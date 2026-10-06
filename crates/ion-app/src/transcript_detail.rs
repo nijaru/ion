@@ -1,12 +1,10 @@
 //! Paged inspection of canonical saved facts and the current live transcript.
-use ion_core::{
-    ActivityOutcome, LiveTranscript, ToolActivityKind, TranscriptActivity, TranscriptItem,
-    TranscriptProjection,
-};
+use ion_core::{LiveTranscript, TranscriptActivity, TranscriptItem, TranscriptProjection};
 use ion_terminal::KeyCode;
 use std::num::NonZeroUsize;
 
-use crate::transcript_render::{push_wrapped, render_message};
+use crate::display_text::push_wrapped;
+use crate::transcript_render::{kind_label, render_message, state_label};
 
 const PAGE_ENTRIES: usize = 32;
 
@@ -266,7 +264,7 @@ fn render_tool(rows: &mut Vec<String>, number: usize, activity: &TranscriptActiv
             "Tool {number}: {} · {} · {}",
             activity.name,
             kind_label(activity.activity.kind),
-            outcome_label(activity.outcome)
+            state_label(activity.state)
         ),
         width,
     );
@@ -295,39 +293,14 @@ fn render_json(rows: &mut Vec<String>, value: &serde_json::Value, width: usize) 
     );
 }
 
-pub fn kind_label(kind: ToolActivityKind) -> &'static str {
-    match kind {
-        ToolActivityKind::Read => "read",
-        ToolActivityKind::List => "list",
-        ToolActivityKind::Search => "search",
-        ToolActivityKind::Edit => "edit",
-        ToolActivityKind::Write => "write",
-        ToolActivityKind::Command => "command",
-        ToolActivityKind::Ask => "ask",
-        ToolActivityKind::Subagent => "subagent",
-        ToolActivityKind::External => "external",
-    }
-}
-
-fn outcome_label(outcome: ActivityOutcome) -> &'static str {
-    match outcome {
-        ActivityOutcome::Pending => "pending",
-        ActivityOutcome::Completed => "completed",
-        ActivityOutcome::Failed => "failed",
-        ActivityOutcome::Cancelled => "cancelled",
-        ActivityOutcome::TimedOut => "timed out",
-        ActivityOutcome::Rejected => "rejected",
-        ActivityOutcome::Unknown => "unknown",
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use ion_ai::{Content, Message, ResponseTermination, ToolCall};
     use ion_core::{CodingAgentEvent as AgentEvent, CodingToolOutput as ToolOutput};
     use ion_core::{
-        StoredToolActivity, ToolActivity, TranscriptMessage, TranscriptPart, UserShellActivity,
+        StoredToolActivity, ToolActivity, ToolActivityKind, TranscriptMessage, TranscriptPart,
+        UserShellActivity,
     };
 
     #[test]
@@ -367,7 +340,7 @@ mod tests {
         assert!(initial.contains("CURRENT_REQUEST"));
         assert!(initial.contains("SAVED_SHELL"));
         assert!(initial.contains("not shared with model"));
-        assert!(initial.contains("pending"));
+        assert!(initial.contains("queued"));
         assert!(initial.contains("no committed result"));
         live.observe(AgentEvent::ToolFinished {
             call_id: "call".into(),

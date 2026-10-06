@@ -9,7 +9,9 @@ use std::{
     sync::{Arc, Mutex},
 };
 
-use crate::transcript_detail::{DetailView, kind_label, tools};
+use crate::display_text::{fit_line, push_wrapped};
+use crate::transcript_detail::{DetailView, tools};
+use crate::transcript_render::kind_label;
 use anyhow::{Context, Result, ensure};
 use ignore::WalkBuilder;
 use ion_ai::{Content, Message, ModelRef};
@@ -2017,11 +2019,11 @@ fn draw(
         } else {
             format!("{count} notices")
         };
-        chrome.push(brief(&format!("{label} · {notice}"), width));
+        chrome.push(fit_line(&format!("{label} · {notice}"), width));
     }
     if let Some(status) = visible_status(ui) {
         if progress.is_some() {
-            chrome.push(brief(&status, width));
+            chrome.push(fit_line(&status, width));
         } else {
             push_wrapped(&mut chrome, &status, width);
         }
@@ -2165,7 +2167,7 @@ fn draw_chat_fullscreen(
     if let Some(status) = status
         && next_row < height
     {
-        rows[next_row] = Line::raw(brief(&status, width));
+        rows[next_row] = Line::raw(fit_line(&status, width));
         next_row += 1;
     }
     for (index, line) in composer
@@ -2215,7 +2217,7 @@ fn draw_modal_fullscreen(
             content.push(format!(
                 "{} {}",
                 if index == picker.selected { '›' } else { ' ' },
-                brief(label, width.saturating_sub(2))
+                fit_line(label, width.saturating_sub(2))
             ));
         }
         composer = Some(wrap_input(&picker.query, picker.query.len(), width));
@@ -2245,7 +2247,7 @@ fn draw_modal_fullscreen(
     let mut next_row = viewport;
     for label in controls.iter().chain(status.iter()) {
         if next_row < height {
-            rows[next_row] = Line::raw(brief(label, width));
+            rows[next_row] = Line::raw(fit_line(label, width));
             next_row += 1;
         }
     }
@@ -2325,43 +2327,6 @@ fn wrap_input(draft: &str, cursor: usize, width: usize) -> WrappedInput {
     }
 }
 
-fn push_wrapped(rows: &mut Vec<String>, text: &str, width: usize) {
-    let width = width.max(1);
-    let mut line = String::new();
-    let mut col = 0;
-    for grapheme in text.graphemes(true) {
-        if grapheme == "\n" || grapheme == "\r" {
-            rows.push(std::mem::take(&mut line));
-            col = 0;
-            continue;
-        }
-        let display = if grapheme == "\t" {
-            "    "
-        } else if grapheme.chars().any(char::is_control) {
-            "�"
-        } else {
-            grapheme
-        };
-        let size = UnicodeWidthStr::width(display).max(1);
-        if col + size > width && col > 0 {
-            rows.push(std::mem::take(&mut line));
-            col = 0;
-        }
-        line.push_str(display);
-        col += size;
-    }
-    rows.push(line);
-}
-fn brief(text: &str, max: usize) -> String {
-    if text.len() <= max {
-        return text.into();
-    }
-    let mut end = max;
-    while !text.is_char_boundary(end) {
-        end -= 1;
-    }
-    format!("{}…", &text[..end])
-}
 fn previous_grapheme(text: &str, cursor: usize) -> usize {
     text[..cursor]
         .grapheme_indices(true)

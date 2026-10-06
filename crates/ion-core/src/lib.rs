@@ -22,6 +22,6 @@ pub use tool_set::{
 };
 
 pub use transcript::{
-    ActivityGroup, ActivityOutcome, ActivityResult, LiveTranscript, TranscriptActivity,
+    ActivityGroup, ActivityResult, ActivityState, LiveTranscript, TranscriptActivity,
     TranscriptItem, TranscriptMessage, TranscriptPart, TranscriptProjection, UserShellActivity,
 };

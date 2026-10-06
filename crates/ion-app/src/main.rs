@@ -22,6 +22,7 @@ use tokio_util::sync::CancellationToken;
 
 mod agent_events;
 mod clipboard;
+mod display_text;
 mod external_editor;
 mod rpc;
 mod terminal_client;

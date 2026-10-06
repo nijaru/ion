@@ -1,12 +1,37 @@
 //! Pure compact rendering for the typed coding transcript.
+use crate::display_text::{fit_line, push_prefixed, push_wrapped};
 use ion_core::{
-    ActivityGroup, ActivityOutcome, ActivityResult, ToolActivityKind, TranscriptActivity,
+    ActivityGroup, ActivityResult, ActivityState, ToolActivityKind, TranscriptActivity,
     TranscriptItem, TranscriptMessage, TranscriptPart, TranscriptProjection, UserShellActivity,
 };
-use unicode_segmentation::UnicodeSegmentation;
-use unicode_width::UnicodeWidthStr;
 
-const MAX_COMPACT_GROUP_ROWS: usize = 12;
+pub(super) fn kind_label(kind: ToolActivityKind) -> &'static str {
+    match kind {
+        ToolActivityKind::Read => "read",
+        ToolActivityKind::List => "list",
+        ToolActivityKind::Search => "search",
+        ToolActivityKind::Edit => "edit",
+        ToolActivityKind::Write => "write",
+        ToolActivityKind::Command => "command",
+        ToolActivityKind::Ask => "ask",
+        ToolActivityKind::Subagent => "subagent",
+        ToolActivityKind::External => "external",
+    }
+}
+
+pub(super) fn state_label(state: ActivityState) -> &'static str {
+    match state {
+        ActivityState::Queued => "queued",
+        ActivityState::Running => "running",
+        ActivityState::Completed => "completed",
+        ActivityState::Failed => "failed",
+        ActivityState::Cancelled => "cancelled",
+        ActivityState::TimedOut => "timed out",
+        ActivityState::Rejected => "rejected",
+        ActivityState::Unknown => "unknown",
+    }
+}
+
 const MAX_COALESCED_SUBJECTS: usize = 3;
 
 pub fn rows(projection: &TranscriptProjection, width: usize) -> Vec<String> {
@@ -29,8 +54,8 @@ pub fn rows(projection: &TranscriptProjection, width: usize) -> Vec<String> {
     rows
 }
 
-/// Keep current-Turn counts and an exception visible when its narrative/tool
-/// rows exceed the inline viewport. This is a projection, never a history cut.
+/// Select a semantic focus before rendering its children. Never take a suffix
+/// of the flattened conversation: that can detach branches from their root.
 pub(super) fn live_rows(
     projection: &TranscriptProjection,
     width: usize,
@@ -39,41 +64,152 @@ pub(super) fn live_rows(
     if budget == 0 {
         return Vec::new();
     }
-    let mut rendered = rows(projection, width);
+    let rendered = rows(projection, width);
     if rendered.len() <= budget {
         return rendered;
     }
     let activities = || {
-        projection.items.iter().flat_map(|item| match item {
-            TranscriptItem::ActivityGroup(group) => group.activities.as_slice(),
-            _ => &[],
-        })
+        projection
+            .items
+            .iter()
+            .enumerate()
+            .flat_map(|(item_index, item)| {
+                let activities = match item {
+                    TranscriptItem::ActivityGroup(group) => group.activities.as_slice(),
+                    _ => &[],
+                };
+                activities
+                    .iter()
+                    .enumerate()
+                    .map(move |(activity_index, activity)| (item_index, activity_index, activity))
+            })
     };
-    let mut pinned = Vec::new();
+    let mut selected = Vec::new();
+    let mut pinned = None;
     if activities().next().is_some() {
         push_wrapped(
-            &mut pinned,
-            &format!("{} · Ctrl-O", group_header(activities())),
+            &mut selected,
+            &format!(
+                "{} · Ctrl-O",
+                group_header(activities().map(|(_, _, activity)| activity))
+            ),
             width.max(1),
         );
-        pinned.truncate(budget.saturating_sub(2).clamp(1, 3));
-        if budget > pinned.len() + 1
-            && let Some(exception) = activities().rfind(|activity| {
-                !matches!(
-                    activity.outcome,
-                    ActivityOutcome::Pending | ActivityOutcome::Completed
-                )
-            })
+        selected.truncate(budget.saturating_sub(2).clamp(1, 3));
+        if budget > selected.len()
+            && let Some((item_index, activity_index, exception)) =
+                activities().rfind(|(_, _, activity)| {
+                    matches!(
+                        activity.state,
+                        ActivityState::Failed
+                            | ActivityState::Cancelled
+                            | ActivityState::TimedOut
+                            | ActivityState::Rejected
+                            | ActivityState::Unknown
+                    )
+                })
         {
-            pinned.push(fit_line(&display_activity(exception).summary, width.max(1)));
+            pinned = Some((item_index, activity_index));
+            // Put the diagnostic subject first in a narrow viewport.
+            let subject = exception
+                .activity
+                .subject
+                .as_deref()
+                .map(clean_inline)
+                .unwrap_or_else(|| exception.name.clone());
+            selected.push(fit_line(
+                &format!("! {subject} · {}", action_label(exception)),
+                width,
+            ));
         }
     } else {
-        pinned.push(fit_line("… earlier conversation · Ctrl-O", width.max(1)));
+        selected.push(fit_line("… earlier conversation · Ctrl-O", width));
     }
-    let tail = budget.saturating_sub(pinned.len());
-    rendered.drain(..rendered.len().saturating_sub(tail));
-    pinned.extend(rendered);
-    pinned
+    let remaining = budget.saturating_sub(selected.len());
+    let focus = projection.items.iter().enumerate().rfind(|(_, item)| {
+        matches!(item, TranscriptItem::ActivityGroup(group) if group.activities.iter().any(|a| a.state == ActivityState::Running))
+    }).or_else(|| projection.items.iter().enumerate().next_back());
+    if remaining > 0
+        && let Some((item_index, focus)) = focus
+    {
+        match focus {
+            TranscriptItem::ActivityGroup(group) => {
+                let pinned_index = pinned
+                    .filter(|(index, _)| *index == item_index)
+                    .map(|(_, index)| index);
+                render_current_group(&mut selected, group, width, remaining, pinned_index)
+            }
+            TranscriptItem::User(message) | TranscriptItem::Assistant(message) => {
+                let user = matches!(focus, TranscriptItem::User(_));
+                let mut preview = Vec::new();
+                render_message(&mut preview, message, user, width);
+                let omitted = preview.len().saturating_sub(remaining);
+                if omitted > 0 {
+                    preview.drain(..omitted);
+                    if let Some(first) = preview.first_mut() {
+                        *first = fit_line(
+                            &format!("{}… {}", if user { "› " } else { "" }, first.trim_start()),
+                            width,
+                        );
+                    }
+                }
+                selected.extend(preview);
+            }
+            TranscriptItem::UserShell(shell) => {
+                let mut preview = Vec::new();
+                render_shell(&mut preview, shell, width);
+                preview.truncate(remaining);
+                selected.extend(preview);
+            }
+        }
+    }
+    selected
+}
+
+/// The live tree keeps a root and selects whole actions in execution priority,
+/// then restores their source order. A queued tail cannot evict running work.
+fn render_current_group(
+    rows: &mut Vec<String>,
+    group: &ActivityGroup,
+    width: usize,
+    budget: usize,
+    pinned_index: Option<usize>,
+) {
+    let display = compact_activities(&group.activities);
+    let capacity = budget.saturating_sub(1);
+    let mut indices = (0..display.len())
+        .filter(|&index| Some(display[index].source.start) != pinned_index)
+        .collect::<Vec<_>>();
+    if indices.is_empty() {
+        return;
+    }
+    rows.push(fit_line("● Current activity", width));
+    let reserve_omission = usize::from(indices.len() > capacity && capacity > 1);
+    indices.sort_by_key(|&index| (display[index].priority(), std::cmp::Reverse(index)));
+    indices.truncate(capacity.saturating_sub(reserve_omission));
+    indices.sort_unstable();
+    let omitted = display
+        .iter()
+        .enumerate()
+        .filter(|(index, _)| {
+            !indices.contains(index) && Some(display[*index].source.start) != pinned_index
+        })
+        .map(|(_, activity)| activity.source.len())
+        .sum::<usize>();
+    for (position, &index) in indices.iter().enumerate() {
+        let last = position + 1 == indices.len() && reserve_omission == 0;
+        rows.push(fit_line(
+            &format!(
+                "{}{}",
+                if last { "└ " } else { "├ " },
+                display[index].summary
+            ),
+            width,
+        ));
+    }
+    if reserve_omission > 0 {
+        rows.push(fit_line(&format!("└ {omitted} more · Ctrl-O"), width));
+    }
 }
 
 pub(super) fn render_message(
@@ -148,7 +284,7 @@ fn render_shell(rows: &mut Vec<String>, shell: &UserShellActivity, width: usize)
             push_wrapped(rows, &note, width);
         }
     }
-    let mut outcome = if let Some(signal) = shell.output["signal"].as_i64() {
+    let mut state = if let Some(signal) = shell.output["signal"].as_i64() {
         format!("signal {signal}")
     } else if let Some(code) = shell.output["exit_code"].as_i64() {
         format!("exit {code}")
@@ -160,24 +296,40 @@ fn render_shell(rows: &mut Vec<String>, shell: &UserShellActivity, width: usize)
         "completed".into()
     };
     if shell.output["cancelled"].as_bool() == Some(true) {
-        outcome.push_str(" · cancelled");
+        state.push_str(" · cancelled");
     }
     if shell.output["timed_out"].as_bool() == Some(true) {
-        outcome.push_str(" · timed out");
+        state.push_str(" · timed out");
     }
     if shell.exclude_from_context {
-        outcome.push_str(" · not shared with model");
+        state.push_str(" · not shared with model");
     }
-    push_wrapped(rows, &format!("  {outcome}"), width);
+    push_wrapped(rows, &format!("  {state}"), width);
 }
 
 #[derive(Debug)]
 struct DisplayActivity {
     summary: String,
     detail: Option<String>,
-    source_count: usize,
+    source: std::ops::Range<usize>,
     observation: bool,
-    high_salience: bool,
+    state: ActivityState,
+}
+
+impl DisplayActivity {
+    fn priority(&self) -> u8 {
+        match self.state {
+            ActivityState::Running => 0,
+            ActivityState::Failed
+            | ActivityState::Cancelled
+            | ActivityState::TimedOut
+            | ActivityState::Rejected
+            | ActivityState::Unknown => 1,
+            ActivityState::Queued => 2,
+            ActivityState::Completed if !self.observation => 3,
+            ActivityState::Completed => 4,
+        }
+    }
 }
 
 fn render_group(rows: &mut Vec<String>, group: &ActivityGroup, width: usize) {
@@ -185,9 +337,8 @@ fn render_group(rows: &mut Vec<String>, group: &ActivityGroup, width: usize) {
         return;
     }
     let display = compact_activities(&group.activities);
-    let (display, omitted) = bound_activities(display);
 
-    if group.activities.len() == 1 && omitted == 0 {
+    if group.activities.len() == 1 {
         let item = &display[0];
         rows.push(fit_line(&format!("● {}", item.summary), width));
         if let Some(detail) = &item.detail {
@@ -197,7 +348,7 @@ fn render_group(rows: &mut Vec<String>, group: &ActivityGroup, width: usize) {
     }
 
     rows.push(fit_line(&group_header(group.activities.iter()), width));
-    let total_children = display.len() + usize::from(omitted > 0);
+    let total_children = display.len();
     for (index, item) in display.iter().enumerate() {
         let last = index + 1 == total_children;
         let branch = if last { "└ " } else { "├ " };
@@ -207,14 +358,12 @@ fn render_group(rows: &mut Vec<String>, group: &ActivityGroup, width: usize) {
             rows.push(fit_line(&format!("{prefix}{detail}"), width));
         }
     }
-    if omitted > 0 {
-        rows.push(fit_line(&format!("└ {omitted} more · Ctrl-O"), width));
-    }
 }
 
 fn group_header<'a>(activities: impl Iterator<Item = &'a TranscriptActivity>) -> String {
     let mut counts = [0usize; 9];
-    let mut pending = 0usize;
+    let mut queued = 0usize;
+    let mut running = 0usize;
     let mut count = 0usize;
     let mut failed = 0usize;
     let mut cancelled = 0usize;
@@ -225,14 +374,15 @@ fn group_header<'a>(activities: impl Iterator<Item = &'a TranscriptActivity>) ->
     for activity in activities {
         count += 1;
         counts[kind_index(activity.activity.kind)] += 1;
-        match activity.outcome {
-            ActivityOutcome::Failed => failed += 1,
-            ActivityOutcome::Cancelled => cancelled += 1,
-            ActivityOutcome::TimedOut => timed_out += 1,
-            ActivityOutcome::Rejected => rejected += 1,
-            ActivityOutcome::Unknown => unknown += 1,
-            ActivityOutcome::Pending => pending += 1,
-            ActivityOutcome::Completed => {}
+        match activity.state {
+            ActivityState::Failed => failed += 1,
+            ActivityState::Cancelled => cancelled += 1,
+            ActivityState::TimedOut => timed_out += 1,
+            ActivityState::Rejected => rejected += 1,
+            ActivityState::Unknown => unknown += 1,
+            ActivityState::Queued => queued += 1,
+            ActivityState::Running => running += 1,
+            ActivityState::Completed => {}
         }
     }
 
@@ -242,7 +392,8 @@ fn group_header<'a>(activities: impl Iterator<Item = &'a TranscriptActivity>) ->
     )];
     for (count, label) in [
         (failed, "failed"),
-        (pending, "pending"),
+        (running, "running"),
+        (queued, "queued"),
         (cancelled, "cancelled"),
         (timed_out, "timed out"),
         (rejected, "skipped"),
@@ -276,28 +427,31 @@ fn compact_activities(activities: &[TranscriptActivity]) -> Vec<DisplayActivity>
     let mut index = 0;
     while index < activities.len() {
         let current = &activities[index];
-        if is_observation(current.activity.kind) && current.outcome == ActivityOutcome::Completed {
+        if is_observation(current.activity.kind) && current.state == ActivityState::Completed {
             let kind = current.activity.kind;
             let mut end = index + 1;
             while end < activities.len()
                 && activities[end].activity.kind == kind
-                && activities[end].outcome == ActivityOutcome::Completed
+                && activities[end].state == ActivityState::Completed
             {
                 end += 1;
             }
             if end - index > 1 {
-                display.push(coalesced_observation(&activities[index..end]));
+                display.push(coalesced_observation(&activities[index..end], index..end));
                 index = end;
                 continue;
             }
         }
-        display.push(display_activity(current));
+        display.push(display_activity(current, index));
         index += 1;
     }
     display
 }
 
-fn coalesced_observation(activities: &[TranscriptActivity]) -> DisplayActivity {
+fn coalesced_observation(
+    activities: &[TranscriptActivity],
+    source: std::ops::Range<usize>,
+) -> DisplayActivity {
     let kind = activities[0].activity.kind;
     let subjects = activities
         .iter()
@@ -319,13 +473,13 @@ fn coalesced_observation(activities: &[TranscriptActivity]) -> DisplayActivity {
     DisplayActivity {
         summary,
         detail: None,
-        source_count: activities.len(),
+        source,
         observation: true,
-        high_salience: false,
+        state: ActivityState::Completed,
     }
 }
 
-fn display_activity(activity: &TranscriptActivity) -> DisplayActivity {
+fn display_activity(activity: &TranscriptActivity, index: usize) -> DisplayActivity {
     let kind = activity.activity.kind;
     let mut summary = action_label(activity);
     if let Some(subject) = activity.activity.subject.as_deref() {
@@ -334,6 +488,9 @@ fn display_activity(activity: &TranscriptActivity) -> DisplayActivity {
             summary.push(' ');
             summary.push_str(&subject);
         }
+    }
+    if activity.state == ActivityState::Queued {
+        summary.push_str(&format!(" · {}", kind_label(kind)));
     }
     append_result_summary(&mut summary, activity);
     let detail = activity.result.as_ref().and_then(|result| {
@@ -344,26 +501,26 @@ fn display_activity(activity: &TranscriptActivity) -> DisplayActivity {
         }
     });
     let observation = is_observation(kind);
-    let high_salience = !observation || activity.outcome != ActivityOutcome::Completed;
     DisplayActivity {
         summary,
         detail,
-        source_count: 1,
+        source: index..index + 1,
         observation,
-        high_salience,
+        state: activity.state,
     }
 }
 
 fn action_label(activity: &TranscriptActivity) -> String {
     let kind = activity.activity.kind;
-    match activity.outcome {
-        ActivityOutcome::Pending => pending_verb(kind).into(),
-        ActivityOutcome::Completed => completed_verb(kind).into(),
-        ActivityOutcome::Cancelled => "Cancelled".into(),
-        ActivityOutcome::TimedOut => "Timed out".into(),
-        ActivityOutcome::Rejected => "Skipped".into(),
-        ActivityOutcome::Unknown => "Interrupted".into(),
-        ActivityOutcome::Failed => {
+    match activity.state {
+        ActivityState::Queued => "Queued".into(),
+        ActivityState::Running => running_verb(kind).into(),
+        ActivityState::Completed => completed_verb(kind).into(),
+        ActivityState::Cancelled => "Cancelled".into(),
+        ActivityState::TimedOut => "Timed out".into(),
+        ActivityState::Rejected => "Skipped".into(),
+        ActivityState::Unknown => "Interrupted".into(),
+        ActivityState::Failed => {
             if kind == ToolActivityKind::Command
                 && let Some(code) = activity
                     .result
@@ -379,7 +536,7 @@ fn action_label(activity: &TranscriptActivity) -> String {
 }
 
 fn append_result_summary(summary: &mut String, activity: &TranscriptActivity) {
-    if activity.outcome != ActivityOutcome::Completed {
+    if activity.state != ActivityState::Completed {
         return;
     }
     let Some(result) = &activity.result else {
@@ -444,28 +601,6 @@ fn command_detail(result: &ActivityResult) -> Option<String> {
         .filter(|line| !line.is_empty())
 }
 
-fn bound_activities(display: Vec<DisplayActivity>) -> (Vec<DisplayActivity>, usize) {
-    if display.len() <= MAX_COMPACT_GROUP_ROWS {
-        return (display, 0);
-    }
-    let high_count = display.iter().filter(|item| item.high_salience).count();
-    let observation_budget = MAX_COMPACT_GROUP_ROWS.saturating_sub(high_count);
-    let mut kept = Vec::new();
-    let mut observations_kept = 0usize;
-    let mut omitted = 0usize;
-    for item in display {
-        if item.high_salience || observations_kept < observation_budget {
-            if item.observation && !item.high_salience {
-                observations_kept += 1;
-            }
-            kept.push(item);
-        } else {
-            omitted += item.source_count;
-        }
-    }
-    (kept, omitted)
-}
-
 fn is_observation(kind: ToolActivityKind) -> bool {
     matches!(
         kind,
@@ -487,7 +622,7 @@ fn kind_index(kind: ToolActivityKind) -> usize {
     }
 }
 
-fn pending_verb(kind: ToolActivityKind) -> &'static str {
+fn running_verb(kind: ToolActivityKind) -> &'static str {
     match kind {
         ToolActivityKind::Read => "Reading",
         ToolActivityKind::List => "Listing",
@@ -546,81 +681,6 @@ fn clean_inline(text: &str) -> String {
         .join(" ")
 }
 
-fn push_prefixed(
-    rows: &mut Vec<String>,
-    prefix: &str,
-    continuation: &str,
-    text: &str,
-    width: usize,
-) {
-    let mut first = true;
-    for logical in text.split('\n') {
-        let line_prefix = if first { prefix } else { continuation };
-        wrap_one(rows, line_prefix, continuation, logical, width);
-        first = false;
-    }
-}
-
-pub(super) fn push_wrapped(rows: &mut Vec<String>, text: &str, width: usize) {
-    for logical in text.split('\n') {
-        wrap_one(rows, "", "", logical, width);
-    }
-}
-
-fn wrap_one(
-    rows: &mut Vec<String>,
-    first_prefix: &str,
-    continuation: &str,
-    text: &str,
-    width: usize,
-) {
-    let mut line = first_prefix.to_owned();
-    let mut col = UnicodeWidthStr::width(first_prefix);
-    let mut prefix = first_prefix;
-    for grapheme in text.graphemes(true) {
-        let display = if grapheme == "\t" {
-            "    "
-        } else if grapheme.chars().any(char::is_control) {
-            "�"
-        } else {
-            grapheme
-        };
-        let size = UnicodeWidthStr::width(display).max(1);
-        if col + size > width && col > UnicodeWidthStr::width(prefix) {
-            rows.push(std::mem::take(&mut line));
-            line.push_str(continuation);
-            prefix = continuation;
-            col = UnicodeWidthStr::width(continuation);
-        }
-        line.push_str(display);
-        col += size;
-    }
-    rows.push(line);
-}
-
-fn fit_line(text: &str, width: usize) -> String {
-    let width = width.max(1);
-    if UnicodeWidthStr::width(text) <= width {
-        return text.to_owned();
-    }
-    if width == 1 {
-        return "…".into();
-    }
-    let target = width - 1;
-    let mut out = String::new();
-    let mut used = 0usize;
-    for grapheme in text.graphemes(true) {
-        let size = UnicodeWidthStr::width(grapheme).max(1);
-        if used + size > target {
-            break;
-        }
-        out.push_str(grapheme);
-        used += size;
-    }
-    out.push('…');
-    out
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -657,7 +717,7 @@ mod tests {
         id: &str,
         kind: ToolActivityKind,
         subject: &str,
-        outcome: ActivityOutcome,
+        state: ActivityState,
         result: Option<serde_json::Value>,
     ) -> TranscriptActivity {
         TranscriptActivity {
@@ -668,11 +728,11 @@ mod tests {
                 subject: Some(subject.into()),
             },
             arguments: serde_json::Value::Null,
-            outcome,
+            state,
             result: result.map(|value| ActivityResult {
                 value,
                 image_mime_types: Vec::new(),
-                is_error: outcome != ActivityOutcome::Completed,
+                is_error: state != ActivityState::Completed,
             }),
         }
     }
@@ -688,35 +748,35 @@ mod tests {
                         "r1",
                         ToolActivityKind::Read,
                         "src/a.rs",
-                        ActivityOutcome::Completed,
+                        ActivityState::Completed,
                         None,
                     ),
                     activity(
                         "r2",
                         ToolActivityKind::Read,
                         "src/b.rs",
-                        ActivityOutcome::Completed,
+                        ActivityState::Completed,
                         None,
                     ),
                     activity(
                         "r3",
                         ToolActivityKind::Read,
                         "src/c.rs",
-                        ActivityOutcome::Completed,
+                        ActivityState::Completed,
                         None,
                     ),
                     activity(
                         "e1",
                         ToolActivityKind::Edit,
                         "src/parser.rs",
-                        ActivityOutcome::Completed,
+                        ActivityState::Completed,
                         Some(serde_json::json!({"replacements":2})),
                     ),
                     activity(
                         "x1",
                         ToolActivityKind::Command,
                         "cargo test",
-                        ActivityOutcome::Completed,
+                        ActivityState::Completed,
                         Some(
                             serde_json::json!({"stdout":"running\ntest result: ok. 148 passed","stderr":""}),
                         ),
@@ -745,7 +805,7 @@ mod tests {
                     "x",
                     ToolActivityKind::Command,
                     "cargo test",
-                    ActivityOutcome::Failed,
+                    ActivityState::Failed,
                     Some(serde_json::json!({"exit_code":1,"stdout":"","stderr":"compile failed"})),
                 )],
             })],
@@ -783,7 +843,7 @@ mod tests {
             "failed",
             ToolActivityKind::Command,
             "FAILURE_MARKER",
-            ActivityOutcome::Failed,
+            ActivityState::Failed,
             Some(serde_json::json!({"exit_code": 7})),
         )];
         activities.extend((0..14).map(|index| {
@@ -791,7 +851,7 @@ mod tests {
                 &format!("write-{index}"),
                 ToolActivityKind::Write,
                 "changed.txt",
-                ActivityOutcome::Completed,
+                ActivityState::Completed,
                 None,
             )
         }));
@@ -818,7 +878,7 @@ mod tests {
                         "pending",
                         ToolActivityKind::Read,
                         "CURRENT_READ",
-                        ActivityOutcome::Pending,
+                        ActivityState::Queued,
                         None,
                     )],
                 }),
@@ -831,7 +891,7 @@ mod tests {
             for fact in [
                 "16 actions",
                 "1 failed",
-                "1 pending",
+                "1 queued",
                 "14 write",
                 "FAILURE_MARKER",
                 "CURRENT_READ",
@@ -839,8 +899,120 @@ mod tests {
                 assert!(text.contains(fact), "missing {fact}: {text}");
             }
         }
+        let tiny = live_rows(&projection, 100, 2);
+        assert_eq!(tiny.len(), 2);
+        assert!(tiny.join("\n").contains("FAILURE_MARKER"));
         assert_eq!(live_rows(&projection, 100, 100), rows(&projection, 100));
         assert!(live_rows(&projection, 100, 0).is_empty());
+    }
+
+    #[test]
+    fn exception_pin_uses_source_location_when_call_ids_are_reused() {
+        let projection = TranscriptProjection {
+            items: vec![
+                TranscriptItem::ActivityGroup(ActivityGroup {
+                    turn: 1,
+                    open: true,
+                    activities: vec![
+                        activity(
+                            "reused",
+                            ToolActivityKind::Read,
+                            "FIRST_READ",
+                            ActivityState::Completed,
+                            None,
+                        ),
+                        activity(
+                            "read-2",
+                            ToolActivityKind::Read,
+                            "SECOND_READ",
+                            ActivityState::Completed,
+                            None,
+                        ),
+                        activity(
+                            "reused",
+                            ToolActivityKind::Command,
+                            "REUSED_FAILURE",
+                            ActivityState::Failed,
+                            None,
+                        ),
+                        activity(
+                            "running",
+                            ToolActivityKind::Command,
+                            "ACTIVE_COMMAND",
+                            ActivityState::Running,
+                            None,
+                        ),
+                        activity(
+                            "queued",
+                            ToolActivityKind::Write,
+                            "LATER_WRITE",
+                            ActivityState::Queued,
+                            None,
+                        ),
+                    ],
+                }),
+                TranscriptItem::Assistant(TranscriptMessage {
+                    turn: Some(1),
+                    steering: false,
+                    parts: vec![TranscriptPart::Text("later narrative\n".repeat(20))],
+                }),
+            ],
+        };
+        let rendered = live_rows(&projection, 100, 7).join("\n");
+        assert_eq!(rendered.matches("REUSED_FAILURE").count(), 1, "{rendered}");
+        assert!(
+            rendered.contains("Read FIRST_READ, SECOND_READ"),
+            "{rendered}"
+        );
+        assert!(rendered.contains("Running ACTIVE_COMMAND"), "{rendered}");
+    }
+
+    #[test]
+    fn running_call_keeps_its_tree_when_later_calls_are_queued() {
+        let projection = TranscriptProjection {
+            items: vec![TranscriptItem::ActivityGroup(ActivityGroup {
+                turn: 1,
+                open: true,
+                activities: vec![
+                    activity(
+                        "running",
+                        ToolActivityKind::Command,
+                        "ACTIVE_COMMAND",
+                        ActivityState::Running,
+                        None,
+                    ),
+                    activity(
+                        "queued",
+                        ToolActivityKind::Read,
+                        "LATER_READ",
+                        ActivityState::Queued,
+                        None,
+                    ),
+                    activity(
+                        "queued-2",
+                        ToolActivityKind::Write,
+                        "LATER_WRITE",
+                        ActivityState::Queued,
+                        None,
+                    ),
+                ],
+            })],
+        };
+        let rendered = live_rows(&projection, 40, 3).join("\n");
+        for fact in [
+            "1 running",
+            "2 queued",
+            "Current activity",
+            "Running ACTIVE_COMMAND",
+        ] {
+            assert!(rendered.contains(fact), "{rendered}");
+        }
+        assert!(!rendered.contains("Reading LATER_READ"), "{rendered}");
+        assert!(
+            rendered
+                .lines()
+                .any(|line| line.starts_with("└ ") && line.contains("ACTIVE_COMMAND"))
+        );
     }
 
     #[test]
@@ -851,7 +1023,7 @@ mod tests {
                     &format!("r{index}"),
                     ToolActivityKind::Read,
                     &format!("file-{index}.rs"),
-                    ActivityOutcome::Completed,
+                    ActivityState::Completed,
                     None,
                 )
             })
@@ -860,14 +1032,14 @@ mod tests {
             "edit",
             ToolActivityKind::Edit,
             "important.rs",
-            ActivityOutcome::Completed,
+            ActivityState::Completed,
             Some(serde_json::json!({"replacements":1})),
         ));
         activities.push(activity(
             "failed",
             ToolActivityKind::Command,
             "cargo test",
-            ActivityOutcome::Failed,
+            ActivityState::Failed,
             Some(serde_json::json!({"exit_code":1,"stderr":"failed"})),
         ));
         let projection = TranscriptProjection {

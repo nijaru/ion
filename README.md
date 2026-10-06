@@ -75,9 +75,12 @@ resize do not publish live rows; terminal-native reflow remains emulator-owned.
 If terminal rendering fails during a Turn, shell or compaction, Ion requests
 cancellation and awaits the operation before returning the error. Inspect the
 Session for saved outcomes when the terminal can no longer display them.
-During long Turns, the inline region keeps activity counts, pending/exception
-counts and the latest exception above the newest transcript rows. Individual
-rows may be omitted; Ctrl-O retains the full current conversation.
+During long Turns, the inline region keeps queued/running/exception counts,
+the latest exception and a rooted preview of current work. Execution-start
+progress changes only the corresponding committed call; later admitted calls
+remain queued. Overflow selects whole actions, favoring running work rather
+than a flattened tail. Individual rows may be omitted; Ctrl-O retains the full
+current conversation. Missing saved results are unknown, not still running.
 After settled history is published, an expanded live band shrinks back to the
 rows the active composer/status actually need. Related tool calls are rendered
 as semantic activity groups with a compact tree (`●`, `├`, `└`) instead of

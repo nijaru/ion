@@ -24,8 +24,10 @@ pub struct TranscriptMessage {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ActivityOutcome {
-    Pending,
+pub enum ActivityState {
+    Queued,
+    /// Live execution-start progress; never reconstructed as running on reopen.
+    Running,
     Completed,
     Failed,
     Cancelled,
@@ -47,7 +49,7 @@ pub struct TranscriptActivity {
     pub name: String,
     pub activity: ToolActivity,
     pub arguments: Value,
-    pub outcome: ActivityOutcome,
+    pub state: ActivityState,
     pub result: Option<ActivityResult>,
 }
 
@@ -150,8 +152,8 @@ impl TranscriptProjection {
             if let TranscriptItem::ActivityGroup(group) = item {
                 group.open = false;
                 for activity in &mut group.activities {
-                    if activity.outcome == ActivityOutcome::Pending {
-                        activity.outcome = ActivityOutcome::Unknown;
+                    if activity.state == ActivityState::Queued {
+                        activity.state = ActivityState::Unknown;
                     }
                 }
             }
@@ -227,10 +229,10 @@ impl TranscriptBuilder {
                     name: call.name.clone(),
                     activity: stored.activity.clone(),
                     arguments: call.arguments.clone(),
-                    outcome: if matches!(termination, ResponseTermination::Completed) {
-                        ActivityOutcome::Pending
+                    state: if matches!(termination, ResponseTermination::Completed) {
+                        ActivityState::Queued
                     } else {
-                        ActivityOutcome::Rejected
+                        ActivityState::Rejected
                     },
                     result: None,
                 });
@@ -240,7 +242,7 @@ impl TranscriptBuilder {
         }
     }
 
-    fn push_result(&mut self, turn: u64, call_id: &str, result: ActivityResult) {
+    fn activity_mut(&mut self, turn: u64, call_id: &str) -> &mut TranscriptActivity {
         let &(group_index, activity_index) = self
             .calls
             .get(&(turn, call_id.to_owned()))
@@ -248,9 +250,13 @@ impl TranscriptBuilder {
         let TranscriptItem::ActivityGroup(group) = &mut self.projection.items[group_index] else {
             unreachable!("call index points to an activity group");
         };
-        let activity = &mut group.activities[activity_index];
-        if activity.outcome != ActivityOutcome::Rejected {
-            activity.outcome = result_outcome(result.is_error, &result.value);
+        &mut group.activities[activity_index]
+    }
+
+    fn push_result(&mut self, turn: u64, call_id: &str, result: ActivityResult) {
+        let activity = self.activity_mut(turn, call_id);
+        if activity.state != ActivityState::Rejected {
+            activity.state = result_state(result.is_error, &result.value);
         }
         activity.result = Some(result);
     }
@@ -300,25 +306,25 @@ fn visible_parts(message: &Message) -> Vec<TranscriptPart> {
         .collect()
 }
 
-fn result_outcome(is_error: bool, value: &Value) -> ActivityOutcome {
+fn result_state(is_error: bool, value: &Value) -> ActivityState {
     if !is_error {
-        return ActivityOutcome::Completed;
+        return ActivityState::Completed;
     }
     if value
         .get("cancelled")
         .and_then(Value::as_bool)
         .unwrap_or(false)
     {
-        return ActivityOutcome::Cancelled;
+        return ActivityState::Cancelled;
     }
     if value
         .get("timed_out")
         .and_then(Value::as_bool)
         .unwrap_or(false)
     {
-        return ActivityOutcome::TimedOut;
+        return ActivityState::TimedOut;
     }
-    ActivityOutcome::Failed
+    ActivityState::Failed
 }
 
 fn live_result(output: ToolOutput) -> ActivityResult {
@@ -427,7 +433,12 @@ impl LiveTranscript {
             }
             // Call content and metadata are already projected by the commit.
             // Start is execution progress, not another authoritative call.
-            AgentEvent::ToolStarted { .. } => {}
+            AgentEvent::ToolStarted { call_id, .. } => {
+                let turn = self.turn.expect("tool progress follows TurnAccepted");
+                let activity = self.builder.activity_mut(turn, &call_id);
+                assert_eq!(activity.state, ActivityState::Queued);
+                activity.state = ActivityState::Running;
+            }
             AgentEvent::ToolFinished {
                 call_id, output, ..
             }
@@ -688,6 +699,47 @@ mod tests {
     }
 
     #[test]
+    fn execution_start_changes_only_the_committed_call() {
+        let mut live = LiveTranscript::default();
+        live.observe(AgentEvent::TurnAccepted { turn: 1 });
+        live.observe(committed(
+            1,
+            vec![
+                call("first", "read", serde_json::json!({"path":"a"})),
+                call("second", "read", serde_json::json!({"path":"b"})),
+            ],
+        ));
+        live.observe(AgentEvent::ToolStarted {
+            call_id: "first".into(),
+            name: "read".into(),
+            // Start cannot overwrite committed arguments or metadata.
+            arguments: serde_json::json!({"path":"not-a"}),
+            activity: ToolActivity::external("not-read"),
+        });
+        let TranscriptItem::ActivityGroup(group) = &live.projection().items[0] else {
+            panic!()
+        };
+        assert_eq!(group.activities[0].state, ActivityState::Running);
+        assert_eq!(group.activities[0].arguments["path"], "a");
+        assert_eq!(group.activities[1].state, ActivityState::Queued);
+        live.observe(AgentEvent::ToolFinished {
+            call_id: "first".into(),
+            name: "read".into(),
+            activity: ToolActivity::external("read"),
+            output: ToolOutput {
+                value: serde_json::json!({"content":"observed"}),
+                images: vec![],
+                is_error: false,
+            },
+        });
+        let TranscriptItem::ActivityGroup(group) = &live.projection().items[0] else {
+            panic!()
+        };
+        assert_eq!(group.activities[0].state, ActivityState::Completed);
+        assert_eq!(group.activities[1].state, ActivityState::Queued);
+    }
+
+    #[test]
     fn live_projection_reopens_a_group_when_partial_text_is_restarted() {
         let mut live = LiveTranscript::default();
         live.observe(AgentEvent::TurnAccepted { turn: 7 });
@@ -738,7 +790,7 @@ mod tests {
         };
         assert!(group.open);
         assert_eq!(group.activities.len(), 2);
-        assert_eq!(group.activities[0].outcome, ActivityOutcome::Completed);
+        assert_eq!(group.activities[0].state, ActivityState::Completed);
     }
 
     #[test]

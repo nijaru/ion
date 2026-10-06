@@ -380,7 +380,7 @@ def exercise_active_band():
                     repaint_time = time.monotonic()
                     repainted = True
                 if repainted and not checked and time.monotonic() - repaint_time > 0.4:
-                    for fact in [b"1 failed", b"1 pending", b"14 write", b"FAILURE_MARKER"]:
+                    for fact in [b"1 failed", b"1 running", b"2 queued", b"14 write", b"FAILURE_MARKER", b"Current activity", b"Running touch active.ready"]:
                         assert fact in output, ("active normal band hid known work", fact, output)
                     assert b"SALIENCE_DONE" not in output and b"\x1b[?1049h" not in output
                     checked = True
@@ -391,7 +391,7 @@ def exercise_active_band():
                     break
             status = child.wait(timeout=2)
             assert checked and status == 0, ("active-band child ended before qualification", status, output[-2000:])
-            print("Ion active inline band retains mutation and exception facts: OK")
+            print("Ion active tree distinguishes running and queued calls and retains mutation/exception facts: OK")
         finally:
             if child is not None and child.poll() is None:
                 child.kill()
