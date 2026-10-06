@@ -16,7 +16,7 @@ use crate::{
         ModelContextSnapshot, Session, SessionError, StoredToolActivity, TurnEndReason,
         valid_user_message,
     },
-    tool_set::{ToolActivity, ToolCatalog, ToolExecution, ToolHost, ToolOutput, ToolSet},
+    tool_set::{ToolActivity, ToolCatalog, ToolExecution, ToolOutput, ToolSet, ToolSource},
 };
 
 fn user_text(prompt: String) -> Message {
@@ -250,7 +250,7 @@ pub struct Agent {
 }
 
 impl Agent {
-    pub fn new(model: Arc<dyn ModelService>, tools: Arc<dyn ToolHost>) -> Self {
+    pub fn new(model: Arc<dyn ModelService>, tools: Arc<dyn ToolSource>) -> Self {
         Self::with_tool_set(model, Arc::new(ToolSet::new([tools])))
     }
 
@@ -1256,7 +1256,8 @@ impl AgentError {
 mod tests {
     use super::*;
     use crate::{
-        CodingSession, ForkPoint, ToolActivityKind, ToolDefinition, ToolExposure, ToolPresentation,
+        CodingSession, ForkPoint, ToolActivityKind, ToolDefinition, ToolExecutor, ToolExposure,
+        ToolPresentation, ToolRegistration,
     };
     use ion_ai::{
         BoxFuture, ImageContent, Message, ModelResponse, ModelStreamEvent, Script,
@@ -1287,32 +1288,32 @@ mod tests {
         }
     }
 
-    impl ToolHost for TestTools {
-        fn definitions(&self) -> Vec<ToolDefinition> {
-            vec![
-                ToolDefinition {
-                    spec: ToolSpec { name: "read".into(), description: "Read UTF-8 text or a supported image (JPEG, PNG, GIF, WebP) from the live working directory. Images are attached to the result. Paths may be relative or absolute. Large text files can be read in byte ranges; use returned next_offset to continue at a UTF-8 boundary. A complete text-file digest is provided when available.".into(), input_schema: serde_json::json!({"type":"object","additionalProperties":false,"required":["path"],"properties":{"path":{"type":"string"},"offset":{"type":"integer","minimum":0},"limit":{"type":"integer","minimum":1,"maximum":65536}}}) },
-                    presentation: ToolPresentation::argument(ToolActivityKind::Read, "path"),
-                    exposure: ToolExposure::Direct,
-                },
-                ToolDefinition {
-                    spec: ToolSpec { name: "edit".into(), description: "Apply one or more disjoint exact text replacements to a UTF-8 file in one write. Each old_text must occur exactly once in the original file; overlapping edits are rejected. Optionally reject changes since base_digest. Operates with the host user's permissions.".into(), input_schema: serde_json::json!({"type":"object","additionalProperties":false,"required":["path","edits"],"properties":{"path":{"type":"string"},"edits":{"type":"array","minItems":1,"items":{"type":"object","additionalProperties":false,"required":["old_text","new_text"],"properties":{"old_text":{"type":"string","minLength":1},"new_text":{"type":"string"}}}},"base_digest":{"type":"string"}}}) },
-                    presentation: ToolPresentation::argument(ToolActivityKind::Edit, "path"),
-                    exposure: ToolExposure::Direct,
-                },
-                ToolDefinition {
-                    spec: ToolSpec { name: "write".into(), description: "Create or replace a UTF-8 file in the live working directory. Missing parent directories are created.".into(), input_schema: serde_json::json!({"type":"object","additionalProperties":false,"required":["path","content"],"properties":{"path":{"type":"string"},"content":{"type":"string"}}}) },
-                    presentation: ToolPresentation::argument(ToolActivityKind::Write, "path"),
-                    exposure: ToolExposure::Direct,
-                },
-                ToolDefinition {
-                    spec: ToolSpec { name: "exec".into(), description: "Run a Bash command (or POSIX sh when Bash is unavailable) in the live working directory with the host user's permissions; this is not sandboxed. Timeout is optional. Returns direct command exit and the final 64 KiB of each output stream, with omitted byte counts when truncated. For complete truncated captures, stdout_full_path and stderr_full_path name private temporary files containing the full observed streams; inspect them instead of rerunning a command. Cancellation is best effort.".into(), input_schema: serde_json::json!({"type":"object","additionalProperties":false,"required":["command"],"properties":{"command":{"type":"string"},"timeout_ms":{"type":"integer","minimum":1}}}) },
-                    presentation: ToolPresentation::argument(ToolActivityKind::Command, "command"),
-                    exposure: ToolExposure::Direct,
-                },
-            ]
+    impl ToolSource for TestTools {
+        fn registrations(self: Arc<Self>) -> Vec<ToolRegistration> {
+            let definitions = [
+            ("read", ToolActivityKind::Read, "path", serde_json::json!({
+                "type":"object", "required":["path"], "properties":{"path":{"type":"string"}}
+            })),
+            ("write", ToolActivityKind::Write, "path", serde_json::json!({
+                "type":"object", "required":["path","content"],
+                "properties":{"path":{"type":"string"},"content":{"type":"string"}}
+            })),
+            ("exec", ToolActivityKind::Command, "command", serde_json::json!({
+                "type":"object", "required":["command"], "properties":{"command":{"type":"string"}}
+            })),
+        ].map(|(name, kind, key, input_schema)| ToolDefinition {
+            spec: ToolSpec { name: name.into(), description: format!("Fixture {name}"), input_schema },
+            presentation: ToolPresentation::argument(kind, key),
+            exposure: ToolExposure::Direct,
+        });
+            definitions
+                .into_iter()
+                .map(|definition| ToolRegistration::new(definition, self.clone()))
+                .collect()
         }
+    }
 
+    impl ToolExecutor for TestTools {
         fn execute<'a>(
             &'a self,
             call: &'a ToolCall,
@@ -1385,11 +1386,6 @@ mod tests {
                         value: serde_json::json!({"command":call.arguments.get("command"),"exit_code":0}),
                         images: Vec::new(),
                         is_error: false,
-                    },
-                    "edit" => ToolOutput {
-                        value: serde_json::json!({"error":"edit is not exercised by core agent tests"}),
-                        images: Vec::new(),
-                        is_error: true,
                     },
                     _ => ToolOutput {
                         value: serde_json::json!({"error":format!("unknown tool: {}",call.name)}),
@@ -1488,23 +1484,31 @@ mod tests {
     async fn streaming_cache_warm_replays_request_without_entering_model_context() {
         struct SlowRead;
 
-        impl ToolHost for SlowRead {
-            fn definitions(&self) -> Vec<ToolDefinition> {
-                vec![ToolDefinition {
-                    spec: ToolSpec {
-                        name: "read".into(),
-                        description: "slow read".into(),
-                        input_schema: serde_json::json!({
-                            "type":"object",
-                            "additionalProperties":false,
-                            "properties":{}
-                        }),
-                    },
-                    presentation: ToolPresentation::argument(ToolActivityKind::Read, "path"),
-                    exposure: ToolExposure::Direct,
-                }]
+        impl ToolSource for SlowRead {
+            fn registrations(self: Arc<Self>) -> Vec<ToolRegistration> {
+                let definitions = {
+                    vec![ToolDefinition {
+                        spec: ToolSpec {
+                            name: "read".into(),
+                            description: "slow read".into(),
+                            input_schema: serde_json::json!({
+                                "type":"object",
+                                "additionalProperties":false,
+                                "properties":{}
+                            }),
+                        },
+                        presentation: ToolPresentation::argument(ToolActivityKind::Read, "path"),
+                        exposure: ToolExposure::Direct,
+                    }]
+                };
+                definitions
+                    .into_iter()
+                    .map(|definition| ToolRegistration::new(definition, self.clone()))
+                    .collect()
             }
+        }
 
+        impl ToolExecutor for SlowRead {
             fn execute<'a>(
                 &'a self,
                 _call: &'a ToolCall,
@@ -1901,22 +1905,30 @@ mod tests {
     async fn deferred_tool_search_activates_next_request_and_survives_reopen_and_fork() {
         struct DeferredTool;
 
-        impl ToolHost for DeferredTool {
-            fn definitions(&self) -> Vec<ToolDefinition> {
-                vec![
-                    ToolDefinition::external(ToolSpec {
-                        name: "special_lookup".into(),
-                        description: "Look up specialized project metadata".into(),
-                        input_schema: serde_json::json!({
-                            "type":"object",
-                            "additionalProperties":false,
-                            "properties":{}
-                        }),
-                    })
-                    .deferred(),
-                ]
+        impl ToolSource for DeferredTool {
+            fn registrations(self: Arc<Self>) -> Vec<ToolRegistration> {
+                let definitions = {
+                    vec![
+                        ToolDefinition::external(ToolSpec {
+                            name: "special_lookup".into(),
+                            description: "Look up specialized project metadata".into(),
+                            input_schema: serde_json::json!({
+                                "type":"object",
+                                "additionalProperties":false,
+                                "properties":{}
+                            }),
+                        })
+                        .deferred(),
+                    ]
+                };
+                definitions
+                    .into_iter()
+                    .map(|definition| ToolRegistration::new(definition, self.clone()))
+                    .collect()
             }
+        }
 
+        impl ToolExecutor for DeferredTool {
             fn execute<'a>(
                 &'a self,
                 call: &'a ToolCall,
@@ -2098,14 +2110,23 @@ mod tests {
     #[tokio::test]
     async fn tool_images_are_committed_replayed_and_rejected_on_a_text_only_route() {
         struct ImageTool;
-        impl ToolHost for ImageTool {
-            fn definitions(&self) -> Vec<ToolDefinition> {
-                vec![ToolDefinition::external(ToolSpec {
-                    name: "picture".into(),
-                    description: "picture".into(),
-                    input_schema: serde_json::json!({"type":"object"}),
-                })]
+        impl ToolSource for ImageTool {
+            fn registrations(self: Arc<Self>) -> Vec<ToolRegistration> {
+                let definitions = {
+                    vec![ToolDefinition::external(ToolSpec {
+                        name: "picture".into(),
+                        description: "picture".into(),
+                        input_schema: serde_json::json!({"type":"object"}),
+                    })]
+                };
+                definitions
+                    .into_iter()
+                    .map(|definition| ToolRegistration::new(definition, self.clone()))
+                    .collect()
             }
+        }
+
+        impl ToolExecutor for ImageTool {
             fn execute<'a>(
                 &'a self,
                 _: &'a ToolCall,
@@ -3290,10 +3311,17 @@ mod tests {
     #[tokio::test]
     async fn malformed_tool_arguments_return_error_without_dispatch() {
         struct NeverDispatch;
-        impl ToolHost for NeverDispatch {
-            fn definitions(&self) -> Vec<ToolDefinition> {
-                Vec::new()
+        impl ToolSource for NeverDispatch {
+            fn registrations(self: Arc<Self>) -> Vec<ToolRegistration> {
+                let definitions = { Vec::new() };
+                definitions
+                    .into_iter()
+                    .map(|definition| ToolRegistration::new(definition, self.clone()))
+                    .collect()
             }
+        }
+
+        impl ToolExecutor for NeverDispatch {
             fn execute<'a>(
                 &'a self,
                 _call: &'a ToolCall,
@@ -3444,14 +3472,14 @@ mod tests {
         std::fs::create_dir(&root).unwrap();
         let session = CodingSession::create(root.join("session.sqlite"), &root).unwrap();
         let scripts = Arc::new(ScriptedModelService::new([
-            response(vec![Content::Text("x".repeat(1_200))]),
+            response(vec![Content::Text("x".repeat(2_200))]),
             response(vec![Content::Text("First task completed.".into())]),
             response(vec![Content::Text("continued".into())]),
         ]));
         let agent =
             Agent::new(scripts.clone(), Arc::new(TestTools::new(&root))).with_limits(AgentLimits {
-                // Leave room for the built-in tool schemas; the second Turn
-                // still has to compact the first Turn's long answer.
+                // Explicit retained-answer pressure, not verbose native-tool
+                // descriptions in this minimal protocol fixture.
                 max_request_bytes: 3_200,
                 ..AgentLimits::default()
             });

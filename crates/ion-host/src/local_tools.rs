@@ -23,8 +23,8 @@ use tokio::{
 use tokio_util::sync::CancellationToken;
 
 use ion_core::{
-    CodingToolHost as ToolHost, CodingToolOutput as ToolOutput, ToolActivityKind, ToolDefinition,
-    ToolExposure, ToolPresentation,
+    CodingToolOutput as ToolOutput, CodingToolSource as ToolSource, ToolActivityKind,
+    ToolDefinition, ToolExecutor, ToolExposure, ToolPresentation, ToolRegistration,
 };
 
 const MAX_FILE_BYTES: usize = 8 * 1024 * 1024;
@@ -58,26 +58,47 @@ impl LocalTools {
     }
 }
 
-impl ToolHost for LocalTools {
-    fn definitions(&self) -> Vec<ToolDefinition> {
+impl ToolSource for LocalTools {
+    fn registrations(self: Arc<Self>) -> Vec<ToolRegistration> {
         specs()
             .into_iter()
             .map(|spec| {
-                let presentation = match spec.name.as_str() {
-                    "read" => ToolPresentation::argument(ToolActivityKind::Read, "path"),
-                    "edit" => ToolPresentation::argument(ToolActivityKind::Edit, "path"),
-                    "write" => ToolPresentation::argument(ToolActivityKind::Write, "path"),
-                    "exec" => ToolPresentation::argument(ToolActivityKind::Command, "command"),
-                    _ => ToolPresentation::external(),
+                let (operation, kind, key) = match spec.name.as_str() {
+                    "read" => (LocalOperation::Read, ToolActivityKind::Read, "path"),
+                    "edit" => (LocalOperation::Edit, ToolActivityKind::Edit, "path"),
+                    "write" => (LocalOperation::Write, ToolActivityKind::Write, "path"),
+                    "exec" => (LocalOperation::Exec, ToolActivityKind::Command, "command"),
+                    _ => unreachable!("native specs and operations have one owner"),
                 };
-                ToolDefinition {
-                    spec,
-                    presentation,
-                    exposure: ToolExposure::Direct,
-                }
+                ToolRegistration::new(
+                    ToolDefinition {
+                        spec,
+                        presentation: ToolPresentation::argument(kind, key),
+                        exposure: ToolExposure::Direct,
+                    },
+                    Arc::new(LocalExecutor {
+                        tools: self.clone(),
+                        operation,
+                    }),
+                )
             })
             .collect()
     }
+}
+
+enum LocalOperation {
+    Read,
+    Edit,
+    Write,
+    Exec,
+}
+
+struct LocalExecutor {
+    tools: Arc<LocalTools>,
+    operation: LocalOperation,
+}
+
+impl ToolExecutor for LocalExecutor {
     fn execute<'a>(
         &'a self,
         call: &'a ToolCall,
@@ -87,12 +108,11 @@ impl ToolHost for LocalTools {
             if stop.is_cancelled() {
                 return error("cancelled before tool start");
             }
-            match call.name.as_str() {
-                "read" => self.read(&call.arguments),
-                "edit" => self.edit(&call.arguments),
-                "write" => self.write(&call.arguments),
-                "exec" => self.exec(&call.arguments, stop).await,
-                _ => error(format!("unknown tool: {}", call.name)),
+            match self.operation {
+                LocalOperation::Read => self.tools.read(&call.arguments),
+                LocalOperation::Edit => self.tools.edit(&call.arguments),
+                LocalOperation::Write => self.tools.write(&call.arguments),
+                LocalOperation::Exec => self.tools.exec(&call.arguments, stop).await,
             }
         })
     }
@@ -1173,7 +1193,10 @@ mod tests {
 
     #[tokio::test]
     async fn long_command_output_retains_the_failure_summary_at_the_end() {
-        let tools = LocalTools::new(std::env::temp_dir()).unwrap();
+        let tools = ion_core::ToolSet::new([
+            Arc::new(LocalTools::new(std::env::temp_dir()).unwrap()) as Arc<dyn ToolSource>,
+        ])
+        .snapshot();
         let output = tools
             .execute(
                 &ToolCall {
@@ -1220,7 +1243,10 @@ mod tests {
 
     #[tokio::test]
     async fn direct_exit_keeps_output_when_descendant_holds_pipe_open() {
-        let tools = LocalTools::new(std::env::temp_dir()).unwrap();
+        let tools = ion_core::ToolSet::new([
+            Arc::new(LocalTools::new(std::env::temp_dir()).unwrap()) as Arc<dyn ToolSource>,
+        ])
+        .snapshot();
         let output = tools
             .execute(
                 &ToolCall {
@@ -1241,7 +1267,10 @@ mod tests {
 
     #[tokio::test]
     async fn incomplete_long_capture_does_not_claim_a_full_output_file() {
-        let tools = LocalTools::new(std::env::temp_dir()).unwrap();
+        let tools = ion_core::ToolSet::new([
+            Arc::new(LocalTools::new(std::env::temp_dir()).unwrap()) as Arc<dyn ToolSource>,
+        ])
+        .snapshot();
         let output = tools
             .execute(
                 &ToolCall {
@@ -1261,7 +1290,10 @@ mod tests {
 
     #[tokio::test]
     async fn post_exit_output_activity_keeps_the_pipe_open_until_idle() {
-        let tools = LocalTools::new(std::env::temp_dir()).unwrap();
+        let tools = ion_core::ToolSet::new([
+            Arc::new(LocalTools::new(std::env::temp_dir()).unwrap()) as Arc<dyn ToolSource>,
+        ])
+        .snapshot();
         let output = tools
             .execute(
                 &ToolCall {
@@ -1281,7 +1313,10 @@ mod tests {
 
     #[tokio::test]
     async fn cancellation_stops_post_exit_capture() {
-        let tools = LocalTools::new(std::env::temp_dir()).unwrap();
+        let tools = ion_core::ToolSet::new([
+            Arc::new(LocalTools::new(std::env::temp_dir()).unwrap()) as Arc<dyn ToolSource>,
+        ])
+        .snapshot();
         let stop = CancellationToken::new();
         let trigger = stop.clone();
         let task = tokio::spawn(async move {
@@ -1338,7 +1373,10 @@ mod tests {
 
     #[tokio::test]
     async fn shell_timeout_is_opt_in_and_accepts_long_explicit_limits() {
-        let tools = LocalTools::new(std::env::temp_dir()).unwrap();
+        let tools = ion_core::ToolSet::new([
+            Arc::new(LocalTools::new(std::env::temp_dir()).unwrap()) as Arc<dyn ToolSource>,
+        ])
+        .snapshot();
         for args in [
             json!({"command":"printf ok"}),
             json!({"command":"printf ok","timeout_ms":600000}),
@@ -1373,7 +1411,10 @@ mod tests {
         if !Path::new("/bin/bash").is_file() {
             return;
         }
-        let tools = LocalTools::new(std::env::temp_dir()).unwrap();
+        let tools = ion_core::ToolSet::new([
+            Arc::new(LocalTools::new(std::env::temp_dir()).unwrap()) as Arc<dyn ToolSource>,
+        ])
+        .snapshot();
         let output = tools
             .execute(
                 &ToolCall {

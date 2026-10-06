@@ -12,8 +12,8 @@ use ion_ai::{
     ResponseTermination, Role, Script, ScriptedModelService, ToolCall, ToolChoice, ToolSpec, Usage,
 };
 use ion_core::{
-    CodingAgent, CodingSession, CodingToolHost, CodingToolOutput, ToolDefinition, ToolSet,
-    TranscriptProjection,
+    CodingAgent, CodingSession, CodingToolOutput, CodingToolSource, ToolDefinition, ToolExecutor,
+    ToolRegistration, ToolSet, TranscriptProjection,
 };
 use ion_host::SessionCatalog;
 use ion_terminal::{Frame, Screen};
@@ -85,23 +85,9 @@ fn completion(text: String) -> Script {
 
 struct NoTools;
 
-impl CodingToolHost for NoTools {
-    fn definitions(&self) -> Vec<ToolDefinition> {
+impl CodingToolSource for NoTools {
+    fn registrations(self: Arc<Self>) -> Vec<ToolRegistration> {
         Vec::new()
-    }
-
-    fn execute<'a>(
-        &'a self,
-        call: &'a ToolCall,
-        _stop: CancellationToken,
-    ) -> BoxFuture<'a, CodingToolOutput> {
-        Box::pin(async move {
-            CodingToolOutput {
-                value: json!({"error": format!("unexpected tool call: {}", call.name)}),
-                images: Vec::new(),
-                is_error: true,
-            }
-        })
     }
 }
 
@@ -110,9 +96,10 @@ struct CatalogTools {
     deferred: bool,
 }
 
-impl CodingToolHost for CatalogTools {
-    fn definitions(&self) -> Vec<ToolDefinition> {
-        (0..self.count)
+impl CodingToolSource for CatalogTools {
+    fn registrations(self: Arc<Self>) -> Vec<ToolRegistration> {
+        let definitions: Vec<ToolDefinition> = {
+            (0..self.count)
             .map(|index| {
                 let definition = ToolDefinition::external(ToolSpec {
                     name: format!("mcp__research__search_{index:03}"),
@@ -138,8 +125,15 @@ impl CodingToolHost for CatalogTools {
                 }
             })
             .collect()
+        };
+        definitions
+            .into_iter()
+            .map(|definition| ToolRegistration::new(definition, self.clone()))
+            .collect()
     }
+}
 
+impl ToolExecutor for CatalogTools {
     fn execute<'a>(
         &'a self,
         call: &'a ToolCall,
@@ -337,11 +331,11 @@ async fn run(workspace: &std::path::Path, state: &std::path::Path) -> Result<()>
     );
 
     for count in [50usize, 100, 250] {
-        let direct_host: Arc<dyn CodingToolHost> = Arc::new(CatalogTools {
+        let direct_host: Arc<dyn CodingToolSource> = Arc::new(CatalogTools {
             count,
             deferred: false,
         });
-        let deferred_host: Arc<dyn CodingToolHost> = Arc::new(CatalogTools {
+        let deferred_host: Arc<dyn CodingToolSource> = Arc::new(CatalogTools {
             count,
             deferred: true,
         });

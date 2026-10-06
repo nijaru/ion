@@ -1,640 +1,258 @@
 # Ion architecture
 
-This file states the chosen coding-agent contracts. [README.md](README.md)
-describes implemented and validated behavior. Ion is unreleased v0 with no
-backward-compatibility or stability guarantees. Replace obsolete runtime,
-API and on-disk representations directly; do not add migration layers,
-deprecated aliases, compatibility facades or preserved development formats
-unless the current design itself requires them.
+This is the chosen design for Ion, not an inventory of everything implemented.
+[README.md](README.md) describes current behavior and qualification. Ion is
+unreleased v0: replace obsolete APIs and development formats directly, without
+migrations, deprecated facades or parallel old/new implementations.
 
 ## Product
 
-Ion is a Rust agent for coding in a local working directory. A user can start
-it in a terminal, choose and authenticate a model, ask it to inspect and
-change files, run native commands, observe results and continue a saved
-session after relaunch. The same behavior is available headlessly and through
-a library host. The first tool set is read, edit, write and shell. Shell can
-handle search and listing until a dedicated tool shows a benefit.
+Ion is a polished local coding agent in Rust. A user chooses a model, asks it
+to inspect and change a working directory, observes its work, intervenes, and
+continues the conversation after relaunch. Terminal, headless, RPC and embedded
+hosts use the same coding semantics. Native tools inherit host permissions;
+there is no implicit sandbox, private workspace importer or rollback promise.
 
-A usable coding agent includes project instructions, model discovery and
-selection, automatic environment API keys, optional masked key entry, and
-honest resume. The broader product target includes the common workflows of a
-Pi-level coding agent: image input, reusable skills and prompt templates,
-custom tools and extensions, earlier-point conversation exploration, and
-long-lived programmatic control. Ion needs to complete real coding tasks end
-to end through these surfaces; scripted model and storage tests alone do not
-establish that outcome.
+Pi 1.0 is the primary reference for mature workflows and harness semantics.
+fx is the primary reference for terminal presentation. Adopt useful outcomes
+and ownership boundaries, not either implementation's class hierarchy, runtime
+or complete feature inventory. A smaller implementation is not an improvement
+if it merely transfers execution or recovery responsibility to every client.
 
-Pi is a direct source reference for the small interactions and failure cases
-that make a coding agent usable: editing and steering prompts, inspecting
-tools, finding sessions, switching models and managing context. Ion adopts
-those user outcomes through its own Session and client design rather than
-copying every Pi command or its TypeScript plugin runtime. The same coding
-loop must be usable from terminal, headless and library clients;
-client-specific rendering or input cannot own model/tool semantics.
+The common-workflow target includes file/shell tools, project instructions,
+models and credentials, images, skills/templates, tool discovery, custom/MCP
+tools, steering/follow-ups, context management and Session exploration. Workers,
+personal memory, gateways, scheduling and generic workflow authoring are outside
+this scope. OAuth is an optional access workflow, never a first-use gate.
 
-Workers, personal memory, gateways, schedules and general workflow authoring
-are outside this initial scope.
+## Four concepts
 
-## Owners and loop
+1. **Session:** ordered committed conversation and execution facts. It owns
+   acceptance, recovery and context history, not HTTP clients or terminal state.
+2. **Active operation:** one exclusive coding Turn, direct-shell operation or
+   compaction. It owns continuation and cancellation until its started work
+   settles. An accepted user message starts a Turn; a model response is a step
+   within it, not another user Turn.
+3. **Prepared request:** a coherent model selection, bounded context and frozen
+   executable capabilities. Its definitions and dispatch bindings cannot change
+   while the issued calls are being handled.
+4. **Host services:** provider transports/credentials, native tools, MCP and
+   project resources. Clients control input and presentation, not another loop.
 
-Ion's core is the production Rust architecture that carries every coding
-workflow above: provider-neutral messages, one durable Session and Turn owner,
-host composition, and thin clients. Pi's Pico and durable-harness work informs
-the explicit ownership, passive-open and recovery boundaries. Ion's coding
-Turn and typed log are the chosen Rust expression of those lessons.
+`ion-ai` owns neutral model/content contracts; `ion-core` owns Session, Turn,
+context and abstract capabilities; `ion-host` implements and composes services;
+`ion-app` owns client interaction/protocol/presentation; `ion-terminal` owns
+physical terminal mechanics. Split mixed responsibilities within these owners
+rather than adding a generic frontend, scheduler or projection framework.
 
-`ion-ai` owns provider-neutral messages, streams and usage facts. `ion-core`
-owns one committed Session log, the coding Turn loop and the abstract model/
-tool contracts they consume: ordered conversation, continuation, recovery and
-bounded model context. Concrete HTTP/provider adapters, credentials, native
-filesystem/shell tools, MCP and project resources are host implementations,
-not Session/runtime responsibilities. A public host composition layer selects
-and composes those implementations with models and Sessions; terminal,
-one-shot headless and sustained-control clients use that layer.
-Terminal rendering and input never become a second agent loop.
-The terminal may cache a bounded wrapped history view, invalidating it after
-Session changes or terminal width changes. Idle keys must not rebuild the
-committed Session projection merely to redraw the editor. The cache never
-owns conversation facts.
-For an active interactive or sustained client, the host owns one binding of
-Session, selected model, resources and agent. New, clone, fork, switch, model
-selection and resource reload update that binding through the same operations
-for both clients. A replacement is prepared before it becomes visible; a
-failed preparation leaves the previous binding usable. Client input queues,
-rendering and protocol records remain client-owned.
+## Coding loop and effects
 
-```text
-user input -> model stream -> final answer
-                   | tool calls
-                   v
-               host tools -> results -> next model request
-```
+Accept input atomically, prepare a request, generate, commit the assistant
+response, settle its calls, and continue or end. There is no fixed step-count
+cap. Calls execute in model order today; parallel execution needs an explicit
+ordering/settlement contract, not a detached task per call.
 
-One Turn starts from an accepted user message. Each model request uses one
-coherent selection of model, instructions, context and a frozen **executable
-tool catalog**. That catalog binds every callable tool definition to its
-semantic presentation identity and exact execution route. The
-**declared loadout** is a subset of that catalog and is the only set advertised
-to the model for that request.
+- Commit an assistant call and its resolved semantic activity metadata before
+  dispatch. Commit an observed result before a dependent request consumes it.
+- Commit a final answer and Turn end together. Assistant plus queued steering
+  is also one atomic transition; a failed write leaves uncommitted input with
+  the host. Publish authoritative observations only after successful commit.
+- Distinguish an admitted call, execution start, observed outcome and operation
+  settlement. Progress cannot establish success or fabricate a durable call.
+- Reject malformed or truncated calls without executing them. Identifiable
+  output-truncated calls can be committed with rejected results atomically;
+  otherwise fail without inventing call identity. A completed empty response
+  is a model error, not a successful empty answer.
+- Cancellation stops new dispatch, requests stop and awaits already-started
+  host work. Rendering, connection or cache-refresh failure cannot drop its
+  execution future. A host returns what it observed, not an assertion that all
+  descendants stopped or arbitrary external changes were undone.
+- Storage failure blocks dependent work. Process loss or task panic may leave
+  unknown effects. Neither authorizes automatic replay.
 
-Direct tools enter the loadout automatically. A deferred capability remains
-callable by the harness but is omitted until a declared `tool_search` call
-selects it. Search activation changes only the next request's loadout; it never
-changes the route of a call already advertised. A previously activated
-deferred tool is restored after reopen/fork/refresh only when its
-provider-neutral definition is still identical. Dynamic host/MCP refresh can
-replace the executable catalog only at a later request boundary. The loop
-builds model input, streams a response,
-dispatches complete tool calls in order, records their results and continues
-until a final response, cancellation or an explicit failure. There is no
-fixed model-step cap on an active Turn. A tool result is available to the
-model before a dependent request. Tool failure can be a result the model
-reasons about; transport, storage and unrecoverable dispatch errors surface
-to the client. Neither client infers task success from the model's prose alone.
-An invented tool name or invalid arguments should reach a visible tool error
-when the call can be represented safely. Preserve malformed streamed argument
-text as a failed call, and never dispatch it or a truncated call. When a
-response reaches its output-token limit with identifiable tool calls, commit
-the incomplete assistant attempt and synthetic failure results in one Session
-transaction, then let the model reissue complete calls. An unrepresentable
-partial call ends the Turn without dispatch.
-A completed response with no nonblank text and no calls ends the Turn as a
-model error; it is not committed as a successful empty assistant answer.
+Steering joins the active Turn at a safe model boundary. Follow-up input stays
+client-owned until accepted as a later Turn, with its own attachments. Restore
+uncommitted input on cancellation/failure. Queue acceptance is not Session
+acceptance, and a stop request is not operation completion.
 
 ## Session and recovery
 
-A Session owns the working-directory identity and one typed, append-only
-history in SQLite. It admits at most one executing coding Turn. One writer
-holds an advisory lock for that Session, serializes submissions and append
-transactions, then explicitly releases the lock after the store closes. A
-briefly inherited file description cannot keep the Session locked after its
-writer exits. Turn acceptance and its user message commit together.
+Use one typed append-only SQLite history, one writer lock and atomic event
+batches. Validate a candidate state before writing; publish derived state only
+after commit. Turn state and indexes derive from entries, not another mutable
+lifecycle record. Keep SQLite durability and locking explicit.
 
-Immediately before a model request, a changed provider-neutral
-`ModelContextSnapshot` records the effective instructions and declared tool
-schemas. Identical consecutive snapshots are elided. Concrete tool routes,
-credentials, HTTP clients and MCP connections remain host/process state and
-are never persisted as model context. When a deferred-tool search closes the
-current pending tool batch, its observed result and the resulting next
-model-context snapshot commit atomically. Clone/fork/reopen therefore follow
-the same context history as the conversation rather than reconstructing it
-from today's filesystem or tool configuration.
+Opening/inspection is passive. A committed call without a result has an unknown
+effect, even if dispatch might not have started. Before later input or direct
+shell authority, commit interrupted-call recovery and close the interrupted
+Turn. A failed recovery grants no execution authority. Resume continues the
+conversation; it does not resume an external action automatically.
 
-Save a complete assistant message containing tool calls durably before
-executing those calls. The same atomic assistant entry retains the semantic
-activity metadata resolved from that model request's frozen tool catalog, so
-later transcript replay does not reinterpret an old call through a different
-catalog. Then save each observed result durably before another model request
-depends on it. A final
-answer and explicit Turn-end reason commit together. Cancellation, provider
-failure and limits also have explicit end reasons. Turn state is derived from
-entries; any index is rebuildable. Partial model text and streaming tool
-output may be shown live, but committed Session facts are the authority on
-reopen.
-Steering remains in a host-owned inbox until it commits to the Session. When
-it arrives beside a completed assistant response, the assistant and steering
-commit together. A failed write leaves the uncommitted prompt available to
-the host for restoration. The agent publishes assistant and steering commit
-events only after successful writes, in durable order, including assistant
-responses that continue the same Turn. Live and reopened transcripts share
-committed ordering and grouping; only the live response tail is provisional.
-A response restart replaces that tail, never earlier committed content.
-Tool-start progress does not establish another call or replace its committed
-arguments and metadata.
-Recorded assistant attempts retain their provider termination reason, so a
-truncated call that was rejected is distinguishable from a complete call.
-User-run shell commands are separate Session facts recorded after their
-observed result. A command may be visible only in the transcript or also
-projected as a user message for later model requests; the latter choice is
-persisted and respected after reopen and compaction. Session owns an exclusive
-direct-shell permit and observed-result publication; the host owns the concrete
-live-directory shell executor. The host holds that permit across execution, so
-direct shell work cannot interleave with an active coding Turn and its observed
-result commits before exclusivity is released. After interrupted reopen,
-Session commits unresolved-call recovery and closes the old Turn before granting
-a direct-shell permit. A failed recovery write grants no authority to execute.
+Direct shell holds Session exclusivity through execution and observed-result
+publication. Persist whether its result participates in model context (`!`) or
+only the human transcript (`!!`). Clone/fork copies a valid committed prefix
+and context boundaries into an independent Session. It does not snapshot or
+roll back the shared working directory. An unfinished Turn cannot be a settled
+fork boundary. New empty Sessions do not displace useful recent conversations.
 
-An unmatched call after process loss has an unknown effect, including when
-dispatch may not have begun. An accepted Turn without an end entry is
-interrupted. Opening and reading a Session are passive; the read-only view
-can project these facts without changing history. Before a later user message
-enters model context, a writer closes unresolved calls with visible
-interruption results and ends the interrupted Turn before accepting the new
-input. It never
-silently reruns a call. Session resume means continuing the conversation
-across launches, not automatically resuming an interrupted external effect.
+There is no general task graph, physical-attempt ledger, receipt protocol,
+second runtime or replay cursor. Add new facts for a concrete coding contract,
+not because a durable framework offers them.
 
-Cancellation prevents new dispatch and requests that active host work stop.
-The Turn awaits the tool host's settlement and records its observed result;
-cache warming may stop, but cannot drop an in-flight tool's cleanup. Embedded
-tool hosts must respond to cancellation and settle their owned work.
-A command's direct exit, timeout or signal result is recorded as observed;
-remote or detached effects may continue. A failure to persist history needed
-for the next step stops that step. These rules give truthful recovery without
-promising all-descendant quiescence or atomic filesystem changes. The typed
-history is an explicit durable continuation, not a generic task framework.
-A separate pre-effect marker, physical attempt ledger, immutable request
-manifest, receipt graph and parallel outcome staging need a demonstrated
-recovery or concurrency benefit before becoming part of this coding contract.
+## Capabilities and trust
 
-SQLite owns Session metadata and ordered entries; one transaction publishes a
-related event batch. Its entries are the only authority for conversation and
-Turn state. A derived index may be rebuilt. This avoids inventing a second
-JSONL publication and recovery protocol for the first product. In unreleased
-v0, do not keep two production runtimes or compatibility facades.
-Discovery of recent Sessions must tolerate one damaged or partially created
-file; opening that exact path must still report its error. A failed tool
-result retains its error identity through persistence and provider replay.
-An idle new Session with no accepted user Turn must not displace the latest
-conversation or clutter the normal Session list.
+A tool source publishes registrations containing a definition, semantic
+presentation metadata and a bound executor. Freeze those registrations for the
+request. Do not freeze only a host object and later rediscover the tool through
+its mutable name registry. Native registrations bind an operation; MCP
+registrations bind the selected connection and original remote name. A remote
+server's implementation cannot be frozen locally; an unavailable captured
+connection produces an error, not implicit replacement or effect replay.
 
-## Context, tools and trust
+Callable capabilities and the model's declared subset are different. Direct
+tools are declared normally; discovery selects deferred registrations for a
+later request. Restore an activated definition only if it remains identical.
+Refresh and overrides replace future registrations, never issued calls.
+Exposure is not a sandbox or permission policy. The Turn still owns execution
+sequencing and durable publication; invoking an executor alone is not a durable
+coding operation.
 
-Project instructions, the current request and useful Session history form a
-bounded model input. Raw history, model-visible configuration and the
-model-context message projection are distinct. Changes to instructions or the
-declared tool loadout are durable Session facts at request boundaries; provider
-adapters may encode that timeline efficiently, but cannot make it depend on
-volatile provider cache state. Context changes must leave the recorded
-conversation inspectable.
+Commit changed instructions and declared schemas at request boundaries; elide
+identical consecutive snapshots. Retain historical semantic metadata so replay
+does not reinterpret old actions through today's tool names. Persist no live
+executor, credential or connection handle.
 
-Prompt caching is a provider optimization, not conversation truth. Each Session
-header owns a persisted opaque provider-conversation identity, retained on
-reopen and allocated fresh on clone/fork rather than copied with transcript
-entries. Every coding, retry, compaction and cache-refresh request carries it
-as optional transport metadata, never model-visible content. Supported
-adapters encode provider-specific affinity controls; the OpenRouter Chat wire
-uses its documented `session_id`, while other wires omit that field. Affinity
-is best effort and cannot become replay state, a cache-hit guarantee or an
-execution-correctness dependency.
-Provider-neutral usage retains total input/output plus optional cache-read and
-cache-write subcounts when the route reports them. Cache lifetime, pricing and
-refresh mechanisms belong to resolved route capabilities, never Session
-correctness. A reusable coding request may opt into caching only on a route
-whose behavior is explicitly supported. On current native Anthropic routes,
-Ion can preserve the initial top-level tool prefix by deriving later
-tool-addition/removal/redefinition messages from durable full context
-snapshots. If the instruction snapshot changes or the historical timeline
-cannot be represented exactly, the adapter falls back to the latest leading
-context rather than inventing replacement semantics.
+Validate untrusted arguments/content at host boundaries. Exact edits validate
+all replacements against one original snapshot before writing, preserving
+unmatched bytes and ordinary BOM/line endings. Respect effective write
+permissions. Bounded command output keeps diagnostic tails, identifies omitted
+or incomplete capture and supplies private complete-capture paths when available.
+Artifacts are inspectable host output, not guaranteed durable Session storage.
 
-Active cache warming is allowed only as a best-effort optimization around the
-exact request whose prefix is being protected. The current streaming policy
-may replay that request with a one-token output ceiling while its tool batch is
-still running, only when verified route pricing/lifetime metadata predicts a
-minimum economic benefit. It stops when the batch/context advances and is
-bounded even during long work. Refresh usage is a durable accounting fact but
-is excluded from model context and normal transcript projection. Refresh
-failure cannot change the outcome of the coding Turn or justify replaying a
-workspace effect. Idle warming is a separate policy decision, not implied by
-streaming warming.
+Resource discovery does not execute repository text or start unconfigured
+servers. Instructions, skills/templates and tool results are lower-trust data.
+MCP discovery isolates failing servers, refreshes at later request boundaries,
+preserves original names and server error identity, and never transparently
+retries a possibly effectful invocation. Images enter through one bounded,
+validated normalization owner for user, native and MCP inputs; unsupported
+content is an explicit error, never silently discarded.
 
-Keep tool
-calls and results intelligible together. If a request is too large, show an
-actionable capacity error without hiding or dropping history. Daily use also
-needs an explicit, recoverable way to reduce model context. A summary must
-commit as a Session fact, retain the raw transcript, and keep complete
-tool-call/result groups on either side of the cut. Evaluate its policy on
-representative tasks. If the saved prefix is too large for one summary
-request, summarize bounded settled prefixes in sequence; do not require a
-larger model merely to reopen long work. No particular checkpoint or tail
-algorithm is fixed.
-If a recent call/result batch exceeds the preferred tail size, first use an older
-settled cut when available so its assistant call and results remain exact in
-the next request. Summarize that batch only when there is no earlier safe cut;
-never divide a call from its results. The request-capacity check still applies
-to the retained context.
-If compaction is cancelled before its Session write, discard the generated
-summary and leave the previous context projection in place.
-Use the selected model's output ceiling for coding requests, clamped to the
-estimated remaining context on each request. Do not impose a smaller fixed
-app-wide generation cap.
-Project `AGENTS.md` files inherit from ancestor directories. In a linked
-worktree nested inside its main checkout, the worktree root's copy shadows
-the main checkout's copy of the same file; other ancestor instructions still
-apply.
-A complete assistant response without tool calls is also a settled cut,
-including when queued steering keeps the Turn active. A steering message
-alone is not a settled assistant batch.
-If a later model cannot encode stored history faithfully, report that or make
-an explicit context change rather than silently dropping content.
-An output-limit stop with observed output usage below the request's dispatched,
-context-clamped output budget may reflect context pressure. Try one
-compact-and-retry before committing that incomplete response or dispatching
-its calls, and notify streaming clients that the provisional attempt was
-replaced. Filling the dispatched budget is ordinary output exhaustion even
-when it is below the model's ceiling; it does not trigger this recovery.
+## Context and providers
 
-Default file and shell tools act on the live working directory with the host
-user's permissions. There is no implicit sandbox, VM, importer or private
-workspace registry. Shell commands use Bash where available, then POSIX sh.
-An edit may contain several targeted replacements in one file. Match every
-old text against the same original snapshot, reject missing, ambiguous or
-overlapping matches before writing, then commit one replacement. Writes report
-creation or replacement; commands report exit status, launch/transport
-failure and truncation. When command output is bounded, retain the diagnostic
-tail and state what was omitted. For a complete capture whose displayed tail
-is truncated, retain the observed full stream in a private temporary file and
-return its path so the agent can inspect earlier output without rerunning the
-command. The file is a host artifact, not a Session authority or a durable
-resume promise. If a descendant keeps an output pipe open
-after the direct command exits, retain bytes already observed and finish
-after output becomes idle. Cancellation bounds this drain even if output
-remains active; mark an unfinished capture rather than reporting it as
-complete. Edits preserve unmatched bytes and ordinary BOM and line-ending
-conventions without silently changing unrelated text. An atomic
-replacement of an existing file must still respect its effective write
-permission; directory rename access alone does not make it an editable target.
-For bounded text files, `read.base_digest` hashes the same full-file bytes
-used for the returned page and can be passed directly to `edit` as its
-change guard.
-The read tool can return a workspace image as a typed tool result. Image
-normalization and bounds have one provider-neutral owner shared with user
-attachments. Session history retains the normalized bytes for replay; terminal
-and inspection views show a marker rather than base64. Provider adapters
-translate this result without changing its Session identity: Anthropic can
-carry image blocks inside a tool result, while Chat Completions needs text in
-the tool message followed by an image-bearing user message. If a selected
-route cannot represent an image, report the limitation rather than silently
-discarding it. Count tool images under the same request-size and context
-bounds as user images.
-Support optional command timeouts and cancellation, and bound payload and
-output sizes at usable values. A raw input or provider response admitted by
-the host must fit its encoded Session entry; model context can still be a
-separate, actionable limit. Do not claim stronger effect or isolation
-guarantees than a tool implements. Approval or sandboxing is a separate opt-in
-product decision, not a prerequisite for native coding.
+Keep three views distinct: raw committed history, bounded model context and
+human conversation/activity. Compaction changes model context, not raw history.
+It commits atomically, respects complete call/result cuts, uses bounded settled
+prefixes when needed, and leaves the old projection intact if cancelled before
+commit. Measure successful continuation, not merely summary compression.
 
-Project files and tool output are lower-trust data. Credentials belong to the
-host and stay out of model-visible context and Session history.
+A prepared request uses the selected model's output ceiling clamped to remaining
+context. Filling that dispatched budget is output exhaustion, not context
+pressure. Capacity recovery must be bounded and visible; an incompatible
+history must fail or undergo an explicit context change, never silently lose
+content. Retry a transient provider failure only before stream output, within
+bounded cancellable waits, without repeating completed effects.
 
-## Model setup and clients
+Host model setup owns catalog capabilities, endpoint resolution and credentials.
+Use matching environment keys automatically, masked entry when needed, and
+explicit custom endpoints. A failed saved login does not silently select another
+identity. Prepare Session/model/resource replacements before publishing them;
+failed preparation leaves the old binding usable. A running operation retains
+its captured binding.
 
-The catalog lists models with working transports and maintained capability
-metadata. A user can discover, select and switch models without asserting
-capacity values for known entries. Custom compatible endpoints remain
-possible with the metadata their adapters actually need. Resolve an ambient
-key automatically for its matching provider. Masked key entry and logout
-operate on host-owned credentials. Do not silently
-switch identities after a saved login fails. The exact initial provider list
-is an implementation recommendation to verify, not a product requirement.
+Retain logical selection and effective execution identity, including usage and
+provider-returned IDs. Routing remains direct-only; a virtual router is not a
+requirement. Effective-model changes advance durable opaque-replay epochs,
+including A → B → A and reopen. Provider-scoped signed reasoning is not answer
+text. Preserve its exact supported continuation and prefix or report an explicit
+reset/incompatibility; never rebase inside an outstanding signed tool exchange.
+Provider adapters own wire validity, SSE framing and error classification.
 
-The host resolves the user's logical model selection to an effective physical
-provider/model, endpoint, wire behavior and credential source for each model
-request. `ModelRoute` carries the logical identity, effective identity and a
-request reason; direct models are the trivial `logical == effective` case.
-Provider adapters encode only the effective identity. Usage-bearing assistant,
-compaction and cache-refresh facts retain a `ModelExecution` containing that
-route plus any provider-returned model identifier, so accounting and replay can
-name what physically ran without changing the Session's logical selection.
-Each Turn records the selected nonsecret logical identity. A custom route is
-validated by the transport's URL rule when selected; model setup must not
-maintain a second URL policy. A compatible API base URL resolves
-to the wire's standard request path once; an already complete standard request
-URL stays complete. Explicit HTTP and HTTPS custom endpoints may be anonymous
-or use an explicitly named environment key or saved provider credential;
-they do not inherit one global custom key. Catalog routes
-require their matching provider credential. A custom HTTP route sends any
-configured credential over that cleartext connection. A
-resumed Session restores that model when its route is available and reports a
-missing route clearly; a global default applies to new Sessions. A custom
-route stays resolvable after another model becomes the default. Explicit
-per-invocation selection overrides the resumed choice for that invocation.
-Current direct model/provider transport remains stable while a Turn runs.
-Future routing may choose another effective physical model only at an explicit
-request boundary and must preserve the same Session/Turn loop. Effective-model
-changes are durable replay-epoch boundaries; the initial direct/effective model
-is established by the first assistant execution fact and later changes append
-`EffectiveModelChanged` before dispatch. An explicit logical model switch also
-changes the direct effective model on its next request. Preserve raw assistant
-history, but omit opaque replay from earlier effective-model epochs in later
-requests, including after switching back. Do not turn private reasoning into
-assistant text or alter tool-call/result pairs. Same-model tool continuation
-retains its replay. Anthropic signed thinking needs its own adapter policy.
-An idle model switch is recorded in its Session so explicit reopen restores
-it. Creating a fresh Session from the TUI or sustained-control client resolves
-the current global default again; switching to an existing Session restores
-that Session's selection.
-Session replacement in an interactive or sustained client prepares the selected
-model, access, project resources and agent before publishing the new client
-binding. A failed switch leaves the previous Session and selection active.
-Starting, cloning, forking or switching Sessions reloads applicable project
-resources at that boundary; explicit reload remains available without a
-Session change. A running Turn keeps its captured binding until settlement.
-Provider adapters accept valid terminal responses and reject incomplete ones,
-including stream truncation. Classify context overflow from a provider signal
-or a narrow documented response pattern; a generic HTTP status is not enough
-to rewrite model context. Preserve a bounded provider error reason when an
-Anthropic or Chat Completions SSE error arrives after HTTP success. An error
-chunk never completes a partial assistant response; unknown future Anthropic
-event types do not invalidate an otherwise complete message. Stream framing
-accepts SSE line endings across arbitrary transport chunk boundaries.
-When a route emits reasoning that must accompany assistant history during tool
-use, its adapter retains that continuation as provider-scoped opaque replay in
-the committed assistant message and re-encodes it only for a compatible route.
-DeepSeek and MiMo Chat Completions carry their exact streamed
-`reasoning_content` string on every later assistant message when tools are
-offered. This material is not answer text or a tool argument. Within one
-model-facing replay epoch, a route that cannot replay a recorded form reports
-incompatibility before sending the next request; it must not silently strip
-it. The OpenRouter Chat Completions route
-retains ordered `reasoning_details` when returned, reconstructs streamed text
-and summary fragments, and replays the structured blocks rather than a plain
-reasoning alias. If a response supplies only plain `reasoning`, replay that
-string. This route is available to cataloged and custom OpenRouter models;
-a custom model is qualified by a live tool turn, not merely by accepting the
-wire setting. Preserve provider tool-call IDs in the encoded history: signed
-tool continuations can bind the signature to the original call. Anthropic
-Messages stores the provider's complete ordered assistant content array as
-opaque replay beside neutral answer/tool content. The adapter checks that
-visible replay blocks still agree with the committed answer and tool calls,
-then sends the original array, including empty signed and redacted thinking
-blocks. For models that bind signed blocks to their
-request prefix, the adapter must preserve the provider-facing system, tools and
-earlier messages that produced each retained block. Client-side compaction
-and resource changes can change that prefix. When the prefix cannot be
-preserved at a new Turn, the agent commits a replay epoch change before
-dispatch and rebuilds context without prior opaque replay. Raw Session
-history remains intact and the reset survives reopen. Do not rebase inside a
-signed assistant tool continuation: preserve its prefix, or report that the
-continuation cannot fit. A successful response on an older account does not
-establish that replay is valid for every account.
-For current native Claude models, request adaptive thinking with the documented
-prefix check set to `error` and report known provider
-`input_transformations` for dropped or mismatch-allowed reasoning. Keep
-provider beta controls off custom Messages-compatible endpoints unless their
-contract is qualified.
-Transient request recovery, when enabled, must be
-bounded, visible, cancellable and must not repeat a completed tool effect.
-Coalesce streamed tool calls by their call index: later repeated or changed
-metadata must not corrupt the first call identity, while argument fragments
-continue to accumulate and distinct completed calls retain unique IDs.
-Usage sent on later stream events can be partial; retain previously observed
-fields when a provider omits them. Anthropic may send several `message_delta`
-events; keep their cumulative usage and require a consistent terminal reason
-before `message_stop`.
-Retry only before any streamed event is observed; a partial response is
-reported as incomplete rather than silently replayed. A retry is a distinct
-`ModelRouteReason::Retry`; tool continuation, steering and direct auxiliary
-work likewise carry explicit reasons instead of masquerading as the original
-user request. Do not persist router-specific state until an actual router needs
-state that cannot be reconstructed from Session facts. A valid provider retry
-delay takes precedence over local backoff, up to a bounded automatic wait;
-longer requested waits are surfaced as errors rather than held open.
+Caching/affinity are optimizations, not truth. Session affinity survives reopen
+and is fresh on clone/fork; it is transport metadata, not prompt content. Warming
+is bounded, subordinate to effect settlement and separately accounted. Failed
+warming cannot alter Turn correctness. Idle warming, speculative compaction and
+router policy require their own demonstrated consumers and lifetimes.
 
-The TUI is shell-like and inline by default: completed conversation content
-becomes native terminal scrollback, while Ion owns only the mutable live
-interaction region needed for the current prompt, progress and transient
-notices. A resumed or switched Session publishes only a bounded recent
-semantic tail into fresh native scrollback; earlier durable history remains
-inspectable rather than flooding the terminal. The mutable live band may grow
-for active work but returns to the smallest safe size after settled history is
-published. Physical frames contain only live rows; settled rows use explicit
-native publication, consuming available rows before scrolling. Resizing or
-redrawing a live frame is not a publication boundary. The terminal owns native
-reflow; the renderer does not keep a second virtual committed history.
-A rendering failure stops further input/redraw, requests cancellation and
-awaits the active operation. It must not drop a running tool/shell future;
-observed results still reach the Session before the host reports failure.
-Inline presentation budgets transcript rows after composer, status and notices.
-Overflow retains a current-Turn summary and an exception instead of blindly
-clipping all earlier work. This does not establish an immutable history cut;
-pending/exception counts are facts about committed calls, not permission or
-proof that every pending call is already running.
+## Terminal experience
 
-Persistent fullscreen is an alternate renderer policy over the same
-`TranscriptProjection`, not a second conversation/runtime model. It owns the
-transcript viewport and scroll position while active, keeps the composer/status
-region stable and preserves a scrolled-up viewport as new rows stream.
-`--tui-mode inline` remains the default; `--tui-mode fullscreen` and the
-in-session `/tui` command select the alternate policy. Pickers and full tool
-detail may use alternate-screen modal views from either policy. Switching
-policies, resizing, normal exit and panic restoration must not corrupt native
-terminal state or alter Session/Turn semantics.
+Polish means legible work and stable interaction, not maximal density. Prefer
+fx's whitespace and activity-tree hierarchy over colored per-tool cards or a
+uniform flat stream of dots. Narrative, user input, activity groups, commands,
+mutations and notices must remain distinguishable without relying on color.
 
-Default transcript presentation is for a human, not a dump of the internal
-agent protocol. Tool activity may be summarized semantically in the normal
-view while complete arguments, outputs, provider diagnostics and usage remain
-inspectable on demand. Persistent metadata such as working directory, Session,
-model and context pressure is conditional or opt-in rather than occupying
-rows merely because it is available. These are presentation projections only;
-Session facts and tool/model semantics remain owned outside the terminal.
+- User prompts have a clear boundary; assistant prose remains readable prose.
+  Related silent tool steps form an activity episode, separated by meaningful
+  narrative/input boundaries. Tree connectors represent that grouping, not an
+  invented operating-system process tree or fictitious parent/child effects.
+- A restrained root dot summarizes an episode; indented branches identify its
+  actions and subjects. Queued, running, completed, failed, cancelled, rejected
+  and unknown work have distinguishable labels. Do not show all admitted calls
+  as running. Real nested composition will require real recorded parentage.
+- Coalesce repetitive successful observations, not consequential mutations or
+  exceptions. Compact output makes current work and recent failure intelligible;
+  full current detail retains arguments, results, capture paths and notices.
+  Glyphs alone are not evidence of correct grouping or execution state.
+- Budget the current activity and composer together. Overflow is selected from
+  semantic items, not blindly sliced rendered strings. Keep current state and
+  exceptions visible with an honest omission/inspection affordance. There is no
+  promise that every action fits a small viewport.
+- Keep the draft editable during work, with coherent multiline movement,
+  history, paste/images, external editor and steering/follow-up behavior. Commands
+  and pickers preserve unsent input. Idle help/resources are content, not a
+  single-line busy preview.
+- Use one control-safe grapheme/display-width policy for transcript/chrome/detail.
+  Composer byte-to-cursor mapping is a separate input contract. Style belongs to
+  semantic presentation roles, not escape strings mixed into untrusted text.
 
-Terminal input is parsed incrementally across read boundaries; a lone Escape
-waits briefly for a possible key sequence, with a longer wait over SSH.
-Bracketed paste and enabled mouse/keyboard sequences remain semantic events
-rather than draft text. The input reader releases the tty before a synchronous
-login prompt. An external editor receives only the unsent draft in a private
-temporary file while Ion releases terminal ownership; failure leaves the
-original draft intact. Copy uses committed assistant text. A readable export
-derives from committed Session entries, marks image content without inlining
-its bytes, and creates a new user-selected file without replacing existing
-data.
+Inline native scrollback is the default. Publish settled content explicitly;
+mutable redraw/resize must not publish history or maintain a second virtual
+committed screen. A group being closed to new children does not prove finality.
+The terminal emulator owns native reflow. Resume publishes a bounded recent
+semantic tail; earlier facts remain inspectable.
 
-Headless mode exposes the same loop without terminal dependencies. Text mode
-writes only the committed final answer to stdout after a successful Turn;
-provisional streamed text can be discarded or replaced and must not masquerade
-as the answer. Failures have a nonzero exit status. A JSONL output mode emits
-one session identity, ordered progress events and a terminal invocation result
-on stdout; diagnostics stay on stderr. Tool lifecycle events carry call IDs so
-a host can correlate them. This is a view of the same loop, not a second
-Session authority or a copy of another harness's event schema.
+Fullscreen is another viewport policy over the same conversation, not another
+runtime. Current-conversation detail/pickers may be modal in either policy.
+Scrolling away from the tail, resizing, policy switches and exit must preserve
+composer/terminal ownership. I/O failure stops input/redraw, cancels and awaits
+active settlement before reporting failure. Panic/crash cannot promise that.
 
-Start a fresh Session by default, explicitly continue recent work or select an
-earlier Session by human-visible identity. Users can name sessions and clone
-the current conversation into a new Session to explore an alternate approach
-without erasing the source history. A clone copies committed conversation
-facts and context boundaries; its future history is independent. Both Sessions
-still act on the same live working directory, so cloning is not a filesystem
-snapshot. An unfinished Turn retains its interruption and unknown-effect
-semantics in the clone. Exact session paths remain available to scripts. The
-TUI preserves draft input during a running Turn, distinguishes steering from
-follow-up work, and makes full tool results inspectable even when the default
-view is compact.
+## Clients and extension boundaries
 
-## Common-workflow expansion
+Share host assembly and replacement operations across clients; do not reproduce
+model/tool/resource setup in executable-private code. Headless text emits the
+committed final answer, not provisional streaming fragments. JSONL/RPC records
+correlate acceptance, progress and settlement without pretending command IDs are
+an exactly-once protocol. A connection owns and joins its active task; EOF or
+I/O failure cancels and waits, and follow-ups start only after settlement.
+Broken output cannot promise delivery; durable inspection remains available.
 
-A user request may contain ordered text and image parts. The host validates
-image type, size and selected-model capability before accepting it; a Session
-commits the accepted content as one user message. Provider adapters encode
-images for their own wire format. On resume, switch or compaction, the context
-builder either preserves content selected for replay or reports an explicit
-incompatibility. It must not replace an image with an unannounced placeholder.
-Image generation is a separate capability.
-An image-only user request may carry an empty text part in the Session; a
-multimodal provider request omits that empty text block while preserving the
-image and any nonempty text parts in order.
-File input is decoded at the host boundary, oriented and bounded for
-inline transport, then stored as normalized image bytes rather than a path to
-a mutable source file. A resize note identifies the dimensions sent to the
-model. The request byte bound still includes encoded image data; context-token
-estimation treats image payloads separately from text and yields to observed
-provider usage when available. Inspection and terminal history show an image
-marker rather than the stored base64.
-Deserializing typed image content must recheck the declared MIME, source bytes
-and decode/resource bounds before that content can enter a Session.
-The terminal clipboard adapter reads file lists before images to avoid
-mistaking a copied file's icon for image input. Raw clipboard pixels enter
-through the same host normalization boundary as files. A queued prompt owns
-its attachments when queued; later pasted images cannot attach to an earlier
-follow-up. Steering is a typed user message with the same image validation as
-Turn input. A busy-turn submit carries its text and images to the next model
-step; an explicit follow-up remains a later Turn.
+Skills/templates, tool sources, executable hooks and optional UI contributions
+are distinct powers. Additional extension registrations need explicit scope
+ownership and disposal; no generic reactive framework is assumed. Callbacks
+cannot mutate Session facts or provider wire state behind their owners.
 
-The host discovers applicable project instructions, Agent Skills and prompt
-templates. Skill summaries belong in the model's available instructions;
-complete skill content is read when invoked. Templates expand before user
-input commits to a Turn. Resource discovery, precedence, errors and trust
-belong to one host owner and are consistent across interactive and
-programmatic clients. A public Rust host interface also composes the model
-catalog, credentials, tools and Session selection; embedding should not
-require reproducing executable-private setup.
-Repository skills and templates are lower-trust local text, like project
-instructions. Discovery does not execute them. Invalid resources produce
-diagnostics; an explicit command expands a template or skill before Turn
-acceptance, and a model can choose to read an advertised skill. The live
-working-directory permission boundary still applies.
+## Composition: next design boundary, not implemented
 
-An embedded host can supply custom tools through `ToolHost`; host composition
-adds them to the local tools, with a same-name custom tool deliberately
-replacing only that built-in. External model-callable tools use named MCP
-servers over stdio or Streamable HTTP rather than a second private executable
-protocol. Server startup is explicit, never triggered merely by opening a repository. A
-server crash or cancellation produces an honest tool error; it cannot alter
-committed Session facts outside ordinary tool results. Failed server discovery
-produces a startup diagnostic without blocking the coding client or tools from
-healthy servers. A malformed entry in a parseable config is skipped without
-hiding valid servers; config edits do not discard that user content. Only
-successfully discovered tools enter the model request. Configured servers
-initialize concurrently so one slow server cannot serially delay others; a
-partly initialized server is closed before its failure is reported. MCP tools
-retain their original tool names for server dispatch. Their model-facing names are
-deterministic, provider-safe aliases bounded to 64 ASCII characters; names
-requiring normalization or shortening receive a stable hash suffix so tools
-with similar names cannot silently alias one another. Duplicate original names
-or an unresolved alias collision invalidate that server's tool snapshot. MCP
-tools may return image blocks; the host validates declared
-MIME, decodes and normalizes them through the same image owner as local read,
-and hands the bounded typed result to the coding Turn. Unsupported media
-receive an explicit tool error. A large text or structured result gives the
-model a bounded preview and a private file containing the complete result, so
-the model can read relevant ranges without losing the tool's observed output.
-If that file cannot be saved, report the loss in the result. Preserve the
-server's `isError` state in either case.
-Remote server credentials come from an explicitly named environment value or
-private OAuth login, separate from Session history. Transport recovery must
-not transparently replay a possibly effectful tool call. A changed server
-tool list replaces its advertised snapshot for later model requests; a
-withdrawn tool call receives an error.
-The server notification marks its snapshot stale. Refresh at the next
-model-request boundary; a successful listing atomically replaces that server's
-tools, while a failed listing keeps the last snapshot and reports a diagnostic.
-The composed tool catalog resolves current host definitions in override order
-and freezes one catalog snapshot per model request. A definition carries the
-provider-facing schema plus non-terminal semantic activity metadata; the
-snapshot retains its execution route so dispatch does not rediscover ownership
-from a later catalog state.
+Investigate hybrid Code Mode alongside discovery: direct calls remain useful,
+while composition can eliminate deterministic model round trips and select
+useful output. This is not merely hiding schemas. No interpreter or performance
+benefit is established yet.
 
-Extensions beyond MCP tools need a documented lifecycle for registering
-commands, observing relevant Turn events, and using client UI capabilities
-when present. Executable registrations are scope-owned: unloading an extension
-must remove its tools, commands, hooks and UI contributions without stale
-callbacks. Use direct Rust ownership/RAII or explicit close semantics before
-considering a general reactive component framework. Add dependency-driven
-activation only for capabilities that genuinely appear or disappear while the
-process stays alive. Extension callbacks cannot mutate committed Session
-entries or provider wire state behind their owners. The external mechanism need not execute Pi's
-TypeScript modules. One-shot JSONL remains a progress stream; a long-lived
-bidirectional control mode must correlate requests, distinguish acceptance
-from settlement, and expose Session, model and resource operations through the
-same host.
-The control process reads one LF-delimited JSON command at a time and reserves
-stdout for JSON records. A prompt response confirms the user Turn was committed
-to its Session; it does not claim model completion. A separate terminal record
-reports the Turn outcome. Command IDs correlate responses, while Turn IDs
-correlate progress and settlement. A running Turn keeps its selected Session
-and model fixed. Cancellation requests the current Turn to stop; it never
-claims to undo tool effects. Closing input cancels active work and waits for
-its terminal record before exiting. Clients must keep draining stdout.
-The connection owns the active operation's task handle. Input/output faults
-close progress publication, request cancellation and await owned settlement
-before returning the original error. Completion records are published only
-after joining, following already-queued progress and before admitting queued
-input. A task panic ends the connection with an error; it cannot establish a
-settled effect or authorize replay of unfinished work. A broken output stream
-cannot promise delivery of completion records; durable facts remain available
-for inspection.
-RPC image input accepts local paths or inline MIME and base64 data. Both enter
-the same host normalization and selected-model capability check before Turn
-acceptance, so a controller can submit images without sharing Ion's filesystem.
-The command-size bound includes the encoded bytes; invalid or oversized inline
-content receives a command error without committing a Turn.
-RPC steering is input for the active Turn; a follow-up is retained by the
-control process for a later Turn and is not a Session fact until accepted.
-Normalize its images and expand its resource command when queued. A queued
-follow-up starts after the current Turn settles, even if that Turn was
-cancelled, unless the client clears the queue. Report its later Turn ID and
-return uncommitted queued input when the control process closes.
-
-Earlier-point exploration selects a committed Turn boundary without erasing
-later history. Forking before a selected user Turn makes that input editable
-again; forking after its settled end continues from its result. Each fork is a
-new Session containing the valid prefix, including applicable compaction facts.
-An unfinished Turn cannot be an after-Turn point. The source and fork still
-act on the same live filesystem; a Session fork is never a worktree snapshot.
-If related alternatives later need in-Session switching or branch-local
-extension state, introduce an active branch projection then, rather than
-duplicating that state in the current linear Session.
+Use the same frozen capabilities and coding effect authority. Record genuine
+parent/child intent before dispatch and outcomes before dependent consumption.
+Keep raw child audit distinct from final model output and compact human activity;
+do not fabricate assistant tool calls or a second Session authority. On guest
+failure/cancellation, stop new calls and await started hosts. Bound guest time,
+heap, calls/concurrency, host capture and emitted model output independently.
+Neither guest isolation nor approvals undo mutations. Unknown scripts/effects
+are not replayed automatically, and durable JavaScript continuation is not a
+prerequisite. Settle these contracts before selecting a confined runtime.
 
 ## Qualification
 
-Exercise the built headless executable and a real terminal on coding tasks:
-inspect, edit/create, run a native command, verify the changed files, then
-relaunch and continue. Check each platform and provider route Ion claims to
-support and state remaining limits in README. Use deterministic tests for
-specific crash, cancellation, storage, provider and terminal boundaries that
-the implementation changes. Run the repository's required format, Clippy,
-tests and offline smoke gates after the last code edit. More elaborate test
-matrices and comparison benchmarks may guide improvements; they are not
-independent first-version requirements.
+Preserve distinct data-integrity, replay, recovery, concurrency and cancellation
+protections; remove duplicate fixtures and obsolete implementation assertions.
+Exercise changed built headless/terminal/control entry points and repository
+gates. Source review, deterministic VT/PTY checks, live-provider coding and human
+terminal review are different evidence. Do not claim emulator-native reflow,
+comparative coding performance or broad usability from mock-provider tests.

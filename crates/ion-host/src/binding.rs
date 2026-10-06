@@ -9,7 +9,7 @@ use std::{
 
 use anyhow::{Context, Result, ensure};
 use ion_ai::ModelRef;
-use ion_core::{CodingAgent, CodingSession, CodingToolHost, CodingToolOutput, ForkPoint};
+use ion_core::{CodingAgent, CodingSession, CodingToolOutput, CodingToolSource, ForkPoint};
 
 use crate::{Host, LocalTools, Resources, Selection, SessionCatalog};
 use tokio_util::sync::CancellationToken;
@@ -21,7 +21,7 @@ pub struct SessionBinding {
     selected: Selection,
     agent: Arc<CodingAgent>,
     resources: Resources,
-    external_tools: Option<Arc<dyn CodingToolHost>>,
+    external_tools: Option<Arc<dyn CodingToolSource>>,
 }
 
 impl SessionBinding {
@@ -29,7 +29,7 @@ impl SessionBinding {
         host: Arc<Host>,
         session: Arc<CodingSession>,
         selected: Selection,
-        external_tools: Option<Arc<dyn CodingToolHost>>,
+        external_tools: Option<Arc<dyn CodingToolSource>>,
     ) -> Result<Self> {
         let catalog = host.sessions(session.cwd().to_path_buf());
         let resources = host.resources(session.cwd())?;

@@ -328,8 +328,12 @@ When a server announces a changed tool list, Ion refreshes that server before
 the next model request. A failed refresh reports a warning and keeps its last
 known list. Remote MCP OAuth login is not yet supported.
 For Rust embedders, `Host::agent_with_tools` takes the working directory,
-selected route and a custom `CodingToolHost`; it composes that host with the
-built-ins, and a same-name custom tool replaces that one built-in.
+selected route and a custom `CodingToolSource`; it composes that source with
+the built-ins, and a same-name registration replaces that one built-in.
+A source publishes `ToolRegistration` values that bind a `ToolDefinition` to a
+`ToolExecutor`. Refresh publishes new registrations; an issued request retains
+its original executor, including an MCP connection and remote tool name. This
+freezes local dispatch identity, not the remote server's implementation.
 
 Tools act directly in the working directory with the host user's permissions.
 There is no implicit sandbox. If a process stops during a tool call, Ion
@@ -365,7 +369,7 @@ stops after producing partial output is not replayed silently.
 If an output-token limit cuts off identifiable tool calls, Ion records them
 as skipped errors and lets the model reissue complete calls. No tool from the
 truncated response runs.
-When observed output use is below the selected model's ceiling, Ion first makes one
+When observed output use is below the request's dispatched output budget, Ion first makes one
 compact-and-retry attempt if a settled history prefix is available. It drops
 the incomplete attempt and reports the restart to streaming clients.
 Coding requests use the catalog model's output ceiling, reduced when the
@@ -410,7 +414,7 @@ contract and [AGENTS.md](AGENTS.md) for repository checks.
 For Rust embedding, `ion-host::Host` composes the same model catalog,
 credentials, project instructions and Session discovery used by the CLI.
 `ion-core::CodingAgent` and `CodingSession` own the coding loop and committed
-conversation; `Host::agent_with_tools` accepts a custom `CodingToolHost`.
+conversation; `Host::agent_with_tools` accepts a custom `CodingToolSource`.
 `Host::resources` loads project skills and prompt templates. For a long-lived
 Rust client, `ion-host::SessionBinding` owns the active Session, model, agent
 and resources and handles idle model and Session changes. `ion rpc` provides

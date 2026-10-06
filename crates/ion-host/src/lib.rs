@@ -20,7 +20,7 @@ use std::{
 };
 
 use anyhow::{Context, Result, ensure};
-use ion_core::{AgentLimits, CodingAgent, CodingToolHost, PromptCacheWarmingPolicy, ToolSet};
+use ion_core::{AgentLimits, CodingAgent, CodingToolSource, PromptCacheWarmingPolicy, ToolSet};
 
 pub use auth::{CredentialStatus, CredentialStore};
 pub use binding::SessionBinding;
@@ -95,14 +95,14 @@ impl Host {
 
     pub fn agent(&self, cwd: &Path, selected: &Selection) -> Result<Arc<CodingAgent>> {
         let tools = Arc::new(LocalTools::new(cwd)?);
-        self.agent_with_tool_host(selected, tools)
+        self.agent_with_tool_source(selected, tools)
     }
 
     pub(crate) fn agent_with_optional_tools(
         &self,
         cwd: &Path,
         selected: &Selection,
-        custom: Option<Arc<dyn CodingToolHost>>,
+        custom: Option<Arc<dyn CodingToolSource>>,
     ) -> Result<Arc<CodingAgent>> {
         match custom {
             Some(custom) => self.agent_with_tools(cwd, selected, custom),
@@ -116,17 +116,17 @@ impl Host {
         &self,
         cwd: &Path,
         selected: &Selection,
-        custom: Arc<dyn CodingToolHost>,
+        custom: Arc<dyn CodingToolSource>,
     ) -> Result<Arc<CodingAgent>> {
-        let builtins: Arc<dyn CodingToolHost> = Arc::new(LocalTools::new(cwd)?);
+        let builtins: Arc<dyn CodingToolSource> = Arc::new(LocalTools::new(cwd)?);
         self.agent_with_tool_set(selected, Arc::new(ToolSet::new([builtins, custom])))
     }
 
-    /// Compose a selected route with a complete caller-owned tool host.
-    pub fn agent_with_tool_host(
+    /// Compose a selected route with a complete caller-owned capability source.
+    pub fn agent_with_tool_source(
         &self,
         selected: &Selection,
-        tools: Arc<dyn CodingToolHost>,
+        tools: Arc<dyn CodingToolSource>,
     ) -> Result<Arc<CodingAgent>> {
         self.agent_with_tool_set(selected, Arc::new(ToolSet::new([tools])))
     }

@@ -176,18 +176,13 @@ fn tool_search_definition() -> ToolDefinition {
     }
 }
 
-/// One owner of one or more tools. A host's definitions must remain coherent
-/// until the next explicit refresh boundary.
-pub trait ToolHost: Send + Sync {
-    fn definitions(&self) -> Vec<ToolDefinition>;
-
-    fn refresh_definitions<'a>(&'a self, _stop: CancellationToken) -> BoxFuture<'a, Vec<String>> {
-        Box::pin(async { Vec::new() })
-    }
-
+/// A concrete operation bound at registration time. Execution must not resolve
+/// the call again through a source's mutable registry. A captured remote
+/// connection may fail, but must not be silently replaced or replay the call.
+pub trait ToolExecutor: Send + Sync {
     /// Respond to `stop`, settle owned work and return its observed outcome.
-    /// The Turn awaits this future through cancellation; hosts must not depend
-    /// on it being dropped to stop work or claim unobserved effects were undone.
+    /// The Turn awaits this future through cancellation; dropping it cannot
+    /// establish settlement or undo unobserved external effects.
     fn execute<'a>(
         &'a self,
         call: &'a ToolCall,
@@ -195,26 +190,51 @@ pub trait ToolHost: Send + Sync {
     ) -> BoxFuture<'a, ToolOutput>;
 }
 
-/// Composition owner for independent tool hosts. Later hosts replace earlier
-/// definitions with the same model-visible name.
+/// An inseparable definition and executable identity, published for a future
+/// request. Refresh replaces registrations, not already-issued capabilities.
+pub struct ToolRegistration {
+    pub definition: ToolDefinition,
+    pub executor: Arc<dyn ToolExecutor>,
+}
+
+impl ToolRegistration {
+    pub fn new(definition: ToolDefinition, executor: Arc<dyn ToolExecutor>) -> Self {
+        Self {
+            definition,
+            executor,
+        }
+    }
+}
+
+/// Discovery/lifecycle owner of registrations, never a name-dispatched executor.
+pub trait ToolSource: Send + Sync {
+    fn registrations(self: Arc<Self>) -> Vec<ToolRegistration>;
+
+    fn refresh<'a>(&'a self, _stop: CancellationToken) -> BoxFuture<'a, Vec<String>> {
+        Box::pin(async { Vec::new() })
+    }
+}
+
+/// Composition owner for independent sources. Later registrations replace
+/// earlier ones with the same model-visible name.
 pub struct ToolSet {
-    hosts: Vec<Arc<dyn ToolHost>>,
+    sources: Vec<Arc<dyn ToolSource>>,
 }
 
 impl ToolSet {
-    pub fn new(hosts: impl IntoIterator<Item = Arc<dyn ToolHost>>) -> Self {
+    pub fn new(sources: impl IntoIterator<Item = Arc<dyn ToolSource>>) -> Self {
         Self {
-            hosts: hosts.into_iter().collect(),
+            sources: sources.into_iter().collect(),
         }
     }
 
     pub async fn refresh(&self, stop: CancellationToken) -> Vec<String> {
         let mut diagnostics = Vec::new();
-        for host in &self.hosts {
+        for source in &self.sources {
             if stop.is_cancelled() {
                 break;
             }
-            diagnostics.extend(host.refresh_definitions(stop.clone()).await);
+            diagnostics.extend(source.refresh(stop.clone()).await);
         }
         diagnostics
     }
@@ -230,12 +250,12 @@ impl ToolSet {
     pub fn snapshot_with_previous(&self, previous: &[ToolSpec]) -> ToolCatalog {
         let mut entries: Vec<RoutedTool> = Vec::new();
         let mut positions = HashMap::new();
-        for host in &self.hosts {
-            for definition in host.definitions() {
-                let name = definition.spec.name.clone();
+        for source in &self.sources {
+            for registration in source.clone().registrations() {
+                let name = registration.definition.spec.name.clone();
                 let routed = RoutedTool {
-                    definition,
-                    route: ToolRoute::Host(host.clone()),
+                    definition: registration.definition,
+                    route: ToolRoute::Executor(registration.executor),
                 };
                 match positions.get(&name).copied() {
                     Some(index) => entries[index] = routed,
@@ -291,7 +311,7 @@ impl ToolSet {
 
 #[derive(Clone)]
 enum ToolRoute {
-    Host(Arc<dyn ToolHost>),
+    Executor(Arc<dyn ToolExecutor>),
     Search,
 }
 
@@ -354,7 +374,7 @@ impl ToolCatalog {
             .iter()
             .filter(|entry| match &entry.route {
                 ToolRoute::Search => search_needed,
-                ToolRoute::Host(_) => {
+                ToolRoute::Executor(_) => {
                     self.declared.contains(&entry.definition.spec.name)
                         || (entry.definition.exposure == ToolExposure::Deferred
                             && additional.contains(&entry.definition.spec.name))
@@ -371,42 +391,21 @@ impl ToolCatalog {
         )
     }
 
-    /// Execute any callable capability in this frozen catalog. Harness-side
-    /// discovery/orchestration may use this for deferred tools.
+    /// Invoke a frozen capability, including a deferred one. This low-level
+    /// operation does not admit a Turn or publish Session facts; coding execution
+    /// must remain inside the Turn's commit/settlement boundary.
     pub fn execute<'a>(
         &'a self,
         call: &'a ToolCall,
         stop: CancellationToken,
     ) -> BoxFuture<'a, ToolOutput> {
-        match self
-            .positions
-            .get(&call.name)
-            .and_then(|index| self.entries.get(*index))
-        {
-            Some(RoutedTool {
-                route: ToolRoute::Host(host),
-                ..
-            }) => host.execute(call, stop),
-            Some(RoutedTool {
-                route: ToolRoute::Search,
-                ..
-            }) => {
-                let execution = self.search_deferred(call);
-                Box::pin(async move { execution.output })
-            }
-            None => Box::pin(async move {
-                ToolOutput {
-                    value: serde_json::json!({"error":format!("unknown tool: {}",call.name)}),
-                    images: Vec::new(),
-                    is_error: true,
-                }
-            }),
-        }
+        let execution = self.dispatch(call, stop);
+        Box::pin(async move { execution.await.output })
     }
 
     /// Execute a model-issued call only when its definition was part of this
     /// request's declared loadout.
-    pub fn execute_model_call<'a>(
+    pub(crate) fn execute_model_call<'a>(
         &'a self,
         call: &'a ToolCall,
         stop: CancellationToken,
@@ -422,6 +421,14 @@ impl ToolCatalog {
                 })
             });
         }
+        self.dispatch(call, stop)
+    }
+
+    fn dispatch<'a>(
+        &'a self,
+        call: &'a ToolCall,
+        stop: CancellationToken,
+    ) -> BoxFuture<'a, ToolExecution> {
         match self
             .positions
             .get(&call.name)
@@ -435,10 +442,10 @@ impl ToolCatalog {
                 Box::pin(async move { execution })
             }
             Some(RoutedTool {
-                route: ToolRoute::Host(host),
+                route: ToolRoute::Executor(executor),
                 ..
             }) => {
-                let future = host.execute(call, stop);
+                let future = executor.execute(call, stop);
                 Box::pin(async move { ToolExecution::output(future.await) })
             }
             None => Box::pin(async move {
@@ -559,15 +566,23 @@ mod tests {
 
     struct Stub(&'static str, &'static str);
 
-    impl ToolHost for Stub {
-        fn definitions(&self) -> Vec<ToolDefinition> {
-            vec![ToolDefinition::external(ToolSpec {
-                name: self.0.into(),
-                description: self.1.into(),
-                input_schema: json!({"type":"object"}),
-            })]
+    impl ToolSource for Stub {
+        fn registrations(self: Arc<Self>) -> Vec<ToolRegistration> {
+            let definitions = {
+                vec![ToolDefinition::external(ToolSpec {
+                    name: self.0.into(),
+                    description: self.1.into(),
+                    input_schema: json!({"type":"object"}),
+                })]
+            };
+            definitions
+                .into_iter()
+                .map(|definition| ToolRegistration::new(definition, self.clone()))
+                .collect()
         }
+    }
 
+    impl ToolExecutor for Stub {
         fn execute<'a>(
             &'a self,
             _call: &'a ToolCall,
@@ -585,12 +600,12 @@ mod tests {
 
     #[tokio::test]
     async fn later_tool_replaces_one_name_without_removing_others() {
-        let hosts: Vec<Arc<dyn ToolHost>> = vec![
+        let sources: Vec<Arc<dyn ToolSource>> = vec![
             Arc::new(Stub("read", "builtin")),
             Arc::new(Stub("custom", "added")),
             Arc::new(Stub("read", "override")),
         ];
-        let tools = ToolSet::new(hosts);
+        let tools = ToolSet::new(sources);
         let catalog = tools.snapshot();
         assert_eq!(catalog.specs().len(), 2);
         assert_eq!(catalog.specs()[0].description, "override");
@@ -610,32 +625,21 @@ mod tests {
 
     struct ChangingHost(AtomicBool);
 
-    impl ToolHost for ChangingHost {
-        fn definitions(&self) -> Vec<ToolDefinition> {
-            let name = if self.0.load(Ordering::Acquire) {
-                "new"
+    impl ToolSource for ChangingHost {
+        fn registrations(self: Arc<Self>) -> Vec<ToolRegistration> {
+            let (name, result) = if self.0.load(Ordering::Acquire) {
+                ("new", "changing:new")
             } else {
-                "read"
+                ("read", "changing:read")
             };
-            vec![ToolDefinition::external(ToolSpec {
-                name: name.into(),
-                description: "changing".into(),
-                input_schema: json!({"type":"object"}),
-            })]
-        }
-
-        fn execute<'a>(
-            &'a self,
-            call: &'a ToolCall,
-            _stop: CancellationToken,
-        ) -> BoxFuture<'a, ToolOutput> {
-            Box::pin(async move {
-                ToolOutput {
-                    value: json!(format!("changing:{}", call.name)),
-                    images: Vec::new(),
-                    is_error: false,
-                }
-            })
+            vec![ToolRegistration::new(
+                ToolDefinition::external(ToolSpec {
+                    name: name.into(),
+                    description: "changing".into(),
+                    input_schema: json!({"type":"object"}),
+                }),
+                Arc::new(Stub(name, result)),
+            )]
         }
     }
 
@@ -643,7 +647,7 @@ mod tests {
     async fn old_catalog_keeps_the_route_that_was_advertised() {
         let changing = Arc::new(ChangingHost(AtomicBool::new(false)));
         let tools = ToolSet::new([
-            Arc::new(Stub("read", "builtin")) as Arc<dyn ToolHost>,
+            Arc::new(Stub("read", "builtin")) as Arc<dyn ToolSource>,
             changing.clone(),
         ]);
         let before = tools.snapshot();
@@ -683,41 +687,7 @@ mod tests {
 
     #[tokio::test]
     async fn deferred_capability_is_callable_but_not_model_declared() {
-        struct Mixed;
-
-        impl ToolHost for Mixed {
-            fn definitions(&self) -> Vec<ToolDefinition> {
-                vec![
-                    ToolDefinition::external(ToolSpec {
-                        name: "direct".into(),
-                        description: "direct".into(),
-                        input_schema: json!({"type":"object"}),
-                    }),
-                    ToolDefinition::external(ToolSpec {
-                        name: "deferred".into(),
-                        description: "deferred".into(),
-                        input_schema: json!({"type":"object"}),
-                    })
-                    .deferred(),
-                ]
-            }
-
-            fn execute<'a>(
-                &'a self,
-                call: &'a ToolCall,
-                _stop: CancellationToken,
-            ) -> BoxFuture<'a, ToolOutput> {
-                Box::pin(async move {
-                    ToolOutput {
-                        value: json!(call.name),
-                        images: Vec::new(),
-                        is_error: false,
-                    }
-                })
-            }
-        }
-
-        let catalog = ToolSet::new([Arc::new(Mixed) as Arc<dyn ToolHost>]).snapshot();
+        let catalog = ToolSet::new([Arc::new(MixedForRestore) as Arc<dyn ToolSource>]).snapshot();
         assert_eq!(
             catalog
                 .declared_specs()
@@ -751,7 +721,7 @@ mod tests {
 
     #[tokio::test]
     async fn tool_search_loads_matching_deferred_capabilities_for_next_request() {
-        let catalog = ToolSet::new([Arc::new(MixedForRestore) as Arc<dyn ToolHost>]).snapshot();
+        let catalog = ToolSet::new([Arc::new(MixedForRestore) as Arc<dyn ToolSource>]).snapshot();
         let execution = catalog
             .execute_model_call(
                 &ToolCall {
@@ -778,7 +748,7 @@ mod tests {
 
     #[test]
     fn compatible_deferred_loadout_restores_but_redefinition_does_not() {
-        let tools = ToolSet::new([Arc::new(MixedForRestore) as Arc<dyn ToolHost>]);
+        let tools = ToolSet::new([Arc::new(MixedForRestore) as Arc<dyn ToolSource>]);
         let initial = tools.snapshot();
         let deferred = initial
             .specs()
@@ -799,23 +769,31 @@ mod tests {
 
     struct MixedForRestore;
 
-    impl ToolHost for MixedForRestore {
-        fn definitions(&self) -> Vec<ToolDefinition> {
-            vec![
-                ToolDefinition::external(ToolSpec {
-                    name: "direct".into(),
-                    description: "direct".into(),
-                    input_schema: json!({"type":"object"}),
-                }),
-                ToolDefinition::external(ToolSpec {
-                    name: "deferred".into(),
-                    description: "deferred".into(),
-                    input_schema: json!({"type":"object"}),
-                })
-                .deferred(),
-            ]
+    impl ToolSource for MixedForRestore {
+        fn registrations(self: Arc<Self>) -> Vec<ToolRegistration> {
+            let definitions = {
+                vec![
+                    ToolDefinition::external(ToolSpec {
+                        name: "direct".into(),
+                        description: "direct".into(),
+                        input_schema: json!({"type":"object"}),
+                    }),
+                    ToolDefinition::external(ToolSpec {
+                        name: "deferred".into(),
+                        description: "deferred".into(),
+                        input_schema: json!({"type":"object"}),
+                    })
+                    .deferred(),
+                ]
+            };
+            definitions
+                .into_iter()
+                .map(|definition| ToolRegistration::new(definition, self.clone()))
+                .collect()
         }
+    }
 
+    impl ToolExecutor for MixedForRestore {
         fn execute<'a>(
             &'a self,
             call: &'a ToolCall,
@@ -833,7 +811,7 @@ mod tests {
 
     #[test]
     fn activity_resolves_a_semantic_subject_without_terminal_formatting() {
-        let tools = ToolSet::new([Arc::new(Stub("read", "builtin")) as Arc<dyn ToolHost>]);
+        let tools = ToolSet::new([Arc::new(Stub("read", "builtin")) as Arc<dyn ToolSource>]);
         let mut catalog = tools.snapshot();
         catalog.entries[0].definition.presentation =
             ToolPresentation::argument(ToolActivityKind::Read, "path");

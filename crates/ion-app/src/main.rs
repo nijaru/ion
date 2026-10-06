@@ -10,7 +10,7 @@ use anyhow::{Context, Result, bail, ensure};
 use clap::{Parser, Subcommand};
 use ion_ai::{Content, Message, ModelRef};
 use ion_core::{
-    CodingAgent, CodingAgentError, CodingAgentEvent, CodingSession, CodingToolHost, ForkPoint,
+    CodingAgent, CodingAgentError, CodingAgentEvent, CodingSession, CodingToolSource, ForkPoint,
 };
 use ion_host::image_input::LoadedImage;
 use ion_host::{
@@ -473,9 +473,9 @@ async fn run_cli(cli: Cli) -> Result<()> {
                 .map(|diagnostic| format!("[mcp: {diagnostic}]"))
                 .collect::<Vec<_>>();
             let external_mcp = startup.tools;
-            let external_tools: Option<Arc<dyn CodingToolHost>> = external_mcp
+            let external_tools: Option<Arc<dyn CodingToolSource>> = external_mcp
                 .as_ref()
-                .map(|tools| tools.clone() as Arc<dyn CodingToolHost>);
+                .map(|tools| tools.clone() as Arc<dyn CodingToolSource>);
             let binding = SessionBinding::new(host, session, selected, external_tools)?;
             for diagnostic in binding.resources().diagnostics() {
                 startup_diagnostics.push(format!(

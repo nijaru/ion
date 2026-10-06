@@ -17,8 +17,8 @@ use base64::{Engine, engine::general_purpose::STANDARD};
 use futures_util::future::join_all;
 use ion_ai::{BoxFuture, ImageMime, MAX_SOURCE_BYTES, ToolCall, ToolSpec, normalize_image};
 use ion_core::{
-    CodingToolHost, CodingToolOutput, ToolActivityKind, ToolDefinition, ToolExposure,
-    ToolPresentation,
+    CodingToolOutput, CodingToolSource, ToolActivityKind, ToolDefinition, ToolExecutor,
+    ToolExposure, ToolPresentation, ToolRegistration,
 };
 use rmcp::{
     ClientHandler, RoleClient,
@@ -203,14 +203,14 @@ type RegisteredTools = Vec<(ToolSpec, String)>;
 struct Server {
     name: String,
     client: RwLock<Option<Client>>,
+    tools: SyncRwLock<RegisteredTools>,
     tool_list_version: Arc<AtomicU64>,
     refreshed_version: AtomicU64,
     refresh_gate: Mutex<()>,
 }
 
 pub struct McpTools {
-    servers: Vec<Server>,
-    discovered: SyncRwLock<Vec<RegisteredTools>>,
+    servers: Vec<Arc<Server>>,
 }
 
 #[derive(Default)]
@@ -231,33 +231,20 @@ impl McpTools {
             }
         };
         let mut servers = Vec::new();
-        let mut discovered = Vec::new();
         let attempts = saved
             .into_iter()
             .map(|(name, definition)| Self::connect_server(name, definition, cwd));
         for attempt in join_all(attempts).await {
             match attempt {
-                Ok((server, tools)) => {
-                    servers.push(server);
-                    discovered.push(tools);
-                }
+                Ok(server) => servers.push(Arc::new(server)),
                 Err(error) => diagnostics.push(format!("{error:#}")),
             }
         }
-        let tools = (!servers.is_empty()).then(|| {
-            Arc::new(Self {
-                servers,
-                discovered: SyncRwLock::new(discovered),
-            })
-        });
+        let tools = (!servers.is_empty()).then(|| Arc::new(Self { servers }));
         McpStartup { tools, diagnostics }
     }
 
-    async fn connect_server(
-        name: String,
-        definition: McpServer,
-        cwd: &Path,
-    ) -> Result<(Server, RegisteredTools)> {
+    async fn connect_server(name: String, definition: McpServer, cwd: &Path) -> Result<Server> {
         validate_name(&name)?;
         validate_server(&definition)?;
         let changed = Arc::new(AtomicU64::new(0));
@@ -294,16 +281,14 @@ impl McpTools {
         };
         let discovered = discover_tools(&name, &client).await;
         match discovered {
-            Ok(discovered) => Ok((
-                Server {
-                    name,
-                    client: RwLock::new(Some(client)),
-                    tool_list_version: changed,
-                    refreshed_version: AtomicU64::new(0),
-                    refresh_gate: Mutex::new(()),
-                },
-                discovered,
-            )),
+            Ok(tools) => Ok(Server {
+                name,
+                client: RwLock::new(Some(client)),
+                tools: SyncRwLock::new(tools),
+                tool_list_version: changed,
+                refreshed_version: AtomicU64::new(0),
+                refresh_gate: Mutex::new(()),
+            }),
             Err(error) => {
                 let _ = client.close_with_timeout(Duration::from_secs(3)).await;
                 Err(error)
@@ -313,7 +298,7 @@ impl McpTools {
 
     async fn refresh_changed(&self, stop: CancellationToken) -> Vec<String> {
         let mut diagnostics = Vec::new();
-        for (index, server) in self.servers.iter().enumerate() {
+        for server in &self.servers {
             if server.tool_list_version.load(Ordering::Acquire)
                 == server.refreshed_version.load(Ordering::Acquire)
             {
@@ -342,9 +327,10 @@ impl McpTools {
             };
             match updated {
                 Ok(updated) => {
-                    self.discovered
+                    *server
+                        .tools
                         .write()
-                        .unwrap_or_else(std::sync::PoisonError::into_inner)[index] = updated;
+                        .unwrap_or_else(std::sync::PoisonError::into_inner) = updated;
                 }
                 Err(error) => diagnostics.push(format!("{error:#}")),
             }
@@ -362,14 +348,11 @@ impl McpTools {
             if let Some(mut client) = server.client.write().await.take() {
                 let _ = client.close_with_timeout(Duration::from_secs(3)).await;
             }
-        }
-        for tools in self
-            .discovered
-            .write()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .iter_mut()
-        {
-            tools.clear();
+            server
+                .tools
+                .write()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .clear();
         }
     }
 }
@@ -438,51 +421,54 @@ fn exposed_tool_name(server: &str, original: &str) -> String {
     exposed
 }
 
-impl CodingToolHost for McpTools {
-    fn definitions(&self) -> Vec<ToolDefinition> {
-        self.discovered
-            .read()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .iter()
-            .flat_map(|tools| {
-                tools.iter().map(|(spec, original)| ToolDefinition {
-                    spec: spec.clone(),
-                    presentation: ToolPresentation::static_target(
-                        ToolActivityKind::External,
-                        original.clone(),
-                    ),
-                    exposure: ToolExposure::Direct,
-                })
-            })
-            .collect()
+impl CodingToolSource for McpTools {
+    fn registrations(self: Arc<Self>) -> Vec<ToolRegistration> {
+        let mut registrations = Vec::new();
+        for server in &self.servers {
+            let tools = server
+                .tools
+                .read()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            for (spec, original) in tools.iter() {
+                registrations.push(ToolRegistration::new(
+                    ToolDefinition {
+                        spec: spec.clone(),
+                        presentation: ToolPresentation::static_target(
+                            ToolActivityKind::External,
+                            original.clone(),
+                        ),
+                        exposure: ToolExposure::Direct,
+                    },
+                    Arc::new(McpExecutor {
+                        server: server.clone(),
+                        original_name: original.clone(),
+                    }),
+                ));
+            }
+        }
+        registrations
     }
 
-    fn refresh_definitions<'a>(&'a self, stop: CancellationToken) -> BoxFuture<'a, Vec<String>> {
+    fn refresh<'a>(&'a self, stop: CancellationToken) -> BoxFuture<'a, Vec<String>> {
         Box::pin(self.refresh_changed(stop))
     }
+}
 
+/// Request-bound connection and original server name. No lookup in discovered
+/// tools is permitted here: another Session may refresh that source meanwhile.
+struct McpExecutor {
+    server: Arc<Server>,
+    original_name: String,
+}
+
+impl ToolExecutor for McpExecutor {
     fn execute<'a>(
         &'a self,
         call: &'a ToolCall,
         stop: CancellationToken,
     ) -> BoxFuture<'a, CodingToolOutput> {
         Box::pin(async move {
-            let route = self
-                .discovered
-                .read()
-                .unwrap_or_else(std::sync::PoisonError::into_inner)
-                .iter()
-                .enumerate()
-                .find_map(|(index, tools)| {
-                    tools
-                        .iter()
-                        .find(|(spec, _)| spec.name == call.name)
-                        .map(|(_, name)| (index, name.clone()))
-                });
-            let Some((index, tool_name)) = route else {
-                return tool_error(format!("unknown MCP tool: {}", call.name));
-            };
-            let server = &self.servers[index];
+            let server = &self.server;
             let client = server.client.read().await;
             let Some(client) = client.as_ref() else {
                 return tool_error(format!("MCP server {} is closed", server.name));
@@ -490,7 +476,8 @@ impl CodingToolHost for McpTools {
             let Some(args) = call.arguments.as_object() else {
                 return tool_error("MCP tool arguments must be an object".to_owned());
             };
-            let request = CallToolRequestParams::new(tool_name).with_arguments(args.clone());
+            let request =
+                CallToolRequestParams::new(self.original_name.clone()).with_arguments(args.clone());
             let result = tokio::select! {
                 () = stop.cancelled() => return tool_error(format!("MCP tool {} cancelled; effects may be unknown",call.name)),
                 result = client.call_tool(request) => result,
@@ -643,6 +630,72 @@ fn tool_error(message: String) -> CodingToolOutput {
 mod tests {
     use super::*;
     use std::os::unix::fs::PermissionsExt;
+
+    #[tokio::test]
+    async fn issued_mcp_capability_survives_peer_refresh_but_not_connection_shutdown() {
+        let root = std::env::temp_dir().join(format!("ion-mcp-bound-{}", uuid::Uuid::now_v7()));
+        fs::create_dir(&root).unwrap();
+        let config = McpConfig::new(&root);
+        let server = r#"
+import json, sys
+listings = 0
+for line in sys.stdin:
+    request = json.loads(line)
+    if "id" not in request:
+        continue
+    method = request["method"]
+    if method == "initialize":
+        result = {"protocolVersion": request["params"]["protocolVersion"],
+                  "capabilities": {"tools": {}}, "serverInfo": {"name": "bound", "version": "1"}}
+    elif method == "tools/list":
+        listings += 1
+        result = {"tools": [{"name": "probe", "inputSchema": {"type": "object"}}]
+                  if listings == 1 else []}
+    elif method == "tools/call":
+        result = {"content": [], "structuredContent": {"called": request["params"]["name"]}}
+    else:
+        continue
+    print(json.dumps({"jsonrpc": "2.0", "id": request["id"], "result": result}), flush=True)
+"#;
+        config
+            .add(
+                "bound",
+                McpServer::Stdio(McpStdioServer {
+                    command: "python3".into(),
+                    args: vec!["-c".into(), server.into()],
+                }),
+            )
+            .unwrap();
+        let startup = McpTools::connect(&config, &root).await;
+        assert!(startup.diagnostics.is_empty(), "{:?}", startup.diagnostics);
+        let source = startup.tools.unwrap();
+        let tools = ion_core::ToolSet::new([source.clone() as Arc<dyn CodingToolSource>]);
+        let issued = tools.snapshot();
+
+        // Another consumer refreshes the source after this request was issued.
+        source.servers[0]
+            .tool_list_version
+            .fetch_add(1, Ordering::AcqRel);
+        let diagnostics = tools.refresh(CancellationToken::new()).await;
+        let refreshed = tools.snapshot();
+        let call = ToolCall {
+            id: "issued".into(),
+            name: "mcp__bound__probe".into(),
+            arguments: json!({}),
+            raw_arguments: None,
+        };
+        let observed = issued.execute(&call, CancellationToken::new()).await;
+        source.shutdown().await;
+        let closed = issued.execute(&call, CancellationToken::new()).await;
+        fs::remove_dir_all(root).unwrap();
+
+        assert!(diagnostics.is_empty(), "{diagnostics:?}");
+        assert!(refreshed.specs().is_empty());
+        assert!(!observed.is_error, "{}", observed.value);
+        assert_eq!(observed.value["structured_content"]["called"], "probe");
+        assert!(closed.is_error);
+        assert_eq!(closed.value["error"], "MCP server bound is closed");
+    }
 
     #[test]
     fn model_facing_mcp_names_preserve_distinct_originals() {
