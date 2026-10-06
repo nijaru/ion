@@ -9,9 +9,7 @@ use std::{
 use anyhow::{Context, Result, bail, ensure};
 use clap::{Parser, Subcommand};
 use ion_ai::{Content, Message, ModelRef};
-use ion_core::{
-    CodingAgent, CodingAgentError, CodingAgentEvent, CodingSession, CodingToolSource, ForkPoint,
-};
+use ion_core::{CodingAgent, CodingAgentError, CodingSession, CodingToolSource, ForkPoint};
 use ion_host::image_input::LoadedImage;
 use ion_host::{
     CredentialStatus, Host, McpHttpServer, McpServer, McpStdioServer, Resources, SavedSelection,
@@ -39,6 +37,9 @@ struct Cli {
     /// Emit JSONL progress records for a headless prompt.
     #[arg(long, global = true)]
     json: bool,
+    /// Enable bounded JavaScript composition alongside direct tools.
+    #[arg(long, global = true)]
+    code_mode: bool,
     /// Working directory for a new session (defaults to the current directory).
     #[arg(long, global = true)]
     cwd: Option<PathBuf>,
@@ -164,7 +165,7 @@ async fn run_cli(cli: Cli) -> Result<()> {
     {
         bail!("--json requires `run PROMPT` or `--print PROMPT`");
     }
-    let host = Arc::new(Host::from_environment()?);
+    let host = Arc::new(Host::from_environment()?.with_code_mode(cli.code_mode));
     let credentials = host.credentials();
     let models = host.models();
     match cli.action {
@@ -614,7 +615,7 @@ async fn headless(
     if json_output {
         write_json_record(&json!({"type":"session","id":id,"cwd":session.cwd()}))?;
     } else {
-        eprintln!("[session: {id}]");
+        writeln!(io::stderr().lock(), "[session: {id}]")?;
     }
     let stop = CancellationToken::new();
     let output_stop = stop.clone();
@@ -638,65 +639,20 @@ async fn headless(
                 }
                 return;
             }
-            match event {
-                CodingAgentEvent::TurnAccepted { .. }
-                | CodingAgentEvent::TextDelta(_)
-                | CodingAgentEvent::AssistantCommitted { .. }
-                | CodingAgentEvent::SteeringCommitted { .. } => {}
-                CodingAgentEvent::ProviderRetry {
-                    attempt,
-                    max_retries,
-                    delay_ms,
-                } => {
-                    eprintln!("[provider retry {attempt}/{max_retries} in {delay_ms}ms]")
-                }
-                CodingAgentEvent::ToolStarted { name, .. } => eprintln!("[tool: {name}]"),
-                CodingAgentEvent::ToolFinished {
-                    name,
-                    output,
-                    projection,
-                    ..
-                } => {
-                    eprintln!("[tool: {name}] {}", output.value);
-                    if let Some(notice) = projection.notice() {
-                        eprintln!("[tool: {name}] {notice}");
-                    }
-                    for image in &output.images {
-                        eprintln!("[tool image: {}]", image.mime_type().as_str());
-                    }
-                }
-                CodingAgentEvent::ToolRejected { name, output, .. } => {
-                    eprintln!("[tool skipped: {name}] {}", output.value)
-                }
-                CodingAgentEvent::InterruptedCalls(count) => {
-                    eprintln!("[recovered {count} incomplete tool call(s); effects unknown]")
-                }
-                CodingAgentEvent::ContextCompacted { through_entry } => {
-                    eprintln!("[context summarized through entry {through_entry}]")
-                }
-                CodingAgentEvent::ProviderReplayRebased => {
-                    eprintln!("[provider reasoning context reset]")
-                }
-                CodingAgentEvent::ProviderReplayNotice {
-                    action,
-                    reason,
-                    count,
-                } => eprintln!("[provider reasoning {action}: {count} block(s), {reason}]"),
-                CodingAgentEvent::ResponseRestarted => {
-                    eprintln!("[incomplete response discarded; retrying]");
-                }
-                CodingAgentEvent::ToolCatalogWarning(message) => {
-                    eprintln!("[tool catalog: {message}]");
-                }
-                CodingAgentEvent::Final(_) => {}
+            if output_error.is_none()
+                && let Some(diagnostic) = agent_events::diagnostic(event)
+                && let Err(error) = writeln!(io::stderr().lock(), "{diagnostic}")
+            {
+                output_error = Some(error);
+                output_stop.cancel();
             }
         })
         .await;
     signal.abort();
+    if let Some(error) = output_error {
+        return Err(error.into());
+    }
     if json_output {
-        if let Some(error) = output_error {
-            return Err(error.into());
-        }
         match &result {
             Ok(_) => write_json_record(&json!({"type":"run_end","status":"completed"}))?,
             Err(CodingAgentError::Cancelled) => write_json_record(

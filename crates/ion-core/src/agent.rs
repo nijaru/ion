@@ -18,7 +18,7 @@ use crate::{
         valid_user_message,
     },
     tool_result::{ToolOutput, ToolResultProjection},
-    tool_set::{ToolActivity, ToolCatalog, ToolExecution, ToolSet, ToolSource},
+    tool_set::{ToolActivity, ToolExecution, ToolSet, ToolSource},
 };
 
 fn user_text(prompt: String) -> Message {
@@ -277,12 +277,10 @@ impl Agent {
         &self,
         session: &Session,
         turn: u64,
-        catalog: &ToolCatalog,
-        call: &ion_ai::ToolCall,
+        tool: ion_ai::BoxFuture<'_, Result<ToolExecution, AgentError>>,
         stop: &CancellationToken,
         warmer: &mut Option<PromptCacheWarmer>,
-    ) -> ToolExecution {
-        let tool = catalog.execute_model_call(call, stop.clone());
+    ) -> Result<ToolExecution, AgentError> {
         tokio::pin!(tool);
         loop {
             let Some(state) = warmer.as_ref() else {
@@ -1001,16 +999,35 @@ impl Agent {
                         Vec::new(),
                     )
                 } else {
+                    let tool = Box::pin(async {
+                        if let Some((runtime, limits)) = tool_catalog.composition(&call.name)
+                            && tool_catalog.is_declared(&call.name)
+                        {
+                            crate::code_gateway::run(
+                                runtime,
+                                limits,
+                                session,
+                                turn,
+                                tool_catalog,
+                                &call,
+                                stop,
+                                observe,
+                            )
+                            .await
+                            .map(ToolExecution::output)
+                        } else {
+                            Ok(tool_catalog.execute_model_call(&call, stop.clone()).await)
+                        }
+                    });
                     let execution = self
                         .execute_tool_with_cache_warming(
                             session,
                             turn,
-                            tool_catalog,
-                            &call,
+                            tool,
                             stop,
                             &mut cache_warmer,
                         )
-                        .await;
+                        .await?;
                     (execution.output, execution.activate)
                 };
                 activate_tools.extend(activate);
@@ -1100,6 +1117,19 @@ pub enum AgentEvent {
         name: String,
         activity: ToolActivity,
         output: ToolOutput,
+    },
+    ChildToolAdmitted {
+        parent_call_id: String,
+        intent: crate::ChildIntent,
+    },
+    ChildToolStarted {
+        parent: crate::ToolOccurrence,
+        child: usize,
+    },
+    ChildToolFinished {
+        parent: crate::ToolOccurrence,
+        child: usize,
+        outcome: crate::ChildOutcome,
     },
     InterruptedCalls(usize),
     Final(String),

@@ -258,6 +258,15 @@ pub fn tools(history: &TranscriptProjection) -> impl Iterator<Item = &Transcript
 }
 
 fn render_tool(rows: &mut Vec<String>, number: usize, activity: &TranscriptActivity, width: usize) {
+    render_activity(rows, &number.to_string(), activity, width);
+}
+
+fn render_activity(
+    rows: &mut Vec<String>,
+    number: &str,
+    activity: &TranscriptActivity,
+    width: usize,
+) {
     push_wrapped(
         rows,
         &format!(
@@ -285,6 +294,14 @@ fn render_tool(rows: &mut Vec<String>, number: usize, activity: &TranscriptActiv
         }
     } else {
         push_wrapped(rows, "[no committed result]", width);
+    }
+    for (child, activity) in activity.children.iter().enumerate() {
+        push_wrapped(
+            rows,
+            "Child activity · not included in model context",
+            width,
+        );
+        render_activity(rows, &format!("{number}.{}", child + 1), activity, width);
     }
 }
 

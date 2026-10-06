@@ -22,7 +22,7 @@ use thiserror::Error;
 use tokio::sync::{Mutex as AsyncMutex, MutexGuard as AsyncMutexGuard};
 use tokio_util::sync::CancellationToken;
 
-const FORMAT_VERSION: u32 = 8;
+const FORMAT_VERSION: u32 = 9;
 // An 8 MiB raw prompt or streamed response can grow up to sixfold when JSON
 // escapes control characters. Keep the storage bound above that encoded size.
 const MAX_ENTRY_BYTES: usize = 64 * 1024 * 1024;
@@ -110,6 +110,16 @@ pub enum SessionEntry {
         /// Observed output, never replaced by a route-specific delivery error.
         result: ToolResult,
         projection: crate::ToolResultProjection,
+    },
+    ChildToolAdmitted {
+        turn: u64,
+        intent: crate::ChildIntent,
+    },
+    ChildToolResult {
+        turn: u64,
+        parent: crate::ToolOccurrence,
+        child: usize,
+        outcome: crate::ChildOutcome,
     },
     TurnEnded {
         turn: u64,
@@ -218,11 +228,20 @@ pub(crate) struct CompactionPlan {
     pub chunked: bool,
 }
 
+#[derive(Clone)]
+struct PendingTool {
+    occurrence: crate::ToolOccurrence,
+    call_id: String,
+    name: String,
+    next_child: usize,
+    children: BTreeSet<usize>,
+}
+
 #[derive(Default, Clone)]
 struct State {
     active: Option<u64>,
     assistant_seen_in_turn: bool,
-    pending: Vec<(String, String)>,
+    pending: Vec<PendingTool>,
     last_id: u64,
     last_end: Option<(u64, TurnEndReason)>,
     last_model: Option<ModelRef>,
@@ -397,7 +416,7 @@ impl State {
                         Content::ToolCall(ToolCall { id, name, .. })
                             if !id.is_empty() && !name.is_empty() =>
                         {
-                            if self.pending.iter().any(|(pending_id, _)| pending_id == id) {
+                            if self.pending.iter().any(|pending| pending.call_id == *id) {
                                 return Err(SessionError::InvalidHistory);
                             }
                             let Some(stored) = tool_activities.get(activity_index) else {
@@ -406,8 +425,17 @@ impl State {
                             if stored.call_id != *id {
                                 return Err(SessionError::InvalidHistory);
                             }
+                            self.pending.push(PendingTool {
+                                occurrence: crate::ToolOccurrence {
+                                    assistant_entry: self.sequence + 1,
+                                    ordinal: activity_index,
+                                },
+                                call_id: id.clone(),
+                                name: name.clone(),
+                                next_child: 0,
+                                children: BTreeSet::new(),
+                            });
                             activity_index += 1;
-                            self.pending.push((id.clone(), name.clone()));
                         }
                         Content::Text(_) => {}
                         _ => return Err(SessionError::InvalidHistory),
@@ -429,10 +457,11 @@ impl State {
                 result,
                 projection,
             } => {
-                let position = self
-                    .pending
-                    .iter()
-                    .position(|(id, name)| id == &result.call_id && name == &result.name);
+                let position = self.pending.iter().position(|pending| {
+                    pending.call_id == result.call_id
+                        && pending.name == result.name
+                        && pending.children.is_empty()
+                });
                 if self.active != Some(*turn) || position.is_none() {
                     return Err(SessionError::InvalidHistory);
                 }
@@ -440,6 +469,43 @@ impl State {
                 messages.push(projection.message(result));
                 if self.pending.is_empty() {
                     new_settled.push(self.sequence + 1);
+                }
+            }
+            SessionEntry::ChildToolAdmitted { turn, intent } => {
+                let parent = self
+                    .pending
+                    .iter_mut()
+                    .find(|pending| pending.occurrence == intent.parent)
+                    .ok_or(SessionError::InvalidHistory)?;
+                if self.active != Some(*turn)
+                    || intent.child != parent.next_child
+                    || intent.call.name.is_empty()
+                    || intent.call.name != intent.definition.name
+                    || intent.call.id.is_empty()
+                    || !intent.call.arguments.is_object()
+                    || intent.call.raw_arguments.is_some()
+                {
+                    return Err(SessionError::InvalidHistory);
+                }
+                parent.next_child = parent
+                    .next_child
+                    .checked_add(1)
+                    .ok_or(SessionError::InvalidHistory)?;
+                parent.children.insert(intent.child);
+            }
+            SessionEntry::ChildToolResult {
+                turn,
+                parent,
+                child,
+                ..
+            } => {
+                let pending = self
+                    .pending
+                    .iter_mut()
+                    .find(|pending| pending.occurrence == *parent)
+                    .ok_or(SessionError::InvalidHistory)?;
+                if self.active != Some(*turn) || !pending.children.remove(child) {
+                    return Err(SessionError::InvalidHistory);
                 }
             }
             SessionEntry::TurnEnded { turn, reason } => {
@@ -924,6 +990,8 @@ impl Session {
                 | SessionEntry::ModelContextChanged { .. }
                 | SessionEntry::CacheWarm { .. }
                 | SessionEntry::Compacted { .. }
+                | SessionEntry::ChildToolAdmitted { .. }
+                | SessionEntry::ChildToolResult { .. }
                 | SessionEntry::TurnEnded { .. } => false,
             });
             let earlier_cut = recent_entry
@@ -1321,6 +1389,57 @@ impl Session {
         append(&mut store, &entries)
     }
 
+    pub(crate) fn tool_occurrence(
+        &self,
+        turn: u64,
+        call_id: &str,
+    ) -> Result<crate::ToolOccurrence, SessionError> {
+        let store = self.store.lock().map_err(|_| SessionError::Poisoned)?;
+        if store.state.active != Some(turn) {
+            return Err(SessionError::InvalidHistory);
+        }
+        store
+            .state
+            .pending
+            .iter()
+            .find(|pending| pending.call_id == call_id)
+            .map(|pending| pending.occurrence)
+            .ok_or(SessionError::InvalidHistory)
+    }
+
+    pub(crate) fn record_child_intent(
+        &self,
+        turn: u64,
+        intent: crate::ChildIntent,
+    ) -> Result<(), SessionError> {
+        let mut store = self.store.lock().map_err(|_| SessionError::Poisoned)?;
+        append(
+            &mut store,
+            &[SessionEntry::ChildToolAdmitted { turn, intent }],
+        )
+    }
+
+    pub(crate) fn record_child_outcome(
+        &self,
+        turn: u64,
+        parent: crate::ToolOccurrence,
+        child: usize,
+        outcome: crate::ChildOutcome,
+    ) -> Result<crate::ChildOutcome, SessionError> {
+        let entry = SessionEntry::ChildToolResult {
+            turn,
+            parent,
+            child,
+            outcome,
+        };
+        let mut store = self.store.lock().map_err(|_| SessionError::Poisoned)?;
+        append(&mut store, std::slice::from_ref(&entry))?;
+        let SessionEntry::ChildToolResult { outcome, .. } = entry else {
+            unreachable!()
+        };
+        Ok(outcome)
+    }
+
     pub(crate) fn end_turn(&self, turn: u64, reason: TurnEndReason) -> Result<(), SessionError> {
         let mut store = self.store.lock().map_err(|_| SessionError::Poisoned)?;
         if store.state.active != Some(turn) {
@@ -1344,13 +1463,16 @@ fn interrupted_turn_entries(state: &State) -> Vec<SessionEntry> {
     entries
 }
 
-fn unknown_results(turn: u64, pending: &[(String, String)]) -> Vec<SessionEntry> {
-    pending.iter().map(|(call_id, name)| SessionEntry::ToolResult { turn, result: ToolResult {
-        call_id: call_id.clone(), name: name.clone(),
-        result: serde_json::json!({"error":"The tool result was not committed. Its external effect is unknown; inspect the working directory before retrying."}),
-        images: Vec::new(),
-        is_error: true,
-    }, projection: crate::ToolResultProjection::Observed }).collect()
+fn unknown_results(turn: u64, pending: &[PendingTool]) -> Vec<SessionEntry> {
+    pending.iter().flat_map(|pending| {
+        pending.children.iter().map(|child| SessionEntry::ChildToolResult {
+            turn, parent: pending.occurrence, child: *child, outcome: crate::ChildOutcome::Unknown,
+        }).chain(std::iter::once(SessionEntry::ToolResult { turn, result: ToolResult {
+            call_id: pending.call_id.clone(), name: pending.name.clone(),
+            result: serde_json::json!({"error":"The tool result was not committed. Its external effect is unknown; inspect the working directory before retrying."}),
+            images: Vec::new(), is_error: true,
+        }, projection: crate::ToolResultProjection::Observed }))
+    }).collect()
 }
 
 fn append(store: &mut Store, entries: &[SessionEntry]) -> Result<(), SessionError> {
@@ -1511,7 +1633,9 @@ fn message_from_entry(entry: &SessionEntry) -> Option<Message> {
         SessionEntry::ToolResult {
             result, projection, ..
         } => Some(projection.message(result)),
-        SessionEntry::UserShell { .. }
+        SessionEntry::ChildToolAdmitted { .. }
+        | SessionEntry::ChildToolResult { .. }
+        | SessionEntry::UserShell { .. }
         | SessionEntry::ModelSelected { .. }
         | SessionEntry::EffectiveModelChanged { .. }
         | SessionEntry::ProviderReplayRebased { .. }
@@ -2813,6 +2937,88 @@ mod tests {
         );
         assert!(reopened.messages().unwrap()[1].provider_replay.is_some());
         drop(reopened);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn parent_result_cannot_settle_a_pending_child() {
+        let (root, path) = fixture();
+        let session = Session::create(&path, &root).unwrap();
+        let model = ModelRef {
+            provider: "test".into(),
+            model: "test".into(),
+        };
+        let (turn, _) = session.begin_turn("compose".into(), model).unwrap();
+        session
+            .record_assistant(
+                turn,
+                Message {
+                    role: Role::Assistant,
+                    content: vec![Content::ToolCall(ToolCall {
+                        id: "parent".into(),
+                        name: "code_mode".into(),
+                        arguments: serde_json::json!({"code":"return true"}),
+                        raw_arguments: None,
+                    })],
+                    provider_replay: None,
+                },
+                Usage::unknown(),
+                false,
+            )
+            .unwrap();
+        let parent = session.tool_occurrence(turn, "parent").unwrap();
+        session
+            .record_child_intent(
+                turn,
+                crate::ChildIntent {
+                    parent,
+                    child: 0,
+                    call: ToolCall {
+                        id: "child".into(),
+                        name: "write".into(),
+                        arguments: serde_json::json!({}),
+                        raw_arguments: None,
+                    },
+                    definition: ion_ai::ToolSpec {
+                        name: "write".into(),
+                        description: String::new(),
+                        input_schema: serde_json::json!({"type":"object"}),
+                    },
+                    activity: crate::ToolActivity::external("write"),
+                },
+            )
+            .unwrap();
+        let result = ToolResult {
+            call_id: "parent".into(),
+            name: "code_mode".into(),
+            result: serde_json::json!({"result":true}),
+            images: Vec::new(),
+            is_error: false,
+        };
+        let before = session.view().unwrap().entries;
+        assert!(matches!(
+            session.record_tool_result(turn, result.clone()),
+            Err(SessionError::InvalidHistory)
+        ));
+        assert_eq!(session.view().unwrap().entries, before);
+        session
+            .record_child_outcome(
+                turn,
+                parent,
+                0,
+                crate::ChildOutcome::Observed {
+                    output: crate::tool_result::ToolOutput {
+                        value: serde_json::json!({"written":true}),
+                        images: Vec::new(),
+                        is_error: false,
+                    },
+                },
+            )
+            .unwrap();
+        session.record_tool_result(turn, result).unwrap();
+        session.end_turn(turn, TurnEndReason::Completed).unwrap();
+        drop(session);
+        Session::open(&path).unwrap();
         fs::remove_dir_all(root).unwrap();
     }
 

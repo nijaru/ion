@@ -105,7 +105,7 @@ Session ID. The source retains all later history. These operations copy
 conversation facts, not working files, and an unfinished Turn cannot be an
 after-Turn point. RPC clients can use `list_turns` and `fork` with `turn` and
 optional `after: true`.
-This unreleased branch uses Session format 8; earlier development Session
+This unreleased branch uses Session format 9; earlier development Session
 files are not reopened. Tool activity classification used by the transcript is
 stored with each assistant tool-call batch, so resumed history is not
 reinterpreted through the currently installed tool catalog.
@@ -125,6 +125,12 @@ contains the observed output and `model_projection`: `observed`,
 `images_unsupported` or `request_limit_exceeded`. The latter two withhold the
 payload from model context, not from saved inspection; `is_error` describes the
 actual tool outcome, not the delivery limit.
+Code Mode adds `child_tool_admitted` (intent and parent call ID),
+`child_tool_started` (progress), and `child_tool_finished` (committed host output,
+MIME markers and `observed`/`not_dispatched`/`unknown` state). Parent identity is
+`{assistant_entry, ordinal}` and each child has its own ordinal; provider call
+IDs can repeat in later steps. An observed host cancellation response need not
+establish that a remote server stopped its external effects.
 `tool_rejected` reports a call that was never dispatched because the model
 response was truncated.
 `assistant_committed` publishes a durable assistant boundary with `turn`,
@@ -389,6 +395,52 @@ Coding requests use the catalog model's output ceiling, reduced when the
 current context leaves less estimated room; there is no separate 16k app cap.
 A completed response with no answer or tool call fails the Turn; it does not
 save an empty assistant message that would break later provider replay.
+
+## Optional Code Mode
+
+`ion --code-mode run 'Read the files in parallel and return a summary'` adds
+`code_mode` alongside direct tools. The same flag works with chat and RPC;
+`Host::with_code_mode(true)` enables it for embedded hosts and later binding
+changes. It is off by default. Its reserved tool name replaces a custom
+`code_mode` registration when enabled.
+
+The model supplies an async JavaScript **body**, for example:
+
+```js
+const results = await Promise.all(
+  ['src/main.rs', 'Cargo.toml'].map(path => tools.call('read', {path}))
+);
+return results.map(r => ({characters: r.value.content.length, failed: r.is_error}));
+```
+
+`tools.call(name, arguments)` returns `{value, is_error, image_mime_types}`.
+`tools.describe(query)` returns up to ten matching frozen definitions, including
+callable deferred tools. Input schemas are included; typed result schemas are
+not yet exposed. Images stay in saved inspection; the guest receives MIME
+metadata, not image bytes. The selected JSON return value, call count and
+failure/skip counts reach the model. Raw child arguments and observations remain
+in the Session, export and nested Ctrl-O/tool detail, without automatic addition
+to model context. A guest can explicitly select their content in its return.
+
+Child intent commits before dispatch and output before guest consumption. A
+normal return drains requests already transferred by the guest, even if
+unawaited. Failure or cancellation closes admission and awaits started work.
+A failed result commit blocks dependent consumption; interrupted children are
+recorded as unknown before their parent is recovered. Reopening never reruns
+the script. `Promise.all` does not roll back writes or external calls.
+
+QuickJS runs on a separate blocking worker without ambient filesystem, network,
+module or timer APIs. Default limits are a 30-second guest deadline (including
+host waits), 64 bridge requests, four concurrent calls, a 64 MiB JS heap,
+512 KiB stack, 64 KiB source and 1 MiB per JSON value. Cumulative guest replies
+are limited to 8 MiB. A 32 MiB child-audit admission threshold stops further
+dispatch; already-started outcomes still commit, so it can overshoot. Successful
+guest return ends its deadline, not host settlement.
+
+These limits are not an OS sandbox or a process-RSS/disk quota. Native and MCP
+calls retain host permissions and their own capture/timeout contracts. Full
+command captures can consume disk; there is no aggregate artifact quota or
+retention guarantee. No comparative latency/token benefit is established yet.
 
 ## Current limits
 

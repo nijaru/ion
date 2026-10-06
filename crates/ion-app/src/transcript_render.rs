@@ -98,20 +98,11 @@ pub(super) fn live_rows(
         selected.truncate(budget.saturating_sub(2).clamp(1, 3));
         if budget > selected.len()
             && let Some((item_index, activity_index, exception)) =
-                activities().rfind(|(_, _, activity)| {
-                    model_result_notice(activity).is_some()
-                        || matches!(
-                            activity.state,
-                            ActivityState::Failed
-                                | ActivityState::Cancelled
-                                | ActivityState::TimedOut
-                                | ActivityState::Rejected
-                                | ActivityState::Unknown
-                        )
-                })
+                activities().rfind(|(_, _, activity)| nested_exception(activity).is_some())
         {
             pinned = Some((item_index, activity_index));
-            // Put the diagnostic subject first in a narrow viewport.
+            let exception = nested_exception(exception).expect("exception selected above");
+            // Preserve severity even when a long child subject must be fitted.
             let subject = exception
                 .activity
                 .subject
@@ -120,7 +111,7 @@ pub(super) fn live_rows(
                 .unwrap_or_else(|| exception.name.clone());
             let diagnostic = match model_result_notice(exception) {
                 Some(notice) => format!("! {notice} · {subject}"),
-                None => format!("! {subject} · {}", action_label(exception)),
+                None => format!("! {} · {subject}", action_label(exception)),
             };
             selected.push(fit_line(&diagnostic, width));
         }
@@ -345,9 +336,12 @@ fn render_group(rows: &mut Vec<String>, group: &ActivityGroup, width: usize) {
     if group.activities.len() == 1 {
         let item = &display[0];
         rows.push(fit_line(&format!("● {}", item.summary), width));
-        if let Some(detail) = &item.detail {
+        if group.activities[0].children.is_empty()
+            && let Some(detail) = &item.detail
+        {
             rows.push(fit_line(&format!("  └ {detail}"), width));
         }
+        render_children(rows, &group.activities[0].children, "  ", width);
         return;
     }
 
@@ -357,9 +351,36 @@ fn render_group(rows: &mut Vec<String>, group: &ActivityGroup, width: usize) {
         let last = index + 1 == total_children;
         let branch = if last { "└ " } else { "├ " };
         rows.push(fit_line(&format!("{branch}{}", item.summary), width));
-        if let Some(detail) = &item.detail {
+        if group.activities[item.source.start].children.is_empty()
+            && let Some(detail) = &item.detail
+        {
             let prefix = if last { "  └ " } else { "│ └ " };
             rows.push(fit_line(&format!("{prefix}{detail}"), width));
+        }
+        render_children(
+            rows,
+            &group.activities[item.source.start].children,
+            if last { "  " } else { "│ " },
+            width,
+        );
+    }
+}
+
+fn render_children(
+    rows: &mut Vec<String>,
+    children: &[TranscriptActivity],
+    prefix: &str,
+    width: usize,
+) {
+    let display = compact_activities(children);
+    for (index, item) in display.iter().enumerate() {
+        let last = index + 1 == display.len();
+        rows.push(fit_line(
+            &format!("{prefix}{}{}", if last { "└ " } else { "├ " }, item.summary),
+            width,
+        ));
+        if let Some(detail) = &item.detail {
+            rows.push(fit_line(&format!("{prefix}  └ {detail}"), width));
         }
     }
 }
@@ -498,9 +519,51 @@ fn model_result_notice(activity: &TranscriptActivity) -> Option<&'static str> {
         .and_then(|result| result.projection.notice())
 }
 
+fn nested_exception(activity: &TranscriptActivity) -> Option<&TranscriptActivity> {
+    let exceptional = |activity: &TranscriptActivity| {
+        matches!(
+            activity.state,
+            ActivityState::Failed
+                | ActivityState::Cancelled
+                | ActivityState::TimedOut
+                | ActivityState::Rejected
+                | ActivityState::Unknown
+        )
+    };
+    if model_result_notice(activity).is_some() {
+        return Some(activity);
+    }
+    activity
+        .children
+        .iter()
+        .rfind(|child| exceptional(child))
+        .or_else(|| exceptional(activity).then_some(activity))
+}
+
 fn display_activity(activity: &TranscriptActivity, index: usize) -> DisplayActivity {
     let kind = activity.activity.kind;
     let mut summary = action_label(activity);
+    if !activity.children.is_empty() {
+        let running = activity
+            .children
+            .iter()
+            .filter(|child| child.state == ActivityState::Running)
+            .count();
+        let exceptions = activity
+            .children
+            .iter()
+            .filter(|child| {
+                !matches!(
+                    child.state,
+                    ActivityState::Queued | ActivityState::Running | ActivityState::Completed
+                )
+            })
+            .count();
+        summary.push_str(&format!(
+            " · {} child calls · {running} running · {exceptions} exceptions",
+            activity.children.len()
+        ));
+    }
     let model_notice = model_result_notice(activity);
     if model_notice.is_some() {
         summary.push_str(" · result not shared with model");
@@ -516,14 +579,38 @@ fn display_activity(activity: &TranscriptActivity, index: usize) -> DisplayActiv
         summary.push_str(&format!(" · {}", kind_label(kind)));
     }
     append_result_summary(&mut summary, activity);
-    let detail = activity.result.as_ref().and_then(|result| {
-        if kind == ToolActivityKind::Command {
-            command_detail(result)
-        } else {
-            None
-        }
+    let child_detail = activity
+        .children
+        .iter()
+        .rfind(|child| {
+            !matches!(
+                child.state,
+                ActivityState::Completed | ActivityState::Queued | ActivityState::Running
+            )
+        })
+        .or_else(|| {
+            activity
+                .children
+                .iter()
+                .find(|child| child.state == ActivityState::Running)
+        })
+        .map(|child| {
+            format!(
+                "{} {}",
+                action_label(child),
+                child.activity.subject.as_deref().unwrap_or(&child.name)
+            )
+        });
+    let detail = child_detail.or_else(|| {
+        activity.result.as_ref().and_then(|result| {
+            if kind == ToolActivityKind::Command {
+                command_detail(result)
+            } else {
+                None
+            }
+        })
     });
-    let observation = is_observation(kind);
+    let observation = is_observation(kind) && activity.children.is_empty();
     DisplayActivity {
         summary,
         detail,
@@ -752,6 +839,7 @@ mod tests {
                 subject: Some(subject.into()),
             },
             arguments: serde_json::Value::Null,
+            children: Vec::new(),
             state,
             result: result.map(|value| ActivityResult {
                 projection: ion_core::ToolResultProjection::Observed,
@@ -948,7 +1036,9 @@ mod tests {
                 "1 failed",
                 "1 queued",
                 "14 write",
-                "FAILURE_MARKER",
+                // Severity leads the pinned row; narrow subjects may be fitted.
+                "Exited 7",
+                "FAILURE_MA",
                 "CURRENT_READ",
             ] {
                 assert!(text.contains(fact), "missing {fact}: {text}");
@@ -959,6 +1049,45 @@ mod tests {
         assert!(tiny.join("\n").contains("FAILURE_MARKER"));
         assert_eq!(live_rows(&projection, 100, 100), rows(&projection, 100));
         assert!(live_rows(&projection, 100, 0).is_empty());
+    }
+
+    #[test]
+    fn nested_failure_remains_visible_under_a_running_parent() {
+        let mut parent = activity(
+            "code",
+            ToolActivityKind::External,
+            "JavaScript",
+            ActivityState::Running,
+            None,
+        );
+        parent.children = vec![activity(
+            "read",
+            ToolActivityKind::Read,
+            "CHILD_FAILURE_LONG_PATH",
+            ActivityState::Failed,
+            Some(serde_json::json!({"error":"missing"})),
+        )];
+        let projection = TranscriptProjection {
+            items: vec![TranscriptItem::ActivityGroup(ActivityGroup {
+                turn: 1,
+                open: true,
+                activities: vec![parent],
+            })],
+        };
+        let full = rows(&projection, 80).join("\n");
+        assert!(
+            full.contains("1 child calls") && full.contains("1 exceptions"),
+            "{full}"
+        );
+        assert!(
+            full.contains("└ Read failed CHILD_FAILURE_LONG_PATH"),
+            "{full}"
+        );
+        let tiny = live_rows(&projection, 24, 2).join("\n");
+        assert!(
+            tiny.contains("Read failed") && tiny.contains("CHILD"),
+            "{tiny}"
+        );
     }
 
     #[test]

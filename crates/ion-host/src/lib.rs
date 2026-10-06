@@ -4,6 +4,7 @@
 pub mod auth;
 mod binding;
 pub mod catalog;
+pub mod code_mode;
 mod credentials;
 pub mod image_input;
 mod local_tools;
@@ -39,6 +40,7 @@ pub struct Host {
     state_root: PathBuf,
     credentials: CredentialStore,
     models: ModelStore,
+    code_mode: bool,
 }
 
 impl Host {
@@ -50,6 +52,7 @@ impl Host {
             state_root,
             credentials,
             models,
+            code_mode: false,
         }
     }
 
@@ -58,6 +61,13 @@ impl Host {
             app_root("XDG_CONFIG_HOME", ".config")?,
             app_root("XDG_STATE_HOME", ".local/state")?,
         ))
+    }
+
+    /// Enable bounded JavaScript composition beside the direct tools for all
+    /// agents assembled by this host, including later model/session switches.
+    pub fn with_code_mode(mut self, enabled: bool) -> Self {
+        self.code_mode = enabled;
+        self
     }
 
     pub fn config_root(&self) -> &Path {
@@ -119,7 +129,7 @@ impl Host {
         custom: Arc<dyn CodingToolSource>,
     ) -> Result<Arc<CodingAgent>> {
         let builtins: Arc<dyn CodingToolSource> = Arc::new(LocalTools::new(cwd)?);
-        self.agent_with_tool_set(selected, Arc::new(ToolSet::new([builtins, custom])))
+        self.agent_with_tool_set(selected, Arc::new(self.tool_set([builtins, custom])))
     }
 
     /// Compose a selected route with a complete caller-owned capability source.
@@ -128,7 +138,19 @@ impl Host {
         selected: &Selection,
         tools: Arc<dyn CodingToolSource>,
     ) -> Result<Arc<CodingAgent>> {
-        self.agent_with_tool_set(selected, Arc::new(ToolSet::new([tools])))
+        self.agent_with_tool_set(selected, Arc::new(self.tool_set([tools])))
+    }
+
+    fn tool_set(&self, sources: impl IntoIterator<Item = Arc<dyn CodingToolSource>>) -> ToolSet {
+        let tools = ToolSet::new(sources);
+        if self.code_mode {
+            tools.with_code_mode(
+                Arc::new(code_mode::QuickJs),
+                ion_core::CodeLimits::default(),
+            )
+        } else {
+            tools
+        }
     }
 
     fn agent_with_tool_set(

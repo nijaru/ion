@@ -132,7 +132,7 @@ pub struct ToolExecution {
 }
 
 impl ToolExecution {
-    fn output(output: ToolOutput) -> Self {
+    pub(crate) fn output(output: ToolOutput) -> Self {
         Self {
             output,
             activate: Vec::new(),
@@ -214,13 +214,25 @@ pub trait ToolSource: Send + Sync {
 /// earlier ones with the same model-visible name.
 pub struct ToolSet {
     sources: Vec<Arc<dyn ToolSource>>,
+    composition: Option<(Arc<dyn crate::CodeRuntime>, crate::CodeLimits)>,
 }
 
 impl ToolSet {
     pub fn new(sources: impl IntoIterator<Item = Arc<dyn ToolSource>>) -> Self {
         Self {
             sources: sources.into_iter().collect(),
+            composition: None,
         }
+    }
+
+    /// Opt in to a Session-owned composed call alongside the direct tools.
+    pub fn with_code_mode(
+        mut self,
+        runtime: Arc<dyn crate::CodeRuntime>,
+        limits: crate::CodeLimits,
+    ) -> Self {
+        self.composition = Some((runtime, limits));
+        self
     }
 
     pub async fn refresh(&self, stop: CancellationToken) -> Vec<String> {
@@ -258,6 +270,21 @@ impl ToolSet {
                         positions.insert(name, entries.len());
                         entries.push(routed);
                     }
+                }
+            }
+        }
+        if let Some((runtime, limits)) = &self.composition {
+            let definition = crate::composition::definition(*limits);
+            let name = definition.spec.name.clone();
+            let routed = RoutedTool {
+                definition,
+                route: ToolRoute::Composition(runtime.clone(), *limits),
+            };
+            match positions.get(&name).copied() {
+                Some(index) => entries[index] = routed,
+                None => {
+                    positions.insert(name, entries.len());
+                    entries.push(routed);
                 }
             }
         }
@@ -308,6 +335,7 @@ impl ToolSet {
 enum ToolRoute {
     Executor(Arc<dyn ToolExecutor>),
     Search,
+    Composition(Arc<dyn crate::CodeRuntime>, crate::CodeLimits),
 }
 
 #[derive(Clone)]
@@ -347,6 +375,10 @@ impl ToolCatalog {
         self.declared.contains(name)
     }
 
+    pub(crate) fn definitions(&self) -> impl Iterator<Item = &ToolDefinition> {
+        self.entries.iter().map(|entry| &entry.definition)
+    }
+
     pub fn definition(&self, name: &str) -> Option<&ToolDefinition> {
         self.positions
             .get(name)
@@ -369,7 +401,7 @@ impl ToolCatalog {
             .iter()
             .filter(|entry| match &entry.route {
                 ToolRoute::Search => search_needed,
-                ToolRoute::Executor(_) => {
+                ToolRoute::Executor(_) | ToolRoute::Composition(..) => {
                     self.declared.contains(&entry.definition.spec.name)
                         || (entry.definition.exposure == ToolExposure::Deferred
                             && additional.contains(&entry.definition.spec.name))
@@ -377,6 +409,30 @@ impl ToolCatalog {
             })
             .map(|entry| entry.definition.spec.clone())
             .collect()
+    }
+
+    pub(crate) fn composition(
+        &self,
+        name: &str,
+    ) -> Option<(&Arc<dyn crate::CodeRuntime>, crate::CodeLimits)> {
+        match self
+            .positions
+            .get(name)
+            .and_then(|index| self.entries.get(*index))
+            .map(|entry| &entry.route)
+        {
+            Some(ToolRoute::Composition(runtime, limits)) => Some((runtime, *limits)),
+            _ => None,
+        }
+    }
+
+    pub(crate) fn is_intrinsic(&self, name: &str) -> bool {
+        self.positions
+            .get(name)
+            .and_then(|index| self.entries.get(*index))
+            .is_some_and(|entry| {
+                matches!(entry.route, ToolRoute::Search | ToolRoute::Composition(..))
+            })
     }
 
     pub fn activity(&self, call: &ToolCall) -> ToolActivity {
@@ -443,6 +499,16 @@ impl ToolCatalog {
                 let future = executor.execute(call, stop);
                 Box::pin(async move { ToolExecution::output(future.await) })
             }
+            Some(RoutedTool {
+                route: ToolRoute::Composition(..),
+                ..
+            }) => Box::pin(async {
+                ToolExecution::output(ToolOutput {
+                    value: serde_json::json!({"error":"code_mode requires the Session effect gateway"}),
+                    images: Vec::new(),
+                    is_error: true,
+                })
+            }),
             None => Box::pin(async move {
                 ToolExecution::output(ToolOutput {
                     value: serde_json::json!({"error":format!("unknown tool: {}",call.name)}),

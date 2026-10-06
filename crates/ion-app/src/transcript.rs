@@ -49,6 +49,38 @@ pub fn render(view: &SessionView) -> String {
                     let _ = writeln!(text, "  [image: {}]", image.mime_type().as_str());
                 }
             }
+            SessionEntry::ChildToolAdmitted { intent, .. } => {
+                let _ = writeln!(
+                    text,
+                    "\nChild tool · {} · {} · parent {}:{} · child {}",
+                    intent.call.name,
+                    intent.call.id,
+                    intent.parent.assistant_entry,
+                    intent.parent.ordinal,
+                    intent.child
+                );
+                json_value(&mut text, &intent.call.arguments);
+            }
+            SessionEntry::ChildToolResult {
+                parent,
+                child,
+                outcome,
+                ..
+            } => {
+                let output = outcome.clone().inspection_output();
+                let _ = writeln!(
+                    text,
+                    "\nChild result · parent {}:{} · child {} · {}",
+                    parent.assistant_entry,
+                    parent.ordinal,
+                    child,
+                    if output.is_error { "error" } else { "ok" }
+                );
+                json_value(&mut text, &output.value);
+                for image in &output.images {
+                    let _ = writeln!(text, "  [image: {}]", image.mime_type().as_str());
+                }
+            }
             SessionEntry::UserShell {
                 command,
                 output,

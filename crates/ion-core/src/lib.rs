@@ -1,6 +1,8 @@
 //! Ion's local coding loop, typed Session history, and abstract model/tool contracts.
 
 mod agent;
+mod code_gateway;
+mod composition;
 mod generation;
 mod request;
 mod session;
@@ -23,6 +25,10 @@ pub use tool_set::{
     ToolSource as CodingToolSource,
 };
 
+pub use composition::{
+    ChildIntent, ChildOutcome, CodeLimits, CodeReply, CodeRequest, CodeRequestKind, CodeRuntime,
+    CodeTask, ToolOccurrence,
+};
 pub use tool_result::{ToolOutput as CodingToolOutput, ToolResultProjection};
 
 pub use transcript::{

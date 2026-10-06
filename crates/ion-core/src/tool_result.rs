@@ -3,7 +3,7 @@ use ion_ai::{Content, Message, Role, ToolResult};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct ToolOutput {
     pub value: Value,
     pub images: Vec<ion_ai::ImageContent>,

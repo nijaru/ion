@@ -49,8 +49,9 @@ rather than adding a generic frontend, scheduler or projection framework.
 
 Accept input atomically, prepare a request, generate, commit the assistant
 response, settle its calls, and continue or end. There is no fixed step-count
-cap. Calls execute in model order today; parallel execution needs an explicit
-ordering/settlement contract, not a detached task per call.
+cap. Model-issued calls execute in order. Opted-in composition can run bounded
+child calls concurrently under the parent operation's admission and settlement
+contract, without a detached task per call.
 
 - Commit an assistant call and its resolved semantic activity metadata before
   dispatch. Commit an observed result before a dependent request consumes it.
@@ -96,7 +97,7 @@ roll back the shared working directory. An unfinished Turn cannot be a settled
 fork boundary. New empty Sessions do not displace useful recent conversations.
 
 There is no general task graph, physical-attempt ledger, receipt protocol,
-second runtime or replay cursor. Add new facts for a concrete coding contract,
+second coding loop or replay cursor. Add new facts for a concrete coding contract,
 not because a durable framework offers them.
 
 ## Capabilities and trust
@@ -196,7 +197,7 @@ mutations and notices must remain distinguishable without relying on color.
 - A restrained root dot summarizes an episode; indented branches identify its
   actions and subjects. Queued, running, completed, failed, cancelled, rejected
   and unknown work have distinguishable labels. Do not show all admitted calls
-  as running. Real nested composition will require real recorded parentage.
+  as running. Nested composition uses recorded parentage, not guessed labels.
 - Coalesce repetitive successful observations, not consequential mutations or
   exceptions. Compact output makes current work and recent failure intelligible;
   full current detail retains arguments, results, capture paths and notices.
@@ -240,22 +241,35 @@ are distinct powers. Additional extension registrations need explicit scope
 ownership and disposal; no generic reactive framework is assumed. Callbacks
 cannot mutate Session facts or provider wire state behind their owners.
 
-## Composition: next design boundary, not implemented
+## Hybrid composition
 
-Investigate hybrid Code Mode alongside discovery: direct calls remain useful,
-while composition can eliminate deterministic model round trips and select
-useful output. This is not merely hiding schemas. No interpreter or performance
-benefit is established yet.
+Code Mode is opt-in alongside direct calls and discovery. A confined host
+executor receives owned code, resource limits and a bounded request channel;
+Session and catalogue authority remain in the coding operation. QuickJS is
+an execution service, not a second coding loop or durable JavaScript runtime.
+No comparative performance benefit is established.
 
-Use the same frozen capabilities and coding effect authority. Record genuine
-parent/child intent before dispatch and outcomes before dependent consumption.
-Keep raw child audit distinct from final model output and compact human activity;
-do not fabricate assistant tool calls or a second Session authority. On guest
-failure/cancellation, stop new calls and await started hosts. Bound guest time,
-heap, calls/concurrency, host capture and emitted model output independently.
-Neither guest isolation nor approvals undo mutations. Unknown scripts/effects
-are not replayed automatically, and durable JavaScript continuation is not a
-prerequisite. Settle these contracts before selecting a confined runtime.
+Identify a parent by committed assistant-entry sequence and call ordinal, not a
+reusable provider ID. Commit child intent with frozen definition/activity before
+dispatch, then observed output before guest consumption. Raw child facts enter
+human inspection and recovery, never ordinary model messages or fabricated
+assistant calls. A parent cannot commit its result while children are pending.
+Recovery closes unknown children before the parent, without rerunning code.
+
+A successful guest return closes its sender; drain already-transferred requests
+and started effects before the parent settles. Failure, cancellation or a
+budget/storage fault closes further admission and requests stop. Retain started
+futures and join the worker through settlement. A failed observation commit
+blocks consumption and dependent dispatch, even if the guest catches errors.
+Neither promise rejection nor guest isolation establishes rollback, physical
+termination or remote quiescence.
+
+Keep guest heap/stack/time, call count/concurrency, argument/reply data, raw audit,
+host capture/artifacts and final model delivery independently owned. Guest
+limits do not cap native process resources or full-capture disk usage. The first
+path bounds guest data and audit admission; native capture remains tool-owned,
+without an aggregate artifact quota. Artifact quotas and typed advisory RESULT
+contracts remain open work, not claims about the current runtime.
 
 ## Qualification
 

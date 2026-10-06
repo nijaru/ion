@@ -53,6 +53,7 @@ pub struct TranscriptActivity {
     pub arguments: Value,
     pub state: ActivityState,
     pub result: Option<ActivityResult>,
+    pub children: Vec<TranscriptActivity>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -88,7 +89,7 @@ pub struct TranscriptProjection {
 impl TranscriptProjection {
     pub fn from_session(view: &SessionView) -> Self {
         let mut builder = TranscriptBuilder::default();
-        for entry in &view.entries {
+        for (entry_index, entry) in view.entries.iter().enumerate() {
             match entry {
                 SessionEntry::TurnStarted { turn, input, .. } => {
                     builder.push_user(Some(*turn), false, input);
@@ -102,13 +103,42 @@ impl TranscriptProjection {
                     tool_activities,
                     termination,
                     ..
-                } => builder.push_assistant(
-                    *turn,
-                    &message.content,
-                    tool_activities,
-                    termination,
-                    false,
-                ),
+                } => {
+                    builder.push_assistant(
+                        *turn,
+                        &message.content,
+                        tool_activities,
+                        termination,
+                        false,
+                    );
+                    for (ordinal, call) in message
+                        .content
+                        .iter()
+                        .filter_map(|part| match part {
+                            Content::ToolCall(call) => Some(call),
+                            _ => None,
+                        })
+                        .enumerate()
+                    {
+                        let location = builder.calls[&(*turn, call.id.clone())];
+                        builder.occurrences.insert(
+                            crate::ToolOccurrence {
+                                assistant_entry: entry_index as u64 + 1,
+                                ordinal,
+                            },
+                            location,
+                        );
+                    }
+                }
+                SessionEntry::ChildToolAdmitted { turn, intent } => {
+                    builder.push_child(*turn, None, intent)
+                }
+                SessionEntry::ChildToolResult {
+                    parent,
+                    child,
+                    outcome,
+                    ..
+                } => builder.push_child_result(*parent, *child, outcome),
                 SessionEntry::ToolResult {
                     turn,
                     result,
@@ -162,6 +192,11 @@ impl TranscriptProjection {
                     if activity.state == ActivityState::Queued {
                         activity.state = ActivityState::Unknown;
                     }
+                    for child in &mut activity.children {
+                        if child.state == ActivityState::Queued {
+                            child.state = ActivityState::Unknown;
+                        }
+                    }
                 }
             }
         }
@@ -176,6 +211,7 @@ struct TranscriptBuilder {
     projection: TranscriptProjection,
     active_group: Option<(u64, usize)>,
     calls: HashMap<(u64, String), (usize, usize)>,
+    occurrences: HashMap<crate::ToolOccurrence, (usize, usize)>,
 }
 
 impl TranscriptBuilder {
@@ -242,6 +278,7 @@ impl TranscriptBuilder {
                         ActivityState::Rejected
                     },
                     result: None,
+                    children: Vec::new(),
                 });
                 self.calls
                     .insert((turn, call.id.clone()), (group_index, activity_index));
@@ -266,6 +303,51 @@ impl TranscriptBuilder {
             activity.state = result_state(result.is_error, &result.value);
         }
         activity.result = Some(result);
+    }
+
+    fn parent_mut(&mut self, parent: crate::ToolOccurrence) -> &mut TranscriptActivity {
+        let &(group, activity) = self
+            .occurrences
+            .get(&parent)
+            .expect("committed parent precedes child facts");
+        let TranscriptItem::ActivityGroup(group) = &mut self.projection.items[group] else {
+            unreachable!()
+        };
+        &mut group.activities[activity]
+    }
+
+    fn push_child(&mut self, turn: u64, parent_call_id: Option<&str>, intent: &crate::ChildIntent) {
+        if let Some(id) = parent_call_id {
+            let location = self.calls[&(turn, id.to_owned())];
+            self.occurrences.insert(intent.parent, location);
+        }
+        let parent = self.parent_mut(intent.parent);
+        assert_eq!(parent.children.len(), intent.child);
+        parent.children.push(TranscriptActivity {
+            call_id: intent.call.id.clone(),
+            name: intent.call.name.clone(),
+            activity: intent.activity.clone(),
+            arguments: intent.call.arguments.clone(),
+            state: ActivityState::Queued,
+            result: None,
+            children: Vec::new(),
+        });
+    }
+
+    fn push_child_result(
+        &mut self,
+        parent: crate::ToolOccurrence,
+        child: usize,
+        outcome: &crate::ChildOutcome,
+    ) {
+        let activity = &mut self.parent_mut(parent).children[child];
+        let output = outcome.clone().inspection_output();
+        activity.state = match outcome {
+            crate::ChildOutcome::Observed { .. } => result_state(output.is_error, &output.value),
+            crate::ChildOutcome::NotDispatched { .. } => ActivityState::Rejected,
+            crate::ChildOutcome::Unknown => ActivityState::Unknown,
+        };
+        activity.result = Some(live_result(output, ToolResultProjection::Observed));
     }
 
     fn ensure_group(&mut self, turn: u64, open: bool) -> usize {
@@ -467,6 +549,26 @@ impl LiveTranscript {
                     live_result(output, ToolResultProjection::Observed),
                 );
             }
+            AgentEvent::ChildToolAdmitted {
+                parent_call_id,
+                intent,
+            } => {
+                self.builder.push_child(
+                    self.turn.expect("child follows TurnAccepted"),
+                    Some(&parent_call_id),
+                    &intent,
+                );
+            }
+            AgentEvent::ChildToolStarted { parent, child } => {
+                let activity = &mut self.builder.parent_mut(parent).children[child];
+                assert_eq!(activity.state, ActivityState::Queued);
+                activity.state = ActivityState::Running;
+            }
+            AgentEvent::ChildToolFinished {
+                parent,
+                child,
+                outcome,
+            } => self.builder.push_child_result(parent, child, &outcome),
             AgentEvent::InterruptedCalls(count) => self.note(format!(
                 "{count} previous tool call(s) had unknown effects; inspect before retrying"
             )),
