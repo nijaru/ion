@@ -12,6 +12,7 @@ use tokio_util::sync::CancellationToken;
 
 use crate::{
     generation::{GeneratedResponse, generate_with_retry, refresh_prompt_cache},
+    request::{PreparedRequest, RequestStep},
     session::{
         ModelContextSnapshot, Session, SessionError, StoredToolActivity, TurnEndReason,
         valid_user_message,
@@ -196,7 +197,7 @@ struct PromptCacheWarmer {
 impl PromptCacheWarmer {
     fn new(
         policy: PromptCacheWarmingPolicy,
-        request: ModelRequest,
+        request: &ModelRequest,
         usage: ion_ai::Usage,
         request_started: tokio::time::Instant,
     ) -> Option<Self> {
@@ -205,8 +206,8 @@ impl PromptCacheWarmer {
         }
         let next_refresh = request_started + policy.refresh_after();
         let stop_at = request_started + ACTIVE_CACHE_WARMING_LIMIT;
-        (next_refresh < stop_at).then_some(Self {
-            request,
+        (next_refresh < stop_at).then(|| Self {
+            request: request.clone(),
             policy,
             next_refresh,
             stop_at,
@@ -363,55 +364,6 @@ impl Agent {
         }
     }
 
-    fn output_budget(&self, bytes: usize, estimated_input: u64, ceiling: u32) -> Option<u32> {
-        if bytes > self.limits.max_request_bytes || ceiling == 0 {
-            return None;
-        }
-        let Some(window) = self.limits.context_window_tokens else {
-            return Some(ceiling);
-        };
-        let available = u64::from(window).saturating_sub(estimated_input + 8_192);
-        (available > 0).then(|| ceiling.min(available as u32))
-    }
-
-    fn request_footprint(request: &ModelRequest) -> Result<(usize, u64), serde_json::Error> {
-        // The timeline is an adapter optimization input. Unsupported adapters
-        // send only the latest instructions/tools, so do not double-count full
-        // historical snapshots in the provider-neutral request estimate.
-        let mut encoded = request.clone();
-        encoded.context_timeline = None;
-        let bytes = serde_json::to_vec(&encoded)?.len();
-        let (encoded_images, image_count) = request
-            .messages
-            .iter()
-            .flat_map(|message| &message.content)
-            .fold((0usize, 0u64), |(bytes, count), part| match part {
-                Content::Image(image) => (bytes.saturating_add(image.data().len()), count + 1),
-                Content::ToolResult(result) => result
-                    .images
-                    .iter()
-                    .fold((bytes, count), |(bytes, count), image| {
-                        (bytes.saturating_add(image.data().len()), count + 1)
-                    }),
-                _ => (bytes, count),
-            });
-        // Serialized base64 counts against the transport bound, but it is
-        // not prompt text. Reserve a conservative visual-token allowance
-        // per image until provider usage gives the observed count.
-        let estimated_input =
-            bytes.saturating_sub(encoded_images).div_ceil(3) as u64 + image_count * 16_384;
-        Ok((bytes, estimated_input))
-    }
-
-    fn request_fits(
-        &self,
-        request: &ModelRequest,
-        output_tokens: u32,
-    ) -> Result<bool, serde_json::Error> {
-        let (bytes, estimated_input) = Self::request_footprint(request)?;
-        Ok(self.output_budget(bytes, estimated_input, output_tokens) == Some(output_tokens))
-    }
-
     fn keep_bytes(&self) -> usize {
         let model_budget = self
             .limits
@@ -474,7 +426,7 @@ impl Agent {
                     parallel_tool_calls: false,
                 },
             };
-            if self.request_fits(&request, output_tokens)? {
+            if self.limits.request_output_budget(&request, output_tokens)? == Some(output_tokens) {
                 break (plan.through_entry, plan.chunked, request);
             }
             budget /= 2;
@@ -736,81 +688,47 @@ impl Agent {
                 }
             }
             let mut recovered_overflow = false;
-            let (generated, tool_catalog, warm_request, warm_request_started) = loop {
+            let step = loop {
                 for diagnostic in self.tools.refresh(stop.clone()).await {
                     observe(AgentEvent::ToolCatalogWarning(diagnostic));
                 }
                 if stop.is_cancelled() {
                     return Err(AgentError::Cancelled);
                 }
-                let previous_context = session.model_context()?;
-                let tool_catalog = self.tools.snapshot_with_previous(
-                    previous_context
-                        .as_ref()
-                        .map_or(&[], |context| context.tools.as_slice()),
-                );
-                let declared_tools = tool_catalog.declared_specs();
-                let context = ModelContextSnapshot {
-                    instructions: instructions.clone(),
-                    tools: declared_tools.clone(),
-                };
-                let route = ModelRoute::direct(model.clone(), route_reason);
-                let mut request = ModelRequest {
-                    route: route.clone(),
-                    provider_session_id: Some(session.provider_session_id().to_string()),
-                    instructions: Some(instructions.clone()),
-                    messages: session.context_messages_for(&route.effective)?,
-                    tools: declared_tools.clone(),
-                    context_timeline: session.context_timeline_for(&route.effective, &context)?,
-                    prompt_cache: ion_ai::PromptCacheIntent::Reusable,
-                    controls: GenerationControls {
-                        max_output_tokens: self.limits.max_output_tokens,
-                        temperature: None,
-                        top_p: None,
-                        reasoning: Reasoning::ProviderDefault,
-                        tool_choice: ToolChoice::Auto,
-                        parallel_tool_calls: true,
-                    },
-                };
-                if !self.limits.image_input
-                    && request.messages.iter().flat_map(|message| &message.content).any(|part| {
-                        matches!(part, Content::Image(_))
-                            || matches!(part, Content::ToolResult(result) if !result.images.is_empty())
-                    })
-                {
-                    return Err(AgentError::ImagesUnsupported);
-                }
-                let (request_bytes, estimated_input) = Self::request_footprint(&request)?;
-                let Some(output_budget) = self.output_budget(
-                    request_bytes,
-                    estimated_input,
-                    self.limits.max_output_tokens,
-                ) else {
-                    if prefix_bound_continuation {
+                let prepared = match PreparedRequest::new(
+                    session,
+                    turn,
+                    &self.tools,
+                    model.clone(),
+                    route_reason,
+                    &instructions,
+                    self.limits,
+                ) {
+                    Ok(prepared) => prepared,
+                    Err(AgentError::ContextTooLarge) if !prefix_bound_continuation => {
+                        if self
+                            .compact_inner(session, &model, stop, self.keep_bytes(), observe)
+                            .await?
+                            .is_some()
+                        {
+                            continue;
+                        }
                         return Err(AgentError::ContextTooLarge);
                     }
-                    if self
-                        .compact_inner(session, &model, stop, self.keep_bytes(), observe)
-                        .await?
-                        .is_some()
-                    {
-                        continue;
-                    }
-                    return Err(AgentError::ContextTooLarge);
+                    Err(error) => return Err(error),
                 };
-                request.controls.max_output_tokens = output_budget;
-                session.record_effective_model(turn, route.effective.clone())?;
-                session.record_model_context(turn, context)?;
+                let output_budget = prepared.output_budget();
+                let xiaomi_context_limit = prepared.provider() == "xiaomi";
                 let mut emitted_text = false;
-                let request_started = tokio::time::Instant::now();
-                let generated =
-                    generate_with_retry(&self.model, request.clone(), stop, &mut |event| {
+                let issued = prepared
+                    .issue(&self.model, stop, &mut |event| {
                         if matches!(event, AgentEvent::TextDelta(_)) {
                             emitted_text = true;
                         }
                         observe(event);
                     })
                     .await;
+                let generated = issued.as_ref().map(|step| &step.generated);
                 if !assistant_seen_in_turn
                     && !replay_rebased
                     && matches!(&generated, Err(AgentError::ReplayContextChanged))
@@ -837,7 +755,7 @@ impl Agent {
                         },
                         ..
                     })
-                ) || (request.route.effective.provider == "xiaomi"
+                ) || (xiaomi_context_limit
                     && matches!(
                         &generated,
                         Ok(GeneratedResponse {
@@ -889,12 +807,14 @@ impl Agent {
                     }
                     continue;
                 }
-                let generated = generated?;
-                let mut warm_request = request;
-                warm_request.route = generated.route.clone();
-                break (generated, tool_catalog, warm_request, request_started);
+                break issued?;
             };
-            let GeneratedResponse { response, route } = generated;
+            let RequestStep {
+                generated: GeneratedResponse { response, route },
+                prepared,
+                started,
+            } = step;
+            let tool_catalog = prepared.catalog();
             let execution = ModelExecution {
                 route,
                 returned_model: response.returned_model.clone(),
@@ -1052,9 +972,9 @@ impl Agent {
                 self.limits.prompt_cache_warming.and_then(|policy| {
                     PromptCacheWarmer::new(
                         policy,
-                        warm_request,
+                        prepared.warming_request(),
                         response.usage,
-                        warm_request_started,
+                        started,
                     )
                 })
             };
@@ -1084,7 +1004,7 @@ impl Agent {
                         .execute_tool_with_cache_warming(
                             session,
                             turn,
-                            &tool_catalog,
+                            tool_catalog,
                             &call,
                             stop,
                             &mut cache_warmer,
@@ -1399,22 +1319,18 @@ mod tests {
 
     #[test]
     fn coding_output_budget_uses_model_ceiling_and_remaining_context() {
-        let root = std::env::temp_dir().join(format!("ion-budget-{}", uuid::Uuid::now_v7()));
-        std::fs::create_dir(&root).unwrap();
-        let agent = Agent::new(
-            Arc::new(ScriptedModelService::new([])),
-            Arc::new(TestTools::new(&root)),
-        )
-        .with_limits(AgentLimits {
+        let limits = AgentLimits {
             max_output_tokens: 128_000,
             context_window_tokens: Some(200_000),
             ..AgentLimits::default()
-        });
-        assert_eq!(agent.output_budget(900, 300, 128_000), Some(128_000));
-        assert_eq!(agent.output_budget(300_000, 100_000, 128_000), Some(91_808));
-        assert_eq!(agent.output_budget(600_000, 200_000, 128_000), None);
-        assert_eq!(agent.output_budget(9 * 1024 * 1024, 300, 128_000), None);
-        std::fs::remove_dir_all(root).unwrap();
+        };
+        assert_eq!(limits.output_budget(900, 300, 128_000), Some(128_000));
+        assert_eq!(
+            limits.output_budget(300_000, 100_000, 128_000),
+            Some(91_808)
+        );
+        assert_eq!(limits.output_budget(600_000, 200_000, 128_000), None);
+        assert_eq!(limits.output_budget(9 * 1024 * 1024, 300, 128_000), None);
     }
 
     #[tokio::test]
@@ -1478,6 +1394,177 @@ mod tests {
             provider: "test".into(),
             model: "test".into(),
         }
+    }
+
+    #[tokio::test]
+    async fn request_admission_failure_does_not_issue_or_publish_partial_boundary() {
+        let root = std::env::temp_dir().join(format!("ion-admission-{}", uuid::Uuid::now_v7()));
+        std::fs::create_dir(&root).unwrap();
+        let path = root.join("session.sqlite");
+        let session = CodingSession::create(&path, &root).unwrap();
+        let scripts = Arc::new(ScriptedModelService::new([
+            response(vec![Content::Text("first answer".into())]),
+            response(vec![Content::Text("must not issue".into())]),
+        ]));
+        let agent = Agent::new(scripts.clone(), Arc::new(TestTools::new(&root)));
+        agent
+            .submit(
+                &session,
+                model(),
+                "first".into(),
+                "first context".into(),
+                CancellationToken::new(),
+                |_| {},
+            )
+            .await
+            .unwrap();
+        let before = session.view().unwrap();
+        let connection = rusqlite::Connection::open(&path).unwrap();
+        connection.execute_batch("CREATE TRIGGER reject_context BEFORE INSERT ON entries WHEN json_extract(NEW.body, '$.kind') = 'model_context_changed' BEGIN SELECT RAISE(ABORT, 'context unavailable'); END;").unwrap();
+        let changed = ModelRef {
+            model: "changed".into(),
+            ..model()
+        };
+        let result = agent
+            .submit(
+                &session,
+                changed.clone(),
+                "second".into(),
+                "second context".into(),
+                CancellationToken::new(),
+                |_| {},
+            )
+            .await;
+        assert!(matches!(result, Err(AgentError::Session(_))), "{result:?}");
+        assert_eq!(
+            scripts.requests().len(),
+            1,
+            "failed admission issued a provider request"
+        );
+        let after = session.view().unwrap();
+        assert_eq!(after.last_model, Some(changed)); // User acceptance is a separate durable boundary.
+        assert_eq!(after.last_context, before.last_context);
+        assert_eq!(after.last_effective_model, before.last_effective_model);
+        assert!(
+            !after
+                .entries
+                .iter()
+                .any(|entry| matches!(entry, crate::SessionEntry::EffectiveModelChanged { .. }))
+        );
+        drop(session);
+        let reopened = CodingSession::open(&path).unwrap();
+        assert_eq!(
+            reopened.view().unwrap().last_effective_model,
+            before.last_effective_model
+        );
+        assert_eq!(reopened.model_context().unwrap(), before.last_context);
+        drop(reopened);
+        drop(connection);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[tokio::test]
+    async fn issued_request_keeps_capability_and_metadata_until_its_calls_settle() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        struct ChangingSource(AtomicUsize);
+        struct BoundExecutor(usize);
+        impl ToolExecutor for BoundExecutor {
+            fn execute<'a>(
+                &'a self,
+                _call: &'a ToolCall,
+                _stop: CancellationToken,
+            ) -> BoxFuture<'a, ToolOutput> {
+                Box::pin(async move {
+                    ToolOutput {
+                        value: serde_json::json!({"generation": self.0}),
+                        images: Vec::new(),
+                        is_error: false,
+                    }
+                })
+            }
+        }
+        impl ToolSource for ChangingSource {
+            fn registrations(self: Arc<Self>) -> Vec<ToolRegistration> {
+                let version = self.0.load(Ordering::SeqCst);
+                vec![ToolRegistration::new(
+                    ToolDefinition {
+                        spec: ToolSpec {
+                            name: "probe".into(),
+                            description: format!("generation {version}"),
+                            input_schema: serde_json::json!({"type":"object"}),
+                        },
+                        presentation: ToolPresentation::static_target(
+                            crate::ToolActivityKind::Read,
+                            format!("generation {version}"),
+                        ),
+                        exposure: crate::ToolExposure::Direct,
+                    },
+                    Arc::new(BoundExecutor(version)),
+                )]
+            }
+        }
+        let root = std::env::temp_dir().join(format!("ion-issued-{}", uuid::Uuid::now_v7()));
+        std::fs::create_dir(&root).unwrap();
+        let session = CodingSession::create(root.join("session.sqlite"), &root).unwrap();
+        let call = |id: &str| {
+            Content::ToolCall(ToolCall {
+                id: id.into(),
+                name: "probe".into(),
+                arguments: serde_json::json!({}),
+                raw_arguments: None,
+            })
+        };
+        let scripts = Arc::new(ScriptedModelService::new([
+            response(vec![call("first")]),
+            response(vec![call("second")]),
+            response(vec![Content::Text("done".into())]),
+        ]));
+        let source = Arc::new(ChangingSource(AtomicUsize::new(0)));
+        let agent = Agent::new(scripts.clone(), source.clone());
+        agent
+            .submit(
+                &session,
+                model(),
+                "probe".into(),
+                "context".into(),
+                CancellationToken::new(),
+                |event| {
+                    if matches!(event, AgentEvent::AssistantCommitted { .. }) {
+                        source.0.store(1, Ordering::SeqCst);
+                    }
+                },
+            )
+            .await
+            .unwrap();
+        let view = session.view().unwrap();
+        let generations = view
+            .messages
+            .iter()
+            .flat_map(|message| &message.content)
+            .filter_map(|part| match part {
+                Content::ToolResult(result) => result.result["generation"].as_u64(),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(generations, [0, 1]);
+        let subjects = view
+            .entries
+            .iter()
+            .filter_map(|entry| match entry {
+                crate::SessionEntry::Assistant {
+                    tool_activities, ..
+                } => tool_activities
+                    .first()
+                    .and_then(|activity| activity.activity.subject.as_deref()),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(subjects, ["generation 0", "generation 1"]);
+        let requests = scripts.requests();
+        assert_eq!(requests[0].tools[0].description, "generation 0");
+        assert_eq!(requests[1].tools[0].description, "generation 1");
+        drop(session);
+        std::fs::remove_dir_all(root).unwrap();
     }
 
     #[tokio::test]

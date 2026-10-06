@@ -117,8 +117,11 @@ Exposure is not a sandbox or permission policy. The Turn still owns execution
 sequencing and durable publication; invoking an executor alone is not a durable
 coding operation.
 
-Commit changed instructions and declared schemas at request boundaries; elide
-identical consecutive snapshots. Retain historical semantic metadata so replay
+Derive the wire declarations and durable context from the same prepared
+catalogue. Admit effective-model and context changes in one Session transaction
+before issuance; a failed admission publishes neither change. Pre-output retry
+retains that preparation, while compaction or replay reset prepares again.
+Elide identical consecutive snapshots. Retain historical semantic metadata so replay
 does not reinterpret old actions through today's tool names. Persist no live
 executor, credential or connection handle.
 

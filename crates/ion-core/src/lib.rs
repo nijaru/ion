@@ -2,6 +2,7 @@
 
 mod agent;
 mod generation;
+mod request;
 mod session;
 mod tool_set;
 mod transcript;

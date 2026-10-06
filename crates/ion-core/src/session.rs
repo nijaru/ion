@@ -814,25 +814,37 @@ impl Session {
         context_projection(&store, Some(model))
     }
 
-    /// Record the effective physical model selected for the next coding request.
-    /// Repeated direct requests on the same physical model are elided.
-    pub(crate) fn record_effective_model(
+    /// Admit one prepared coding request atomically before provider issuance.
+    /// A failed write publishes neither its effective-model change nor context.
+    pub(crate) fn admit_request(
         &self,
         turn: u64,
         model: ModelRef,
+        context: ModelContextSnapshot,
     ) -> Result<bool, SessionError> {
         let mut store = self.store.lock().map_err(|_| SessionError::Poisoned)?;
-        match store.state.last_effective_model.as_ref() {
-            None => Ok(false),
-            Some(previous) if previous == &model => Ok(false),
-            Some(_) => {
-                append(
-                    &mut store,
-                    &[SessionEntry::EffectiveModelChanged { turn, model }],
-                )?;
-                Ok(true)
-            }
+        if store.state.active != Some(turn) || !store.state.pending.is_empty() {
+            return Err(SessionError::InvalidHistory);
         }
+        let mut entries = Vec::new();
+        // The first observed assistant still establishes the initial effective
+        // model; preparation must not manufacture a completed execution fact.
+        if store
+            .state
+            .last_effective_model
+            .as_ref()
+            .is_some_and(|previous| previous != &model)
+        {
+            entries.push(SessionEntry::EffectiveModelChanged { turn, model });
+        }
+        if store.state.last_context.as_ref() != Some(&context) {
+            entries.push(SessionEntry::ModelContextChanged { turn, context });
+        }
+        if entries.is_empty() {
+            return Ok(false);
+        }
+        append(&mut store, &entries)?;
+        Ok(true)
     }
 
     /// Permanently omit prior opaque replay from future model requests after
@@ -840,26 +852,6 @@ impl Session {
     pub(crate) fn rebase_provider_replay(&self, turn: u64) -> Result<(), SessionError> {
         let mut store = self.store.lock().map_err(|_| SessionError::Poisoned)?;
         append(&mut store, &[SessionEntry::ProviderReplayRebased { turn }])
-    }
-
-    /// Record a model-visible context transition immediately before a request.
-    /// Identical consecutive snapshots are elided. The snapshot contains only
-    /// provider-neutral prompt/tool declarations; concrete execution routes stay
-    /// frozen in the in-memory request-bound ToolCatalog.
-    pub(crate) fn record_model_context(
-        &self,
-        turn: u64,
-        context: ModelContextSnapshot,
-    ) -> Result<bool, SessionError> {
-        let mut store = self.store.lock().map_err(|_| SessionError::Poisoned)?;
-        if store.state.last_context.as_ref() == Some(&context) {
-            return Ok(false);
-        }
-        append(
-            &mut store,
-            &[SessionEntry::ModelContextChanged { turn, context }],
-        )?;
-        Ok(true)
     }
 
     /// Find the earliest settled cut that fits a useful recent suffix.
@@ -1101,7 +1093,23 @@ impl Session {
             .clone()
             .ok_or(SessionError::InvalidHistory)?;
         let effective = logical.clone();
-        self.record_effective_model(turn, effective.clone())?;
+        {
+            let mut store = self.store.lock().map_err(|_| SessionError::Poisoned)?;
+            if store
+                .state
+                .last_effective_model
+                .as_ref()
+                .is_some_and(|previous| previous != &effective)
+            {
+                append(
+                    &mut store,
+                    &[SessionEntry::EffectiveModelChanged {
+                        turn,
+                        model: effective.clone(),
+                    }],
+                )?;
+            }
+        }
         self.record_assistant_with_activities(
             turn,
             message,
@@ -2574,10 +2582,20 @@ mod tests {
         };
 
         let (first, _) = session.begin_turn("first".into(), logical.clone()).unwrap();
+        let context = ModelContextSnapshot {
+            instructions: "routing fixture".into(),
+            tools: Vec::new(),
+        };
+        session
+            .admit_request(first, physical_a.clone(), context.clone())
+            .unwrap();
         assert!(
             !session
-                .record_effective_model(first, physical_a.clone())
+                .view()
                 .unwrap()
+                .entries
+                .iter()
+                .any(|entry| matches!(entry, SessionEntry::EffectiveModelChanged { .. }))
         );
         session
             .record_assistant_with_activities(
@@ -2603,7 +2621,7 @@ mod tests {
             .unwrap();
         assert!(
             session
-                .record_effective_model(second, physical_b.clone())
+                .admit_request(second, physical_b.clone(), context.clone())
                 .unwrap()
         );
         assert!(
@@ -2635,7 +2653,7 @@ mod tests {
         let (third, _) = session.begin_turn("third".into(), logical.clone()).unwrap();
         assert!(
             session
-                .record_effective_model(third, physical_a.clone())
+                .admit_request(third, physical_a.clone(), context)
                 .unwrap()
         );
         let third_context = session.context_messages_for(&physical_a).unwrap();
@@ -3045,7 +3063,7 @@ mod tests {
             provider: "test".into(),
             model: "test".into(),
         };
-        let (turn, _) = session.begin_turn("hello".into(), model).unwrap();
+        let (turn, _) = session.begin_turn("hello".into(), model.clone()).unwrap();
         let first = ModelContextSnapshot {
             instructions: "first instructions".into(),
             tools: vec![ToolSpec {
@@ -3054,8 +3072,12 @@ mod tests {
                 input_schema: serde_json::json!({"type":"object"}),
             }],
         };
-        assert!(session.record_model_context(turn, first.clone()).unwrap());
-        assert!(!session.record_model_context(turn, first).unwrap());
+        assert!(
+            session
+                .admit_request(turn, model.clone(), first.clone())
+                .unwrap()
+        );
+        assert!(!session.admit_request(turn, model.clone(), first).unwrap());
 
         let changed = ModelContextSnapshot {
             instructions: "changed instructions".into(),
@@ -3065,7 +3087,7 @@ mod tests {
                 input_schema: serde_json::json!({"type":"object"}),
             }],
         };
-        assert!(session.record_model_context(turn, changed.clone()).unwrap());
+        assert!(session.admit_request(turn, model, changed.clone()).unwrap());
         let view = session.view().unwrap();
         assert_eq!(view.last_context, Some(changed.clone()));
         assert_eq!(
@@ -3102,7 +3124,7 @@ mod tests {
 
         let (first, _) = session.begin_turn("first".into(), model.clone()).unwrap();
         session
-            .record_model_context(first, context("first context"))
+            .admit_request(first, model.clone(), context("first context"))
             .unwrap();
         session
             .record_assistant(
@@ -3117,9 +3139,9 @@ mod tests {
             )
             .unwrap();
 
-        let (second, _) = session.begin_turn("second".into(), model).unwrap();
+        let (second, _) = session.begin_turn("second".into(), model.clone()).unwrap();
         session
-            .record_model_context(second, context("second context"))
+            .admit_request(second, model, context("second context"))
             .unwrap();
         session
             .record_assistant(
