@@ -87,6 +87,7 @@ with tempfile.TemporaryDirectory(prefix="ion-terminal-") as temporary:
                     os.write(master, b"\x0f")
                     closed_active = True
                 if closed_active and b"Details closed" in output[active_start:] and not sent_steering:
+                    assert "Working · Ctrl-C cancels · Details closed".encode() in output[active_start:], "detail-close notice hid the active operation"
                     os.write(master, b"Also check that the updated file has two lines.\r")
                     sent_steering = True
                 if sent_steering and not sent_second:

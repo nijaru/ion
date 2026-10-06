@@ -53,6 +53,32 @@ impl TuiMode {
     }
 }
 
+#[derive(Clone, Copy)]
+enum ActiveOperation<'a> {
+    Coding(&'a CancellationToken),
+    Shell(&'a CancellationToken),
+    Compaction(&'a CancellationToken),
+}
+
+impl ActiveOperation<'_> {
+    fn is_cancelled(self) -> bool {
+        match self {
+            Self::Coding(stop) | Self::Shell(stop) | Self::Compaction(stop) => stop.is_cancelled(),
+        }
+    }
+
+    fn label(self) -> &'static str {
+        match self {
+            Self::Coding(stop) if stop.is_cancelled() => "Cancelling turn…",
+            Self::Shell(stop) if stop.is_cancelled() => "Cancelling shell…",
+            Self::Compaction(stop) if stop.is_cancelled() => "Cancelling compaction…",
+            Self::Coding(_) => "Working",
+            Self::Shell(_) => "Running shell",
+            Self::Compaction(_) => "Summarizing context",
+        }
+    }
+}
+
 #[derive(Default)]
 struct Frontend {
     mode: TuiMode,
@@ -196,7 +222,7 @@ pub async fn chat(init: ChatInit) -> Result<()> {
                     continue;
                 }
             };
-            ui.status = "Working · Enter steers · Alt-Enter queues · Ctrl-C cancels".into();
+            ui.status.clear();
             ui.scroll = 0;
             run_turn(
                 &mut terminal,
@@ -214,14 +240,7 @@ pub async fn chat(init: ChatInit) -> Result<()> {
             .await?;
             continue;
         }
-        draw(
-            &mut terminal,
-            &mut screen,
-            &mut ui,
-            None,
-            &runtime.selected().identity(),
-            false,
-        )?;
+        draw(&mut terminal, &mut screen, &mut ui, None, None)?;
         #[cfg(debug_assertions)]
         if std::env::var_os("ION_SMOKE_PANIC_AFTER_FIRST_DRAW").is_some() {
             panic!("ION smoke panic after first terminal draw");
@@ -234,7 +253,7 @@ pub async fn chat(init: ChatInit) -> Result<()> {
                 Action::None => {}
                 Action::Quit => break,
                 Action::Submit(prompt) => {
-                    ui.status = "Working · Enter steers · Alt-Enter queues · Ctrl-C cancels".into();
+                    ui.status.clear();
                     ui.scroll = 0;
                     let images = std::mem::take(&mut ui.images);
                     run_turn(
@@ -321,9 +340,7 @@ pub async fn chat(init: ChatInit) -> Result<()> {
                     } else {
                         match handle_command(&mut runtime, &mut ui, &command) {
                             Ok(Some(prompt)) => {
-                                ui.status =
-                                    "Working · Enter steers · Alt-Enter queues · Ctrl-C cancels"
-                                        .into();
+                                ui.status.clear();
                                 ui.scroll = 0;
                                 let images = std::mem::take(&mut ui.images);
                                 run_turn(
@@ -885,7 +902,7 @@ async fn run_compaction(
     selected: &Selection,
 ) -> Result<()> {
     let model = selected.identity();
-    ui.status = "Summarizing context · Ctrl-C cancels".into();
+    ui.status.clear();
     let stop = CancellationToken::new();
     let mut input_ended = false;
     let mut output_error = None;
@@ -897,7 +914,7 @@ async fn run_compaction(
             tokio::select! {
                 result = &mut compact => break result,
                 event = input.next(), if !input_ended => match event {
-                    Some(Ok(InputEvent::Key(KeyEvent { code: KeyCode::Char('c'), modifiers }))) if modifiers.contains(Modifiers::CONTROL) => { stop.cancel(); ui.status = "Cancelling…".into(); },
+                    Some(Ok(InputEvent::Key(KeyEvent { code: KeyCode::Char('c'), modifiers }))) if modifiers.contains(Modifiers::CONTROL) => stop.cancel(),
                     Some(Ok(InputEvent::Key(key))) if is_clipboard_shortcut(key) && ui.picker.is_none() && ui.details.is_none() => {
                         start_clipboard_paste(ui, selected);
                     },
@@ -909,12 +926,12 @@ async fn run_compaction(
                         MouseKind::ScrollDown => ui.scroll = ui.scroll.saturating_sub(3),
                         _ => {},
                     },
-                    Some(Err(error)) => { stop.cancel(); input_ended = true; ui.status = format!("Input failed: {error}. Cancelling…"); },
+                    Some(Err(error)) => { stop.cancel(); input_ended = true; ui.status = format!("Input failed: {error}"); },
                     None => { stop.cancel(); input_ended = true; },
                 },
                 _ = tick.tick(), if output_error.is_none() => {
                     finish_ready_clipboard_paste(ui).await;
-                    if let Err(error) = draw(terminal, screen, ui, None, &model, true) {
+                    if let Err(error) = draw(terminal, screen, ui, None, Some(ActiveOperation::Compaction(&stop))) {
                         output_error = Some(error);
                         input_ended = true;
                         stop.cancel();
@@ -1125,12 +1142,11 @@ async fn run_user_shell(
     command: String,
     exclude_from_context: bool,
 ) -> Result<()> {
-    let model = runtime.selected().identity();
     let stop = CancellationToken::new();
     let mut tick = interval(Duration::from_millis(50));
     let mut input_ended = false;
     let mut output_error = None;
-    ui.status = "Running shell · Ctrl-C cancels".into();
+    ui.status.clear();
     let output = {
         let running = runtime.run_user_shell(&command, stop.clone(), exclude_from_context);
         tokio::pin!(running);
@@ -1140,7 +1156,6 @@ async fn run_user_shell(
                 event = input.next(), if !input_ended => match event {
                     Some(Ok(InputEvent::Key(KeyEvent { code: KeyCode::Char('c'), modifiers }))) if modifiers.contains(Modifiers::CONTROL) => {
                         stop.cancel();
-                        ui.status = "Cancelling shell…".into();
                     }
                     Some(Ok(InputEvent::Key(key))) if is_clipboard_shortcut(key) && ui.picker.is_none() && ui.details.is_none() => {
                         start_clipboard_paste(ui, runtime.selected());
@@ -1156,13 +1171,13 @@ async fn run_user_shell(
                     Some(Err(error)) => {
                         stop.cancel();
                         input_ended = true;
-                        ui.status = format!("Input failed: {error}. Cancelling shell…");
+                        ui.status = format!("Input failed: {error}");
                     }
                     None => { stop.cancel(); input_ended = true; },
                 },
                 _ = tick.tick(), if output_error.is_none() => {
                     finish_ready_clipboard_paste(ui).await;
-                    if let Err(error) = draw(terminal, screen, ui, None, &model, true) {
+                    if let Err(error) = draw(terminal, screen, ui, None, Some(ActiveOperation::Shell(&stop))) {
                         output_error = Some(error);
                         input_ended = true;
                         stop.cancel();
@@ -1247,7 +1262,7 @@ async fn run_turn(
             tokio::select! {
                 result = &mut turn => break result,
                 event = input.next(), if !input_ended => match event {
-                    Some(Ok(InputEvent::Key(KeyEvent { code: KeyCode::Char('c'), modifiers }))) if modifiers.contains(Modifiers::CONTROL) => { stop.cancel(); ui.status = "Cancelling…".into(); },
+                    Some(Ok(InputEvent::Key(KeyEvent { code: KeyCode::Char('c'), modifiers }))) if modifiers.contains(Modifiers::CONTROL) => stop.cancel(),
                     Some(Ok(InputEvent::Key(key))) if is_clipboard_shortcut(key) && ui.picker.is_none() && ui.details.is_none() => {
                         start_clipboard_paste(ui, selected);
                     },
@@ -1259,13 +1274,13 @@ async fn run_turn(
                         MouseKind::ScrollDown => ui.scroll = ui.scroll.saturating_sub(3),
                         _ => {},
                     },
-                    Some(Err(error)) => { stop.cancel(); input_ended = true; ui.status = format!("Input failed: {error}. Cancelling…"); },
+                    Some(Err(error)) => { stop.cancel(); input_ended = true; ui.status = format!("Input failed: {error}"); },
                     None => { stop.cancel(); input_ended = true; },
                 },
                 _ = tick.tick(), if output_error.is_none() => {
                     finish_ready_clipboard_paste(ui).await;
                     let preview = progress.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
-                    if let Err(error) = draw(terminal, screen, ui, Some(&preview), &model, true) {
+                    if let Err(error) = draw(terminal, screen, ui, Some(&preview), Some(ActiveOperation::Coding(&stop))) {
                         output_error = Some(error);
                         input_ended = true;
                         stop.cancel();
@@ -1971,19 +1986,18 @@ fn draw(
     screen: &mut Screen,
     ui: &mut Frontend,
     progress: Option<&LiveTranscript>,
-    _model: &ModelRef,
-    _busy: bool,
+    operation: Option<ActiveOperation<'_>>,
 ) -> Result<()> {
     let (width, height) = terminal.size()?;
     screen.resize(width, height);
 
     if ui.details.is_some() || ui.picker.is_some() {
         terminal.enter_alt_screen()?;
-        return draw_modal_fullscreen(terminal, screen, ui, progress, width, height);
+        return draw_modal_fullscreen(terminal, screen, ui, progress, operation, width, height);
     }
     if ui.mode == TuiMode::Fullscreen {
         terminal.enter_alt_screen()?;
-        return draw_chat_fullscreen(terminal, screen, ui, progress, width, height);
+        return draw_chat_fullscreen(terminal, screen, ui, progress, operation, width, height);
     }
 
     let mut surface_reset = false;
@@ -2006,7 +2020,7 @@ fn draw(
     let row_budget = LIVE_REGION_MAX_ROWS.min(height.max(1) as usize);
     let mut chrome = Vec::new();
     let notices = progress.map_or(&[][..], LiveTranscript::notices);
-    if progress.is_none() {
+    if operation.is_none() {
         // Idle command output (help, resources, diagnostics) is content, not
         // busy chrome. Keep its wrapped rows rather than a one-line preview.
         for notice in &ui.notices {
@@ -2021,8 +2035,8 @@ fn draw(
         };
         chrome.push(fit_line(&format!("{label} · {notice}"), width));
     }
-    if let Some(status) = visible_status(ui) {
-        if progress.is_some() {
+    if let Some(status) = visible_status(ui, operation) {
+        if operation.is_some() {
             chrome.push(fit_line(&status, width));
         } else {
             push_wrapped(&mut chrome, &status, width);
@@ -2081,13 +2095,8 @@ fn draw(
     Ok(())
 }
 
-fn visible_status(ui: &Frontend) -> Option<String> {
-    let idle = ui.status.is_empty()
-        || ui.status.starts_with("Ready ·")
-        || ui.status.starts_with("Enter to send");
-    if idle && ui.images.is_empty() {
-        return None;
-    }
+fn visible_status(ui: &Frontend, operation: Option<ActiveOperation<'_>>) -> Option<String> {
+    let idle = ui.status.is_empty();
     let attachment = if ui.images.is_empty() {
         String::new()
     } else {
@@ -2098,6 +2107,24 @@ fn visible_status(ui: &Frontend) -> Option<String> {
     } else {
         format!("{}{}", ui.status, attachment)
     };
+    if let Some(operation) = operation {
+        let label = operation.label();
+        return Some(if operation.is_cancelled() {
+            if status.is_empty() {
+                label.to_owned()
+            } else {
+                format!("{label} · {status}")
+            }
+        } else if status.is_empty() {
+            let controls = match operation {
+                ActiveOperation::Coding(_) => "Enter steers · Alt-Enter queues · Ctrl-C cancels",
+                _ => "Ctrl-C cancels",
+            };
+            format!("{label} · {controls}")
+        } else {
+            format!("{label} · Ctrl-C cancels · {status}")
+        });
+    }
     (!status.is_empty()).then_some(status)
 }
 
@@ -2106,6 +2133,7 @@ fn draw_chat_fullscreen(
     screen: &mut Screen,
     ui: &mut Frontend,
     progress: Option<&LiveTranscript>,
+    operation: Option<ActiveOperation<'_>>,
     width: u16,
     height: u16,
 ) -> Result<()> {
@@ -2151,7 +2179,7 @@ fn draw_chat_fullscreen(
         .cursor_row
         .saturating_sub(composer_height.saturating_sub(1))
         .min(composer.lines.len().saturating_sub(composer_height));
-    let status = visible_status(ui);
+    let status = visible_status(ui, operation);
     let status_height = usize::from(status.is_some());
     let viewport = height.saturating_sub(composer_height + status_height);
 
@@ -2196,6 +2224,7 @@ fn draw_modal_fullscreen(
     screen: &mut Screen,
     ui: &mut Frontend,
     progress: Option<&LiveTranscript>,
+    operation: Option<ActiveOperation<'_>>,
     width: u16,
     height: u16,
 ) -> Result<()> {
@@ -2228,7 +2257,7 @@ fn draw_modal_fullscreen(
         .as_ref()
         .map_or(content.as_slice(), DetailView::rows);
     let controls = ui.details.as_ref().map(DetailView::controls);
-    let status = visible_status(ui);
+    let status = visible_status(ui, operation);
     let composer_height = composer
         .as_ref()
         .map_or(0, |composer| composer.lines.len().min(3));
@@ -2448,6 +2477,52 @@ mod tests {
             Action::Queue(prompt) if prompt == "follow up"
         ));
         assert!(ui.draft.is_empty());
+    }
+
+    #[test]
+    fn operation_status_survives_notices_and_tracks_cancellation() {
+        let stop = CancellationToken::new();
+        let operations = [
+            (
+                ActiveOperation::Coding(&stop),
+                "Working",
+                "Cancelling turn…",
+            ),
+            (
+                ActiveOperation::Shell(&stop),
+                "Running shell",
+                "Cancelling shell…",
+            ),
+            (
+                ActiveOperation::Compaction(&stop),
+                "Summarizing context",
+                "Cancelling compaction…",
+            ),
+        ];
+        let mut ui = Frontend::default();
+        assert_eq!(visible_status(&ui, None), None);
+        for notice in [
+            "Details closed",
+            "Steering sent for the next model step",
+            "1 follow-up(s) queued",
+        ] {
+            ui.status = notice.into();
+            for (operation, label, _) in operations {
+                let status = visible_status(&ui, Some(operation)).unwrap();
+                assert!(status.starts_with(label), "{status}");
+                assert!(status.contains(notice), "{status}");
+                assert!(status.contains("Ctrl-C cancels"), "{status}");
+            }
+        }
+        stop.cancel();
+        ui.status = "Details closed".into();
+        for (operation, _, label) in operations {
+            let status = visible_status(&ui, Some(operation)).unwrap();
+            assert!(status.starts_with(label), "{status}");
+            assert!(status.contains("Details closed"), "{status}");
+            assert!(!status.contains("Ctrl-C cancels"), "{status}");
+        }
+        assert_eq!(visible_status(&ui, None).unwrap(), "Details closed");
     }
 
     #[test]
