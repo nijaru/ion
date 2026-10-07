@@ -28,8 +28,12 @@ jobs:
       - run: cargo test --locked --workspace
       - name: Build terminal smoke binary
         run: cargo build --locked -p ion
+      - name: Install native-scrollback test terminal
+        run: sudo apt-get update && sudo apt-get install -y tmux
       - name: Terminal PTY smoke
         run: python3 scripts/smoke_terminal.py
+      - name: Inline native-scrollback smoke
+        run: python3 scripts/smoke_scrollback.py
       - name: Direct shell PTY smoke
         run: python3 scripts/smoke_shell.py
       - name: RPC smoke

@@ -150,7 +150,7 @@ impl Screen {
         if available < rows {
             // Erase the mutable surface before scrolling. Only terminal-owned
             // content above the band may move into scrollback.
-            write!(out, "\x1b[{};1H\x1b[J", self.origin + 1)?;
+            self.clear_inline_surface(out)?;
             let grow = rows - available;
             for _ in 0..grow {
                 write!(out, "\x1b[{};1H\r\n", self.screen_height)?;
@@ -220,7 +220,7 @@ impl Screen {
         if lines.is_empty() {
             return Ok(());
         }
-        write!(out, "\x1b[{};1H\x1b[J", self.origin + 1)?;
+        self.clear_inline_surface(out)?;
         let mut origin = self.origin;
         for line in lines {
             write!(out, "\x1b[{};1H\x1b[2K{line}\r\n", origin + 1)?;
@@ -230,6 +230,17 @@ impl Screen {
         self.origin = origin;
         self.live_height = Some(self.live_height().min(self.avail() as usize));
         self.invalidate();
+        Ok(())
+    }
+
+    fn clear_inline_surface(&self, out: &mut impl Write) -> io::Result<()> {
+        // At row one, erase-to-end is a full-screen erase. tmux saves that
+        // screen in history, including provisional work. Erase owned rows
+        // individually so only explicit publication can advance history.
+        write!(out, "\x1b[0m")?;
+        for row in self.origin..self.screen_height {
+            write!(out, "\x1b[{};1H\x1b[2K", row + 1)?;
+        }
         Ok(())
     }
 
@@ -576,15 +587,31 @@ mod tests {
     #[test]
     fn growing_live_band_scrolls_only_after_clearing_mutable_rows() {
         let mut screen = Screen::with_live_height(80, 22, 24, 1);
+        let mut terminal = vt100::Parser::new(24, 80, 32);
+        terminal.process(b"\x1b[22;1HPRIOR_HISTORY");
         let mut output = Vec::new();
+        screen
+            .draw(
+                &mut output,
+                &Frame {
+                    live: &[line("MUTABLE")],
+                    cursor: None,
+                },
+            )
+            .unwrap();
+        terminal.process(&output);
+        output.clear();
         screen.ensure_live_height(&mut output, 4).unwrap();
+        terminal.process(&output);
         assert_eq!(screen.origin, 20);
         assert_eq!(screen.live_height(), 4);
-        let text = String::from_utf8(output).unwrap();
-        assert!(text.starts_with("\x1b[23;1H\x1b[J"));
-        assert_eq!(text.matches("\x1b[24;1H\r\n").count(), 2);
+        assert!(!terminal.screen().contents().contains("MUTABLE"));
+        assert_eq!(
+            terminal.screen().rows(0, 80).nth(19).unwrap(),
+            "PRIOR_HISTORY"
+        );
 
-        output = Vec::new();
+        output.clear();
         screen.ensure_live_height(&mut output, 2).unwrap();
         assert!(output.is_empty(), "the live band never shrinks during chat");
         assert_eq!(screen.origin, 20);
