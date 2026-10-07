@@ -167,15 +167,18 @@ impl Host {
             selected.wire,
             resolver,
             selected.capabilities,
+            selected.context_window_tokens,
         )?);
         Ok(Arc::new(
-            CodingAgent::with_tool_set(service, tools).with_limits(AgentLimits {
-                max_output_tokens: selected.max_output_tokens,
-                context_window_tokens: selected.context_window_tokens,
-                image_input: selected.image_input,
-                prompt_cache_warming: prompt_cache_warming(selected),
-                ..AgentLimits::default()
-            }),
+            CodingAgent::with_tool_set(service, tools, selected.identity()).with_limits(
+                AgentLimits {
+                    max_output_tokens: selected.max_output_tokens,
+                    context_window_tokens: selected.context_window_tokens,
+                    image_input: selected.image_input,
+                    prompt_cache_warming: prompt_cache_warming(selected),
+                    ..AgentLimits::default()
+                },
+            ),
         ))
     }
 }
@@ -208,4 +211,114 @@ fn app_root(variable: &str, fallback: &str) -> Result<PathBuf> {
     }
     let home = std::env::var_os("HOME").context("HOME is required for Ion paths")?;
     Ok(PathBuf::from(home).join(fallback).join("ion"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use ion_ai::ModelRef;
+    use ion_core::{CodingSession, ToolRegistration};
+    use tokio::{
+        io::{AsyncReadExt, AsyncWriteExt},
+        net::TcpListener,
+    };
+    use tokio_util::sync::CancellationToken;
+
+    struct NoTools;
+    impl CodingToolSource for NoTools {
+        fn registrations(self: Arc<Self>) -> Vec<ToolRegistration> {
+            Vec::new()
+        }
+    }
+
+    #[tokio::test]
+    async fn selected_agent_keeps_identity_transport_and_limits_together() {
+        let root = std::env::temp_dir().join(format!("ion-bound-model-{}", uuid::Uuid::now_v7()));
+        std::fs::create_dir(&root).unwrap();
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let endpoint = format!(
+            "http://{}/v1/chat/completions",
+            listener.local_addr().unwrap()
+        );
+        let server = tokio::spawn(async move {
+            let (mut socket, _) = listener.accept().await.unwrap();
+            let mut bytes = Vec::new();
+            let body_start = loop {
+                assert!(socket.read_buf(&mut bytes).await.unwrap() > 0);
+                assert!(bytes.len() < 64 * 1024);
+                if let Some(at) = bytes.windows(4).position(|part| part == b"\r\n\r\n") {
+                    break at + 4;
+                }
+            };
+            let headers = std::str::from_utf8(&bytes[..body_start]).unwrap();
+            let length: usize = headers
+                .lines()
+                .find_map(|line| {
+                    let (name, value) = line.split_once(':')?;
+                    name.eq_ignore_ascii_case("content-length")
+                        .then(|| value.trim().parse().unwrap())
+                })
+                .unwrap();
+            while bytes.len() < body_start + length {
+                assert!(socket.read_buf(&mut bytes).await.unwrap() > 0);
+            }
+            let body: serde_json::Value =
+                serde_json::from_slice(&bytes[body_start..body_start + length]).unwrap();
+            let reply = "data: {\"choices\":[{\"index\":0,\"delta\":{\"content\":\"answer\"},\"finish_reason\":\"stop\"}]}\n\ndata: [DONE]\n\n";
+            socket.write_all(format!("HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{reply}", reply.len()).as_bytes()).await.unwrap();
+            body
+        });
+        let host = Host::new(root.join("config"), root.join("state"));
+        let route = SavedSelection {
+            provider: format!("binding-probe-{}", uuid::Uuid::now_v7()),
+            model: "selected-model".into(),
+            endpoint: Some(endpoint),
+            wire: Some(Wire::ChatCompletions),
+            api_key_env: None,
+            image_input: false,
+        };
+        let mut selected = host.models().save_default(&route).unwrap();
+        selected.max_output_tokens = 1234;
+        selected.context_window_tokens = Some(50_000);
+        let agent = host
+            .agent_with_tool_source(&selected, Arc::new(NoTools))
+            .unwrap();
+        host.models()
+            .save_default(&SavedSelection {
+                model: "new-default".into(),
+                ..route
+            })
+            .unwrap();
+        let session = CodingSession::create(root.join("session.sqlite"), &root).unwrap();
+        session
+            .select_model(ModelRef {
+                provider: "previous".into(),
+                model: "previous-model".into(),
+            })
+            .unwrap();
+        assert_eq!(agent.model(), &selected.identity());
+        assert_eq!(agent.limits().max_output_tokens, 1234);
+        assert_eq!(agent.limits().context_window_tokens, Some(50_000));
+        assert_eq!(
+            agent
+                .submit(
+                    &session,
+                    "hello".into(),
+                    String::new(),
+                    CancellationToken::new(),
+                    |_| {}
+                )
+                .await
+                .unwrap(),
+            "answer"
+        );
+        let body = server.await.unwrap();
+        assert_eq!(body["model"], "selected-model");
+        assert_eq!(body["max_completion_tokens"], 1234);
+        let view = session.view().unwrap();
+        assert_eq!(view.last_model, Some(selected.identity()));
+        assert_eq!(view.last_effective_model, Some(selected.identity()));
+        drop(session);
+        std::fs::remove_dir_all(root).unwrap();
+    }
 }

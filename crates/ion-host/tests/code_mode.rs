@@ -68,7 +68,7 @@ fn make_agent(
     let source: Arc<dyn CodingToolSource> = Arc::new(LocalTools::new(root).unwrap());
     let tools = ToolSet::new([source]).with_code_mode(Arc::new(QuickJs), limits);
     (
-        CodingAgent::with_tool_set(model.clone(), Arc::new(tools)),
+        CodingAgent::with_tool_set(model.clone(), Arc::new(tools), identity()),
         model,
     )
 }
@@ -116,7 +116,6 @@ async fn native_fanout_selects_context_and_preserves_occurrences_inspection_and_
     let result = agent
         .submit(
             &session,
-            identity(),
             "run".into(),
             String::new(),
             CancellationToken::new(),
@@ -231,7 +230,6 @@ async fn returned_guest_does_not_cancel_unawaited_host_work_at_its_deadline() {
     agent
         .submit(
             &session,
-            identity(),
             "run".into(),
             String::new(),
             CancellationToken::new(),
@@ -268,7 +266,6 @@ async fn cancellation_settles_native_children_before_return() {
         agent
             .submit(
                 &task_session,
-                identity(),
                 "run".into(),
                 String::new(),
                 task_stop,
@@ -329,7 +326,6 @@ async fn child_commit_failure_blocks_consumption_drains_started_work_and_reopens
         Duration::from_secs(5),
         agent.submit(
             &session,
-            identity(),
             "run".into(),
             String::new(),
             CancellationToken::new(),
@@ -361,7 +357,6 @@ async fn child_commit_failure_blocks_consumption_drains_started_work_and_reopens
     );
     next.submit(
         &reopened,
-        identity(),
         "continue without replay".into(),
         String::new(),
         CancellationToken::new(),
@@ -412,7 +407,6 @@ async fn child_intent_fault_prevents_native_dispatch() {
     let result = agent
         .submit(
             &session,
-            identity(),
             "run".into(),
             String::new(),
             CancellationToken::new(),
@@ -446,7 +440,6 @@ async fn child_intent_fault_prevents_native_dispatch() {
     );
     next.submit(
         &reopened,
-        identity(),
         "continue".into(),
         String::new(),
         CancellationToken::new(),
@@ -482,7 +475,6 @@ async fn guest_failure_retains_prior_mutation_and_deadline_settles_native_captur
             Duration::from_secs(5),
             agent.submit(
                 &session,
-                identity(),
                 "run".into(),
                 String::new(),
                 CancellationToken::new(),
@@ -525,7 +517,6 @@ async fn child_images_stay_inspectable_and_reply_limit_is_cumulative() {
     agent
         .submit(
             &session,
-            identity(),
             "run".into(),
             String::new(),
             CancellationToken::new(),
@@ -588,7 +579,6 @@ async fn reply_and_audit_budgets_preserve_observations_and_stop_dependents() {
         agent
             .submit(
                 &session,
-                identity(),
                 "run".into(),
                 String::new(),
                 CancellationToken::new(),

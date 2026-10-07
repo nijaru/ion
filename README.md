@@ -395,7 +395,9 @@ export and tool detail, with a notice that it was not shared. The Session's
 64 MiB encoded-entry limit still applies; a failed result commit leaves the
 effect unknown rather than silently discarding data or replaying the tool.
 A large prompt or accumulated context can still exceed the limit when no
-settled group can be summarized.
+settled group can be summarized. The MiMo adapter classifies a zero-output
+length stop near a known context window as context pressure, independent of
+the configured provider name.
 Transient provider failures can trigger up to two cancellable retries before
 stream output; retry events appear in the TUI and JSONL output. A response that
 stops after producing partial output is not replayed silently.
@@ -494,7 +496,10 @@ For Rust embedding, `ion-host::Host` composes the same model catalog,
 credentials, project instructions and Session discovery used by the CLI.
 `ion-core::CodingAgent` and `CodingSession` own the coding loop and committed
 conversation; `Host::agent_with_tools` accepts a custom `CodingToolSource`.
-`Host::resources` loads project skills and prompt templates. For a long-lived
+Host-created agents bind the selected logical model, transport and limits.
+Core agent constructors also take a `ModelRef`; submission and compaction use
+that bound model without another model argument. Construct a new agent to
+change models. `Host::resources` loads project skills and prompt templates. For a long-lived
 Rust client, `ion-host::SessionBinding` owns the active Session, model, agent
 and resources and handles idle model and Session changes. `ion rpc` provides
 long-lived subprocess control.

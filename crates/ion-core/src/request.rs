@@ -92,10 +92,6 @@ impl<'s> PreparedRequest<'s> {
         self.request.controls.max_output_tokens
     }
 
-    pub fn provider(&self) -> &str {
-        &self.request.route.effective.provider
-    }
-
     pub fn catalog(&self) -> &ToolCatalog {
         &self.catalog
     }

@@ -370,14 +370,13 @@ impl Control {
         self.idle()?;
         let agent = self.binding.agent().clone();
         let session = self.binding.session().clone();
-        let model = self.binding.selected().identity();
         let stop = CancellationToken::new();
         let task_stop = stop.clone();
         let output = self.output.clone();
         let task = tokio::spawn(async move {
             let mut output_fault = None;
             let result = agent
-                .compact(&session, model, task_stop.clone(), |event| {
+                .compact(&session, task_stop.clone(), |event| {
                     if output.try_send(event_record(event)).is_err() {
                         output_fault = Some("RPC progress queue is unavailable".to_owned());
                         task_stop.cancel();
@@ -418,7 +417,6 @@ impl Control {
         self.idle()?;
         let agent = self.binding.agent().clone();
         let instructions = self.binding.resources().instructions().to_owned();
-        let model = self.binding.selected().identity();
         let session = self.binding.session().clone();
         let stop = CancellationToken::new();
         let steering = Arc::new(SteeringInbox::new(
@@ -435,7 +433,6 @@ impl Control {
             let result = agent
                 .submit_message_with_steering(
                     &session,
-                    model,
                     input,
                     instructions,
                     task_stop.clone(),

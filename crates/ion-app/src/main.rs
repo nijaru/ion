@@ -8,7 +8,7 @@ use std::{
 
 use anyhow::{Context, Result, bail, ensure};
 use clap::{Parser, Subcommand};
-use ion_ai::{Content, Message, ModelRef};
+use ion_ai::{Content, Message};
 use ion_core::{CodingAgent, CodingAgentError, CodingSession, CodingToolSource, ForkPoint};
 use ion_host::image_input::LoadedImage;
 use ion_host::{
@@ -446,7 +446,6 @@ async fn run_cli(cli: Cli) -> Result<()> {
             let previous = existing.as_ref().and_then(|view| view.last_model.clone());
             let selected = models.choose(cli.provider, cli.model, previous, credentials)?;
             selected.require_access(credentials)?;
-            let model = selected.identity();
             let images = cli
                 .image
                 .iter()
@@ -497,7 +496,6 @@ async fn run_cli(cli: Cli) -> Result<()> {
                         headless(
                             binding.session().clone(),
                             binding.agent().clone(),
-                            model,
                             binding.instructions().to_owned(),
                             with_piped_input(expand_input(binding.resources(), prompt)?)?,
                             images,
@@ -515,7 +513,7 @@ async fn run_cli(cli: Cli) -> Result<()> {
                         });
                         let result = binding
                             .agent()
-                            .compact(binding.session(), model, stop, |_| {})
+                            .compact(binding.session(), stop, |_| {})
                             .await;
                         signal.abort();
                         if result? {
@@ -542,7 +540,6 @@ async fn run_cli(cli: Cli) -> Result<()> {
                         headless(
                             binding.session().clone(),
                             binding.agent().clone(),
-                            model,
                             binding.instructions().to_owned(),
                             with_piped_input(expand_input(
                                 binding.resources(),
@@ -601,7 +598,6 @@ fn status_label(status: CredentialStatus) -> &'static str {
 async fn headless(
     session: Arc<CodingSession>,
     agent: Arc<CodingAgent>,
-    model: ModelRef,
     instructions: String,
     prompt: String,
     images: Vec<LoadedImage>,
@@ -628,7 +624,7 @@ async fn headless(
     let mut output_error = None;
     let input = Message::user_input(prompt, images);
     let result = agent
-        .submit_message(&session, model, input, instructions, stop, |event| {
+        .submit_message(&session, input, instructions, stop, |event| {
             if json_output {
                 let record = agent_events::event_record(event);
                 if output_error.is_none()

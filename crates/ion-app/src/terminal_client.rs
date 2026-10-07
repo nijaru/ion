@@ -889,13 +889,12 @@ async fn run_compaction(
     let session = runtime.session();
     let agent = runtime.agent();
     let selected = runtime.selected();
-    let model = selected.identity();
     ui.status.clear();
     let stop = CancellationToken::new();
     let mut input_ended = false;
     let mut output_error = None;
     let result = {
-        let compact = agent.compact(session, model.clone(), stop.clone(), |_| {});
+        let compact = agent.compact(session, stop.clone(), |_| {});
         tokio::pin!(compact);
         let mut tick = interval(Duration::from_millis(50));
         loop {
@@ -1205,7 +1204,6 @@ async fn run_turn(
     } = incoming;
     let session = runtime.session();
     let selected = runtime.selected();
-    let model = selected.identity();
     let prior_entry_count = match session.entry_count() {
         Ok(count) => count as usize,
         Err(error) => {
@@ -1229,7 +1227,6 @@ async fn run_turn(
     let result = {
         let turn = runtime.agent().submit_message_with_steering(
             session,
-            model.clone(),
             user_message,
             runtime.instructions().to_owned(),
             stop.clone(),

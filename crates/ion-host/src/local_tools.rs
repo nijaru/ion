@@ -1126,17 +1126,24 @@ mod tests {
             let model = Arc::new(ScriptedModelService::new([Script::Stream(vec![
                 ModelStreamEvent::Completed(response),
             ])]));
-            let agent = CodingAgent::new(model.clone(), Arc::new(LocalTools::new(&root).unwrap()))
-                .with_limits(AgentLimits {
-                    prompt_cache_warming: warming.then_some(PromptCacheWarmingPolicy {
-                        lifetime_seconds: 300,
-                        cache_write_microusd_per_million: 5_000_000,
-                        cache_read_microusd_per_million: 100_000,
-                        output_microusd_per_million: 1_000_000,
-                        minimum_savings_microusd: 1,
-                    }),
-                    ..AgentLimits::default()
-                });
+            let agent = CodingAgent::new(
+                model.clone(),
+                Arc::new(LocalTools::new(&root).unwrap()),
+                ModelRef {
+                    provider: "test".into(),
+                    model: "test".into(),
+                },
+            )
+            .with_limits(AgentLimits {
+                prompt_cache_warming: warming.then_some(PromptCacheWarmingPolicy {
+                    lifetime_seconds: 300,
+                    cache_write_microusd_per_million: 5_000_000,
+                    cache_read_microusd_per_million: 100_000,
+                    output_microusd_per_million: 1_000_000,
+                    minimum_savings_microusd: 1,
+                }),
+                ..AgentLimits::default()
+            });
             let stop = CancellationToken::new();
             let trigger = stop.clone();
             let running_session = session.clone();
@@ -1145,10 +1152,6 @@ mod tests {
                 let result = agent
                     .submit(
                         &running_session,
-                        ModelRef {
-                            provider: "test".into(),
-                            model: "test".into(),
-                        },
                         "run".into(),
                         String::new(),
                         stop,

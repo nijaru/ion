@@ -180,6 +180,9 @@ content. Retry a transient provider failure only before stream output, within
 bounded cancellable waits, without repeating completed effects.
 
 Host model setup owns catalog capabilities, endpoint resolution and credentials.
+Assemble logical model identity, transport and limits from one selection; bind
+that identity to the Core agent rather than resupplying it at submit/compaction.
+Model changes construct and preflight a replacement agent before publication.
 Use matching environment keys automatically, masked entry when needed, and
 explicit custom endpoints. A failed saved login does not silently select another
 identity. Prepare Session/model/resource replacements before publishing them;
@@ -192,7 +195,9 @@ requirement. Effective-model changes advance durable opaque-replay epochs,
 including A → B → A and reopen. Provider-scoped signed reasoning is not answer
 text. Preserve its exact supported continuation and prefix or report an explicit
 reset/incompatibility; never rebase inside an outstanding signed tool exchange.
-Provider adapters own wire validity, SSE framing and error classification.
+Provider adapters own wire validity, SSE framing and capacity/error
+classification. Normalize provider-specific stops into neutral outcomes using
+the chosen wire and known model limits, never a Core provider-name branch.
 
 Caching/affinity are optimizations, not truth. Session affinity survives reopen
 and is fresh on clone/fork; it is transport metadata, not prompt content. Warming

@@ -257,11 +257,11 @@ mod tests {
                 }),
             ])])),
             Arc::new(LocalTools::new(&workspace).unwrap()),
+            model,
         );
         agent
             .submit(
                 &session,
-                model,
                 "first prompt".into(),
                 String::new(),
                 CancellationToken::new(),

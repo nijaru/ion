@@ -254,19 +254,30 @@ impl Default for AgentLimits {
     }
 }
 
+/// One coding loop bound to a logical model and its immutable host contract.
 pub struct Agent {
-    model: Arc<dyn ModelService>,
+    service: Arc<dyn ModelService>,
+    model: ModelRef,
     tools: Arc<ToolSet>,
     limits: AgentLimits,
 }
 
 impl Agent {
-    pub fn new(model: Arc<dyn ModelService>, tools: Arc<dyn ToolSource>) -> Self {
-        Self::with_tool_set(model, Arc::new(ToolSet::new([tools])))
+    pub fn new(
+        service: Arc<dyn ModelService>,
+        tools: Arc<dyn ToolSource>,
+        model: ModelRef,
+    ) -> Self {
+        Self::with_tool_set(service, Arc::new(ToolSet::new([tools])), model)
     }
 
-    pub fn with_tool_set(model: Arc<dyn ModelService>, tools: Arc<ToolSet>) -> Self {
+    pub fn with_tool_set(
+        service: Arc<dyn ModelService>,
+        tools: Arc<ToolSet>,
+        model: ModelRef,
+    ) -> Self {
         Self {
+            service,
             model,
             tools,
             limits: AgentLimits::default(),
@@ -276,6 +287,10 @@ impl Agent {
     pub fn with_limits(mut self, limits: AgentLimits) -> Self {
         self.limits = limits;
         self
+    }
+
+    pub fn model(&self) -> &ModelRef {
+        &self.model
     }
 
     pub fn limits(&self) -> AgentLimits {
@@ -308,7 +323,7 @@ impl Agent {
             let refresh = async {
                 tokio::time::sleep_until(deadline).await;
                 let started = tokio::time::Instant::now();
-                let refreshed = refresh_prompt_cache(&self.model, request, stop).await;
+                let refreshed = refresh_prompt_cache(&self.service, request, stop).await;
                 (started, refreshed)
             };
             tokio::pin!(refresh);
@@ -345,7 +360,6 @@ impl Agent {
     pub async fn compact<F>(
         &self,
         session: &Session,
-        model: ModelRef,
         stop: CancellationToken,
         mut observe: F,
     ) -> Result<bool, AgentError>
@@ -362,7 +376,7 @@ impl Agent {
         let mut changed = false;
         loop {
             match self
-                .compact_inner(session, &model, &stop, keep_bytes, &mut observe)
+                .compact_inner(session, &stop, keep_bytes, &mut observe)
                 .await?
             {
                 Some(chunked) => {
@@ -389,7 +403,6 @@ impl Agent {
     async fn compact_inner<F>(
         &self,
         session: &Session,
-        model: &ModelRef,
         stop: &CancellationToken,
         keep_bytes: usize,
         observe: &mut F,
@@ -415,7 +428,7 @@ impl Agent {
                 message.provider_replay = None;
             }
             let request = ModelRequest {
-                route: ModelRoute::direct(model.clone(), ModelRouteReason::Auxiliary),
+                route: ModelRoute::direct(self.model.clone(), ModelRouteReason::Auxiliary),
                 provider_session_id: Some(session.provider_session_id().to_string()),
                 instructions: Some("Summarize the coding conversation for continued work. Preserve the user's goal and constraints, current file changes and test results, important tool findings, unresolved errors, and precise next steps. Distinguish observations from guesses. Return only the summary.".into()),
                 messages: vec![ion_ai::Message {
@@ -447,7 +460,7 @@ impl Agent {
             }
         };
         let GeneratedResponse { response, route } =
-            generate_with_retry(&self.model, request, stop, &mut |_| {}).await?;
+            generate_with_retry(&self.service, request, stop, &mut |_| {}).await?;
         if !matches!(response.termination, ResponseTermination::Completed)
             || response.message.role != Role::Assistant
             || response
@@ -486,7 +499,6 @@ impl Agent {
     pub async fn submit<F>(
         &self,
         session: &Session,
-        model: ModelRef,
         prompt: String,
         instructions: String,
         stop: CancellationToken,
@@ -500,7 +512,6 @@ impl Agent {
         }
         self.submit_inner(
             session,
-            model,
             user_text(prompt),
             instructions,
             stop,
@@ -514,7 +525,6 @@ impl Agent {
     pub async fn submit_message<F>(
         &self,
         session: &Session,
-        model: ModelRef,
         input: Message,
         instructions: String,
         stop: CancellationToken,
@@ -523,28 +533,15 @@ impl Agent {
     where
         F: FnMut(AgentEvent) + Send,
     {
-        self.submit_inner(
-            session,
-            model,
-            input,
-            instructions,
-            stop,
-            None,
-            &mut observe,
-        )
-        .await
+        self.submit_inner(session, input, instructions, stop, None, &mut observe)
+            .await
     }
 
     /// Accept user steering at model-step boundaries during an active turn.
     /// Prompts not committed when the Turn ends remain in the host-owned inbox.
-    #[expect(
-        clippy::too_many_arguments,
-        reason = "explicit turn and input lifecycles"
-    )]
     pub async fn submit_with_steering<F>(
         &self,
         session: &Session,
-        model: ModelRef,
         prompt: String,
         instructions: String,
         stop: CancellationToken,
@@ -559,7 +556,6 @@ impl Agent {
         }
         self.submit_inner(
             session,
-            model,
             user_text(prompt),
             instructions,
             stop,
@@ -569,14 +565,9 @@ impl Agent {
         .await
     }
 
-    #[expect(
-        clippy::too_many_arguments,
-        reason = "explicit Turn input and steering"
-    )]
     pub async fn submit_message_with_steering<F>(
         &self,
         session: &Session,
-        model: ModelRef,
         input: Message,
         instructions: String,
         stop: CancellationToken,
@@ -588,7 +579,6 @@ impl Agent {
     {
         self.submit_inner(
             session,
-            model,
             input,
             instructions,
             stop,
@@ -598,14 +588,9 @@ impl Agent {
         .await
     }
 
-    #[expect(
-        clippy::too_many_arguments,
-        reason = "explicit turn and input lifecycles"
-    )]
     async fn submit_inner<F>(
         &self,
         session: &Session,
-        model: ModelRef,
         input: Message,
         instructions: String,
         stop: CancellationToken,
@@ -644,13 +629,13 @@ impl Agent {
         {
             return Err(AgentError::ContextTooLarge);
         }
-        let (turn, interrupted) = session.begin_turn_message(input, model.clone())?;
+        let (turn, interrupted) = session.begin_turn_message(input, self.model.clone())?;
         observe(AgentEvent::TurnAccepted { turn });
         if interrupted > 0 {
             observe(AgentEvent::InterruptedCalls(interrupted));
         }
         let outcome = self
-            .drive(session, turn, model, instructions, &stop, steering, observe)
+            .drive(session, turn, instructions, &stop, steering, observe)
             .await;
         match outcome {
             Ok(answer) => Ok(answer),
@@ -665,15 +650,10 @@ impl Agent {
         }
     }
 
-    #[expect(
-        clippy::too_many_arguments,
-        reason = "explicit turn and input lifecycles"
-    )]
     async fn drive<F>(
         &self,
         session: &Session,
         turn: u64,
-        model: ModelRef,
         instructions: String,
         stop: &CancellationToken,
         steering: Option<&SteeringInbox>,
@@ -711,7 +691,7 @@ impl Agent {
                     session,
                     turn,
                     &self.tools,
-                    model.clone(),
+                    self.model.clone(),
                     route_reason,
                     &instructions,
                     self.limits,
@@ -719,7 +699,7 @@ impl Agent {
                     Ok(prepared) => prepared,
                     Err(AgentError::ContextTooLarge) if !prefix_bound_continuation => {
                         if self
-                            .compact_inner(session, &model, stop, self.keep_bytes(), observe)
+                            .compact_inner(session, stop, self.keep_bytes(), observe)
                             .await?
                             .is_some()
                         {
@@ -730,10 +710,9 @@ impl Agent {
                     Err(error) => return Err(error),
                 };
                 let output_budget = prepared.output_budget();
-                let xiaomi_context_limit = prepared.provider() == "xiaomi";
                 let mut emitted_text = false;
                 let issued = prepared
-                    .issue(&self.model, stop, &mut |event| {
+                    .issue(&self.service, stop, &mut |event| {
                         if matches!(event, AgentEvent::TextDelta(_)) {
                             emitted_text = true;
                         }
@@ -767,26 +746,7 @@ impl Agent {
                         },
                         ..
                     })
-                ) || (xiaomi_context_limit
-                    && matches!(
-                        &generated,
-                        Ok(GeneratedResponse {
-                            response: ModelResponse {
-                                termination: ResponseTermination::Incomplete(
-                                    IncompleteReason::MaxOutputTokens
-                                ),
-                                usage: ion_ai::Usage {
-                                    output_tokens: Some(0),
-                                    input_tokens: Some(input),
-                                    ..
-                                },
-                                ..
-                            },
-                            ..
-                        }) if self.limits.context_window_tokens.is_some_and(|window| {
-                            *input * 100 >= u64::from(window) * 99
-                        })
-                    ));
+                );
                 let recoverable_length = !length_recovery_attempted
                     && matches!(
                         &generated,
@@ -808,7 +768,7 @@ impl Agent {
                     && !prefix_bound_continuation
                     && !recovered_overflow
                     && self
-                        .compact_inner(session, &model, stop, self.keep_bytes(), observe)
+                        .compact_inner(session, stop, self.keep_bytes(), observe)
                         .await?
                         .is_some()
                 {
@@ -1380,8 +1340,8 @@ mod tests {
             response(vec![Content::Text("first".into())]),
             response(vec![Content::Text("second".into())]),
         ]));
-        let agent =
-            Agent::new(scripts.clone(), Arc::new(TestTools::new(&root))).with_limits(AgentLimits {
+        let agent = Agent::new(scripts.clone(), Arc::new(TestTools::new(&root)), model())
+            .with_limits(AgentLimits {
                 max_output_tokens: 128_000,
                 context_window_tokens: Some(200_000),
                 ..AgentLimits::default()
@@ -1389,7 +1349,6 @@ mod tests {
         agent
             .submit(
                 &session,
-                model(),
                 "short".into(),
                 "test".into(),
                 CancellationToken::new(),
@@ -1400,7 +1359,6 @@ mod tests {
         agent
             .submit(
                 &session,
-                model(),
                 "another".into(),
                 "x".repeat(300_000),
                 CancellationToken::new(),
@@ -1444,11 +1402,10 @@ mod tests {
             response(vec![Content::Text("first answer".into())]),
             response(vec![Content::Text("must not issue".into())]),
         ]));
-        let agent = Agent::new(scripts.clone(), Arc::new(TestTools::new(&root)));
+        let agent = Agent::new(scripts.clone(), Arc::new(TestTools::new(&root)), model());
         agent
             .submit(
                 &session,
-                model(),
                 "first".into(),
                 "first context".into(),
                 CancellationToken::new(),
@@ -1463,10 +1420,14 @@ mod tests {
             model: "changed".into(),
             ..model()
         };
+        let agent = Agent::new(
+            scripts.clone(),
+            Arc::new(TestTools::new(&root)),
+            changed.clone(),
+        );
         let result = agent
             .submit(
                 &session,
-                changed.clone(),
                 "second".into(),
                 "second context".into(),
                 CancellationToken::new(),
@@ -1558,11 +1519,10 @@ mod tests {
             response(vec![Content::Text("done".into())]),
         ]));
         let source = Arc::new(ChangingSource(AtomicUsize::new(0)));
-        let agent = Agent::new(scripts.clone(), source.clone());
+        let agent = Agent::new(scripts.clone(), source.clone(), model());
         agent
             .submit(
                 &session,
-                model(),
                 "probe".into(),
                 "context".into(),
                 CancellationToken::new(),
@@ -1683,22 +1643,22 @@ mod tests {
             warm,
             response(vec![Content::Text("done".into())]),
         ]));
-        let agent = Agent::new(service.clone(), Arc::new(SlowRead)).with_limits(AgentLimits {
-            prompt_cache_warming: Some(PromptCacheWarmingPolicy {
-                lifetime_seconds: 0,
-                cache_write_microusd_per_million: 5_000_000,
-                cache_read_microusd_per_million: 200_000,
-                output_microusd_per_million: 20_000_000,
-                minimum_savings_microusd: 0,
-            }),
-            ..AgentLimits::default()
-        });
+        let agent =
+            Agent::new(service.clone(), Arc::new(SlowRead), model()).with_limits(AgentLimits {
+                prompt_cache_warming: Some(PromptCacheWarmingPolicy {
+                    lifetime_seconds: 0,
+                    cache_write_microusd_per_million: 5_000_000,
+                    cache_read_microusd_per_million: 200_000,
+                    output_microusd_per_million: 20_000_000,
+                    minimum_savings_microusd: 0,
+                }),
+                ..AgentLimits::default()
+            });
 
         assert_eq!(
             agent
                 .submit(
                     &session,
-                    model(),
                     "inspect".into(),
                     "test".into(),
                     CancellationToken::new(),
@@ -1755,7 +1715,7 @@ mod tests {
             }),
             response(vec![Content::Text("done".into())]),
         ]));
-        let agent = Agent::new(service.clone(), Arc::new(TestTools::new(&root)));
+        let agent = Agent::new(service.clone(), Arc::new(TestTools::new(&root)), model());
         let request = ModelRequest {
             route: ModelRoute::direct(model(), ModelRouteReason::UserRequest),
             provider_session_id: Some(uuid::Uuid::now_v7().to_string()),
@@ -1775,7 +1735,7 @@ mod tests {
         };
         let mut retry_delay = None;
         let generated = generate_with_retry(
-            &agent.model,
+            &agent.service,
             request.clone(),
             &CancellationToken::new(),
             &mut |event| {
@@ -1797,10 +1757,10 @@ mod tests {
             Script::Stream(vec![ModelStreamEvent::TextDelta("partial".into())]),
             response(vec![Content::Text("should not be used".into())]),
         ]));
-        let agent = Agent::new(service.clone(), Arc::new(TestTools::new(&root)));
+        let agent = Agent::new(service.clone(), Arc::new(TestTools::new(&root)), model());
         let mut visible = String::new();
         let error = generate_with_retry(
-            &agent.model,
+            &agent.service,
             request.clone(),
             &CancellationToken::new(),
             &mut |event| {
@@ -1823,9 +1783,9 @@ mod tests {
             }),
             response(vec![Content::Text("should not be used".into())]),
         ]));
-        let agent = Agent::new(service.clone(), Arc::new(TestTools::new(&root)));
+        let agent = Agent::new(service.clone(), Arc::new(TestTools::new(&root)), model());
         let error = generate_with_retry(
-            &agent.model,
+            &agent.service,
             request,
             &CancellationToken::new(),
             &mut |_| {},
@@ -1866,13 +1826,12 @@ mod tests {
             }),
             response(vec![Content::Text("done".into())]),
         ]));
-        let agent = Agent::new(service.clone(), Arc::new(TestTools::new(&root)));
+        let agent = Agent::new(service.clone(), Arc::new(TestTools::new(&root)), model());
         let mut rebases = 0;
         assert_eq!(
             agent
                 .submit(
                     &session,
-                    model(),
                     "second".into(),
                     "instructions".into(),
                     CancellationToken::new(),
@@ -1931,11 +1890,10 @@ mod tests {
                 retry_after_ms: None,
             }),
         ]));
-        let agent = Agent::new(service.clone(), Arc::new(TestTools::new(&root)));
+        let agent = Agent::new(service.clone(), Arc::new(TestTools::new(&root)), model());
         let error = agent
             .submit(
                 &session,
-                model(),
                 "read file".into(),
                 "instructions".into(),
                 CancellationToken::new(),
@@ -1985,11 +1943,10 @@ mod tests {
             response(vec![Content::Text("created and checked".into())]),
         ]));
         let tools = Arc::new(TestTools::new(&root));
-        let agent = Agent::new(scripts, tools.clone());
+        let agent = Agent::new(scripts, tools.clone(), model());
         let answer = agent
             .submit(
                 &session,
-                model(),
                 "create the file".into(),
                 "test".into(),
                 CancellationToken::new(),
@@ -2008,11 +1965,10 @@ mod tests {
         let scripts = Arc::new(ScriptedModelService::new([response(vec![Content::Text(
             "still here".into(),
         )])]));
-        let agent = Agent::new(scripts, tools);
+        let agent = Agent::new(scripts, tools, model());
         let answer = agent
             .submit(
                 &reopened,
-                model(),
                 "continue".into(),
                 "test".into(),
                 CancellationToken::new(),
@@ -2088,12 +2044,11 @@ mod tests {
             })]),
             response(vec![Content::Text("done".into())]),
         ]));
-        let agent = Agent::new(scripts.clone(), Arc::new(DeferredTool));
+        let agent = Agent::new(scripts.clone(), Arc::new(DeferredTool), model());
         assert_eq!(
             agent
                 .submit(
                     &session,
-                    model(),
                     "find the metadata".into(),
                     "test".into(),
                     CancellationToken::new(),
@@ -2177,12 +2132,11 @@ mod tests {
         let resumed_scripts = Arc::new(ScriptedModelService::new([response(vec![Content::Text(
             "resumed".into(),
         )])]));
-        let resumed_agent = Agent::new(resumed_scripts.clone(), Arc::new(DeferredTool));
+        let resumed_agent = Agent::new(resumed_scripts.clone(), Arc::new(DeferredTool), model());
         assert_eq!(
             resumed_agent
                 .submit(
                     &reopened,
-                    model(),
                     "continue after reopen".into(),
                     "test".into(),
                     CancellationToken::new(),
@@ -2204,12 +2158,11 @@ mod tests {
         let fork_scripts = Arc::new(ScriptedModelService::new([response(vec![Content::Text(
             "forked".into(),
         )])]));
-        let fork_agent = Agent::new(fork_scripts.clone(), Arc::new(DeferredTool));
+        let fork_agent = Agent::new(fork_scripts.clone(), Arc::new(DeferredTool), model());
         assert_eq!(
             fork_agent
                 .submit(
                     &fork,
-                    model(),
                     "continue from fork".into(),
                     "test".into(),
                     CancellationToken::new(),
@@ -2295,6 +2248,7 @@ mod tests {
                     root: root.clone(),
                     output: output.clone(),
                 }),
+                model(),
             )
             .with_limits(AgentLimits {
                 max_request_bytes: 4_096,
@@ -2308,7 +2262,6 @@ mod tests {
             agent
                 .submit(
                     &session,
-                    model(),
                     "report".into(),
                     "test".into(),
                     CancellationToken::new(),
@@ -2411,7 +2364,7 @@ mod tests {
             }
             assert!(
                 agent
-                    .compact(&reopened, model(), CancellationToken::new(), |_| {})
+                    .compact(&reopened, CancellationToken::new(), |_| {})
                     .await
                     .unwrap()
             );
@@ -2482,14 +2435,14 @@ mod tests {
             call(),
             response(vec![Content::Text("saw it".into())]),
         ]));
-        let agent = Agent::new(scripts.clone(), Arc::new(ImageTool)).with_limits(AgentLimits {
-            image_input: true,
-            ..AgentLimits::default()
-        });
+        let agent =
+            Agent::new(scripts.clone(), Arc::new(ImageTool), model()).with_limits(AgentLimits {
+                image_input: true,
+                ..AgentLimits::default()
+            });
         agent
             .submit(
                 &session,
-                model(),
                 "inspect".into(),
                 "test".into(),
                 CancellationToken::new(),
@@ -2506,11 +2459,10 @@ mod tests {
             matches!(&reopened.messages().unwrap()[2].content[0], Content::ToolResult(result) if result.images.len() == 1)
         );
         let text_service = Arc::new(ScriptedModelService::new([]));
-        let text_agent = Agent::new(text_service.clone(), Arc::new(ImageTool));
+        let text_agent = Agent::new(text_service.clone(), Arc::new(ImageTool), model());
         let error = text_agent
             .submit(
                 &reopened,
-                model(),
                 "continue".into(),
                 "test".into(),
                 CancellationToken::new(),
@@ -2542,11 +2494,10 @@ mod tests {
             .collect::<Vec<_>>();
         scripts.push(response(vec![Content::Text("done".into())]));
         let service = Arc::new(ScriptedModelService::new(scripts));
-        let agent = Agent::new(service.clone(), Arc::new(TestTools::new(&root)));
+        let agent = Agent::new(service.clone(), Arc::new(TestTools::new(&root)), model());
         let answer = agent
             .submit(
                 &session,
-                model(),
                 "inspect the file repeatedly".into(),
                 "test".into(),
                 CancellationToken::new(),
@@ -2578,13 +2529,12 @@ mod tests {
             })
             .collect::<Vec<_>>();
         let service = Arc::new(ScriptedModelService::new(scripts));
-        let agent = Agent::new(service.clone(), Arc::new(TestTools::new(&root)));
+        let agent = Agent::new(service.clone(), Arc::new(TestTools::new(&root)), model());
         let stop = CancellationToken::new();
         let mut trigger = Some(stop.clone());
         let result = agent
             .submit(
                 &session,
-                model(),
                 "inspect the file".into(),
                 "test".into(),
                 stop,
@@ -2615,12 +2565,11 @@ mod tests {
             response(vec![Content::Text(" \n".into())]),
             response(vec![Content::Text("working again".into())]),
         ]));
-        let agent = Agent::new(service, Arc::new(TestTools::new(&root)));
+        let agent = Agent::new(service, Arc::new(TestTools::new(&root)), model());
         for prompt in ["empty", "blank"] {
             let error = agent
                 .submit(
                     &session,
-                    model(),
                     prompt.into(),
                     "test".into(),
                     CancellationToken::new(),
@@ -2643,7 +2592,6 @@ mod tests {
             agent
                 .submit(
                     &reopened,
-                    model(),
                     "continue".into(),
                     "test".into(),
                     CancellationToken::new(),
@@ -2696,13 +2644,12 @@ mod tests {
             })]),
             response(vec![Content::Text("done".into())]),
         ]));
-        let agent = Agent::new(scripts.clone(), Arc::new(TestTools::new(&root)));
+        let agent = Agent::new(scripts.clone(), Arc::new(TestTools::new(&root)), model());
         let mut rejected = Vec::new();
         assert_eq!(
             agent
                 .submit(
                     &session,
-                    model(),
                     "write the file".into(),
                     "test".into(),
                     CancellationToken::new(),
@@ -2759,10 +2706,12 @@ mod tests {
         let scripts = Arc::new(ScriptedModelService::new([response(vec![Content::Text(
             "done".into(),
         )])]));
-        let agent = Agent::new(scripts, Arc::new(TestTools::new(&root))).with_limits(AgentLimits {
-            max_request_bytes: 80 * 1024 * 1024,
-            ..AgentLimits::default()
-        });
+        let agent = Agent::new(scripts, Arc::new(TestTools::new(&root)), model()).with_limits(
+            AgentLimits {
+                max_request_bytes: 80 * 1024 * 1024,
+                ..AgentLimits::default()
+            },
+        );
         let steering =
             SteeringInbox::new(agent.limits(), crate::InputBudget::new(128 * 1024 * 1024));
         let prompt = "\0".repeat(11 * 1024 * 1024);
@@ -2770,7 +2719,6 @@ mod tests {
         let result = agent
             .submit_with_steering(
                 &session,
-                model(),
                 "start".into(),
                 "test".into(),
                 CancellationToken::new(),
@@ -2811,10 +2759,12 @@ mod tests {
                 returned_model: Some("test".into()),
             }),
         ])]));
-        let agent = Agent::new(scripts, Arc::new(TestTools::new(&root))).with_limits(AgentLimits {
-            max_request_bytes: 80 * 1024 * 1024,
-            ..AgentLimits::default()
-        });
+        let agent = Agent::new(scripts, Arc::new(TestTools::new(&root)), model()).with_limits(
+            AgentLimits {
+                max_request_bytes: 80 * 1024 * 1024,
+                ..AgentLimits::default()
+            },
+        );
         let steering =
             SteeringInbox::new(agent.limits(), crate::InputBudget::new(128 * 1024 * 1024));
         let prompt = "\0".repeat(11 * 1024 * 1024);
@@ -2822,7 +2772,6 @@ mod tests {
         let result = agent
             .submit_with_steering(
                 &session,
-                model(),
                 "start".into(),
                 "test".into(),
                 CancellationToken::new(),
@@ -2899,12 +2848,11 @@ mod tests {
             ]),
             response(vec![Content::Text("second".into())]),
         ]));
-        let agent = Agent::new(scripts.clone(), Arc::new(TestTools::new(&root)));
+        let agent = Agent::new(scripts.clone(), Arc::new(TestTools::new(&root)), model());
         let steering = SteeringInbox::new(agent.limits(), crate::InputBudget::default());
         let answer = agent
             .submit_with_steering(
                 &session,
-                model(),
                 "start".into(),
                 "test".into(),
                 CancellationToken::new(),
@@ -2987,11 +2935,10 @@ mod tests {
             response(vec![Content::Text("Earlier work summarized.".into())]),
             response(vec![Content::Text("second".into())]),
         ]));
-        let agent = Agent::new(scripts.clone(), Arc::new(TestTools::new(&root)));
+        let agent = Agent::new(scripts.clone(), Arc::new(TestTools::new(&root)), model());
         agent
             .submit(
                 &session,
-                model(),
                 "earlier".into(),
                 "test".into(),
                 CancellationToken::new(),
@@ -3010,7 +2957,6 @@ mod tests {
         let answer = agent
             .submit_with_steering(
                 &session,
-                model(),
                 "start".into(),
                 "test".into(),
                 CancellationToken::new(),
@@ -3133,8 +3079,8 @@ mod tests {
             ]),
             response(vec![Content::Text("second".into())]),
         ]));
-        let agent =
-            Agent::new(scripts.clone(), Arc::new(TestTools::new(&root))).with_limits(AgentLimits {
+        let agent = Agent::new(scripts.clone(), Arc::new(TestTools::new(&root)), model())
+            .with_limits(AgentLimits {
                 image_input: true,
                 ..AgentLimits::default()
             });
@@ -3142,7 +3088,6 @@ mod tests {
         let answer = agent
             .submit_with_steering(
                 &session,
-                model(),
                 "start".into(),
                 "test".into(),
                 CancellationToken::new(),
@@ -3249,7 +3194,7 @@ mod tests {
             response(vec![Content::Text("done".into())]),
         ]));
         std::fs::write(root.join("file.txt"), "content").unwrap();
-        let agent = Agent::new(scripts.clone(), Arc::new(TestTools::new(&root)));
+        let agent = Agent::new(scripts.clone(), Arc::new(TestTools::new(&root)), model());
         let steering = Arc::new(SteeringInbox::new(
             agent.limits(),
             crate::InputBudget::default(),
@@ -3258,7 +3203,6 @@ mod tests {
         agent
             .submit_with_steering(
                 &session,
-                model(),
                 "read file".into(),
                 "test".into(),
                 CancellationToken::new(),
@@ -3314,11 +3258,10 @@ mod tests {
             response(vec![Content::Text("First task is complete.".into())]),
             response(vec![Content::Text("continued".into())]),
         ]));
-        let agent = Agent::new(scripts.clone(), Arc::new(TestTools::new(&root)));
+        let agent = Agent::new(scripts.clone(), Arc::new(TestTools::new(&root)), model());
         agent
             .submit(
                 &session,
-                model(),
                 "first task".into(),
                 "test".into(),
                 CancellationToken::new(),
@@ -3328,7 +3271,7 @@ mod tests {
             .unwrap();
         assert!(
             agent
-                .compact(&session, model(), CancellationToken::new(), |_| {})
+                .compact(&session, CancellationToken::new(), |_| {})
                 .await
                 .unwrap()
         );
@@ -3342,7 +3285,6 @@ mod tests {
         agent
             .submit(
                 &session,
-                model(),
                 "continue".into(),
                 "test".into(),
                 CancellationToken::new(),
@@ -3375,12 +3317,11 @@ mod tests {
             response(vec![Content::Text("First result is complete.".into())]),
             response(vec![Content::Text("continued".into())]),
         ]));
-        let agent = Agent::new(scripts.clone(), Arc::new(TestTools::new(&root)));
+        let agent = Agent::new(scripts.clone(), Arc::new(TestTools::new(&root)), model());
         for prompt in ["first task", "next task"] {
             agent
                 .submit(
                     &session,
-                    model(),
                     prompt.into(),
                     "test".into(),
                     CancellationToken::new(),
@@ -3400,8 +3341,9 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn mimo_zero_output_at_window_compacts_before_retry() {
-        let root = std::env::temp_dir().join(format!("ion-mimo-overflow-{}", uuid::Uuid::now_v7()));
+    async fn completed_context_capacity_outcome_compacts_before_retry() {
+        let root =
+            std::env::temp_dir().join(format!("ion-completed-overflow-{}", uuid::Uuid::now_v7()));
         std::fs::create_dir(&root).unwrap();
         let session = CodingSession::create(root.join("session.sqlite"), &root).unwrap();
         let scripts = Arc::new(ScriptedModelService::new([
@@ -3413,26 +3355,21 @@ mod tests {
                     provider_replay: None,
                 },
                 usage: Usage::known(49_900, 0),
-                termination: ResponseTermination::Incomplete(IncompleteReason::MaxOutputTokens),
-                returned_model: Some("mimo-v2.6-flash".into()),
+                termination: ResponseTermination::Incomplete(IncompleteReason::ContextLength),
+                returned_model: None,
             })]),
             response(vec![Content::Text("Earlier result is complete.".into())]),
             response(vec![Content::Text("continued".into())]),
         ]));
-        let agent =
-            Agent::new(scripts.clone(), Arc::new(TestTools::new(&root))).with_limits(AgentLimits {
+        let agent = Agent::new(scripts.clone(), Arc::new(TestTools::new(&root)), model())
+            .with_limits(AgentLimits {
                 context_window_tokens: Some(50_000),
                 ..AgentLimits::default()
             });
-        let mimo = ModelRef {
-            provider: "xiaomi".into(),
-            model: "mimo-v2.6-flash".into(),
-        };
         for prompt in ["first", "second"] {
             agent
                 .submit(
                     &session,
-                    mimo.clone(),
                     prompt.into(),
                     "test".into(),
                     CancellationToken::new(),
@@ -3476,11 +3413,10 @@ mod tests {
             response(vec![Content::Text("Earlier work summarized.".into())]),
             response(vec![Content::Text("complete answer".into())]),
         ]));
-        let agent = Agent::new(scripts.clone(), Arc::new(TestTools::new(&root)));
+        let agent = Agent::new(scripts.clone(), Arc::new(TestTools::new(&root)), model());
         agent
             .submit(
                 &session,
-                model(),
                 "first".into(),
                 "test".into(),
                 CancellationToken::new(),
@@ -3492,7 +3428,6 @@ mod tests {
         let answer = agent
             .submit(
                 &session,
-                model(),
                 "second".into(),
                 "test".into(),
                 CancellationToken::new(),
@@ -3578,16 +3513,19 @@ mod tests {
             let model_service = Arc::new(FillBudget {
                 requests: Mutex::new(Vec::new()),
             });
-            let agent = Agent::new(model_service.clone(), Arc::new(TestTools::new(&root)))
-                .with_limits(AgentLimits {
-                    max_output_tokens: ceiling,
-                    context_window_tokens: window,
-                    ..AgentLimits::default()
-                });
+            let agent = Agent::new(
+                model_service.clone(),
+                Arc::new(TestTools::new(&root)),
+                model(),
+            )
+            .with_limits(AgentLimits {
+                max_output_tokens: ceiling,
+                context_window_tokens: window,
+                ..AgentLimits::default()
+            });
             agent
                 .submit(
                     &session,
-                    model(),
                     "first".into(),
                     "test".into(),
                     CancellationToken::new(),
@@ -3598,7 +3536,6 @@ mod tests {
             let result = agent
                 .submit(
                     &session,
-                    model(),
                     "second".into(),
                     "test".into(),
                     CancellationToken::new(),
@@ -3645,11 +3582,10 @@ mod tests {
             })]),
             response(vec![Content::Text("I can use read instead.".into())]),
         ]));
-        let agent = Agent::new(scripts.clone(), Arc::new(TestTools::new(&root)));
+        let agent = Agent::new(scripts.clone(), Arc::new(TestTools::new(&root)), model());
         let answer = agent
             .submit(
                 &session,
-                model(),
                 "inspect".into(),
                 "test".into(),
                 CancellationToken::new(),
@@ -3702,11 +3638,10 @@ mod tests {
             })]),
             response(vec![Content::Text("I need to correct the call".into())]),
         ]));
-        let agent = Agent::new(scripts, Arc::new(NeverDispatch));
+        let agent = Agent::new(scripts, Arc::new(NeverDispatch), model());
         agent
             .submit(
                 &session,
-                model(),
                 "try a command".into(),
                 "test".into(),
                 CancellationToken::new(),
@@ -3749,10 +3684,10 @@ mod tests {
                 retry_after_ms: None,
             })
         })));
-        let agent = Agent::new(scripts, Arc::new(TestTools::new(&root)));
+        let agent = Agent::new(scripts, Arc::new(TestTools::new(&root)), model());
         assert!(
             agent
-                .compact(&session, model(), CancellationToken::new(), |_| {})
+                .compact(&session, CancellationToken::new(), |_| {})
                 .await
                 .is_err()
         );
@@ -3813,9 +3748,10 @@ mod tests {
         let agent = Agent::new(
             Arc::new(CancelOnCompletion(stop.clone())),
             Arc::new(TestTools::new(&root)),
+            model(),
         );
         assert!(matches!(
-            agent.compact(&session, model(), stop, |_| {}).await,
+            agent.compact(&session, stop, |_| {}).await,
             Err(AgentError::Cancelled)
         ));
         let after = session.view().unwrap();
@@ -3835,8 +3771,8 @@ mod tests {
             response(vec![Content::Text("First task completed.".into())]),
             response(vec![Content::Text("continued".into())]),
         ]));
-        let agent =
-            Agent::new(scripts.clone(), Arc::new(TestTools::new(&root))).with_limits(AgentLimits {
+        let agent = Agent::new(scripts.clone(), Arc::new(TestTools::new(&root)), model())
+            .with_limits(AgentLimits {
                 // Explicit retained-answer pressure, not verbose native-tool
                 // descriptions in this minimal protocol fixture.
                 max_request_bytes: 3_200,
@@ -3846,7 +3782,6 @@ mod tests {
             agent
                 .submit(
                     &session,
-                    model(),
                     prompt.into(),
                     "test".into(),
                     CancellationToken::new(),
@@ -3894,15 +3829,15 @@ mod tests {
                 "Summary through chunk {index}"
             ))])
         })));
-        let agent =
-            Agent::new(scripts.clone(), Arc::new(TestTools::new(&root))).with_limits(AgentLimits {
+        let agent = Agent::new(scripts.clone(), Arc::new(TestTools::new(&root)), model())
+            .with_limits(AgentLimits {
                 max_request_bytes: 2_000,
                 ..AgentLimits::default()
             });
         let mut cuts = Vec::new();
         assert!(
             agent
-                .compact(&session, model(), CancellationToken::new(), |event| {
+                .compact(&session, CancellationToken::new(), |event| {
                     if let AgentEvent::ContextCompacted { through_entry } = event {
                         cuts.push(through_entry);
                     }
@@ -3960,14 +3895,14 @@ mod tests {
             .unwrap();
         let before = session.view().unwrap().entries;
         let scripts = Arc::new(ScriptedModelService::new([]));
-        let agent =
-            Agent::new(scripts.clone(), Arc::new(TestTools::new(&root))).with_limits(AgentLimits {
+        let agent = Agent::new(scripts.clone(), Arc::new(TestTools::new(&root)), model())
+            .with_limits(AgentLimits {
                 max_request_bytes: 2_000,
                 ..AgentLimits::default()
             });
         assert!(matches!(
             agent
-                .compact(&session, model(), CancellationToken::new(), |_| {})
+                .compact(&session, CancellationToken::new(), |_| {})
                 .await,
             Err(AgentError::ContextTooLarge)
         ));
@@ -3998,11 +3933,10 @@ mod tests {
                 }),
             ]),
         ]));
-        let agent = Agent::new(scripts.clone(), Arc::new(TestTools::new(&root)));
+        let agent = Agent::new(scripts.clone(), Arc::new(TestTools::new(&root)), model());
         agent
             .submit(
                 &session,
-                model(),
                 "first".into(),
                 "test".into(),
                 CancellationToken::new(),
@@ -4014,7 +3948,6 @@ mod tests {
             agent
                 .submit(
                     &session,
-                    model(),
                     "second".into(),
                     "test".into(),
                     CancellationToken::new(),
@@ -4059,12 +3992,11 @@ mod tests {
         let scripts = Arc::new(ScriptedModelService::new([response(vec![Content::Text(
             "inspected".into(),
         )])]));
-        let agent = Agent::new(scripts, Arc::new(TestTools::new(&root)));
+        let agent = Agent::new(scripts, Arc::new(TestTools::new(&root)), model());
         let mut interrupted = 0;
         agent
             .submit(
                 &reopened,
-                model(),
                 "inspect first".into(),
                 "test".into(),
                 CancellationToken::new(),

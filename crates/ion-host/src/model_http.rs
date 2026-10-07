@@ -68,6 +68,7 @@ pub struct HttpModelService {
     wire: HttpWire,
     credentials: Arc<dyn CredentialResolver>,
     capabilities: ModelCapabilities,
+    context_window_tokens: Option<u32>,
 }
 
 impl HttpModelService {
@@ -118,6 +119,7 @@ impl HttpModelService {
             wire,
             credentials,
             ModelCapabilities::conservative(),
+            None,
         )
     }
 
@@ -126,6 +128,7 @@ impl HttpModelService {
         wire: HttpWire,
         credentials: Arc<dyn CredentialResolver>,
         capabilities: ModelCapabilities,
+        context_window_tokens: Option<u32>,
     ) -> Result<Self, ProviderError> {
         let endpoint = parse_endpoint(endpoint)?;
         let client = Client::builder()
@@ -140,6 +143,7 @@ impl HttpModelService {
             wire,
             credentials,
             capabilities,
+            context_window_tokens,
         })
     }
 }
@@ -300,6 +304,7 @@ impl ModelService for HttpModelService {
                 return Err(invalid("provider response is not text/event-stream"));
             }
             let wire = self.wire;
+            let context_window_tokens = self.context_window_tokens;
             let stream: ModelStream = Box::pin(try_stream! {
                 let mut bytes = response.bytes_stream();
                 let mut frame = Vec::new();
@@ -318,6 +323,7 @@ impl ModelService for HttpModelService {
                         let events = decode_frame(&frame, &mut decoder, &request, wire)?;
                         frame.clear();
                         for event in events {
+                            let event = normalize_capacity(event, wire, context_window_tokens);
                             let terminal = matches!(event, ModelStreamEvent::Completed(_));
                             yield event;
                             if terminal { return; }
@@ -329,13 +335,14 @@ impl ModelService for HttpModelService {
                 // than sending a separate [DONE] sentinel.
                 if !frame.is_empty() {
                     for event in decode_frame(&frame, &mut decoder, &request, wire)? {
+                        let event = normalize_capacity(event, wire, context_window_tokens);
                         let terminal = matches!(event, ModelStreamEvent::Completed(_));
                         yield event;
                         if terminal { return; }
                     }
                 }
                 if wire.is_chat() {
-                    yield ModelStreamEvent::Completed(decoder.complete(&request)?);
+                    yield normalize_capacity(ModelStreamEvent::Completed(decoder.complete(&request)?), wire, context_window_tokens);
                     return;
                 }
                 Err(transport("provider stream ended before completion"))?;
@@ -343,6 +350,29 @@ impl ModelService for HttpModelService {
             Ok(stream)
         })
     }
+}
+
+fn normalize_capacity(
+    mut event: ModelStreamEvent,
+    wire: HttpWire,
+    context_window_tokens: Option<u32>,
+) -> ModelStreamEvent {
+    if let ModelStreamEvent::Completed(response) = &mut event {
+        // MiMo reports a full context as a zero-output length stop. Interpret
+        // that wire behavior here, independent of the caller's provider alias.
+        if wire == HttpWire::MiMoChat
+            && response.termination
+                == ResponseTermination::Incomplete(IncompleteReason::MaxOutputTokens)
+            && response.usage.output_tokens == Some(0)
+            && response.usage.input_tokens.is_some_and(|input| {
+                context_window_tokens
+                    .is_some_and(|window| u128::from(input) * 100 >= u128::from(window) * 99)
+            })
+        {
+            response.termination = ResponseTermination::Incomplete(IncompleteReason::ContextLength);
+        }
+    }
+    event
 }
 
 fn classify_http_error(status: u16, body: &[u8]) -> ProviderErrorKind {
@@ -2145,6 +2175,113 @@ mod tests {
             .unwrap();
         assert_eq!(frame.data, "{\"a\":\n1}");
         assert!(parse_frame(b"data: \xff\n\n").is_err());
+    }
+
+    #[tokio::test]
+    async fn mimo_capacity_is_normalized_for_aliases_on_every_completion_path() {
+        let frame = "data: {\"model\":\"served-model\",\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"length\"}],\"usage\":{\"prompt_tokens\":49900,\"completion_tokens\":0}}";
+        for suffix in ["\n\ndata: [DONE]\n\n", "\n\ndata: [DONE]", ""] {
+            let endpoint = serve(format!("{frame}{suffix}"), "200 OK").await;
+            let model = HttpModelService::new_with_capabilities(
+                &endpoint,
+                HttpWire::MiMoChat,
+                Arc::new(|| None),
+                ModelCapabilities::conservative(),
+                Some(50_000),
+            )
+            .unwrap();
+            let mut request = request();
+            request.route = ModelRoute::direct(
+                ModelRef {
+                    provider: "renamed-mimo".into(),
+                    model: "requested-model".into(),
+                },
+                ModelRouteReason::UserRequest,
+            );
+            let mut stream = model.stream(request).await.unwrap();
+            let mut completed = None;
+            while let Some(event) = stream.next().await {
+                if let ModelStreamEvent::Completed(response) = event.unwrap() {
+                    assert!(completed.is_none());
+                    completed = Some(response);
+                }
+            }
+            let response = completed.unwrap();
+            assert_eq!(
+                response.termination,
+                ResponseTermination::Incomplete(IncompleteReason::ContextLength),
+                "{suffix:?}"
+            );
+            assert_eq!(response.usage, Usage::known(49_900, 0));
+            assert_eq!(response.returned_model.as_deref(), Some("served-model"));
+        }
+    }
+
+    #[test]
+    fn capacity_normalization_requires_the_mimo_wire_and_known_window() {
+        for (wire, window, input, output, expected) in [
+            (
+                HttpWire::MiMoChat,
+                Some(50_000),
+                49_499,
+                0,
+                IncompleteReason::MaxOutputTokens,
+            ),
+            (
+                HttpWire::MiMoChat,
+                Some(50_000),
+                49_500,
+                0,
+                IncompleteReason::ContextLength,
+            ),
+            (
+                HttpWire::MiMoChat,
+                Some(50_000),
+                u64::MAX,
+                0,
+                IncompleteReason::ContextLength,
+            ),
+            (
+                HttpWire::MiMoChat,
+                Some(50_000),
+                49_900,
+                1,
+                IncompleteReason::MaxOutputTokens,
+            ),
+            (
+                HttpWire::MiMoChat,
+                None,
+                49_900,
+                0,
+                IncompleteReason::MaxOutputTokens,
+            ),
+            (
+                HttpWire::ChatCompletions,
+                Some(50_000),
+                49_900,
+                0,
+                IncompleteReason::MaxOutputTokens,
+            ),
+        ] {
+            let event = ModelStreamEvent::Completed(ModelResponse {
+                message: Message {
+                    role: Role::Assistant,
+                    content: Vec::new(),
+                    provider_replay: None,
+                },
+                usage: Usage::known(input, output),
+                termination: ResponseTermination::Incomplete(IncompleteReason::MaxOutputTokens),
+                returned_model: None,
+            });
+            let ModelStreamEvent::Completed(response) = normalize_capacity(event, wire, window)
+            else {
+                unreachable!();
+            };
+            assert_eq!(
+                response.termination,
+                ResponseTermination::Incomplete(expected)
+            );
+        }
     }
 
     #[tokio::test]
