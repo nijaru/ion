@@ -83,6 +83,7 @@ impl ActiveOperation<'_> {
 #[derive(Default)]
 struct Frontend {
     mode: TuiMode,
+    output_detail: crate::tool_output::OutputDetail,
     history: TranscriptProjection,
     fullscreen_rows: usize,
     fullscreen_width: usize,
@@ -688,8 +689,9 @@ fn handle_command(
     let args = args.trim();
     match name {
         "/help" => ui.note(
-            "/new /clone /fork [TURN] /fork-after TURN /resume /session /name NAME /model /compact /tools /tool [N] /tui MODE /image PATH /copy /editor /export PATH /skills /prompts /reload /login PROVIDER /logout PROVIDER /quit\nCtrl-V pastes files, image or text from the host clipboard. !COMMAND runs shell and shares result with model; !!COMMAND keeps it out of model context".into(),
+            "/new /clone /fork [TURN] /fork-after TURN /resume /session /name NAME /model /compact /tools /tool [N] /settings [compact|expanded] /tui MODE /image PATH /copy /editor /export PATH /skills /prompts /reload /login PROVIDER /logout PROVIDER /quit\nCtrl-V pastes files, image or text from the host clipboard. !COMMAND runs shell and shares result with model; !!COMMAND keeps it out of model context".into(),
         ),
+        "/settings" => ui.output_settings(args)?,
         "/tui" => {
             match args {
                 "" => ui.note(format!(
@@ -1008,6 +1010,15 @@ fn busy_key(
         }
         Action::Queue(prompt) => ui.queue_follow_up(prompt, limits, resources),
         Action::Command(command) => {
+            if let Some(args) = command
+                .strip_prefix("/settings")
+                .filter(|args| args.is_empty() || args.starts_with(' '))
+            {
+                if let Err(error) = ui.output_settings(args.trim()) {
+                    ui.status = format!("{error:#}");
+                }
+                return;
+            }
             if command == "/copy" || command == "/editor" {
                 ui.status = "This action is available after the operation".into();
                 return;
@@ -1472,6 +1483,7 @@ impl Frontend {
                     items: self.pending_history_items.clone(),
                 },
                 width.saturating_sub(1).max(1),
+                self.output_detail,
             ));
         }
         rows
@@ -1481,6 +1493,20 @@ impl Frontend {
         self.history_published_items = self.pending_history_target;
         self.pending_history_items.clear();
         self.pending_history_banner = None;
+    }
+
+    fn output_settings(&mut self, args: &str) -> Result<()> {
+        match args {
+            "" => self.note(format!("Tool output: {}. Use /settings compact or /settings expanded.\nTerminal-local: affects fullscreen and future publication, not existing native scrollback. Inline progress stays compact. Ctrl-O always inspects recorded source.", self.output_detail.label())),
+            "compact" | "expanded" => {
+                self.output_detail = if args == "compact" { crate::tool_output::OutputDetail::Compact } else { crate::tool_output::OutputDetail::Expanded };
+                self.scroll = 0;
+                self.fullscreen_rows = 0;
+                self.status = format!("Tool output: {} · fullscreen and future publication; native history unchanged", self.output_detail.label());
+            }
+            _ => anyhow::bail!("use /settings compact or /settings expanded"),
+        }
+        Ok(())
     }
 
     fn note(&mut self, message: String) {
@@ -2159,7 +2185,7 @@ fn draw_chat_fullscreen(
 ) -> Result<()> {
     let width = width.max(1) as usize;
     let height = height.max(1) as usize;
-    let mut content = crate::transcript_render::rows(&ui.history, width);
+    let mut content = crate::transcript_render::rows(&ui.history, width, ui.output_detail);
 
     for notice in &ui.notices {
         if !content.is_empty() && content.last().is_some_and(|row| row.width() > 0) {
@@ -2168,7 +2194,7 @@ fn draw_chat_fullscreen(
         content.extend(notice_rows(notice, width));
     }
     if let Some(progress) = progress {
-        let live = crate::transcript_render::rows(progress.projection(), width);
+        let live = crate::transcript_render::rows(progress.projection(), width, ui.output_detail);
         if !live.is_empty()
             && !content.is_empty()
             && content.last().is_some_and(|row| row.width() > 0)
@@ -2506,6 +2532,46 @@ mod tests {
             Action::Queue(prompt) if prompt == "follow up"
         ));
         assert!(ui.draft.is_empty());
+    }
+
+    #[test]
+    fn output_settings_during_work_do_not_republish_or_admit_input() {
+        let mut ui = Frontend {
+            history_published_items: 7,
+            pending_history_target: 7,
+            ..Frontend::default()
+        };
+        let stop = CancellationToken::new();
+        ui.draft = "/settings expanded".into();
+        ui.cursor = ui.draft.len();
+        busy_key(
+            &mut ui,
+            KeyEvent::new(KeyCode::Enter, Modifiers::NONE),
+            &stop,
+            None,
+            None,
+            AgentLimits::default(),
+        );
+        assert_eq!(ui.output_detail, crate::tool_output::OutputDetail::Expanded);
+        assert!(!stop.is_cancelled() && ui.pending.is_empty());
+        assert!(ui.draft.is_empty());
+        assert_eq!(
+            (ui.history_published_items, ui.pending_history_target),
+            (7, 7)
+        );
+        assert!(ui.pending_history_items.is_empty() && ui.pending_history_banner.is_none());
+        assert!(ui.status.contains("native history unchanged"));
+        assert!(ui.output_settings("unknown").is_err());
+        assert_eq!(ui.output_detail, crate::tool_output::OutputDetail::Expanded);
+        ui.output_settings("").unwrap();
+        assert!(
+            ui.notices
+                .last()
+                .unwrap()
+                .contains("Inline progress stays compact")
+        );
+        ui.output_settings("compact").unwrap();
+        assert_eq!(ui.output_detail, crate::tool_output::OutputDetail::Compact);
     }
 
     #[test]

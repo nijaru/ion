@@ -29,18 +29,23 @@ pub(crate) fn recorded(activity: &TranscriptActivity) -> Option<RecordedDiff<'_>
     })
 }
 
-pub(crate) fn render_preview(
+pub(crate) fn render(
     rows: &mut Vec<Line<'static>>,
     activity: &TranscriptActivity,
     prefix: &str,
     width: usize,
+    detail: crate::tool_output::OutputDetail,
 ) {
     let Some(diff) = recorded(activity) else {
         return;
     };
     const PREVIEW_LINES: usize = 8;
-    let mut source = diff.text.lines().skip(2);
-    let lines = source.by_ref().take(PREVIEW_LINES).collect::<Vec<_>>();
+    let expanded = detail == crate::tool_output::OutputDetail::Expanded;
+    let mut source = diff.text.lines().skip(if expanded { 0 } else { 2 });
+    let lines = source
+        .by_ref()
+        .take(if expanded { usize::MAX } else { PREVIEW_LINES })
+        .collect::<Vec<_>>();
     let more = source.next().is_some();
     let footer = if diff.truncated {
         Some("… diff capture truncated · Ctrl-O")
@@ -61,8 +66,11 @@ pub(crate) fn render_preview(
             _ => Style::default().add_modifier(Modifier::DIM),
         };
         // Bound physical preview rows; long source lines remain in inspection.
-        let visible =
-            crate::display_text::fit_line(text, width.saturating_sub(prefix.width() + 2).max(1));
+        let visible = if expanded {
+            (*text).to_owned()
+        } else {
+            crate::display_text::fit_line(text, width.saturating_sub(prefix.width() + 2).max(1))
+        };
         crate::display_text::push_styled(
             rows,
             &format!("{prefix}{}", if last { "└ " } else { "│ " }),
@@ -122,7 +130,13 @@ mod tests {
         };
         for width in 1..=40 {
             let mut rows = vec![];
-            render_preview(&mut rows, &activity, "│ ", width);
+            render(
+                &mut rows,
+                &activity,
+                "│ ",
+                width,
+                crate::tool_output::OutputDetail::Compact,
+            );
             assert!(rows.len() <= 9, "width {width}: {} rows", rows.len());
             assert!(
                 rows.iter()
@@ -139,6 +153,21 @@ mod tests {
                     .any(|span| span.style.fg == Some(Color::Green))
             }));
         }
+        let mut expanded = Vec::new();
+        render(
+            &mut expanded,
+            &activity,
+            "  ",
+            80,
+            crate::tool_output::OutputDetail::Expanded,
+        );
+        let expanded = expanded
+            .iter()
+            .map(ToString::to_string)
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(expanded.contains("--- old") && expanded.contains("+++ new"));
+        assert!(expanded.contains("diff capture truncated") && !expanded.contains('\u{1b}'));
         let history = TranscriptProjection {
             items: vec![TranscriptItem::ActivityGroup(ActivityGroup {
                 turn: 1,

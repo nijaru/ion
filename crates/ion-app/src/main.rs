@@ -26,6 +26,7 @@ mod external_editor;
 mod markdown;
 mod rpc;
 mod terminal_client;
+mod tool_output;
 mod transcript;
 mod transcript_detail;
 mod transcript_render;

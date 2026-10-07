@@ -1,5 +1,5 @@
 //! Pure compact rendering for the typed coding transcript.
-use crate::display_text::fit_line;
+use crate::{display_text::fit_line, tool_output::OutputDetail};
 use ion_core::{
     ActivityGroup, ActivityResult, ActivityState, ToolActivityKind, TranscriptActivity,
     TranscriptItem, TranscriptMessage, TranscriptPart, TranscriptProjection, UserShellActivity,
@@ -38,7 +38,11 @@ pub(super) fn state_label(state: ActivityState) -> &'static str {
 
 const MAX_COALESCED_SUBJECTS: usize = 3;
 
-pub fn rows(projection: &TranscriptProjection, width: usize) -> Vec<Line<'static>> {
+pub fn rows(
+    projection: &TranscriptProjection,
+    width: usize,
+    detail: OutputDetail,
+) -> Vec<Line<'static>> {
     let width = width.max(1);
     let mut rows = Vec::new();
     for item in &projection.items {
@@ -48,8 +52,8 @@ pub fn rows(projection: &TranscriptProjection, width: usize) -> Vec<Line<'static
         match item {
             TranscriptItem::User(message) => render_message(&mut rows, message, true, width),
             TranscriptItem::Assistant(message) => render_message(&mut rows, message, false, width),
-            TranscriptItem::ActivityGroup(group) => render_group(&mut rows, group, width),
-            TranscriptItem::UserShell(shell) => render_shell(&mut rows, shell, width),
+            TranscriptItem::ActivityGroup(group) => render_group(&mut rows, group, width, detail),
+            TranscriptItem::UserShell(shell) => render_shell(&mut rows, shell, width, detail),
         }
     }
     while rows.last().is_some_and(|row| row.width() == 0) {
@@ -68,7 +72,9 @@ pub(super) fn live_rows(
     if budget == 0 {
         return Vec::new();
     }
-    let rendered = rows(projection, width);
+    // Expanded capture is for publication/fullscreen. Inline progress stays a
+    // compact semantic preview instead of allocating a whole capture each tick.
+    let rendered = rows(projection, width, OutputDetail::Compact);
     if rendered.len() <= budget {
         return rendered;
     }
@@ -184,7 +190,7 @@ pub(super) fn live_rows(
             }
             TranscriptItem::UserShell(shell) => {
                 let mut preview = Vec::new();
-                render_shell(&mut preview, shell, width);
+                render_shell(&mut preview, shell, width, OutputDetail::Compact);
                 preview.truncate(remaining);
                 selected.extend(preview);
             }
@@ -202,7 +208,7 @@ fn render_current_group(
     budget: usize,
     pinned_index: Option<usize>,
 ) {
-    let display = compact_activities(&group.activities);
+    let display = display_activities(&group.activities, OutputDetail::Compact);
     let capacity = budget.saturating_sub(1);
     let mut indices = (0..display.len())
         .filter(|&index| Some(display[index].source.start) != pinned_index)
@@ -314,7 +320,12 @@ pub(super) fn render_source_message(
     }
 }
 
-fn render_shell(rows: &mut Vec<Line<'static>>, shell: &UserShellActivity, width: usize) {
+fn render_shell(
+    rows: &mut Vec<Line<'static>>,
+    shell: &UserShellActivity,
+    width: usize,
+    detail: OutputDetail,
+) {
     let prefix = if shell.exclude_from_context {
         "› !!"
     } else {
@@ -336,29 +347,7 @@ fn render_shell(rows: &mut Vec<Line<'static>>, shell: &UserShellActivity, width:
         }
         return;
     };
-    for stream in ["stdout", "stderr"] {
-        if let Some(text) = output[stream].as_str().filter(|text| !text.is_empty()) {
-            let count = text.lines().count();
-            if count > 4 {
-                push_wrapped(
-                    rows,
-                    &format!("  … {} earlier {stream} lines · Ctrl-O", count - 4),
-                    width,
-                );
-            }
-            for line in text.lines().skip(count.saturating_sub(4)) {
-                push_prefixed(rows, &format!("  {stream}: "), "    ", line, width);
-            }
-        }
-        if output[format!("{stream}_truncated")].as_bool() == Some(true) {
-            let capture = output[format!("{stream}_full_path")].as_str();
-            let note = capture.map_or_else(
-                || format!("  {stream} truncated/incomplete · Ctrl-O"),
-                |path| format!("  {stream} truncated/incomplete · capture: {path} · Ctrl-O"),
-            );
-            push_wrapped(rows, &note, width);
-        }
-    }
+    crate::tool_output::render_command(rows, output, "  ", width, detail, 4);
     let mut state = if let Some(signal) = output["signal"].as_i64() {
         format!("signal {signal}")
     } else if let Some(code) = output["exit_code"].as_i64() {
@@ -422,22 +411,29 @@ impl DisplayActivity {
     }
 }
 
-fn render_group(rows: &mut Vec<Line<'static>>, group: &ActivityGroup, width: usize) {
+fn render_group(
+    rows: &mut Vec<Line<'static>>,
+    group: &ActivityGroup,
+    width: usize,
+    detail: OutputDetail,
+) {
     if group.activities.is_empty() {
         return;
     }
-    let display = compact_activities(&group.activities);
+    let display = display_activities(&group.activities, detail);
 
     if group.activities.len() == 1 {
         let item = &display[0];
         push_activity(rows, "• ", "  ", item, width);
         if group.activities[0].children.is_empty()
+            && group.activities[0].activity.kind != ToolActivityKind::Command
             && let Some(detail) = &item.detail
         {
             push_detail(rows, "  └ ", "    ", detail, width);
         }
-        crate::edit_diff::render_preview(rows, &group.activities[0], "  ", width);
-        render_children(rows, &group.activities[0].children, "  ", width);
+        crate::tool_output::render_activity(rows, &group.activities[0], "  ", width, detail);
+        crate::edit_diff::render(rows, &group.activities[0], "  ", width, detail);
+        render_children(rows, &group.activities[0].children, "  ", width, detail);
         return;
     }
 
@@ -451,6 +447,7 @@ fn render_group(rows: &mut Vec<Line<'static>>, group: &ActivityGroup, width: usi
         let branch = if last { "└ " } else { "├ " };
         push_activity(rows, branch, if last { "  " } else { "│ " }, item, width);
         if group.activities[item.source.start].children.is_empty()
+            && group.activities[item.source.start].activity.kind != ToolActivityKind::Command
             && let Some(detail) = &item.detail
         {
             let prefix = if last { "  └ " } else { "│ └ " };
@@ -462,17 +459,35 @@ fn render_group(rows: &mut Vec<Line<'static>>, group: &ActivityGroup, width: usi
                 width,
             );
         }
-        crate::edit_diff::render_preview(
+        if item.source.len() == 1 {
+            crate::tool_output::render_activity(
+                rows,
+                &group.activities[item.source.start],
+                if last { "  " } else { "│ " },
+                width,
+                detail,
+            );
+        } else {
+            crate::tool_output::render_folded_reads(
+                rows,
+                &group.activities[item.source.clone()],
+                if last { "  " } else { "│ " },
+                width,
+            );
+        }
+        crate::edit_diff::render(
             rows,
             &group.activities[item.source.start],
             if last { "  " } else { "│ " },
             width,
+            detail,
         );
         render_children(
             rows,
             &group.activities[item.source.start].children,
             if last { "  " } else { "│ " },
             width,
+            detail,
         );
     }
 }
@@ -482,8 +497,9 @@ fn render_children(
     children: &[TranscriptActivity],
     prefix: &str,
     width: usize,
+    detail: OutputDetail,
 ) {
-    let display = compact_activities(children);
+    let display = display_activities(children, detail);
     for (index, item) in display.iter().enumerate() {
         let last = index + 1 == display.len();
         let continuation = format!("{prefix}{}", if last { "  " } else { "│ " });
@@ -494,8 +510,32 @@ fn render_children(
             item,
             width,
         );
-        crate::edit_diff::render_preview(rows, &children[item.source.start], &continuation, width);
-        if let Some(detail) = &item.detail {
+        crate::edit_diff::render(
+            rows,
+            &children[item.source.start],
+            &continuation,
+            width,
+            detail,
+        );
+        if item.source.len() == 1 {
+            crate::tool_output::render_activity(
+                rows,
+                &children[item.source.start],
+                &continuation,
+                width,
+                detail,
+            );
+        } else {
+            crate::tool_output::render_folded_reads(
+                rows,
+                &children[item.source.clone()],
+                &continuation,
+                width,
+            );
+        }
+        if children[item.source.start].activity.kind != ToolActivityKind::Command
+            && let Some(detail) = &item.detail
+        {
             push_detail(
                 rows,
                 &format!("{continuation}└ "),
@@ -572,7 +612,17 @@ fn group_header<'a>(activities: impl Iterator<Item = &'a TranscriptActivity>) ->
     format!("• {}", parts.join(" · "))
 }
 
-fn compact_activities(activities: &[TranscriptActivity]) -> Vec<DisplayActivity> {
+fn display_activities(
+    activities: &[TranscriptActivity],
+    detail: OutputDetail,
+) -> Vec<DisplayActivity> {
+    if detail == OutputDetail::Expanded {
+        return activities
+            .iter()
+            .enumerate()
+            .map(|(index, activity)| display_activity(activity, index))
+            .collect();
+    }
     let mut display = Vec::new();
     let mut index = 0;
     while index < activities.len() {
@@ -984,7 +1034,7 @@ fn push_detail(
 mod tests {
     use super::*;
     fn plain_rows(projection: &TranscriptProjection, width: usize) -> Vec<String> {
-        super::rows(projection, width)
+        super::rows(projection, width, OutputDetail::Compact)
             .iter()
             .map(ToString::to_string)
             .collect()
@@ -1000,6 +1050,118 @@ mod tests {
             .collect()
     }
     use ion_core::{ToolActivity, TranscriptActivity};
+
+    #[test]
+    fn output_modes_disclose_ranges_streams_and_uncoalesced_observations() {
+        let mut read = activity(
+            "r1",
+            ToolActivityKind::Read,
+            "data.txt",
+            ActivityState::Completed,
+            Some(
+                serde_json::json!({"content":"**literal**\nsecond\nthird\nFOURTH_READ", "offset":64, "next_offset":100, "file_bytes":256, "has_more":true}),
+            ),
+        );
+        read.result.as_mut().unwrap().projection =
+            ion_core::ToolResultProjection::RequestLimitExceeded;
+        let second = activity(
+            "r2",
+            ToolActivityKind::Read,
+            "other.txt",
+            ActivityState::Completed,
+            Some(
+                serde_json::json!({"content":"SECOND_READ", "offset":4, "next_offset":15, "file_bytes":15, "has_more":false}),
+            ),
+        );
+        let command = activity(
+            "c",
+            ToolActivityKind::Command,
+            "test",
+            ActivityState::Failed,
+            Some(
+                serde_json::json!({"exit_code":7, "stdout":"FIRST_STDOUT\ntwo\nthree\nLAST_STDOUT", "stderr":"diagnostic\u{1b}[2J", "stdout_truncated":true, "stdout_full_path":"/capture/stdout"}),
+            ),
+        );
+        let single = TranscriptProjection {
+            items: vec![TranscriptItem::ActivityGroup(ActivityGroup {
+                turn: 1,
+                open: false,
+                activities: vec![read.clone(), command.clone()],
+            })],
+        };
+        let compact = rows(&single, 120, OutputDetail::Compact)
+            .iter()
+            .map(ToString::to_string)
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(
+            compact.contains("**literal**") && !compact.contains("FOURTH_READ"),
+            "{compact}"
+        );
+        assert!(compact.contains("file continues beyond this recorded range"));
+        assert!(compact.contains("bytes 64..100 of 256") && compact.contains("earlier file bytes"));
+        assert!(compact.contains("LAST_STDOUT") && !compact.contains("FIRST_STDOUT"));
+        assert!(
+            compact.contains("stderr")
+                && compact.contains("diagnostic�[2J")
+                && !compact.contains('\u{1b}')
+        );
+        assert!(
+            compact.contains("1 earlier stdout lines") && compact.contains("1 more content lines")
+        );
+        assert!(compact.contains("not shared with model") && compact.contains("Exited 7"));
+        assert!(compact.contains("/capture/stdout") && compact.contains("truncated/incomplete"));
+        let grouped = TranscriptProjection {
+            items: vec![TranscriptItem::ActivityGroup(ActivityGroup {
+                turn: 1,
+                open: false,
+                activities: vec![
+                    read,
+                    second,
+                    activity(
+                        "r3",
+                        ToolActivityKind::Read,
+                        "third.txt",
+                        ActivityState::Completed,
+                        Some(serde_json::json!({"content":"THIRD_READ"})),
+                    ),
+                    command,
+                ],
+            })],
+        };
+        let folded = plain_rows(&grouped, 120).join("\n");
+        assert!(!folded.contains("SECOND_READ"));
+        assert!(folded.contains("2 read outputs folded"));
+        assert!(
+            folded.contains("other.txt: content · bytes 4..15 of 15")
+                && folded.contains("earlier bytes not recorded")
+        );
+        for width in [1, 8, 24, 120] {
+            let expanded = rows(&grouped, width, OutputDetail::Expanded);
+            assert!(expanded.iter().all(|row| row.width() <= width));
+            assert!(
+                expanded
+                    .iter()
+                    .all(|row| !row.to_string().contains('\u{1b}'))
+            );
+        }
+        let expanded = rows(&grouped, 120, OutputDetail::Expanded)
+            .iter()
+            .map(ToString::to_string)
+            .collect::<Vec<_>>()
+            .join("\n");
+        for text in [
+            "FOURTH_READ",
+            "SECOND_READ",
+            "FIRST_STDOUT",
+            "**literal**",
+            "not shared with model",
+            "truncated/incomplete",
+        ] {
+            assert!(expanded.contains(text), "{expanded}");
+        }
+        assert!(!expanded.contains("earlier stdout lines"));
+    }
 
     #[test]
     fn activity_styles_follow_typed_state_and_wrapping_keeps_the_tree() {
@@ -1026,7 +1188,7 @@ mod tests {
                 ],
             })],
         };
-        let rows = super::rows(&projection, 24);
+        let rows = super::rows(&projection, 24, OutputDetail::Compact);
         let read = rows
             .iter()
             .position(|row| row.to_string().starts_with("├ Reading"))
@@ -1305,7 +1467,8 @@ mod tests {
         assert!(rendered.contains("├ Read src/a.rs, src/b.rs, src/c.rs"));
         assert!(rendered.contains("├ Edited src/parser.rs · 2 replacements"));
         assert!(rendered.contains("└ Ran cargo test"));
-        assert!(rendered.contains("  └ test result: ok. 148 passed"));
+        assert!(rendered.contains("  └ stdout"));
+        assert!(rendered.contains("test result: ok. 148 passed"));
         assert_eq!(rendered.matches("Read src/").count(), 1);
     }
 
@@ -1356,7 +1519,8 @@ mod tests {
         };
         let rendered = plain_rows(&projection, 80).join("\n");
         assert!(rendered.contains("• Exited 1 cargo test"));
-        assert!(rendered.contains("└ compile failed"));
+        assert!(rendered.contains("└ stderr"));
+        assert!(rendered.contains("compile failed"));
     }
 
     #[test]

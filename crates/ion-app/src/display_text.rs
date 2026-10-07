@@ -133,6 +133,11 @@ fn wrap_line(
 }
 
 pub(super) fn fit_line(text: &str, width: usize) -> String {
+    fit_line_with_status(text, width).0
+}
+
+/// The flag describes omitted source, not control replacement or a literal ellipsis.
+pub(super) fn fit_line_with_status(text: &str, width: usize) -> (String, bool) {
     let width = width.max(1);
     let text = text
         .graphemes(true)
@@ -149,10 +154,10 @@ pub(super) fn fit_line(text: &str, width: usize) -> String {
         })
         .is_some()
     {
-        return text;
+        return (text, false);
     }
     if width == 1 {
-        return "…".into();
+        return ("…".into(), true);
     }
     let target = width - 1;
     let mut out = String::new();
@@ -166,7 +171,7 @@ pub(super) fn fit_line(text: &str, width: usize) -> String {
         used += size;
     }
     out.push('…');
-    out
+    (out, true)
 }
 
 #[cfg(test)]

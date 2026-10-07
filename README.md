@@ -88,8 +88,8 @@ rows the active composer/status actually need. Related tool calls are rendered
 as semantic activity groups with a restrained tree (`•`, `├`, `└`) instead of
 raw tool-call/result protocol rows. Semantic emphasis and terminal-palette
 colors distinguish active work, mutations and exceptions without colored
-background cards; labels still carry the execution state. Long action and
-output-preview rows wrap under their tree branch. Styles survive native
+background cards; labels still carry the execution state. Long action rows
+wrap under their tree branch; compact output lines are shortened to fit. Styles survive native
 publication as well as live/fullscreen rendering. Repeated successful observation
 work can coalesce, while edits, writes, commands and exceptional outcomes remain
 explicit.
@@ -106,10 +106,22 @@ Tables, syntax highlighting and other Markdown extensions are not implemented.
 Successful native edits record a unified patch from the text read and the
 replacement written, alongside both digests. The patch capture is limited to
 64 KiB and explicitly marked when truncated; it is not a later filesystem diff.
-The transcript previews up to eight patch rows with addition/removal styles;
+Compact output previews up to eight patch rows with addition/removal styles;
 long lines and additional rows are omitted with an ellipsis. Ctrl-O or `/tool N`
 shows the full recorded capture, including truncation, without interpreting its
 contents as Markdown. Write-file diffs are not implemented.
+
+`/settings` shows the current tool-output presentation; `/settings compact`
+(the default) or `/settings expanded` changes it without changing model behavior.
+Compact shows the first three read-content lines and the last three lines of
+both command streams (four for direct shell), with explicit omission notices.
+Expanded shows all recorded read/command output and edit capture, and separates
+successful observations instead of coalescing them. Neither mode fetches omitted
+file ranges or capture artifacts; capture truncation stays visible. Tool text is
+literal and control-safe, not Markdown. The choice lasts for this terminal only
+and applies to fullscreen and future inline publication. Existing native history
+is not rewritten or republished; the bounded inline progress view stays compact.
+Ctrl-O always retains source inspection. Thinking visibility is not yet implemented.
 
 Inline remains the default, but persistent fullscreen is also available with
 `--tui-mode fullscreen`; use `/tui inline` or `/tui fullscreen` to switch

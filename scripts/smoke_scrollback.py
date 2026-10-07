@@ -39,14 +39,16 @@ with tempfile.TemporaryDirectory(prefix="ion-scrollback-") as temporary:
         def do_POST(self):
             body = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
             requests.append(body)
-            if len(requests) == 1:
+            if len(requests) in (1, 3):
                 calls = [
                     ("read", {"path": "data.txt"}),
                     ("edit", {"path": "data.txt", "edits": [{"old_text": "observed data", "new_text": "UPDATED_SNAPSHOT"}]}),
-                    ("exec", {"command": "printf 'COMMAND_OUTPUT_%s\\n' ONCE"}),
+                    ("exec", {"command": "printf 'FIRST_%s\\nmid-one\\nmid-two\\nCOMMAND_OUTPUT_%s\\n' HIDDEN ONCE"}),
+                ] if len(requests) == 1 else [
+                    ("exec", {"command": "printf 'FUTURE_%s\\nmid-one\\nmid-two\\nfuture-last\\n' FIRST"}),
                 ]
                 delta = {
-                    "content": "NARRATIVE_ONCE",
+                    "content": "NARRATIVE_ONCE" if len(requests) == 1 else "FUTURE_NARRATIVE",
                     "tool_calls": [
                         {"index": index, "id": f"call-{index}", "type": "function",
                          "function": {"name": name, "arguments": json.dumps(arguments)}}
@@ -55,11 +57,11 @@ with tempfile.TemporaryDirectory(prefix="ion-scrollback-") as temporary:
                 }
                 finish = "tool_calls"
             else:
-                assert len(requests) == 2, "unexpected additional model request"
+                assert len(requests) in (2, 4), "unexpected additional model request"
                 # Leave the completed calls visible in the mutable surface
                 # before the final observation is committed and published.
                 time.sleep(0.75)
-                delta, finish = {"content": "FINAL_ONCE"}, "stop"
+                delta, finish = {"content": "FINAL_ONCE" if len(requests) == 2 else "FUTURE_DONE"}, "stop"
             payload = b"data: " + json.dumps({
                 "id": "scrollback", "model": "smoke-model",
                 "choices": [{"index": 0, "delta": delta, "finish_reason": finish}],
@@ -93,7 +95,7 @@ with tempfile.TemporaryDirectory(prefix="ion-scrollback-") as temporary:
         launcher.chmod(0o700)
         tmux("new-session", "-d", "-s", "ion", "-x", "100", "-y", "30",
              "-c", str(workspace), str(launcher))
-        deadline = time.monotonic() + 15
+        deadline = time.monotonic() + 35
         while "›" not in tmux("capture-pane", "-p", "-t", "ion"):
             assert time.monotonic() < deadline, "inline composer did not start"
             time.sleep(0.02)
@@ -122,6 +124,33 @@ with tempfile.TemporaryDirectory(prefix="ion-scrollback-") as temporary:
         assert "-observed data" in detail and "+UPDATED_SNAPSHOT" in detail, detail
         tmux("send-keys", "-t", "ion", "Escape")
         time.sleep(0.1)
+        check_history()
+
+        def command(text, expected):
+            tmux("send-keys", "-t", "ion", "-l", text)
+            tmux("send-keys", "-t", "ion", "Enter")
+            while expected not in tmux("capture-pane", "-p", "-t", "ion"):
+                assert time.monotonic() < deadline, f"command did not complete: {text}"
+                time.sleep(0.02)
+
+        assert "FIRST_HIDDEN" not in tmux("capture-pane", "-p", "-t", "ion", "-S", "-")
+        command("/settings expanded", "Tool output: expanded")
+        check_history()
+        tmux("resize-window", "-t", "ion", "-x", "100", "-y", "60")
+        command("/tui fullscreen", "FIRST_HIDDEN")
+        assert '--- "data.txt"' in tmux("capture-pane", "-p", "-t", "ion"), "expanded diff header missing"
+        command("/settings compact", "Tool output: compact")
+        time.sleep(0.1)
+        assert "FIRST_HIDDEN" not in tmux("capture-pane", "-p", "-t", "ion"), "compact view exposed omitted output"
+        command("/tui inline", "native terminal scrollback")
+        check_history()
+        assert "FIRST_HIDDEN" not in tmux("capture-pane", "-p", "-t", "ion", "-S", "-"), "settings republished old native output"
+        command("/settings expanded", "Tool output: expanded")
+        command("NEXT_INPUT: run a follow-up command", "FUTURE_DONE")
+        time.sleep(0.1)
+        history = tmux("capture-pane", "-p", "-t", "ion", "-S", "-")
+        assert history.count("FUTURE_FIRST") == 1, "expanded future publication omitted or duplicated recorded output"
+        assert len(requests) == 4, "settings changed model requests"
         check_history()
         tmux("resize-window", "-t", "ion", "-x", "60", "-y", "20")
         time.sleep(0.15)

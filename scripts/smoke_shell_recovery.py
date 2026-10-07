@@ -125,8 +125,10 @@ def qualify(case, excluded=False):
                 wait_until(lambda: "› ".encode() in output and b"external effect unknown" in output)
             # Explicit NEW shell admission closes the interruption, not replays it.
             # Result-write faults recover in the same UI; crash cases reopen.
-            os.write(master, b"!printf RECOVERY_DONE\r")
-            wait_until(lambda: b"stdout: RECOVERY_DONE" in output and b"Shell finished" in output)
+            # Split the marker in the command so its presence proves output
+            # disclosure, not merely the echoed command or composer.
+            os.write(master, b"!printf 'RECOVERY_%s' DONE\r")
+            wait_until(lambda: b"RECOVERY_DONE" in output and b"Shell finished" in output)
             assert ("Shell command: " + command).encode() not in output, "previous shell error remained in the new operation's notices"
             os.write(master, b"/exit\r")
             wait_until(lambda: child.poll() is not None)
