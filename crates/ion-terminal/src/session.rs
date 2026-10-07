@@ -7,6 +7,7 @@ use crossterm::event::{
     DisableBracketedPaste, DisableMouseCapture, EnableBracketedPaste, EnableMouseCapture,
     KeyboardEnhancementFlags, PopKeyboardEnhancementFlags, PushKeyboardEnhancementFlags,
 };
+use crossterm::style::{Attribute, SetAttribute};
 use crossterm::terminal::{EnterAlternateScreen, LeaveAlternateScreen};
 use crossterm::{SynchronizedUpdate, execute, terminal};
 
@@ -219,6 +220,13 @@ impl TerminalSession {
                 Err(_) => {}
             }
         }
+        // A modal or failed frame may have hidden the cursor or left styling
+        // active. Teardown owns these too; it cannot depend on Screen::finish.
+        if let Err(err) = restore_cursor_and_style(&mut self.output)
+            && first_error.is_none()
+        {
+            first_error = Some(err);
+        }
         if let Err(err) = terminal::disable_raw_mode()
             && first_error.is_none()
         {
@@ -290,6 +298,12 @@ impl Drop for TerminalSession {
     }
 }
 
+fn restore_cursor_and_style(out: &mut impl Write) -> io::Result<()> {
+    let cursor = execute!(out, Show);
+    let style = execute!(out, SetAttribute(Attribute::Reset));
+    cursor.and(style)
+}
+
 fn write_emergency_restore(out: &mut impl Write) -> io::Result<()> {
     execute!(
         out,
@@ -297,9 +311,8 @@ fn write_emergency_restore(out: &mut impl Write) -> io::Result<()> {
         PopKeyboardEnhancementFlags,
         DisableBracketedPaste,
         LeaveAlternateScreen,
-        Show
     )?;
-    out.write_all(b"\x1b[0m")?;
+    restore_cursor_and_style(out)?;
     out.flush()
 }
 

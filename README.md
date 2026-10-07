@@ -75,10 +75,10 @@ complete Session remains available through inspect/export and tool detail.
 Publication uses available terminal rows before scrolling. Ordinary redraw and
 resize do not publish live rows; terminal-native reflow remains emulator-owned.
 The active operation and cancellation status remain visible alongside steering,
-queue and detail-close notices. If terminal rendering fails during a Turn, shell
-or compaction, Ion requests cancellation and awaits the operation before returning
-the error. Inspect the
-Session for saved outcomes when the terminal can no longer display them.
+queue and detail-close notices. On terminal input or rendering failure during a
+Turn, shell or compaction, Ion cancels and awaits started work, then exits without
+admitting queued prompts. Inspect the Session for saved outcomes when the
+terminal can no longer display them.
 During long Turns, the inline region keeps queued/running/exception counts,
 the latest exception and a rooted preview of current work. Execution-start
 progress changes only the corresponding committed call; later admitted calls

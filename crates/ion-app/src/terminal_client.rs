@@ -287,7 +287,7 @@ pub async fn chat(init: ChatInit) -> Result<()> {
                         command.clone(),
                         exclude_from_context,
                     )
-                    .await
+                    .await?
                     {
                         ui.status = format!(
                             "Shell operation failed: {error:#}; inspect the Session and working directory before retrying\nShell command: {command}"
@@ -332,7 +332,7 @@ pub async fn chat(init: ChatInit) -> Result<()> {
                             &mut input,
                             &mut ui,
                         )
-                        .await
+                        .await?
                         {
                             Ok(()) => ui.status = "Draft returned from editor".into(),
                             Err(error) => {
@@ -613,12 +613,14 @@ fn last_committed_answer(view: &SessionView) -> Result<String> {
         .context("no completed assistant answer to copy")
 }
 
+// The outer result owns terminal lifecycle; only the editor's own failure is
+// recoverable. Never resume admission after losing input or physical output.
 async fn edit_draft_in_terminal(
     terminal: &mut TerminalSession,
     screen: &mut Screen,
     input: &mut InputStream,
     ui: &mut Frontend,
-) -> Result<()> {
+) -> Result<Result<()>> {
     input
         .suspend()
         .context("release terminal input for editor")?;
@@ -629,10 +631,10 @@ async fn edit_draft_in_terminal(
     *input = terminal
         .input()
         .context("resume terminal input after editor")?;
-    let edited = edited?;
-    ui.draft = edited;
-    ui.cursor = ui.draft.len();
-    Ok(())
+    Ok(edited.map(|edited| {
+        ui.draft = edited;
+        ui.cursor = ui.draft.len();
+    }))
 }
 
 fn apply_fork(
@@ -1189,7 +1191,7 @@ async fn run_user_shell(
     runtime: &ion_host::SessionBinding,
     command: String,
     exclude_from_context: bool,
-) -> Result<()> {
+) -> Result<Result<()>> {
     let stop = CancellationToken::new();
     let mut tick = interval(Duration::from_millis(50));
     let mut input_ended = false;
@@ -1235,23 +1237,29 @@ async fn run_user_shell(
         }
     };
     finish_pending_clipboard_paste(ui).await;
-    let view = runtime.session().view()?;
-    ui.load_history(runtime.session(), &view);
-    ui.scroll = 0;
-    let output = output?;
-    ui.status = if output.is_error {
-        "Shell finished with an error"
-    } else {
-        "Shell finished"
-    }
-    .into();
+    // Terminal failure is fatal even when Session inspection or shell settlement
+    // also failed. The operation has settled; queued input has no new authority.
     if let Some(error) = output_error {
         return Err(error.context("terminal output failed after operation settlement"));
     }
     if input_ended {
-        ui.status = "Terminal input ended after the shell result was saved".into();
+        return Err(anyhow::anyhow!(
+            "terminal input ended during the shell operation"
+        ));
     }
-    Ok(())
+    Ok((|| {
+        let view = runtime.session().view()?;
+        ui.load_history(runtime.session(), &view);
+        ui.scroll = 0;
+        let output = output?;
+        ui.status = if output.is_error {
+            "Shell finished with an error"
+        } else {
+            "Shell finished"
+        }
+        .into();
+        Ok(())
+    })())
 }
 
 async fn run_turn(

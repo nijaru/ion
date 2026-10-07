@@ -6,6 +6,7 @@ import os
 import pty
 import select
 import signal
+import sqlite3
 import struct
 import subprocess
 import tempfile
@@ -28,36 +29,40 @@ def observed_shells(view):
     return [(admissions[entry["admission_entry"]], entry["outcome"]) for entry in settlements]
 
 
-def output_failure_settles_operation(workspace, env, mode, coding):
-    """Keep input alive while failing only the actual terminal output device."""
-    workspace = workspace / ("output-failure-turn" if coding else "output-failure-shell")
+def terminal_failure_settles_operation(workspace, env, mode, coding, fault):
+    """A queued prompt cannot start after a terminal device disconnects."""
+    workspace = workspace / f"{fault}-failure-{'turn' if coding else 'shell'}"
     workspace.mkdir()
     session = workspace / "session.sqlite"
     command = "printf '%s\\n' $$ > render.pid; printf 'CAPTURED_BEFORE_RENDER_FAILURE\\n'; touch render.ready; exec sleep 30"
     server = None
     thread = None
     requests = 0
-    if coding:
-        class Provider(BaseHTTPRequestHandler):
-            def do_POST(self):
-                nonlocal requests
-                requests += 1
-                self.rfile.read(int(self.headers["Content-Length"]))
-                self.send_response(200)
-                self.send_header("Content-Type", "text/event-stream")
-                self.end_headers()
+    class Provider(BaseHTTPRequestHandler):
+        def do_POST(self):
+            nonlocal requests
+            requests += 1
+            self.rfile.read(int(self.headers["Content-Length"]))
+            self.send_response(200)
+            self.send_header("Content-Type", "text/event-stream")
+            self.end_headers()
+            if coding and requests == 1:
                 delta = {"tool_calls": [{"index": 0, "id": "render-call", "type": "function", "function": {"name": "exec", "arguments": json.dumps({"command": command, "timeout_ms": 120000})}}]}
-                body = {"id": "render", "choices": [{"index": 0, "delta": delta, "finish_reason": "tool_calls"}]}
-                self.wfile.write(b"data: " + json.dumps(body).encode() + b"\n\ndata: [DONE]\n\n")
-                self.wfile.flush()
+                finish = "tool_calls"
+            else:
+                delta = {"content": "Done without tools."}
+                finish = "stop"
+            body = {"id": "render", "choices": [{"index": 0, "delta": delta, "finish_reason": finish}]}
+            self.wfile.write(b"data: " + json.dumps(body).encode() + b"\n\ndata: [DONE]\n\n")
+            self.wfile.flush()
 
-            def log_message(self, *_args):
-                pass
+        def log_message(self, *_args):
+            pass
 
-        server = ThreadingHTTPServer(("127.0.0.1", 0), Provider)
-        thread = threading.Thread(target=server.serve_forever, daemon=True)
-        thread.start()
-        subprocess.run([binary, "use", "smoke", "shell-model", "--endpoint", f"http://127.0.0.1:{server.server_port}/v1/chat/completions", "--wire", "chat-completions"], env=env, capture_output=True, check=True)
+    server = ThreadingHTTPServer(("127.0.0.1", 0), Provider)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    subprocess.run([binary, "use", "smoke", "shell-model", "--endpoint", f"http://127.0.0.1:{server.server_port}/v1/chat/completions", "--wire", "chat-completions"], env=env, capture_output=True, check=True)
     input_master, input_slave = pty.openpty()
     output_master, output_slave = pty.openpty()
     for slave in (input_slave, output_slave):
@@ -66,6 +71,9 @@ def output_failure_settles_operation(workspace, env, mode, coding):
     def attach_input_terminal():
         os.setsid()
         fcntl.ioctl(input_slave, termios.TIOCSCTTY, 0)
+        if fault == "input":
+            # Exercise Ion's input lifecycle rather than a kernel SIGHUP exit.
+            signal.signal(signal.SIGHUP, signal.SIG_IGN)
 
     child = subprocess.Popen([binary, "--cwd", workspace, "--session", session, "--tui-mode", mode, "chat"], env=env, stdin=input_slave, stdout=output_slave, stderr=subprocess.PIPE, preexec_fn=attach_input_terminal)
     os.close(input_slave)
@@ -87,11 +95,57 @@ def output_failure_settles_operation(workspace, env, mode, coding):
             if select.select([output_master], [], [], 0.05)[0]:
                 os.read(output_master, 65536)
         pid = int((workspace / "render.pid").read_text())
-        os.close(output_master)
-        output_master = None
-        # Force a changed live frame; an unchanged idle frame need not write.
-        os.write(input_master, b"draft after output failure")
-        assert child.wait(timeout=8) != 0, "output failure was reported as success"
+        os.write(input_master, b"Do not run another command." + (b"\x1b[13;3u" if coding else b"\r"))
+        queued = bytearray()
+        while b"1 follow-up(s) queued" not in queued:
+            assert time.monotonic() < deadline, "follow-up was not admitted to the client queue"
+            if select.select([output_master], [], [], 0.05)[0]:
+                queued.extend(os.read(output_master, 65536))
+        saved_entry = None
+        if fault == "output-corrupt-view":
+            # The live writer retains its state, but passive history inspection
+            # now fails. That error must not mask the terminal's fatal fault.
+            with sqlite3.connect(session) as connection:
+                saved_entry = connection.execute("SELECT seq, body FROM entries ORDER BY seq LIMIT 1").fetchone()
+                connection.execute("UPDATE entries SET body = ? WHERE seq = ?", (b"invalid entry", saved_entry[0]))
+        if fault.startswith("output"):
+            os.close(output_master)
+            output_master = None
+            # Force a changed live frame; an unchanged idle frame need not write.
+            os.write(input_master, b"draft after output failure")
+        else:
+            os.write(input_master, b"\x0f")
+            modal = bytearray()
+            while b"Conversation" not in modal or b"\x1b[?25l" not in modal:
+                assert time.monotonic() < deadline, "details did not hide the terminal cursor"
+                if select.select([output_master], [], [], 0.05)[0]:
+                    modal.extend(os.read(output_master, 65536))
+            os.close(input_master)
+            input_master = None
+        teardown = bytearray()
+        deadline = time.monotonic() + 8
+        while child.poll() is None:
+            assert time.monotonic() < deadline, "terminal failure did not settle and exit"
+            if output_master is not None and select.select([output_master], [], [], 0.05)[0]:
+                try:
+                    teardown.extend(os.read(output_master, 65536))
+                except OSError:
+                    pass
+            else:
+                time.sleep(0.01)
+        assert child.returncode != 0, "terminal failure was reported as success"
+        if output_master is not None:
+            while select.select([output_master], [], [], 0)[0]:
+                try:
+                    chunk = os.read(output_master, 65536)
+                except OSError:
+                    break
+                if not chunk:
+                    break
+                teardown.extend(chunk)
+        if saved_entry is not None:
+            with sqlite3.connect(session) as connection:
+                connection.execute("UPDATE entries SET body = ? WHERE seq = ?", (saved_entry[1], saved_entry[0]))
         view = json.loads(subprocess.run([binary, "--cwd", workspace, "--session", session, "inspect"], env=env, capture_output=True, check=True).stdout)
         if coding:
             results = [entry["data"]["result"] for entry in view["entries"] if entry["kind"] == "tool_result"]
@@ -104,14 +158,22 @@ def output_failure_settles_operation(workspace, env, mode, coding):
             result = shells[-1][1]["output"]
         assert result["stdout"] == "CAPTURED_BEFORE_RENDER_FAILURE\n" and result["cancelled"], result
         assert result["signal"] is not None and result["wait_error"] is None, result
-        assert requests == (1 if coding else 0), "output failure dispatched another model request"
+        turns = [entry for entry in view["entries"] if entry["kind"] == "turn_started"]
+        assert len(turns) == (1 if coding else 0), "terminal failure admitted the queued prompt"
+        assert requests == (1 if coding else 0), "terminal failure dispatched another model request"
+        if output_master is not None:
+            left_alt = teardown.rfind(b"\x1b[?1049l")
+            assert left_alt >= 0, "error teardown left the details surface active"
+            restored = teardown[left_alt + len(b"\x1b[?1049l"):]
+            assert b"\x1b[?25h" in restored, "error teardown left the terminal cursor hidden"
+            assert b"\x1b[0m" in restored, "error teardown left terminal styling active"
         try:
             os.kill(pid, 0)
         except ProcessLookupError:
             pid = None
         else:
             raise AssertionError("direct shell command still exists after terminal exit")
-        print(f"Ion {mode} terminal output failure preserves {'coding' if coding else 'shell'} settlement: OK")
+        print(f"Ion {mode} terminal {fault} failure settles {'coding' if coding else 'shell'} without queued admission: OK")
     finally:
         if child.poll() is None:
             child.kill()
@@ -121,7 +183,8 @@ def output_failure_settles_operation(workspace, env, mode, coding):
                 os.kill(pid, 9)
             except ProcessLookupError:
                 pass
-        os.close(input_master)
+        if input_master is not None:
+            os.close(input_master)
         if output_master is not None:
             os.close(output_master)
         if server is not None:
@@ -135,12 +198,15 @@ for mode in ("inline", "fullscreen"):
         work = Path(temporary)
         workspace = work / "workspace"
         workspace.mkdir()
+        editor = work / "editor.sh"
+        editor.write_text(f"#!/bin/sh\nif test -f '{workspace / 'editor.fail'}'; then exit 7; fi\nprintf edited-from-editor > \"$1\"\n")
+        editor.chmod(0o700)
         env = {
             **os.environ,
             "XDG_CONFIG_HOME": str(work / "config"),
             "XDG_STATE_HOME": str(work / "state"),
             "TERM": "xterm-256color",
-            "VISUAL": "/bin/sh -c 'printf edited-from-editor > \"$0\"'",
+            "VISUAL": str(editor),
         }
         subprocess.run([binary, "use", "smoke", "shell-model", "--endpoint", "http://127.0.0.1:9/v1/chat/completions", "--wire", "chat-completions"], env=env, capture_output=True, check=True)
         master, slave = pty.openpty()
@@ -173,6 +239,12 @@ for mode in ("inline", "fullscreen"):
                     os.write(master, b"original draft\x07")
                     step = 1
                 if step == 1 and b"Draft returned from editor" in output and b"edited-from-editor" in output:
+                    segment_start = len(output)
+                    (workspace / "editor.fail").touch()
+                    os.write(master, b"\x07")
+                    step = "editor_failure"
+                if step == "editor_failure" and b"Editor failed" in segment and b"original draft retained" in segment and b"edited-from-editor" in segment:
+                    (workspace / "editor.fail").unlink()
                     segment_start = len(output)
                     # The complete markers below are not present in the commands:
                     # composer echo cannot satisfy visible-output assertions.
@@ -222,8 +294,10 @@ for mode in ("inline", "fullscreen"):
             refused = subprocess.run([binary, "--cwd", workspace, "--continue", "export", "session.txt"], env=env, capture_output=True, text=True)
             assert refused.returncode != 0 and "cannot save transcript" in refused.stderr
             print(f"Ion {mode} shell output, context choice and inspection: OK")
-            for coding in (False, True):
-                output_failure_settles_operation(workspace, env, mode, coding)
+            for fault in ("output", "input"):
+                for coding in (False, True):
+                    terminal_failure_settles_operation(workspace, env, mode, coding, fault)
+            terminal_failure_settles_operation(workspace, env, mode, False, "output-corrupt-view")
         finally:
             if child.poll() is None:
                 child.send_signal(signal.SIGKILL)
