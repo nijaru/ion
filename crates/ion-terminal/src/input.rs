@@ -178,7 +178,7 @@ pub struct InputStream {
     parser: InputParser,
     replies: TerminalReplyFilter,
     pending: VecDeque<InputEvent>,
-    waiting: bool,
+    escape_deadline: Option<tokio::time::Instant>,
     eof: bool,
     escape_grace: Duration,
 }
@@ -207,7 +207,7 @@ impl InputStream {
             parser: InputParser::new(),
             replies: TerminalReplyFilter::default(),
             pending: VecDeque::new(),
-            waiting: false,
+            escape_deadline: None,
             eof: false,
             escape_grace: Duration::from_millis(if remote { 100 } else { 10 }),
         })
@@ -234,6 +234,7 @@ impl InputStream {
             if self.eof {
                 return None;
             }
+            let escape_deadline = self.escape_deadline;
             tokio::select! {
                 result = self.chunks.recv() => match result {
                     None => {
@@ -252,7 +253,12 @@ impl InputStream {
                         Err(error) => return Some(Err(error)),
                     }
                 },
-                () = tokio::time::sleep(self.escape_grace), if self.waiting => self.parse(&[], false),
+                () = async {
+                    match escape_deadline {
+                        Some(deadline) => tokio::time::sleep_until(deadline).await,
+                        None => std::future::pending().await,
+                    }
+                } => self.parse(&[], false),
             }
         }
     }
@@ -268,7 +274,8 @@ impl InputStream {
             },
             maybe_more,
         );
-        self.waiting = maybe_more;
+        // New bytes renew disambiguation grace; cancelling a read does not.
+        self.escape_deadline = maybe_more.then(|| tokio::time::Instant::now() + self.escape_grace);
     }
 
     fn decode(event: term_input::InputEvent) -> Option<InputEvent> {
@@ -462,6 +469,52 @@ fn decode_modifiers(modifiers: term_input::Modifiers) -> Modifiers {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn escape_grace_survives_cancelled_reads_without_breaking_split_keys() {
+        let (sender, chunks) = mpsc::channel(4);
+        let mut stream = InputStream {
+            reader: None,
+            stop: Arc::new(AtomicBool::new(false)),
+            chunks,
+            resize: signal(SignalKind::window_change()).unwrap(),
+            parser: InputParser::new(),
+            replies: TerminalReplyFilter::default(),
+            pending: VecDeque::new(),
+            escape_deadline: None,
+            eof: false,
+            escape_grace: Duration::from_millis(100),
+        };
+        sender.send(Ok(b"\x1b".to_vec())).await.unwrap();
+        let mut refresh = tokio::time::interval(Duration::from_millis(30));
+        let event = tokio::time::timeout(Duration::from_secs(1), async {
+            loop {
+                tokio::select! {
+                    event = stream.next() => break event.unwrap().unwrap(),
+                    _ = refresh.tick() => {}
+                }
+            }
+        })
+        .await
+        .expect("redraw cancellation must not renew Escape grace");
+        assert_eq!(
+            event,
+            InputEvent::Key(KeyEvent::new(KeyCode::Esc, Modifiers::NONE))
+        );
+
+        sender.send(Ok(b"\x1b".to_vec())).await.unwrap();
+        assert!(
+            tokio::time::timeout(Duration::from_millis(20), stream.next())
+                .await
+                .is_err()
+        );
+        sender.send(Ok(b"[13;3u".to_vec())).await.unwrap();
+        let event = stream.next().await.unwrap().unwrap();
+        assert_eq!(
+            event,
+            InputEvent::Key(KeyEvent::new(KeyCode::Enter, Modifiers::ALT))
+        );
+    }
 
     #[test]
     fn application_key_event_has_no_crossterm_state() {
