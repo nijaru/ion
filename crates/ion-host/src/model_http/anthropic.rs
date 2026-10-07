@@ -582,7 +582,16 @@ impl AnthropicState {
                         let text = block["thinking"]
                             .as_str()
                             .ok_or_else(|| invalid("invalid thinking block"))?;
-                        let signature = block["signature"].as_str().unwrap_or_default();
+                        let signature = block
+                            .get("signature")
+                            .filter(|value| !value.is_null())
+                            .map(|value| {
+                                value
+                                    .as_str()
+                                    .ok_or_else(|| invalid("invalid thinking signature"))
+                            })
+                            .transpose()?
+                            .unwrap_or_default();
                         let human_block = if text.is_empty() {
                             None
                         } else {
@@ -595,10 +604,14 @@ impl AnthropicState {
                             signature: signature.into(),
                             human_block,
                         });
-                        human_block.map(|block| ModelStreamEvent::ThinkingDelta {
-                            block,
-                            text: text.into(),
-                        })
+                        human_block
+                            .map(|block| ModelStreamEvent::ThinkingDelta {
+                                block,
+                                text: text.into(),
+                            })
+                            .or_else(|| {
+                                (!signature.is_empty()).then_some(ModelStreamEvent::OutputObserved)
+                            })
                     }
                     Some("redacted_thinking") => {
                         let data = block["data"]
@@ -607,7 +620,7 @@ impl AnthropicState {
                             .ok_or_else(|| invalid("invalid redacted thinking block"))?;
                         self.blocks
                             .push(AnthropicBlock::RedactedThinking(data.into()));
-                        None
+                        Some(ModelStreamEvent::OutputObserved)
                     }
                     Some("tool_use") => {
                         if block
@@ -634,7 +647,7 @@ impl AnthropicState {
                             initial: block["input"].clone(),
                             fragments: None,
                         });
-                        None
+                        Some(ModelStreamEvent::OutputObserved)
                     }
                     _ => return Err(unsupported("unsupported Anthropic content block")),
                 };
@@ -699,7 +712,7 @@ impl AnthropicState {
                             .ok_or_else(|| invalid("invalid signature delta"))?;
                         signature.push_str(part);
                         wire["signature"] = json!(signature);
-                        Ok(Vec::new())
+                        Ok(vec![ModelStreamEvent::OutputObserved])
                     }
                     (
                         AnthropicBlock::Tool {
@@ -714,7 +727,11 @@ impl AnthropicState {
                             .as_str()
                             .ok_or_else(|| invalid("invalid tool input delta"))?;
                         fragments.get_or_insert_default().push_str(part);
-                        Ok(Vec::new())
+                        Ok(if part.is_empty() {
+                            Vec::new()
+                        } else {
+                            vec![ModelStreamEvent::OutputObserved]
+                        })
                     }
                     _ => Err(invalid("mismatched content block delta")),
                 }

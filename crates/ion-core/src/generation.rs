@@ -3,8 +3,8 @@ use std::{sync::Arc, time::Duration};
 
 use futures_util::StreamExt;
 use ion_ai::{
-    ModelExecution, ModelRequest, ModelResponse, ModelRoute, ModelRouteReason, ModelService,
-    ModelStreamEvent, ProviderError, ProviderErrorKind, Usage,
+    Content, ModelExecution, ModelRequest, ModelResponse, ModelRoute, ModelRouteReason,
+    ModelService, ModelStreamEvent, ProviderError, ProviderErrorKind, Usage,
 };
 use tokio_util::sync::CancellationToken;
 
@@ -82,6 +82,7 @@ where
     };
     tokio::pin!(stream);
     let mut observed = false;
+    let mut output_observed = false;
     loop {
         let event = tokio::select! {
             item = stream.next() => item,
@@ -90,13 +91,22 @@ where
         match event {
             Some(Ok(ModelStreamEvent::TextDelta(text))) => {
                 observed = true;
+                output_observed = true;
                 observe(AgentEvent::TextDelta(text));
             }
             Some(Ok(ModelStreamEvent::ThinkingDelta { block, text })) => {
                 observed = true;
+                output_observed = true;
                 observe(AgentEvent::ThinkingDelta { block, text });
             }
-            Some(Ok(ModelStreamEvent::ToolCall(_))) | Some(Ok(ModelStreamEvent::Usage(_))) => {
+            Some(Ok(ModelStreamEvent::OutputObserved | ModelStreamEvent::ToolCall(_))) => {
+                observed = true;
+                if !output_observed {
+                    output_observed = true;
+                    observe(AgentEvent::ModelOutputObserved);
+                }
+            }
+            Some(Ok(ModelStreamEvent::Usage(_))) => {
                 observed = true;
             }
             Some(Ok(ModelStreamEvent::ProviderReplayNotice {
@@ -111,7 +121,22 @@ where
                     count,
                 });
             }
-            Some(Ok(ModelStreamEvent::Completed(response))) => return (Ok(response), observed),
+            Some(Ok(ModelStreamEvent::Completed(response))) => {
+                // Services may deliver generated content only at completion.
+                // Usage alone does not establish generated-output custody.
+                let generated = response.message.provider_replay.is_some()
+                    || response.message.content.iter().any(|part| match part {
+                        Content::Text(text) | Content::Thinking(text) => !text.is_empty(),
+                        _ => true,
+                    });
+                if generated {
+                    observed = true;
+                    if !output_observed {
+                        observe(AgentEvent::ModelOutputObserved);
+                    }
+                }
+                return (Ok(response), observed);
+            }
             Some(Err(error)) => return (Err(AgentError::Provider(error)), observed),
             None => return (Err(AgentError::IncompleteModelResponse), observed),
         }

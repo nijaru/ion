@@ -487,6 +487,7 @@ impl LiveTranscript {
                     }
                 }
             }
+            AgentEvent::ModelOutputObserved => {}
             AgentEvent::TextDelta(text) => self.push_text(text),
             AgentEvent::ThinkingDelta { block, text } => self.push_thinking(block, text),
             AgentEvent::AssistantCommitted {

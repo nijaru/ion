@@ -704,7 +704,9 @@ impl Agent {
                     .issue(&self.service, stop, &mut |event| {
                         if matches!(
                             event,
-                            AgentEvent::TextDelta(_) | AgentEvent::ThinkingDelta { .. }
+                            AgentEvent::TextDelta(_)
+                                | AgentEvent::ThinkingDelta { .. }
+                                | AgentEvent::ModelOutputObserved
                         ) {
                             emitted_output = true;
                         }
@@ -1015,6 +1017,8 @@ pub enum AgentEvent {
     TurnAccepted {
         turn: u64,
     },
+    /// Generated content without a human delta. Not call admission or an effect.
+    ModelOutputObserved,
     /// Provisional text for the current response only.
     TextDelta(String),
     /// Provisional human thinking, sharing the current response's custody.
@@ -3421,60 +3425,106 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn context_recovery_does_not_reuse_observed_thinking() {
-        let root =
-            std::env::temp_dir().join(format!("ion-thinking-overflow-{}", uuid::Uuid::now_v7()));
-        std::fs::create_dir(&root).unwrap();
-        let session = CodingSession::create(root.join("session.sqlite"), &root).unwrap();
-        let scripts = Arc::new(ScriptedModelService::new([
-            response(vec![Content::Text("earlier result".into())]),
-            Script::Stream(vec![
-                ModelStreamEvent::ThinkingDelta {
+    async fn context_recovery_does_not_reuse_observed_output() {
+        let call = ToolCall {
+            id: "partial".into(),
+            name: "read".into(),
+            arguments: serde_json::json!({}),
+            raw_arguments: None,
+        };
+        for (output, content, replay) in [
+            (vec![ModelStreamEvent::OutputObserved], vec![], None),
+            (
+                vec![ModelStreamEvent::ThinkingDelta {
                     block: 0,
                     text: "discarded thought".into(),
-                },
-                ModelStreamEvent::Completed(ModelResponse {
-                    message: Message {
-                        role: Role::Assistant,
-                        content: Vec::new(),
-                        provider_replay: None,
-                    },
-                    usage: Usage::known(49_900, 0),
-                    termination: ResponseTermination::Incomplete(IncompleteReason::ContextLength),
-                    returned_model: None,
-                }),
-            ]),
-            response(vec![Content::Text("must not summarize".into())]),
-            response(vec![Content::Text("must not retry".into())]),
-        ]));
-        let agent = Agent::new(scripts.clone(), Arc::new(TestTools::new(&root)), model());
-        agent
-            .submit(
-                &session,
-                "first".into(),
-                "test".into(),
-                CancellationToken::new(),
-                |_| {},
-            )
-            .await
-            .unwrap();
-        let mut events = Vec::new();
-        let error = agent
-            .submit(
-                &session,
-                "second".into(),
-                "test".into(),
-                CancellationToken::new(),
-                |event| events.push(event),
-            )
-            .await
-            .unwrap_err();
-        assert!(matches!(error, AgentError::IncompleteModelResponse));
-        assert!(events.iter().any(|event| matches!(event, AgentEvent::ThinkingDelta { text, .. } if text == "discarded thought")));
-        assert_eq!(scripts.requests().len(), 2);
-        assert!(session.view().unwrap().compacted_through.is_none());
-        drop(session);
-        std::fs::remove_dir_all(root).unwrap();
+                }],
+                vec![],
+                None,
+            ),
+            (vec![ModelStreamEvent::ToolCall(call.clone())], vec![], None),
+            (vec![], vec![Content::ToolCall(call)], None),
+            (
+                vec![],
+                vec![],
+                Some(ion_ai::ProviderReplay::new(
+                    "test",
+                    "opaque",
+                    serde_json::json!("PRIVATE_OPAQUE"),
+                )),
+            ),
+        ] {
+            let human = output
+                .iter()
+                .any(|event| matches!(event, ModelStreamEvent::ThinkingDelta { .. }));
+            let root =
+                std::env::temp_dir().join(format!("ion-output-overflow-{}", uuid::Uuid::now_v7()));
+            std::fs::create_dir(&root).unwrap();
+            let session = CodingSession::create(root.join("session.sqlite"), &root).unwrap();
+            let scripts = Arc::new(ScriptedModelService::new([
+                response(vec![Content::Text("earlier result".into())]),
+                Script::Stream(
+                    output
+                        .into_iter()
+                        .chain([ModelStreamEvent::Completed(ModelResponse {
+                            message: Message {
+                                role: Role::Assistant,
+                                content,
+                                provider_replay: replay,
+                            },
+                            usage: Usage::known(49_900, 0),
+                            termination: ResponseTermination::Incomplete(
+                                IncompleteReason::ContextLength,
+                            ),
+                            returned_model: None,
+                        })])
+                        .collect(),
+                ),
+                response(vec![Content::Text("must not summarize".into())]),
+                response(vec![Content::Text("must not retry".into())]),
+            ]));
+            let agent = Agent::new(scripts.clone(), Arc::new(TestTools::new(&root)), model());
+            agent
+                .submit(
+                    &session,
+                    "first".into(),
+                    "test".into(),
+                    CancellationToken::new(),
+                    |_| {},
+                )
+                .await
+                .unwrap();
+            let mut events = Vec::new();
+            let error = agent
+                .submit(
+                    &session,
+                    "second".into(),
+                    "test".into(),
+                    CancellationToken::new(),
+                    |event| events.push(event),
+                )
+                .await
+                .unwrap_err();
+            assert!(matches!(error, AgentError::IncompleteModelResponse));
+            if human {
+                assert!(events.iter().any(|event| matches!(event, AgentEvent::ThinkingDelta { text, .. } if text == "discarded thought")));
+            } else {
+                assert!(
+                    events
+                        .iter()
+                        .any(|event| matches!(event, AgentEvent::ModelOutputObserved))
+                );
+            }
+            assert!(
+                !events
+                    .iter()
+                    .any(|event| matches!(event, AgentEvent::ToolStarted { .. }))
+            );
+            assert_eq!(scripts.requests().len(), 2);
+            assert!(session.view().unwrap().compacted_through.is_none());
+            drop(session);
+            std::fs::remove_dir_all(root).unwrap();
+        }
     }
 
     #[tokio::test]

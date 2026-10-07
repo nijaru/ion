@@ -5,6 +5,7 @@ use serde_json::{Value, json};
 pub(super) fn event_record(event: CodingAgentEvent) -> Value {
     match event {
         CodingAgentEvent::TurnAccepted { turn } => json!({"type":"turn_accepted","turn":turn}),
+        CodingAgentEvent::ModelOutputObserved => json!({"type":"model_output_observed"}),
         CodingAgentEvent::TextDelta(text) => json!({"type":"text_delta","text":text}),
         CodingAgentEvent::ThinkingDelta { block, text } => {
             json!({"type":"thinking_delta","block":block,"text":text})
@@ -138,6 +139,7 @@ pub(super) fn diagnostic(event: CodingAgentEvent) -> Option<String> {
         CodingAgentEvent::ResponseRestarted => "[incomplete response discarded; retrying]".into(),
         CodingAgentEvent::ToolCatalogWarning(message) => format!("[tool catalog: {message}]"),
         CodingAgentEvent::TurnAccepted { .. }
+        | CodingAgentEvent::ModelOutputObserved
         | CodingAgentEvent::TextDelta(_)
         | CodingAgentEvent::ThinkingDelta { .. }
         | CodingAgentEvent::AssistantCommitted { .. }

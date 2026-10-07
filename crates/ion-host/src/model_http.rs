@@ -1022,9 +1022,27 @@ mod tests {
         ToolResult, ToolSpec,
     };
     use tokio::{
-        io::{AsyncReadExt, AsyncWriteExt},
+        io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader},
         net::TcpListener,
     };
+
+    async fn consume_request(socket: &mut tokio::net::TcpStream) {
+        let mut reader = BufReader::new(socket);
+        let mut length = 0;
+        loop {
+            let mut line = String::new();
+            assert_ne!(reader.read_line(&mut line).await.unwrap(), 0);
+            if line == "\r\n" {
+                break;
+            }
+            if let Some((name, value)) = line.split_once(':')
+                && name.eq_ignore_ascii_case("content-length")
+            {
+                length = value.trim().parse().unwrap();
+            }
+        }
+        reader.read_exact(&mut vec![0; length]).await.unwrap();
+    }
 
     async fn serve(body: String, status: &str) -> String {
         serve_split(body, status, usize::MAX).await
@@ -1036,8 +1054,7 @@ mod tests {
         let status = status.to_owned();
         tokio::spawn(async move {
             let (mut socket, _) = listener.accept().await.unwrap();
-            let mut request = [0u8; 4096];
-            let _ = socket.read(&mut request).await.unwrap();
+            consume_request(&mut socket).await;
             let response = format!(
                 "HTTP/1.1 {status}\r\nContent-Type: text/event-stream\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
                 body.len()
@@ -1907,7 +1924,13 @@ mod tests {
             }]
         );
         let events = state.accept(&json!({"choices":[{"delta":{"reasoning_details":[{"type":"reasoning.text","text":"plain thought","signature":"opaque"},{"type":"reasoning.summary","summary":"readable summary"},{"type":"reasoning.encrypted","data":"encrypted"}],"content":"answer"},"finish_reason":"stop"}]})).unwrap();
-        assert_eq!(events, vec![ModelStreamEvent::TextDelta("answer".into())]);
+        assert_eq!(
+            events,
+            vec![
+                ModelStreamEvent::OutputObserved,
+                ModelStreamEvent::TextDelta("answer".into())
+            ]
+        );
         assert_eq!(
             state.complete(&request()).unwrap().message.content,
             vec![
@@ -2081,14 +2104,14 @@ mod tests {
     }
 
     #[test]
-    fn chat_tool_call_keeps_first_metadata_while_arguments_stream() {
+    fn chat_tool_metadata_is_stable_while_arguments_stream() {
         let request = request();
         let mut state = ChatState::default();
         state
             .accept(&json!({"choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"id":"call-first","function":{"name":"read","arguments":"{\"path\":\""}}]},"finish_reason":null}]}))
             .unwrap();
         state
-            .accept(&json!({"choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"id":"call-later","function":{"name":"read","arguments":"README.md\"}"}}]},"finish_reason":"tool_calls"}]}))
+            .accept(&json!({"choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"id":"call-first","function":{"name":"read","arguments":"README.md\"}"}}]},"finish_reason":"tool_calls"}]}))
             .unwrap();
         assert_eq!(
             state.complete(&request).unwrap().message.content,
@@ -2100,6 +2123,19 @@ mod tests {
             })]
         );
 
+        for replacement in [
+            json!({"index":0,"id":"different","function":{"name":"read"}}),
+            json!({"index":0,"id":null,"function":{"name":"write"}}),
+        ] {
+            let mut state = ChatState::default();
+            state.accept(&json!({"choices":[{"delta":{"tool_calls":[{"index":0,"id":"first","function":{"name":"read","arguments":"{}"}}]}}]})).unwrap();
+            assert!(
+                state
+                    .accept(&json!({"choices":[{"delta":{"tool_calls":[replacement]}}]}))
+                    .is_err()
+            );
+        }
+
         let mut duplicate = ChatState::default();
         duplicate
             .accept(&json!({"choices":[{"index":0,"delta":{"tool_calls":[
@@ -2108,6 +2144,55 @@ mod tests {
         ]},"finish_reason":"tool_calls"}]}))
             .unwrap();
         assert!(duplicate.complete(&request).is_err());
+    }
+
+    #[test]
+    fn chat_rejects_mistyped_semantics_instead_of_discarding_them() {
+        for choice in [
+            json!({"index":"0","delta":{}}),
+            json!({"index":-1,"delta":{}}),
+            json!({"delta":[],"finish_reason":"tool_calls"}),
+            json!({"delta":{},"finish_reason":42}),
+            json!({"delta":{"content":42}}),
+            json!({"delta":{"content":"answer","tool_calls":{}}}),
+            json!({"delta":{"tool_calls":[{"index":0,"id":42}]}}),
+            json!({"delta":{"tool_calls":[{"index":0,"function":[]}]}}),
+            json!({"delta":{"tool_calls":[{"index":0,"function":{"name":42}}]}}),
+            json!({"delta":{"tool_calls":[{"index":0,"function":{"arguments":42}}]}}),
+            json!({"delta":{"tool_calls":[{"index":0,"type":42}]}}),
+        ] {
+            let mut state = ChatState::default();
+            state.accept(&json!({"choices":[{"delta":{"tool_calls":[{"index":0,"id":"first","function":{"name":"read","arguments":"{}"}}]}}]})).unwrap();
+            assert!(
+                state.accept(&json!({"choices":[choice.clone()]})).is_err(),
+                "accepted {choice}"
+            );
+        }
+    }
+
+    #[test]
+    fn chat_tool_continuations_allow_omitted_null_and_empty_metadata() {
+        let mut state = ChatState::default();
+        for fragment in [
+            json!({"index":0,"id":"first","type":"function","function":{"name":"read","arguments":"{"}}),
+            json!({"index":0,"id":null,"type":null,"function":{"name":"","arguments":"\"path\":\"README.md\""}}),
+            json!({"index":0,"id":"","function":{"name":null,"arguments":null}}),
+            json!({"index":0,"function":{"arguments":"}"}}),
+        ] {
+            state.accept(&json!({"choices":[{"index":null,"delta":{"content":null,"tool_calls":[fragment]},"finish_reason":null}]})).unwrap();
+        }
+        state
+            .accept(&json!({"choices":[{"delta":null,"finish_reason":"tool_calls"}]}))
+            .unwrap();
+        assert_eq!(
+            state.complete(&request()).unwrap().message.content,
+            vec![Content::ToolCall(ToolCall {
+                id: "first".into(),
+                name: "read".into(),
+                arguments: json!({"path":"README.md"}),
+                raw_arguments: None,
+            })]
+        );
     }
 
     #[test]
@@ -2334,6 +2419,49 @@ mod tests {
                 response.termination,
                 ResponseTermination::Incomplete(expected)
             );
+        }
+    }
+
+    #[tokio::test]
+    async fn partial_tool_and_opaque_output_stop_retries_without_admitting_calls() {
+        use ion_core::{CodingAgent, CodingAgentEvent, CodingSession, ToolSet};
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        let start = "event: message_start\ndata: {\"type\":\"message_start\",\"message\":{\"type\":\"message\",\"model\":\"test-model\",\"role\":\"assistant\",\"content\":[],\"usage\":{\"input_tokens\":3,\"output_tokens\":0}}}\n\n";
+        for (wire, body) in [
+            (HttpWire::ChatCompletions, "data: {\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":0,\"id\":\"partial\",\"function\":{\"name\":\"read\",\"arguments\":\"{\"}}]}}]}\n\n".to_owned()),
+            (HttpWire::OpenRouterChat, "data: {\"choices\":[{\"delta\":{\"reasoning_details\":[{\"type\":\"reasoning.encrypted\",\"data\":\"PRIVATE_OPAQUE\"}]}}]}\n\n".to_owned()),
+            (HttpWire::AnthropicMessages, format!("{start}event: content_block_start\ndata: {{\"type\":\"content_block_start\",\"index\":0,\"content_block\":{{\"type\":\"redacted_thinking\",\"data\":\"PRIVATE_OPAQUE\"}}}}\n\n")),
+            (HttpWire::AnthropicMessages, format!("{start}event: content_block_start\ndata: {{\"type\":\"content_block_start\",\"index\":0,\"content_block\":{{\"type\":\"thinking\",\"thinking\":\"\",\"signature\":\"PRIVATE_OPAQUE\"}}}}\n\n")),
+        ] {
+            let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let endpoint = format!("http://{}/v1/messages", listener.local_addr().unwrap());
+            let requests = Arc::new(AtomicUsize::new(0));
+            let count = requests.clone();
+            let server = tokio::spawn(async move {
+                loop {
+                    let (mut socket, _) = listener.accept().await.unwrap();
+                    count.fetch_add(1, Ordering::SeqCst);
+                    consume_request(&mut socket).await;
+                    let reply = format!("HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len());
+                    socket.write_all(reply.as_bytes()).await.unwrap();
+                }
+            });
+            let root = std::env::temp_dir().join(format!("ion-partial-wire-{}", uuid::Uuid::now_v7()));
+            std::fs::create_dir(&root).unwrap();
+            let session = CodingSession::create(root.join("session.sqlite"), &root).unwrap();
+            let model = Arc::new(HttpModelService::new(&endpoint, wire, Arc::new(|| None)).unwrap());
+            let agent = CodingAgent::with_tool_set(model, Arc::new(ToolSet::new([])), request().route.effective);
+            let mut events = Vec::new();
+            let result = agent.submit(&session, "work".into(), "test".into(), CancellationToken::new(), |event| events.push(event)).await;
+            server.abort();
+            assert!(server.await.unwrap_err().is_cancelled());
+            assert!(result.is_err(), "{wire:?}");
+            assert_eq!(requests.load(Ordering::SeqCst), 1, "{wire:?}");
+            assert!(events.iter().any(|event| matches!(event, CodingAgentEvent::ModelOutputObserved)), "{wire:?}");
+            assert!(!events.iter().any(|event| matches!(event, CodingAgentEvent::ProviderRetry { .. } | CodingAgentEvent::ToolStarted { .. } | CodingAgentEvent::AssistantCommitted { .. })));
+            assert!(!format!("{events:?}").contains("PRIVATE_OPAQUE"));
+            drop(session);
+            std::fs::remove_dir_all(root).unwrap();
         }
     }
 

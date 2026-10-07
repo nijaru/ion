@@ -166,6 +166,8 @@ provisional answer as if it had completed.
 In JSONL mode, stdout contains one JSON object per line: a `session` record with the ID and
 directory, ordered `text_delta`, tool lifecycle, recovery and final records,
 then a `run_end` record with `completed`, `cancelled` or `failed` status.
+`model_output_observed` records generated content received without human deltas.
+It carries no content and does not mean a tool was admitted or ran.
 `tool_started` and `tool_finished` share a `call_id` and include a semantic
 `activity` object (kind plus bounded subject when available). `tool_finished`
 contains the observed output and `model_projection`: `observed`,
@@ -452,8 +454,9 @@ settled group can be summarized. The MiMo adapter classifies a zero-output
 length stop near a known context window as context pressure, independent of
 the configured provider name.
 Transient provider failures can trigger up to two cancellable retries before
-stream output; retry events appear in the TUI and JSONL output. A response that
-stops after producing partial output is not replayed silently.
+generated output, including tool fragments and opaque reasoning. Retry events
+appear in the TUI and JSONL output. A response that stops after producing partial
+output is not replayed silently.
 If an output-token limit cuts off identifiable tool calls, Ion records them
 as skipped errors and lets the model reissue complete calls. No tool from the
 truncated response runs.

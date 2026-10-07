@@ -39,6 +39,9 @@ pub enum IncompleteReason {
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum ModelStreamEvent {
+    /// Generated tool fragments or opaque replay material were observed. This
+    /// is neither human text nor a complete, executable call; it bars pre-output retry.
+    OutputObserved,
     TextDelta(String),
     /// Human thinking blocks are numbered consecutively from zero within a
     /// response. Signatures, encrypted and redacted material never enter here.

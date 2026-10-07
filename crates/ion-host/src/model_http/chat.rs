@@ -161,7 +161,13 @@ impl ChatState {
         if value.get("error").is_some_and(|v| !v.is_null()) {
             return Err(chat_stream_error(value));
         }
-        if let Some(model) = value.get("model").and_then(Value::as_str) {
+        if !value.is_object() {
+            return Err(invalid("invalid Chat response object"));
+        }
+        if let Some(model) = optional_string(value, "model")? {
+            if model.is_empty() {
+                return Err(invalid("empty returned model"));
+            }
             if self.model.as_deref().is_some_and(|old| old != model) {
                 return Err(invalid("returned model changed within one response"));
             }
@@ -185,8 +191,23 @@ impl ChatState {
         let Some(choice) = choices.first() else {
             return Ok(events);
         };
-        if choice["index"].as_u64().is_some_and(|index| index != 0) {
+        if !choice.is_object() {
+            return Err(invalid("invalid response choice"));
+        }
+        if let Some(index) = choice.get("index").filter(|value| !value.is_null())
+            && index.as_u64() != Some(0)
+        {
             return Err(invalid("unexpected response choice index"));
+        }
+        let finish = optional_string(choice, "finish_reason")?;
+        let delta = &choice["delta"];
+        if !delta.is_null() && !delta.is_object() {
+            return Err(invalid("invalid response delta"));
+        }
+        if let Some(role) = optional_string(delta, "role")?
+            && role != "assistant"
+        {
+            return Err(invalid("invalid assistant delta role"));
         }
         if value.get("usage").is_none_or(Value::is_null)
             && let Some(usage) = choice.get("usage").filter(|usage| !usage.is_null())
@@ -195,14 +216,11 @@ impl ChatState {
             events.push(ModelStreamEvent::Usage(self.usage.value()));
         }
         if self.finish.is_some() {
-            if choice["finish_reason"].as_str() != self.finish.as_deref()
-                || !empty_post_finish_delta(&choice["delta"])
-            {
+            if finish != self.finish.as_deref() || !empty_post_finish_delta(&choice["delta"]) {
                 return Err(invalid("contradictory choice after finish_reason"));
             }
             return Ok(events);
         }
-        let delta = &choice["delta"];
         if let Some(details) = delta.get("reasoning_details").filter(|v| !v.is_null()) {
             let details = details
                 .as_array()
@@ -212,6 +230,9 @@ impl ChatState {
             }
             for detail in details {
                 let index = append_openrouter_detail(&mut self.reasoning_details, detail)?;
+                if openrouter_human_text(detail).is_none() {
+                    events.push(ModelStreamEvent::OutputObserved);
+                }
                 if let Some(text) = openrouter_human_text(detail) {
                     self.thinking_source
                         .get_or_insert(ThinkingSource::Structured);
@@ -228,32 +249,42 @@ impl ChatState {
                 self.push_thinking(0, reasoning, &mut events);
             }
         }
-        if let Some(part) = delta["content"].as_str().filter(|s| !s.is_empty()) {
+        if let Some(part) = optional_string(delta, "content")?.filter(|s| !s.is_empty()) {
             self.text.push_str(part);
             events.push(ModelStreamEvent::TextDelta(part.into()));
         }
-        if let Some(fragments) = delta["tool_calls"].as_array() {
+        if let Some(fragments) = delta.get("tool_calls").filter(|value| !value.is_null()) {
+            let fragments = fragments
+                .as_array()
+                .ok_or_else(|| invalid("invalid tool_calls delta"))?;
             for fragment in fragments {
+                if !fragment.is_object() {
+                    return Err(invalid("invalid tool call fragment"));
+                }
                 let index = fragment["index"]
                     .as_u64()
                     .ok_or_else(|| invalid("tool call fragment missing index"))?;
+                if let Some(kind) = optional_string(fragment, "type")?
+                    && kind != "function"
+                {
+                    return Err(unsupported("unsupported tool call type"));
+                }
+                let function = &fragment["function"];
+                if !function.is_null() && !function.is_object() {
+                    return Err(invalid("invalid tool function delta"));
+                }
                 let call = self.calls.entry(index).or_default();
-                if let Some(id) = fragment["id"].as_str()
-                    && call.id.is_empty()
-                {
-                    call.id = id.into();
-                }
-                if let Some(name) = fragment["function"]["name"].as_str()
-                    && call.name.is_empty()
-                {
-                    call.name = name.into();
-                }
-                if let Some(args) = fragment["function"]["arguments"].as_str() {
+                merge_call_metadata(&mut call.id, optional_string(fragment, "id")?)?;
+                merge_call_metadata(&mut call.name, optional_string(function, "name")?)?;
+                if let Some(args) = optional_string(function, "arguments")? {
                     call.arguments.push_str(args);
                 }
             }
+            if !fragments.is_empty() {
+                events.push(ModelStreamEvent::OutputObserved);
+            }
         }
-        if let Some(reason) = choice["finish_reason"].as_str() {
+        if let Some(reason) = finish {
             self.finish = Some(reason.into());
         }
         Ok(events)
@@ -369,6 +400,32 @@ impl ChatState {
     }
 }
 
+// Omitted/null fields are continuations, not permission to discard mistyped
+// semantics. In particular, discarded arguments can turn a corrupt call into
+// a valid executable call using only its earlier fragments.
+fn optional_string<'a>(value: &'a Value, key: &str) -> Result<Option<&'a str>, ProviderError> {
+    value
+        .get(key)
+        .filter(|value| !value.is_null())
+        .map(|value| {
+            value
+                .as_str()
+                .ok_or_else(|| invalid(&format!("invalid {key} delta field")))
+        })
+        .transpose()
+}
+
+fn merge_call_metadata(target: &mut String, part: Option<&str>) -> Result<(), ProviderError> {
+    if let Some(part) = part.filter(|part| !part.is_empty()) {
+        if target.is_empty() {
+            target.push_str(part);
+        } else if target != part {
+            return Err(invalid("tool call metadata changed within one response"));
+        }
+    }
+    Ok(())
+}
+
 pub(super) fn append_openrouter_detail(
     details: &mut Vec<Value>,
     fragment: &Value,
@@ -435,20 +492,9 @@ pub(super) fn chat_reasoning_delta(
     delta: &Value,
     wire: HttpWire,
 ) -> Result<Option<&str>, ProviderError> {
-    let field = |name| -> Result<Option<&str>, ProviderError> {
-        delta
-            .get(name)
-            .filter(|value| !value.is_null())
-            .map(|value| {
-                value
-                    .as_str()
-                    .ok_or_else(|| invalid("invalid reasoning delta"))
-            })
-            .transpose()
-    };
-    let reasoning = field("reasoning")?.filter(|s| !s.is_empty());
-    let content = field("reasoning_content")?.filter(|s| !s.is_empty());
-    let other = field("reasoning_text")?.filter(|s| !s.is_empty());
+    let reasoning = optional_string(delta, "reasoning")?.filter(|s| !s.is_empty());
+    let content = optional_string(delta, "reasoning_content")?.filter(|s| !s.is_empty());
+    let other = optional_string(delta, "reasoning_text")?.filter(|s| !s.is_empty());
     if other.is_some() {
         return Err(unsupported("unexpected reasoning field for route"));
     }
@@ -487,9 +533,8 @@ pub(super) fn empty_post_finish_delta(delta: &Value) -> bool {
         "role" => value.is_null() || value == "assistant",
         "content" => value.is_null() || value == "",
         "tool_calls" => value.is_null() || value.as_array().is_some_and(Vec::is_empty),
-        "reasoning" | "reasoning_content" | "reasoning_text" | "reasoning_details" => {
-            !has_content(value)
-        }
+        "reasoning" | "reasoning_content" | "reasoning_text" => value.is_null() || value == "",
+        "reasoning_details" => value.is_null() || value.as_array().is_some_and(Vec::is_empty),
         _ => false,
     })
 }
