@@ -21,6 +21,7 @@ use tokio_util::sync::CancellationToken;
 mod agent_events;
 mod clipboard;
 mod display_text;
+mod edit_diff;
 mod external_editor;
 mod markdown;
 mod rpc;

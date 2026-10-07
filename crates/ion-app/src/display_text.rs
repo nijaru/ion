@@ -141,7 +141,14 @@ pub(super) fn fit_line(text: &str, width: usize) -> String {
             _ => visible(grapheme),
         })
         .collect::<String>();
-    if UnicodeWidthStr::width(text.as_str()) <= width {
+    if text
+        .graphemes(true)
+        .try_fold(0usize, |used, grapheme| {
+            used.checked_add(UnicodeWidthStr::width(grapheme).max(1))
+                .filter(|&used| used <= width)
+        })
+        .is_some()
+    {
         return text;
     }
     if width == 1 {
@@ -173,6 +180,7 @@ mod tests {
             ("界界", 4, "界界"),
             ("e\u{0301}x", 2, "e\u{0301}x"),
             ("a\u{1b}b", 3, "a�b"),
+            ("\u{200b}\u{200b}\u{200b}", 2, "\u{200b}…"),
         ] {
             let fitted = fit_line(text, width);
             assert_eq!(fitted, expected);

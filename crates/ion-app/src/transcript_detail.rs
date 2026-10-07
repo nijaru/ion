@@ -301,7 +301,29 @@ fn render_activity(
         if let Some(notice) = result.projection.notice() {
             push_wrapped(rows, notice, width);
         }
-        render_json(rows, &result.value, width);
+        if let Some(diff) = crate::edit_diff::recorded(activity) {
+            for (key, value) in diff.fields {
+                if key != "diff" {
+                    push_wrapped(rows, &format!("{key}: {value}"), width);
+                }
+            }
+            push_wrapped(
+                rows,
+                if diff.truncated {
+                    "Recorded edit diff · capture truncated"
+                } else {
+                    "Recorded edit diff"
+                },
+                width,
+            );
+            if diff.text.is_empty() {
+                push_wrapped(rows, "No text changes", width);
+            } else {
+                push_wrapped(rows, diff.text, width);
+            }
+        } else {
+            render_json(rows, &result.value, width);
+        }
         for mime in &result.image_mime_types {
             push_wrapped(rows, &format!("[image: {mime}]"), width);
         }

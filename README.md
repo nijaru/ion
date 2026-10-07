@@ -103,6 +103,14 @@ in the formatted view. User prompts and tool output remain literal. Ctrl-O
 source inspection, saved Session facts, copy and export retain original Markdown.
 Tables, syntax highlighting and other Markdown extensions are not implemented.
 
+Successful native edits record a unified patch from the text read and the
+replacement written, alongside both digests. The patch capture is limited to
+64 KiB and explicitly marked when truncated; it is not a later filesystem diff.
+The transcript previews up to eight patch rows with addition/removal styles;
+long lines and additional rows are omitted with an ellipsis. Ctrl-O or `/tool N`
+shows the full recorded capture, including truncation, without interpreting its
+contents as Markdown. Write-file diffs are not implemented.
+
 Inline remains the default, but persistent fullscreen is also available with
 `--tui-mode fullscreen`; use `/tui inline` or `/tui fullscreen` to switch
 inside chat. Fullscreen owns the transcript viewport and scrolling while using

@@ -311,9 +311,10 @@ impl LocalTools {
             Ok(meta) => meta.permissions(),
             Err(e) => return error(e.to_string()),
         };
+        let diff = crate::edit_diff::capture(&input.path, &text, &replacement);
         match replace_file(&path, replacement.as_bytes(), Some(permissions)) {
             Ok(()) => success(
-                json!({"path": input.path, "replacements": input.edits.len(), "base_digest": actual, "new_digest": hex_digest(replacement.as_bytes())}),
+                json!({"path": input.path, "replacements": input.edits.len(), "base_digest": actual, "new_digest": hex_digest(replacement.as_bytes()), "diff": diff}),
             ),
             Err(e) => error(format!("edit write failed: {e}")),
         }
@@ -952,6 +953,9 @@ mod tests {
             fs::read_to_string(path).unwrap(),
             "\u{feff}one\r\nTWO\r\nthree\r\n"
         );
+        let patch = output.value["diff"]["text"].as_str().unwrap();
+        assert!(patch.contains("-two\r\n+TWO\r\n"), "{patch:?}");
+        assert_eq!(output.value["diff"]["truncated"], false);
         fs::remove_dir_all(root).unwrap();
     }
 

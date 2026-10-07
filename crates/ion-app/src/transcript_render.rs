@@ -436,6 +436,7 @@ fn render_group(rows: &mut Vec<Line<'static>>, group: &ActivityGroup, width: usi
         {
             push_detail(rows, "  └ ", "    ", detail, width);
         }
+        crate::edit_diff::render_preview(rows, &group.activities[0], "  ", width);
         render_children(rows, &group.activities[0].children, "  ", width);
         return;
     }
@@ -461,6 +462,12 @@ fn render_group(rows: &mut Vec<Line<'static>>, group: &ActivityGroup, width: usi
                 width,
             );
         }
+        crate::edit_diff::render_preview(
+            rows,
+            &group.activities[item.source.start],
+            if last { "  " } else { "│ " },
+            width,
+        );
         render_children(
             rows,
             &group.activities[item.source.start].children,
@@ -487,6 +494,7 @@ fn render_children(
             item,
             width,
         );
+        crate::edit_diff::render_preview(rows, &children[item.source.start], &continuation, width);
         if let Some(detail) = &item.detail {
             push_detail(
                 rows,

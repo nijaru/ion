@@ -6,6 +6,7 @@ mod binding;
 pub mod catalog;
 pub mod code_mode;
 mod credentials;
+mod edit_diff;
 pub mod image_input;
 mod local_tools;
 pub mod mcp;

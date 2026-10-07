@@ -42,6 +42,7 @@ with tempfile.TemporaryDirectory(prefix="ion-scrollback-") as temporary:
             if len(requests) == 1:
                 calls = [
                     ("read", {"path": "data.txt"}),
+                    ("edit", {"path": "data.txt", "edits": [{"old_text": "observed data", "new_text": "UPDATED_SNAPSHOT"}]}),
                     ("exec", {"command": "printf 'COMMAND_OUTPUT_%s\\n' ONCE"}),
                 ]
                 delta = {
@@ -106,10 +107,21 @@ with tempfile.TemporaryDirectory(prefix="ion-scrollback-") as temporary:
 
         def check_history():
             history = tmux("capture-pane", "-p", "-t", "ion", "-S", "-")
-            for marker in ("INPUT_ONCE", "NARRATIVE_ONCE", "COMMAND_OUTPUT_ONCE", "FINAL_ONCE"):
+            for marker in ("INPUT_ONCE", "NARRATIVE_ONCE", "COMMAND_OUTPUT_ONCE", "FINAL_ONCE", "-observed data", "+UPDATED_SNAPSHOT"):
                 assert history.count(marker) == 1, f"{marker} was republished or lost:\n{history}"
             assert "Working" not in history, f"mutable operation chrome leaked into history:\n{history}"
 
+        check_history()
+        assert (workspace / "data.txt").read_text() == "UPDATED_SNAPSHOT\n"
+        tmux("send-keys", "-t", "ion", "-l", "/tool 2")
+        tmux("send-keys", "-t", "ion", "Enter")
+        while "Recorded edit diff" not in tmux("capture-pane", "-p", "-t", "ion"):
+            assert time.monotonic() < deadline, "recorded edit inspection did not open"
+            time.sleep(0.02)
+        detail = tmux("capture-pane", "-p", "-t", "ion")
+        assert "-observed data" in detail and "+UPDATED_SNAPSHOT" in detail, detail
+        tmux("send-keys", "-t", "ion", "Escape")
+        time.sleep(0.1)
         check_history()
         tmux("resize-window", "-t", "ion", "-x", "60", "-y", "20")
         time.sleep(0.15)

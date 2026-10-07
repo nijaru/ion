@@ -170,6 +170,7 @@ with tempfile.TemporaryDirectory(prefix="ion-terminal-") as temporary:
             assert alt_enters > 0 and alt_enters == alt_leaves, (alt_enters, alt_leaves)
             plain_output = re.sub(rb"\x1b\[[0-9;?]*[A-Za-z]", b"", bytes(output))
             assert b"MARKDOWN_BOLD and literal_code docs (https://example.org/ion)" in plain_output, "assistant Markdown was not rendered"
+            assert b"-sample data" in plain_output and b"+sample data updated" in plain_output, "actual edit patch was not rendered"
             assert "• ".encode() in output, "semantic activity group header was not rendered"
             assert b"\xe2\x94\x9c " in output or b"\xe2\x94\x94 " in output, "grouped tool tree was not rendered"
             assert sent_file_start and selected_file and sent_first and sent_steering and sent_second and resized and sent_tool and closed_tool and sent_compact and sent_clone and sent_controls and sent_key and sent_logout and sent_copy and sent_quit, "terminal did not complete the session/model/login workflow"
@@ -184,6 +185,9 @@ with tempfile.TemporaryDirectory(prefix="ion-terminal-") as temporary:
             inspected = subprocess.run([binary, "--cwd", workspace, "--session", session_id, "inspect"], env=env, check=True, capture_output=True)
             entries = json.loads(inspected.stdout)["entries"]
             assert "**MARKDOWN_BOLD**" in str(entries), "formatted view replaced the original saved Markdown"
+            edits = [entry["data"]["result"]["result"]["diff"] for entry in entries if entry["kind"] == "tool_result" and "diff" in entry["data"]["result"]["result"]]
+            assert len(edits) == 1 and not edits[0]["truncated"], edits
+            assert "-sample data\n-second token\n+sample data updated\n+second token updated\n" in edits[0]["text"], edits
             exported = subprocess.run([binary, "--cwd", workspace, "--session", session_id, "export"], env=env, check=True, capture_output=True, text=True).stdout
             assert "**MARKDOWN_BOLD**" in exported, "export lost the original Markdown source"
             source = [line for line in listing.splitlines() if "\t\t2 turn(s)" in line]
