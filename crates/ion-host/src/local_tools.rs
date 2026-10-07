@@ -165,7 +165,7 @@ impl LocalTools {
             Ok(path) => path,
             Err(e) => return error(e),
         };
-        let mut file = match File::open(&path) {
+        let mut file = match crate::file_io::open_regular(&path) {
             Ok(file) => file,
             Err(e) => return error(format!("read {}: {e}", input.path)),
         };
@@ -281,7 +281,7 @@ impl LocalTools {
             Ok(path) => path,
             Err(e) => return error(e),
         };
-        let bytes = match read_file(&path) {
+        let bytes = match crate::file_io::read_bounded(&path, MAX_FILE_BYTES) {
             Ok(bytes) => bytes,
             Err(e) => return error(format!("edit {}: {e}", input.path)),
         };
@@ -594,24 +594,18 @@ fn replace_text_preserving_format(source: &str, edits: &[TextEdit]) -> Result<St
     }
     Ok(result)
 }
-fn read_file(path: &Path) -> std::io::Result<Vec<u8>> {
-    let meta = fs::metadata(path)?;
-    if !meta.is_file() {
-        return Err(std::io::Error::other("not a regular file"));
-    }
-    let mut bytes = Vec::new();
-    File::open(path)?
-        .take((MAX_FILE_BYTES + 1) as u64)
-        .read_to_end(&mut bytes)?;
-    if bytes.len() > MAX_FILE_BYTES {
-        return Err(std::io::Error::other("file exceeds 8 MiB"));
-    }
-    Ok(bytes)
-}
 fn ensure_writable(path: &Path) -> std::io::Result<()> {
     // Atomic rename would otherwise bypass the target file's write permission.
     // Opening without truncate checks the current host user's effective access.
-    OpenOptions::new().write(true).open(path).map(|_| ())
+    let file = File::from(rustix::fs::open(
+        path,
+        rustix::fs::OFlags::WRONLY | rustix::fs::OFlags::NONBLOCK | rustix::fs::OFlags::CLOEXEC,
+        rustix::fs::Mode::empty(),
+    )?);
+    if !file.metadata()?.is_file() {
+        return Err(std::io::Error::other("not a regular file"));
+    }
+    Ok(())
 }
 fn replace_file(
     path: &Path,

@@ -1,6 +1,6 @@
 //! Host-facing image input. Capability and filesystem access belong here;
 //! normalization is shared with images returned by coding tools.
-use std::{fs, io::Read, path::Path};
+use std::path::Path;
 
 use anyhow::{Context, Result, ensure};
 use base64::{Engine, engine::general_purpose::STANDARD};
@@ -12,24 +12,12 @@ pub use ion_ai::LoadedImage;
 
 pub fn load_image(selected: &Selection, path: &Path) -> Result<LoadedImage> {
     require_image_input(selected)?;
-    let metadata =
-        fs::metadata(path).with_context(|| format!("cannot inspect {}", path.display()))?;
-    ensure!(
-        metadata.is_file(),
-        "{} is not a regular file",
-        path.display()
-    );
-    ensure!(
-        metadata.len() <= MAX_SOURCE_BYTES as u64,
-        "{} exceeds Ion's current 32 MiB source-image bound",
-        path.display()
-    );
-    let mut bytes = Vec::new();
-    fs::File::open(path)
-        .with_context(|| format!("cannot open {}", path.display()))?
-        .take(MAX_SOURCE_BYTES as u64 + 1)
-        .read_to_end(&mut bytes)
-        .with_context(|| format!("cannot read {}", path.display()))?;
+    let bytes = crate::file_io::read_bounded(path, MAX_SOURCE_BYTES).with_context(|| {
+        format!(
+            "cannot read image {} (regular file, 32 MiB maximum)",
+            path.display()
+        )
+    })?;
     normalize_image(&bytes).with_context(|| format!("invalid image {}", path.display()))
 }
 

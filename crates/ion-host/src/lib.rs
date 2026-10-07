@@ -7,6 +7,7 @@ pub mod catalog;
 pub mod code_mode;
 mod credentials;
 mod edit_diff;
+mod file_io;
 pub mod image_input;
 mod local_tools;
 pub mod mcp;

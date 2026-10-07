@@ -2,7 +2,6 @@
 use std::{
     collections::BTreeMap,
     fs,
-    io::Read,
     path::{Path, PathBuf},
 };
 
@@ -16,7 +15,7 @@ mod templates;
 pub use templates::PromptTemplate;
 use templates::load_template;
 
-const MAX_RESOURCE_BYTES: u64 = 1024 * 1024;
+const MAX_RESOURCE_BYTES: usize = 1024 * 1024;
 
 #[derive(Debug, Clone)]
 pub struct ResourceDiagnostic {
@@ -303,17 +302,12 @@ fn load_skill(path: &Path) -> Result<Skill> {
 }
 
 pub(super) fn read_resource(path: &Path) -> Result<String> {
-    let file = fs::File::open(path).with_context(|| format!("cannot open {}", path.display()))?;
-    if !file.metadata()?.is_file() {
-        return Err(anyhow!("resource must be a regular file"));
-    }
-    let mut bytes = Vec::new();
-    file.take(MAX_RESOURCE_BYTES + 1).read_to_end(&mut bytes)?;
-    if bytes.len() as u64 > MAX_RESOURCE_BYTES {
-        return Err(anyhow!(
-            "resource must be a regular file no larger than 1 MiB"
-        ));
-    }
+    let bytes = crate::file_io::read_bounded(path, MAX_RESOURCE_BYTES).with_context(|| {
+        format!(
+            "cannot read resource {} (regular file, 1 MiB maximum)",
+            path.display()
+        )
+    })?;
     let text = String::from_utf8(bytes)
         .with_context(|| format!("cannot read {} as UTF-8", path.display()))?;
     Ok(text.strip_prefix('\u{feff}').unwrap_or(&text).to_owned())

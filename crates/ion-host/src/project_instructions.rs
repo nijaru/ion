@@ -1,6 +1,6 @@
 //! Project instructions for both executable clients.
 use std::{
-    fs, io,
+    io,
     path::{Path, PathBuf},
 };
 
@@ -21,25 +21,18 @@ pub fn load(cwd: &Path) -> Result<String> {
         if shadowed_main_file.as_ref() == Some(&path) {
             continue;
         }
-        match fs::read(&path) {
+        match crate::file_io::read_bounded(&path, 64 * 1024) {
             Ok(bytes) => {
-                ensure!(
-                    bytes.len() <= 64 * 1024,
-                    "project instructions {} exceed 64 KiB",
-                    path.display()
-                );
                 let text = String::from_utf8(bytes).with_context(|| {
                     format!("project instructions {} are not UTF-8", path.display())
                 })?;
                 let text = text.strip_prefix('\u{feff}').unwrap_or(&text);
+                let block = format!("\nProject instructions from {}:\n{text}\n", path.display());
                 ensure!(
-                    instructions.len().saturating_add(text.len()) <= 128 * 1024,
+                    instructions.len().saturating_add(block.len()) <= 128 * 1024,
                     "project instructions exceed 128 KiB"
                 );
-                instructions.push_str(&format!(
-                    "\nProject instructions from {}:\n{text}\n",
-                    path.display()
-                ));
+                instructions.push_str(&block);
             }
             Err(error) if error.kind() == io::ErrorKind::NotFound => {}
             Err(error) => {
@@ -56,10 +49,16 @@ fn shadowed_main_agents(cwd: &Path) -> Option<PathBuf> {
     let worktree_root = cwd
         .ancestors()
         .find(|directory| directory.join(".git").is_file())?;
-    let git_file = fs::read_to_string(worktree_root.join(".git")).ok()?;
+    let git_file = String::from_utf8(
+        crate::file_io::read_bounded(&worktree_root.join(".git"), 64 * 1024).ok()?,
+    )
+    .ok()?;
     let git_dir = git_file.lines().next()?.strip_prefix("gitdir:")?.trim();
     let git_dir = worktree_root.join(git_dir).canonicalize().ok()?;
-    let common_dir = fs::read_to_string(git_dir.join("commondir")).ok()?;
+    let common_dir = String::from_utf8(
+        crate::file_io::read_bounded(&git_dir.join("commondir"), 64 * 1024).ok()?,
+    )
+    .ok()?;
     let common_dir = git_dir.join(common_dir.trim()).canonicalize().ok()?;
     let main_root = common_dir.parent()?;
     if main_root.join(".git").canonicalize().ok()? != common_dir
@@ -75,6 +74,7 @@ fn shadowed_main_agents(cwd: &Path) -> Option<PathBuf> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::fs;
 
     fn fixture() -> (PathBuf, PathBuf) {
         let mut random = [0u8; 8];
