@@ -1,6 +1,7 @@
-"""Exercise skill and prompt resource expansion through the built headless CLI."""
+"""Exercise shared resource expansion and terminal command discovery/completion."""
 
 import json
+import errno
 import fcntl
 import os
 import pty
@@ -57,7 +58,7 @@ with tempfile.TemporaryDirectory(prefix="ion-resources-") as temporary:
         "---\ndescription: Check a named concern\n---\nCheck $1; scope ${2:-all}.\n"
     )
     env = os.environ.copy()
-    env.update(XDG_CONFIG_HOME=str(work / "config"), XDG_STATE_HOME=str(work / "state"))
+    env.update(HOME=str(work / "home"), XDG_CONFIG_HOME=str(work / "config"), XDG_STATE_HOME=str(work / "state"))
     server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
@@ -76,60 +77,84 @@ with tempfile.TemporaryDirectory(prefix="ion-resources-") as temporary:
         assert requests[0]["messages"][-1]["content"].strip() == "Check Rust; scope all."
         assert "AUDIT_BODY_MARKER" in requests[1]["messages"][-1]["content"]
         assert "User request: src/lib.rs" in requests[1]["messages"][-1]["content"]
-        master, slave = pty.openpty()
-        fcntl.ioctl(slave, termios.TIOCSWINSZ, struct.pack("HHHH", 30, 100, 0, 0))
+        for mode in ("inline", "fullscreen"):
+            master, slave = pty.openpty()
+            fcntl.ioctl(slave, termios.TIOCSWINSZ, struct.pack("HHHH", 30, 100, 0, 0))
 
-        def attach_terminal():
-            os.setsid()
-            fcntl.ioctl(slave, termios.TIOCSCTTY, 0)
+            def attach_terminal():
+                os.setsid()
+                fcntl.ioctl(slave, termios.TIOCSCTTY, 0)
 
-        terminal_env = {**env, "TERM": "xterm-256color"}
-        child = subprocess.Popen([binary, "--cwd", workspace, "chat"], env=terminal_env, stdin=slave, stdout=slave, stderr=slave, preexec_fn=attach_terminal)
-        os.close(slave)
-        output = bytearray()
-        sent = False
-        sent_reload = False
-        sent_prompts = False
-        quit_sent = False
-        deadline = time.monotonic() + 10
-        try:
-            while time.monotonic() < deadline:
-                readable, _, _ = select.select([master], [], [], 0.05)
-                if readable:
-                    try:
-                        data = os.read(master, 65536)
-                    except OSError:
-                        data = b""
-                    output.extend(data)
-                    if b"\x1b[6n" in data:
-                        os.write(master, b"\x1b[2;1R")
-                if b"\xe2\x80\xba " in output and not sent:
-                    assert b"\x1b[?1049h" not in output, "resource smoke entered alternate screen at inline startup"
-                    os.write(master, b"/check TUI\r")
-                    sent = True
-                if sent and b"RESOURCE_OK" in output and not sent_reload:
-                    (prompts / "late.md").write_text("A later prompt.\n")
-                    os.write(master, b"/reload\r")
-                    sent_reload = True
-                if sent_reload and b"Reloaded resources" in output and not sent_prompts:
-                    os.write(master, b"/prompts\r")
-                    sent_prompts = True
-                if sent_prompts and b"/late" in output and not quit_sent:
-                    os.write(master, b"\x03")
-                    quit_sent = True
-                if child.poll() is not None:
-                    break
-            child.wait(timeout=5)
-            assert child.returncode == 0, output[-1000:]
-            assert sent and sent_reload and sent_prompts and b"/late" in output
-            assert len(requests) == 3, requests
-            assert requests[2]["messages"][-1]["content"].strip() == "Check TUI; scope all."
-        finally:
-            if child.poll() is None:
-                child.send_signal(signal.SIGKILL)
-                child.wait()
-            os.close(master)
-        print("Ion headless and terminal skills and prompt templates: OK")
+            terminal_env = {**env, "TERM": "xterm-256color"}
+            child = subprocess.Popen([binary, "--cwd", workspace, "--tui-mode", mode, "chat"], env=terminal_env, stdin=slave, stdout=slave, stderr=slave, preexec_fn=attach_terminal)
+            os.close(slave)
+            output = bytearray()
+            phase = 0
+            checkpoint = 0
+            before = len(requests)
+            deadline = time.monotonic() + 15
+            try:
+                while time.monotonic() < deadline:
+                    readable, _, _ = select.select([master], [], [], 0.05)
+                    if readable:
+                        try:
+                            data = os.read(master, 65536)
+                        except OSError as error:
+                            if error.errno != errno.EIO:
+                                raise
+                            data = b""
+                        output.extend(data)
+                        if b"\x1b[6n" in data:
+                            os.write(master, b"\x1b[2;1R")
+                    current = output[checkpoint:]
+                    if phase == 0 and b"\xe2\x80\xba " in output:
+                        checkpoint = len(output)
+                        os.write(master, b"/che")
+                        phase = 1
+                    elif phase == 1 and b"Check a named concern" in current and b"\xe2\x80\xba /che" in current:
+                        assert len(requests) == before, "discovery issued a model request"
+                        if mode == "inline":
+                            assert b"\x1b[?1049h" not in output, "completion took the inline client into alternate screen"
+                        os.write(master, b"\x1b")
+                        escape_ready = time.monotonic() + 0.12
+                        phase = 11
+                    elif phase == 11 and time.monotonic() >= escape_ready:
+                        # Keep draining output while Escape resolves. Blocking
+                        # the PTY consumer can stall redraw and merge queued
+                        # Escape/Tab bytes into an Alt-Tab sequence.
+                        os.write(master, b"\tTUI\r")
+                        phase = 2
+                    elif phase == 2 and len(requests) == before + 1 and b"RESOURCE_OK" in current:
+                        (prompts / "late.md").write_text("A later prompt.\n")
+                        checkpoint = len(output)
+                        os.write(master, b"/reload\r")
+                        phase = 3
+                    elif phase == 3 and b"Reloaded resources" in current:
+                        checkpoint = len(output)
+                        os.write(master, b"/la")
+                        phase = 4
+                    elif phase == 4 and b"A later prompt" in current:
+                        assert len(requests) == before + 1, "reload/discovery issued a model request"
+                        checkpoint = len(output)
+                        os.write(master, b"\t\r")
+                        phase = 5
+                    elif phase == 5 and len(requests) == before + 2 and b"RESOURCE_OK" in current:
+                        os.write(master, b"\x03")
+                        phase = 6
+                    if child.poll() is not None:
+                        break
+                assert phase == 6, f"{mode} command completion stopped in phase {phase}: {output[-1000:]!r}"
+                child.wait(timeout=5)
+                assert child.returncode == 0, output[-1000:]
+                assert len(requests) == before + 2, "completion duplicated submission"
+                assert requests[before]["messages"][-1]["content"].strip() == "Check TUI; scope all."
+                assert requests[before + 1]["messages"][-1]["content"].strip() == "A later prompt."
+            finally:
+                if child.poll() is None:
+                    child.send_signal(signal.SIGKILL)
+                    child.wait()
+                os.close(master)
+        print("Ion headless resources and both-mode non-executing command completion/reload: OK")
     finally:
         server.shutdown()
         server.server_close()

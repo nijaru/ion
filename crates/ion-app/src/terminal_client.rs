@@ -10,6 +10,7 @@ use std::{
 };
 
 use crate::display_text::{fit_line, push_wrapped};
+use crate::terminal_commands::{Builtin, Completion};
 use crate::transcript_detail::{DetailView, tools};
 use crate::transcript_render::kind_label;
 use anyhow::{Context, Result, ensure};
@@ -100,6 +101,7 @@ struct Frontend {
     status: String,
     notices: Vec<String>,
     picker: Option<Picker>,
+    completion: Completion,
     pending: VecDeque<TurnInput>,
     input_budget: InputBudget,
     prompt_history: Vec<String>,
@@ -258,7 +260,7 @@ pub async fn chat(init: ChatInit) -> Result<()> {
             break;
         };
         match event? {
-            InputEvent::Key(key) => match ui.key(key) {
+            InputEvent::Key(key) => match ui.key(key, Some(runtime.resources())) {
                 Action::None => {}
                 Action::Quit => break,
                 Action::Submit(prompt) => {
@@ -293,21 +295,26 @@ pub async fn chat(init: ChatInit) -> Result<()> {
                     }
                 }
                 Action::Command(command) => {
-                    if let Some(provider) = command.strip_prefix("/login ") {
+                    let (name, args) = command
+                        .split_once(char::is_whitespace)
+                        .unwrap_or((&command, ""));
+                    let args = args.trim();
+                    let builtin = Builtin::parse(name);
+                    if builtin == Some(Builtin::Login) && !args.is_empty() {
                         match login_in_terminal(
                             &mut terminal,
                             &mut screen,
                             &mut input,
                             runtime.host().credentials(),
-                            provider.trim(),
+                            args,
                         )? {
                             Ok(()) => ui.status = "Credential saved".into(),
                             Err(error) => ui.status = format!("{error:#}"),
                         }
-                    } else if command == "/compact" {
+                    } else if builtin == Some(Builtin::Compact) && args.is_empty() {
                         run_compaction(&mut terminal, &mut screen, &mut input, &mut ui, &runtime)
                             .await?;
-                    } else if command == "/copy" {
+                    } else if builtin == Some(Builtin::Copy) && args.is_empty() {
                         match copy_last_answer(runtime.session(), &mut terminal).await {
                             Ok(crate::clipboard::CopyOutcome::Copied) => {
                                 ui.status = "Copied last assistant answer".into()
@@ -317,7 +324,8 @@ pub async fn chat(init: ChatInit) -> Result<()> {
                             }
                             Err(error) => ui.status = format!("Copy failed: {error:#}"),
                         }
-                    } else if command == "/editor" {
+                    } else if builtin == Some(Builtin::Editor) && args.is_empty() {
+                        ui.completion.clear();
                         match edit_draft_in_terminal(
                             &mut terminal,
                             &mut screen,
@@ -686,47 +694,69 @@ fn handle_command(
     ui: &mut Frontend,
     command: &str,
 ) -> Result<Option<String>> {
-    let (name, args) = command.split_once(' ').unwrap_or((command, ""));
+    let (name, args) = command
+        .split_once(char::is_whitespace)
+        .unwrap_or((command, ""));
     let args = args.trim();
-    match name {
-        "/help" => ui.note(
-            "/new /clone /fork [TURN] /fork-after TURN /resume /session /name NAME /model /compact /tools /tool [N] /settings [compact|expanded|thinking show|thinking hide] /tui MODE /image PATH /copy /editor /export PATH /skills /prompts /reload /login PROVIDER /logout PROVIDER /quit\nCtrl-V pastes files, image or text from the host clipboard. !COMMAND runs shell and shares result with model; !!COMMAND keeps it out of model context".into(),
-        ),
-        "/settings" => ui.output_settings(args)?,
-        "/tui" => {
-            match args {
-                "" => ui.note(format!(
-                    "TUI mode: {}. Use /tui inline or /tui fullscreen",
-                    ui.mode.label()
-                )),
-                "inline" | "regular" => {
-                    ui.mode = TuiMode::Inline;
-                    ui.scroll = 0;
-                    ui.status = "Inline TUI · native terminal scrollback".into();
-                }
-                "fullscreen" => {
-                    ui.mode = TuiMode::Fullscreen;
-                    ui.scroll = 0;
-                    ui.fullscreen_rows = 0;
-                    ui.status = "Fullscreen TUI · PageUp/PageDown or mouse wheel scrolls".into();
-                }
-                _ => anyhow::bail!("use /tui inline or /tui fullscreen"),
+    match Builtin::parse(name) {
+        Some(Builtin::Help) => ui.note(Builtin::help()),
+        Some(Builtin::Settings) => ui.output_settings(args)?,
+        Some(Builtin::Tui) => match args {
+            "" => ui.note(format!(
+                "TUI mode: {}. Use /tui inline or /tui fullscreen",
+                ui.mode.label()
+            )),
+            "inline" | "regular" => {
+                ui.mode = TuiMode::Inline;
+                ui.scroll = 0;
+                ui.status = "Inline TUI · native terminal scrollback".into();
             }
-        }
-        "/image" => {
+            "fullscreen" => {
+                ui.mode = TuiMode::Fullscreen;
+                ui.scroll = 0;
+                ui.fullscreen_rows = 0;
+                ui.status = "Fullscreen TUI · PageUp/PageDown or mouse wheel scrolls".into();
+            }
+            _ => anyhow::bail!("use /tui inline or /tui fullscreen"),
+        },
+        Some(Builtin::Image) => {
             anyhow::ensure!(!args.is_empty(), "use /image PATH");
             let path = Path::new(args);
-            let path = if path.is_absolute() { path.to_owned() } else { runtime.session().cwd().join(path) };
-            ui.images.push(ion_host::image_input::load_image(runtime.selected(), &path)?);
+            let path = if path.is_absolute() {
+                path.to_owned()
+            } else {
+                runtime.session().cwd().join(path)
+            };
+            ui.images.push(ion_host::image_input::load_image(
+                runtime.selected(),
+                &path,
+            )?);
             ui.status = format!("{} image(s) attached to the next prompt", ui.images.len());
         }
-        "/skills" => ui.note(runtime.resources().skills().map(|skill| format!("{} — {}", skill.name, skill.description)).collect::<Vec<_>>().join("\n")),
-        "/prompts" => ui.note(runtime.resources().templates().map(|template| format!("/{} — {}", template.name, template.description)).collect::<Vec<_>>().join("\n")),
-        "/reload" => {
+        Some(Builtin::Skills) => ui.note(
+            runtime
+                .resources()
+                .skills()
+                .map(|skill| format!("{} — {}", skill.name, skill.description))
+                .collect::<Vec<_>>()
+                .join("\n"),
+        ),
+        Some(Builtin::Prompts) => ui.note(
+            runtime
+                .resources()
+                .templates()
+                .map(|template| format!("/{} — {}", template.name, template.description))
+                .collect::<Vec<_>>()
+                .join("\n"),
+        ),
+        Some(Builtin::Reload) => {
             runtime.reload_resources()?;
-            ui.note(format!("Reloaded resources ({} diagnostic(s))", runtime.resources().diagnostics().len()));
+            ui.note(format!(
+                "Reloaded resources ({} diagnostic(s))",
+                runtime.resources().diagnostics().len()
+            ));
         }
-        "/session" => {
+        Some(Builtin::Session) => {
             let view = runtime.session().view()?;
             ui.note(format!(
                 "Session {} · {} turn(s) · {} · {}",
@@ -739,44 +769,63 @@ fn handle_command(
                 context_label(&view, runtime.selected().context_window_tokens),
             ));
         }
-        "/export" => {
+        Some(Builtin::Export) => {
             anyhow::ensure!(!args.is_empty(), "use /export PATH");
             let target = Path::new(args);
-            let target = if target.is_absolute() { target.to_owned() } else { runtime.session().cwd().join(target) };
+            let target = if target.is_absolute() {
+                target.to_owned()
+            } else {
+                runtime.session().cwd().join(target)
+            };
             crate::transcript::save_new(&runtime.session().view()?, &target)?;
             ui.status = format!("Transcript saved to {}", target.display());
         }
-        "/new" => {
+        Some(Builtin::New) => {
             runtime.new_session()?;
             ui.refresh_session(runtime.session())?;
             ui.note("Started a new session".into());
         }
-        "/clone" => {
+        Some(Builtin::Clone) => {
             let id = runtime.clone_session()?;
             ui.refresh_session(runtime.session())?;
             ui.note(format!(
                 "Cloned conversation as {id}; both sessions use the same working directory"
             ));
         }
-        "/fork" => {
+        Some(Builtin::Fork) => {
             let turns = runtime.session().view()?.turns();
             if args.is_empty() {
-                let items = turns.into_iter().map(|item| PickerItem {
-                    label: format!("Turn {}  {}", item.turn, crate::preview_input(&item.input)),
-                    value: PickerValue::ForkBefore { turn: item.turn, input: item.input },
-                }).collect();
-                ui.picker = Some(Picker { title: "Fork before Turn", query: String::new(), selected: 0, items });
+                let items = turns
+                    .into_iter()
+                    .map(|item| PickerItem {
+                        label: format!("Turn {}  {}", item.turn, crate::preview_input(&item.input)),
+                        value: PickerValue::ForkBefore {
+                            turn: item.turn,
+                            input: item.input,
+                        },
+                    })
+                    .collect();
+                ui.picker = Some(Picker {
+                    title: "Fork before Turn",
+                    query: String::new(),
+                    selected: 0,
+                    items,
+                });
             } else {
                 let turn: u64 = args.parse().context("use /fork TURN")?;
-                let input = turns.into_iter().find(|item| item.turn == turn).context("selected Turn does not exist")?.input;
+                let input = turns
+                    .into_iter()
+                    .find(|item| item.turn == turn)
+                    .context("selected Turn does not exist")?
+                    .input;
                 apply_fork(runtime, ui, ForkPoint::BeforeTurn(turn), Some(input))?;
             }
         }
-        "/fork-after" => {
+        Some(Builtin::ForkAfter) => {
             let turn: u64 = args.parse().context("use /fork-after TURN")?;
             apply_fork(runtime, ui, ForkPoint::AfterTurn(turn), None)?;
         }
-        "/resume" => {
+        Some(Builtin::Resume) => {
             if !args.is_empty() {
                 runtime.switch_session(runtime.catalog().by_id(args)?)?;
                 ui.refresh_session(runtime.session())?;
@@ -803,7 +852,7 @@ fn handle_command(
                 });
             }
         }
-        "/name" => {
+        Some(Builtin::Name) => {
             if args.is_empty() {
                 ui.note(
                     runtime
@@ -817,7 +866,7 @@ fn handle_command(
                 ui.refresh_session(runtime.session())?;
             }
         }
-        "/model" => {
+        Some(Builtin::Model) => {
             if !args.is_empty() {
                 let (provider, model) =
                     args.split_once('/').context("use /model PROVIDER/MODEL")?;
@@ -858,13 +907,13 @@ fn handle_command(
                 });
             }
         }
-        "/logout" => {
+        Some(Builtin::Logout) => {
             anyhow::ensure!(!args.is_empty(), "use /logout PROVIDER");
             runtime.host().credentials().remove(args)?;
             ui.status = format!("Removed saved {args} credential");
         }
-        "/tools" => ui.list_tools(),
-        "/tool" => {
+        Some(Builtin::Tools) => ui.list_tools(),
+        Some(Builtin::Tool) => {
             let number = if args.is_empty() {
                 tools(&ui.history).count()
             } else {
@@ -872,7 +921,8 @@ fn handle_command(
             };
             ui.open_details(Some(number));
         }
-        _ => {
+        Some(kind) => anyhow::bail!("use {}", kind.usage()),
+        None => {
             if let Some(prompt) = runtime.resources().expand_command(command) {
                 return prompt.map(Some);
             }
@@ -972,7 +1022,7 @@ fn busy_key(
         && !key.modifiers.contains(Modifiers::CONTROL)
         && ui.draft.trim_start().starts_with('/'))
     .then(|| ui.draft.clone());
-    let action = ui.key(key);
+    let action = ui.key(key, resources);
     let action = if ui.clipboard_job.is_some() {
         match action {
             Action::Submit(prompt) | Action::Queue(prompt) => {
@@ -1011,20 +1061,23 @@ fn busy_key(
         }
         Action::Queue(prompt) => ui.queue_follow_up(prompt, limits, resources),
         Action::Command(command) => {
-            if let Some(args) = command
-                .strip_prefix("/settings")
-                .filter(|args| args.is_empty() || args.starts_with(' '))
-            {
+            let (name, args) = command
+                .split_once(char::is_whitespace)
+                .unwrap_or((&command, ""));
+            let builtin = Builtin::parse(name);
+            if builtin == Some(Builtin::Settings) {
                 if let Err(error) = ui.output_settings(args.trim()) {
                     ui.status = format!("{error:#}");
                 }
                 return;
             }
-            if command == "/copy" || command == "/editor" {
+            if matches!(builtin, Some(Builtin::Copy | Builtin::Editor)) {
                 ui.status = "This action is available after the operation".into();
                 return;
             }
-            if let (Some(steering), Some(resources)) = (steering, resources)
+            if builtin.is_some() {
+                ui.status = "Commands are available after this operation".into();
+            } else if let (Some(steering), Some(resources)) = (steering, resources)
                 && let Some(expanded) = resources.expand_command(&command)
             {
                 match expanded {
@@ -1389,6 +1442,7 @@ enum Action {
 
 impl Frontend {
     fn refresh_session(&mut self, session: &CodingSession) -> Result<()> {
+        self.completion.clear();
         let view = session.view()?;
         self.load_history(session, &view);
         self.details = None;
@@ -1525,14 +1579,54 @@ impl Frontend {
         self.scroll = 0;
     }
 
-    fn key(&mut self, key: KeyEvent) -> Action {
+    fn key(&mut self, key: KeyEvent, resources: Option<&Resources>) -> Action {
         if self.details.is_some() {
+            self.completion.clear();
             return self.detail_key(key);
         }
         if self.picker.is_some() {
+            self.completion.clear();
             return self.picker_key(key);
         }
-        match key {
+        let menu_was_visible = self.completion.visible();
+        self.completion.refresh(
+            &self.draft,
+            self.cursor,
+            resources,
+            key.code == KeyCode::Tab && key.modifiers.is_empty(),
+        );
+        if self.completion.active() && key.code == KeyCode::Esc && key.modifiers.is_empty() {
+            self.completion.dismiss();
+            return Action::None;
+        }
+        if key.modifiers.is_empty()
+            && (self.completion.visible() || (self.completion.active() && key.code == KeyCode::Tab))
+        {
+            match key.code {
+                KeyCode::Up | KeyCode::Down => {
+                    self.completion.move_selection(key.code == KeyCode::Down);
+                    return Action::None;
+                }
+                KeyCode::Tab | KeyCode::Enter => {
+                    if key.code == KeyCode::Tab && !menu_was_visible && !self.completion.unique() {
+                        return Action::None;
+                    }
+                    if let Some((range, text, cursor)) = self.completion.replacement(&self.draft) {
+                        if self.draft.len() - range.len() + text.len() <= MAX_DRAFT {
+                            self.draft.replace_range(range, &text);
+                            self.cursor = cursor;
+                            self.history_cursor = None;
+                        } else {
+                            self.status = format!("Prompt is limited to {MAX_DRAFT} bytes");
+                        }
+                    }
+                    self.completion.clear();
+                    return Action::None;
+                }
+                _ => {}
+            }
+        }
+        let action = match key {
             KeyEvent {
                 code: KeyCode::Char('c'),
                 modifiers,
@@ -1626,7 +1720,7 @@ impl Frontend {
                 let syntax = prompt.trim();
                 if syntax.is_empty() && self.images.is_empty() {
                     Action::None
-                } else if syntax == "/exit" || syntax == "/quit" {
+                } else if Builtin::parse(syntax) == Some(Builtin::Quit) {
                     Action::Quit
                 } else if syntax.starts_with('/') {
                     Action::Command(syntax.to_owned())
@@ -1751,7 +1845,14 @@ impl Frontend {
                 Action::None
             }
             _ => Action::None,
+        };
+        if self.picker.is_some() || self.details.is_some() {
+            self.completion.clear();
+        } else {
+            self.completion
+                .refresh(&self.draft, self.cursor, resources, false);
         }
+        action
     }
 
     fn picker_key(&mut self, key: KeyEvent) -> Action {
@@ -1900,6 +2001,7 @@ impl Frontend {
         self.history_cursor = None;
     }
     fn insert(&mut self, text: &str) {
+        self.completion.clear();
         if let Some(picker) = &mut self.picker {
             picker.query.push_str(
                 &text
@@ -1964,6 +2066,14 @@ impl Frontend {
         limits: AgentLimits,
         resources: Option<&Resources>,
     ) {
+        let name = original.split_whitespace().next().unwrap_or("");
+        if Builtin::parse(name).is_some() {
+            self.draft = original;
+            self.cursor = self.draft.len();
+            self.status =
+                "Terminal commands cannot be queued; submit a prompt or resource command".into();
+            return;
+        }
         let prompt = match resources {
             Some(resources) => match expand_resource_input(resources, original.clone()) {
                 Ok(prompt) => prompt,
@@ -2103,6 +2213,20 @@ fn draw(
         .cursor_row
         .saturating_sub(composer_height.saturating_sub(1))
         .min(composer.lines.len().saturating_sub(composer_height));
+    let progress_height = usize::from(operation.is_some()) * 2;
+    let status_height = usize::from(visible_status(ui, operation).is_some());
+    let completions = ui.completion.rows(
+        width,
+        row_budget.saturating_sub(composer_height + progress_height + status_height),
+    );
+    let chrome_budget =
+        row_budget.saturating_sub(composer_height + progress_height + completions.len());
+    // Discovery is temporary composer chrome. Older notices must not hide a
+    // keyboard-active menu or displace the operation's stop/status controls.
+    if chrome.len() > chrome_budget {
+        chrome.drain(..chrome.len() - chrome_budget);
+    }
+    chrome.extend(completions);
     let content_budget = row_budget.saturating_sub(composer_height + chrome.len());
     let mut live_rows = progress.map_or_else(Vec::new, |progress| {
         crate::transcript_render::live_rows(
@@ -2250,7 +2374,11 @@ fn draw_chat_fullscreen(
         .min(composer.lines.len().saturating_sub(composer_height));
     let status = visible_status(ui, operation);
     let status_height = usize::from(status.is_some());
-    let viewport = height.saturating_sub(composer_height + status_height);
+    let completions = ui.completion.rows(
+        width,
+        height.saturating_sub(composer_height + status_height),
+    );
+    let viewport = height.saturating_sub(composer_height + status_height + completions.len());
 
     let end = content.len().saturating_sub(ui.scroll);
     let start = end.saturating_sub(viewport);
@@ -2266,6 +2394,12 @@ fn draw_chat_fullscreen(
     {
         rows[next_row] = Line::raw(fit_line(&status, width));
         next_row += 1;
+    }
+    for row in completions {
+        if next_row < height {
+            rows[next_row] = Line::raw(row);
+            next_row += 1;
+        }
     }
     for (index, line) in composer
         .lines
@@ -2551,7 +2685,7 @@ mod tests {
         let mut ui = Frontend::default();
         ui.insert("follow up");
         assert!(matches!(
-            ui.key(KeyEvent::new(KeyCode::Enter, Modifiers::ALT)),
+            ui.key(KeyEvent::new(KeyCode::Enter, Modifiers::ALT), None),
             Action::Queue(prompt) if prompt == "follow up"
         ));
         assert!(ui.draft.is_empty());
@@ -2689,7 +2823,7 @@ mod tests {
         assert!(clipboard_paths(&[PathBuf::from("/tmp/bad\nname")], false).is_err());
         let mut ui = Frontend::default();
         assert!(matches!(
-            ui.key(KeyEvent::new(KeyCode::Char('v'), Modifiers::CONTROL)),
+            ui.key(KeyEvent::new(KeyCode::Char('v'), Modifiers::CONTROL), None),
             Action::PasteClipboard
         ));
     }
@@ -2928,21 +3062,193 @@ mod tests {
     }
 
     #[test]
+    fn command_completion_edits_without_dispatch_or_argument_loss() {
+        let mut ui = Frontend {
+            history_published_items: 7,
+            ..Frontend::default()
+        };
+        for ch in "/hel".chars() {
+            assert!(matches!(
+                ui.key(KeyEvent::new(KeyCode::Char(ch), Modifiers::NONE), None),
+                Action::None
+            ));
+        }
+        assert!(ui.completion.active());
+        assert!(matches!(
+            ui.key(KeyEvent::new(KeyCode::Tab, Modifiers::NONE), None),
+            Action::None
+        ));
+        assert_eq!(ui.draft, "/help ");
+        assert!(ui.pending.is_empty());
+        assert_eq!(ui.history_published_items, 7);
+        assert!(
+            matches!(ui.key(KeyEvent::new(KeyCode::Enter, Modifiers::NONE), None), Action::Command(command) if command == "/help")
+        );
+
+        ui.insert("  /help focus 🦀");
+        ui.cursor = "  /hel".len();
+        ui.key(KeyEvent::new(KeyCode::Tab, Modifiers::NONE), None);
+        assert_eq!(ui.draft, "  /help focus 🦀");
+        assert_eq!(ui.cursor, "  /help ".len());
+        ui.draft.clear();
+        ui.cursor = 0;
+        ui.insert("/re");
+        // Pasted ambiguous names open discovery before accepting a proposal.
+        ui.key(KeyEvent::new(KeyCode::Tab, Modifiers::NONE), None);
+        assert_eq!(ui.draft, "/re");
+        assert!(ui.completion.active());
+        ui.key(KeyEvent::new(KeyCode::Esc, Modifiers::NONE), None);
+        assert!(!ui.completion.active());
+        assert_eq!(ui.draft, "/re");
+        ui.draft.clear();
+        ui.cursor = 0;
+        ui.insert("literal");
+        ui.key(KeyEvent::new(KeyCode::Tab, Modifiers::NONE), None);
+        assert_eq!(ui.draft, "literal\t");
+        ui.draft.clear();
+        ui.cursor = 0;
+        ui.insert("/fork");
+        ui.key(KeyEvent::new(KeyCode::Tab, Modifiers::NONE), None);
+        assert!(ui.completion.active());
+        ui.completion.rows(80, 5);
+        ui.key(KeyEvent::new(KeyCode::Down, Modifiers::NONE), None);
+        ui.completion.rows(80, 5);
+        assert!(matches!(
+            ui.key(KeyEvent::new(KeyCode::Enter, Modifiers::NONE), None),
+            Action::None
+        ));
+        assert_eq!(ui.draft, "/fork-after ");
+        ui.draft.clear();
+        ui.cursor = 0;
+        ui.insert("/re");
+        ui.completion.refresh(&ui.draft, ui.cursor, None, false);
+        assert!(ui.completion.rows(80, 1).is_empty());
+        // A menu that cannot fit is not an invisible keyboard target.
+        assert!(
+            matches!(ui.key(KeyEvent::new(KeyCode::Enter, Modifiers::NONE), None), Action::Command(command) if command == "/re")
+        );
+    }
+
+    #[test]
+    fn resource_discovery_and_busy_completion_preserve_admission_authority() {
+        let root = std::env::temp_dir().join(format!("ion-menu-{}", uuid::Uuid::now_v7()));
+        fs::create_dir_all(root.join(".ion/prompts")).unwrap();
+        fs::create_dir(root.join(".git")).unwrap();
+        fs::create_dir_all(root.join(".agents/skills/zzmenu-audit")).unwrap();
+        fs::write(root.join(".agents/skills/zzmenu-audit/SKILL.md"), "---\nname: zzmenu-audit\ndescription: Explicit audit\ndisable-model-invocation: true\n---\nAudit instructions\n").unwrap();
+        let template = root.join(".ion/prompts/zzmenu-check.md");
+        fs::write(&template, "ESC\x1b[31m 🦀\nFirst $1\n").unwrap();
+        fs::write(
+            root.join(".ion/prompts/new.md"),
+            "Must not shadow terminal control\n",
+        )
+        .unwrap();
+        let resources = Resources::load(&root, &root.join("config")).unwrap();
+        let stop = CancellationToken::new();
+        let mut ui = Frontend {
+            history_published_items: 7,
+            ..Frontend::default()
+        };
+        let steering = SteeringInbox::new(AgentLimits::default(), ui.input_budget.clone());
+        ui.insert("/zzmenu-ch");
+        ui.completion
+            .refresh(&ui.draft, ui.cursor, Some(&resources), false);
+        for width in [1, 8, 24, 80] {
+            let rows = ui.completion.rows(width, 5);
+            assert!(rows.len() <= 5);
+            assert!(
+                rows.iter()
+                    .all(|row| !row.contains('\x1b') && row.width() <= width)
+            );
+        }
+        busy_key(
+            &mut ui,
+            KeyEvent::new(KeyCode::Tab, Modifiers::NONE),
+            &stop,
+            Some(&steering),
+            Some(&resources),
+            AgentLimits::default(),
+        );
+        assert_eq!(ui.draft, "/zzmenu-check ");
+        assert!(steering.take_uncommitted().is_empty());
+        ui.insert("concurrency");
+        busy_key(
+            &mut ui,
+            KeyEvent::new(KeyCode::Enter, Modifiers::NONE),
+            &stop,
+            Some(&steering),
+            Some(&resources),
+            AgentLimits::default(),
+        );
+        fs::write(&template, "Changed $1\n").unwrap();
+        let reloaded = Resources::load(&root, &root.join("config")).unwrap();
+        let queued = steering.take_uncommitted();
+        assert_eq!(queued.len(), 1);
+        assert!(
+            matches!(&queued[0].message().content[0], Content::Text(text) if text.contains("First concurrency") && !text.contains("Changed"))
+        );
+        drop(queued);
+        assert_eq!(ui.history_published_items, 7);
+        assert!(!stop.is_cancelled());
+        ui.insert("/zzmenu-au");
+        ui.key(
+            KeyEvent::new(KeyCode::Tab, Modifiers::NONE),
+            Some(&reloaded),
+        );
+        assert_eq!(ui.draft, "/skill:zzmenu-audit ");
+        ui.draft.clear();
+        ui.cursor = 0;
+        ui.insert("/ne");
+        ui.completion
+            .refresh(&ui.draft, ui.cursor, Some(&reloaded), false);
+        assert!(
+            ui.completion
+                .rows(100, 5)
+                .iter()
+                .all(|row| !row.contains("[prompt]"))
+        );
+        ui.draft.clear();
+        ui.cursor = 0;
+        ui.insert("/new");
+        busy_key(
+            &mut ui,
+            KeyEvent::new(KeyCode::Enter, Modifiers::NONE),
+            &stop,
+            Some(&steering),
+            Some(&reloaded),
+            AgentLimits::default(),
+        );
+        assert_eq!(ui.draft, "/new");
+        assert!(steering.take_uncommitted().is_empty());
+        busy_key(
+            &mut ui,
+            KeyEvent::new(KeyCode::Enter, Modifiers::ALT),
+            &stop,
+            Some(&steering),
+            Some(&reloaded),
+            AgentLimits::default(),
+        );
+        assert_eq!(ui.draft, "/new");
+        assert!(ui.pending.is_empty());
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
     fn prompt_history_restores_unsent_draft_and_moves_between_lines() {
         let mut ui = Frontend {
             prompt_history: vec!["first".into(), "second\nline".into()],
             ..Frontend::default()
         };
         ui.insert("unsent");
-        ui.key(KeyEvent::new(KeyCode::Up, Modifiers::NONE));
+        ui.key(KeyEvent::new(KeyCode::Up, Modifiers::NONE), None);
         assert_eq!(ui.draft, "second\nline");
-        ui.key(KeyEvent::new(KeyCode::Up, Modifiers::NONE));
+        ui.key(KeyEvent::new(KeyCode::Up, Modifiers::NONE), None);
         assert_eq!(ui.cursor, "line".len());
-        ui.key(KeyEvent::new(KeyCode::Up, Modifiers::NONE));
+        ui.key(KeyEvent::new(KeyCode::Up, Modifiers::NONE), None);
         assert_eq!(ui.draft, "first");
-        ui.key(KeyEvent::new(KeyCode::Down, Modifiers::NONE));
+        ui.key(KeyEvent::new(KeyCode::Down, Modifiers::NONE), None);
         assert_eq!(ui.draft, "second\nline");
-        ui.key(KeyEvent::new(KeyCode::Down, Modifiers::NONE));
+        ui.key(KeyEvent::new(KeyCode::Down, Modifiers::NONE), None);
         assert_eq!(ui.draft, "unsent");
     }
 
@@ -2961,9 +3267,9 @@ mod tests {
         assert!(scan_files(&root).contains(&"src/main.rs".into()));
         assert!(!scan_files(&root).contains(&"src/skip.rs".into()));
         ui.insert("Read ");
-        ui.key(KeyEvent::new(KeyCode::Char('@'), Modifiers::NONE));
-        ui.key(KeyEvent::new(KeyCode::Char('m'), Modifiers::NONE));
-        let chosen = ui.key(KeyEvent::new(KeyCode::Enter, Modifiers::NONE));
+        ui.key(KeyEvent::new(KeyCode::Char('@'), Modifiers::NONE), None);
+        ui.key(KeyEvent::new(KeyCode::Char('m'), Modifiers::NONE), None);
+        let chosen = ui.key(KeyEvent::new(KeyCode::Enter, Modifiers::NONE), None);
         let Action::Pick(PickerValue::File { path, start, end }) = chosen else {
             panic!("file picker did not choose a path")
         };

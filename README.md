@@ -250,6 +250,11 @@ admission, so later resource changes do not rewrite an accepted follow-up. Up an
 earlier prompts when the cursor reaches the first or last editor line. Type
 `@` to pick a project file, or use Tab after a partial `@path`; the picker
 inserts a path reference for the model to read, not the file's contents.
+Type `/` to discover terminal commands, prompt templates and `/skill:NAME`.
+Up/Down selects a suggestion; Tab or Enter inserts it without executing it.
+Submit the completed draft separately. Esc closes discovery without discarding
+input. Suggestions stay in the selected terminal surface, including during work;
+terminal controls cannot be queued as follow-up prompts.
 Ctrl-O opens the whole conversation, including current work and provisional
 assistant text, in a full-screen detail view. Left/Right browse earlier/newer
 pages (32 messages, calls or shell records); Up/Down and Page-Up/Page-Down
@@ -366,7 +371,10 @@ load it explicitly. Prompt templates are direct `.md` files in
 expands one before submitting it. Templates support `$1`, `$@`,
 `${1:-default}` and `${@:N:L}` argument forms; quote an argument containing
 spaces. `ion resources` lists both, and the TUI has
-`/skills`, `/prompts` and `/reload`. Starting, cloning, forking or switching a
+`/skills`, `/prompts` and `/reload`. Slash-command discovery uses this same
+loaded inventory; `/reload` refreshes suggestions. Native terminal command names
+take precedence over same-named templates in the terminal client. Starting,
+cloning, forking or switching a
 Session refreshes resources; `/reload` refreshes the current Session. Personal
 resources take precedence over same-named project resources; nearer project
 directories take precedence over ancestors. Invalid resources are skipped with
