@@ -111,8 +111,19 @@ struct ChatCall {
     arguments: String,
 }
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum ThinkingSource {
+    Plain,
+    Structured,
+}
+
 pub(super) struct ChatState {
     text: String,
+    thinking_source: Option<ThinkingSource>,
+    // Stream one readable channel so dual fields cannot duplicate provisional
+    // output. Completion projects the richer validated structured blocks.
+    thinking_entry: Option<usize>,
+    thinking_blocks: usize,
     reasoning_content: String,
     reasoning_details: Vec<Value>,
     wire: HttpWire,
@@ -125,6 +136,9 @@ impl Default for ChatState {
     fn default() -> Self {
         Self {
             text: String::new(),
+            thinking_source: None,
+            thinking_entry: None,
+            thinking_blocks: 0,
             reasoning_content: String::new(),
             reasoning_details: Vec::new(),
             wire: HttpWire::ChatCompletions,
@@ -197,11 +211,22 @@ impl ChatState {
                 return Err(unsupported("structured reasoning replay is unsupported"));
             }
             for detail in details {
-                append_openrouter_detail(&mut self.reasoning_details, detail)?;
+                let index = append_openrouter_detail(&mut self.reasoning_details, detail)?;
+                if let Some(text) = openrouter_human_text(detail) {
+                    self.thinking_source
+                        .get_or_insert(ThinkingSource::Structured);
+                    if self.thinking_source == Some(ThinkingSource::Structured) {
+                        self.push_thinking(index, text, &mut events);
+                    }
+                }
             }
         }
         if let Some(reasoning) = chat_reasoning_delta(delta, self.wire)? {
             self.reasoning_content.push_str(reasoning);
+            self.thinking_source.get_or_insert(ThinkingSource::Plain);
+            if self.thinking_source == Some(ThinkingSource::Plain) {
+                self.push_thinking(0, reasoning, &mut events);
+            }
         }
         if let Some(part) = delta["content"].as_str().filter(|s| !s.is_empty()) {
             self.text.push_str(part);
@@ -233,6 +258,18 @@ impl ChatState {
         }
         Ok(events)
     }
+    fn push_thinking(&mut self, index: usize, text: &str, events: &mut Vec<ModelStreamEvent>) {
+        if self.thinking_entry != Some(index) {
+            self.thinking_entry = Some(index);
+            self.thinking_blocks += 1;
+        }
+        let block = self.thinking_blocks - 1;
+        events.push(ModelStreamEvent::ThinkingDelta {
+            block,
+            text: text.into(),
+        });
+    }
+
     pub(super) fn complete(self, request: &ModelRequest) -> Result<ModelResponse, ProviderError> {
         if self.wire == HttpWire::OpenRouterChat
             && !self.reasoning_content.is_empty()
@@ -266,7 +303,15 @@ impl ChatState {
         {
             return Err(invalid("finish_reason contradicts tool calls"));
         }
-        let mut content = Vec::new();
+        let mut content = self
+            .reasoning_details
+            .iter()
+            .filter_map(openrouter_human_text)
+            .map(|text| Content::Thinking(text.to_owned()))
+            .collect::<Vec<_>>();
+        if content.is_empty() && !self.reasoning_content.is_empty() {
+            content.push(Content::Thinking(self.reasoning_content.clone()));
+        }
         if !self.text.is_empty() {
             content.push(Content::Text(self.text));
         }
@@ -327,7 +372,7 @@ impl ChatState {
 pub(super) fn append_openrouter_detail(
     details: &mut Vec<Value>,
     fragment: &Value,
-) -> Result<(), ProviderError> {
+) -> Result<usize, ProviderError> {
     if !valid_openrouter_detail(fragment) {
         return Err(invalid("invalid OpenRouter reasoning detail"));
     }
@@ -337,7 +382,7 @@ pub(super) fn append_openrouter_detail(
         "reasoning.summary" => "summary",
         _ => {
             details.push(fragment.clone());
-            return Ok(());
+            return Ok(details.len() - 1);
         }
     };
     if let Some(last) = details.last_mut().filter(|last| {
@@ -369,11 +414,21 @@ pub(super) fn append_openrouter_detail(
                     }
                 }
             }
-            return Ok(());
+            return Ok(details.len() - 1);
         }
     }
     details.push(fragment.clone());
-    Ok(())
+    Ok(details.len() - 1)
+}
+
+// Called only after detail validation, at the adapter projection boundary.
+fn openrouter_human_text(detail: &Value) -> Option<&str> {
+    match detail["type"].as_str() {
+        Some("reasoning.text") => detail["text"].as_str(),
+        Some("reasoning.summary") => detail["summary"].as_str(),
+        _ => None,
+    }
+    .filter(|text| !text.is_empty())
 }
 
 pub(super) fn chat_reasoning_delta(

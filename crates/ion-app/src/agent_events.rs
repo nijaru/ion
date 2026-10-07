@@ -6,6 +6,9 @@ pub(super) fn event_record(event: CodingAgentEvent) -> Value {
     match event {
         CodingAgentEvent::TurnAccepted { turn } => json!({"type":"turn_accepted","turn":turn}),
         CodingAgentEvent::TextDelta(text) => json!({"type":"text_delta","text":text}),
+        CodingAgentEvent::ThinkingDelta { block, text } => {
+            json!({"type":"thinking_delta","block":block,"text":text})
+        }
         CodingAgentEvent::AssistantCommitted {
             turn,
             content,
@@ -136,6 +139,7 @@ pub(super) fn diagnostic(event: CodingAgentEvent) -> Option<String> {
         CodingAgentEvent::ToolCatalogWarning(message) => format!("[tool catalog: {message}]"),
         CodingAgentEvent::TurnAccepted { .. }
         | CodingAgentEvent::TextDelta(_)
+        | CodingAgentEvent::ThinkingDelta { .. }
         | CodingAgentEvent::AssistantCommitted { .. }
         | CodingAgentEvent::SteeringCommitted { .. }
         | CodingAgentEvent::ChildToolStarted { .. }

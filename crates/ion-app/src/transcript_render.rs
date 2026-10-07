@@ -36,22 +36,46 @@ pub(super) fn state_label(state: ActivityState) -> &'static str {
     }
 }
 
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub(super) enum ThinkingVisibility {
+    #[default]
+    Hidden,
+    Visible,
+}
+
+impl ThinkingVisibility {
+    pub(super) fn label(self) -> &'static str {
+        match self {
+            Self::Hidden => "Hidden",
+            Self::Visible => "Shown",
+        }
+    }
+}
+
 const MAX_COALESCED_SUBJECTS: usize = 3;
 
 pub fn rows(
     projection: &TranscriptProjection,
     width: usize,
     detail: OutputDetail,
+    thinking: ThinkingVisibility,
 ) -> Vec<Line<'static>> {
     let width = width.max(1);
     let mut rows = Vec::new();
     for item in &projection.items {
+        if hidden_thinking(item, thinking) {
+            continue;
+        }
         if !rows.is_empty() && rows.last().is_some_and(|row: &Line<'_>| row.width() > 0) {
             rows.push(Line::default());
         }
         match item {
-            TranscriptItem::User(message) => render_message(&mut rows, message, true, width),
-            TranscriptItem::Assistant(message) => render_message(&mut rows, message, false, width),
+            TranscriptItem::User(message) => {
+                render_message(&mut rows, message, true, width, thinking)
+            }
+            TranscriptItem::Assistant(message) => {
+                render_message(&mut rows, message, false, width, thinking)
+            }
             TranscriptItem::ActivityGroup(group) => render_group(&mut rows, group, width, detail),
             TranscriptItem::UserShell(shell) => render_shell(&mut rows, shell, width, detail),
         }
@@ -62,19 +86,25 @@ pub fn rows(
     rows
 }
 
+fn hidden_thinking(item: &TranscriptItem, thinking: ThinkingVisibility) -> bool {
+    thinking == ThinkingVisibility::Hidden
+        && matches!(item, TranscriptItem::Assistant(message) if message.parts.iter().all(|part| matches!(part, TranscriptPart::Thinking(_))))
+}
+
 /// Select a semantic focus before rendering its children. Never take a suffix
 /// of the flattened conversation: that can detach branches from their root.
 pub(super) fn live_rows(
     projection: &TranscriptProjection,
     width: usize,
     budget: usize,
+    thinking: ThinkingVisibility,
 ) -> Vec<Line<'static>> {
     if budget == 0 {
         return Vec::new();
     }
     // Expanded capture is for publication/fullscreen. Inline progress stays a
     // compact semantic preview instead of allocating a whole capture each tick.
-    let rendered = rows(projection, width, OutputDetail::Compact);
+    let rendered = rows(projection, width, OutputDetail::Compact, thinking);
     if rendered.len() <= budget {
         return rendered;
     }
@@ -144,7 +174,7 @@ pub(super) fn live_rows(
     let remaining = budget.saturating_sub(selected.len());
     let focus = projection.items.iter().enumerate().rfind(|(_, item)| {
         matches!(item, TranscriptItem::ActivityGroup(group) if group.activities.iter().any(|a| a.state == ActivityState::Running))
-    }).or_else(|| projection.items.iter().enumerate().next_back());
+    }).or_else(|| projection.items.iter().enumerate().rfind(|(_, item)| !hidden_thinking(item, thinking)));
     if remaining > 0
         && let Some((item_index, focus)) = focus
     {
@@ -158,14 +188,23 @@ pub(super) fn live_rows(
             TranscriptItem::User(message) | TranscriptItem::Assistant(message) => {
                 let user = matches!(focus, TranscriptItem::User(_));
                 let mut preview = Vec::new();
-                render_message(&mut preview, message, user, width);
+                render_message(&mut preview, message, user, width, thinking);
                 let omitted = preview.len().saturating_sub(remaining);
                 if omitted > 0 {
                     preview.drain(..omitted);
                     if let Some(first) = preview.first_mut() {
-                        first
-                            .spans
-                            .insert(0, Span::raw(if user { "› … " } else { "… " }));
+                        let prefix = if user {
+                            "› … "
+                        } else if message
+                            .parts
+                            .iter()
+                            .all(|part| matches!(part, TranscriptPart::Thinking(_)))
+                        {
+                            "Thinking · … "
+                        } else {
+                            "… "
+                        };
+                        first.spans.insert(0, Span::raw(prefix));
                         let clipped = first.width() > width;
                         if width <= 1 {
                             first.spans = vec![Span::raw("…")];
@@ -259,6 +298,7 @@ pub(super) fn render_message(
     message: &TranscriptMessage,
     user: bool,
     width: usize,
+    thinking: ThinkingVisibility,
 ) {
     if user {
         render_source_message(rows, message, true, width);
@@ -266,12 +306,28 @@ pub(super) fn render_message(
     }
     for part in &message.parts {
         match part {
+            TranscriptPart::Thinking(text) => {
+                if thinking == ThinkingVisibility::Visible {
+                    render_thinking(rows, text, width);
+                }
+            }
             TranscriptPart::Text(text) => crate::markdown::render(rows, text, width),
             TranscriptPart::Image { mime_type } => {
                 push_wrapped(rows, &format!("[image: {mime_type}]"), width)
             }
         }
     }
+}
+
+fn render_thinking(rows: &mut Vec<Line<'static>>, text: &str, width: usize) {
+    rows.push(Line::styled(fit_line("Thinking", width), subdued()));
+    crate::display_text::push_styled(
+        rows,
+        "  ",
+        "  ",
+        Line::from(Span::styled(text, subdued())),
+        width,
+    );
 }
 
 /// Inspection keeps the original human-visible source, not the formatted view.
@@ -285,6 +341,7 @@ pub(super) fn render_source_message(
     let mut first = true;
     for part in &message.parts {
         match part {
+            TranscriptPart::Thinking(text) => render_thinking(rows, text, width),
             TranscriptPart::Text(text) => {
                 if user {
                     let prefix = if first {
@@ -1033,18 +1090,121 @@ fn push_detail(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn thinking_visibility_preserves_literal_source_and_wrapping() {
+        let projection = TranscriptProjection {
+            items: vec![
+                TranscriptItem::Assistant(TranscriptMessage {
+                    turn: Some(1),
+                    steering: false,
+                    parts: vec![TranscriptPart::Text("answer".into())],
+                }),
+                TranscriptItem::Assistant(TranscriptMessage {
+                    turn: Some(1),
+                    steering: false,
+                    parts: vec![TranscriptPart::Thinking(
+                        "**human thought**\nnext\u{1b}[2J".into(),
+                    )],
+                }),
+            ],
+        };
+        for width in [1, 8, 24, 80] {
+            let hidden = rows(
+                &projection,
+                width,
+                OutputDetail::Expanded,
+                ThinkingVisibility::Hidden,
+            );
+            assert!(
+                !hidden
+                    .iter()
+                    .any(|line| line.to_string().contains("thought"))
+            );
+            assert_eq!(
+                live_rows(&projection, width, 3, ThinkingVisibility::Hidden),
+                live_rows(
+                    &TranscriptProjection {
+                        items: projection.items[..1].to_vec()
+                    },
+                    width,
+                    3,
+                    ThinkingVisibility::Hidden
+                )
+            );
+            let visible = rows(
+                &projection,
+                width,
+                OutputDetail::Compact,
+                ThinkingVisibility::Visible,
+            );
+            assert!(
+                visible
+                    .iter()
+                    .all(|line| line.width() <= width && !line.to_string().contains('\u{1b}'))
+            );
+        }
+        let shown = rows(
+            &projection,
+            80,
+            OutputDetail::Compact,
+            ThinkingVisibility::Visible,
+        );
+        assert!(shown.iter().any(|line| {
+            line.to_string() == "  **human thought**"
+                && line
+                    .spans
+                    .iter()
+                    .filter(|span| !span.content.trim().is_empty())
+                    .all(|span| span.style.add_modifier.contains(Modifier::DIM))
+        }));
+        assert!(
+            shown
+                .iter()
+                .any(|line| line.to_string().contains("next�[2J"))
+        );
+        let long = TranscriptProjection {
+            items: vec![TranscriptItem::Assistant(TranscriptMessage {
+                turn: Some(1),
+                steering: false,
+                parts: vec![TranscriptPart::Thinking("long thought\n".repeat(20))],
+            })],
+        };
+        let preview = live_rows(&long, 80, 3, ThinkingVisibility::Visible);
+        assert_eq!(preview.len(), 3);
+        assert!(
+            preview
+                .iter()
+                .any(|line| line.to_string().starts_with("Thinking · … "))
+        );
+        let TranscriptItem::Assistant(message) = &projection.items[1] else {
+            panic!()
+        };
+        let mut source = Vec::new();
+        render_source_message(&mut source, message, false, 80);
+        assert!(
+            source
+                .iter()
+                .any(|line| line.to_string().contains("**human thought**"))
+        );
+    }
+
     fn plain_rows(projection: &TranscriptProjection, width: usize) -> Vec<String> {
-        super::rows(projection, width, OutputDetail::Compact)
-            .iter()
-            .map(ToString::to_string)
-            .collect()
+        super::rows(
+            projection,
+            width,
+            OutputDetail::Compact,
+            ThinkingVisibility::Hidden,
+        )
+        .iter()
+        .map(ToString::to_string)
+        .collect()
     }
     fn plain_live_rows(
         projection: &TranscriptProjection,
         width: usize,
         budget: usize,
     ) -> Vec<String> {
-        super::live_rows(projection, width, budget)
+        super::live_rows(projection, width, budget, ThinkingVisibility::Hidden)
             .iter()
             .map(ToString::to_string)
             .collect()
@@ -1089,11 +1249,16 @@ mod tests {
                 activities: vec![read.clone(), command.clone()],
             })],
         };
-        let compact = rows(&single, 120, OutputDetail::Compact)
-            .iter()
-            .map(ToString::to_string)
-            .collect::<Vec<_>>()
-            .join("\n");
+        let compact = rows(
+            &single,
+            120,
+            OutputDetail::Compact,
+            ThinkingVisibility::Hidden,
+        )
+        .iter()
+        .map(ToString::to_string)
+        .collect::<Vec<_>>()
+        .join("\n");
         assert!(
             compact.contains("**literal**") && !compact.contains("FOURTH_READ"),
             "{compact}"
@@ -1137,7 +1302,12 @@ mod tests {
                 && folded.contains("earlier bytes not recorded")
         );
         for width in [1, 8, 24, 120] {
-            let expanded = rows(&grouped, width, OutputDetail::Expanded);
+            let expanded = rows(
+                &grouped,
+                width,
+                OutputDetail::Expanded,
+                ThinkingVisibility::Hidden,
+            );
             assert!(expanded.iter().all(|row| row.width() <= width));
             assert!(
                 expanded
@@ -1145,11 +1315,16 @@ mod tests {
                     .all(|row| !row.to_string().contains('\u{1b}'))
             );
         }
-        let expanded = rows(&grouped, 120, OutputDetail::Expanded)
-            .iter()
-            .map(ToString::to_string)
-            .collect::<Vec<_>>()
-            .join("\n");
+        let expanded = rows(
+            &grouped,
+            120,
+            OutputDetail::Expanded,
+            ThinkingVisibility::Hidden,
+        )
+        .iter()
+        .map(ToString::to_string)
+        .collect::<Vec<_>>()
+        .join("\n");
         for text in [
             "FOURTH_READ",
             "SECOND_READ",
@@ -1188,7 +1363,12 @@ mod tests {
                 ],
             })],
         };
-        let rows = super::rows(&projection, 24, OutputDetail::Compact);
+        let rows = super::rows(
+            &projection,
+            24,
+            OutputDetail::Compact,
+            ThinkingVisibility::Hidden,
+        );
         let read = rows
             .iter()
             .position(|row| row.to_string().starts_with("├ Reading"))
@@ -1211,7 +1391,7 @@ mod tests {
             .collect::<String>();
         assert!(retained.contains(subject));
         assert!(rows.iter().all(|row| row.width() <= 24));
-        let live = super::live_rows(&projection, 24, 6);
+        let live = super::live_rows(&projection, 24, 6, ThinkingVisibility::Hidden);
         assert!(live.iter().any(|row| row.style.fg == Some(Color::Red)));
         assert!(live.iter().any(|row| row.style.fg == Some(Color::Cyan)));
     }
@@ -1231,12 +1411,12 @@ mod tests {
             };
             for narrow in 1..=width {
                 assert!(
-                    super::live_rows(&projection, narrow, 3)
+                    super::live_rows(&projection, narrow, 3, ThinkingVisibility::Hidden)
                         .iter()
                         .all(|row| row.width() <= narrow)
                 );
             }
-            let rows = super::live_rows(&projection, width, 3);
+            let rows = super::live_rows(&projection, width, 3, ThinkingVisibility::Hidden);
             let first = &rows[1];
             if source.starts_with("**") {
                 assert!(
@@ -1268,7 +1448,13 @@ mod tests {
             parts: vec![TranscriptPart::Text(source.into())],
         };
         let mut formatted = Vec::new();
-        render_message(&mut formatted, &message, false, 80);
+        render_message(
+            &mut formatted,
+            &message,
+            false,
+            80,
+            ThinkingVisibility::Hidden,
+        );
         let formatted = formatted
             .iter()
             .map(ToString::to_string)
@@ -1286,7 +1472,7 @@ mod tests {
             source
         );
         let mut user = Vec::new();
-        render_message(&mut user, &message, true, 80);
+        render_message(&mut user, &message, true, 80, ThinkingVisibility::Hidden);
         let user = user
             .iter()
             .map(ToString::to_string)

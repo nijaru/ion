@@ -84,6 +84,7 @@ impl ActiveOperation<'_> {
 struct Frontend {
     mode: TuiMode,
     output_detail: crate::tool_output::OutputDetail,
+    thinking_visibility: crate::transcript_render::ThinkingVisibility,
     history: TranscriptProjection,
     fullscreen_rows: usize,
     fullscreen_width: usize,
@@ -148,7 +149,7 @@ impl TurnInput {
                         note: Some(note),
                     });
                 }
-                Content::ToolCall(_) | Content::ToolResult(_) => {
+                Content::Thinking(_) | Content::ToolCall(_) | Content::ToolResult(_) => {
                     unreachable!("admitted input cannot contain tools");
                 }
             }
@@ -689,7 +690,7 @@ fn handle_command(
     let args = args.trim();
     match name {
         "/help" => ui.note(
-            "/new /clone /fork [TURN] /fork-after TURN /resume /session /name NAME /model /compact /tools /tool [N] /settings [compact|expanded] /tui MODE /image PATH /copy /editor /export PATH /skills /prompts /reload /login PROVIDER /logout PROVIDER /quit\nCtrl-V pastes files, image or text from the host clipboard. !COMMAND runs shell and shares result with model; !!COMMAND keeps it out of model context".into(),
+            "/new /clone /fork [TURN] /fork-after TURN /resume /session /name NAME /model /compact /tools /tool [N] /settings [compact|expanded|thinking show|thinking hide] /tui MODE /image PATH /copy /editor /export PATH /skills /prompts /reload /login PROVIDER /logout PROVIDER /quit\nCtrl-V pastes files, image or text from the host clipboard. !COMMAND runs shell and shares result with model; !!COMMAND keeps it out of model context".into(),
         ),
         "/settings" => ui.output_settings(args)?,
         "/tui" => {
@@ -1484,6 +1485,7 @@ impl Frontend {
                 },
                 width.saturating_sub(1).max(1),
                 self.output_detail,
+                self.thinking_visibility,
             ));
         }
         rows
@@ -1497,14 +1499,20 @@ impl Frontend {
 
     fn output_settings(&mut self, args: &str) -> Result<()> {
         match args {
-            "" => self.note(format!("Tool output: {}. Use /settings compact or /settings expanded.\nTerminal-local: affects fullscreen and future publication, not existing native scrollback. Inline progress stays compact. Ctrl-O always inspects recorded source.", self.output_detail.label())),
+            "" => self.note(format!("Tool output: {}. Use /settings compact or /settings expanded.\nThinking: {}. Use /settings thinking show or /settings thinking hide; independent of generation effort.\nTerminal-local: affects fullscreen and future publication, not existing native scrollback. Inline progress stays compact. Ctrl-O always inspects recorded source.", self.output_detail.label(), self.thinking_visibility.label())),
             "compact" | "expanded" => {
                 self.output_detail = if args == "compact" { crate::tool_output::OutputDetail::Compact } else { crate::tool_output::OutputDetail::Expanded };
                 self.scroll = 0;
                 self.fullscreen_rows = 0;
                 self.status = format!("Tool output: {} · fullscreen and future publication; native history unchanged", self.output_detail.label());
             }
-            _ => anyhow::bail!("use /settings compact or /settings expanded"),
+            "thinking show" | "thinking hide" => {
+                self.thinking_visibility = if args == "thinking show" { crate::transcript_render::ThinkingVisibility::Visible } else { crate::transcript_render::ThinkingVisibility::Hidden };
+                self.scroll = 0;
+                self.fullscreen_rows = 0;
+                self.status = format!("Thinking: {} · presentation only; native history unchanged", self.thinking_visibility.label());
+            }
+            _ => anyhow::bail!("use /settings compact|expanded or /settings thinking show|hide"),
         }
         Ok(())
     }
@@ -2097,7 +2105,12 @@ fn draw(
         .min(composer.lines.len().saturating_sub(composer_height));
     let content_budget = row_budget.saturating_sub(composer_height + chrome.len());
     let mut live_rows = progress.map_or_else(Vec::new, |progress| {
-        crate::transcript_render::live_rows(progress.projection(), width, content_budget)
+        crate::transcript_render::live_rows(
+            progress.projection(),
+            width,
+            content_budget,
+            ui.thinking_visibility,
+        )
     });
     live_rows.extend(chrome.into_iter().map(Line::raw));
     let composer_offset = live_rows.len();
@@ -2185,7 +2198,12 @@ fn draw_chat_fullscreen(
 ) -> Result<()> {
     let width = width.max(1) as usize;
     let height = height.max(1) as usize;
-    let mut content = crate::transcript_render::rows(&ui.history, width, ui.output_detail);
+    let mut content = crate::transcript_render::rows(
+        &ui.history,
+        width,
+        ui.output_detail,
+        ui.thinking_visibility,
+    );
 
     for notice in &ui.notices {
         if !content.is_empty() && content.last().is_some_and(|row| row.width() > 0) {
@@ -2194,7 +2212,12 @@ fn draw_chat_fullscreen(
         content.extend(notice_rows(notice, width));
     }
     if let Some(progress) = progress {
-        let live = crate::transcript_render::rows(progress.projection(), width, ui.output_detail);
+        let live = crate::transcript_render::rows(
+            progress.projection(),
+            width,
+            ui.output_detail,
+            ui.thinking_visibility,
+        );
         if !live.is_empty()
             && !content.is_empty()
             && content.last().is_some_and(|row| row.width() > 0)
@@ -2572,6 +2595,38 @@ mod tests {
         );
         ui.output_settings("compact").unwrap();
         assert_eq!(ui.output_detail, crate::tool_output::OutputDetail::Compact);
+        ui.draft = "/settings thinking show".into();
+        ui.cursor = ui.draft.len();
+        busy_key(
+            &mut ui,
+            KeyEvent::new(KeyCode::Enter, Modifiers::NONE),
+            &stop,
+            None,
+            None,
+            AgentLimits::default(),
+        );
+        assert_eq!(
+            ui.thinking_visibility,
+            crate::transcript_render::ThinkingVisibility::Visible
+        );
+        assert_eq!(ui.output_detail, crate::tool_output::OutputDetail::Compact);
+        assert!(
+            !stop.is_cancelled() && ui.pending.is_empty() && ui.pending_history_items.is_empty()
+        );
+        assert_eq!(
+            (ui.history_published_items, ui.pending_history_target),
+            (7, 7)
+        );
+        assert!(ui.output_settings("thinking sometimes").is_err());
+        assert_eq!(
+            ui.thinking_visibility,
+            crate::transcript_render::ThinkingVisibility::Visible
+        );
+        ui.output_settings("thinking hide").unwrap();
+        assert_eq!(
+            ui.thinking_visibility,
+            crate::transcript_render::ThinkingVisibility::Hidden
+        );
     }
 
     #[test]

@@ -495,14 +495,14 @@ impl State {
                             });
                             activity_index += 1;
                         }
-                        Content::Text(_) => {}
+                        Content::Text(_) | Content::Thinking(_) => {}
                         _ => return Err(SessionError::InvalidHistory),
                     }
                 }
                 if activity_index != tool_activities.len() {
                     return Err(SessionError::InvalidHistory);
                 }
-                messages.push(message.clone());
+                messages.push(model_message(message));
                 self.assistant_seen_in_turn = true;
                 self.last_execution = Some(execution.clone());
                 self.last_usage = Some(*usage);
@@ -802,6 +802,8 @@ impl Session {
     pub fn provider_session_id(&self) -> uuid::Uuid {
         self.header.provider_session_id
     }
+    /// Model-facing conversation: human thinking is excluded; opaque replay
+    /// retains its producing provider. Use the view for human/raw inspection.
     pub fn messages(&self) -> Result<Vec<Message>, SessionError> {
         Ok(self
             .store
@@ -1733,9 +1735,25 @@ fn projected_entry_messages(entries: &[SessionEntry], display: bool) -> Vec<Opti
             SessionEntry::ToolResult { result, .. } if display => {
                 Some(crate::ToolResultProjection::Observed.message(result))
             }
+            SessionEntry::Assistant { message, .. } if !display => Some(model_message(message)),
             other => message_from_entry(other),
         })
         .collect()
+}
+
+// Human thinking is presentation evidence. Only the adapter-owned replay may
+// carry it back to a provider; summaries and cross-provider context use answers.
+fn model_message(message: &Message) -> Message {
+    Message {
+        role: message.role,
+        content: message
+            .content
+            .iter()
+            .filter(|part| !matches!(part, Content::Thinking(_)))
+            .cloned()
+            .collect(),
+        provider_replay: message.provider_replay.clone(),
+    }
 }
 
 fn message_from_entry(entry: &SessionEntry) -> Option<Message> {
@@ -1839,12 +1857,12 @@ pub(crate) fn valid_user_message(message: &Message) -> bool {
         && message.content.iter().all(|part| match part {
             Content::Text(_) => true,
             Content::Image(image) => image.validate().is_ok(),
-            Content::ToolCall(_) | Content::ToolResult(_) => false,
+            Content::Thinking(_) | Content::ToolCall(_) | Content::ToolResult(_) => false,
         })
         && message.content.iter().any(|part| match part {
             Content::Text(text) => !text.trim().is_empty(),
             Content::Image(_) => true,
-            Content::ToolCall(_) | Content::ToolResult(_) => false,
+            Content::Thinking(_) | Content::ToolCall(_) | Content::ToolResult(_) => false,
         })
 }
 
@@ -2933,6 +2951,80 @@ mod tests {
         assert_eq!(reopened.context_messages().unwrap().len(), 3);
         assert_eq!(reopened.view().unwrap().compacted_through, Some(3));
         drop(reopened);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn human_thinking_stays_in_facts_not_model_context_across_history_operations() {
+        let (root, path) = fixture();
+        let session = Session::create(&path, &root).unwrap();
+        let (turn, _) = session
+            .begin_turn("question".into(), test_execution().route.logical)
+            .unwrap();
+        let message = Message {
+            role: Role::Assistant,
+            content: vec![
+                Content::Thinking("human thought".into()),
+                Content::Text("answer".into()),
+            ],
+            provider_replay: Some(ProviderReplay::new(
+                "test",
+                "test-replay",
+                serde_json::json!({"signature":"opaque"}),
+            )),
+        };
+        session
+            .record_assistant(turn, message.clone(), Usage::unknown(), false)
+            .unwrap();
+        assert_eq!(session.view().unwrap().display_messages()[1], message);
+        let facts = session.view().unwrap().entries;
+        assert!(facts.iter().any(|entry| matches!(entry, SessionEntry::Assistant { message: saved, .. } if saved == &message)));
+        assert_eq!(
+            session.messages().unwrap()[1].content,
+            vec![Content::Text("answer".into())]
+        );
+        assert_eq!(
+            session.messages().unwrap()[1].provider_replay,
+            message.provider_replay
+        );
+        let clone = session
+            .clone_to(root.join("clone-thinking.sqlite"))
+            .unwrap();
+        let fork = session
+            .fork_to(
+                root.join("fork-thinking.sqlite"),
+                ForkPoint::AfterTurn(turn),
+            )
+            .unwrap();
+        for copy in [&clone, &fork] {
+            assert_eq!(copy.view().unwrap().display_messages()[1], message);
+            assert_eq!(copy.view().unwrap().entries, facts);
+            assert_eq!(copy.messages().unwrap(), session.messages().unwrap());
+        }
+        session
+            .record_compaction(3, "summary".into(), test_execution(), Usage::unknown())
+            .unwrap();
+        assert!(
+            session
+                .context_messages()
+                .unwrap()
+                .iter()
+                .flat_map(|message| &message.content)
+                .all(|part| !matches!(part, Content::Thinking(_)))
+        );
+        drop(session);
+        let reopened = Session::open(&path).unwrap();
+        assert_eq!(reopened.view().unwrap().display_messages()[1], message);
+        assert!(reopened.view().unwrap().entries.starts_with(&facts));
+        assert_eq!(
+            reopened.messages().unwrap()[1].provider_replay,
+            message.provider_replay
+        );
+        assert_eq!(
+            reopened.messages().unwrap()[1].content,
+            vec![Content::Text("answer".into())]
+        );
+        drop((reopened, clone, fork));
         fs::remove_dir_all(root).unwrap();
     }
 

@@ -92,6 +92,10 @@ where
                 observed = true;
                 observe(AgentEvent::TextDelta(text));
             }
+            Some(Ok(ModelStreamEvent::ThinkingDelta { block, text })) => {
+                observed = true;
+                observe(AgentEvent::ThinkingDelta { block, text });
+            }
             Some(Ok(ModelStreamEvent::ToolCall(_))) | Some(Ok(ModelStreamEvent::Usage(_))) => {
                 observed = true;
             }

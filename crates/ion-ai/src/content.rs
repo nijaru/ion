@@ -191,6 +191,9 @@ impl ImageContent {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum Content {
     Text(String),
+    /// Provider-supplied human reasoning or summary, never opaque replay or
+    /// answer text. Adapters project only known readable fields into this part.
+    Thinking(String),
     Image(ImageContent),
     ToolCall(ToolCall),
     ToolResult(ToolResult),

@@ -14,6 +14,7 @@ use crate::{
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum TranscriptPart {
     Text(String),
+    Thinking(String),
     Image { mime_type: String },
 }
 
@@ -236,6 +237,9 @@ impl TranscriptBuilder {
     ) {
         for part in content {
             let visible = match part {
+                Content::Thinking(text) if !text.is_empty() => {
+                    Some(TranscriptPart::Thinking(text.clone()))
+                }
                 Content::Text(text) if !text.trim().is_empty() => {
                     Some(TranscriptPart::Text(text.clone()))
                 }
@@ -383,11 +387,17 @@ fn visible_parts(message: &Message) -> Vec<TranscriptPart> {
         .content
         .iter()
         .filter_map(|content| match content {
+            Content::Thinking(text) if !text.is_empty() => {
+                Some(TranscriptPart::Thinking(text.clone()))
+            }
             Content::Text(text) if !text.is_empty() => Some(TranscriptPart::Text(text.clone())),
             Content::Image(image) => Some(TranscriptPart::Image {
                 mime_type: image.mime_type().as_str().to_owned(),
             }),
-            Content::Text(_) | Content::ToolCall(_) | Content::ToolResult(_) => None,
+            Content::Thinking(_)
+            | Content::Text(_)
+            | Content::ToolCall(_)
+            | Content::ToolResult(_) => None,
         })
         .collect()
 }
@@ -428,14 +438,14 @@ fn live_result(output: ToolOutput, projection: ToolResultProjection) -> Activity
 
 /// One active Turn's committed projection plus a removable streamed response.
 /// Feed all events in order, starting with TurnAccepted. Commit events replace
-/// provisional text; restart never removes committed assistant or steering.
+/// provisional response; restart never removes committed assistant or steering.
 #[derive(Debug, Default)]
 pub struct LiveTranscript {
     revision: u64,
     turn: Option<u64>,
     builder: TranscriptBuilder,
-    current_text: Option<usize>,
-    group_closed_for_partial_text: Option<(u64, usize)>,
+    current_response: Option<usize>,
+    group_closed_for_partial_response: Option<(u64, usize)>,
     notices: Vec<String>,
 }
 
@@ -461,7 +471,7 @@ impl LiveTranscript {
 
     /// Index of the uncommitted assistant tail in this live projection.
     pub fn provisional_item_index(&self) -> Option<usize> {
-        self.current_text
+        self.current_response
     }
 
     pub fn observe(&mut self, event: AgentEvent) {
@@ -478,6 +488,7 @@ impl LiveTranscript {
                 }
             }
             AgentEvent::TextDelta(text) => self.push_text(text),
+            AgentEvent::ThinkingDelta { block, text } => self.push_thinking(block, text),
             AgentEvent::AssistantCommitted {
                 turn,
                 content,
@@ -573,12 +584,9 @@ impl LiveTranscript {
         }
     }
 
-    fn push_text(&mut self, text: String) {
-        if text.is_empty() {
-            return;
-        }
-        if self.current_text.is_none() {
-            self.group_closed_for_partial_text = self.builder.active_group;
+    fn partial_response(&mut self) -> &mut TranscriptMessage {
+        if self.current_response.is_none() {
+            self.group_closed_for_partial_response = self.builder.active_group;
             self.builder.close_group();
             let index = self.builder.projection.items.len();
             self.builder
@@ -587,28 +595,71 @@ impl LiveTranscript {
                 .push(TranscriptItem::Assistant(TranscriptMessage {
                     turn: self.turn,
                     steering: false,
-                    parts: vec![TranscriptPart::Text(String::new())],
+                    parts: Vec::new(),
                 }));
-            self.current_text = Some(index);
+            self.current_response = Some(index);
         }
-        if let Some(index) = self.current_text
-            && let TranscriptItem::Assistant(message) = &mut self.builder.projection.items[index]
-            && let Some(TranscriptPart::Text(current)) = message.parts.first_mut()
+        let index = self
+            .current_response
+            .expect("partial response was inserted");
+        let TranscriptItem::Assistant(message) = &mut self.builder.projection.items[index] else {
+            unreachable!("provisional response is an assistant message");
+        };
+        message
+    }
+
+    fn push_text(&mut self, text: String) {
+        if text.is_empty() {
+            return;
+        }
+        let message = self.partial_response();
+        if let Some(TranscriptPart::Text(current)) = message
+            .parts
+            .iter_mut()
+            .find(|part| matches!(part, TranscriptPart::Text(_)))
+        {
+            current.push_str(&text);
+        } else {
+            message.parts.push(TranscriptPart::Text(text));
+        }
+    }
+
+    fn push_thinking(&mut self, block: usize, text: String) {
+        if text.is_empty() {
+            return;
+        }
+        let message = self.partial_response();
+        let count = message
+            .parts
+            .iter()
+            .filter(|part| matches!(part, TranscriptPart::Thinking(_)))
+            .count();
+        assert!(
+            block <= count,
+            "human thinking block indices are consecutive"
+        );
+        if block == count {
+            message.parts.push(TranscriptPart::Thinking(text));
+        } else if let Some(TranscriptPart::Thinking(current)) = message
+            .parts
+            .iter_mut()
+            .filter(|part| matches!(part, TranscriptPart::Thinking(_)))
+            .nth(block)
         {
             current.push_str(&text);
         }
     }
 
     fn restart_partial_response(&mut self) {
-        if let Some(index) = self.current_text.take() {
+        if let Some(index) = self.current_response.take() {
             assert_eq!(
                 index + 1,
                 self.builder.projection.items.len(),
-                "provisional text is always the last transcript item"
+                "provisional response is always the last transcript item"
             );
             self.builder.projection.items.pop();
         }
-        if let Some((turn, index)) = self.group_closed_for_partial_text.take() {
+        if let Some((turn, index)) = self.group_closed_for_partial_response.take() {
             if let TranscriptItem::ActivityGroup(group) = &mut self.builder.projection.items[index]
             {
                 group.open = true;
@@ -914,6 +965,55 @@ mod tests {
         assert!(group.open);
         assert_eq!(group.activities.len(), 2);
         assert_eq!(group.activities[0].state, ActivityState::Completed);
+    }
+
+    #[test]
+    fn thinking_and_prose_share_response_restart_and_commit_custody() {
+        let mut live = LiveTranscript::default();
+        live.observe(AgentEvent::TurnAccepted { turn: 1 });
+        live.observe(committed(1, vec![Content::Text("kept".into())]));
+        for (block, text) in [(0, "first "), (0, "thought"), (1, "summary")] {
+            live.observe(AgentEvent::ThinkingDelta {
+                block,
+                text: text.into(),
+            });
+        }
+        live.observe(AgentEvent::TextDelta("provisional".into()));
+        let index = live.provisional_item_index().unwrap();
+        let TranscriptItem::Assistant(message) = &live.projection().items[index] else {
+            panic!()
+        };
+        assert_eq!(
+            message.parts,
+            vec![
+                TranscriptPart::Thinking("first thought".into()),
+                TranscriptPart::Thinking("summary".into()),
+                TranscriptPart::Text("provisional".into())
+            ]
+        );
+        live.observe(AgentEvent::ResponseRestarted);
+        assert!(live.provisional_item_index().is_none());
+        assert_eq!(live.projection().items.len(), 1);
+        live.observe(AgentEvent::ThinkingDelta {
+            block: 0,
+            text: "new thought".into(),
+        });
+        live.observe(committed(
+            1,
+            vec![
+                Content::Thinking("recorded thought".into()),
+                Content::Text("answer".into()),
+            ],
+        ));
+        assert!(live.provisional_item_index().is_none());
+        assert_eq!(live.projection().items.len(), 3);
+        let TranscriptItem::Assistant(message) = &live.projection().items[1] else {
+            panic!()
+        };
+        assert_eq!(
+            message.parts,
+            vec![TranscriptPart::Thinking("recorded thought".into())]
+        );
     }
 
     #[test]

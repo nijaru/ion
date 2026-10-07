@@ -46,7 +46,9 @@ pub(super) fn validated_anthropic_replay(
         .as_str()
         .filter(|s| s.len() == 64 && s.bytes().all(|b| b.is_ascii_hexdigit()))
         .ok_or_else(|| invalid("invalid Anthropic replay prefix"))?;
-    let mut visible = content.iter();
+    let mut visible = content
+        .iter()
+        .filter(|part| !matches!(part, Content::Thinking(_)));
     for block in blocks {
         match block["type"].as_str() {
             Some("thinking") => {
@@ -356,6 +358,7 @@ enum AnthropicBlock {
     Thinking {
         text: String,
         signature: String,
+        human_block: Option<usize>,
     },
     RedactedThinking(String),
     Tool {
@@ -374,6 +377,7 @@ pub(super) struct AnthropicState {
     model: Option<String>,
     pub(super) prefix_digest: Option<String>,
     blocks: Vec<AnthropicBlock>,
+    thinking_blocks: usize,
     /// The matching response blocks, retained verbatim apart from applying
     /// streamed field deltas. Indices follow `blocks` throughout a message.
     wire_blocks: Vec<Value>,
@@ -579,11 +583,22 @@ impl AnthropicState {
                             .as_str()
                             .ok_or_else(|| invalid("invalid thinking block"))?;
                         let signature = block["signature"].as_str().unwrap_or_default();
+                        let human_block = if text.is_empty() {
+                            None
+                        } else {
+                            let index = self.thinking_blocks;
+                            self.thinking_blocks += 1;
+                            Some(index)
+                        };
                         self.blocks.push(AnthropicBlock::Thinking {
                             text: text.into(),
                             signature: signature.into(),
+                            human_block,
                         });
-                        None
+                        human_block.map(|block| ModelStreamEvent::ThinkingDelta {
+                            block,
+                            text: text.into(),
+                        })
                     }
                     Some("redacted_thinking") => {
                         let data = block["data"]
@@ -652,13 +667,30 @@ impl AnthropicState {
                             vec![ModelStreamEvent::TextDelta(part.into())]
                         })
                     }
-                    (AnthropicBlock::Thinking { text, .. }, Some("thinking_delta")) => {
+                    (
+                        AnthropicBlock::Thinking {
+                            text, human_block, ..
+                        },
+                        Some("thinking_delta"),
+                    ) => {
                         let part = value["delta"]["thinking"]
                             .as_str()
                             .ok_or_else(|| invalid("invalid thinking delta"))?;
                         text.push_str(part);
                         wire["thinking"] = json!(text);
-                        Ok(Vec::new())
+                        Ok(if part.is_empty() {
+                            Vec::new()
+                        } else {
+                            let block = *human_block.get_or_insert_with(|| {
+                                let index = self.thinking_blocks;
+                                self.thinking_blocks += 1;
+                                index
+                            });
+                            vec![ModelStreamEvent::ThinkingDelta {
+                                block,
+                                text: part.into(),
+                            }]
+                        })
                     }
                     (AnthropicBlock::Thinking { signature, .. }, Some("signature_delta")) => {
                         let part = value["delta"]["signature"]
@@ -705,13 +737,19 @@ impl AnthropicState {
                         let text = std::mem::take(text);
                         Some(Content::Text(text))
                     }
-                    AnthropicBlock::Thinking { text, signature } => {
+                    AnthropicBlock::Thinking {
+                        text, signature, ..
+                    } => {
                         if signature.is_empty() {
                             return Err(invalid("thinking block missing signature"));
                         }
                         wire["thinking"] = json!(text);
                         wire["signature"] = json!(signature);
-                        None
+                        if text.is_empty() {
+                            None
+                        } else {
+                            Some(Content::Thinking(std::mem::take(text)))
+                        }
                     }
                     AnthropicBlock::RedactedThinking(data) => {
                         wire["data"] = json!(data);

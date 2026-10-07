@@ -193,7 +193,14 @@ Retain logical selection and effective execution identity, including usage and
 provider-returned IDs. Routing remains direct-only; a virtual router is not a
 requirement. Effective-model changes advance durable opaque-replay epochs,
 including A → B → A and reopen. Provider-scoped signed reasoning is not answer
-text. Preserve its exact supported continuation and prefix or report an explicit
+text. Adapters project known human-readable reasoning/summary fields into neutral
+thinking parts, never expose signatures or encrypted/redacted continuation data.
+Keep that human projection distinct from opaque replay: raw facts and inspection
+retain it, human thinking returns to a provider only through adapter-owned replay,
+and final-answer copy excludes it. Streamed thinking shares the provisional response's restart/commit
+custody and counts as observed output regardless of display visibility. Terminal
+visibility is a presentation preference, separate from generation effort.
+Preserve signed continuation and its exact supported prefix or report an explicit
 reset/incompatibility; never rebase inside an outstanding signed tool exchange.
 Provider adapters own wire validity, SSE framing and capacity/error
 classification. Normalize provider-specific stops into neutral outcomes using

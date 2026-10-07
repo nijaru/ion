@@ -121,7 +121,17 @@ file ranges or capture artifacts; capture truncation stays visible. Tool text is
 literal and control-safe, not Markdown. The choice lasts for this terminal only
 and applies to fullscreen and future inline publication. Existing native history
 is not rewritten or republished; the bounded inline progress view stays compact.
-Ctrl-O always retains source inspection. Thinking visibility is not yet implemented.
+Ctrl-O always retains source inspection.
+
+`/settings thinking show` or `/settings thinking hide` controls provider-supplied
+human thinking separately from output detail and generation effort. Thinking is
+hidden by default and shown as labeled, subdued literal text when enabled. The
+choice is terminal-local; it affects live/fullscreen display and future native
+publication, never rewrites prior scrollback. Inspection/export retain the safe
+human text, while final-answer copy excludes it. Adapters project known readable
+text/summary fields only; signatures, encrypted/redacted blocks and opaque replay
+never enter presentation. Replay custody is unchanged, and human thinking does
+not become answer text or standalone model context.
 
 Inline remains the default, but persistent fullscreen is also available with
 `--tui-mode fullscreen`; use `/tui inline` or `/tui fullscreen` to switch

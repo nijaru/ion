@@ -57,11 +57,18 @@ with tempfile.TemporaryDirectory(prefix="ion-scrollback-") as temporary:
                 }
                 finish = "tool_calls"
             else:
-                assert len(requests) in (2, 4), "unexpected additional model request"
+                assert len(requests) in (2, 4, 5), "unexpected additional model request"
                 # Leave the completed calls visible in the mutable surface
                 # before the final observation is committed and published.
                 time.sleep(0.75)
-                delta, finish = {"content": "FINAL_ONCE" if len(requests) == 2 else "FUTURE_DONE"}, "stop"
+                answer = {2: "FINAL_ONCE", 4: "FUTURE_DONE", 5: "JSONL_ANSWER"}[len(requests)]
+                delta, finish = {"content": answer}, "stop"
+            thinking = f"THINK_{len(requests)}"
+            delta.update(reasoning=thinking, reasoning_details=[
+                {"type": "reasoning.text", "text": thinking, "signature": "SIGNATURE_PRIVATE", "index": 0},
+                {"type": "reasoning.summary", "summary": f"SAFE_SUMMARY_{len(requests)}", "index": 1},
+                {"type": "reasoning.encrypted", "data": "ENCRYPTED_PRIVATE", "index": 2},
+            ])
             payload = b"data: " + json.dumps({
                 "id": "scrollback", "model": "smoke-model",
                 "choices": [{"index": 0, "delta": delta, "finish_reason": finish}],
@@ -84,7 +91,7 @@ with tempfile.TemporaryDirectory(prefix="ion-scrollback-") as temporary:
         subprocess.run(
             [binary, "use", "smoke", "smoke-model", "--endpoint",
              f"http://127.0.0.1:{server.server_port}/v1/chat/completions",
-             "--wire", "chat-completions"], env=env, check=True, capture_output=True,
+             "--wire", "openrouter-chat"], env=env, check=True, capture_output=True,
         )
         exit_path = work / "exit-status"
         launcher = work / "launch.sh"
@@ -112,6 +119,8 @@ with tempfile.TemporaryDirectory(prefix="ion-scrollback-") as temporary:
             for marker in ("INPUT_ONCE", "NARRATIVE_ONCE", "COMMAND_OUTPUT_ONCE", "FINAL_ONCE", "-observed data", "+UPDATED_SNAPSHOT"):
                 assert history.count(marker) == 1, f"{marker} was republished or lost:\n{history}"
             assert "Working" not in history, f"mutable operation chrome leaked into history:\n{history}"
+            assert "THINK_1" not in history and "THINK_2" not in history, "hidden thinking was published retroactively"
+            assert "SIGNATURE_PRIVATE" not in history and "ENCRYPTED_PRIVATE" not in history, "opaque reasoning leaked"
 
         check_history()
         assert (workspace / "data.txt").read_text() == "UPDATED_SNAPSHOT\n"
@@ -139,6 +148,12 @@ with tempfile.TemporaryDirectory(prefix="ion-scrollback-") as temporary:
         tmux("resize-window", "-t", "ion", "-x", "100", "-y", "60")
         command("/tui fullscreen", "FIRST_HIDDEN")
         assert '--- "data.txt"' in tmux("capture-pane", "-p", "-t", "ion"), "expanded diff header missing"
+        command("/settings thinking show", "Thinking: Shown")
+        view = tmux("capture-pane", "-p", "-t", "ion")
+        assert "THINK_2" in view and "SAFE_SUMMARY_2" in view, "thinking visibility did not show recorded human blocks"
+        assert "SIGNATURE_PRIVATE" not in view and "ENCRYPTED_PRIVATE" not in view, "opaque reasoning leaked"
+        command("/settings thinking hide", "Thinking: Hidden")
+        assert "THINK_2" not in tmux("capture-pane", "-p", "-t", "ion"), "thinking did not hide"
         command("/settings compact", "Tool output: compact")
         time.sleep(0.1)
         assert "FIRST_HIDDEN" not in tmux("capture-pane", "-p", "-t", "ion"), "compact view exposed omitted output"
@@ -146,11 +161,15 @@ with tempfile.TemporaryDirectory(prefix="ion-scrollback-") as temporary:
         check_history()
         assert "FIRST_HIDDEN" not in tmux("capture-pane", "-p", "-t", "ion", "-S", "-"), "settings republished old native output"
         command("/settings expanded", "Tool output: expanded")
+        command("/settings thinking show", "Thinking: Shown")
         command("NEXT_INPUT: run a follow-up command", "FUTURE_DONE")
         time.sleep(0.1)
         history = tmux("capture-pane", "-p", "-t", "ion", "-S", "-")
         assert history.count("FUTURE_FIRST") == 1, "expanded future publication omitted or duplicated recorded output"
+        assert history.count("THINK_3") == 1 and history.count("THINK_4") == 1, "future thinking publication was lost or duplicated"
         assert len(requests) == 4, "settings changed model requests"
+        assert requests[1]["messages"][2]["content"] == "NARRATIVE_ONCE", "human thinking became answer text on the wire"
+        assert requests[1]["messages"][2]["reasoning_details"][2]["data"] == "ENCRYPTED_PRIVATE", "opaque replay was changed"
         check_history()
         tmux("resize-window", "-t", "ion", "-x", "60", "-y", "20")
         time.sleep(0.15)
@@ -160,6 +179,18 @@ with tempfile.TemporaryDirectory(prefix="ion-scrollback-") as temporary:
             assert time.monotonic() < deadline, "inline client did not exit"
             time.sleep(0.02)
         assert exit_path.read_text().strip() == "0", "inline client failed on exit"
+        session = next((work / "state/ion/sessions").rglob("*.sqlite"))
+        inspected = json.loads(subprocess.run([binary, "--cwd", workspace, "--session", session, "inspect"], env=env, capture_output=True, text=True, check=True).stdout)
+        assistants = [entry["data"]["message"] for entry in inspected["entries"] if entry["kind"] == "assistant"]
+        assert assistants[0]["content"][:2] == [{"Thinking": "THINK_1"}, {"Thinking": "SAFE_SUMMARY_1"}], "saved human thinking lost its block boundaries"
+        exported = subprocess.run([binary, "--cwd", workspace, "--session", session, "export"], env=env, capture_output=True, text=True, check=True).stdout
+        assert "THINK_1" in exported and "SAFE_SUMMARY_1" in exported and "SIGNATURE_PRIVATE" not in exported and "ENCRYPTED_PRIVATE" not in exported, "export lost human thinking or exposed opaque replay"
+        output = subprocess.run([binary, "--json", "--cwd", workspace, "--session", work / "jsonl.sqlite", "run", "Return an answer"], env=env, capture_output=True, text=True, check=True).stdout
+        events = [json.loads(line) for line in output.splitlines()]
+        thinking = [(event["block"], event["text"]) for event in events if event["type"] == "thinking_delta"]
+        assert thinking == [(0, "THINK_5"), (1, "SAFE_SUMMARY_5")], "JSONL thinking was absent or duplicated"
+        assert any(event["type"] == "final" and event["text"] == "JSONL_ANSWER" for event in events), "thinking changed the final answer"
+        assert "SIGNATURE_PRIVATE" not in output and "ENCRYPTED_PRIVATE" not in output, "JSONL exposed opaque replay"
     finally:
         subprocess.run(["tmux", "-S", socket, "kill-server"], env=env,
                        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)

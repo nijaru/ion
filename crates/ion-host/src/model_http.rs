@@ -754,6 +754,7 @@ fn wire_messages_with_anthropic_context(
         let mut results = Vec::new();
         for item in &message.content {
             match (message.role, item) {
+                (Role::Assistant, Content::Thinking(_)) => {}
                 (Role::User | Role::Assistant, Content::Text(part)) => {
                     text.push_str(part);
                     if message.role == Role::User && !part.is_empty() {
@@ -1778,13 +1779,24 @@ mod tests {
             .into();
             let mut state = ChatState::new(wire);
             for part in ["first ", "second"] {
-                state.accept(&json!({"choices":[{"delta":{"reasoning_content":part},"finish_reason":null}]})).unwrap();
+                let events = state.accept(&json!({"choices":[{"delta":{"reasoning_content":part},"finish_reason":null}]})).unwrap();
+                assert_eq!(
+                    events,
+                    vec![ModelStreamEvent::ThinkingDelta {
+                        block: 0,
+                        text: part.into()
+                    }]
+                );
             }
             state.accept(&json!({"choices":[{"delta":{"tool_calls":[{"index":0,"id":"remote","function":{"name":"read","arguments":"{}"}}]},"finish_reason":"tool_calls"}]})).unwrap();
             let assistant = state.complete(&request).unwrap().message;
             assert_eq!(
                 assistant.provider_replay.as_ref().unwrap().data,
                 "first second"
+            );
+            assert_eq!(
+                assistant.content[0],
+                Content::Thinking("first second".into())
             );
             request.messages.push(assistant);
             request.messages.push(Message {
@@ -1827,7 +1839,14 @@ mod tests {
         request.route.effective.provider = "openrouter".into();
         let mut state = ChatState::new(HttpWire::OpenRouterChat);
         for text in ["plan ", "read"] {
-            state.accept(&json!({"choices":[{"delta":{"reasoning":text,"reasoning_details":[{"type":"reasoning.text","text":text,"format":"unknown","index":0}]},"finish_reason":null}]})).unwrap();
+            let events = state.accept(&json!({"choices":[{"delta":{"reasoning":text,"reasoning_details":[{"type":"reasoning.text","text":text,"format":"unknown","index":0}]},"finish_reason":null}]})).unwrap();
+            assert_eq!(
+                events,
+                vec![ModelStreamEvent::ThinkingDelta {
+                    block: 0,
+                    text: text.into()
+                }]
+            );
         }
         state.accept(&json!({"choices":[{"delta":{"tool_calls":[{"index":0,"id":"remote","function":{"name":"read","arguments":"{}"}}]},"finish_reason":"tool_calls"}]})).unwrap();
         let assistant = state.complete(&request).unwrap().message;
@@ -1869,6 +1888,33 @@ mod tests {
                 .unwrap_err()
                 .kind,
             ProviderErrorKind::Unsupported
+        );
+    }
+
+    #[test]
+    fn late_structured_thinking_keeps_summaries_without_duplicate_streams() {
+        let mut state = ChatState::new(HttpWire::OpenRouterChat);
+        let events = state
+            .accept(
+                &json!({"choices":[{"delta":{"reasoning":"plain thought"},"finish_reason":null}]}),
+            )
+            .unwrap();
+        assert_eq!(
+            events,
+            vec![ModelStreamEvent::ThinkingDelta {
+                block: 0,
+                text: "plain thought".into()
+            }]
+        );
+        let events = state.accept(&json!({"choices":[{"delta":{"reasoning_details":[{"type":"reasoning.text","text":"plain thought","signature":"opaque"},{"type":"reasoning.summary","summary":"readable summary"},{"type":"reasoning.encrypted","data":"encrypted"}],"content":"answer"},"finish_reason":"stop"}]})).unwrap();
+        assert_eq!(events, vec![ModelStreamEvent::TextDelta("answer".into())]);
+        assert_eq!(
+            state.complete(&request()).unwrap().message.content,
+            vec![
+                Content::Thinking("plain thought".into()),
+                Content::Thinking("readable summary".into()),
+                Content::Text("answer".into())
+            ]
         );
     }
 
@@ -1915,6 +1961,13 @@ mod tests {
         state.accept(&json!({"choices":[{"delta":{"reasoning_details":[{"type":"reasoning.summary","summary":"inspect","index":1},{"type":"reasoning.encrypted","data":"opaque","format":"google-gemini-v1","id":"thought-1","index":2}]},"finish_reason":null}]})).unwrap();
         state.accept(&json!({"choices":[{"delta":{"tool_calls":[{"index":0,"id":"provider-call","function":{"name":"read","arguments":"{}"}}]},"finish_reason":"tool_calls"}]})).unwrap();
         let assistant = state.complete(&request).unwrap().message;
+        assert_eq!(
+            &assistant.content[..2],
+            &[
+                Content::Thinking("Need read".into()),
+                Content::Thinking("First inspect".into())
+            ]
+        );
         let details = json!([
             {"type":"reasoning.text","text":"Need read","index":0,"signature":"signed","format":"google-gemini-v1"},
             {"type":"reasoning.summary","summary":"First inspect","index":1},
@@ -2452,6 +2505,64 @@ mod tests {
             }
         }
         assert_eq!(completed.unwrap().message.content, response.message.content);
+    }
+
+    #[test]
+    fn anthropic_projects_only_human_initial_and_streamed_thinking() {
+        let request = request();
+        let mut state = AnthropicState::default();
+        let mut projected = Vec::new();
+        let mut response = None;
+        for event in [
+            json!({"type":"message_start","message":{"type":"message","role":"assistant","model":"returned","content":[],"stop_reason":null,"usage":{"input_tokens":3,"output_tokens":0}}}),
+            json!({"type":"content_block_start","index":0,"content_block":{"type":"thinking","thinking":"initial ","signature":"SIGNATURE_PRIVATE"}}),
+            json!({"type":"content_block_delta","index":0,"delta":{"type":"thinking_delta","thinking":"thought"}}),
+            json!({"type":"content_block_delta","index":0,"delta":{"type":"signature_delta","signature":"CHUNK_PRIVATE"}}),
+            json!({"type":"content_block_start","index":1,"content_block":{"type":"redacted_thinking","data":"ENCRYPTED_PRIVATE"}}),
+            json!({"type":"content_block_start","index":2,"content_block":{"type":"thinking","thinking":"summary","signature":"OTHER_SIGNATURE"}}),
+            json!({"type":"content_block_delta","index":0,"delta":{"type":"thinking_delta","thinking":" tail"}}),
+            json!({"type":"content_block_stop","index":0}),
+            json!({"type":"content_block_stop","index":1}),
+            json!({"type":"content_block_stop","index":2}),
+            json!({"type":"content_block_start","index":3,"content_block":{"type":"text","text":"answer"}}),
+            json!({"type":"content_block_stop","index":3}),
+            json!({"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":7}}),
+            json!({"type":"message_stop"}),
+        ] {
+            for event in state.accept(&event, &request).unwrap() {
+                match event {
+                    ModelStreamEvent::ThinkingDelta { block, text } => {
+                        projected.push((block, text))
+                    }
+                    ModelStreamEvent::Completed(value) => response = Some(value),
+                    _ => {}
+                }
+            }
+        }
+        assert_eq!(
+            projected,
+            vec![
+                (0, "initial ".into()),
+                (0, "thought".into()),
+                (1, "summary".into()),
+                (0, " tail".into()),
+            ]
+        );
+        let message = response.unwrap().message;
+        assert_eq!(
+            message.content,
+            vec![
+                Content::Thinking("initial thought tail".into()),
+                Content::Thinking("summary".into()),
+                Content::Text("answer".into())
+            ]
+        );
+        let replay = message.provider_replay.unwrap();
+        assert_eq!(
+            replay.data["blocks"][0]["signature"],
+            "SIGNATURE_PRIVATECHUNK_PRIVATE"
+        );
+        assert_eq!(replay.data["blocks"][1]["data"], "ENCRYPTED_PRIVATE");
     }
 
     #[test]

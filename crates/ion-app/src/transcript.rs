@@ -139,6 +139,12 @@ pub fn render(view: &SessionView) -> String {
 fn message(text: &mut String, message: &Message) {
     for part in &message.content {
         match part {
+            Content::Thinking(value) => {
+                let _ = writeln!(text, "  Thinking:");
+                for line in value.lines() {
+                    let _ = writeln!(text, "    {line}");
+                }
+            }
             Content::Text(value) => {
                 for line in value.lines() {
                     let _ = writeln!(text, "  {line}");

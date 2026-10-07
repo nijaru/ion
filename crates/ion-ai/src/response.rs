@@ -40,6 +40,12 @@ pub enum IncompleteReason {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum ModelStreamEvent {
     TextDelta(String),
+    /// Human thinking blocks are numbered consecutively from zero within a
+    /// response. Signatures, encrypted and redacted material never enter here.
+    ThinkingDelta {
+        block: usize,
+        text: String,
+    },
     ToolCall(ToolCall),
     Usage(Usage),
     /// A provider reported that saved opaque reasoning was dropped or that a

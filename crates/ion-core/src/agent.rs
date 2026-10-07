@@ -467,7 +467,7 @@ impl Agent {
                 .message
                 .content
                 .iter()
-                .any(|part| !matches!(part, Content::Text(_)))
+                .any(|part| !matches!(part, Content::Text(_) | Content::Thinking(_)))
         {
             return Err(AgentError::InvalidSummary);
         }
@@ -710,11 +710,14 @@ impl Agent {
                     Err(error) => return Err(error),
                 };
                 let output_budget = prepared.output_budget();
-                let mut emitted_text = false;
+                let mut emitted_output = false;
                 let issued = prepared
                     .issue(&self.service, stop, &mut |event| {
-                        if matches!(event, AgentEvent::TextDelta(_)) {
-                            emitted_text = true;
+                        if matches!(
+                            event,
+                            AgentEvent::TextDelta(_) | AgentEvent::ThinkingDelta { .. }
+                        ) {
+                            emitted_output = true;
                         }
                         observe(event);
                     })
@@ -764,7 +767,7 @@ impl Agent {
                             ..
                         }) if *output < u64::from(output_budget)
                     );
-                if ((overflow && !emitted_text) || recoverable_length)
+                if ((overflow && !emitted_output) || recoverable_length)
                     && !prefix_bound_continuation
                     && !recovered_overflow
                     && self
@@ -1044,6 +1047,11 @@ pub enum AgentEvent {
     },
     /// Provisional text for the current response only.
     TextDelta(String),
+    /// Provisional human thinking, sharing the current response's custody.
+    ThinkingDelta {
+        block: usize,
+        text: String,
+    },
     /// Published after the assistant's complete content and call metadata commit.
     AssistantCommitted {
         turn: u64,
@@ -3381,6 +3389,63 @@ mod tests {
         assert_eq!(scripts.requests().len(), 4);
         assert!(scripts.requests()[2].tools.is_empty());
         assert!(session.view().unwrap().compacted_through.is_some());
+        drop(session);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[tokio::test]
+    async fn context_recovery_does_not_reuse_observed_thinking() {
+        let root =
+            std::env::temp_dir().join(format!("ion-thinking-overflow-{}", uuid::Uuid::now_v7()));
+        std::fs::create_dir(&root).unwrap();
+        let session = CodingSession::create(root.join("session.sqlite"), &root).unwrap();
+        let scripts = Arc::new(ScriptedModelService::new([
+            response(vec![Content::Text("earlier result".into())]),
+            Script::Stream(vec![
+                ModelStreamEvent::ThinkingDelta {
+                    block: 0,
+                    text: "discarded thought".into(),
+                },
+                ModelStreamEvent::Completed(ModelResponse {
+                    message: Message {
+                        role: Role::Assistant,
+                        content: Vec::new(),
+                        provider_replay: None,
+                    },
+                    usage: Usage::known(49_900, 0),
+                    termination: ResponseTermination::Incomplete(IncompleteReason::ContextLength),
+                    returned_model: None,
+                }),
+            ]),
+            response(vec![Content::Text("must not summarize".into())]),
+            response(vec![Content::Text("must not retry".into())]),
+        ]));
+        let agent = Agent::new(scripts.clone(), Arc::new(TestTools::new(&root)), model());
+        agent
+            .submit(
+                &session,
+                "first".into(),
+                "test".into(),
+                CancellationToken::new(),
+                |_| {},
+            )
+            .await
+            .unwrap();
+        let mut events = Vec::new();
+        let error = agent
+            .submit(
+                &session,
+                "second".into(),
+                "test".into(),
+                CancellationToken::new(),
+                |event| events.push(event),
+            )
+            .await
+            .unwrap_err();
+        assert!(matches!(error, AgentError::IncompleteModelResponse));
+        assert!(events.iter().any(|event| matches!(event, AgentEvent::ThinkingDelta { text, .. } if text == "discarded thought")));
+        assert_eq!(scripts.requests().len(), 2);
+        assert!(session.view().unwrap().compacted_through.is_none());
         drop(session);
         std::fs::remove_dir_all(root).unwrap();
     }

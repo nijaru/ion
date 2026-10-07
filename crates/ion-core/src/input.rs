@@ -242,6 +242,14 @@ mod tests {
             ),
             Err(CodingAgentError::InvalidUserInput)
         ));
+        let mut input = Message::user_input("question".into(), []);
+        input
+            .content
+            .push(ion_ai::Content::Thinking("not user input".into()));
+        assert!(matches!(
+            budget.admit(input, &(), AgentLimits::default()),
+            Err(CodingAgentError::InvalidUserInput)
+        ));
         assert_eq!(*budget.used.lock().unwrap(), 0);
     }
 }
