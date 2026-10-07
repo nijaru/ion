@@ -65,7 +65,10 @@ session ID to stderr. In the TUI, `/new`, `/clone`, `/fork`, `/fork-after TURN`,
 `/model` and `/compact` manage the conversation; `/login PROVIDER` and `/logout PROVIDER`
 manage saved keys. The TUI model picker searches catalog and configured
 custom routes. A resumed session restores its model; `ion use` sets the
-default for new sessions.
+default for new sessions. Custom routes and that default are published together
+in `$XDG_CONFIG_HOME/ion/models.json` (or `~/.config/ion/models.json`), with
+concurrent saves serialized. After updating from a development build with the
+older split preferences, select your default and configure custom routes again.
 
 Terminal chat is inline-first. Settled transcript rows are appended once to
 native terminal scrollback; Ion keeps only the active composer/progress region
@@ -295,6 +298,8 @@ Ion loads `AGENTS.md` instructions found along the working directory's
 ancestor path. A nested linked worktree's copy shadows the main checkout's
 copy of the same file. `ion use` also accepts a custom model with
 `--endpoint URL --wire chat-completions` or `--wire anthropic-messages`.
+Custom provider identifiers contain only lowercase ASCII letters, digits and
+hyphens, with 1–64 bytes; the same identifier is used for provider login.
 `URL` may be a compatible API base such as `http://desktop:8080/v1` or the
 complete `http://desktop:8080/v1/chat/completions` request URL. Ion appends
 the standard wire path only when the URL is a base.

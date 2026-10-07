@@ -13,7 +13,7 @@ use serde::{Deserialize, Serialize, de::DeserializeOwned};
 
 use crate::{
     HttpModelService, HttpWire,
-    auth::{CredentialStatus, CredentialStore},
+    auth::{CredentialStatus, CredentialStore, validate_provider_id},
     catalog,
 };
 
@@ -53,8 +53,10 @@ pub struct SavedSelection {
 }
 
 #[derive(Default, Serialize, Deserialize)]
-struct Routes {
+#[serde(deny_unknown_fields)]
+struct ModelConfiguration {
     custom: Vec<SavedSelection>,
+    default: Option<ModelRef>,
 }
 
 #[derive(Clone)]
@@ -117,30 +119,35 @@ impl ModelStore {
     }
 
     pub fn save_default(&self, saved: &SavedSelection) -> Result<Selection> {
+        validate_provider_id(&saved.provider)?;
+        // Serialize read/modify/publish, including between separate CLI processes.
+        // Keep the lock inode stable while replacing the configuration document.
+        let _lock = self.writer_lock()?;
+        let mut configuration = self.configuration()?;
         let effective =
             if saved.endpoint.is_none() && catalog::find(&saved.provider, &saved.model).is_none() {
                 ensure!(
                     saved.wire.is_none() && saved.api_key_env.is_none() && !saved.image_input,
                     "custom route overrides require --endpoint and --wire"
                 );
-                self.routes()?
+                configuration
                     .custom
-                    .into_iter()
+                    .iter()
                     .find(|route| route.provider == saved.provider && route.model == saved.model)
                     .context("custom model has no configured route")?
+                    .clone()
             } else {
                 saved.clone()
             };
         let selected = self.resolve_saved(&effective)?;
         if effective.endpoint.is_some() {
-            let mut routes = self.routes()?;
-            routes.custom.retain(|route| {
+            configuration.custom.retain(|route| {
                 route.provider != effective.provider || route.model != effective.model
             });
-            routes.custom.push(effective.clone());
-            write_json(&self.root.join("routes.json"), &routes)?;
+            configuration.custom.push(effective);
         }
-        write_json(&self.root.join("selection.json"), &selected.identity())?;
+        configuration.default = Some(selected.identity());
+        write_json(&self.root.join("models.json"), &configuration)?;
         Ok(selected)
     }
 
@@ -165,8 +172,9 @@ impl ModelStore {
                 )
             });
         }
-        if let Some(selected) = self.default()? {
-            return self.resolve_identity(&selected);
+        let configuration = self.configuration()?;
+        if let Some(selected) = &configuration.default {
+            return self.resolve_identity_with(selected, &configuration);
         }
         for entry in catalog::models() {
             if credentials.status(entry.provider, Some(entry.api_key_env))?
@@ -184,6 +192,22 @@ impl ModelStore {
     }
 
     pub fn resolve_identity(&self, model: &ModelRef) -> Result<Selection> {
+        validate_provider_id(&model.provider)?;
+        let configuration = if catalog::find(&model.provider, &model.model).is_some() {
+            // Explicit catalog selection is independent of saved custom routes.
+            ModelConfiguration::default()
+        } else {
+            self.configuration()?
+        };
+        self.resolve_identity_with(model, &configuration)
+    }
+
+    fn resolve_identity_with(
+        &self,
+        model: &ModelRef,
+        configuration: &ModelConfiguration,
+    ) -> Result<Selection> {
+        validate_provider_id(&model.provider)?;
         if catalog::find(&model.provider, &model.model).is_some() {
             return self.resolve_saved(&SavedSelection {
                 provider: model.provider.clone(),
@@ -194,8 +218,7 @@ impl ModelStore {
                 image_input: false,
             });
         }
-        let routes = self.routes()?;
-        if let Some(route) = routes
+        if let Some(route) = configuration
             .custom
             .iter()
             .find(|route| route.provider == model.provider && route.model == model.model)
@@ -215,7 +238,7 @@ impl ModelStore {
                 })
             })
             .collect::<Result<Vec<_>>>()?;
-        for route in self.routes()?.custom {
+        for route in self.configuration()?.custom {
             options.push(self.resolve_saved(&route)?);
         }
         Ok(options)
@@ -238,15 +261,34 @@ impl ModelStore {
             .collect()
     }
 
-    fn default(&self) -> Result<Option<ModelRef>> {
-        read_json(&self.root.join("selection.json"))
+    fn configuration(&self) -> Result<ModelConfiguration> {
+        Ok(read_json(&self.root.join("models.json"))?.unwrap_or_default())
     }
 
-    fn routes(&self) -> Result<Routes> {
-        Ok(read_json(&self.root.join("routes.json"))?.unwrap_or_default())
+    fn writer_lock(&self) -> Result<File> {
+        DirBuilder::new()
+            .recursive(true)
+            .mode(0o700)
+            .create(&self.root)?;
+        let lock = File::from(rustix::fs::open(
+            self.root.join("models.lock"),
+            rustix::fs::OFlags::RDWR
+                | rustix::fs::OFlags::CREATE
+                | rustix::fs::OFlags::CLOEXEC
+                | rustix::fs::OFlags::NONBLOCK
+                | rustix::fs::OFlags::NOFOLLOW,
+            rustix::fs::Mode::RUSR | rustix::fs::Mode::WUSR,
+        )?);
+        ensure!(
+            lock.metadata()?.is_file(),
+            "model lock is not a regular file"
+        );
+        rustix::fs::flock(&lock, rustix::fs::FlockOperation::LockExclusive)?;
+        Ok(lock)
     }
 
     fn resolve_saved(&self, saved: &SavedSelection) -> Result<Selection> {
+        validate_provider_id(&saved.provider)?;
         if let Some(model) = catalog::find(&saved.provider, &saved.model) {
             ensure!(
                 saved.endpoint.is_none()
@@ -308,9 +350,9 @@ impl ModelStore {
 }
 
 fn read_json<T: DeserializeOwned>(path: &Path) -> Result<Option<T>> {
-    match fs::read(path) {
-        Ok(bytes) => Ok(Some(
-            serde_json::from_slice(&bytes)
+    match crate::file_io::open_regular(path) {
+        Ok(file) => Ok(Some(
+            serde_json::from_reader(io::BufReader::new(file))
                 .with_context(|| format!("invalid {}", path.display()))?,
         )),
         Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(None),
@@ -343,7 +385,14 @@ pub(crate) fn write_json<T: Serialize>(path: &Path, value: &T) -> Result<()> {
         file.write_all(&serde_json::to_vec_pretty(value)?)?;
         file.sync_all()?;
         fs::rename(&temp, path)?;
-        File::open(parent)?.sync_all()?;
+        File::open(parent)
+            .and_then(|directory| directory.sync_all())
+            .with_context(|| {
+                format!(
+                    "published {}, but syncing its directory failed",
+                    path.display()
+                )
+            })?;
         Ok(())
     })();
     if result.is_err() {
@@ -355,6 +404,17 @@ pub(crate) fn write_json<T: Serialize>(path: &Path, value: &T) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn desktop_route(endpoint: &str) -> SavedSelection {
+        SavedSelection {
+            provider: "desktop".into(),
+            model: "qwen".into(),
+            endpoint: Some(endpoint.into()),
+            wire: Some(Wire::ChatCompletions),
+            api_key_env: None,
+            image_input: false,
+        }
+    }
 
     #[test]
     fn custom_route_uses_transport_endpoint_policy() {
@@ -431,6 +491,127 @@ mod tests {
         );
 
         let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn failed_default_publication_preserves_the_previous_custom_route() {
+        let root = std::env::temp_dir().join(format!("ion-model-atomic-{}", uuid::Uuid::now_v7()));
+        let store = ModelStore::new(root.clone());
+        let mut route = desktop_route("http://localhost:8080/v1");
+        let first = store.save_default(&route).unwrap();
+        let publication = root.join("models.json");
+        let backup = root.join("backup.json");
+        fs::rename(&publication, &backup).unwrap();
+        fs::create_dir(&publication).unwrap();
+        route.endpoint = Some("http://localhost:9090/v1".into());
+        assert!(store.save_default(&route).is_err());
+        fs::remove_dir(&publication).unwrap();
+        fs::rename(&backup, &publication).unwrap();
+        let reopened = ModelStore::new(root.clone());
+        assert_eq!(
+            reopened
+                .resolve_identity(&first.identity())
+                .unwrap()
+                .endpoint,
+            first.endpoint
+        );
+        assert_eq!(
+            reopened
+                .choose(
+                    None,
+                    None,
+                    None,
+                    &CredentialStore::new(root.join("credentials"))
+                )
+                .unwrap()
+                .endpoint,
+            first.endpoint
+        );
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn invalid_provider_ids_cannot_replace_a_usable_default() {
+        let root = std::env::temp_dir().join(format!("ion-model-id-{}", uuid::Uuid::now_v7()));
+        let store = ModelStore::new(root.clone());
+        let mut route = desktop_route("http://localhost:8080/v1");
+        let first = store.save_default(&route).unwrap();
+        let too_long = "a".repeat(65);
+        for provider in ["", "Desktop", "bad/name", "café", too_long.as_str()] {
+            route.provider = provider.into();
+            assert!(store.save_default(&route).is_err(), "accepted {provider:?}");
+            assert!(store.resolve_saved(&route).is_err());
+            let credentials = CredentialStore::new(root.join("credentials"));
+            assert_eq!(
+                credentials
+                    .status(provider, Some(""))
+                    .unwrap_err()
+                    .to_string(),
+                "invalid provider identifier"
+            );
+            assert!(credentials.resolver(provider, None).is_err());
+            assert_eq!(
+                store
+                    .choose(
+                        None,
+                        None,
+                        None,
+                        &CredentialStore::new(root.join("credentials"))
+                    )
+                    .unwrap()
+                    .identity(),
+                first.identity()
+            );
+        }
+        assert!(!root.join("credentials").exists());
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn concurrent_model_saves_retain_each_route_and_a_resolvable_default() {
+        let root = std::env::temp_dir().join(format!("ion-model-writers-{}", uuid::Uuid::now_v7()));
+        let barrier = std::sync::Arc::new(std::sync::Barrier::new(8));
+        let writers = (0..8)
+            .map(|index| {
+                let root = root.clone();
+                let barrier = barrier.clone();
+                std::thread::spawn(move || {
+                    let route = SavedSelection {
+                        model: format!("local-{index}"),
+                        ..desktop_route(&format!("http://localhost:{}/v1", 8080 + index))
+                    };
+                    barrier.wait();
+                    ModelStore::new(root).save_default(&route).unwrap()
+                })
+            })
+            .collect::<Vec<_>>();
+        let saved = writers
+            .into_iter()
+            .map(|writer| writer.join().unwrap())
+            .collect::<Vec<_>>();
+        let store = ModelStore::new(root.clone());
+        for selected in &saved {
+            assert_eq!(
+                store
+                    .resolve_identity(&selected.identity())
+                    .unwrap()
+                    .endpoint,
+                selected.endpoint
+            );
+        }
+        let default = store
+            .choose(
+                None,
+                None,
+                None,
+                &CredentialStore::new(root.join("credentials")),
+            )
+            .unwrap();
+        assert!(saved.iter().any(|selected| {
+            selected.identity() == default.identity() && selected.endpoint == default.endpoint
+        }));
+        assert_eq!(store.configuration().unwrap().custom.len(), saved.len());
+        fs::remove_dir_all(root).unwrap();
     }
 
     #[test]

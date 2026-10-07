@@ -72,6 +72,7 @@ impl CredentialStore {
     }
 
     pub fn status(&self, provider: &str, env_name: Option<&str>) -> Result<CredentialStatus> {
+        validate_provider_id(provider)?;
         if let Some(env_name) = env_name
             && environment_key(env_name)?.is_some()
         {
@@ -101,14 +102,7 @@ impl CredentialStore {
     }
 
     fn key_path(&self, provider: &str) -> Result<PathBuf> {
-        ensure!(
-            !provider.is_empty()
-                && provider.len() <= 64
-                && provider
-                    .bytes()
-                    .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'-'),
-            "invalid provider identifier"
-        );
+        validate_provider_id(provider)?;
         Ok(self.root.join(format!("{provider}.key")))
     }
 
@@ -176,6 +170,18 @@ impl CredentialResolver for StoredResolver {
             Ok(key)
         })
     }
+}
+
+pub(crate) fn validate_provider_id(provider: &str) -> Result<()> {
+    ensure!(
+        !provider.is_empty()
+            && provider.len() <= 64
+            && provider
+                .bytes()
+                .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'-'),
+        "invalid provider identifier"
+    );
+    Ok(())
 }
 
 fn environment_key(name: &str) -> Result<Option<String>> {
