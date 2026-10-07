@@ -37,6 +37,7 @@ use anthropic::{
 use chat::{ChatState, chat_body};
 
 const MAX_FRAME: usize = 256 * 1024;
+const MAX_ERROR_BODY: usize = 16 * 1024;
 const MAX_RESPONSE: usize = 8 * 1024 * 1024;
 const PROVIDER_IDLE_TIMEOUT: Duration = Duration::from_secs(300);
 const CHAT_REASONING_CONTENT_REPLAY: &str = "chat_reasoning_content";
@@ -261,7 +262,7 @@ impl ModelService for HttpModelService {
                 let status = response.status().as_u16();
                 let retry_after_ms = parse_retry_after(response.headers());
                 let mut body = Vec::new();
-                while body.len() < 16 * 1024 {
+                while body.len() < MAX_ERROR_BODY {
                     let Some(chunk) = tokio::time::timeout(PROVIDER_IDLE_TIMEOUT, response.chunk())
                         .await
                         .map_err(|_| {
@@ -274,13 +275,11 @@ impl ModelService for HttpModelService {
                     else {
                         break;
                     };
-                    if body.len() + chunk.len() > 16 * 1024 {
-                        break;
-                    }
-                    body.extend_from_slice(&chunk);
+                    append_error_prefix(&mut body, &chunk);
                 }
-                let kind = classify_http_error(status, &body);
-                let detail = provider_error_detail(&body);
+                let value = serde_json::from_slice::<Value>(&body).ok();
+                let kind = classify_status_error(status, value.as_ref());
+                let detail = value.as_ref().and_then(provider_error_detail_value);
                 let mut message = detail.map_or_else(
                     || format!("provider returned HTTP {status}"),
                     |detail| format!("provider returned HTTP {status}: {detail}"),
@@ -319,6 +318,12 @@ impl ModelService for HttpModelService {
                         total += 1;
                         if frame.len() == MAX_FRAME { Err(invalid("provider SSE frame exceeded byte limit"))?; }
                         frame.push(byte);
+                        // SSE ignores exactly one initial UTF-8 BOM. The absolute
+                        // byte count recognizes it even across transport chunks.
+                        if total == 3 && frame.as_slice() == b"\xef\xbb\xbf" {
+                            frame.clear();
+                            continue;
+                        }
                         if !has_sse_event_boundary(&frame) { continue; }
                         let events = decode_frame(&frame, &mut decoder, &request, wire)?;
                         frame.clear();
@@ -375,31 +380,29 @@ fn normalize_capacity(
     event
 }
 
-fn classify_http_error(status: u16, body: &[u8]) -> ProviderErrorKind {
-    if status == 429 {
-        let value = serde_json::from_slice::<Value>(body).ok();
-        let code = value.as_ref().and_then(|value| {
-            value
-                .pointer("/error/code")
-                .and_then(Value::as_str)
-                .or_else(|| value.get("code").and_then(Value::as_str))
-        });
-        if matches!(
+fn append_error_prefix(body: &mut Vec<u8>, chunk: &[u8]) {
+    let retained = chunk.len().min(MAX_ERROR_BODY - body.len());
+    body.extend_from_slice(&chunk[..retained]);
+}
+
+fn classify_status_error(status: u16, value: Option<&Value>) -> ProviderErrorKind {
+    let code = value.and_then(|value| {
+        value
+            .pointer("/error/code")
+            .and_then(Value::as_str)
+            .or_else(|| value.pointer("/error/type").and_then(Value::as_str))
+            .or_else(|| value.get("code").and_then(Value::as_str))
+            .or_else(|| value.get("type").and_then(Value::as_str))
+    });
+    if status == 429
+        && matches!(
             code,
             Some("insufficient_quota" | "billing_hard_limit_reached")
-        ) {
-            return ProviderErrorKind::Quota;
-        }
+        )
+    {
+        return ProviderErrorKind::Quota;
     }
     if matches!(status, 400 | 413) {
-        let value = serde_json::from_slice::<Value>(body).ok();
-        let code = value.as_ref().and_then(|value| {
-            value
-                .pointer("/error/code")
-                .and_then(Value::as_str)
-                .or_else(|| value.pointer("/error/type").and_then(Value::as_str))
-                .or_else(|| value.get("code").and_then(Value::as_str))
-        });
         if matches!(
             code,
             Some(
@@ -411,7 +414,7 @@ fn classify_http_error(status: u16, body: &[u8]) -> ProviderErrorKind {
         ) {
             return ProviderErrorKind::ContextLength;
         }
-        let message = value.as_ref().and_then(|value| {
+        let message = value.and_then(|value| {
             value
                 .pointer("/error/message")
                 .and_then(Value::as_str)
@@ -469,11 +472,6 @@ fn is_context_error_message(message: &str) -> bool {
     .any(|part| lower.contains(part))
 }
 
-fn provider_error_detail(body: &[u8]) -> Option<String> {
-    let value = serde_json::from_slice::<Value>(body).ok()?;
-    provider_error_detail_value(&value)
-}
-
 fn provider_error_detail_value(value: &Value) -> Option<String> {
     let detail = value
         .pointer("/error/message")
@@ -491,13 +489,21 @@ fn provider_error_detail_value(value: &Value) -> Option<String> {
 fn chat_stream_error(value: &Value) -> ProviderError {
     let code = &value["error"]["code"];
     let kind = if let Some(status) = code.as_u64().and_then(|code| u16::try_from(code).ok()) {
-        classify_http_error(status, &[])
+        classify_status_error(status, Some(value))
     } else {
-        match code.as_str() {
+        match code
+            .as_str()
+            .or_else(|| value.pointer("/error/type").and_then(Value::as_str))
+        {
             Some("server_error") => ProviderErrorKind::Server,
             Some("rate_limit_exceeded" | "rate_limited") => ProviderErrorKind::RateLimited,
-            Some("insufficient_quota") => ProviderErrorKind::Quota,
-            Some("context_length_exceeded") => ProviderErrorKind::ContextLength,
+            Some("insufficient_quota" | "billing_hard_limit_reached") => ProviderErrorKind::Quota,
+            Some(
+                "context_length_exceeded"
+                | "model_context_window_exceeded"
+                | "context_window_exceeded"
+                | "request_too_large",
+            ) => ProviderErrorKind::ContextLength,
             _ => ProviderErrorKind::Transport,
         }
     };
@@ -1476,34 +1482,66 @@ mod tests {
 
     #[test]
     fn structured_context_error_is_distinct_from_other_bad_requests() {
+        for (status, envelope, expected) in [
+            (
+                400,
+                json!({"error":{"code":"context_length_exceeded"}}),
+                ProviderErrorKind::ContextLength,
+            ),
+            (
+                400,
+                json!({"error":{"code":"invalid_api_key"}}),
+                ProviderErrorKind::InvalidRequest,
+            ),
+            (413, Value::Null, ProviderErrorKind::InvalidRequest),
+            (
+                413,
+                json!({"error":{"type":"request_too_large"}}),
+                ProviderErrorKind::ContextLength,
+            ),
+            (
+                400,
+                json!({"error":{"message":"Prompt is too long"}}),
+                ProviderErrorKind::ContextLength,
+            ),
+            (
+                429,
+                json!({"error":{"code":"insufficient_quota"}}),
+                ProviderErrorKind::Quota,
+            ),
+            (
+                429,
+                json!({"error":{"message":"quota used"},"code":"insufficient_quota"}),
+                ProviderErrorKind::Quota,
+            ),
+        ] {
+            assert_eq!(classify_status_error(status, Some(&envelope)), expected);
+        }
         assert_eq!(
-            classify_http_error(400, br#"{"error":{"code":"context_length_exceeded"}}"#),
-            ProviderErrorKind::ContextLength
-        );
-        assert_eq!(
-            classify_http_error(400, br#"{"error":{"code":"invalid_api_key"}}"#),
-            ProviderErrorKind::InvalidRequest
-        );
-        assert_eq!(
-            classify_http_error(413, b""),
-            ProviderErrorKind::InvalidRequest
-        );
-        assert_eq!(
-            classify_http_error(413, br#"{"error":{"type":"request_too_large"}}"#),
-            ProviderErrorKind::ContextLength
-        );
-        assert_eq!(
-            classify_http_error(400, br#"{"error":{"message":"Prompt is too long"}}"#),
-            ProviderErrorKind::ContextLength
-        );
-        assert_eq!(
-            classify_http_error(429, br#"{"error":{"code":"insufficient_quota"}}"#),
-            ProviderErrorKind::Quota
-        );
-        assert_eq!(
-            provider_error_detail(br#"{"error":{"message":"bad\nrequest"}}"#).as_deref(),
+            provider_error_detail_value(&json!({"error":{"message":"bad\nrequest"}})).as_deref(),
             Some("badrequest")
         );
+    }
+
+    #[test]
+    fn error_prefix_is_independent_of_transport_segmentation() {
+        let body = format!(
+            "{{\"error\":{{\"code\":\"insufficient_quota\"}}}}{}",
+            " ".repeat(64 * 1024)
+        );
+        for chunk_size in [1, 1024, usize::MAX] {
+            let mut retained = Vec::new();
+            for chunk in body.as_bytes().chunks(chunk_size) {
+                append_error_prefix(&mut retained, chunk);
+            }
+            assert_eq!(retained.len(), MAX_ERROR_BODY);
+            assert_eq!(retained, body.as_bytes()[..MAX_ERROR_BODY]);
+            let value: Value = serde_json::from_slice(&retained).unwrap();
+            assert_eq!(
+                classify_status_error(429, Some(&value)),
+                ProviderErrorKind::Quota
+            );
+        }
     }
 
     #[test]
@@ -2551,6 +2589,78 @@ mod tests {
             stream.next().await.unwrap().unwrap(),
             ModelStreamEvent::Completed(_)
         ));
+    }
+
+    #[tokio::test]
+    async fn initial_sse_bom_preserves_the_first_delta_across_chunks() {
+        let body = concat!(
+            "\u{feff}data: {\"choices\":[{\"index\":0,\"delta\":{\"content\":\"prefix \"}}]}\n\n",
+            "\u{feff}data: {\"choices\":[{\"index\":0,\"delta\":{\"content\":\"must_ignore\"}}]}\n\n",
+            "data: {\"choices\":[{\"index\":0,\"delta\":{\"content\":\"answer\u{feff}\"},\"finish_reason\":\"stop\"}]}\n\n",
+            "data: [DONE]\n\n"
+        );
+        for chunk_size in [1, 2, usize::MAX] {
+            let endpoint = serve_split(body.into(), "200 OK", chunk_size).await;
+            let model =
+                HttpModelService::new(&endpoint, HttpWire::ChatCompletions, Arc::new(|| None))
+                    .unwrap();
+            let mut stream = model.stream(request()).await.unwrap();
+            let mut deltas = String::new();
+            let mut completed = None;
+            while let Some(event) = stream.next().await {
+                match event.unwrap() {
+                    ModelStreamEvent::TextDelta(text) => deltas.push_str(&text),
+                    ModelStreamEvent::Completed(response) => completed = Some(response),
+                    _ => {}
+                }
+            }
+            assert_eq!(deltas, "prefix answer\u{feff}");
+            assert_eq!(
+                completed.unwrap().message.content,
+                vec![Content::Text("prefix answer\u{feff}".into())]
+            );
+        }
+    }
+
+    #[test]
+    fn numeric_stream_status_keeps_context_and_quota_semantics() {
+        for (envelope, expected) in [
+            (
+                json!({"error":{"code":400,"type":"context_length_exceeded","message":"too large"}}),
+                ProviderErrorKind::ContextLength,
+            ),
+            (
+                json!({"error":{"code":413,"message":"Prompt is too long"}}),
+                ProviderErrorKind::ContextLength,
+            ),
+            (
+                json!({"error":{"code":429,"type":"insufficient_quota","message":"quota used"}}),
+                ProviderErrorKind::Quota,
+            ),
+        ] {
+            let failure = ChatState::default().accept(&envelope).unwrap_err();
+            assert_eq!(failure.kind, expected);
+        }
+    }
+
+    #[tokio::test]
+    async fn padded_http_quota_body_keeps_the_bounded_prefix_across_chunks() {
+        let body = format!(
+            "{{\"error\":{{\"code\":\"insufficient_quota\",\"message\":\"quota used\"}}}}{}",
+            " ".repeat(64 * 1024)
+        );
+        for chunk_size in [1024, usize::MAX] {
+            let endpoint = serve_split(body.clone(), "429 Too Many Requests", chunk_size).await;
+            let model =
+                HttpModelService::new(&endpoint, HttpWire::ChatCompletions, Arc::new(|| None))
+                    .unwrap();
+            let failure = match model.stream(request()).await {
+                Ok(_) => panic!("HTTP quota error opened a model stream"),
+                Err(error) => error,
+            };
+            assert_eq!(failure.kind, ProviderErrorKind::Quota);
+            assert!(failure.message.contains("quota used"));
+        }
     }
 
     #[tokio::test]
