@@ -85,9 +85,13 @@ than a flattened tail. Individual rows may be omitted; Ctrl-O retains the full
 current conversation. Missing saved results are unknown, not still running.
 After settled history is published, an expanded live band shrinks back to the
 rows the active composer/status actually need. Related tool calls are rendered
-as semantic activity groups with a compact tree (`●`, `├`, `└`) instead of
-raw tool-call/result protocol rows. Repeated successful observation work can
-coalesce, while edits, writes, commands and exceptional outcomes remain
+as semantic activity groups with a restrained tree (`•`, `├`, `└`) instead of
+raw tool-call/result protocol rows. Semantic emphasis and terminal-palette
+colors distinguish active work, mutations and exceptions without colored
+background cards; labels still carry the execution state. Long action and
+output-preview rows wrap under their tree branch. Styles survive native
+publication as well as live/fullscreen rendering. Repeated successful observation
+work can coalesce, while edits, writes, commands and exceptional outcomes remain
 explicit.
 
 Inline remains the default, but persistent fullscreen is also available with

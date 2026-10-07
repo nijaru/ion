@@ -1,8 +1,12 @@
 //! Pure compact rendering for the typed coding transcript.
-use crate::display_text::{fit_line, push_prefixed, push_wrapped};
+use crate::display_text::fit_line;
 use ion_core::{
     ActivityGroup, ActivityResult, ActivityState, ToolActivityKind, TranscriptActivity,
     TranscriptItem, TranscriptMessage, TranscriptPart, TranscriptProjection, UserShellActivity,
+};
+use ratatui::{
+    style::{Color, Modifier, Style},
+    text::Line,
 };
 
 pub(super) fn kind_label(kind: ToolActivityKind) -> &'static str {
@@ -34,12 +38,12 @@ pub(super) fn state_label(state: ActivityState) -> &'static str {
 
 const MAX_COALESCED_SUBJECTS: usize = 3;
 
-pub fn rows(projection: &TranscriptProjection, width: usize) -> Vec<String> {
+pub fn rows(projection: &TranscriptProjection, width: usize) -> Vec<Line<'static>> {
     let width = width.max(1);
     let mut rows = Vec::new();
     for item in &projection.items {
-        if !rows.is_empty() && rows.last().is_some_and(|row: &String| !row.is_empty()) {
-            rows.push(String::new());
+        if !rows.is_empty() && rows.last().is_some_and(|row: &Line<'_>| row.width() > 0) {
+            rows.push(Line::default());
         }
         match item {
             TranscriptItem::User(message) => render_message(&mut rows, message, true, width),
@@ -48,7 +52,7 @@ pub fn rows(projection: &TranscriptProjection, width: usize) -> Vec<String> {
             TranscriptItem::UserShell(shell) => render_shell(&mut rows, shell, width),
         }
     }
-    while rows.last().is_some_and(String::is_empty) {
+    while rows.last().is_some_and(|row| row.width() == 0) {
         rows.pop();
     }
     rows
@@ -60,7 +64,7 @@ pub(super) fn live_rows(
     projection: &TranscriptProjection,
     width: usize,
     budget: usize,
-) -> Vec<String> {
+) -> Vec<Line<'static>> {
     if budget == 0 {
         return Vec::new();
     }
@@ -95,6 +99,9 @@ pub(super) fn live_rows(
             ),
             width.max(1),
         );
+        for row in &mut selected {
+            row.style = heading();
+        }
         selected.truncate(budget.saturating_sub(2).clamp(1, 3));
         if budget > selected.len()
             && let Some((item_index, activity_index, exception)) =
@@ -113,10 +120,20 @@ pub(super) fn live_rows(
                 Some(notice) => format!("! {notice} · {subject}"),
                 None => format!("! {} · {subject}", action_label(exception)),
             };
-            selected.push(fit_line(&diagnostic, width));
+            selected.push(Line::styled(
+                fit_line(&diagnostic, width),
+                activity_style(
+                    exception.state,
+                    model_result_notice(exception).is_some(),
+                    false,
+                ),
+            ));
         }
     } else {
-        selected.push(fit_line("… earlier conversation · Ctrl-O", width));
+        selected.push(Line::styled(
+            fit_line("… earlier conversation · Ctrl-O", width),
+            subdued(),
+        ));
     }
     let remaining = budget.saturating_sub(selected.len());
     let focus = projection.items.iter().enumerate().rfind(|(_, item)| {
@@ -140,9 +157,16 @@ pub(super) fn live_rows(
                 if omitted > 0 {
                     preview.drain(..omitted);
                     if let Some(first) = preview.first_mut() {
-                        *first = fit_line(
-                            &format!("{}… {}", if user { "› " } else { "" }, first.trim_start()),
-                            width,
+                        *first = Line::styled(
+                            fit_line(
+                                &format!(
+                                    "{}… {}",
+                                    if user { "› " } else { "" },
+                                    first.to_string().trim_start()
+                                ),
+                                width,
+                            ),
+                            first.style,
                         );
                     }
                 }
@@ -162,7 +186,7 @@ pub(super) fn live_rows(
 /// The live tree keeps a root and selects whole actions in execution priority,
 /// then restores their source order. A queued tail cannot evict running work.
 fn render_current_group(
-    rows: &mut Vec<String>,
+    rows: &mut Vec<Line<'static>>,
     group: &ActivityGroup,
     width: usize,
     budget: usize,
@@ -176,7 +200,10 @@ fn render_current_group(
     if indices.is_empty() {
         return;
     }
-    rows.push(fit_line("● Current activity", width));
+    rows.push(Line::styled(
+        fit_line("• Current activity", width),
+        heading(),
+    ));
     let reserve_omission = usize::from(indices.len() > capacity && capacity > 1);
     indices.sort_by_key(|&index| (display[index].priority(), std::cmp::Reverse(index)));
     indices.truncate(capacity.saturating_sub(reserve_omission));
@@ -191,26 +218,33 @@ fn render_current_group(
         .sum::<usize>();
     for (position, &index) in indices.iter().enumerate() {
         let last = position + 1 == indices.len() && reserve_omission == 0;
-        rows.push(fit_line(
-            &format!(
-                "{}{}",
-                if last { "└ " } else { "├ " },
-                display[index].summary
+        rows.push(Line::styled(
+            fit_line(
+                &format!(
+                    "{}{}",
+                    if last { "└ " } else { "├ " },
+                    display[index].summary
+                ),
+                width,
             ),
-            width,
+            display[index].style(),
         ));
     }
     if reserve_omission > 0 {
-        rows.push(fit_line(&format!("└ {omitted} more · Ctrl-O"), width));
+        rows.push(Line::styled(
+            fit_line(&format!("└ {omitted} more · Ctrl-O"), width),
+            subdued(),
+        ));
     }
 }
 
 pub(super) fn render_message(
-    rows: &mut Vec<String>,
+    rows: &mut Vec<Line<'static>>,
     message: &TranscriptMessage,
     user: bool,
     width: usize,
 ) {
+    let start = rows.len();
     let mut first = true;
     for part in &message.parts {
         match part {
@@ -242,20 +276,33 @@ pub(super) fn render_message(
         }
         first = false;
     }
+    if user {
+        for row in &mut rows[start..] {
+            row.style = Style::default().fg(Color::Blue);
+        }
+    }
 }
 
-fn render_shell(rows: &mut Vec<String>, shell: &UserShellActivity, width: usize) {
+fn render_shell(rows: &mut Vec<Line<'static>>, shell: &UserShellActivity, width: usize) {
     let prefix = if shell.exclude_from_context {
         "› !!"
     } else {
         "› !"
     };
+    let start = rows.len();
     push_prefixed(rows, prefix, "  ", &shell.command, width);
+    for row in &mut rows[start..] {
+        row.style = Style::default().fg(Color::Blue);
+    }
     let ion_core::UserShellOutcome::Observed { output, is_error } = &shell.outcome else {
         if shell.exclude_from_context {
             push_wrapped(rows, "  not shared with model", width);
         }
+        let start = rows.len();
         push_wrapped(rows, ion_core::UserShellOutcome::unknown_notice(), width);
+        for row in &mut rows[start..] {
+            row.style = heading().fg(Color::Yellow);
+        }
         return;
     };
     for stream in ["stdout", "stderr"] {
@@ -301,7 +348,16 @@ fn render_shell(rows: &mut Vec<String>, shell: &UserShellActivity, width: usize)
     if shell.exclude_from_context {
         state.push_str(" · not shared with model");
     }
+    let start = rows.len();
     push_wrapped(rows, &format!("  {state}"), width);
+    let style = if *is_error {
+        heading().fg(Color::Red)
+    } else {
+        subdued()
+    };
+    for row in &mut rows[start..] {
+        row.style = style;
+    }
 }
 
 #[derive(Debug)]
@@ -315,6 +371,10 @@ struct DisplayActivity {
 }
 
 impl DisplayActivity {
+    fn style(&self) -> Style {
+        activity_style(self.state, self.model_notice.is_some(), self.observation)
+    }
+
     fn priority(&self) -> u8 {
         match self.state {
             ActivityState::Running => 0,
@@ -331,7 +391,7 @@ impl DisplayActivity {
     }
 }
 
-fn render_group(rows: &mut Vec<String>, group: &ActivityGroup, width: usize) {
+fn render_group(rows: &mut Vec<Line<'static>>, group: &ActivityGroup, width: usize) {
     if group.activities.is_empty() {
         return;
     }
@@ -339,27 +399,36 @@ fn render_group(rows: &mut Vec<String>, group: &ActivityGroup, width: usize) {
 
     if group.activities.len() == 1 {
         let item = &display[0];
-        rows.push(fit_line(&format!("● {}", item.summary), width));
+        push_activity(rows, "• ", "  ", item, width);
         if group.activities[0].children.is_empty()
             && let Some(detail) = &item.detail
         {
-            rows.push(fit_line(&format!("  └ {detail}"), width));
+            push_detail(rows, "  └ ", "    ", detail, width);
         }
         render_children(rows, &group.activities[0].children, "  ", width);
         return;
     }
 
-    rows.push(fit_line(&group_header(group.activities.iter()), width));
+    rows.push(Line::styled(
+        fit_line(&group_header(group.activities.iter()), width),
+        heading(),
+    ));
     let total_children = display.len();
     for (index, item) in display.iter().enumerate() {
         let last = index + 1 == total_children;
         let branch = if last { "└ " } else { "├ " };
-        rows.push(fit_line(&format!("{branch}{}", item.summary), width));
+        push_activity(rows, branch, if last { "  " } else { "│ " }, item, width);
         if group.activities[item.source.start].children.is_empty()
             && let Some(detail) = &item.detail
         {
             let prefix = if last { "  └ " } else { "│ └ " };
-            rows.push(fit_line(&format!("{prefix}{detail}"), width));
+            push_detail(
+                rows,
+                prefix,
+                if last { "    " } else { "│   " },
+                detail,
+                width,
+            );
         }
         render_children(
             rows,
@@ -371,7 +440,7 @@ fn render_group(rows: &mut Vec<String>, group: &ActivityGroup, width: usize) {
 }
 
 fn render_children(
-    rows: &mut Vec<String>,
+    rows: &mut Vec<Line<'static>>,
     children: &[TranscriptActivity],
     prefix: &str,
     width: usize,
@@ -379,12 +448,22 @@ fn render_children(
     let display = compact_activities(children);
     for (index, item) in display.iter().enumerate() {
         let last = index + 1 == display.len();
-        rows.push(fit_line(
-            &format!("{prefix}{}{}", if last { "└ " } else { "├ " }, item.summary),
+        let continuation = format!("{prefix}{}", if last { "  " } else { "│ " });
+        push_activity(
+            rows,
+            &format!("{prefix}{}", if last { "└ " } else { "├ " }),
+            &continuation,
+            item,
             width,
-        ));
+        );
         if let Some(detail) = &item.detail {
-            rows.push(fit_line(&format!("{prefix}  └ {detail}"), width));
+            push_detail(
+                rows,
+                &format!("{continuation}└ "),
+                &format!("{continuation}  "),
+                detail,
+                width,
+            );
         }
     }
 }
@@ -451,7 +530,7 @@ fn group_header<'a>(activities: impl Iterator<Item = &'a TranscriptActivity>) ->
             parts.push(format!("{} {label}", counts[index]));
         }
     }
-    format!("● {}", parts.join(" · "))
+    format!("• {}", parts.join(" · "))
 }
 
 fn compact_activities(activities: &[TranscriptActivity]) -> Vec<DisplayActivity> {
@@ -796,10 +875,202 @@ fn clean_inline(text: &str) -> String {
         .join(" ")
 }
 
+fn heading() -> Style {
+    Style::default().add_modifier(Modifier::BOLD)
+}
+fn subdued() -> Style {
+    Style::default().add_modifier(Modifier::DIM)
+}
+fn activity_style(state: ActivityState, notice: bool, observation: bool) -> Style {
+    if notice {
+        return heading().fg(Color::Yellow);
+    }
+    match state {
+        ActivityState::Failed | ActivityState::Rejected => heading().fg(Color::Red),
+        ActivityState::Unknown | ActivityState::Cancelled | ActivityState::TimedOut => {
+            heading().fg(Color::Yellow)
+        }
+        ActivityState::Running => heading().fg(Color::Cyan),
+        ActivityState::Queued => subdued(),
+        ActivityState::Completed if !observation => heading(),
+        ActivityState::Completed => Style::default(),
+    }
+}
+fn push_prefixed(
+    rows: &mut Vec<Line<'static>>,
+    prefix: &str,
+    continuation: &str,
+    text: &str,
+    width: usize,
+) {
+    let mut plain = Vec::new();
+    crate::display_text::push_prefixed(&mut plain, prefix, continuation, text, width);
+    rows.extend(plain.into_iter().map(Line::raw));
+}
+fn push_wrapped(rows: &mut Vec<Line<'static>>, text: &str, width: usize) {
+    push_prefixed(rows, "", "", text, width);
+}
+fn push_activity(
+    rows: &mut Vec<Line<'static>>,
+    prefix: &str,
+    continuation: &str,
+    item: &DisplayActivity,
+    width: usize,
+) {
+    let start = rows.len();
+    push_prefixed(rows, prefix, continuation, &item.summary, width);
+    for row in &mut rows[start..] {
+        row.style = item.style();
+    }
+}
+fn push_detail(
+    rows: &mut Vec<Line<'static>>,
+    prefix: &str,
+    continuation: &str,
+    text: &str,
+    width: usize,
+) {
+    let start = rows.len();
+    push_prefixed(rows, prefix, continuation, text, width);
+    for row in &mut rows[start..] {
+        row.style = subdued();
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    fn plain_rows(projection: &TranscriptProjection, width: usize) -> Vec<String> {
+        super::rows(projection, width)
+            .iter()
+            .map(ToString::to_string)
+            .collect()
+    }
+    fn plain_live_rows(
+        projection: &TranscriptProjection,
+        width: usize,
+        budget: usize,
+    ) -> Vec<String> {
+        super::live_rows(projection, width, budget)
+            .iter()
+            .map(ToString::to_string)
+            .collect()
+    }
     use ion_core::{ToolActivity, TranscriptActivity};
+
+    #[test]
+    fn activity_styles_follow_typed_state_and_wrapping_keeps_the_tree() {
+        let subject = "deep/project/with/a/long/path/界界/important.rs";
+        let projection = TranscriptProjection {
+            items: vec![TranscriptItem::ActivityGroup(ActivityGroup {
+                turn: 1,
+                open: true,
+                activities: vec![
+                    activity(
+                        "read",
+                        ToolActivityKind::Read,
+                        subject,
+                        ActivityState::Running,
+                        None,
+                    ),
+                    activity(
+                        "edit",
+                        ToolActivityKind::Edit,
+                        "failed.rs",
+                        ActivityState::Failed,
+                        None,
+                    ),
+                ],
+            })],
+        };
+        let rows = super::rows(&projection, 24);
+        let read = rows
+            .iter()
+            .position(|row| row.to_string().starts_with("├ Reading"))
+            .unwrap();
+        let failed = rows
+            .iter()
+            .position(|row| row.to_string().starts_with("└ Edit failed"))
+            .unwrap();
+        assert!(failed > read + 1);
+        assert_eq!(rows[read].style.fg, Some(Color::Cyan));
+        assert_eq!(rows[failed].style.fg, Some(Color::Red));
+        let wrapped = rows[read..failed]
+            .iter()
+            .map(ToString::to_string)
+            .collect::<Vec<_>>();
+        assert!(wrapped[1..].iter().all(|row| row.starts_with("│ ")));
+        let retained = wrapped
+            .iter()
+            .map(|row| row.chars().skip(2).collect::<String>())
+            .collect::<String>();
+        assert!(retained.contains(subject));
+        assert!(rows.iter().all(|row| row.width() <= 24));
+        let live = super::live_rows(&projection, 24, 6);
+        assert!(live.iter().any(|row| row.style.fg == Some(Color::Red)));
+        assert!(live.iter().any(|row| row.style.fg == Some(Color::Cyan)));
+    }
+
+    #[test]
+    fn nested_wrapping_keeps_sibling_rails_for_actions_and_details() {
+        let mut parent = activity(
+            "parent",
+            ToolActivityKind::External,
+            "composition",
+            ActivityState::Running,
+            None,
+        );
+        parent.children = vec![
+            activity(
+                "first",
+                ToolActivityKind::Command,
+                "a long first child command that wraps across several rows",
+                ActivityState::Completed,
+                Some(
+                    serde_json::json!({"stdout":"a long first child output that wraps across several rows"}),
+                ),
+            ),
+            activity(
+                "second",
+                ToolActivityKind::Edit,
+                "second.rs",
+                ActivityState::Completed,
+                None,
+            ),
+        ];
+        let projection = TranscriptProjection {
+            items: vec![TranscriptItem::ActivityGroup(ActivityGroup {
+                turn: 1,
+                open: true,
+                activities: vec![parent],
+            })],
+        };
+        let rows = plain_rows(&projection, 24);
+        let first = rows
+            .iter()
+            .position(|row| row.starts_with("  ├ Ran"))
+            .unwrap();
+        let last = rows
+            .iter()
+            .position(|row| row.starts_with("  └ Edited"))
+            .unwrap();
+        assert!(last > first + 2);
+        assert!(
+            rows[first + 1..last]
+                .iter()
+                .all(|row| row.starts_with("  │ ")),
+            "{rows:?}"
+        );
+        assert!(
+            rows[first + 1..last]
+                .iter()
+                .any(|row| row.starts_with("  │ └ "))
+        );
+        assert!(
+            rows.iter()
+                .all(|row| unicode_width::UnicodeWidthStr::width(row.as_str()) <= 24)
+        );
+    }
 
     #[test]
     fn shell_preview_shows_observed_output_outcome_and_context_choice() {
@@ -819,7 +1090,7 @@ mod tests {
                 exclude_from_context: true,
             })],
         };
-        let rendered = rows(&projection, 120).join("\n");
+        let rendered = plain_rows(&projection, 120).join("\n");
         assert!(rendered.contains("OBSERVED_OUTPUT"), "{rendered}");
         assert!(rendered.contains("OBSERVED_FAILURE"));
         assert!(rendered.contains("exit 7"));
@@ -903,8 +1174,8 @@ mod tests {
                 ],
             })],
         };
-        let rendered = rows(&projection, 100).join("\n");
-        for count in ["● 5 actions", "3 read", "1 edit", "1 command"] {
+        let rendered = plain_rows(&projection, 100).join("\n");
+        for count in ["• 5 actions", "3 read", "1 edit", "1 command"] {
             assert!(rendered.contains(count));
         }
         assert!(rendered.contains("├ Read src/a.rs, src/b.rs, src/c.rs"));
@@ -935,7 +1206,7 @@ mod tests {
                     activities: vec![read],
                 })],
             };
-            for rendered in [rows(&history, 80), live_rows(&history, 80, 16)] {
+            for rendered in [plain_rows(&history, 80), plain_live_rows(&history, 80, 16)] {
                 let rendered = rendered.join("\n");
                 assert!(rendered.contains("not shared with model"), "{rendered}");
                 assert!(rendered.contains("Read"), "{rendered}");
@@ -959,8 +1230,8 @@ mod tests {
                 )],
             })],
         };
-        let rendered = rows(&projection, 80).join("\n");
-        assert!(rendered.contains("● Exited 1 cargo test"));
+        let rendered = plain_rows(&projection, 80).join("\n");
+        assert!(rendered.contains("• Exited 1 cargo test"));
         assert!(rendered.contains("└ compile failed"));
     }
 
@@ -981,7 +1252,7 @@ mod tests {
             ],
         };
         assert_eq!(
-            rows(&projection, 80),
+            plain_rows(&projection, 80),
             vec!["› fix the parser", "", "I found the issue."]
         );
     }
@@ -1034,7 +1305,7 @@ mod tests {
             ],
         };
         for width in [24, 100] {
-            let rendered = live_rows(&projection, width, 7);
+            let rendered = plain_live_rows(&projection, width, 7);
             assert!(rendered.len() <= 7);
             let text = rendered.join("\n");
             for fact in [
@@ -1050,11 +1321,14 @@ mod tests {
                 assert!(text.contains(fact), "missing {fact}: {text}");
             }
         }
-        let tiny = live_rows(&projection, 100, 2);
+        let tiny = plain_live_rows(&projection, 100, 2);
         assert_eq!(tiny.len(), 2);
         assert!(tiny.join("\n").contains("FAILURE_MARKER"));
-        assert_eq!(live_rows(&projection, 100, 100), rows(&projection, 100));
-        assert!(live_rows(&projection, 100, 0).is_empty());
+        assert_eq!(
+            plain_live_rows(&projection, 100, 100),
+            plain_rows(&projection, 100)
+        );
+        assert!(plain_live_rows(&projection, 100, 0).is_empty());
     }
 
     #[test]
@@ -1080,7 +1354,7 @@ mod tests {
                 activities: vec![parent],
             })],
         };
-        let full = rows(&projection, 80).join("\n");
+        let full = plain_rows(&projection, 80).join("\n");
         assert!(
             full.contains("1 child calls") && full.contains("1 exceptions"),
             "{full}"
@@ -1089,7 +1363,7 @@ mod tests {
             full.contains("└ Read failed CHILD_FAILURE_LONG_PATH"),
             "{full}"
         );
-        let tiny = live_rows(&projection, 24, 2).join("\n");
+        let tiny = plain_live_rows(&projection, 24, 2).join("\n");
         assert!(
             tiny.contains("Read failed") && tiny.contains("CHILD"),
             "{tiny}"
@@ -1148,7 +1422,7 @@ mod tests {
                 }),
             ],
         };
-        let rendered = live_rows(&projection, 100, 7).join("\n");
+        let rendered = plain_live_rows(&projection, 100, 7).join("\n");
         assert_eq!(rendered.matches("REUSED_FAILURE").count(), 1, "{rendered}");
         assert!(
             rendered.contains("Read FIRST_READ, SECOND_READ"),
@@ -1188,7 +1462,7 @@ mod tests {
                 ],
             })],
         };
-        let rendered = live_rows(&projection, 40, 3).join("\n");
+        let rendered = plain_live_rows(&projection, 40, 3).join("\n");
         for fact in [
             "1 running",
             "2 queued",
@@ -1239,7 +1513,7 @@ mod tests {
                 activities,
             })],
         };
-        let rendered = rows(&projection, 100).join("\n");
+        let rendered = plain_rows(&projection, 100).join("\n");
         assert!(rendered.contains("Edited important.rs"));
         assert!(rendered.contains("Exited 1 cargo test"));
         assert!(rendered.contains("Read file-0.rs, file-1.rs, file-2.rs · +17 more"));

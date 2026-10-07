@@ -1457,14 +1457,14 @@ impl Frontend {
         self.saved_draft.clear();
     }
 
-    fn pending_history_rows(&self, width: usize) -> Vec<String> {
+    fn pending_history_rows(&self, width: usize) -> Vec<Line<'static>> {
         let mut rows = Vec::new();
         if let Some(banner) = &self.pending_history_banner {
-            rows.push(String::new());
-            rows.push(banner.clone());
-            rows.push(String::new());
+            rows.push(Line::default());
+            rows.extend(notice_rows(banner, width));
+            rows.push(Line::default());
         } else if self.history_published_items > 0 && !self.pending_history_items.is_empty() {
-            rows.push(String::new());
+            rows.push(Line::default());
         }
         if !self.pending_history_items.is_empty() {
             rows.extend(crate::transcript_render::rows(
@@ -2030,7 +2030,7 @@ fn draw(
     let commit_rows = ui.pending_history_rows(width.max(1) as usize);
     let history_committed = !commit_rows.is_empty();
     if history_committed {
-        screen.commit_text_lines(terminal.output(), &commit_rows)?;
+        screen.commit_lines(terminal.output(), &commit_rows)?;
     }
     if !ui.pending_history_items.is_empty() || ui.pending_history_banner.is_some() {
         ui.finish_history_commit();
@@ -2073,7 +2073,7 @@ fn draw(
     let mut live_rows = progress.map_or_else(Vec::new, |progress| {
         crate::transcript_render::live_rows(progress.projection(), width, content_budget)
     });
-    live_rows.extend(chrome);
+    live_rows.extend(chrome.into_iter().map(Line::raw));
     let composer_offset = live_rows.len();
     for line in composer
         .lines
@@ -2081,7 +2081,7 @@ fn draw(
         .skip(composer_start)
         .take(composer_height)
     {
-        live_rows.push(line.clone());
+        live_rows.push(Line::raw(line.clone()));
     }
     let mut cursor_row = composer_offset + composer.cursor_row.saturating_sub(composer_start);
 
@@ -2100,7 +2100,7 @@ fn draw(
         cursor_row = cursor_row.saturating_sub(drop);
     }
 
-    let live = live_rows.into_iter().map(Line::raw).collect::<Vec<_>>();
+    let live = live_rows;
     let cursor = (cursor_row < live.len()).then_some((
         cursor_row,
         composer.cursor_col.min(width.saturating_sub(1)) as u16,
@@ -2162,22 +2162,22 @@ fn draw_chat_fullscreen(
     let mut content = crate::transcript_render::rows(&ui.history, width);
 
     for notice in &ui.notices {
-        if !content.is_empty() && content.last().is_some_and(|row| !row.is_empty()) {
-            content.push(String::new());
+        if !content.is_empty() && content.last().is_some_and(|row| row.width() > 0) {
+            content.push(Line::default());
         }
-        push_wrapped(&mut content, notice, width);
+        content.extend(notice_rows(notice, width));
     }
     if let Some(progress) = progress {
         let live = crate::transcript_render::rows(progress.projection(), width);
         if !live.is_empty()
             && !content.is_empty()
-            && content.last().is_some_and(|row| !row.is_empty())
+            && content.last().is_some_and(|row| row.width() > 0)
         {
-            content.push(String::new());
+            content.push(Line::default());
         }
         content.extend(live);
         for notice in progress.notices() {
-            push_wrapped(&mut content, notice, width);
+            content.extend(notice_rows(notice, width));
         }
     }
 
@@ -2208,7 +2208,7 @@ fn draw_chat_fullscreen(
     let mut rows = vec![Line::raw(""); height];
     let padding = viewport.saturating_sub(end.saturating_sub(start));
     for (index, row) in content[start..end].iter().enumerate() {
-        rows[padding + index] = Line::raw(row.clone());
+        rows[padding + index] = row.clone();
     }
 
     let mut next_row = viewport;
@@ -2237,6 +2237,12 @@ fn draw_chat_fullscreen(
 
     screen.draw_fullscreen(terminal.output(), &rows, cursor)?;
     Ok(())
+}
+
+fn notice_rows(text: &str, width: usize) -> Vec<Line<'static>> {
+    let mut rows = Vec::new();
+    push_wrapped(&mut rows, text, width);
+    rows.into_iter().map(Line::raw).collect()
 }
 
 fn draw_modal_fullscreen(

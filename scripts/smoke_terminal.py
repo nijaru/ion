@@ -167,7 +167,7 @@ with tempfile.TemporaryDirectory(prefix="ion-terminal-") as temporary:
             alt_leaves = output.count(b"\x1b[?1049l")
             assert saw_inline_start, "inline composer never appeared before modal interaction"
             assert alt_enters > 0 and alt_enters == alt_leaves, (alt_enters, alt_leaves)
-            assert b"\xe2\x97\x8f " in output, "semantic activity group header was not rendered"
+            assert "• ".encode() in output, "semantic activity group header was not rendered"
             assert b"\xe2\x94\x9c " in output or b"\xe2\x94\x94 " in output, "grouped tool tree was not rendered"
             assert sent_file_start and selected_file and sent_first and sent_steering and sent_second and resized and sent_tool and closed_tool and sent_compact and sent_clone and sent_controls and sent_key and sent_logout and sent_copy and sent_quit, "terminal did not complete the session/model/login workflow"
             assert "RESUMED" in copy_file.read_text(), "copy did not use the committed assistant answer"

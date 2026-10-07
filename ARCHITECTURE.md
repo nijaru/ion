@@ -235,6 +235,8 @@ mutations and notices must remain distinguishable without relying on color.
 - Use one control-safe grapheme/display-width policy for transcript/chrome/detail.
   Composer byte-to-cursor mapping is a separate input contract. Style belongs to
   semantic presentation roles, not escape strings mixed into untrusted text.
+  Carry typed styles through both mutable rendering and native publication;
+  settling content must not flatten a styled live transcript into plain strings.
 
 Inline native scrollback is the default. Publish settled content explicitly;
 mutable redraw/resize must not publish history or maintain a second virtual

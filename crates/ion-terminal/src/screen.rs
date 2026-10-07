@@ -1,7 +1,7 @@
 //! Line-diff renderer for Ion's mutable terminal surface.
 //!
 //! Normal inline chat owns only a live band. Settled transcript rows can be
-//! appended once with `commit_text_lines`, after which the physical terminal
+//! appended once with `commit_lines`, after which the physical terminal
 //! owns their scrollback/reflow. Drawing never publishes or scrolls live rows.
 //! Fullscreen rendering is a separate transient surface.
 
@@ -14,7 +14,7 @@ use ratatui::text::Line;
 use ratatui::widgets::{Paragraph, Widget};
 
 /// Wrapped live rows, bottom-aligned and clipped to the reserved inline band.
-/// Settled rows must be published separately through `commit_text_lines`.
+/// Settled rows must be published separately through `commit_lines`.
 pub struct Frame<'a> {
     pub live: &'a [Line<'a>],
     /// (live row, column); None hides the hardware cursor.
@@ -209,21 +209,26 @@ impl Screen {
         self.cursor_at = None;
     }
 
-    /// Append settled plain-text rows exactly once above the mutable live band.
+    /// Append settled styled rows exactly once above the mutable live band.
     ///
     /// The current live surface is discarded, the rows are printed from the
     /// band's anchor with explicit CRLFs, and ordinary terminal scrolling moves
     /// older content into native scrollback. The anchor advances to the cursor's
     /// resulting physical row. Already committed rows are never re-rendered on
     /// resize; a subsequent `draw` repaints only the live band.
-    pub fn commit_text_lines(&mut self, out: &mut impl Write, lines: &[String]) -> io::Result<()> {
+    pub fn commit_lines(&mut self, out: &mut impl Write, lines: &[Line<'_>]) -> io::Result<()> {
         if lines.is_empty() {
             return Ok(());
         }
         self.clear_inline_surface(out)?;
         let mut origin = self.origin;
         for line in lines {
-            write!(out, "\x1b[{};1H\x1b[2K{line}\r\n", origin + 1)?;
+            write!(out, "\x1b[{};1H\x1b[2K", origin + 1)?;
+            for span in &line.spans {
+                emit_style(out, line.style.patch(span.style))?;
+                write!(out, "{}\x1b[0m", span.content)?;
+            }
+            write!(out, "\x1b[0m\r\n")?;
             origin = origin.saturating_add(1).min(self.screen_height - 1);
         }
         out.flush()?;
@@ -504,7 +509,7 @@ mod tests {
         terminal.process(b"banner\r\n\r\n");
         let mut out = Vec::new();
         screen
-            .commit_text_lines(&mut out, &["first".into(), "second".into()])
+            .commit_lines(&mut out, &["first".into(), "second".into()])
             .unwrap();
         terminal.process(&out);
         out.clear();
@@ -692,13 +697,13 @@ mod tests {
             let mut screen = Screen::with_live_height(30, origin, 12, 1);
             let mut terminal = vt100::Parser::new(12, 30, 64);
             let settled = (0..24)
-                .map(|index| format!("settled-{index:02}"))
+                .map(|index| Line::raw(format!("settled-{index:02}")))
                 .collect::<Vec<_>>();
             let mut out = Vec::new();
             let mut emitted = Vec::new();
             for batch in [&settled[..3], &settled[3..]] {
                 out.clear();
-                screen.commit_text_lines(&mut out, batch).unwrap();
+                screen.commit_lines(&mut out, batch).unwrap();
                 terminal.process(&out);
                 emitted.extend_from_slice(&out);
             }
@@ -729,7 +734,11 @@ mod tests {
                 .filter(|row| row.starts_with("settled-"))
                 .map(|row| row.trim_end())
                 .collect::<Vec<_>>();
-            assert_eq!(recorded, settled, "origin {origin}");
+            assert_eq!(
+                recorded,
+                settled.iter().map(ToString::to_string).collect::<Vec<_>>(),
+                "origin {origin}"
+            );
             terminal.screen_mut().set_scrollback(usize::MAX);
             let depth = terminal.screen().scrollback();
             for offset in 1..=depth {
@@ -777,7 +786,7 @@ mod tests {
             }
             let text = String::from_utf8(emitted).unwrap();
             for row in &settled {
-                assert_eq!(text.matches(row).count(), 1);
+                assert_eq!(text.matches(row.to_string().as_str()).count(), 1);
             }
         }
     }
@@ -968,6 +977,49 @@ mod tests {
             terminal.screen().rows(0, 40).next().unwrap().trim_end(),
             "界x"
         );
+    }
+
+    #[test]
+    fn native_publication_preserves_the_live_styles_without_leaking_them() {
+        let styled = Line::from(vec![
+            Span::styled("action", Style::default().fg(Color::Yellow)),
+            Span::raw(" body"),
+        ])
+        .style(
+            Style::default()
+                .fg(Color::Cyan)
+                .add_modifier(ratatui::style::Modifier::BOLD),
+        );
+        let mut live_screen = Screen::new(30, 0, 4);
+        let mut native_screen = Screen::new(30, 0, 4);
+        let mut live = vt100::Parser::new(4, 30, 0);
+        let mut native = vt100::Parser::new(4, 30, 0);
+        let mut out = Vec::new();
+        live_screen
+            .draw(
+                &mut out,
+                &Frame {
+                    live: std::slice::from_ref(&styled),
+                    cursor: None,
+                },
+            )
+            .unwrap();
+        live.process(&out);
+        out.clear();
+        native_screen
+            .commit_lines(&mut out, &[styled, Line::raw("plain")])
+            .unwrap();
+        native.process(&out);
+        for column in 0..11 {
+            let a = live.screen().cell(0, column).unwrap();
+            let b = native.screen().cell(0, column).unwrap();
+            assert_eq!(a.contents(), b.contents());
+            assert_eq!(a.fgcolor(), b.fgcolor());
+            assert_eq!(a.bold(), b.bold());
+        }
+        let plain = native.screen().cell(1, 0).unwrap();
+        assert!(!plain.bold());
+        assert_eq!(plain.fgcolor(), vt100::Color::Default);
     }
 
     #[test]

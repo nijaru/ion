@@ -141,7 +141,9 @@ impl DetailView {
                                     if message.steering { "Steering" } else { "User" },
                                     width,
                                 );
-                                render_message(&mut rows, message, true, width);
+                                let mut message_rows = Vec::new();
+                                render_message(&mut message_rows, message, true, width);
+                                rows.extend(message_rows.iter().map(ToString::to_string));
                             }
                             TranscriptItem::Assistant(message) => {
                                 push_wrapped(
@@ -153,7 +155,9 @@ impl DetailView {
                                     },
                                     width,
                                 );
-                                render_message(&mut rows, message, false, width);
+                                let mut message_rows = Vec::new();
+                                render_message(&mut message_rows, message, false, width);
+                                rows.extend(message_rows.iter().map(ToString::to_string));
                             }
                             TranscriptItem::UserShell(shell) => {
                                 push_wrapped(
