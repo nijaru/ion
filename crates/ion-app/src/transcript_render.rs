@@ -251,11 +251,15 @@ fn render_shell(rows: &mut Vec<String>, shell: &UserShellActivity, width: usize)
         "› !"
     };
     push_prefixed(rows, prefix, "  ", &shell.command, width);
+    let ion_core::UserShellOutcome::Observed { output, is_error } = &shell.outcome else {
+        if shell.exclude_from_context {
+            push_wrapped(rows, "  not shared with model", width);
+        }
+        push_wrapped(rows, ion_core::UserShellOutcome::unknown_notice(), width);
+        return;
+    };
     for stream in ["stdout", "stderr"] {
-        if let Some(text) = shell.output[stream]
-            .as_str()
-            .filter(|text| !text.is_empty())
-        {
+        if let Some(text) = output[stream].as_str().filter(|text| !text.is_empty()) {
             let count = text.lines().count();
             if count > 4 {
                 push_wrapped(
@@ -268,8 +272,8 @@ fn render_shell(rows: &mut Vec<String>, shell: &UserShellActivity, width: usize)
                 push_prefixed(rows, &format!("  {stream}: "), "    ", line, width);
             }
         }
-        if shell.output[format!("{stream}_truncated")].as_bool() == Some(true) {
-            let capture = shell.output[format!("{stream}_full_path")].as_str();
+        if output[format!("{stream}_truncated")].as_bool() == Some(true) {
+            let capture = output[format!("{stream}_full_path")].as_str();
             let note = capture.map_or_else(
                 || format!("  {stream} truncated/incomplete · Ctrl-O"),
                 |path| format!("  {stream} truncated/incomplete · capture: {path} · Ctrl-O"),
@@ -277,21 +281,21 @@ fn render_shell(rows: &mut Vec<String>, shell: &UserShellActivity, width: usize)
             push_wrapped(rows, &note, width);
         }
     }
-    let mut state = if let Some(signal) = shell.output["signal"].as_i64() {
+    let mut state = if let Some(signal) = output["signal"].as_i64() {
         format!("signal {signal}")
-    } else if let Some(code) = shell.output["exit_code"].as_i64() {
+    } else if let Some(code) = output["exit_code"].as_i64() {
         format!("exit {code}")
-    } else if shell.output["wait_error"].as_str().is_some() {
+    } else if output["wait_error"].as_str().is_some() {
         "exit unknown; inspect details".into()
-    } else if shell.is_error {
+    } else if *is_error {
         "failed; inspect details".into()
     } else {
         "completed".into()
     };
-    if shell.output["cancelled"].as_bool() == Some(true) {
+    if output["cancelled"].as_bool() == Some(true) {
         state.push_str(" · cancelled");
     }
-    if shell.output["timed_out"].as_bool() == Some(true) {
+    if output["timed_out"].as_bool() == Some(true) {
         state.push_str(" · timed out");
     }
     if shell.exclude_from_context {
@@ -802,14 +806,16 @@ mod tests {
         let projection = TranscriptProjection {
             items: vec![TranscriptItem::UserShell(ion_core::UserShellActivity {
                 command: "run-check".into(),
-                output: serde_json::json!({
-                    "stdout": "first\nsecond\nthird\nfourth\nOBSERVED_OUTPUT\n",
-                    "stderr": "\u{1b}[2JOBSERVED_FAILURE\n",
-                    "exit_code": 7,
-                    "stdout_truncated": true,
-                    "stdout_full_path": "/tmp/capture.txt"
-                }),
-                is_error: true,
+                outcome: ion_core::UserShellOutcome::Observed {
+                    output: serde_json::json!({
+                        "stdout": "first\nsecond\nthird\nfourth\nOBSERVED_OUTPUT\n",
+                        "stderr": "\u{1b}[2JOBSERVED_FAILURE\n",
+                        "exit_code": 7,
+                        "stdout_truncated": true,
+                        "stdout_full_path": "/tmp/capture.txt"
+                    }),
+                    is_error: true,
+                },
                 exclude_from_context: true,
             })],
         };

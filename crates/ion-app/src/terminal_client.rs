@@ -275,9 +275,8 @@ pub async fn chat(init: ChatInit) -> Result<()> {
                     )
                     .await
                     {
-                        ui.note(format!("Shell command: {command}"));
                         ui.status = format!(
-                            "Shell result uncertain: {error:#}; inspect the working directory before retrying"
+                            "Shell operation failed: {error:#}; inspect the Session and working directory before retrying\nShell command: {command}"
                         );
                     }
                 }
@@ -1175,10 +1174,10 @@ async fn run_user_shell(
         }
     };
     finish_pending_clipboard_paste(ui).await;
-    let output = output?;
     let view = runtime.session().view()?;
     ui.load_history(runtime.session(), &view);
     ui.scroll = 0;
+    let output = output?;
     ui.status = if output.is_error {
         "Shell finished with an error"
     } else {
@@ -2381,8 +2380,10 @@ mod tests {
             .map(|index| {
                 TranscriptItem::UserShell(ion_core::UserShellActivity {
                     command: format!("echo {index}"),
-                    output: serde_json::Value::Null,
-                    is_error: false,
+                    outcome: ion_core::UserShellOutcome::Observed {
+                        output: serde_json::Value::Null,
+                        is_error: false,
+                    },
                     exclude_from_context: false,
                 })
             })
@@ -2429,6 +2430,7 @@ mod tests {
             ],
             messages: vec![],
             unfinished_turn: Some(2),
+            unfinished_user_shell: None,
             last_end: None,
             last_model: None,
             last_effective_model: None,

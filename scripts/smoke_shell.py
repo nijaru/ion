@@ -18,6 +18,16 @@ from pathlib import Path
 
 root = Path(__file__).resolve().parent.parent
 binary = Path(os.environ.get("ION_SMOKE_BIN", root / "target/debug/ion"))
+
+
+def observed_shells(view):
+    admissions = {index: entry["data"] for index, entry in enumerate(view["entries"], 1) if entry["kind"] == "user_shell_admitted"}
+    settlements = [entry["data"] for entry in view["entries"] if entry["kind"] == "user_shell_settled"]
+    assert len(admissions) == len(settlements), view
+    assert all(entry["outcome"]["kind"] == "observed" for entry in settlements), settlements
+    return [(admissions[entry["admission_entry"]], entry["outcome"]) for entry in settlements]
+
+
 def output_failure_settles_operation(workspace, env, mode, coding):
     """Keep input alive while failing only the actual terminal output device."""
     workspace = workspace / ("output-failure-turn" if coding else "output-failure-shell")
@@ -89,9 +99,9 @@ def output_failure_settles_operation(workspace, env, mode, coding):
             result = results[0]["result"]
             assert view["unfinished_turn"] is None and view["entries"][-1]["data"]["reason"] == "cancelled", view["unfinished_turn"]
         else:
-            shells = [entry["data"] for entry in view["entries"] if entry["kind"] == "user_shell"]
+            shells = observed_shells(view)
             assert len(shells) == 1, ("shell outcome was lost on rendering failure", [entry["kind"] for entry in view["entries"]])
-            result = shells[-1]["output"]
+            result = shells[-1][1]["output"]
         assert result["stdout"] == "CAPTURED_BEFORE_RENDER_FAILURE\n" and result["cancelled"], result
         assert result["signal"] is not None and result["wait_error"] is None, result
         assert requests == (1 if coding else 0), "output failure dispatched another model request"
@@ -197,16 +207,16 @@ for mode in ("inline", "fullscreen"):
             listing = subprocess.run([binary, "--cwd", workspace, "sessions"], env=env, capture_output=True, text=True, check=True).stdout
             session_id = listing.split("\t")[0]
             inspect = subprocess.run([binary, "--cwd", workspace, "--session", session_id, "inspect"], env=env, capture_output=True, text=True, check=True).stdout
-            entries = [entry["data"] for entry in json.loads(inspect)["entries"] if entry["kind"] == "user_shell"]
+            entries = observed_shells(json.loads(inspect))
             assert len(entries) == 3, entries
-            assert entries[0]["output"]["stdout"] == "VISIBLE_OUTPUT\n" and not entries[0]["exclude_from_context"]
-            assert entries[1]["output"]["stderr"] == "FAILED_STDERR\n" and entries[1]["output"]["exit_code"] == 7 and entries[1]["is_error"]
-            assert entries[2]["output"]["stdout"] == "PRIVATE_OUTPUT\n" and entries[2]["exclude_from_context"]
+            assert entries[0][1]["output"]["stdout"] == "VISIBLE_OUTPUT\n" and not entries[0][0]["exclude_from_context"]
+            assert entries[1][1]["output"]["stderr"] == "FAILED_STDERR\n" and entries[1][1]["output"]["exit_code"] == 7 and entries[1][1]["is_error"]
+            assert entries[2][1]["output"]["stdout"] == "PRIVATE_OUTPUT\n" and entries[2][0]["exclude_from_context"]
             transcript = (workspace / "session.txt").read_text()
             assert "VISIBLE_OUTPUT" in transcript and "PRIVATE_OUTPUT" in transcript and "not shared with model" in transcript
             assert (workspace / "session.txt").stat().st_mode & 0o777 == 0o600
             resumed = subprocess.run([binary, "--cwd", workspace, "--continue", "inspect"], env=env, capture_output=True, text=True, check=True)
-            assert len([entry for entry in json.loads(resumed.stdout)["entries"] if entry["kind"] == "user_shell"]) == 3
+            assert len(observed_shells(json.loads(resumed.stdout))) == 3
             exported = subprocess.run([binary, "--cwd", workspace, "--continue", "export"], env=env, capture_output=True, text=True, check=True)
             assert "User shell" in exported.stdout and "PRIVATE_OUTPUT" in exported.stdout
             refused = subprocess.run([binary, "--cwd", workspace, "--continue", "export", "session.txt"], env=env, capture_output=True, text=True)

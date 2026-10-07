@@ -118,8 +118,12 @@ impl SessionCatalog {
                     .map(|ch| if ch.is_control() { ' ' } else { ch })
                     .collect(),
             ),
-            SessionEntry::UserShell { command, .. } => Some(format!(
-                "!{}",
+            SessionEntry::UserShellAdmitted {
+                command,
+                exclude_from_context,
+            } => Some(format!(
+                "{}{}",
+                if *exclude_from_context { "!!" } else { "!" },
                 command
                     .lines()
                     .next()
@@ -139,7 +143,7 @@ impl SessionCatalog {
             && !view
                 .entries
                 .iter()
-                .any(|entry| matches!(entry, SessionEntry::UserShell { .. }))
+                .any(|entry| matches!(entry, SessionEntry::UserShellAdmitted { .. }))
         {
             return None;
         }

@@ -16,7 +16,7 @@ pub fn render(view: &SessionView) -> String {
     if let Some(name) = &view.name {
         let _ = writeln!(text, "Name: {name}");
     }
-    for entry in &view.entries {
+    for (entry_index, entry) in view.entries.iter().enumerate() {
         match entry {
             SessionEntry::TurnStarted { turn, input, .. } => {
                 let _ = write!(text, "\nTurn {turn} · user\n");
@@ -81,12 +81,11 @@ pub fn render(view: &SessionView) -> String {
                     let _ = writeln!(text, "  [image: {}]", image.mime_type().as_str());
                 }
             }
-            SessionEntry::UserShell {
+            SessionEntry::UserShellAdmitted {
                 command,
-                output,
-                is_error,
                 exclude_from_context,
             } => {
+                let outcome = view.user_shell_outcome(entry_index as u64 + 1);
                 let _ = writeln!(
                     text,
                     "\nUser shell · {} · {}\n$ {command}",
@@ -95,9 +94,20 @@ pub fn render(view: &SessionView) -> String {
                     } else {
                         "shared with model"
                     },
-                    if *is_error { "error" } else { "ok" }
+                    match outcome {
+                        ion_core::UserShellOutcome::Observed { is_error: true, .. } => "error",
+                        ion_core::UserShellOutcome::Observed { .. } => "ok",
+                        ion_core::UserShellOutcome::Unknown => "external effect unknown",
+                    }
                 );
-                json_value(&mut text, output);
+                match outcome {
+                    ion_core::UserShellOutcome::Observed { output, .. } => {
+                        json_value(&mut text, output)
+                    }
+                    ion_core::UserShellOutcome::Unknown => {
+                        let _ = writeln!(text, "{}", ion_core::UserShellOutcome::unknown_notice());
+                    }
+                }
             }
             SessionEntry::TurnEnded { reason, .. } => {
                 let _ = writeln!(text, "\nTurn ended · {reason:?}");
@@ -111,7 +121,8 @@ pub fn render(view: &SessionView) -> String {
             SessionEntry::CacheWarm { .. }
             | SessionEntry::ModelContextChanged { .. }
             | SessionEntry::ModelSelected { .. }
-            | SessionEntry::EffectiveModelChanged { .. } => {}
+            | SessionEntry::EffectiveModelChanged { .. }
+            | SessionEntry::UserShellSettled { .. } => {}
         }
     }
     text.chars()
@@ -217,6 +228,7 @@ mod tests {
             ],
             messages: vec![],
             unfinished_turn: None,
+            unfinished_user_shell: None,
             last_end: None,
             last_model: None,
             last_effective_model: None,

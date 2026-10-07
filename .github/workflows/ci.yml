@@ -36,6 +36,8 @@ jobs:
         run: python3 scripts/smoke_scrollback.py
       - name: Direct shell PTY smoke
         run: python3 scripts/smoke_shell.py
+      - name: Direct shell admission and recovery smoke
+        run: python3 scripts/smoke_shell_recovery.py
       - name: RPC smoke
         run: python3 scripts/smoke_rpc.py
       - name: Code Mode effect and inspection smoke

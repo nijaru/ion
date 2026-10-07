@@ -68,8 +68,7 @@ pub struct ActivityGroup {
 #[derive(Debug, Clone, PartialEq)]
 pub struct UserShellActivity {
     pub command: String,
-    pub output: Value,
-    pub is_error: bool,
+    pub outcome: crate::UserShellOutcome,
     pub exclude_from_context: bool,
 }
 
@@ -159,10 +158,8 @@ impl TranscriptProjection {
                         },
                     );
                 }
-                SessionEntry::UserShell {
+                SessionEntry::UserShellAdmitted {
                     command,
-                    output,
-                    is_error,
                     exclude_from_context,
                 } => {
                     builder.close_group();
@@ -171,8 +168,7 @@ impl TranscriptProjection {
                         .items
                         .push(TranscriptItem::UserShell(UserShellActivity {
                             command: command.clone(),
-                            output: output.clone(),
-                            is_error: *is_error,
+                            outcome: view.user_shell_outcome(entry_index as u64 + 1).clone(),
                             exclude_from_context: *exclude_from_context,
                         }));
                 }
@@ -182,7 +178,8 @@ impl TranscriptProjection {
                 | SessionEntry::ProviderReplayRebased { .. }
                 | SessionEntry::ModelContextChanged { .. }
                 | SessionEntry::CacheWarm { .. }
-                | SessionEntry::Compacted { .. } => {}
+                | SessionEntry::Compacted { .. }
+                | SessionEntry::UserShellSettled { .. } => {}
             }
         }
         for item in &mut builder.projection.items {
@@ -765,6 +762,7 @@ mod tests {
             ],
             messages: Vec::new(),
             unfinished_turn: None,
+            unfinished_user_shell: None,
             last_end: None,
             last_model: None,
             last_effective_model: None,

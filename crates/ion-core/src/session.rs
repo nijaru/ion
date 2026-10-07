@@ -22,7 +22,7 @@ use thiserror::Error;
 use tokio::sync::{Mutex as AsyncMutex, MutexGuard as AsyncMutexGuard};
 use tokio_util::sync::CancellationToken;
 
-const FORMAT_VERSION: u32 = 9;
+const FORMAT_VERSION: u32 = 10;
 // An 8 MiB raw prompt or streamed response can grow up to sixfold when JSON
 // escapes control characters. Keep the storage bound above that encoded size.
 const MAX_ENTRY_BYTES: usize = 64 * 1024 * 1024;
@@ -65,11 +65,14 @@ pub enum SessionEntry {
         turn: u64,
         context: ModelContextSnapshot,
     },
-    UserShell {
+    UserShellAdmitted {
         command: String,
-        output: serde_json::Value,
-        is_error: bool,
         exclude_from_context: bool,
+    },
+    UserShellSettled {
+        /// Sequence of the admitted command, never a host-supplied identity.
+        admission_entry: u64,
+        outcome: UserShellOutcome,
     },
     Steering {
         turn: u64,
@@ -127,6 +130,23 @@ pub enum SessionEntry {
     },
 }
 
+/// An observed host result is distinct from closure after lost observation.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum UserShellOutcome {
+    Observed {
+        output: serde_json::Value,
+        is_error: bool,
+    },
+    Unknown,
+}
+
+impl UserShellOutcome {
+    pub fn unknown_notice() -> &'static str {
+        "Shell result was not committed; external effect unknown. Inspect the working directory before retrying."
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ModelContextSnapshot {
     pub instructions: String,
@@ -154,6 +174,14 @@ pub enum ForkPoint {
     AfterTurn(u64),
 }
 
+/// Passive inspection of an admission without a committed host observation.
+/// Dispatch and physical termination cannot be inferred from this state.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(tag = "effect", rename = "unknown")]
+pub struct UnobservedUserShell {
+    pub admission_entry: u64,
+}
+
 #[derive(Debug, Clone, Serialize)]
 pub struct SessionView {
     pub cwd: PathBuf,
@@ -161,6 +189,7 @@ pub struct SessionView {
     pub entries: Vec<SessionEntry>,
     pub messages: Vec<Message>,
     pub unfinished_turn: Option<u64>,
+    pub unfinished_user_shell: Option<UnobservedUserShell>,
     pub last_end: Option<(u64, TurnEndReason)>,
     pub last_model: Option<ModelRef>,
     pub last_effective_model: Option<ModelRef>,
@@ -181,21 +210,15 @@ pub struct TurnSummary {
 impl SessionView {
     /// Conversation display, including user commands kept out of model context.
     pub fn display_messages(&self) -> Vec<Message> {
-        self.entries
-            .iter()
-            .filter_map(|entry| match entry {
-                SessionEntry::UserShell {
-                    command,
-                    output,
-                    exclude_from_context,
-                    ..
-                } => Some(shell_message(command, output, *exclude_from_context)),
-                SessionEntry::ToolResult { result, .. } => {
-                    Some(crate::ToolResultProjection::Observed.message(result))
-                }
-                other => message_from_entry(other),
-            })
+        projected_entry_messages(&self.entries, true)
+            .into_iter()
+            .flatten()
             .collect()
+    }
+
+    /// Missing settlement is passively projected as unknown, never repaired here.
+    pub fn user_shell_outcome(&self, admission_entry: u64) -> &UserShellOutcome {
+        shell_outcome_at(&self.entries, admission_entry as usize)
     }
 
     pub fn turns(&self) -> Vec<TurnSummary> {
@@ -237,9 +260,17 @@ struct PendingTool {
     children: BTreeSet<usize>,
 }
 
+#[derive(Clone)]
+struct PendingShell {
+    admission_entry: u64,
+    command: String,
+    exclude_from_context: bool,
+}
+
 #[derive(Default, Clone)]
 struct State {
     active: Option<u64>,
+    pending_shell: Option<PendingShell>,
     assistant_seen_in_turn: bool,
     pending: Vec<PendingTool>,
     last_id: u64,
@@ -281,7 +312,7 @@ impl State {
     ) -> Result<(), SessionError> {
         match entry {
             SessionEntry::ModelSelected { model } => {
-                if self.active.is_some() {
+                if self.active.is_some() || self.pending_shell.is_some() {
                     return Err(SessionError::InvalidHistory);
                 }
                 self.select_model(model);
@@ -314,18 +345,43 @@ impl State {
                 }
                 self.last_context = Some(context.clone());
             }
-            SessionEntry::UserShell {
+            SessionEntry::UserShellAdmitted {
                 command,
-                output,
                 exclude_from_context,
-                ..
             } => {
-                if self.active.is_some() || command.trim().is_empty() || command.contains('\0') {
+                if self.active.is_some()
+                    || self.pending_shell.is_some()
+                    || command.trim().is_empty()
+                    || command.contains('\0')
+                {
                     return Err(SessionError::InvalidHistory);
                 }
                 if !exclude_from_context {
-                    messages.push(shell_message(command, output, false));
+                    messages.push(shell_message(command, &UserShellOutcome::Unknown, false));
                 }
+                self.pending_shell = Some(PendingShell {
+                    admission_entry: self.sequence + 1,
+                    command: command.clone(),
+                    exclude_from_context: *exclude_from_context,
+                });
+            }
+            SessionEntry::UserShellSettled {
+                admission_entry,
+                outcome,
+            } => {
+                let shell = self
+                    .pending_shell
+                    .as_ref()
+                    .ok_or(SessionError::InvalidHistory)?;
+                if self.active.is_some() || shell.admission_entry != *admission_entry {
+                    return Err(SessionError::InvalidHistory);
+                }
+                if !shell.exclude_from_context {
+                    // No intervening message is legal while a shell is pending.
+                    *messages.last_mut().ok_or(SessionError::InvalidHistory)? =
+                        shell_message(&shell.command, outcome, false);
+                }
+                self.pending_shell = None;
                 new_settled.push(self.sequence + 1);
             }
             SessionEntry::CacheWarm {
@@ -344,6 +400,7 @@ impl State {
                 ..
             } => {
                 if !self.pending.is_empty()
+                    || self.pending_shell.is_some()
                     || summary.trim().is_empty()
                     || !(settled.contains(through_entry) || new_settled.contains(through_entry))
                     || self
@@ -357,6 +414,7 @@ impl State {
             }
             SessionEntry::TurnStarted { turn, input, model } => {
                 if self.active.is_some()
+                    || self.pending_shell.is_some()
                     || *turn != self.last_id.saturating_add(1)
                     || !valid_user_message(input)
                 {
@@ -530,8 +588,8 @@ struct Store {
     messages: Vec<Message>,
 }
 
-/// A writable Session holds a cross-process lock. `submit_gate` also keeps a
-/// whole live Turn exclusive within this process, including its async effects.
+/// A writable Session holds a cross-process lock. `submit_gate` also keeps
+/// coding Turns and direct shells exclusive through async effects and commit.
 pub struct Session {
     // Field order closes SQLite before releasing the writer lock.
     store: Mutex<Store>,
@@ -543,19 +601,31 @@ pub struct Session {
 
 pub struct UserShellPermit<'a> {
     session: &'a Session,
+    admission_entry: u64,
+    command: String,
     _gate: AsyncMutexGuard<'a, ()>,
 }
 
 impl UserShellPermit<'_> {
-    pub fn record(
-        self,
-        command: String,
-        output: serde_json::Value,
-        is_error: bool,
-        exclude_from_context: bool,
-    ) -> Result<(), SessionError> {
-        self.session
-            .record_user_shell(command, output, is_error, exclude_from_context)
+    pub fn command(&self) -> &str {
+        &self.command
+    }
+
+    /// Consume authority only after the started host work has settled. A failed
+    /// commit leaves the admitted command unknown, not retryable observation.
+    pub fn record(self, output: serde_json::Value, is_error: bool) -> Result<(), SessionError> {
+        let mut store = self
+            .session
+            .store
+            .lock()
+            .map_err(|_| SessionError::Poisoned)?;
+        append(
+            &mut store,
+            &[SessionEntry::UserShellSettled {
+                admission_entry: self.admission_entry,
+                outcome: UserShellOutcome::Observed { output, is_error },
+            }],
+        )
     }
 }
 
@@ -708,6 +778,9 @@ impl Session {
             entries,
             messages,
             unfinished_turn: state.active,
+            unfinished_user_shell: state.pending_shell.map(|shell| UnobservedUserShell {
+                admission_entry: shell.admission_entry,
+            }),
             last_end: state.last_end,
             last_model: state.last_model,
             last_effective_model: state.last_effective_model,
@@ -738,32 +811,13 @@ impl Session {
             .clone())
     }
 
-    /// Record a user-run command after its observed result is available.
-    /// It is never appended while a model Turn owns the Session.
-    fn record_user_shell(
-        &self,
-        command: String,
-        output: serde_json::Value,
-        is_error: bool,
-        exclude_from_context: bool,
-    ) -> Result<(), SessionError> {
-        let mut store = self.store.lock().map_err(|_| SessionError::Poisoned)?;
-        append(
-            &mut store,
-            &[SessionEntry::UserShell {
-                command,
-                output,
-                is_error,
-                exclude_from_context,
-            }],
-        )
-    }
-
-    /// Acquire exclusive authority for one direct user shell effect. The host
-    /// executes the effect, then publishes its observed result through the
-    /// returned permit before exclusivity is released.
+    /// Durably freeze one direct command and its sharing choice before granting
+    /// host authority. Recovery and admission are a single transaction; the
+    /// permit holds exclusivity until observed-result publication or abandonment.
     pub async fn begin_user_shell(
         &self,
+        command: String,
+        exclude_from_context: bool,
         stop: CancellationToken,
     ) -> Result<UserShellPermit<'_>, SessionError> {
         let gate = tokio::select! {
@@ -774,13 +828,16 @@ impl Session {
             return Err(SessionError::UserShellCancelled);
         }
         let mut store = self.store.lock().map_err(|_| SessionError::Poisoned)?;
-        let recovery = interrupted_turn_entries(&store.state);
-        if !recovery.is_empty() {
-            // Recovery must commit before the host gets permission to run.
-            append(&mut store, &recovery)?;
-        }
+        let mut entries = interrupted_operation_entries(&store.state);
+        entries.push(SessionEntry::UserShellAdmitted {
+            command: command.clone(),
+            exclude_from_context,
+        });
+        append(&mut store, &entries)?;
         Ok(UserShellPermit {
             session: self,
+            admission_entry: store.state.sequence,
+            command,
             _gate: gate,
         })
     }
@@ -842,7 +899,9 @@ impl Session {
         let mut initial = None;
         let mut changes = Vec::new();
         let mut last = None;
-        for entry in read_entries(&store.connection)? {
+        let entries = read_entries(&store.connection)?;
+        let projected = projected_entry_messages(&entries, false);
+        for (entry, message) in entries.into_iter().zip(projected) {
             match entry {
                 SessionEntry::ModelContextChanged { context, .. } => {
                     let state = model_context_state(&context);
@@ -856,8 +915,8 @@ impl Session {
                     }
                     last = Some(state);
                 }
-                other => {
-                    if message_from_entry(&other).is_some() {
+                _ => {
+                    if message.is_some() {
                         message_count = message_count.saturating_add(1);
                     }
                 }
@@ -934,6 +993,7 @@ impl Session {
     ) -> Result<Option<CompactionPlan>, SessionError> {
         let store = self.store.lock().map_err(|_| SessionError::Poisoned)?;
         let entries = read_entries(&store.connection)?;
+        let projected = projected_entry_messages(&entries, false);
         let previous = store
             .state
             .compaction
@@ -950,7 +1010,7 @@ impl Session {
         let mut prefix_bytes = summary_bytes.saturating_add(2);
         let mut prefix_fit = None;
         for boundary in (previous + 1)..=entries.len() as u64 {
-            if let Some(message) = message_from_entry(&entries[boundary as usize - 1]) {
+            if let Some(message) = &projected[boundary as usize - 1] {
                 prefix_bytes = prefix_bytes
                     .saturating_add(serde_json::to_vec(&message)?.len())
                     .saturating_add(1);
@@ -965,7 +1025,7 @@ impl Session {
             if store.settled.contains(&boundary) && suffix_bytes <= suffix_budget {
                 through = Some(boundary);
             }
-            if let Some(message) = message_from_entry(&entries[boundary as usize - 1]) {
+            if let Some(message) = &projected[boundary as usize - 1] {
                 suffix_bytes = suffix_bytes.saturating_add(serde_json::to_vec(&message)?.len() + 1);
             }
         }
@@ -976,7 +1036,7 @@ impl Session {
         // exactly when older settled history is available to summarize.
         let through = if keep_bytes > 0 {
             let recent_entry = entries.iter().rposition(|entry| match entry {
-                SessionEntry::UserShell {
+                SessionEntry::UserShellAdmitted {
                     exclude_from_context,
                     ..
                 } => !exclude_from_context,
@@ -992,6 +1052,7 @@ impl Session {
                 | SessionEntry::Compacted { .. }
                 | SessionEntry::ChildToolAdmitted { .. }
                 | SessionEntry::ChildToolResult { .. }
+                | SessionEntry::UserShellSettled { .. }
                 | SessionEntry::TurnEnded { .. } => false,
             });
             let earlier_cut = recent_entry
@@ -1077,6 +1138,11 @@ impl Session {
             entries,
             messages: store.messages.clone(),
             unfinished_turn: store.state.active,
+            unfinished_user_shell: store.state.pending_shell.as_ref().map(|shell| {
+                UnobservedUserShell {
+                    admission_entry: shell.admission_entry,
+                }
+            }),
             last_end: store.state.last_end.clone(),
             last_model: store.state.last_model.clone(),
             last_effective_model: store.state.last_effective_model.clone(),
@@ -1136,7 +1202,7 @@ impl Session {
             return Err(SessionError::InvalidUserInput);
         }
         let mut store = self.store.lock().map_err(|_| SessionError::Poisoned)?;
-        let mut entries = interrupted_turn_entries(&store.state);
+        let mut entries = interrupted_operation_entries(&store.state);
         let interrupted = store.state.pending.len();
         let turn = store
             .state
@@ -1451,7 +1517,13 @@ impl Session {
     }
 }
 
-fn interrupted_turn_entries(state: &State) -> Vec<SessionEntry> {
+fn interrupted_operation_entries(state: &State) -> Vec<SessionEntry> {
+    if let Some(shell) = &state.pending_shell {
+        return vec![SessionEntry::UserShellSettled {
+            admission_entry: shell.admission_entry,
+            outcome: UserShellOutcome::Unknown,
+        }];
+    }
     let Some(turn) = state.active else {
         return Vec::new();
     };
@@ -1477,7 +1549,16 @@ fn unknown_results(turn: u64, pending: &[PendingTool]) -> Vec<SessionEntry> {
 
 fn append(store: &mut Store, entries: &[SessionEntry]) -> Result<(), SessionError> {
     let mut candidate = store.state.clone();
-    let mut new_messages = Vec::new();
+    // A shared pending shell owns the final context message. Seed only that
+    // slot so candidate settlement can replace it without rebuilding history.
+    let pending_message = store
+        .state
+        .pending_shell
+        .as_ref()
+        .filter(|shell| !shell.exclude_from_context)
+        .map(|shell| shell_message(&shell.command, &UserShellOutcome::Unknown, false));
+    let replace_pending_message = pending_message.is_some();
+    let mut new_messages: Vec<_> = pending_message.into_iter().collect();
     let mut new_settled = Vec::new();
     let encoded = entries
         .iter()
@@ -1497,6 +1578,9 @@ fn append(store: &mut Store, entries: &[SessionEntry]) -> Result<(), SessionErro
     tx.commit()?;
     store.state = candidate;
     store.settled.extend(new_settled);
+    if replace_pending_message {
+        store.messages.pop();
+    }
     store.messages.extend(new_messages);
     Ok(())
 }
@@ -1540,11 +1624,12 @@ fn context_projection(
         .map(|(_, summary)| vec![summary_message(summary)])
         .unwrap_or_default();
     let clear_all = model != store.state.last_effective_model.as_ref();
-    for (index, entry) in read_entries_after(&store.connection, through)?
-        .iter()
+    let entries = read_entries_after(&store.connection, through)?;
+    for (index, message) in projected_entry_messages(&entries, false)
+        .into_iter()
         .enumerate()
     {
-        if let Some(mut message) = message_from_entry(entry) {
+        if let Some(mut message) = message {
             let sequence = through
                 .checked_add(
                     u64::try_from(index)
@@ -1616,17 +1701,45 @@ fn valid_model_context(context: &ModelContextSnapshot) -> bool {
 }
 
 fn messages_from_entries(entries: &[SessionEntry]) -> Vec<Message> {
-    entries.iter().filter_map(message_from_entry).collect()
+    projected_entry_messages(entries, false)
+        .into_iter()
+        .flatten()
+        .collect()
+}
+
+// History validation makes shell admission and settlement adjacent: no other
+// entry is legal while a shell is pending. Settled compaction/fork cuts preserve
+// the pair, so projections do not need a second occurrence index.
+fn shell_outcome_at(entries: &[SessionEntry], settlement_index: usize) -> &UserShellOutcome {
+    match entries.get(settlement_index) {
+        Some(SessionEntry::UserShellSettled { outcome, .. }) => outcome,
+        _ => &UserShellOutcome::Unknown,
+    }
+}
+
+fn projected_entry_messages(entries: &[SessionEntry], display: bool) -> Vec<Option<Message>> {
+    entries
+        .iter()
+        .enumerate()
+        .map(|(index, entry)| match entry {
+            SessionEntry::UserShellAdmitted {
+                command,
+                exclude_from_context,
+            } if display || !exclude_from_context => Some(shell_message(
+                command,
+                shell_outcome_at(entries, index + 1),
+                *exclude_from_context,
+            )),
+            SessionEntry::ToolResult { result, .. } if display => {
+                Some(crate::ToolResultProjection::Observed.message(result))
+            }
+            other => message_from_entry(other),
+        })
+        .collect()
 }
 
 fn message_from_entry(entry: &SessionEntry) -> Option<Message> {
     match entry {
-        SessionEntry::UserShell {
-            command,
-            output,
-            exclude_from_context: false,
-            ..
-        } => Some(shell_message(command, output, false)),
         SessionEntry::TurnStarted { input, .. } => Some(input.clone()),
         SessionEntry::Steering { input, .. } => Some(input.clone()),
         SessionEntry::Assistant { message, .. } => Some(message.clone()),
@@ -1635,7 +1748,8 @@ fn message_from_entry(entry: &SessionEntry) -> Option<Message> {
         } => Some(projection.message(result)),
         SessionEntry::ChildToolAdmitted { .. }
         | SessionEntry::ChildToolResult { .. }
-        | SessionEntry::UserShell { .. }
+        | SessionEntry::UserShellAdmitted { .. }
+        | SessionEntry::UserShellSettled { .. }
         | SessionEntry::ModelSelected { .. }
         | SessionEntry::EffectiveModelChanged { .. }
         | SessionEntry::ProviderReplayRebased { .. }
@@ -1646,15 +1760,31 @@ fn message_from_entry(entry: &SessionEntry) -> Option<Message> {
     }
 }
 
-fn shell_message(command: &str, output: &serde_json::Value, excluded: bool) -> Message {
+fn shell_message(command: &str, outcome: &UserShellOutcome, excluded: bool) -> Message {
     let mut body = format!(
-        "User ran shell command{}:\n$ {command}",
+        "User {} shell command{}:\n$ {command}",
+        match outcome {
+            UserShellOutcome::Observed { .. } => "ran",
+            UserShellOutcome::Unknown => "admitted",
+        },
         if excluded {
             " (not shared with model)"
         } else {
             ""
         }
     );
+    let output = match outcome {
+        UserShellOutcome::Observed { output, .. } => output,
+        UserShellOutcome::Unknown => {
+            body.push('\n');
+            body.push_str(UserShellOutcome::unknown_notice());
+            return Message {
+                role: Role::User,
+                content: vec![Content::Text(body)],
+                provider_replay: None,
+            };
+        }
+    };
     if let Some(stdout) = output.get("stdout").and_then(serde_json::Value::as_str) {
         body.push_str("\nstdout:\n");
         body.push_str(stdout);
@@ -1874,7 +2004,8 @@ mod tests {
         let session = Session::create(&path, &root).unwrap();
         {
             let guard = session.submit_gate.lock().await;
-            let permit = session.begin_user_shell(CancellationToken::new());
+            let permit =
+                session.begin_user_shell("echo done".into(), false, CancellationToken::new());
             tokio::pin!(permit);
             assert!(
                 tokio::time::timeout(Duration::from_millis(30), permit.as_mut())
@@ -1883,18 +2014,21 @@ mod tests {
             );
             drop(guard);
             let permit = permit.await.unwrap();
+            assert!(session.submit_gate.try_lock().is_err());
+            assert!(
+                matches!(session.view().unwrap().entries.last(), Some(SessionEntry::UserShellAdmitted { command, exclude_from_context: false }) if command == "echo done")
+            );
             permit
-                .record(
-                    "echo done".into(),
-                    serde_json::json!({"stdout":"done","exit_code":0}),
-                    false,
-                    false,
-                )
+                .record(serde_json::json!({"stdout":"done","exit_code":0}), false)
                 .unwrap();
         }
+        assert!(session.submit_gate.try_lock().is_ok());
         assert!(matches!(
             session.view().unwrap().entries.last(),
-            Some(SessionEntry::UserShell { .. })
+            Some(SessionEntry::UserShellSettled {
+                outcome: UserShellOutcome::Observed { .. },
+                ..
+            })
         ));
         drop(session);
         fs::remove_dir_all(root).unwrap();
@@ -1932,7 +2066,9 @@ mod tests {
             "CREATE TRIGGER reject_recovery BEFORE INSERT ON entries BEGIN SELECT RAISE(ABORT, 'recovery unavailable'); END;"
         ).unwrap();
         assert!(matches!(
-            session.begin_user_shell(CancellationToken::new()).await,
+            session
+                .begin_user_shell("printf new".into(), false, CancellationToken::new())
+                .await,
             Err(SessionError::Sqlite(_))
         ));
         assert_eq!(session.view().unwrap().entries, before.entries);
@@ -1945,7 +2081,7 @@ mod tests {
             .unwrap();
 
         let permit = session
-            .begin_user_shell(CancellationToken::new())
+            .begin_user_shell("printf new".into(), false, CancellationToken::new())
             .await
             .unwrap();
         let recovered = session.view().unwrap();
@@ -1954,30 +2090,224 @@ mod tests {
             "recovery must precede permission to run an effect"
         );
         assert!(matches!(
-            recovered.entries.last(),
+            recovered.entries.get(recovered.entries.len() - 2),
             Some(SessionEntry::TurnEnded {
                 reason: TurnEndReason::Interrupted,
                 ..
             })
         ));
         assert!(
-            matches!(&recovered.entries[recovered.entries.len() - 2], SessionEntry::ToolResult { result, .. } if result.call_id == "unsettled" && result.is_error)
+            matches!(&recovered.entries[recovered.entries.len() - 3], SessionEntry::ToolResult { result, .. } if result.call_id == "unsettled" && result.is_error)
         );
         permit
-            .record(
-                "printf new".into(),
-                serde_json::json!({"stdout":"new","exit_code":0}),
-                false,
-                false,
-            )
+            .record(serde_json::json!({"stdout":"new","exit_code":0}), false)
             .unwrap();
         drop(session);
         let reopened = Session::open(&path).unwrap();
         assert!(
-            matches!(reopened.view().unwrap().entries.last(), Some(SessionEntry::UserShell { output, .. }) if output["stdout"] == "new")
+            matches!(reopened.view().unwrap().entries.last(), Some(SessionEntry::UserShellSettled { outcome: UserShellOutcome::Observed { output, .. }, .. }) if output["stdout"] == "new")
         );
         drop(reopened);
         fs::remove_dir_all(root).unwrap();
+    }
+
+    #[tokio::test]
+    async fn shell_admission_and_result_faults_leave_only_committed_authority() {
+        let (root, path) = fixture();
+        let session = Session::create(&path, &root).unwrap();
+        session.store.lock().unwrap().connection.execute_batch(
+            "CREATE TRIGGER reject_shell BEFORE INSERT ON entries BEGIN SELECT RAISE(ABORT, 'storage unavailable'); END;"
+        ).unwrap();
+        assert!(matches!(
+            session
+                .begin_user_shell("touch effect".into(), false, CancellationToken::new())
+                .await,
+            Err(SessionError::Sqlite(_))
+        ));
+        assert!(session.view().unwrap().entries.is_empty());
+        session
+            .store
+            .lock()
+            .unwrap()
+            .connection
+            .execute_batch("DROP TRIGGER reject_shell;")
+            .unwrap();
+        let permit = session
+            .begin_user_shell("touch effect".into(), false, CancellationToken::new())
+            .await
+            .unwrap();
+        assert_eq!(permit.command(), "touch effect");
+        assert_eq!(
+            session.view().unwrap().unfinished_user_shell,
+            Some(UnobservedUserShell { admission_entry: 1 })
+        );
+        // Simulate the started host's effect, then fail only result publication.
+        fs::write(root.join("effect"), "observed").unwrap();
+        session.store.lock().unwrap().connection.execute_batch(
+            "CREATE TRIGGER reject_result BEFORE INSERT ON entries BEGIN SELECT RAISE(ABORT, 'result unavailable'); END;"
+        ).unwrap();
+        assert!(matches!(
+            permit.record(
+                serde_json::json!({"stdout":"observed", "exit_code":0}),
+                false
+            ),
+            Err(SessionError::Sqlite(_))
+        ));
+        let before = session.view().unwrap();
+        assert_eq!(before.entries.len(), 1);
+        assert_eq!(before.user_shell_outcome(1), &UserShellOutcome::Unknown);
+        assert!(
+            serde_json::to_string(&before.display_messages())
+                .unwrap()
+                .contains("external effect unknown")
+        );
+        assert!(
+            !serde_json::to_string(&before.display_messages())
+                .unwrap()
+                .contains("exit code")
+        );
+        drop(session);
+        let reopened = Session::open(&path).unwrap();
+        assert_eq!(reopened.view().unwrap().entries, before.entries);
+        assert_eq!(Session::inspect(&path).unwrap().entries, before.entries);
+        assert_eq!(reopened.context_messages().unwrap(), before.messages);
+        assert_eq!(fs::read_to_string(root.join("effect")).unwrap(), "observed");
+        drop(reopened);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[tokio::test]
+    async fn interrupted_shell_recovery_is_atomic_private_and_never_replayed() {
+        for excluded in [false, true] {
+            let (root, path) = fixture();
+            let session = Session::create(&path, &root).unwrap();
+            let permit = session
+                .begin_user_shell(
+                    "interrupted-command".into(),
+                    excluded,
+                    CancellationToken::new(),
+                )
+                .await
+                .unwrap();
+            drop(permit);
+            drop(session);
+            let session = Session::open(&path).unwrap();
+            let before = session.view().unwrap();
+            assert_eq!(
+                before.unfinished_user_shell,
+                Some(UnobservedUserShell { admission_entry: 1 })
+            );
+            assert_eq!(before.unfinished_turn, None);
+            assert_eq!(before.display_messages().len(), 1);
+            assert_eq!(before.messages.len(), usize::from(!excluded));
+            let transcript = crate::TranscriptProjection::from_session(&before);
+            assert!(
+                matches!(&transcript.items[..], [crate::TranscriptItem::UserShell(shell)]
+                if shell.command == "interrupted-command" && shell.outcome == UserShellOutcome::Unknown && shell.exclude_from_context == excluded)
+            );
+            let clone = session.clone_to(root.join("clone.sqlite")).unwrap();
+            assert_eq!(clone.view().unwrap().entries, before.entries);
+            assert_eq!(clone.context_messages().unwrap(), before.messages);
+            drop(clone);
+            // Fail the NEW admission after recovery would have been inserted:
+            // both shell and coding admissions must roll back recovery too.
+            session.store.lock().unwrap().connection.execute_batch(
+                "CREATE TRIGGER reject_admission BEFORE INSERT ON entries WHEN json_extract(CAST(NEW.body AS TEXT), '$.kind') IN ('turn_started', 'user_shell_admitted') BEGIN SELECT RAISE(ABORT, 'admission unavailable'); END;"
+            ).unwrap();
+            assert!(
+                session
+                    .begin_user_shell("new-command".into(), false, CancellationToken::new())
+                    .await
+                    .is_err()
+            );
+            assert!(
+                session
+                    .begin_turn("new input".into(), test_execution().route.logical)
+                    .is_err()
+            );
+            assert_eq!(session.view().unwrap().entries, before.entries);
+            session
+                .store
+                .lock()
+                .unwrap()
+                .connection
+                .execute_batch("DROP TRIGGER reject_admission;")
+                .unwrap();
+            // Exercise both explicit recovery entry points without synthetic Turns.
+            if excluded {
+                session
+                    .begin_user_shell("new-command".into(), false, CancellationToken::new())
+                    .await
+                    .unwrap()
+                    .record(serde_json::json!({"stdout":"new"}), false)
+                    .unwrap();
+            } else {
+                let (turn, _) = session
+                    .begin_turn("new input".into(), test_execution().route.logical)
+                    .unwrap();
+                session.end_turn(turn, TurnEndReason::Cancelled).unwrap();
+            }
+            let recovered = session.view().unwrap();
+            assert_eq!(recovered.unfinished_user_shell, None);
+            assert!(matches!(
+                &recovered.entries[1],
+                SessionEntry::UserShellSettled {
+                    admission_entry: 1,
+                    outcome: UserShellOutcome::Unknown
+                }
+            ));
+            assert_eq!(recovered.entries.iter().filter(|entry| matches!(entry, SessionEntry::UserShellAdmitted { command, .. } if command == "interrupted-command")).count(), 1);
+            let context = serde_json::to_string(&session.context_messages().unwrap()).unwrap();
+            assert_eq!(context.contains("interrupted-command"), !excluded);
+            assert_eq!(context.contains("external effect unknown"), !excluded);
+            // Settled prefix cuts cannot bisect shell intent and outcome.
+            let plan = session.compaction_plan(0, usize::MAX).unwrap().unwrap();
+            assert!(plan.through_entry >= 2);
+            assert_eq!(
+                serde_json::to_string(&plan.messages)
+                    .unwrap()
+                    .contains("interrupted-command"),
+                !excluded
+            );
+            assert!(
+                session
+                    .record_compaction(1, "invalid cut".into(), test_execution(), Usage::unknown())
+                    .is_err()
+            );
+            session
+                .record_compaction(
+                    plan.through_entry,
+                    "settled history".into(),
+                    test_execution(),
+                    Usage::unknown(),
+                )
+                .unwrap();
+            if !excluded {
+                let fork = session
+                    .fork_to(root.join("fork.sqlite"), ForkPoint::BeforeTurn(1))
+                    .unwrap();
+                assert_eq!(fork.view().unwrap().entries[..2], recovered.entries[..2]);
+                assert!(
+                    serde_json::to_string(&fork.context_messages().unwrap())
+                        .unwrap()
+                        .contains("external effect unknown")
+                );
+                drop(fork);
+            }
+            drop(session);
+            let reopened = Session::open(&path).unwrap();
+            assert_eq!(
+                reopened.view().unwrap().user_shell_outcome(1),
+                &UserShellOutcome::Unknown
+            );
+            assert!(
+                !serde_json::to_string(&reopened.context_messages().unwrap())
+                    .unwrap()
+                    .contains("interrupted-command")
+            );
+            drop(reopened);
+            fs::remove_dir_all(root).unwrap();
+        }
     }
 
     #[test]
@@ -2050,25 +2380,21 @@ mod tests {
         fs::remove_dir_all(root).unwrap();
     }
 
-    #[test]
-    fn user_shell_context_choice_survives_reopen_and_compaction() {
+    #[tokio::test]
+    async fn user_shell_context_choice_survives_reopen_and_compaction() {
         let (root, path) = fixture();
         let session = Session::create(&path, &root).unwrap();
         session
-            .record_user_shell(
-                "pwd".into(),
-                serde_json::json!({"stdout":"visible"}),
-                false,
-                false,
-            )
+            .begin_user_shell("pwd".into(), false, CancellationToken::new())
+            .await
+            .unwrap()
+            .record(serde_json::json!({"stdout":"visible"}), false)
             .unwrap();
         session
-            .record_user_shell(
-                "secret".into(),
-                serde_json::json!({"stdout":"private"}),
-                false,
-                true,
-            )
+            .begin_user_shell("secret".into(), true, CancellationToken::new())
+            .await
+            .unwrap()
+            .record(serde_json::json!({"stdout":"private"}), false)
             .unwrap();
         let view = session.view().unwrap();
         assert_eq!(view.display_messages().len(), 2);
@@ -2084,10 +2410,12 @@ mod tests {
                 .contains("private")
         );
         assert!(matches!(
-            session.record_user_shell("\0".into(), serde_json::Value::Null, true, false),
+            session
+                .begin_user_shell("\0".into(), false, CancellationToken::new())
+                .await,
             Err(SessionError::InvalidHistory)
         ));
-        assert_eq!(session.view().unwrap().entries.len(), 2);
+        assert_eq!(session.view().unwrap().entries.len(), 4);
         drop(session);
         let reopened = Session::open(&path).unwrap();
         let view = reopened.view().unwrap();
@@ -2110,6 +2438,30 @@ mod tests {
             !serde_json::to_string(&reopened.context_messages().unwrap())
                 .unwrap()
                 .contains("private")
+        );
+        // A shell result after a compacted prefix still resolves by absolute
+        // admission sequence, not its position in the retained suffix.
+        reopened
+            .begin_user_shell("after-summary".into(), false, CancellationToken::new())
+            .await
+            .unwrap()
+            .record(serde_json::json!({"stdout":"suffix-observation"}), false)
+            .unwrap();
+        let context = serde_json::to_string(&reopened.context_messages().unwrap()).unwrap();
+        assert!(context.contains("suffix-observation"));
+        assert!(!context.contains("external effect unknown"));
+        assert!(!context.contains("private"));
+        let plan = reopened.compaction_plan(0, usize::MAX).unwrap().unwrap();
+        assert!(
+            serde_json::to_string(&plan.messages)
+                .unwrap()
+                .contains("suffix-observation")
+        );
+        drop(reopened);
+        let reopened = Session::open(&path).unwrap();
+        assert_eq!(
+            serde_json::to_string(&reopened.context_messages().unwrap()).unwrap(),
+            context
         );
         drop(reopened);
         fs::remove_dir_all(root).unwrap();

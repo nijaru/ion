@@ -89,10 +89,19 @@ shell authority, commit interrupted-call recovery and close the interrupted
 Turn. A failed recovery grants no execution authority. Resume continues the
 conversation; it does not resume an external action automatically.
 
-Direct shell holds Session exclusivity through execution and observed-result
-publication. Persist whether its result participates in model context (`!`) or
-only the human transcript (`!!`). Clone/fork copies a valid committed prefix
-and context boundaries into an independent Session. It does not snapshot or
+Direct shell commits the command and context-sharing choice before granting
+host authority, then holds Session exclusivity through observed-result commit.
+The permit owns that identity and metadata; hosts cannot resupply them at commit.
+Keep observed output raw, including errors and cancellation. A missing result is
+an unknown external effect in passive inspection, not observed termination.
+The next explicit coding or shell admission closes an interrupted shell and
+admits new input atomically, without replay. Failed admission/recovery grants no
+host authority; failed result commit leaves the command unknown and inspectable.
+Share command and outcome with model context for `!`; keep both out for `!!`,
+including unknown interruptions. These are direct coding-shell facts, not Turns.
+
+Clone/fork copies a valid committed prefix and context boundaries into an
+independent Session. It does not snapshot or
 roll back the shared working directory. An unfinished Turn cannot be a settled
 fork boundary. New empty Sessions do not displace useful recent conversations.
 

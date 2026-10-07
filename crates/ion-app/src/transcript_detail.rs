@@ -165,17 +165,26 @@ impl DetailView {
                                     },
                                     width,
                                 );
-                                push_wrapped(
-                                    &mut rows,
-                                    if shell.is_error {
-                                        "Result marked as error"
-                                    } else {
-                                        "Result marked as successful"
-                                    },
-                                    width,
-                                );
                                 push_wrapped(&mut rows, &shell.command, width);
-                                render_json(&mut rows, &shell.output, width);
+                                match &shell.outcome {
+                                    ion_core::UserShellOutcome::Observed { output, is_error } => {
+                                        push_wrapped(
+                                            &mut rows,
+                                            if *is_error {
+                                                "Result marked as error"
+                                            } else {
+                                                "Result marked as successful"
+                                            },
+                                            width,
+                                        );
+                                        render_json(&mut rows, output, width);
+                                    }
+                                    ion_core::UserShellOutcome::Unknown => push_wrapped(
+                                        &mut rows,
+                                        ion_core::UserShellOutcome::unknown_notice(),
+                                        width,
+                                    ),
+                                }
                             }
                             TranscriptItem::ActivityGroup(_) => {
                                 unreachable!("groups are flattened into tool entries")
@@ -328,8 +337,10 @@ mod tests {
         let history = TranscriptProjection {
             items: vec![TranscriptItem::UserShell(UserShellActivity {
                 command: "previous-check".into(),
-                output: serde_json::json!({"stdout": "SAVED_SHELL"}),
-                is_error: false,
+                outcome: ion_core::UserShellOutcome::Observed {
+                    output: serde_json::json!({"stdout": "SAVED_SHELL"}),
+                    is_error: false,
+                },
                 exclude_from_context: true,
             })],
         };

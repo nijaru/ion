@@ -17,7 +17,7 @@ pub use agent::{
 pub use session::{
     ForkPoint, ModelContextSnapshot, Session as CodingSession, SessionEntry,
     SessionError as CodingSessionError, SessionView, StoredToolActivity, TurnEndReason,
-    TurnSummary, UserShellPermit,
+    TurnSummary, UnobservedUserShell, UserShellOutcome, UserShellPermit,
 };
 pub use tool_set::{
     ToolActivity, ToolActivityKind, ToolCatalog, ToolDefinition, ToolExecutor, ToolExposure,

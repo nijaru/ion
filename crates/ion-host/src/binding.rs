@@ -80,15 +80,13 @@ impl SessionBinding {
         stop: CancellationToken,
         exclude_from_context: bool,
     ) -> Result<CodingToolOutput> {
-        let permit = self.session.begin_user_shell(stop.clone()).await?;
         let tools = LocalTools::new(self.session.cwd())?;
-        let output = tools.run_user_shell(command, stop).await;
-        permit.record(
-            command.to_owned(),
-            output.value.clone(),
-            output.is_error,
-            exclude_from_context,
-        )?;
+        let permit = self
+            .session
+            .begin_user_shell(command.to_owned(), exclude_from_context, stop.clone())
+            .await?;
+        let output = tools.run_user_shell(permit.command(), stop).await;
+        permit.record(output.value.clone(), output.is_error)?;
         Ok(output)
     }
 
@@ -231,6 +229,37 @@ mod tests {
             api_key_env: None,
             image_input: false,
         }
+    }
+
+    #[tokio::test]
+    async fn direct_shell_preflights_before_recovery_or_admission() {
+        let root = std::env::temp_dir().join(format!("ion-binding-{}", uuid::Uuid::now_v7()));
+        let cwd = root.join("work");
+        fs::create_dir_all(&cwd).unwrap();
+        let host = Arc::new(Host::new(root.join("config"), root.join("state")));
+        let selected = host.models().save_default(&route("one")).unwrap();
+        let path = host.sessions(cwd.clone()).new_path().unwrap();
+        let session = Arc::new(CodingSession::create(&path, &cwd).unwrap());
+        let binding = SessionBinding::new(host, session.clone(), selected, None).unwrap();
+        drop(
+            session
+                .begin_user_shell("old command".into(), false, CancellationToken::new())
+                .await
+                .unwrap(),
+        );
+        let before = session.view().unwrap();
+        fs::rename(&cwd, root.join("moved-work")).unwrap();
+        assert!(
+            binding
+                .run_user_shell("touch must-not-dispatch", CancellationToken::new(), false)
+                .await
+                .is_err()
+        );
+        assert_eq!(session.view().unwrap().entries, before.entries);
+        assert!(!root.join("moved-work/must-not-dispatch").exists());
+        drop(binding);
+        drop(session);
+        fs::remove_dir_all(root).unwrap();
     }
 
     #[test]

@@ -107,7 +107,7 @@ Session ID. The source retains all later history. These operations copy
 conversation facts, not working files, and an unfinished Turn cannot be an
 after-Turn point. RPC clients can use `list_turns` and `fork` with `turn` and
 optional `after: true`.
-This unreleased branch uses Session format 9; earlier development Session
+This unreleased branch uses Session format 10; earlier development Session
 files are not reopened. Tool activity classification used by the transcript is
 stored with each assistant tool-call batch, so resumed history is not
 reinterpreted through the currently installed tool catalog.
@@ -217,15 +217,18 @@ shell commands and tool output, so review it before sharing. Image inputs are
 shown as markers rather than inline bytes; an existing target file is not
 overwritten.
 In the terminal, `!command` runs a shell command in the live working
-directory and includes its observed result in later model context.
-`!!command` runs it without sharing the result with the model. Both commands
-remain visible in the saved Session. The terminal shows bounded stdout/stderr
-previews, observed exit/signal and cancellation/timeout status, capture notices
+directory and shares the command and its outcome with later model context.
+`!!command` runs it without sharing the command or outcome with the model.
+Both commands remain visible in the saved Session. The terminal shows bounded
+stdout/stderr previews, observed exit/signal and cancellation/timeout status, capture notices
 and the `!!` sharing choice; Ctrl-O inspects the full stored result.
-The host executes the command while the
-Session holds an exclusive direct-shell permit, then publishes the observed
-result before releasing that permit. Ctrl-C requests cancellation of a running
-command; a command that started can still have external effects.
+Before dispatch, the Session commits the command and sharing choice, then holds
+an exclusive direct-shell permit through observed-result commit. Ctrl-C requests
+cancellation; a command that started can still have external effects. If Ion is
+killed or the result cannot be committed, reopen, inspection and export show the
+command with an unknown external effect, not an invented exit status. The next
+explicit coding or shell admission closes that interruption atomically without
+rerunning it. `!!` interruptions remain excluded from model context.
 
 Ion loads `AGENTS.md` instructions found along the working directory's
 ancestor path. A nested linked worktree's copy shadows the main checkout's
