@@ -16,4 +16,4 @@ pub use input::{
 };
 pub use requirements::TerminalRequirements;
 pub use screen::{Frame, Screen, Surface};
-pub use session::{TerminalOutput, TerminalSession, install_panic_hook};
+pub use session::{TerminalOutput, TerminalSession, TerminalWriter};

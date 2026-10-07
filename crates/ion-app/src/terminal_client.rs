@@ -25,7 +25,7 @@ use ion_host::image_input::LoadedImage;
 use ion_host::{CredentialStatus, CredentialStore, Resources, Selection};
 use ion_terminal::{
     Frame, InputEvent, InputStream, KeyCode, KeyEvent, Modifiers, MouseKind, Screen,
-    TerminalSession, install_panic_hook,
+    TerminalSession,
 };
 use ratatui::text::Line;
 use tokio::time::{Duration, interval};
@@ -223,7 +223,6 @@ pub async fn chat(init: ChatInit) -> Result<()> {
     let tui_mode = init.tui_mode;
     let mut runtime = init.binding;
     let images = init.images;
-    install_panic_hook();
     let mut terminal = TerminalSession::enter().context("interactive chat requires a terminal")?;
     let mut screen = new_inline_screen(&mut terminal)?;
     let mut input = terminal.input()?;
@@ -237,6 +236,9 @@ pub async fn chat(init: ChatInit) -> Result<()> {
         ui.note(diagnostic);
     }
     loop {
+        terminal
+            .check_active()
+            .context("terminal lifecycle failed before input dispatch")?;
         if let Some(incoming) = ui.pending.pop_front() {
             ui.status.clear();
             ui.scroll = 0;
@@ -259,6 +261,9 @@ pub async fn chat(init: ChatInit) -> Result<()> {
         let Some(event) = input.next().await else {
             break;
         };
+        terminal
+            .check_active()
+            .context("terminal lifecycle failed while awaiting input")?;
         match event? {
             InputEvent::Key(key) => match ui.key(key, Some(runtime.resources())) {
                 Action::None => {}
@@ -411,17 +416,17 @@ pub async fn chat(init: ChatInit) -> Result<()> {
         }
     }
     input.suspend()?;
-    if terminal.is_alt_screen() {
+    if terminal.is_alt_screen()? {
         terminal.leave_alt_screen()?;
         screen.invalidate();
     }
-    screen.finish(terminal.output())?;
+    screen.finish(&mut terminal.output()?)?;
     terminal.restore()?;
     Ok(())
 }
 
 fn new_inline_screen(terminal: &mut TerminalSession) -> Result<Screen> {
-    if terminal.is_alt_screen() {
+    if terminal.is_alt_screen()? {
         terminal.leave_alt_screen()?;
     }
     let (width, height) = terminal.size().context("read terminal size")?;
@@ -941,6 +946,9 @@ async fn run_compaction(
     ui: &mut Frontend,
     runtime: &ion_host::SessionBinding,
 ) -> Result<()> {
+    terminal
+        .check_active()
+        .context("terminal lifecycle failed before compaction")?;
     let session = runtime.session();
     let agent = runtime.agent();
     let selected = runtime.selected();
@@ -953,9 +961,23 @@ async fn run_compaction(
         tokio::pin!(compact);
         let mut tick = interval(Duration::from_millis(50));
         loop {
+            if output_error.is_none()
+                && let Err(error) = terminal.check_active()
+            {
+                output_error = Some(error.into());
+                input_ended = true;
+                stop.cancel();
+            }
             tokio::select! {
                 result = &mut compact => break result,
-                event = input.next(), if !input_ended => match event {
+                event = input.next(), if !input_ended => {
+                    if let Err(error) = terminal.check_active() {
+                        output_error = Some(error.into());
+                        input_ended = true;
+                        stop.cancel();
+                        continue;
+                    }
+                    match event {
                     Some(Ok(InputEvent::Key(KeyEvent { code: KeyCode::Char('c'), modifiers }))) if modifiers.contains(Modifiers::CONTROL) => stop.cancel(),
                     Some(Ok(InputEvent::Key(key))) if is_clipboard_shortcut(key) && ui.picker.is_none() && ui.details.is_none() => {
                         start_clipboard_paste(ui, selected);
@@ -970,6 +992,7 @@ async fn run_compaction(
                     },
                     Some(Err(error)) => { stop.cancel(); input_ended = true; ui.status = format!("Input failed: {error}"); },
                     None => { stop.cancel(); input_ended = true; },
+                    }
                 },
                 _ = tick.tick(), if output_error.is_none() => {
                     finish_ready_clipboard_paste(ui).await;
@@ -1192,6 +1215,9 @@ async fn run_user_shell(
     command: String,
     exclude_from_context: bool,
 ) -> Result<Result<()>> {
+    terminal
+        .check_active()
+        .context("terminal lifecycle failed before shell admission")?;
     let stop = CancellationToken::new();
     let mut tick = interval(Duration::from_millis(50));
     let mut input_ended = false;
@@ -1201,9 +1227,23 @@ async fn run_user_shell(
         let running = runtime.run_user_shell(&command, stop.clone(), exclude_from_context);
         tokio::pin!(running);
         loop {
+            if output_error.is_none()
+                && let Err(error) = terminal.check_active()
+            {
+                output_error = Some(error.into());
+                input_ended = true;
+                stop.cancel();
+            }
             tokio::select! {
                 result = &mut running => break result,
-                event = input.next(), if !input_ended => match event {
+                event = input.next(), if !input_ended => {
+                    if let Err(error) = terminal.check_active() {
+                        output_error = Some(error.into());
+                        input_ended = true;
+                        stop.cancel();
+                        continue;
+                    }
+                    match event {
                     Some(Ok(InputEvent::Key(KeyEvent { code: KeyCode::Char('c'), modifiers }))) if modifiers.contains(Modifiers::CONTROL) => {
                         stop.cancel();
                     }
@@ -1224,6 +1264,7 @@ async fn run_user_shell(
                         ui.status = format!("Input failed: {error}");
                     }
                     None => { stop.cancel(); input_ended = true; },
+                    }
                 },
                 _ = tick.tick(), if output_error.is_none() => {
                     finish_ready_clipboard_paste(ui).await;
@@ -1270,6 +1311,9 @@ async fn run_turn(
     runtime: &ion_host::SessionBinding,
     incoming: TurnInput,
 ) -> Result<()> {
+    terminal
+        .check_active()
+        .context("terminal lifecycle failed before turn admission")?;
     let TurnInput {
         prompt,
         images: attached,
@@ -1317,9 +1361,23 @@ async fn run_turn(
         tokio::pin!(turn);
         let mut tick = interval(Duration::from_millis(50));
         loop {
+            if output_error.is_none()
+                && let Err(error) = terminal.check_active()
+            {
+                output_error = Some(error.into());
+                input_ended = true;
+                stop.cancel();
+            }
             tokio::select! {
                 result = &mut turn => break result,
-                event = input.next(), if !input_ended => match event {
+                event = input.next(), if !input_ended => {
+                    if let Err(error) = terminal.check_active() {
+                        output_error = Some(error.into());
+                        input_ended = true;
+                        stop.cancel();
+                        continue;
+                    }
+                    match event {
                     Some(Ok(InputEvent::Key(KeyEvent { code: KeyCode::Char('c'), modifiers }))) if modifiers.contains(Modifiers::CONTROL) => stop.cancel(),
                     Some(Ok(InputEvent::Key(key))) if is_clipboard_shortcut(key) && ui.picker.is_none() && ui.details.is_none() => {
                         start_clipboard_paste(ui, selected);
@@ -1334,6 +1392,7 @@ async fn run_turn(
                     },
                     Some(Err(error)) => { stop.cancel(); input_ended = true; ui.status = format!("Input failed: {error}"); },
                     None => { stop.cancel(); input_ended = true; },
+                    }
                 },
                 _ = tick.tick(), if output_error.is_none() => {
                     finish_ready_clipboard_paste(ui).await;
@@ -2173,7 +2232,7 @@ fn draw(
     }
 
     let mut surface_reset = false;
-    if terminal.is_alt_screen() {
+    if terminal.is_alt_screen()? {
         terminal.leave_alt_screen()?;
         screen.invalidate();
         surface_reset = true;
@@ -2182,7 +2241,7 @@ fn draw(
     let commit_rows = ui.pending_history_rows(width.max(1) as usize);
     let history_committed = !commit_rows.is_empty();
     if history_committed {
-        screen.commit_lines(terminal.output(), &commit_rows)?;
+        screen.commit_lines(&mut terminal.output()?, &commit_rows)?;
     }
     if !ui.pending_history_items.is_empty() || ui.pending_history_banner.is_some() {
         ui.finish_history_commit();
@@ -2258,7 +2317,7 @@ fn draw(
 
     let desired_live_height = live_rows.len().clamp(1, row_budget);
     if desired_live_height > screen.live_height() {
-        screen.ensure_live_height(terminal.output(), desired_live_height)?;
+        screen.ensure_live_height(&mut terminal.output()?, desired_live_height)?;
     } else if desired_live_height < screen.live_height() && (history_committed || surface_reset) {
         // The settled-history commit or fullscreen exit erased/replaced the
         // mutable surface, so shrinking cannot leak stale rows into scrollback.
@@ -2426,7 +2485,7 @@ fn draw_chat_fullscreen(
         composer.cursor_col.min(width.saturating_sub(1)) as u16,
     ));
 
-    screen.draw_fullscreen(terminal.output(), &rows, cursor)?;
+    screen.draw_fullscreen(&mut terminal.output()?, &rows, cursor)?;
     Ok(())
 }
 
@@ -2519,7 +2578,7 @@ fn draw_modal_fullscreen(
         }
     }
 
-    screen.draw_fullscreen(terminal.output(), &rows, cursor)?;
+    screen.draw_fullscreen(&mut terminal.output()?, &rows, cursor)?;
     Ok(())
 }
 

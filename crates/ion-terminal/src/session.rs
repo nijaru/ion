@@ -1,20 +1,27 @@
 use std::fs::File;
 use std::io::{self, Stdout, Write};
 use std::path::{Path, PathBuf};
-
-use crossterm::cursor::Show;
-use crossterm::event::{
-    DisableBracketedPaste, DisableMouseCapture, EnableBracketedPaste, EnableMouseCapture,
-    KeyboardEnhancementFlags, PopKeyboardEnhancementFlags, PushKeyboardEnhancementFlags,
+use std::sync::{
+    Arc, LazyLock, Mutex, MutexGuard, Once, TryLockError, Weak,
+    atomic::{AtomicU64, Ordering},
 };
-use crossterm::style::{Attribute, SetAttribute};
-use crossterm::terminal::{EnterAlternateScreen, LeaveAlternateScreen};
-use crossterm::{SynchronizedUpdate, execute, terminal};
 
-use crate::capabilities::{CapabilitySupport, TerminalCapabilities};
+use crossterm::{SynchronizedUpdate, terminal};
+
 use crate::input::InputStream;
 use crate::requirements::TerminalRequirements;
 use crate::{Frame, Screen};
+
+#[path = "modes.rs"]
+mod modes;
+use modes::TerminalState;
+
+type State = TerminalState<Stdout>;
+static PANIC_OWNER: Mutex<Weak<Mutex<State>>> = Mutex::new(Weak::new());
+static PANIC_HOOK: Once = Once::new();
+// A process panic invalidates the live lease even when either mutex is busy.
+// It is an event generation, not a second owner of physical mode custody.
+static PANIC_GENERATION: LazyLock<Arc<AtomicU64>> = LazyLock::new(|| Arc::new(AtomicU64::new(0)));
 
 /// Output that mirrors bytes to the optional PTY capture without changing the
 /// writer contract used by the renderer.
@@ -42,13 +49,6 @@ impl<W: Write> TerminalOutput<W> {
         let capture_path = std::env::var_os("ION_TERMINAL_CAPTURE").map(PathBuf::from);
         Self::new(output, capture_path.as_deref())
     }
-
-    pub fn record_external(&mut self, bytes: &[u8]) -> io::Result<()> {
-        if let Some(capture) = &mut self.capture {
-            capture.write_all(bytes)?;
-        }
-        Ok(())
-    }
 }
 
 impl<W: Write> Write for TerminalOutput<W> {
@@ -71,19 +71,34 @@ impl<W: Write> Write for TerminalOutput<W> {
     }
 }
 
-/// One owner for raw mode, bracketed paste, output capture, and input
-/// creation. `suspend` and `resume` are idempotent lifecycle transitions.
+/// A synchronous output lease. Physical writes cannot race panic restoration
+/// or a keyboard-stack/screen transition. Never retain it across an await.
+pub struct TerminalWriter<'a>(MutexGuard<'a, State>);
+
+impl Write for TerminalWriter<'_> {
+    fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
+        self.0.usable()?;
+        let result = self.0.output.write(bytes);
+        if result.is_err() {
+            self.0.fail();
+        }
+        result
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        self.0.usable()?;
+        let result = self.0.output.flush();
+        if result.is_err() {
+            self.0.fail();
+        }
+        result
+    }
+}
+
+/// The process's exclusive physical terminal owner. Normal transitions,
+/// output, and the panic hook use the same mode custody and output lock.
 pub struct TerminalSession {
-    output: TerminalOutput<Stdout>,
-    requirements: TerminalRequirements,
-    capabilities: TerminalCapabilities,
-    restored: bool,
-    keyboard_enhancement_enabled: bool,
-    mouse_enabled: bool,
-    /// True while the fullscreen frontend owns the alternate screen.
-    /// Every restore path must leave it, or the user's terminal is
-    /// stranded on the alt screen after quit or crash.
-    alt_screen: bool,
+    state: Arc<Mutex<State>>,
 }
 
 impl TerminalSession {
@@ -92,79 +107,95 @@ impl TerminalSession {
     }
 
     pub fn with_requirements(requirements: TerminalRequirements) -> io::Result<Self> {
-        let output = TerminalOutput::from_environment(io::stdout())?;
-        let mut session = Self {
-            output,
-            requirements,
-            capabilities: TerminalCapabilities::default(),
-            restored: true,
-            keyboard_enhancement_enabled: false,
-            mouse_enabled: false,
-            alt_screen: false,
+        install_panic_hook();
+        let state = {
+            let mut owner = PANIC_OWNER
+                .lock()
+                .map_err(|_| io::Error::other("terminal owner registry is poisoned"))?;
+            if owner.upgrade().is_some() {
+                return Err(io::Error::other("terminal already has a physical owner"));
+            }
+            let state = Arc::new(Mutex::new(TerminalState::new(
+                TerminalOutput::from_environment(io::stdout())?,
+                requirements,
+                Arc::clone(&PANIC_GENERATION),
+            )));
+            *owner = Arc::downgrade(&state);
+            state
         };
-        session.activate()?;
+        let session = Self { state };
+        let result = { session.lock().activate() };
+        result?;
         Ok(session)
     }
 
-    pub fn output(&mut self) -> &mut TerminalOutput<Stdout> {
-        &mut self.output
+    fn lock(&self) -> MutexGuard<'_, State> {
+        match self.state.lock() {
+            Ok(state) => state,
+            Err(error) => {
+                let mut state = error.into_inner();
+                state.fail();
+                state
+            }
+        }
+    }
+
+    pub fn output(&mut self) -> io::Result<TerminalWriter<'_>> {
+        let state = self.lock();
+        state.usable()?;
+        Ok(TerminalWriter(state))
+    }
+
+    pub fn check_active(&self) -> io::Result<()> {
+        self.lock().usable()
     }
 
     pub fn input(&self) -> io::Result<InputStream> {
+        self.check_active()?;
         InputStream::new()
     }
 
-    /// Enter the alternate screen and enable mouse capture for a
-    /// fullscreen frontend (pi parity: `--tui-mode fullscreen`). The
-    /// alt screen preserves native scrollback verbatim — leaving it
-    /// restores the inline frontend's exact prior surface.
+    /// Own a keyboard push on the alternate surface while it is in use.
     pub fn enter_alt_screen(&mut self) -> io::Result<()> {
-        if self.alt_screen {
-            return Ok(());
-        }
-        execute!(self.output, EnterAlternateScreen, EnableMouseCapture)?;
-        self.mouse_enabled = true;
-        self.alt_screen = true;
-        self.restored = false;
-        Ok(())
+        self.lock().enter_alt_screen()
     }
 
-    /// Leave the alternate screen and release mouse capture. The inline
-    /// surface repaints from its own frame state; nothing from the
-    /// fullscreen viewport survives into scrollback unless the caller
-    /// prints it.
+    /// Pop only the alternate push before restoring the primary surface.
     pub fn leave_alt_screen(&mut self) -> io::Result<()> {
-        if !self.alt_screen {
-            return Ok(());
-        }
-        execute!(self.output, DisableMouseCapture, LeaveAlternateScreen)?;
-        self.mouse_enabled = false;
-        self.alt_screen = false;
-        Ok(())
+        self.lock().leave_alt_screen()
     }
 
-    #[must_use]
-    pub fn is_alt_screen(&self) -> bool {
-        self.alt_screen
+    pub fn is_alt_screen(&self) -> io::Result<bool> {
+        self.lock().is_alt_screen()
     }
 
     pub fn size(&self) -> io::Result<(u16, u16)> {
+        self.lock().usable()?;
         terminal::size()
     }
 
     pub fn cursor_position(&self) -> io::Result<(u16, u16)> {
+        let state = self.lock();
+        state.usable()?;
         crossterm::cursor::position()
     }
 
-    /// Render one frame under the negotiated output policy. Synchronized
-    /// output is opt-in because terminals may ignore the private mode.
     pub fn render(&mut self, screen: &mut Screen, frame: &Frame<'_>) -> io::Result<()> {
-        if self.requirements.synchronized_output {
-            self.output
-                .sync_update(|output| screen.draw(output, frame))?
+        let mut state = self.lock();
+        state.usable()?;
+        let result = if state.requirements.synchronized_output {
+            state
+                .output
+                .sync_update(|output| screen.draw(output, frame))
+                .and_then(|result| result)
         } else {
-            screen.draw(&mut self.output, frame)
+            screen.draw(&mut state.output, frame)
+        };
+        let result = result.and_then(|()| state.usable());
+        if result.is_err() {
+            state.fail();
         }
+        result
     }
 
     pub fn suspend(&mut self) -> io::Result<()> {
@@ -172,123 +203,11 @@ impl TerminalSession {
     }
 
     pub fn resume(&mut self) -> io::Result<()> {
-        if !self.restored {
-            return Ok(());
-        }
-        self.activate()
+        self.lock().activate()
     }
 
     pub fn restore(&mut self) -> io::Result<()> {
-        if self.restored {
-            return Ok(());
-        }
-        let mut first_error = None;
-        // A fullscreen frontend crashed without leaving the alt screen:
-        // exiting it restores the primary surface, and scrollback,
-        // before the ordinary teardown. Never disable mouse first here —
-        // LeaveAlternateScreen implies the capture off on most
-        // terminals; emitting both keeps explicit ordering.
-        if self.mouse_enabled {
-            match execute!(self.output, DisableMouseCapture) {
-                Ok(()) => self.mouse_enabled = false,
-                Err(err) => first_error = Some(err),
-            }
-        }
-        if self.keyboard_enhancement_enabled {
-            match execute!(self.output, PopKeyboardEnhancementFlags) {
-                Ok(()) => self.keyboard_enhancement_enabled = false,
-                Err(err) => first_error = Some(err),
-            }
-        }
-        if self.mouse_enabled {
-            match execute!(self.output, DisableMouseCapture) {
-                Ok(()) => self.mouse_enabled = false,
-                Err(err) if first_error.is_none() => first_error = Some(err),
-                Err(_) => {}
-            }
-        }
-        if self.requirements.bracketed_paste
-            && let Err(err) = execute!(self.output, DisableBracketedPaste)
-            && first_error.is_none()
-        {
-            first_error = Some(err);
-        }
-        if self.alt_screen {
-            match execute!(self.output, LeaveAlternateScreen) {
-                Ok(()) => self.alt_screen = false,
-                Err(err) if first_error.is_none() => first_error = Some(err),
-                Err(_) => {}
-            }
-        }
-        // A modal or failed frame may have hidden the cursor or left styling
-        // active. Teardown owns these too; it cannot depend on Screen::finish.
-        if let Err(err) = restore_cursor_and_style(&mut self.output)
-            && first_error.is_none()
-        {
-            first_error = Some(err);
-        }
-        if let Err(err) = terminal::disable_raw_mode()
-            && first_error.is_none()
-        {
-            first_error = Some(err);
-        }
-        if let Err(err) = self.output.flush()
-            && first_error.is_none()
-        {
-            first_error = Some(err);
-        }
-        if first_error.is_none() {
-            self.restored = true;
-        }
-        first_error.map_or(Ok(()), Err)
-    }
-
-    fn activate(&mut self) -> io::Result<()> {
-        terminal::enable_raw_mode()?;
-        self.restored = false;
-        if self.requirements.bracketed_paste {
-            if let Err(err) = execute!(self.output, EnableBracketedPaste) {
-                let _ = self.restore();
-                return Err(err);
-            }
-            self.capabilities.bracketed_paste = CapabilitySupport::Supported;
-        } else {
-            self.capabilities.bracketed_paste = CapabilitySupport::Unsupported;
-        }
-
-        if self.requirements.mouse {
-            if let Err(err) = execute!(self.output, EnableMouseCapture) {
-                let _ = self.restore();
-                return Err(err);
-            }
-            self.mouse_enabled = true;
-            self.capabilities.mouse = CapabilitySupport::Supported;
-        } else {
-            self.capabilities.mouse = CapabilitySupport::Unsupported;
-        }
-
-        if self.requirements.keyboard_enhancement {
-            match terminal::supports_keyboard_enhancement() {
-                Ok(true) => {
-                    let flags = KeyboardEnhancementFlags::DISAMBIGUATE_ESCAPE_CODES;
-                    if let Err(err) = execute!(self.output, PushKeyboardEnhancementFlags(flags)) {
-                        let _ = self.restore();
-                        return Err(err);
-                    }
-                    self.keyboard_enhancement_enabled = true;
-                    self.capabilities.kitty_keyboard = CapabilitySupport::Supported;
-                }
-                Ok(false) => {
-                    self.capabilities.kitty_keyboard = CapabilitySupport::Unsupported;
-                }
-                Err(_) => {
-                    self.capabilities.kitty_keyboard = CapabilitySupport::Unknown;
-                }
-            }
-        } else {
-            self.capabilities.kitty_keyboard = CapabilitySupport::Unsupported;
-        }
-        Ok(())
+        self.lock().restore()
     }
 }
 
@@ -298,49 +217,46 @@ impl Drop for TerminalSession {
     }
 }
 
-fn restore_cursor_and_style(out: &mut impl Write) -> io::Result<()> {
-    let cursor = execute!(out, Show);
-    let style = execute!(out, SetAttribute(Attribute::Reset));
-    cursor.and(style)
+fn record_panic(generation: &AtomicU64) {
+    // At exhaustion every newly acquired lease is invalid too; never wrap and
+    // accidentally resurrect a prior lease.
+    let _ = generation.fetch_update(Ordering::SeqCst, Ordering::SeqCst, |value| {
+        value.checked_add(1)
+    });
 }
 
-fn write_emergency_restore(out: &mut impl Write) -> io::Result<()> {
-    execute!(
-        out,
-        DisableMouseCapture,
-        PopKeyboardEnhancementFlags,
-        DisableBracketedPaste,
-        LeaveAlternateScreen,
-    )?;
-    restore_cursor_and_style(out)?;
-    out.flush()
+fn restore_on_panic<W: Write>(owner: &Mutex<TerminalState<W>>) {
+    let mut state = match owner.try_lock() {
+        Ok(state) => state,
+        Err(TryLockError::Poisoned(error)) => error.into_inner(),
+        // The panicking thread may already hold this lock. Another thread may
+        // be between physical transitions. Neither permits a competing pop.
+        Err(TryLockError::WouldBlock) => return,
+    };
+    let _ = state.restore();
+    state.fail();
 }
 
-/// Install a panic hook that restores the process terminal before the
-/// previous hook prints its diagnostic.
-pub fn install_panic_hook() {
-    let previous = std::panic::take_hook();
-    std::panic::set_hook(Box::new(move |info| {
-        let _ = terminal::disable_raw_mode();
-        let _ = write_emergency_restore(&mut io::stdout());
-        previous(info);
-    }));
+fn install_panic_hook() {
+    PANIC_HOOK.call_once(|| {
+        let previous = std::panic::take_hook();
+        std::panic::set_hook(Box::new(move |info| {
+            record_panic(&PANIC_GENERATION);
+            let owner = PANIC_OWNER
+                .try_lock()
+                .ok()
+                .and_then(|owner| owner.upgrade());
+            if let Some(owner) = owner {
+                restore_on_panic(&owner);
+            }
+            previous(info);
+        }));
+    });
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn emergency_restore_leaves_temporary_terminal_modes() {
-        let mut output = Vec::new();
-        write_emergency_restore(&mut output).unwrap();
-        let text = String::from_utf8(output).unwrap();
-        assert!(text.contains("\x1b[?1049l"), "{text:?}");
-        assert!(text.contains("\x1b[?2004l"), "{text:?}");
-        assert!(text.contains("\x1b[?25h"), "{text:?}");
-        assert!(text.ends_with("\x1b[0m"), "{text:?}");
-    }
 
     #[test]
     fn default_requirements_enable_paste_and_keyboard() {
@@ -356,8 +272,7 @@ mod tests {
             .sync_update(|output| output.write_all(b"frame"))
             .expect("sync update")
             .expect("frame");
-        let bytes = output.output;
-        let text = String::from_utf8(bytes).expect("utf8");
+        let text = String::from_utf8(output.output).expect("utf8");
         assert!(text.starts_with("\x1b[?2026h"));
         assert!(text.ends_with("\x1b[?2026l"));
         assert!(text.contains("frame"));

@@ -90,10 +90,9 @@ pub async fn copy(text: &str, terminal: &mut TerminalSession) -> Result<CopyOutc
         if encoded.len() > OSC52_LIMIT {
             bail!("answer exceeds the terminal clipboard request size limit");
         }
-        terminal
-            .output()
-            .write_all(format!("\x1b]52;c;{encoded}\x07").as_bytes())?;
-        terminal.output().flush()?;
+        let mut output = terminal.output()?;
+        output.write_all(format!("\x1b]52;c;{encoded}\x07").as_bytes())?;
+        output.flush()?;
         return Ok(CopyOutcome::RequestedFromTerminal);
     }
     bail!("clipboard is unavailable in this environment")
