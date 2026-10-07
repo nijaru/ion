@@ -22,6 +22,7 @@ mod agent_events;
 mod clipboard;
 mod display_text;
 mod external_editor;
+mod markdown;
 mod rpc;
 mod terminal_client;
 mod transcript;

@@ -5,6 +5,7 @@ import fcntl
 import json
 import os
 import pty
+import re
 import select
 import signal
 import struct
@@ -167,6 +168,8 @@ with tempfile.TemporaryDirectory(prefix="ion-terminal-") as temporary:
             alt_leaves = output.count(b"\x1b[?1049l")
             assert saw_inline_start, "inline composer never appeared before modal interaction"
             assert alt_enters > 0 and alt_enters == alt_leaves, (alt_enters, alt_leaves)
+            plain_output = re.sub(rb"\x1b\[[0-9;?]*[A-Za-z]", b"", bytes(output))
+            assert b"MARKDOWN_BOLD and literal_code docs (https://example.org/ion)" in plain_output, "assistant Markdown was not rendered"
             assert "• ".encode() in output, "semantic activity group header was not rendered"
             assert b"\xe2\x94\x9c " in output or b"\xe2\x94\x94 " in output, "grouped tool tree was not rendered"
             assert sent_file_start and selected_file and sent_first and sent_steering and sent_second and resized and sent_tool and closed_tool and sent_compact and sent_clone and sent_controls and sent_key and sent_logout and sent_copy and sent_quit, "terminal did not complete the session/model/login workflow"
@@ -180,6 +183,9 @@ with tempfile.TemporaryDirectory(prefix="ion-terminal-") as temporary:
             session_id = named[0].split("\t")[0]
             inspected = subprocess.run([binary, "--cwd", workspace, "--session", session_id, "inspect"], env=env, check=True, capture_output=True)
             entries = json.loads(inspected.stdout)["entries"]
+            assert "**MARKDOWN_BOLD**" in str(entries), "formatted view replaced the original saved Markdown"
+            exported = subprocess.run([binary, "--cwd", workspace, "--session", session_id, "export"], env=env, check=True, capture_output=True, text=True).stdout
+            assert "**MARKDOWN_BOLD**" in exported, "export lost the original Markdown source"
             source = [line for line in listing.splitlines() if "\t\t2 turn(s)" in line]
             assert len(source) == 1, listing
             original = subprocess.run([binary, "--cwd", workspace, "--session", source[0].split("\t")[0], "inspect"], env=env, check=True, capture_output=True)

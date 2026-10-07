@@ -4,7 +4,7 @@ use ion_terminal::KeyCode;
 use std::num::NonZeroUsize;
 
 use crate::display_text::push_wrapped;
-use crate::transcript_render::{kind_label, render_message, state_label};
+use crate::transcript_render::{kind_label, render_source_message, state_label};
 
 const PAGE_ENTRIES: usize = 32;
 
@@ -142,7 +142,7 @@ impl DetailView {
                                     width,
                                 );
                                 let mut message_rows = Vec::new();
-                                render_message(&mut message_rows, message, true, width);
+                                render_source_message(&mut message_rows, message, true, width);
                                 rows.extend(message_rows.iter().map(ToString::to_string));
                             }
                             TranscriptItem::Assistant(message) => {
@@ -156,7 +156,7 @@ impl DetailView {
                                     width,
                                 );
                                 let mut message_rows = Vec::new();
-                                render_message(&mut message_rows, message, false, width);
+                                render_source_message(&mut message_rows, message, false, width);
                                 rows.extend(message_rows.iter().map(ToString::to_string));
                             }
                             TranscriptItem::UserShell(shell) => {

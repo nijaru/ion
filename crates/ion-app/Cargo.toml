@@ -15,6 +15,7 @@ ion-ai.workspace = true
 ion-core.workspace = true
 ion-host.workspace = true
 ion-terminal.workspace = true
+pulldown-cmark = { version = "0.13.4", default-features = false }
 ratatui = "0.30.2"
 rpassword = "7.5.4"
 serde = { version = "1.0.229", features = ["derive"] }

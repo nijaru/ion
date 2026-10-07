@@ -6,7 +6,7 @@ use ion_core::{
 };
 use ratatui::{
     style::{Color, Modifier, Style},
-    text::Line,
+    text::{Line, Span},
 };
 
 pub(super) fn kind_label(kind: ToolActivityKind) -> &'static str {
@@ -157,17 +157,27 @@ pub(super) fn live_rows(
                 if omitted > 0 {
                     preview.drain(..omitted);
                     if let Some(first) = preview.first_mut() {
-                        *first = Line::styled(
-                            fit_line(
-                                &format!(
-                                    "{}… {}",
-                                    if user { "› " } else { "" },
-                                    first.to_string().trim_start()
-                                ),
-                                width,
-                            ),
-                            first.style,
-                        );
+                        first
+                            .spans
+                            .insert(0, Span::raw(if user { "› … " } else { "… " }));
+                        let clipped = first.width() > width;
+                        if width <= 1 {
+                            first.spans = vec![Span::raw("…")];
+                        } else {
+                            let mut wrapped = Vec::new();
+                            crate::display_text::push_styled(
+                                &mut wrapped,
+                                "",
+                                "",
+                                std::mem::take(first),
+                                if clipped { width - 1 } else { width },
+                            );
+                            // Only this leading row is clipped; later retained rows stay intact.
+                            *first = wrapped.into_iter().next().expect("wrapped omission row");
+                            if clipped {
+                                first.spans.push(Span::raw("…"));
+                            }
+                        }
                     }
                 }
                 selected.extend(preview);
@@ -239,6 +249,27 @@ fn render_current_group(
 }
 
 pub(super) fn render_message(
+    rows: &mut Vec<Line<'static>>,
+    message: &TranscriptMessage,
+    user: bool,
+    width: usize,
+) {
+    if user {
+        render_source_message(rows, message, true, width);
+        return;
+    }
+    for part in &message.parts {
+        match part {
+            TranscriptPart::Text(text) => crate::markdown::render(rows, text, width),
+            TranscriptPart::Image { mime_type } => {
+                push_wrapped(rows, &format!("[image: {mime_type}]"), width)
+            }
+        }
+    }
+}
+
+/// Inspection keeps the original human-visible source, not the formatted view.
+pub(super) fn render_source_message(
     rows: &mut Vec<Line<'static>>,
     message: &TranscriptMessage,
     user: bool,
@@ -903,9 +934,13 @@ fn push_prefixed(
     text: &str,
     width: usize,
 ) {
-    let mut plain = Vec::new();
-    crate::display_text::push_prefixed(&mut plain, prefix, continuation, text, width);
-    rows.extend(plain.into_iter().map(Line::raw));
+    crate::display_text::push_styled(
+        rows,
+        prefix,
+        continuation,
+        Line::from(Span::raw(text)),
+        width,
+    );
 }
 fn push_wrapped(rows: &mut Vec<Line<'static>>, text: &str, width: usize) {
     push_prefixed(rows, "", "", text, width);
@@ -1009,6 +1044,87 @@ mod tests {
         let live = super::live_rows(&projection, 24, 6);
         assert!(live.iter().any(|row| row.style.fg == Some(Color::Red)));
         assert!(live.iter().any(|row| row.style.fg == Some(Color::Cyan)));
+    }
+
+    #[test]
+    fn clipped_markdown_retains_inline_style_and_code_indentation() {
+        for (source, width) in [
+            ("**abcdefghijklmnoabcdefghijklmnopqrstuv**", 8),
+            ("```\n  first\n  second\n  third\n  fourth\n```", 12),
+        ] {
+            let projection = TranscriptProjection {
+                items: vec![TranscriptItem::Assistant(TranscriptMessage {
+                    turn: Some(1),
+                    steering: false,
+                    parts: vec![TranscriptPart::Text(source.into())],
+                })],
+            };
+            for narrow in 1..=width {
+                assert!(
+                    super::live_rows(&projection, narrow, 3)
+                        .iter()
+                        .all(|row| row.width() <= narrow)
+                );
+            }
+            let rows = super::live_rows(&projection, width, 3);
+            let first = &rows[1];
+            if source.starts_with("**") {
+                assert!(
+                    first
+                        .spans
+                        .iter()
+                        .any(|span| span.style.add_modifier.contains(Modifier::BOLD)),
+                    "{first:?}"
+                );
+            } else {
+                assert!(first.to_string().starts_with("…     "), "{first:?}");
+                assert!(
+                    first
+                        .spans
+                        .iter()
+                        .any(|span| span.style.fg == Some(Color::Magenta)),
+                    "{first:?}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn markdown_is_assistant_presentation_not_user_or_inspection_source() {
+        let source = "# Heading\n\n**bold** [site](https://example.org)";
+        let message = TranscriptMessage {
+            turn: Some(1),
+            steering: false,
+            parts: vec![TranscriptPart::Text(source.into())],
+        };
+        let mut formatted = Vec::new();
+        render_message(&mut formatted, &message, false, 80);
+        let formatted = formatted
+            .iter()
+            .map(ToString::to_string)
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(formatted.contains("Heading\n\nbold site (https://example.org)"));
+        assert!(!formatted.contains("**"));
+        let mut raw = Vec::new();
+        render_source_message(&mut raw, &message, false, 80);
+        assert_eq!(
+            raw.iter()
+                .map(ToString::to_string)
+                .collect::<Vec<_>>()
+                .join("\n"),
+            source
+        );
+        let mut user = Vec::new();
+        render_message(&mut user, &message, true, 80);
+        let user = user
+            .iter()
+            .map(ToString::to_string)
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(user.starts_with("› # Heading"));
+        assert!(user.contains("**bold** [site](https://example.org)"));
+        assert!(matches!(&message.parts[0], TranscriptPart::Text(text) if text == source));
     }
 
     #[test]

@@ -94,6 +94,15 @@ publication as well as live/fullscreen rendering. Repeated successful observatio
 work can coalesce, while edits, writes, commands and exceptional outcomes remain
 explicit.
 
+Assistant responses render CommonMark headings, emphasis, lists, quotes, inline
+code and code blocks. Code whitespace is retained (tabs use four spaces), with
+wrapping at display columns. Links show their label and destination; images
+show alt text and a destination, without fetching. HTML remains literal text;
+links never open automatically, and unsupported/opaque URL schemes are hidden
+in the formatted view. User prompts and tool output remain literal. Ctrl-O
+source inspection, saved Session facts, copy and export retain original Markdown.
+Tables, syntax highlighting and other Markdown extensions are not implemented.
+
 Inline remains the default, but persistent fullscreen is also available with
 `--tui-mode fullscreen`; use `/tui inline` or `/tui fullscreen` to switch
 inside chat. Fullscreen owns the transcript viewport and scrolling while using
