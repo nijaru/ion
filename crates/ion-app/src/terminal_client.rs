@@ -16,8 +16,9 @@ use anyhow::{Context, Result, ensure};
 use ignore::WalkBuilder;
 use ion_ai::{Content, Message, ModelRef};
 use ion_core::{
-    CodingAgent, CodingSession, ForkPoint, LiveTranscript, SessionEntry, SessionView,
-    SteeringInbox, TranscriptItem, TranscriptProjection, TurnEndReason,
+    AcceptedInput, AgentLimits, CodingSession, ForkPoint, InputBudget, InputReservation,
+    LiveTranscript, SessionEntry, SessionView, SteeringInbox, TranscriptItem, TranscriptProjection,
+    TurnEndReason,
 };
 use ion_host::image_input::LoadedImage;
 use ion_host::{CredentialStatus, CredentialStore, Resources, Selection};
@@ -97,7 +98,8 @@ struct Frontend {
     status: String,
     notices: Vec<String>,
     picker: Option<Picker>,
-    pending: VecDeque<PendingInput>,
+    pending: VecDeque<TurnInput>,
+    input_budget: InputBudget,
     prompt_history: Vec<String>,
     history_cursor: Option<usize>,
     saved_draft: String,
@@ -106,31 +108,55 @@ struct Frontend {
     cwd: PathBuf,
 }
 
-struct PendingInput {
+struct TurnInput {
     prompt: String,
     images: Vec<LoadedImage>,
+    reservation: Option<InputReservation>,
 }
 
-impl PendingInput {
-    fn from_message(input: Message) -> Self {
-        let mut prompt = String::new();
+impl TurnInput {
+    fn direct(prompt: String, images: Vec<LoadedImage>) -> Self {
+        Self {
+            prompt,
+            images,
+            reservation: None,
+        }
+    }
+
+    fn from_accepted(input: AcceptedInput) -> Self {
+        let (input, reservation) = input.into_parts();
+        // This private inbox is populated only through Message::user_input:
+        // one prompt, then each optional image note immediately before its image.
+        let mut parts = input.content.into_iter();
+        let Some(Content::Text(prompt)) = parts.next() else {
+            unreachable!("terminal input must retain its original prompt");
+        };
         let mut images = Vec::new();
-        for part in input.content {
+        while let Some(part) = parts.next() {
             match part {
-                Content::Text(text) => {
-                    if !prompt.is_empty() {
-                        prompt.push('\n');
-                    }
-                    prompt.push_str(&text);
-                }
                 Content::Image(content) => images.push(LoadedImage {
                     content,
                     note: None,
                 }),
-                Content::ToolCall(_) | Content::ToolResult(_) => {}
+                Content::Text(note) => {
+                    let Some(Content::Image(content)) = parts.next() else {
+                        unreachable!("terminal image note must precede its image");
+                    };
+                    images.push(LoadedImage {
+                        content,
+                        note: Some(note),
+                    });
+                }
+                Content::ToolCall(_) | Content::ToolResult(_) => {
+                    unreachable!("admitted input cannot contain tools");
+                }
             }
         }
-        Self { prompt, images }
+        Self {
+            prompt,
+            images,
+            reservation: Some(reservation),
+        }
     }
 }
 
@@ -207,21 +233,7 @@ pub async fn chat(init: ChatInit) -> Result<()> {
         ui.note(diagnostic);
     }
     loop {
-        if let Some(PendingInput { prompt, images }) = ui.pending.pop_front() {
-            let prompt = match expand_resource_input(runtime.resources(), prompt) {
-                Ok(prompt) => prompt,
-                Err((original, error)) => {
-                    ui.images.splice(0..0, images);
-                    ui.draft = if ui.draft.is_empty() {
-                        original
-                    } else {
-                        format!("{original}\n\n{}", ui.draft)
-                    };
-                    ui.cursor = ui.draft.len();
-                    ui.status = format!("{error:#}");
-                    continue;
-                }
-            };
+        if let Some(incoming) = ui.pending.pop_front() {
             ui.status.clear();
             ui.scroll = 0;
             run_turn(
@@ -230,8 +242,7 @@ pub async fn chat(init: ChatInit) -> Result<()> {
                 &mut input,
                 &mut ui,
                 &runtime,
-                prompt,
-                images,
+                incoming,
             )
             .await?;
             continue;
@@ -258,8 +269,7 @@ pub async fn chat(init: ChatInit) -> Result<()> {
                         &mut input,
                         &mut ui,
                         &runtime,
-                        prompt,
-                        images,
+                        TurnInput::direct(prompt, images),
                     )
                     .await?;
                 }
@@ -293,16 +303,8 @@ pub async fn chat(init: ChatInit) -> Result<()> {
                             Err(error) => ui.status = format!("{error:#}"),
                         }
                     } else if command == "/compact" {
-                        run_compaction(
-                            &mut terminal,
-                            &mut screen,
-                            &mut input,
-                            &mut ui,
-                            runtime.session(),
-                            runtime.agent(),
-                            runtime.selected(),
-                        )
-                        .await?;
+                        run_compaction(&mut terminal, &mut screen, &mut input, &mut ui, &runtime)
+                            .await?;
                     } else if command == "/copy" {
                         match copy_last_answer(runtime.session(), &mut terminal).await {
                             Ok(crate::clipboard::CopyOutcome::Copied) => {
@@ -340,8 +342,7 @@ pub async fn chat(init: ChatInit) -> Result<()> {
                                     &mut input,
                                     &mut ui,
                                     &runtime,
-                                    prompt,
-                                    images,
+                                    TurnInput::direct(prompt, images),
                                 )
                                 .await?;
                             }
@@ -350,10 +351,9 @@ pub async fn chat(init: ChatInit) -> Result<()> {
                         }
                     }
                 }
-                Action::Queue(prompt) => ui.pending.push_back(PendingInput {
-                    prompt,
-                    images: std::mem::take(&mut ui.images),
-                }),
+                Action::Queue(prompt) => {
+                    ui.queue_follow_up(prompt, runtime.agent().limits(), Some(runtime.resources()))
+                }
                 Action::PasteClipboard => {
                     if let Err(error) = paste_clipboard(&mut ui, runtime.selected()).await {
                         ui.status = format!("Paste failed: {error:#}");
@@ -884,10 +884,11 @@ async fn run_compaction(
     screen: &mut Screen,
     input: &mut InputStream,
     ui: &mut Frontend,
-    session: &CodingSession,
-    agent: &CodingAgent,
-    selected: &Selection,
+    runtime: &ion_host::SessionBinding,
 ) -> Result<()> {
+    let session = runtime.session();
+    let agent = runtime.agent();
+    let selected = runtime.selected();
     let model = selected.identity();
     ui.status.clear();
     let stop = CancellationToken::new();
@@ -905,7 +906,7 @@ async fn run_compaction(
                     Some(Ok(InputEvent::Key(key))) if is_clipboard_shortcut(key) && ui.picker.is_none() && ui.details.is_none() => {
                         start_clipboard_paste(ui, selected);
                     },
-                    Some(Ok(InputEvent::Key(key))) => busy_key(ui, key, &stop, None, None),
+                    Some(Ok(InputEvent::Key(key))) => busy_key(ui, key, &stop, None, Some(runtime.resources()), runtime.agent().limits()),
                     Some(Ok(InputEvent::Paste(text))) => ui.insert(&text),
                     Some(Ok(InputEvent::Resize(size))) => screen.resize(size.columns, size.rows),
                     Some(Ok(InputEvent::Mouse(mouse))) => match mouse.kind() {
@@ -949,7 +950,7 @@ fn expand_resource_input(
     resources: &Resources,
     prompt: String,
 ) -> std::result::Result<String, (String, anyhow::Error)> {
-    match resources.expand_command(&prompt) {
+    match resources.expand_command(prompt.trim()) {
         Some(Ok(expanded)) => Ok(expanded),
         Some(Err(error)) => Err((prompt, error)),
         None => Ok(prompt),
@@ -962,7 +963,13 @@ fn busy_key(
     stop: &CancellationToken,
     steering: Option<&SteeringInbox>,
     resources: Option<&Resources>,
+    limits: AgentLimits,
 ) {
+    let raw_command = (key.code == KeyCode::Enter
+        && !key.modifiers.contains(Modifiers::SHIFT)
+        && !key.modifiers.contains(Modifiers::CONTROL)
+        && ui.draft.trim_start().starts_with('/'))
+    .then(|| ui.draft.clone());
     let action = ui.key(key);
     let action = if ui.clipboard_job.is_some() {
         match action {
@@ -997,20 +1004,10 @@ fn busy_key(
                     }
                 }
             } else {
-                ui.pending.push_back(PendingInput {
-                    prompt,
-                    images: std::mem::take(&mut ui.images),
-                });
-                ui.status = format!("{} follow-up(s) queued", ui.pending.len());
+                ui.queue_follow_up(prompt, limits, resources);
             }
         }
-        Action::Queue(prompt) => {
-            ui.pending.push_back(PendingInput {
-                prompt,
-                images: std::mem::take(&mut ui.images),
-            });
-            ui.status = format!("{} follow-up(s) queued", ui.pending.len());
-        }
+        Action::Queue(prompt) => ui.queue_follow_up(prompt, limits, resources),
         Action::Command(command) => {
             if command == "/copy" || command == "/editor" {
                 ui.status = "This action is available after the operation".into();
@@ -1036,7 +1033,7 @@ fn busy_key(
             } else {
                 ui.status = "Commands are available after this operation".into();
             }
-            ui.draft = command;
+            ui.draft = raw_command.unwrap_or(command);
             ui.cursor = ui.draft.len();
         }
         Action::Shell(command, exclude_from_context) => {
@@ -1069,9 +1066,9 @@ fn return_pending_to_editor(ui: &mut Frontend) {
     let remaining = ui
         .pending
         .drain(..)
-        .map(|pending| {
-            restored.extend(pending.images);
-            pending.prompt
+        .map(|TurnInput { prompt, images, .. }| {
+            restored.extend(images);
+            prompt
         })
         .collect::<Vec<_>>()
         .join("\n\n");
@@ -1147,7 +1144,7 @@ async fn run_user_shell(
                     Some(Ok(InputEvent::Key(key))) if is_clipboard_shortcut(key) && ui.picker.is_none() && ui.details.is_none() => {
                         start_clipboard_paste(ui, runtime.selected());
                     },
-                    Some(Ok(InputEvent::Key(key))) => busy_key(ui, key, &stop, None, None),
+                    Some(Ok(InputEvent::Key(key))) => busy_key(ui, key, &stop, None, Some(runtime.resources()), runtime.agent().limits()),
                     Some(Ok(InputEvent::Paste(text))) => ui.insert(&text),
                     Some(Ok(InputEvent::Resize(size))) => screen.resize(size.columns, size.rows),
                     Some(Ok(InputEvent::Mouse(mouse))) => match mouse.kind() {
@@ -1199,9 +1196,13 @@ async fn run_turn(
     input: &mut InputStream,
     ui: &mut Frontend,
     runtime: &ion_host::SessionBinding,
-    prompt: String,
-    attached: Vec<LoadedImage>,
+    incoming: TurnInput,
 ) -> Result<()> {
+    let TurnInput {
+        prompt,
+        images: attached,
+        mut reservation,
+    } = incoming;
     let session = runtime.session();
     let selected = runtime.selected();
     let model = selected.identity();
@@ -1222,7 +1223,7 @@ async fn run_turn(
     let progress = Arc::new(Mutex::new(LiveTranscript::with_user_input(&user_message)));
     let observer = progress.clone();
     let stop = CancellationToken::new();
-    let steering = SteeringInbox::default();
+    let steering = SteeringInbox::new(runtime.agent().limits(), ui.input_budget.clone());
     let mut input_ended = false;
     let mut output_error = None;
     let result = {
@@ -1234,6 +1235,9 @@ async fn run_turn(
             stop.clone(),
             &steering,
             move |event| {
+                if matches!(&event, ion_core::CodingAgentEvent::TurnAccepted { .. }) {
+                    drop(reservation.take());
+                }
                 observer
                     .lock()
                     .unwrap_or_else(std::sync::PoisonError::into_inner)
@@ -1250,7 +1254,7 @@ async fn run_turn(
                     Some(Ok(InputEvent::Key(key))) if is_clipboard_shortcut(key) && ui.picker.is_none() && ui.details.is_none() => {
                         start_clipboard_paste(ui, selected);
                     },
-                    Some(Ok(InputEvent::Key(key))) => busy_key(ui, key, &stop, Some(&steering), Some(runtime.resources())),
+                    Some(Ok(InputEvent::Key(key))) => busy_key(ui, key, &stop, Some(&steering), Some(runtime.resources()), runtime.agent().limits()),
                     Some(Ok(InputEvent::Paste(text))) => ui.insert(&text),
                     Some(Ok(InputEvent::Resize(size))) => screen.resize(size.columns, size.rows),
                     Some(Ok(InputEvent::Mouse(mouse))) => match mouse.kind() {
@@ -1275,7 +1279,7 @@ async fn run_turn(
     };
     finish_pending_clipboard_paste(ui).await;
     for input in steering.take_uncommitted() {
-        ui.pending.push_back(PendingInput::from_message(input));
+        ui.pending.push_back(TurnInput::from_accepted(input));
     }
     if result.is_err() {
         return_pending_to_editor(ui);
@@ -1558,10 +1562,9 @@ impl Frontend {
                 code: KeyCode::Enter,
                 modifiers,
             } if modifiers.contains(Modifiers::ALT) => {
-                let prompt = self.draft.trim().to_owned();
-                self.draft.clear();
+                let prompt = std::mem::take(&mut self.draft);
                 self.cursor = 0;
-                if prompt.is_empty() {
+                if prompt.trim().is_empty() {
                     Action::None
                 } else {
                     Action::Queue(prompt)
@@ -1587,16 +1590,16 @@ impl Frontend {
                 code: KeyCode::Enter,
                 ..
             } => {
-                let prompt = self.draft.trim().to_owned();
-                self.draft.clear();
+                let prompt = std::mem::take(&mut self.draft);
                 self.cursor = 0;
-                if prompt.is_empty() && self.images.is_empty() {
+                let syntax = prompt.trim();
+                if syntax.is_empty() && self.images.is_empty() {
                     Action::None
-                } else if prompt == "/exit" || prompt == "/quit" {
+                } else if syntax == "/exit" || syntax == "/quit" {
                     Action::Quit
-                } else if prompt.starts_with('/') {
-                    Action::Command(prompt)
-                } else if let Some(command) = prompt.strip_prefix("!!") {
+                } else if syntax.starts_with('/') {
+                    Action::Command(syntax.to_owned())
+                } else if let Some(command) = syntax.strip_prefix("!!") {
                     if command.trim().is_empty() {
                         self.draft = prompt;
                         self.cursor = self.draft.len();
@@ -1605,7 +1608,7 @@ impl Frontend {
                     } else {
                         Action::Shell(command.trim().to_owned(), true)
                     }
-                } else if let Some(command) = prompt.strip_prefix('!') {
+                } else if let Some(command) = syntax.strip_prefix('!') {
                     if command.trim().is_empty() {
                         self.draft = prompt;
                         self.cursor = self.draft.len();
@@ -1924,8 +1927,44 @@ impl Frontend {
         self.cursor = self.draft.len();
     }
 
+    fn queue_follow_up(
+        &mut self,
+        original: String,
+        limits: AgentLimits,
+        resources: Option<&Resources>,
+    ) {
+        let prompt = match resources {
+            Some(resources) => match expand_resource_input(resources, original.clone()) {
+                Ok(prompt) => prompt,
+                Err((_, error)) => {
+                    self.draft = original;
+                    self.cursor = self.draft.len();
+                    self.status = format!("Follow-up was not queued: {error:#}");
+                    return;
+                }
+            },
+            None => original.clone(),
+        };
+        let message = Message::user_input(prompt.clone(), self.images.clone());
+        match self.input_budget.reserve(&message, &(), limits) {
+            Ok(reservation) => {
+                self.pending.push_back(TurnInput {
+                    prompt,
+                    images: std::mem::take(&mut self.images),
+                    reservation: Some(reservation),
+                });
+                self.status = format!("{} follow-up(s) queued", self.pending.len());
+            }
+            Err(error) => {
+                self.draft = original;
+                self.cursor = self.draft.len();
+                self.status = format!("Follow-up was not queued: {error}");
+            }
+        }
+    }
+
     fn dequeue(&mut self) {
-        if let Some(PendingInput { prompt, images }) = self.pending.pop_back() {
+        if let Some(TurnInput { prompt, images, .. }) = self.pending.pop_back() {
             self.images.extend(images);
             if self.draft.is_empty() {
                 self.draft = prompt;
@@ -2573,22 +2612,32 @@ mod tests {
         .unwrap();
         apply_clipboard(&mut ui, prepared).unwrap();
         ui.insert("describe the picture");
-        let steering = SteeringInbox::default();
+        let steering = SteeringInbox::new(
+            AgentLimits {
+                image_input: true,
+                ..AgentLimits::default()
+            },
+            ui.input_budget.clone(),
+        );
         busy_key(
             &mut ui,
             KeyEvent::new(KeyCode::Enter, Modifiers::NONE),
             &CancellationToken::new(),
             Some(&steering),
             None,
+            AgentLimits {
+                image_input: true,
+                ..AgentLimits::default()
+            },
         );
         let queued = steering.take_uncommitted();
         assert_eq!(queued.len(), 1);
-        assert_eq!(queued[0].content.len(), 2);
+        assert_eq!(queued[0].message().content.len(), 2);
         assert_eq!(
-            queued[0].content[0],
+            queued[0].message().content[0],
             Content::Text("describe the picture".into())
         );
-        assert!(matches!(queued[0].content[1], Content::Image(_)));
+        assert!(matches!(queued[0].message().content[1], Content::Image(_)));
         assert!(ui.pending.is_empty());
         assert!(ui.images.is_empty());
     }
@@ -2601,13 +2650,23 @@ mod tests {
         ui.clipboard_job = Some(tokio::spawn(async {
             Ok(PreparedPaste::Text(" image".into()))
         }));
-        let steering = SteeringInbox::default();
+        let steering = SteeringInbox::new(
+            AgentLimits {
+                image_input: true,
+                ..AgentLimits::default()
+            },
+            ui.input_budget.clone(),
+        );
         busy_key(
             &mut ui,
             KeyEvent::new(KeyCode::Enter, Modifiers::NONE),
             &CancellationToken::new(),
             Some(&steering),
             None,
+            AgentLimits {
+                image_input: true,
+                ..AgentLimits::default()
+            },
         );
         assert_eq!(ui.draft, "describe this");
         assert!(steering.take_uncommitted().is_empty());
@@ -2640,25 +2699,108 @@ mod tests {
         ui.images
             .push(ion_ai::normalize_rgba(1, 1, vec![255, 0, 0, 255]).unwrap());
         ui.insert("/skill:ion-terminal-audit-test src/lib.rs");
-        let steering = SteeringInbox::default();
+        let steering = SteeringInbox::new(
+            AgentLimits {
+                image_input: true,
+                ..AgentLimits::default()
+            },
+            ui.input_budget.clone(),
+        );
         busy_key(
             &mut ui,
             KeyEvent::new(KeyCode::Enter, Modifiers::NONE),
             &CancellationToken::new(),
             Some(&steering),
             Some(&resources),
+            AgentLimits {
+                image_input: true,
+                ..AgentLimits::default()
+            },
         );
         assert!(ui.draft.is_empty());
         let queued = steering.take_uncommitted();
         assert_eq!(queued.len(), 1);
-        let Content::Text(prompt) = &queued[0].content[0] else {
+        let Content::Text(prompt) = &queued[0].message().content[0] else {
             panic!("expected text steering");
         };
         assert!(prompt.contains("AUDIT_MARKER"));
         assert!(prompt.contains("User request: src/lib.rs"));
-        assert!(matches!(queued[0].content[1], Content::Image(_)));
+        assert!(matches!(queued[0].message().content[1], Content::Image(_)));
         assert!(ui.images.is_empty());
         fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn queue_rejection_preserves_editor_and_restored_steering_keeps_its_budget() {
+        let limits = AgentLimits {
+            image_input: true,
+            ..AgentLimits::default()
+        };
+        let message = Message::user_input("first".into(), []);
+        let budget = InputBudget::new(serde_json::to_vec(&(&message, &())).unwrap().len());
+        let mut ui = Frontend {
+            input_budget: budget.clone(),
+            ..Frontend::default()
+        };
+        ui.queue_follow_up("first".into(), limits, None);
+        let image = ion_ai::normalize_rgba(1, 1, vec![255, 0, 0, 255]).unwrap();
+        ui.images.push(image.clone());
+        ui.insert("  second\n");
+        busy_key(
+            &mut ui,
+            KeyEvent::new(KeyCode::Enter, Modifiers::ALT),
+            &CancellationToken::new(),
+            None,
+            None,
+            limits,
+        );
+        assert_eq!(ui.draft, "  second\n");
+        assert_eq!(ui.images.len(), 1);
+        assert_eq!(ui.images[0].content, image.content);
+        assert_eq!(ui.pending.len(), 1);
+        assert!(ui.status.contains("not queued"));
+        let steering = SteeringInbox::new(limits, budget);
+        assert!(matches!(
+            steering.push("x".into()),
+            Err(ion_core::CodingAgentError::InputQueueFull { .. })
+        ));
+        ui.dequeue();
+        assert_eq!(ui.draft, "  second\n\n\nfirst");
+        steering.push("x".into()).unwrap();
+        let accepted = steering.take_uncommitted().pop().unwrap();
+        ui.pending.push_back(TurnInput::from_accepted(accepted));
+        assert!(matches!(
+            steering.push("x".into()),
+            Err(ion_core::CodingAgentError::InputQueueFull { .. })
+        ));
+        ui.dequeue();
+        assert_eq!(ui.draft, "  second\n\n\nfirst\n\nx");
+        assert_eq!(ui.images.len(), 1);
+        steering.push("x".into()).unwrap();
+    }
+
+    #[test]
+    fn recovered_steering_preserves_prompt_and_each_image_note() {
+        let mut first = ion_ai::normalize_rgba(1, 1, vec![255, 0, 0, 255]).unwrap();
+        first.note = Some("First image coordinates".into());
+        let mut second = ion_ai::normalize_rgba(1, 1, vec![0, 255, 0, 255]).unwrap();
+        second.note = Some("Second image coordinates".into());
+        let message = Message::user_input("  inspect both\n".into(), [first, second]);
+        let accepted = InputBudget::default()
+            .admit(
+                message.clone(),
+                &(),
+                AgentLimits {
+                    image_input: true,
+                    ..AgentLimits::default()
+                },
+            )
+            .unwrap();
+        let recovered = TurnInput::from_accepted(accepted);
+        assert_eq!(
+            Message::user_input(recovered.prompt, recovered.images),
+            message
+        );
     }
 
     #[test]

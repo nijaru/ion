@@ -13,10 +13,7 @@ use tokio_util::sync::CancellationToken;
 use crate::{
     generation::{GeneratedResponse, generate_with_retry, refresh_prompt_cache},
     request::{PreparedRequest, RequestStep},
-    session::{
-        ModelContextSnapshot, Session, SessionError, StoredToolActivity, TurnEndReason,
-        valid_user_message,
-    },
+    session::{ModelContextSnapshot, Session, SessionError, StoredToolActivity, TurnEndReason},
     tool_result::{ToolOutput, ToolResultProjection},
     tool_set::{ToolActivity, ToolExecution, ToolSet, ToolSource},
 };
@@ -31,25 +28,27 @@ fn user_text(prompt: String) -> Message {
 
 /// Host-owned input waiting for a Session commit. A failed write leaves the
 /// messages here so the host can return them to its editor after the Turn.
-#[derive(Default)]
 pub struct SteeringInbox {
-    pending: Mutex<VecDeque<Message>>,
+    pending: Mutex<VecDeque<crate::AcceptedInput>>,
+    budget: crate::InputBudget,
+    limits: AgentLimits,
 }
 
 impl SteeringInbox {
-    pub fn push(&self, prompt: String) {
-        if !prompt.trim().is_empty() {
-            self.pending
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner)
-                .push_back(user_text(prompt));
+    pub fn new(limits: AgentLimits, budget: crate::InputBudget) -> Self {
+        Self {
+            pending: Mutex::new(VecDeque::new()),
+            budget,
+            limits,
         }
     }
 
+    pub fn push(&self, prompt: String) -> Result<(), AgentError> {
+        self.push_message(user_text(prompt))
+    }
+
     pub fn push_message(&self, input: Message) -> Result<(), AgentError> {
-        if !valid_user_message(&input) {
-            return Err(AgentError::InvalidUserInput);
-        }
+        let input = self.budget.admit(input, &(), self.limits)?;
         self.pending
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
@@ -59,7 +58,7 @@ impl SteeringInbox {
 
     /// Return inputs that never entered the Session. Call after the Turn
     /// future finishes; the host can restore them to its editor or queue.
-    pub fn take_uncommitted(&self) -> Vec<Message> {
+    pub fn take_uncommitted(&self) -> Vec<crate::AcceptedInput> {
         self.pending
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
@@ -81,8 +80,17 @@ impl SteeringInbox {
             return Ok(Vec::new());
         }
         validate_steering(&pending, limits)?;
-        session.record_steerings(turn, pending.iter().cloned().collect())?;
-        Ok(pending.drain(..).collect())
+        session.record_steerings(
+            turn,
+            pending
+                .iter()
+                .map(|input| input.message().clone())
+                .collect(),
+        )?;
+        Ok(pending
+            .drain(..)
+            .map(crate::AcceptedInput::into_message)
+            .collect())
     }
 
     #[expect(
@@ -110,28 +118,29 @@ impl SteeringInbox {
             tool_activities,
             execution,
             usage,
-            pending.iter().cloned().collect(),
+            pending
+                .iter()
+                .map(|input| input.message().clone())
+                .collect(),
         )?;
-        Ok((complete, pending.drain(..).collect()))
+        Ok((
+            complete,
+            pending
+                .drain(..)
+                .map(crate::AcceptedInput::into_message)
+                .collect(),
+        ))
     }
 }
 
-fn validate_steering(pending: &VecDeque<Message>, limits: AgentLimits) -> Result<(), AgentError> {
+fn validate_steering(
+    pending: &VecDeque<crate::AcceptedInput>,
+    limits: AgentLimits,
+) -> Result<(), AgentError> {
+    // Embedded callers may pass an inbox admitted under another route. Validate
+    // that boundary too; live clients use the active agent's limits at admission.
     for input in pending {
-        if !valid_user_message(input) {
-            return Err(AgentError::InvalidUserInput);
-        }
-        if !limits.image_input
-            && input
-                .content
-                .iter()
-                .any(|part| matches!(part, Content::Image(_)))
-        {
-            return Err(AgentError::ImagesUnsupported);
-        }
-        if serde_json::to_vec(input)?.len() > limits.max_request_bytes {
-            return Err(AgentError::ContextTooLarge);
-        }
+        crate::input::validate_input(input.message(), limits)?;
     }
     Ok(())
 }
@@ -267,6 +276,10 @@ impl Agent {
     pub fn with_limits(mut self, limits: AgentLimits) -> Self {
         self.limits = limits;
         self
+    }
+
+    pub fn limits(&self) -> AgentLimits {
+        self.limits
     }
 
     pub fn tool_catalog(&self) -> crate::tool_set::ToolCatalog {
@@ -1139,7 +1152,7 @@ pub enum AgentEvent {
 pub enum AgentError {
     #[error("prompt is empty")]
     EmptyPrompt,
-    #[error("steering input is not a valid user message")]
+    #[error("input is not a valid user message")]
     InvalidUserInput,
     #[error(
         "selected model route does not declare image input; choose an image-capable model or configure the custom route with --images"
@@ -1147,6 +1160,10 @@ pub enum AgentError {
     ImagesUnsupported,
     #[error("turn was cancelled")]
     Cancelled,
+    #[error("pending input queue is full ({max_encoded_bytes} encoded bytes maximum)")]
+    InputQueueFull { max_encoded_bytes: usize },
+    #[error("input exceeds route message limit ({max_encoded_bytes} bytes)")]
+    InputTooLarge { max_encoded_bytes: usize },
     #[error(
         "model input exceeds the context or request-size limit after available compaction; shorten the current input or, for a context-window limit, select a larger-context model"
     )]
@@ -1185,6 +1202,8 @@ impl AgentError {
             Self::EmptyPrompt
             | Self::InvalidUserInput
             | Self::ImagesUnsupported
+            | Self::InputQueueFull { .. }
+            | Self::InputTooLarge { .. }
             | Self::Session(_)
             | Self::Json(_) => TurnEndReason::Failed("agent_error".into()),
         }
@@ -2744,9 +2763,10 @@ mod tests {
             max_request_bytes: 80 * 1024 * 1024,
             ..AgentLimits::default()
         });
-        let steering = SteeringInbox::default();
+        let steering =
+            SteeringInbox::new(agent.limits(), crate::InputBudget::new(128 * 1024 * 1024));
         let prompt = "\0".repeat(11 * 1024 * 1024);
-        steering.push(prompt.clone());
+        steering.push(prompt.clone()).unwrap();
         let result = agent
             .submit_with_steering(
                 &session,
@@ -2759,7 +2779,14 @@ mod tests {
             )
             .await;
         assert!(matches!(result, Err(AgentError::Session(_))));
-        assert_eq!(steering.take_uncommitted(), vec![user_text(prompt)]);
+        assert_eq!(
+            steering
+                .take_uncommitted()
+                .into_iter()
+                .map(crate::AcceptedInput::into_message)
+                .collect::<Vec<_>>(),
+            vec![user_text(prompt)]
+        );
         drop(session);
         std::fs::remove_dir_all(root).unwrap();
     }
@@ -2788,7 +2815,8 @@ mod tests {
             max_request_bytes: 80 * 1024 * 1024,
             ..AgentLimits::default()
         });
-        let steering = SteeringInbox::default();
+        let steering =
+            SteeringInbox::new(agent.limits(), crate::InputBudget::new(128 * 1024 * 1024));
         let prompt = "\0".repeat(11 * 1024 * 1024);
         let mut published = 0;
         let result = agent
@@ -2808,13 +2836,20 @@ mod tests {
                         published += 1;
                     }
                     if matches!(event, AgentEvent::TextDelta(_)) {
-                        steering.push(prompt.clone());
+                        steering.push(prompt.clone()).unwrap();
                     }
                 },
             )
             .await;
         assert!(matches!(result, Err(AgentError::Session(_))));
-        assert_eq!(steering.take_uncommitted(), vec![user_text(prompt)]);
+        assert_eq!(
+            steering
+                .take_uncommitted()
+                .into_iter()
+                .map(crate::AcceptedInput::into_message)
+                .collect::<Vec<_>>(),
+            vec![user_text(prompt)]
+        );
         assert_eq!(
             published, 0,
             "failed commit cannot publish authoritative facts"
@@ -2865,7 +2900,7 @@ mod tests {
             response(vec![Content::Text("second".into())]),
         ]));
         let agent = Agent::new(scripts.clone(), Arc::new(TestTools::new(&root)));
-        let steering = SteeringInbox::default();
+        let steering = SteeringInbox::new(agent.limits(), crate::InputBudget::default());
         let answer = agent
             .submit_with_steering(
                 &session,
@@ -2876,7 +2911,7 @@ mod tests {
                 &steering,
                 |event| {
                     if matches!(event, AgentEvent::TextDelta(_)) {
-                        steering.push("also answer this".into());
+                        steering.push("also answer this".into()).unwrap();
                     }
                 },
             )
@@ -2967,8 +3002,10 @@ mod tests {
 
         let input = user_text("start".into());
         let mut live = LiveTranscript::with_user_input(&input);
-        let steering = SteeringInbox::default();
-        steering.push("queued before the first step".into());
+        let steering = SteeringInbox::new(agent.limits(), crate::InputBudget::default());
+        steering
+            .push("queued before the first step".into())
+            .unwrap();
         let mut restarted = false;
         let answer = agent
             .submit_with_steering(
@@ -2980,7 +3017,7 @@ mod tests {
                 &steering,
                 |event| {
                     if matches!(&event, AgentEvent::TextDelta(text) if text == "first") {
-                        steering.push("after the first answer".into());
+                        steering.push("after the first answer".into()).unwrap();
                     }
                     let restart = matches!(&event, AgentEvent::ResponseRestarted);
                     live.observe(event);
@@ -3101,7 +3138,7 @@ mod tests {
                 image_input: true,
                 ..AgentLimits::default()
             });
-        let steering = SteeringInbox::default();
+        let steering = SteeringInbox::new(agent.limits(), crate::InputBudget::default());
         let answer = agent
             .submit_with_steering(
                 &session,
@@ -3160,7 +3197,13 @@ mod tests {
         let (turn, _) = session
             .begin_turn_message(user_text("start".into()), model())
             .unwrap();
-        let steering = SteeringInbox::default();
+        let steering = SteeringInbox::new(
+            AgentLimits {
+                image_input: true,
+                ..AgentLimits::default()
+            },
+            crate::InputBudget::default(),
+        );
         let input = Message {
             role: Role::User,
             content: vec![Content::Text("look".into()), Content::Image(tiny_image())],
@@ -3171,7 +3214,14 @@ mod tests {
             steering.record_pending(&session, turn, AgentLimits::default()),
             Err(AgentError::ImagesUnsupported)
         ));
-        assert_eq!(steering.take_uncommitted(), vec![input]);
+        assert_eq!(
+            steering
+                .take_uncommitted()
+                .into_iter()
+                .map(crate::AcceptedInput::into_message)
+                .collect::<Vec<_>>(),
+            vec![input]
+        );
         assert_eq!(session.view().unwrap().entries.len(), 1);
         drop(session);
         std::fs::remove_dir_all(root).unwrap();
@@ -3200,7 +3250,10 @@ mod tests {
         ]));
         std::fs::write(root.join("file.txt"), "content").unwrap();
         let agent = Agent::new(scripts.clone(), Arc::new(TestTools::new(&root)));
-        let steering = Arc::new(SteeringInbox::default());
+        let steering = Arc::new(SteeringInbox::new(
+            agent.limits(),
+            crate::InputBudget::default(),
+        ));
         let mut live = LiveTranscript::with_user_input(&user_text("read file".into()));
         agent
             .submit_with_steering(
@@ -3212,7 +3265,7 @@ mod tests {
                 &steering,
                 |event| {
                     if matches!(&event, AgentEvent::ToolFinished { .. }) {
-                        steering.push("also check the content".into());
+                        steering.push("also check the content".into()).unwrap();
                     }
                     live.observe(event);
                 },

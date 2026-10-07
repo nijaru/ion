@@ -169,8 +169,13 @@ objects. Ion validates and normalizes both before accepting the input.
 Turn while one is active; its acknowledgement means only that Ion holds the
 prepared input. A later `follow_up_started` record gives its committed Turn ID.
 `clear_queue` returns uncommitted steering and follow-ups; `abort` alone leaves
-follow-ups queued. Queued input is process-local and bounded to 32 MiB of
-encoded messages. Closing stdin cancels active work and returns pending
+follow-ups queued. Steering and follow-ups share a process-local 32 MiB
+allowance for encoded messages and retained correlation IDs. Each input must
+also satisfy the active route's message-size and image-input limits before Ion
+acknowledges it. Accepted input keeps its reservation until Session acceptance
+or return to the editor/client, including while a follow-up waits to start.
+This is a queued-input bound, not a process-memory or context-fit guarantee.
+Closing stdin cancels active work and returns pending
 follow-ups as `uncommitted_follow_up` records. Returned typed inputs can include
 image payloads, so clients should handle them as their own input data.
 Input/output errors also cancel and await active work before the process exits
@@ -194,7 +199,11 @@ Uncommitted steering is returned as a typed `input` message if a Turn ends
 before the Session accepts it.
 While a turn runs, the editor remains available: Enter steers the next model
 step, Alt-Enter queues a separate follow-up turn, Alt-Up returns the most
-recent queued follow-up to the editor, and Ctrl-C cancels. Up and Down browse
+recent queued follow-up to the editor, and Ctrl-C cancels. The terminal uses the
+same shared queued-input allowance and route checks as RPC. Rejected input
+remains in the editor with its attachments; recovered steering retains image
+notes with their corresponding images. Queued resource commands expand before
+admission, so later resource changes do not rewrite an accepted follow-up. Up and Down browse
 earlier prompts when the cursor reaches the first or last editor line. Type
 `@` to pick a project file, or use Tab after a partial `@path`; the picker
 inserts a path reference for the model to read, not the file's contents.

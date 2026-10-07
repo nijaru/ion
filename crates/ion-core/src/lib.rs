@@ -4,6 +4,7 @@ mod agent;
 mod code_gateway;
 mod composition;
 mod generation;
+mod input;
 mod request;
 mod session;
 mod tool_result;
@@ -14,6 +15,7 @@ pub use agent::{
     Agent as CodingAgent, AgentError as CodingAgentError, AgentEvent as CodingAgentEvent,
     AgentLimits, PromptCacheWarmingPolicy, SteeringInbox,
 };
+pub use input::{AcceptedInput, InputBudget, InputReservation};
 pub use session::{
     ForkPoint, ModelContextSnapshot, Session as CodingSession, SessionEntry,
     SessionError as CodingSessionError, SessionView, StoredToolActivity, TurnEndReason,

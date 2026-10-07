@@ -322,6 +322,9 @@ with tempfile.TemporaryDirectory(prefix="ion-rpc-") as temporary:
         records = [json.loads(line) for line in incomplete.stdout.splitlines()]
         assert [record["type"] for record in records] == ["ready", "response"], records
         assert records[1]["command"] == "parse" and "final newline" in records[1]["error"], records
+        # A short command can expand beyond the route's message limit. It must
+        # be refused before queue acknowledgement, not poison the active Turn.
+        (prompts / "oversize.md").write_text("$1 $1\n")
         disconnected = subprocess.Popen([binary, "--cwd", workspace, "rpc"], env=env, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, bufsize=0)
         pid = None
         try:
@@ -334,6 +337,27 @@ with tempfile.TemporaryDirectory(prefix="ion-rpc-") as temporary:
                 time.sleep(0.01)
             assert (workspace / "io.ready").exists(), "native command did not become ready"
             pid = int((workspace / "io.pid").read_text())
+            too_large = "/oversize " + "z" * (4 * 1024 * 1024 + 1)
+            for kind in ("steer", "follow_up"):
+                send(disconnected, {"id": "oversized-" + kind, "type": kind, "message": too_large})
+                refused = until(disconnected, lambda record: record.get("id") == "oversized-" + kind)[-1]
+                assert refused["success"] is False and "message limit" in refused["error"], "oversized expanded input was acknowledged as queued"
+            send(disconnected, {"id": "valid-steer", "type": "steer", "message": "KEPT_AFTER_REJECTION"})
+            assert until(disconnected, lambda record: record.get("id") == "valid-steer")[-1]["success"]
+            send(disconnected, {"id": "valid-follow", "type": "follow_up", "message": "KEPT_FOLLOW_UP"})
+            assert until(disconnected, lambda record: record.get("id") == "valid-follow")[-1]["success"]
+            send(disconnected, {"id": "release-inputs", "type": "clear_queue"})
+            cleared = until(disconnected, lambda record: record.get("id") == "release-inputs")[-1]
+            assert cleared["data"]["steering"][0]["content"][0]["Text"] == "KEPT_AFTER_REJECTION", cleared
+            assert cleared["data"]["follow_up"][0]["id"] == "valid-follow", cleared
+            # Follow-ups and steering share one retained-input allowance.
+            for index in range(5):
+                identity = f"budget-follow-{index}"
+                send(disconnected, {"id": identity, "type": "follow_up", "message": "q" * (6 * 1024 * 1024)})
+                assert until(disconnected, lambda record: record.get("id") == identity)[-1]["success"]
+            send(disconnected, {"id": "combined-full", "type": "steer", "message": "s" * (3 * 1024 * 1024)})
+            refused = until(disconnected, lambda record: record.get("id") == "combined-full")[-1]
+            assert refused["success"] is False and "queue is full" in refused["error"], "steering bypassed the shared pending-input bound"
             disconnected.stdout.close()
             send(disconnected, {"type": "get_state"})
             assert disconnected.wait(timeout=8) != 0, "broken output was reported as success"

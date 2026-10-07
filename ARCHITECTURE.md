@@ -73,8 +73,16 @@ contract, without a detached task per call.
 
 Steering joins the active Turn at a safe model boundary. Follow-up input stays
 client-owned until accepted as a later Turn, with its own attachments. Restore
-uncommitted input on cancellation/failure. Queue acceptance is not Session
-acceptance, and a stop request is not operation completion.
+uncommitted input on cancellation/failure. Core owns shared encoded-byte
+admission across steering and follow-ups, including retained host metadata.
+Validate individual messages against the active agent before acknowledging
+queue acceptance. Keep reservations with uncommitted input through queue
+transfer and submission wait; release on Session acceptance or explicit
+editor/client handoff. Connection completion disables admission before its
+final steering drain. Preserve literal editor input and image-note association
+on refusal/recovery; expand queued resources at admission, not later dispatch.
+Queue acceptance is not Session acceptance, and a stop request is not operation
+completion. Queue limits do not promise process-RSS or full model-context fit.
 
 ## Session and recovery
 

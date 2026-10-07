@@ -3,7 +3,9 @@ use std::{collections::VecDeque, path::PathBuf, sync::Arc};
 
 use anyhow::{Context, Result, anyhow, bail, ensure};
 use ion_ai::Message;
-use ion_core::{CodingAgentEvent, ForkPoint, SteeringInbox};
+use ion_core::{
+    AcceptedInput, CodingAgentEvent, ForkPoint, InputBudget, InputReservation, SteeringInbox,
+};
 use serde_json::{Value, json};
 use tokio::{
     io::{AsyncBufRead, BufReader},
@@ -18,9 +20,7 @@ use crate::{
 };
 
 mod input;
-use input::{CommandReader, Input, MAX_COMMAND_BYTES};
-
-const MAX_QUEUED_BYTES: usize = 4 * MAX_COMMAND_BYTES;
+use input::{CommandReader, Input};
 
 struct Active {
     stop: CancellationToken,
@@ -32,8 +32,7 @@ struct Active {
 
 struct QueuedFollowUp {
     id: Option<Value>,
-    input: Message,
-    encoded_bytes: usize,
+    input: AcceptedInput,
 }
 
 /// The only mutable control state. The Session and selected route are fixed
@@ -42,7 +41,7 @@ struct Control {
     binding: ion_host::SessionBinding,
     active: Option<Active>,
     follow_ups: VecDeque<QueuedFollowUp>,
-    queued_bytes: usize,
+    input_budget: InputBudget,
     output: mpsc::Sender<Value>,
 }
 
@@ -52,7 +51,7 @@ pub async fn run(binding: ion_host::SessionBinding) -> Result<()> {
         binding,
         active: None,
         follow_ups: VecDeque::new(),
-        queued_bytes: 0,
+        input_budget: InputBudget::default(),
         output,
     };
     write_json_record(
@@ -85,8 +84,7 @@ async fn connection<R: AsyncBufRead + Unpin>(
                 joined = async { (&mut control.active.as_mut().expect("active operation").task).await }, if busy => {
                     // A polled-complete JoinHandle must not be awaited again during
                     // error cleanup. Its result is now owned by this branch.
-                    control.active = None;
-                    let terminal = joined.context("RPC operation task failed; unfinished effects remain unknown")?;
+                    let terminal = control.finish_operation(joined)?;
                     // The task has stopped producing. Publish pending progress,
                     // then completion, before admitting follow-ups or idle state.
                     while let Ok(record) = events.try_recv() {
@@ -135,6 +133,26 @@ async fn connection<R: AsyncBufRead + Unpin>(
 }
 
 impl Control {
+    fn finish_operation(
+        &mut self,
+        joined: std::result::Result<Vec<Value>, tokio::task::JoinError>,
+    ) -> Result<Vec<Value>> {
+        // Admission closes before the final drain. Even steering received after
+        // the task finished must be returned, never lost with the active slot.
+        let active = self
+            .active
+            .take()
+            .context("no active operation to finish")?;
+        let mut terminal =
+            joined.context("RPC operation task failed; unfinished effects remain unknown")?;
+        if let Some(steering) = active.steering {
+            terminal.extend(steering.take_uncommitted().into_iter().map(
+                |pending| json!({"type":"uncommitted_steering","input":pending.into_message()}),
+            ));
+        }
+        Ok(terminal)
+    }
+
     fn session_id(&self) -> String {
         self.binding.session_id()
     }
@@ -194,14 +212,12 @@ impl Control {
                     let prompt = expand_input(self.binding.resources(), message.to_owned())?;
                     let images = self.load_images(&value)?;
                     ensure!(!prompt.trim().is_empty() || !images.is_empty(), "message is empty");
-                    let input = Message::user_input(prompt, images);
-                    let encoded_bytes = serde_json::to_vec(&(&id, &input))?.len();
-                    ensure!(
-                        self.queued_bytes.checked_add(encoded_bytes).is_some_and(|total| total <= MAX_QUEUED_BYTES),
-                        "queued follow-ups exceed the 32 MiB process bound"
-                    );
-                    self.follow_ups.push_back(QueuedFollowUp { id: id.clone(), input, encoded_bytes });
-                    self.queued_bytes += encoded_bytes;
+                    let input = self.input_budget.admit(
+                        Message::user_input(prompt, images),
+                        &id,
+                        self.binding.agent().limits(),
+                    )?;
+                    self.follow_ups.push_back(QueuedFollowUp { id: id.clone(), input });
                     Ok(json!({"disposition":"queued","position":self.follow_ups.len()}))
                 }
                 "clear_queue" => {
@@ -209,9 +225,9 @@ impl Control {
                         .active
                         .as_ref()
                         .and_then(|active| active.steering.as_ref())
-                        .map_or_else(Vec::new, |steering| steering.take_uncommitted());
-                    let follow_up = self.follow_ups.drain(..).map(|pending| json!({"id":pending.id,"input":pending.input})).collect::<Vec<_>>();
-                    self.queued_bytes = 0;
+                        .map_or_else(Vec::new, |steering| steering.take_uncommitted())
+                        .into_iter().map(AcceptedInput::into_message).collect::<Vec<_>>();
+                    let follow_up = self.follow_ups.drain(..).map(|pending| json!({"id":pending.id,"input":pending.input.into_message()})).collect::<Vec<_>>();
                     Ok(json!({"steering":steering,"follow_up":follow_up}))
                 }
                 "abort" => {
@@ -324,15 +340,14 @@ impl Control {
             !prompt.trim().is_empty() || !images.is_empty(),
             "message is empty"
         );
-        self.start_message(Message::user_input(prompt, images), id, false)
+        self.start_message(Message::user_input(prompt, images), id, None)
     }
 
     fn start_next_follow_up(&mut self) -> Result<()> {
         while let Some(pending) = self.follow_ups.pop_front() {
-            self.queued_bytes -= pending.encoded_bytes;
             let id = pending.id;
-            let input = pending.input;
-            match self.start_message(input.clone(), id.clone(), true) {
+            let (input, reservation) = pending.input.into_parts();
+            match self.start_message(input.clone(), id.clone(), Some(reservation)) {
                 Ok(()) => return Ok(()),
                 Err(error) => write_json_record(&json!({
                     "type":"follow_up_failed","id":id,"input":input,"error":format!("{error:#}")
@@ -345,10 +360,9 @@ impl Control {
     fn return_uncommitted_follow_ups(&mut self) -> Result<()> {
         for pending in self.follow_ups.drain(..) {
             write_json_record(&json!({
-                "type":"uncommitted_follow_up","id":pending.id,"input":pending.input
+                "type":"uncommitted_follow_up","id":pending.id,"input":pending.input.into_message()
             }))?;
         }
-        self.queued_bytes = 0;
         Ok(())
     }
 
@@ -394,14 +408,23 @@ impl Control {
         Ok(json!({"disposition":"started"}))
     }
 
-    fn start_message(&mut self, input: Message, id: Option<Value>, queued: bool) -> Result<()> {
+    fn start_message(
+        &mut self,
+        input: Message,
+        id: Option<Value>,
+        mut reservation: Option<InputReservation>,
+    ) -> Result<()> {
+        let queued = reservation.is_some();
         self.idle()?;
         let agent = self.binding.agent().clone();
         let instructions = self.binding.resources().instructions().to_owned();
         let model = self.binding.selected().identity();
         let session = self.binding.session().clone();
         let stop = CancellationToken::new();
-        let steering = Arc::new(SteeringInbox::default());
+        let steering = Arc::new(SteeringInbox::new(
+            agent.limits(),
+            self.input_budget.clone(),
+        ));
         let output = self.output.clone();
         let task_stop = stop.clone();
         let task_steering = steering.clone();
@@ -420,6 +443,7 @@ impl Control {
                     |event| match event {
                         CodingAgentEvent::TurnAccepted { turn } => {
                             accepted = Some(turn);
+                            drop(reservation.take());
                             let record = if queued {
                                 json!({"type":"follow_up_started","id":id,"turn":turn})
                             } else {
@@ -473,14 +497,7 @@ impl Control {
                     failure(id, "prompt", &error)
                 }
             };
-            let mut terminal = vec![terminal];
-            terminal.extend(
-                task_steering
-                    .take_uncommitted()
-                    .into_iter()
-                    .map(|pending| json!({"type":"uncommitted_steering","input":pending})),
-            );
-            terminal
+            vec![terminal]
         });
         self.active = Some(Active {
             stop,
@@ -549,11 +566,84 @@ mod tests {
             binding,
             active: None,
             follow_ups: VecDeque::new(),
-            queued_bytes: 0,
+            input_budget: InputBudget::default(),
             output,
         };
 
         (control, events, root)
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn steering_accepted_after_task_completion_is_returned_at_join() {
+        let (mut control, _events, root) = fixture();
+        let steering = Arc::new(SteeringInbox::new(
+            control.binding.agent().limits(),
+            control.input_budget.clone(),
+        ));
+        control.active = Some(Active {
+            stop: CancellationToken::new(),
+            steering: Some(steering),
+            task: tokio::spawn(async { vec![json!({"type":"turn_end","status":"completed"})] }),
+        });
+        // The task is complete but the connection has not closed admission yet.
+        let joined = (&mut control.active.as_mut().unwrap().task).await;
+        control
+            .command(br#"{"id":"late","type":"steer","message":"retain me"}"#)
+            .unwrap();
+        let terminal = control.finish_operation(joined).unwrap();
+        assert!(control.active.is_none());
+        assert_eq!(terminal[1]["type"], "uncommitted_steering");
+        assert_eq!(terminal[1]["input"]["content"][0]["Text"], "retain me");
+        drop(control);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn queued_submission_holds_capacity_until_acceptance_or_recovery() {
+        let (mut control, _events, root) = fixture();
+        let session = control.binding.session().clone();
+        let permit = session
+            .begin_user_shell("hold gate".into(), false, CancellationToken::new())
+            .await
+            .unwrap();
+        let input = Message::user_input("queued".into(), []);
+        control.input_budget = InputBudget::new(serde_json::to_vec(&(&input, &())).unwrap().len());
+        let input = control
+            .input_budget
+            .admit(input, &(), control.binding.agent().limits())
+            .unwrap();
+        control
+            .follow_ups
+            .push_back(QueuedFollowUp { id: None, input });
+        control.start_next_follow_up().unwrap();
+        tokio::task::yield_now().await;
+        assert!(matches!(
+            control.input_budget.admit(
+                Message::user_input("x".into(), []),
+                &(),
+                control.binding.agent().limits()
+            ),
+            Err(ion_core::CodingAgentError::InputQueueFull { .. })
+        ));
+        control.active.as_ref().unwrap().stop.cancel();
+        let joined = (&mut control.active.as_mut().unwrap().task).await;
+        let terminal = control.finish_operation(joined).unwrap();
+        assert_eq!(terminal[0]["type"], "follow_up_failed");
+        assert_eq!(terminal[0]["input"]["content"][0]["Text"], "queued");
+        assert!(
+            control
+                .input_budget
+                .admit(
+                    Message::user_input("x".into(), []),
+                    &(),
+                    control.binding.agent().limits()
+                )
+                .is_ok()
+        );
+        drop(permit);
+        drop(session);
+        drop(control);
+        std::fs::remove_dir_all(root).unwrap();
     }
 
     #[tokio::test(flavor = "current_thread")]
