@@ -229,11 +229,7 @@ pub async fn chat(init: ChatInit) -> Result<()> {
                 &mut screen,
                 &mut input,
                 &mut ui,
-                runtime.session(),
-                runtime.agent(),
-                runtime.selected(),
-                runtime.instructions(),
-                runtime.resources(),
+                &runtime,
                 prompt,
                 images,
             )
@@ -261,11 +257,7 @@ pub async fn chat(init: ChatInit) -> Result<()> {
                         &mut screen,
                         &mut input,
                         &mut ui,
-                        runtime.session(),
-                        runtime.agent(),
-                        runtime.selected(),
-                        runtime.instructions(),
-                        runtime.resources(),
+                        &runtime,
                         prompt,
                         images,
                     )
@@ -348,11 +340,7 @@ pub async fn chat(init: ChatInit) -> Result<()> {
                                     &mut screen,
                                     &mut input,
                                     &mut ui,
-                                    runtime.session(),
-                                    runtime.agent(),
-                                    runtime.selected(),
-                                    runtime.instructions(),
-                                    runtime.resources(),
+                                    &runtime,
                                     prompt,
                                     images,
                                 )
@@ -1206,20 +1194,17 @@ async fn run_user_shell(
     Ok(())
 }
 
-#[allow(clippy::too_many_arguments)]
 async fn run_turn(
     terminal: &mut TerminalSession,
     screen: &mut Screen,
     input: &mut InputStream,
     ui: &mut Frontend,
-    session: &CodingSession,
-    agent: &CodingAgent,
-    selected: &Selection,
-    instructions: &str,
-    resources: &Resources,
+    runtime: &ion_host::SessionBinding,
     prompt: String,
     attached: Vec<LoadedImage>,
 ) -> Result<()> {
+    let session = runtime.session();
+    let selected = runtime.selected();
     let model = selected.identity();
     let prior_entry_count = match session.entry_count() {
         Ok(count) => count as usize,
@@ -1242,11 +1227,11 @@ async fn run_turn(
     let mut input_ended = false;
     let mut output_error = None;
     let result = {
-        let turn = agent.submit_message_with_steering(
+        let turn = runtime.agent().submit_message_with_steering(
             session,
             model.clone(),
             user_message,
-            instructions.to_owned(),
+            runtime.instructions().to_owned(),
             stop.clone(),
             &steering,
             move |event| {
@@ -1266,7 +1251,7 @@ async fn run_turn(
                     Some(Ok(InputEvent::Key(key))) if is_clipboard_shortcut(key) && ui.picker.is_none() && ui.details.is_none() => {
                         start_clipboard_paste(ui, selected);
                     },
-                    Some(Ok(InputEvent::Key(key))) => busy_key(ui, key, &stop, Some(&steering), Some(resources)),
+                    Some(Ok(InputEvent::Key(key))) => busy_key(ui, key, &stop, Some(&steering), Some(runtime.resources())),
                     Some(Ok(InputEvent::Paste(text))) => ui.insert(&text),
                     Some(Ok(InputEvent::Resize(size))) => screen.resize(size.columns, size.rows),
                     Some(Ok(InputEvent::Mouse(mouse))) => match mouse.kind() {
