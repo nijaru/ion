@@ -15,7 +15,7 @@ use crate::{
     request::{PreparedRequest, RequestStep},
     session::{ModelContextSnapshot, Session, SessionError, StoredToolActivity, TurnEndReason},
     tool_result::{ToolOutput, ToolResultProjection},
-    tool_set::{ToolActivity, ToolExecution, ToolSet, ToolSource},
+    tool_set::{ToolActivity, ToolDispatch, ToolExecution, ToolSet, ToolSource},
 };
 
 fn user_text(prompt: String) -> Message {
@@ -607,27 +607,16 @@ impl Agent {
         if stop.is_cancelled() {
             return Err(AgentError::Cancelled);
         }
+        crate::input::validate_input(&input, self.limits)?;
         if !self.limits.image_input
-            && (input
-                .content
-                .iter()
-                .any(|part| matches!(part, Content::Image(_)))
-                || session.context_messages()?.iter().any(|message| {
-                    message
-                        .content
-                        .iter()
-                        .any(|part| matches!(part, Content::Image(_)))
-                }))
+            && session.context_messages()?.iter().any(|message| {
+                message
+                    .content
+                    .iter()
+                    .any(|part| matches!(part, Content::Image(_)))
+            })
         {
             return Err(AgentError::ImagesUnsupported);
-        }
-        if input
-            .content
-            .iter()
-            .any(|part| matches!(part, Content::Image(_)))
-            && serde_json::to_vec(&input)?.len() > self.limits.max_request_bytes
-        {
-            return Err(AgentError::ContextTooLarge);
         }
         let (turn, interrupted) = session.begin_turn_message(input, self.model.clone())?;
         observe(AgentEvent::TurnAccepted { turn });
@@ -965,48 +954,29 @@ impl Agent {
                     arguments: call.arguments.clone(),
                     activity: activity.clone(),
                 });
-                let (output, activate) = if call.raw_arguments.is_some() {
-                    (
-                        ToolOutput {
-                            value: serde_json::json!({"error":"tool arguments were not a valid JSON object; submit a corrected call"}),
-                            images: Vec::new(),
-                            is_error: true,
-                        },
-                        Vec::new(),
-                    )
-                } else {
-                    let tool = Box::pin(async {
-                        if let Some((runtime, limits)) = tool_catalog.composition(&call.name)
-                            && tool_catalog.is_declared(&call.name)
-                        {
-                            crate::code_gateway::run(
-                                runtime,
-                                limits,
-                                session,
-                                turn,
-                                tool_catalog,
-                                &call,
-                                stop,
-                                observe,
-                            )
-                            .await
-                            .map(ToolExecution::output)
-                        } else {
-                            Ok(tool_catalog.execute_model_call(&call, stop.clone()).await)
-                        }
-                    });
-                    let execution = self
-                        .execute_tool_with_cache_warming(
+                let tool = Box::pin(async {
+                    match tool_catalog.execute_model_call(&call, stop.clone()) {
+                        ToolDispatch::Composition(runtime, limits) => crate::code_gateway::run(
+                            runtime,
+                            limits,
                             session,
                             turn,
-                            tool,
+                            tool_catalog,
+                            &call,
                             stop,
-                            &mut cache_warmer,
+                            observe,
                         )
-                        .await?;
-                    (execution.output, execution.activate)
-                };
-                activate_tools.extend(activate);
+                        .await
+                        .map(ToolExecution::output),
+                        ToolDispatch::Execution(execution) => Ok(execution.await),
+                        ToolDispatch::Rejected(output) => Ok(ToolExecution::output(output)),
+                    }
+                });
+                let execution = self
+                    .execute_tool_with_cache_warming(session, turn, tool, stop, &mut cache_warmer)
+                    .await?;
+                let output = execution.output;
+                activate_tools.extend(execution.activate);
                 let projection = output
                     .model_projection(self.limits.image_input, self.limits.max_request_bytes)?;
                 let next_context =
@@ -3727,40 +3697,60 @@ mod tests {
 
     #[tokio::test]
     async fn malformed_tool_arguments_return_error_without_dispatch() {
-        struct NeverDispatch;
-        impl ToolSource for NeverDispatch {
+        struct EffectTools(std::path::PathBuf);
+        impl ToolSource for EffectTools {
             fn registrations(self: Arc<Self>) -> Vec<ToolRegistration> {
-                let definitions = { Vec::new() };
-                definitions
-                    .into_iter()
-                    .map(|definition| ToolRegistration::new(definition, self.clone()))
-                    .collect()
+                vec![ToolRegistration::new(
+                    ToolDefinition::external(ToolSpec {
+                        name: "exec".into(),
+                        description: "Record a dispatched effect".into(),
+                        input_schema: serde_json::json!({"type":"object"}),
+                    }),
+                    self,
+                )]
             }
         }
-
-        impl ToolExecutor for NeverDispatch {
+        impl ToolExecutor for EffectTools {
             fn execute<'a>(
                 &'a self,
                 _call: &'a ToolCall,
                 _stop: CancellationToken,
             ) -> BoxFuture<'a, ToolOutput> {
-                Box::pin(async { panic!("malformed call was dispatched") })
+                Box::pin(async move {
+                    std::fs::write(self.0.join("effect"), "dispatched").unwrap();
+                    ToolOutput {
+                        value: serde_json::json!({"written":true}),
+                        images: Vec::new(),
+                        is_error: false,
+                    }
+                })
             }
         }
         let root =
             std::env::temp_dir().join(format!("ion-malformed-call-{}", uuid::Uuid::now_v7()));
         std::fs::create_dir(&root).unwrap();
         let session = CodingSession::create(root.join("session.sqlite"), &root).unwrap();
-        let scripts = Arc::new(ScriptedModelService::new([
-            response(vec![Content::ToolCall(ToolCall {
-                id: "broken".into(),
+        let calls = [
+            ToolCall {
+                id: "raw".into(),
                 name: "exec".into(),
                 arguments: serde_json::json!({}),
-                raw_arguments: Some("{\"command\":\"touch should-not-exist\"".into()),
-            })]),
-            response(vec![Content::Text("I need to correct the call".into())]),
+                raw_arguments: Some("{\"command\":".into()),
+            },
+            ToolCall {
+                id: "array".into(),
+                name: "exec".into(),
+                arguments: serde_json::json!([]),
+                raw_arguments: None,
+            },
+        ];
+        let scripts = Arc::new(ScriptedModelService::new([
+            response(calls.iter().cloned().map(Content::ToolCall).collect()),
+            response(vec![Content::Text("I need to correct the calls".into())]),
         ]));
-        let agent = Agent::new(scripts, Arc::new(NeverDispatch), model());
+        let tools = Arc::new(EffectTools(root.clone()));
+        let catalog = ToolSet::new([tools.clone() as Arc<dyn ToolSource>]).snapshot();
+        let agent = Agent::new(scripts, tools, model());
         agent
             .submit(
                 &session,
@@ -3771,11 +3761,49 @@ mod tests {
             )
             .await
             .unwrap();
-        assert!(!root.join("should-not-exist").exists());
-        assert!(matches!(
-            &session.messages().unwrap()[2].content[0],
-            Content::ToolResult(ToolResult { is_error: true, .. })
-        ));
+        assert!(!root.join("effect").exists());
+        let results = session
+            .messages()
+            .unwrap()
+            .into_iter()
+            .flat_map(|message| message.content)
+            .filter_map(|part| match part {
+                Content::ToolResult(result) => Some(result),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(results.len(), calls.len());
+        assert!(results.iter().all(|result| {
+            result.is_error
+                && result.result["error"]
+                    .as_str()
+                    .is_some_and(|error| error.contains("valid JSON object"))
+        }));
+        for call in &calls {
+            assert!(
+                catalog
+                    .execute(call, CancellationToken::new())
+                    .await
+                    .is_error
+            );
+            assert!(!root.join("effect").exists());
+        }
+        let valid = ToolCall {
+            id: "valid".into(),
+            name: "exec".into(),
+            arguments: serde_json::json!({}),
+            raw_arguments: None,
+        };
+        assert!(
+            !catalog
+                .execute(&valid, CancellationToken::new())
+                .await
+                .is_error
+        );
+        assert_eq!(
+            std::fs::read_to_string(root.join("effect")).unwrap(),
+            "dispatched"
+        );
         drop(session);
         std::fs::remove_dir_all(root).unwrap();
     }
@@ -3993,6 +4021,60 @@ mod tests {
             raw_before + cuts.len()
         );
         drop(reopened);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[tokio::test]
+    async fn oversized_input_is_rejected_before_turn_admission() {
+        let root = std::env::temp_dir().join(format!("ion-input-bound-{}", uuid::Uuid::now_v7()));
+        std::fs::create_dir(&root).unwrap();
+        let session = CodingSession::create(root.join("session.sqlite"), &root).unwrap();
+        let scripts = Arc::new(ScriptedModelService::new([response(vec![Content::Text(
+            "small input accepted".into(),
+        )])]));
+        let agent = Agent::new(scripts.clone(), Arc::new(TestTools::new(&root)), model())
+            .with_limits(AgentLimits {
+                max_request_bytes: 2_048,
+                ..AgentLimits::default()
+            });
+        for prompt in ["x".repeat(2_049), "\0".repeat(400)] {
+            let mut accepted = false;
+            let result = agent
+                .submit(
+                    &session,
+                    prompt,
+                    String::new(),
+                    CancellationToken::new(),
+                    |event| {
+                        accepted |= matches!(event, AgentEvent::TurnAccepted { .. });
+                    },
+                )
+                .await;
+            assert!(matches!(
+                result,
+                Err(AgentError::InputTooLarge {
+                    max_encoded_bytes: 2_048
+                })
+            ));
+            assert!(!accepted);
+            assert!(session.view().unwrap().entries.is_empty());
+            assert!(scripts.requests().is_empty());
+        }
+        assert_eq!(
+            agent
+                .submit(
+                    &session,
+                    "small".into(),
+                    String::new(),
+                    CancellationToken::new(),
+                    |_| {}
+                )
+                .await
+                .unwrap(),
+            "small input accepted"
+        );
+        assert_eq!(scripts.requests().len(), 1);
+        drop(session);
         std::fs::remove_dir_all(root).unwrap();
     }
 

@@ -3,8 +3,8 @@
 Ion is an unreleased Rust coding agent for a local working directory. It has
 one coding loop for terminal chat, headless prompts and Rust library hosts. The
 agent can read, edit and write files and run a native shell command. Sessions
-are saved in SQLite and continue across launches. Ion is usable for short
-coding tasks; its session and model controls are still simpler than Pi's.
+are saved in SQLite and continue across launches. Ion is experimental;
+everyday coding reliability is not yet qualified.
 
 ## Start
 
@@ -55,7 +55,9 @@ ion --continue compact     # summarize old context; retain the raw Session
 `--cwd PATH` chooses a working directory. By default, a run starts a new
 session; `--continue` reopens the most recently active one in that directory.
 `--session ID` selects a listed session, and `--session PATH` can create or
-open an exact SQLite path for scripts. Opening and quitting an empty chat does
+open an exact SQLite path for scripts. Session paths are canonicalized so
+symbolic links share the same writer lock. Hard-linked databases are rejected;
+use clone or fork to copy a conversation. Opening and quitting an empty chat does
 not displace the latest conversation in `--continue` or `sessions`. An
 existing session uses its recorded directory, and an explicit `--cwd` must
 match it. Headless runs print the

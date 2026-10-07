@@ -3,7 +3,7 @@
 use std::{
     collections::BTreeSet,
     fs::{self, File, OpenOptions},
-    os::unix::fs::OpenOptionsExt,
+    os::unix::fs::{MetadataExt, OpenOptionsExt},
     path::{Path, PathBuf},
     sync::Mutex,
     time::Duration,
@@ -652,8 +652,9 @@ impl Session {
             .create_new(true)
             .mode(0o600)
             .open(path)?;
-        let lock = lock(path)?;
-        let mut connection = Connection::open(path)?;
+        let path = database_path(path)?;
+        let lock = lock(&path)?;
+        let mut connection = Connection::open(&path)?;
         initialize_new(&connection)?;
         let header = Header {
             version: FORMAT_VERSION,
@@ -676,18 +677,15 @@ impl Session {
             }),
             _lock: lock,
             header,
-            path: path.to_owned(),
+            path,
             submit_gate: AsyncMutex::new(()),
         })
     }
 
     pub fn open(path: impl AsRef<Path>) -> Result<Self, SessionError> {
-        let path = path.as_ref();
-        if !path.is_file() {
-            return Err(SessionError::NotFound);
-        }
-        let lock = lock(path)?;
-        let connection = Connection::open(path)?;
+        let path = database_path(path.as_ref())?;
+        let lock = lock(&path)?;
+        let connection = Connection::open(&path)?;
         configure_connection(&connection)?;
         let header = read_header(&connection)?;
         let (state, settled, messages) = project(&read_entries(&connection)?)?;
@@ -701,7 +699,7 @@ impl Session {
             }),
             _lock: lock,
             header,
-            path: path.to_owned(),
+            path,
             submit_gate: AsyncMutex::new(()),
         })
     }
@@ -753,14 +751,20 @@ impl Session {
             append(&mut target, entries)
         };
         if let Err(error) = copied {
-            drop(clone);
+            let Self {
+                store, _lock, path, ..
+            } = clone;
+            // Close SQLite before unlinking its files, but keep exclusive custody
+            // through cleanup. Never unlink the lock inode: contenders may have
+            // opened it already and must not acquire a different lease afterward.
+            drop(store);
             for suffix in ["-wal", "-shm"] {
                 let mut sidecar = path.as_os_str().to_os_string();
                 sidecar.push(suffix);
                 let _ = fs::remove_file(PathBuf::from(sidecar));
             }
-            let _ = fs::remove_file(path.with_extension("lock"));
             let _ = fs::remove_file(path);
+            drop(_lock);
             return Err(error);
         }
         Ok(clone)
@@ -768,6 +772,7 @@ impl Session {
 
     /// Read persisted facts without taking write ownership or repairing history.
     pub fn inspect(path: impl AsRef<Path>) -> Result<SessionView, SessionError> {
+        let path = database_path(path.as_ref())?;
         let connection = Connection::open_with_flags(path, OpenFlags::SQLITE_OPEN_READ_ONLY)?;
         let header = read_header(&connection)?;
         let entries = read_entries(&connection)?;
@@ -1941,13 +1946,36 @@ fn initialize_new(connection: &Connection) -> Result<(), SessionError> {
     Ok(())
 }
 
+fn database_path(path: &Path) -> Result<PathBuf, SessionError> {
+    let path = path.canonicalize().map_err(|error| {
+        if error.kind() == std::io::ErrorKind::NotFound {
+            SessionError::NotFound
+        } else {
+            SessionError::Io(error)
+        }
+    })?;
+    let metadata = fs::metadata(&path)?;
+    if !metadata.is_file() {
+        return Err(SessionError::NotFound);
+    }
+    // SQLite resolves symlinks, but cannot unify hard-linked journal/WAL names.
+    // Reject those aliases rather than claiming lock normalization makes them safe.
+    // https://www.sqlite.org/howtocorrupt.html#multiple_links_to_the_same_file
+    if metadata.nlink() != 1 {
+        return Err(SessionError::HardLinkedDatabase);
+    }
+    Ok(path)
+}
+
 fn lock(path: &Path) -> Result<SessionLock, SessionError> {
+    let mut sidecar = path.as_os_str().to_os_string();
+    sidecar.push(".lock");
     let file = OpenOptions::new()
         .write(true)
         .create(true)
         .truncate(false)
         .mode(0o600)
-        .open(path.with_extension("lock"))?;
+        .open(PathBuf::from(sidecar))?;
     flock(&file, FlockOperation::NonBlockingLockExclusive).map_err(|error| {
         if error == rustix::io::Errno::WOULDBLOCK {
             SessionError::AlreadyOpen
@@ -1964,6 +1992,8 @@ pub enum SessionError {
     NotFound,
     #[error("session is already open for writing")]
     AlreadyOpen,
+    #[error("hard-linked session databases are unsupported; use Session clone or fork")]
+    HardLinkedDatabase,
     #[error("invalid session path")]
     InvalidPath,
     #[error("invalid working directory")]
@@ -2688,6 +2718,114 @@ mod tests {
         ));
         assert!(matches!(entries[4], SessionEntry::TurnStarted { .. }));
         drop(reopened);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn session_aliases_share_writer_identity_and_copies_normalize_paths() {
+        use std::os::unix::fs::symlink;
+
+        let (root, path) = fixture();
+        let directory_alias = root.join("alias");
+        symlink(&root, &directory_alias).unwrap();
+        let file_alias = root.join("alias.sqlite");
+        let session = Session::create(&path, &root).unwrap();
+        symlink(&path, &file_alias).unwrap();
+        for alias in [&file_alias, &directory_alias.join("session.sqlite")] {
+            assert!(matches!(
+                Session::open(alias),
+                Err(SessionError::AlreadyOpen)
+            ));
+        }
+        drop(session);
+        let session = Session::open(&file_alias).unwrap();
+        assert_eq!(session.path(), path.canonicalize().unwrap());
+        assert!(matches!(
+            Session::open(&path),
+            Err(SessionError::AlreadyOpen)
+        ));
+        let copied = session
+            .clone_to(directory_alias.join("copy.sqlite"))
+            .unwrap();
+        assert_eq!(
+            copied.path(),
+            root.join("copy.sqlite").canonicalize().unwrap()
+        );
+        assert!(matches!(
+            Session::open(root.join("copy.sqlite")),
+            Err(SessionError::AlreadyOpen)
+        ));
+        drop(copied);
+        drop(session);
+        drop(Session::open(&path).unwrap());
+        fs::remove_file(directory_alias).unwrap();
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn hard_linked_databases_are_rejected_before_sqlite_access() {
+        let (root, path) = fixture();
+        drop(Session::create(&path, &root).unwrap());
+        let alias = root.join("hard.sqlite");
+        fs::hard_link(&path, &alias).unwrap();
+        for name in [&path, &alias] {
+            assert!(matches!(
+                Session::open(name),
+                Err(SessionError::HardLinkedDatabase)
+            ));
+            assert!(matches!(
+                Session::inspect(name),
+                Err(SessionError::HardLinkedDatabase)
+            ));
+        }
+        fs::remove_file(alias).unwrap();
+        drop(Session::open(&path).unwrap());
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn distinct_database_extensions_do_not_share_a_writer_lock() {
+        let (root, path) = fixture();
+        let first = Session::create(&path, &root).unwrap();
+        let second = Session::create(path.with_extension("db"), &root).unwrap();
+        drop(second);
+        drop(first);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn failed_copy_retains_lock_identity_for_waiting_writers() {
+        let (root, path) = fixture();
+        let source = Session::create(&path, &root).unwrap();
+        let destination = root.join("copy.sqlite");
+        // A contender can open the lock inode before actually requesting its lease.
+        let waiting = OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(root.join("copy.sqlite.lock"))
+            .unwrap();
+        assert!(
+            source
+                .copy_entries_to(
+                    &destination,
+                    &[SessionEntry::TurnEnded {
+                        turn: 1,
+                        reason: TurnEndReason::Completed,
+                    }]
+                )
+                .is_err()
+        );
+        assert!(!destination.exists());
+        let writer = Session::create(&destination, &root).unwrap();
+        assert_eq!(
+            flock(&waiting, FlockOperation::NonBlockingLockExclusive),
+            Err(rustix::io::Errno::WOULDBLOCK)
+        );
+        drop(writer);
+        flock(&waiting, FlockOperation::NonBlockingLockExclusive).unwrap();
+        flock(&waiting, FlockOperation::Unlock).unwrap();
+        drop(waiting);
+        drop(source);
         fs::remove_dir_all(root).unwrap();
     }
 

@@ -140,6 +140,23 @@ impl ToolExecution {
     }
 }
 
+pub(crate) enum ToolDispatch<'a> {
+    Rejected(ToolOutput),
+    Execution(BoxFuture<'a, ToolExecution>),
+    Composition(&'a Arc<dyn crate::CodeRuntime>, crate::CodeLimits),
+}
+
+impl ToolDispatch<'_> {
+    fn rejected(error: impl Into<String>) -> Self {
+        let output = ToolOutput {
+            value: serde_json::json!({"error": error.into()}),
+            images: Vec::new(),
+            is_error: true,
+        };
+        Self::Rejected(output)
+    }
+}
+
 const TOOL_SEARCH_NAME: &str = "tool_search";
 const DEFAULT_TOOL_SEARCH_LIMIT: usize = 5;
 const MAX_TOOL_SEARCH_LIMIT: usize = 10;
@@ -411,21 +428,6 @@ impl ToolCatalog {
             .collect()
     }
 
-    pub(crate) fn composition(
-        &self,
-        name: &str,
-    ) -> Option<(&Arc<dyn crate::CodeRuntime>, crate::CodeLimits)> {
-        match self
-            .positions
-            .get(name)
-            .and_then(|index| self.entries.get(*index))
-            .map(|entry| &entry.route)
-        {
-            Some(ToolRoute::Composition(runtime, limits)) => Some((runtime, *limits)),
-            _ => None,
-        }
-    }
-
     pub(crate) fn is_intrinsic(&self, name: &str) -> bool {
         self.positions
             .get(name)
@@ -450,8 +452,18 @@ impl ToolCatalog {
         call: &'a ToolCall,
         stop: CancellationToken,
     ) -> BoxFuture<'a, ToolOutput> {
-        let execution = self.dispatch(call, stop);
-        Box::pin(async move { execution.await.output })
+        let dispatch = self.dispatch(call, stop);
+        Box::pin(async move {
+            match dispatch {
+                ToolDispatch::Rejected(output) => output,
+                ToolDispatch::Execution(execution) => execution.await.output,
+                ToolDispatch::Composition(..) => ToolOutput {
+                    value: serde_json::json!({"error":"code_mode requires the Session effect gateway"}),
+                    images: Vec::new(),
+                    is_error: true,
+                },
+            }
+        })
     }
 
     /// Execute a model-issued call only when its definition was part of this
@@ -460,26 +472,22 @@ impl ToolCatalog {
         &'a self,
         call: &'a ToolCall,
         stop: CancellationToken,
-    ) -> BoxFuture<'a, ToolExecution> {
+    ) -> ToolDispatch<'a> {
         if !self.is_declared(&call.name) {
-            return Box::pin(async move {
-                ToolExecution::output(ToolOutput {
-                    value: serde_json::json!({
-                        "error": format!("tool was not declared for this request: {}", call.name)
-                    }),
-                    images: Vec::new(),
-                    is_error: true,
-                })
-            });
+            return ToolDispatch::rejected(format!(
+                "tool was not declared for this request: {}",
+                call.name
+            ));
         }
         self.dispatch(call, stop)
     }
 
-    fn dispatch<'a>(
-        &'a self,
-        call: &'a ToolCall,
-        stop: CancellationToken,
-    ) -> BoxFuture<'a, ToolExecution> {
+    fn dispatch<'a>(&'a self, call: &'a ToolCall, stop: CancellationToken) -> ToolDispatch<'a> {
+        if call.raw_arguments.is_some() || !call.arguments.is_object() {
+            return ToolDispatch::rejected(
+                "tool arguments were not a valid JSON object; submit a corrected call",
+            );
+        }
         match self
             .positions
             .get(&call.name)
@@ -490,32 +498,22 @@ impl ToolCatalog {
                 ..
             }) => {
                 let execution = self.search_deferred(call);
-                Box::pin(async move { execution })
+                ToolDispatch::Execution(Box::pin(async move { execution }))
             }
             Some(RoutedTool {
                 route: ToolRoute::Executor(executor),
                 ..
             }) => {
                 let future = executor.execute(call, stop);
-                Box::pin(async move { ToolExecution::output(future.await) })
+                ToolDispatch::Execution(Box::pin(
+                    async move { ToolExecution::output(future.await) },
+                ))
             }
             Some(RoutedTool {
-                route: ToolRoute::Composition(..),
+                route: ToolRoute::Composition(runtime, limits),
                 ..
-            }) => Box::pin(async {
-                ToolExecution::output(ToolOutput {
-                    value: serde_json::json!({"error":"code_mode requires the Session effect gateway"}),
-                    images: Vec::new(),
-                    is_error: true,
-                })
-            }),
-            None => Box::pin(async move {
-                ToolExecution::output(ToolOutput {
-                    value: serde_json::json!({"error":format!("unknown tool: {}",call.name)}),
-                    images: Vec::new(),
-                    is_error: true,
-                })
-            }),
+            }) => ToolDispatch::Composition(runtime, *limits),
+            None => ToolDispatch::rejected(format!("unknown tool: {}", call.name)),
         }
     }
 
@@ -770,10 +768,11 @@ mod tests {
             catalog.execute(&call, CancellationToken::new()).await.value,
             json!("deferred")
         );
-        let model_result = catalog
-            .execute_model_call(&call, CancellationToken::new())
-            .await
-            .output;
+        let ToolDispatch::Rejected(model_result) =
+            catalog.execute_model_call(&call, CancellationToken::new())
+        else {
+            panic!("an undeclared model call must be rejected");
+        };
         assert!(model_result.is_error);
         assert_eq!(
             model_result.value["error"],
@@ -784,17 +783,18 @@ mod tests {
     #[tokio::test]
     async fn tool_search_loads_matching_deferred_capabilities_for_next_request() {
         let catalog = ToolSet::new([Arc::new(MixedForRestore) as Arc<dyn ToolSource>]).snapshot();
-        let execution = catalog
-            .execute_model_call(
-                &ToolCall {
-                    id: "search".into(),
-                    name: TOOL_SEARCH_NAME.into(),
-                    arguments: json!({"query":"deferred"}),
-                    raw_arguments: None,
-                },
-                CancellationToken::new(),
-            )
-            .await;
+        let call = ToolCall {
+            id: "search".into(),
+            name: TOOL_SEARCH_NAME.into(),
+            arguments: json!({"query":"deferred"}),
+            raw_arguments: None,
+        };
+        let ToolDispatch::Execution(execution) =
+            catalog.execute_model_call(&call, CancellationToken::new())
+        else {
+            panic!("tool search cannot select the composition gateway");
+        };
+        let execution = execution.await;
         assert!(!execution.output.is_error);
         assert_eq!(execution.activate, ["deferred"]);
         assert_eq!(execution.output.value["count"], 1);
