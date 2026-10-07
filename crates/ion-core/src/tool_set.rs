@@ -141,19 +141,14 @@ impl ToolExecution {
 }
 
 pub(crate) enum ToolDispatch<'a> {
-    Rejected(ToolOutput),
+    Rejected(String),
     Execution(BoxFuture<'a, ToolExecution>),
     Composition(&'a Arc<dyn crate::CodeRuntime>, crate::CodeLimits),
 }
 
 impl ToolDispatch<'_> {
     fn rejected(error: impl Into<String>) -> Self {
-        let output = ToolOutput {
-            value: serde_json::json!({"error": error.into()}),
-            images: Vec::new(),
-            is_error: true,
-        };
-        Self::Rejected(output)
+        Self::Rejected(error.into())
     }
 }
 
@@ -455,7 +450,9 @@ impl ToolCatalog {
         let dispatch = self.dispatch(call, stop);
         Box::pin(async move {
             match dispatch {
-                ToolDispatch::Rejected(output) => output,
+                ToolDispatch::Rejected(reason) => crate::ToolOutcome::NotDispatched { reason }
+                    .inspection_output()
+                    .into_owned(),
                 ToolDispatch::Execution(execution) => execution.await.output,
                 ToolDispatch::Composition(..) => ToolOutput {
                     value: serde_json::json!({"error":"code_mode requires the Session effect gateway"}),
@@ -504,10 +501,11 @@ impl ToolCatalog {
                 route: ToolRoute::Executor(executor),
                 ..
             }) => {
-                let future = executor.execute(call, stop);
-                ToolDispatch::Execution(Box::pin(
-                    async move { ToolExecution::output(future.await) },
-                ))
+                // Selecting a frozen route grants no host authority. Even an
+                // executor's synchronous constructor runs only when polled.
+                ToolDispatch::Execution(Box::pin(async move {
+                    ToolExecution::output(executor.execute(call, stop).await)
+                }))
             }
             Some(RoutedTool {
                 route: ToolRoute::Composition(runtime, limits),
@@ -773,9 +771,8 @@ mod tests {
         else {
             panic!("an undeclared model call must be rejected");
         };
-        assert!(model_result.is_error);
         assert_eq!(
-            model_result.value["error"],
+            model_result,
             "tool was not declared for this request: deferred"
         );
     }

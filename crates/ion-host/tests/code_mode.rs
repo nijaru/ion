@@ -486,7 +486,7 @@ async fn guest_failure_retains_prior_mutation_and_deadline_settles_native_captur
         .unwrap();
         assert_eq!(fs::read_to_string(root.0.join("effect")).unwrap(), "kept");
         let view = session.view().unwrap();
-        assert!(view.entries.iter().any(|entry| matches!(entry, SessionEntry::ToolResult { result, .. } if result.name == "code_mode" && result.is_error)));
+        assert!(view.entries.iter().any(|entry| matches!(entry, SessionEntry::ToolResult { result, .. } if result.name == "code_mode" && matches!(&result.outcome, ion_core::ToolOutcome::Observed { output, .. } if output.is_error))));
         assert!(view.entries.iter().any(|entry| matches!(entry, SessionEntry::ChildToolResult { outcome: ChildOutcome::Observed { output }, .. } if if timeout { output.value["cancelled"] == true && output.value["stdout"].as_str().unwrap().contains("BEFORE_DEADLINE") } else { !output.is_error })));
         assert_eq!(model.requests().len(), 2);
     }
@@ -607,7 +607,7 @@ async fn reply_and_audit_budgets_preserve_observations_and_stop_dependents() {
         if audit_admission_bytes == 8192 {
             assert!(view.entries.iter().any(|entry| matches!(entry,
                 SessionEntry::ToolResult { result, .. }
-                if result.is_error && result.result["error"].as_str().is_some_and(|error| error.contains("audit admission byte limit"))
+                if matches!(&result.outcome, ion_core::ToolOutcome::Observed { output, .. } if output.is_error && output.value["error"].as_str().is_some_and(|error| error.contains("audit admission byte limit")))
             )));
         }
         assert!(!root.0.join("dependent").exists());

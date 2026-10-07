@@ -32,7 +32,9 @@ pub use composition::{
     ChildIntent, ChildOutcome, CodeLimits, CodeReply, CodeRequest, CodeRequestKind, CodeRuntime,
     CodeTask, ToolOccurrence,
 };
-pub use tool_result::{ToolOutput as CodingToolOutput, ToolResultProjection};
+pub use tool_result::{
+    ToolOutcome, ToolOutput as CodingToolOutput, ToolResultProjection, ToolSettlement,
+};
 
 pub use transcript::{
     ActivityGroup, ActivityResult, ActivityState, LiveTranscript, TranscriptActivity,

@@ -5,6 +5,9 @@ use serde_json::{Value, json};
 pub(super) fn event_record(event: CodingAgentEvent) -> Value {
     match event {
         CodingAgentEvent::TurnAccepted { turn } => json!({"type":"turn_accepted","turn":turn}),
+        CodingAgentEvent::TurnEnded { turn, reason } => {
+            json!({"type":"turn_ended","turn":turn,"reason":reason})
+        }
         CodingAgentEvent::ModelOutputObserved => json!({"type":"model_output_observed"}),
         CodingAgentEvent::TextDelta(text) => json!({"type":"text_delta","text":text}),
         CodingAgentEvent::ThinkingDelta { block, text } => {
@@ -40,18 +43,16 @@ pub(super) fn event_record(event: CodingAgentEvent) -> Value {
             call_id,
             name,
             activity,
-            output,
-            projection,
+            outcome,
         } => {
-            json!({"type":"tool_finished","call_id":call_id,"name":name,"activity":activity,"output":output.value,"image_mime_types":output.images.iter().map(|image| image.mime_type().as_str()).collect::<Vec<_>>(),"is_error":output.is_error,"model_projection":projection})
-        }
-        CodingAgentEvent::ToolRejected {
-            call_id,
-            name,
-            activity,
-            output,
-        } => {
-            json!({"type":"tool_rejected","call_id":call_id,"name":name,"activity":activity,"output":output.value,"is_error":output.is_error})
+            let state = match &outcome {
+                ion_core::ToolOutcome::Observed { .. } => "observed",
+                ion_core::ToolOutcome::NotDispatched { .. } => "not_dispatched",
+                ion_core::ToolOutcome::Unknown => "unknown",
+            };
+            let projection = outcome.projection();
+            let output = outcome.inspection_output();
+            json!({"type":"tool_finished","call_id":call_id,"name":name,"activity":activity,"state":state,"output":output.value,"image_mime_types":output.images.iter().map(|image| image.mime_type().as_str()).collect::<Vec<_>>(),"is_error":output.is_error,"model_projection":projection})
         }
         CodingAgentEvent::ChildToolAdmitted {
             parent_call_id,
@@ -103,26 +104,25 @@ pub(super) fn diagnostic(event: CodingAgentEvent) -> Option<String> {
             delay_ms,
         } => format!("[provider retry {attempt}/{max_retries} in {delay_ms}ms]"),
         CodingAgentEvent::ToolStarted { name, .. } => format!("[tool: {name}]"),
-        CodingAgentEvent::ToolFinished {
-            name,
-            output,
-            projection,
-            ..
-        } => {
-            let mut text = output_diagnostic(&format!("tool: {name}"), output);
-            if let Some(notice) = projection.notice() {
+        CodingAgentEvent::ToolFinished { name, outcome, .. } => {
+            let label = match &outcome {
+                ion_core::ToolOutcome::Observed { .. } => "tool",
+                ion_core::ToolOutcome::NotDispatched { .. } => "tool skipped",
+                ion_core::ToolOutcome::Unknown => "tool effect unknown",
+            };
+            let projection = outcome.projection();
+            let mut text =
+                output_diagnostic(&format!("{label}: {name}"), &outcome.inspection_output());
+            if let Some(notice) = projection.and_then(ion_core::ToolResultProjection::notice) {
                 text.push_str(&format!("\n[tool: {name}] {notice}"));
             }
             text
-        }
-        CodingAgentEvent::ToolRejected { name, output, .. } => {
-            output_diagnostic(&format!("tool skipped: {name}"), output)
         }
         CodingAgentEvent::ChildToolAdmitted { intent, .. } => {
             format!("[child tool: {}]", intent.call.name)
         }
         CodingAgentEvent::ChildToolFinished { outcome, .. } => {
-            output_diagnostic("child result", outcome.inspection_output())
+            output_diagnostic("child result", &outcome.inspection_output())
         }
         CodingAgentEvent::InterruptedCalls(count) => {
             format!("[recovered {count} incomplete tool call(s); effects unknown]")
@@ -139,6 +139,7 @@ pub(super) fn diagnostic(event: CodingAgentEvent) -> Option<String> {
         CodingAgentEvent::ResponseRestarted => "[incomplete response discarded; retrying]".into(),
         CodingAgentEvent::ToolCatalogWarning(message) => format!("[tool catalog: {message}]"),
         CodingAgentEvent::TurnAccepted { .. }
+        | CodingAgentEvent::TurnEnded { .. }
         | CodingAgentEvent::ModelOutputObserved
         | CodingAgentEvent::TextDelta(_)
         | CodingAgentEvent::ThinkingDelta { .. }
@@ -160,7 +161,7 @@ pub(super) fn diagnostic(event: CodingAgentEvent) -> Option<String> {
     )
 }
 
-fn output_diagnostic(label: &str, output: ion_core::CodingToolOutput) -> String {
+fn output_diagnostic(label: &str, output: &ion_core::CodingToolOutput) -> String {
     let mut text = format!("[{label}] {}", output.value);
     for image in &output.images {
         text.push_str(&format!(

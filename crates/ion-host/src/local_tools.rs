@@ -1183,13 +1183,16 @@ mod tests {
                     _ => None,
                 })
                 .unwrap();
+            let ion_core::ToolOutcome::Observed { output, .. } = &output.outcome else {
+                panic!("missing observed cancellation")
+            };
             assert_eq!(
-                output.result["cancelled"], true,
+                output.value["cancelled"], true,
                 "must record observed cancellation, not a synthetic unknown effect: {output:?}"
             );
-            assert_eq!(output.result["stdout"], "OBSERVED_BEFORE_CANCEL\n");
-            assert!(output.result["exit_code"].is_number() || output.result["signal"].is_number());
-            assert!(events.iter().any(|event| matches!(event, CodingAgentEvent::ToolFinished { output, .. } if output.value["cancelled"] == true)));
+            assert_eq!(output.value["stdout"], "OBSERVED_BEFORE_CANCEL\n");
+            assert!(output.value["exit_code"].is_number() || output.value["signal"].is_number());
+            assert!(events.iter().any(|event| matches!(event, CodingAgentEvent::ToolFinished { outcome: ion_core::ToolOutcome::Observed { output, .. }, .. } if output.value["cancelled"] == true)));
             assert!(matches!(
                 view.entries.last(),
                 Some(SessionEntry::TurnEnded {

@@ -7,7 +7,7 @@ use serde_json::Value;
 use crate::{
     agent::AgentEvent,
     session::{SessionEntry, SessionView},
-    tool_result::{ToolOutput, ToolResultProjection},
+    tool_result::ToolResultProjection,
     tool_set::ToolActivity,
 };
 
@@ -40,7 +40,8 @@ pub enum ActivityState {
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct ActivityResult {
-    pub projection: ToolResultProjection,
+    /// Only observed top-level output has a route delivery decision.
+    pub projection: Option<ToolResultProjection>,
     pub value: Value,
     pub image_mime_types: Vec<String>,
     pub is_error: bool,
@@ -139,25 +140,8 @@ impl TranscriptProjection {
                     outcome,
                     ..
                 } => builder.push_child_result(*parent, *child, outcome),
-                SessionEntry::ToolResult {
-                    turn,
-                    result,
-                    projection,
-                } => {
-                    builder.push_result(
-                        *turn,
-                        &result.call_id,
-                        ActivityResult {
-                            projection: *projection,
-                            value: result.result.clone(),
-                            image_mime_types: result
-                                .images
-                                .iter()
-                                .map(|image| image.mime_type().as_str().to_owned())
-                                .collect(),
-                            is_error: result.is_error,
-                        },
-                    );
+                SessionEntry::ToolResult { turn, result } => {
+                    builder.push_outcome(*turn, &result.call_id, &result.outcome);
                 }
                 SessionEntry::UserShellAdmitted {
                     command,
@@ -298,12 +282,21 @@ impl TranscriptBuilder {
         &mut group.activities[activity_index]
     }
 
-    fn push_result(&mut self, turn: u64, call_id: &str, result: ActivityResult) {
+    fn push_outcome(&mut self, turn: u64, call_id: &str, outcome: &crate::ToolOutcome) {
+        let output = outcome.inspection_output();
+        let state = match outcome {
+            crate::ToolOutcome::Observed { .. } => result_state(output.is_error, &output.value),
+            crate::ToolOutcome::NotDispatched { .. } => ActivityState::Rejected,
+            crate::ToolOutcome::Unknown => ActivityState::Unknown,
+        };
         let activity = self.activity_mut(turn, call_id);
-        if activity.state != ActivityState::Rejected {
-            activity.state = result_state(result.is_error, &result.value);
-        }
-        activity.result = Some(result);
+        activity.state = state;
+        activity.result = Some(activity_result(
+            output.value.clone(),
+            &output.images,
+            output.is_error,
+            outcome.projection(),
+        ));
     }
 
     fn parent_mut(&mut self, parent: crate::ToolOccurrence) -> &mut TranscriptActivity {
@@ -348,7 +341,12 @@ impl TranscriptBuilder {
             crate::ChildOutcome::NotDispatched { .. } => ActivityState::Rejected,
             crate::ChildOutcome::Unknown => ActivityState::Unknown,
         };
-        activity.result = Some(live_result(output, ToolResultProjection::Observed));
+        activity.result = Some(activity_result(
+            output.value,
+            &output.images,
+            output.is_error,
+            None,
+        ));
     }
 
     fn ensure_group(&mut self, turn: u64, open: bool) -> usize {
@@ -423,16 +421,20 @@ fn result_state(is_error: bool, value: &Value) -> ActivityState {
     ActivityState::Failed
 }
 
-fn live_result(output: ToolOutput, projection: ToolResultProjection) -> ActivityResult {
+fn activity_result(
+    value: Value,
+    images: &[ion_ai::ImageContent],
+    is_error: bool,
+    projection: Option<ToolResultProjection>,
+) -> ActivityResult {
     ActivityResult {
         projection,
-        value: output.value,
-        image_mime_types: output
-            .images
+        value,
+        image_mime_types: images
             .iter()
             .map(|image| image.mime_type().as_str().to_owned())
             .collect(),
-        is_error: output.is_error,
+        is_error,
     }
 }
 
@@ -539,24 +541,10 @@ impl LiveTranscript {
                 activity.state = ActivityState::Running;
             }
             AgentEvent::ToolFinished {
-                call_id,
-                output,
-                projection,
-                ..
+                call_id, outcome, ..
             } => {
                 let turn = self.turn.expect("tool progress follows TurnAccepted");
-                self.builder
-                    .push_result(turn, &call_id, live_result(output, projection));
-            }
-            AgentEvent::ToolRejected {
-                call_id, output, ..
-            } => {
-                let turn = self.turn.expect("tool progress follows TurnAccepted");
-                self.builder.push_result(
-                    turn,
-                    &call_id,
-                    live_result(output, ToolResultProjection::Observed),
-                );
+                self.builder.push_outcome(turn, &call_id, &outcome);
             }
             AgentEvent::ChildToolAdmitted {
                 parent_call_id,
@@ -578,6 +566,7 @@ impl LiveTranscript {
                 child,
                 outcome,
             } => self.builder.push_child_result(parent, child, &outcome),
+            AgentEvent::TurnEnded { .. } => self.builder.close_group(),
             AgentEvent::InterruptedCalls(count) => self.note(format!(
                 "{count} previous tool call(s) had unknown effects; inspect before retrying"
             )),
@@ -680,6 +669,7 @@ impl LiveTranscript {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::tool_result::ToolOutput;
     use ion_ai::{
         ModelExecution, ModelRef, ModelRoute, ModelRouteReason, Role, ToolCall, ToolResult, Usage,
     };
@@ -763,30 +753,34 @@ mod tests {
                     vec![call("a", "read", serde_json::json!({"path":"a.rs"}))],
                 ),
                 SessionEntry::ToolResult {
-                    projection: crate::ToolResultProjection::Observed,
                     turn: 1,
-                    result: ToolResult {
-                        call_id: "a".into(),
-                        name: "read".into(),
-                        result: serde_json::json!({"path":"a.rs"}),
-                        images: Vec::new(),
-                        is_error: false,
-                    },
+                    result: crate::ToolSettlement::observed(
+                        ToolResult {
+                            call_id: "a".into(),
+                            name: "read".into(),
+                            result: serde_json::json!({"path":"a.rs"}),
+                            images: Vec::new(),
+                            is_error: false,
+                        },
+                        crate::ToolResultProjection::Observed,
+                    ),
                 },
                 assistant(
                     1,
                     vec![call("b", "edit", serde_json::json!({"path":"b.rs"}))],
                 ),
                 SessionEntry::ToolResult {
-                    projection: crate::ToolResultProjection::Observed,
                     turn: 1,
-                    result: ToolResult {
-                        call_id: "b".into(),
-                        name: "edit".into(),
-                        result: serde_json::json!({"path":"b.rs","replacements":1}),
-                        images: Vec::new(),
-                        is_error: false,
-                    },
+                    result: crate::ToolSettlement::observed(
+                        ToolResult {
+                            call_id: "b".into(),
+                            name: "edit".into(),
+                            result: serde_json::json!({"path":"b.rs","replacements":1}),
+                            images: Vec::new(),
+                            is_error: false,
+                        },
+                        crate::ToolResultProjection::Observed,
+                    ),
                 },
                 assistant(
                     1,
@@ -796,15 +790,17 @@ mod tests {
                     ],
                 ),
                 SessionEntry::ToolResult {
-                    projection: crate::ToolResultProjection::Observed,
                     turn: 1,
-                    result: ToolResult {
-                        call_id: "c".into(),
-                        name: "read".into(),
-                        result: serde_json::json!({"path":"c.rs"}),
-                        images: Vec::new(),
-                        is_error: false,
-                    },
+                    result: crate::ToolSettlement::observed(
+                        ToolResult {
+                            call_id: "c".into(),
+                            name: "read".into(),
+                            result: serde_json::json!({"path":"c.rs"}),
+                            images: Vec::new(),
+                            is_error: false,
+                        },
+                        crate::ToolResultProjection::Observed,
+                    ),
                 },
                 assistant(1, vec![Content::Text("Done.".into())]),
                 SessionEntry::TurnEnded {
@@ -896,14 +892,16 @@ mod tests {
         assert_eq!(group.activities[0].arguments["path"], "a");
         assert_eq!(group.activities[1].state, ActivityState::Queued);
         live.observe(AgentEvent::ToolFinished {
-            projection: crate::ToolResultProjection::Observed,
             call_id: "first".into(),
             name: "read".into(),
             activity: ToolActivity::external("read"),
-            output: ToolOutput {
-                value: serde_json::json!({"content":"observed"}),
-                images: vec![],
-                is_error: false,
+            outcome: crate::ToolOutcome::Observed {
+                projection: crate::ToolResultProjection::Observed,
+                output: ToolOutput {
+                    value: serde_json::json!({"content":"observed"}),
+                    images: vec![],
+                    is_error: false,
+                },
             },
         });
         let TranscriptItem::ActivityGroup(group) = &live.projection().items[0] else {
@@ -926,17 +924,19 @@ mod tests {
             )],
         ));
         live.observe(AgentEvent::ToolFinished {
-            projection: crate::ToolResultProjection::Observed,
             call_id: "read-1".into(),
             name: "read".into(),
             activity: ToolActivity {
                 kind: ToolActivityKind::Read,
                 subject: Some("src/lib.rs".into()),
             },
-            output: ToolOutput {
-                value: serde_json::json!({"path":"src/lib.rs"}),
-                images: Vec::new(),
-                is_error: false,
+            outcome: crate::ToolOutcome::Observed {
+                projection: crate::ToolResultProjection::Observed,
+                output: ToolOutput {
+                    value: serde_json::json!({"path":"src/lib.rs"}),
+                    images: Vec::new(),
+                    is_error: false,
+                },
             },
         });
         live.observe(AgentEvent::TextDelta("discard me".into()));
@@ -1026,17 +1026,19 @@ mod tests {
             vec![call("one", "read", serde_json::json!({"path":"one.rs"}))],
         ));
         live.observe(AgentEvent::ToolFinished {
-            projection: crate::ToolResultProjection::Observed,
             call_id: "one".into(),
             name: "read".into(),
             activity: ToolActivity {
                 kind: ToolActivityKind::Read,
                 subject: Some("one.rs".into()),
             },
-            output: ToolOutput {
-                value: serde_json::json!({}),
-                images: Vec::new(),
-                is_error: false,
+            outcome: crate::ToolOutcome::Observed {
+                projection: crate::ToolResultProjection::Observed,
+                output: ToolOutput {
+                    value: serde_json::json!({}),
+                    images: Vec::new(),
+                    is_error: false,
+                },
             },
         });
         live.observe(AgentEvent::TextDelta("provisional".into()));

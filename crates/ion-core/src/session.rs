@@ -10,10 +10,12 @@ use std::{
 };
 
 use crate::tool_set::ToolActivity;
+#[cfg(test)]
+use ion_ai::ToolResult;
 use ion_ai::{
     Content, IncompleteReason, Message, ModelContextChange, ModelContextState,
-    ModelContextTimeline, ModelExecution, ModelRef, ResponseTermination, Role, ToolCall,
-    ToolResult, ToolSpec, Usage,
+    ModelContextTimeline, ModelExecution, ModelRef, ResponseTermination, Role, ToolCall, ToolSpec,
+    Usage,
 };
 use rusqlite::{Connection, OpenFlags, OptionalExtension, params};
 use rustix::fs::{FlockOperation, flock};
@@ -110,9 +112,7 @@ pub enum SessionEntry {
     },
     ToolResult {
         turn: u64,
-        /// Observed output, never replaced by a route-specific delivery error.
-        result: ToolResult,
-        projection: crate::ToolResultProjection,
+        result: crate::ToolSettlement,
     },
     ChildToolAdmitted {
         turn: u64,
@@ -256,6 +256,7 @@ struct PendingTool {
     occurrence: crate::ToolOccurrence,
     call_id: String,
     name: String,
+    activity: ToolActivity,
     next_child: usize,
     children: BTreeSet<usize>,
 }
@@ -490,6 +491,7 @@ impl State {
                                 },
                                 call_id: id.clone(),
                                 name: name.clone(),
+                                activity: stored.activity.clone(),
                                 next_child: 0,
                                 children: BTreeSet::new(),
                             });
@@ -510,11 +512,7 @@ impl State {
                     new_settled.push(self.sequence + 1);
                 }
             }
-            SessionEntry::ToolResult {
-                turn,
-                result,
-                projection,
-            } => {
+            SessionEntry::ToolResult { turn, result } => {
                 let position = self.pending.iter().position(|pending| {
                     pending.call_id == result.call_id
                         && pending.name == result.name
@@ -523,8 +521,14 @@ impl State {
                 if self.active != Some(*turn) || position.is_none() {
                     return Err(SessionError::InvalidHistory);
                 }
-                self.pending.remove(position.expect("checked above"));
-                messages.push(projection.message(result));
+                let position = position.expect("checked above");
+                if matches!(result.outcome, crate::ToolOutcome::NotDispatched { .. })
+                    && self.pending[position].next_child != 0
+                {
+                    return Err(SessionError::InvalidHistory);
+                }
+                self.pending.remove(position);
+                messages.push(result.message(false));
                 if self.pending.is_empty() {
                     new_settled.push(self.sequence + 1);
                 }
@@ -1369,17 +1373,17 @@ impl Session {
         tool_activities: Vec<StoredToolActivity>,
         execution: ModelExecution,
         usage: Usage,
-    ) -> Result<Vec<ToolResult>, SessionError> {
+    ) -> Result<Vec<crate::ToolSettlement>, SessionError> {
         let results = message
             .content
             .iter()
             .filter_map(|part| match part {
-                Content::ToolCall(call) => Some(ToolResult {
+                Content::ToolCall(call) => Some(crate::ToolSettlement {
                     call_id: call.id.clone(),
                     name: call.name.clone(),
-                    result: serde_json::json!({"error": "Tool call was not executed: the model response hit the output token limit and its arguments may be truncated. Reissue the complete call."}),
-                    images: Vec::new(),
-                    is_error: true,
+                    outcome: crate::ToolOutcome::NotDispatched {
+                        reason: "the model response hit the output token limit and its arguments may be truncated. Reissue the complete call.".into(),
+                    },
                 }),
                 _ => None,
             })
@@ -1400,11 +1404,7 @@ impl Session {
             results
                 .iter()
                 .cloned()
-                .map(|result| SessionEntry::ToolResult {
-                    turn,
-                    result,
-                    projection: crate::ToolResultProjection::Observed,
-                }),
+                .map(|result| SessionEntry::ToolResult { turn, result }),
         );
         let mut store = self.store.lock().map_err(|_| SessionError::Poisoned)?;
         append(&mut store, &entries)?;
@@ -1441,8 +1441,7 @@ impl Session {
         )
     }
 
-    /// Publish one observed tool result and, when this closes the assistant's
-    /// pending calls, the next model-visible context in the same transaction.
+    #[cfg(test)]
     pub(crate) fn record_tool_result_with_context(
         &self,
         turn: u64,
@@ -1450,11 +1449,20 @@ impl Session {
         projection: crate::ToolResultProjection,
         context: Option<ModelContextSnapshot>,
     ) -> Result<(), SessionError> {
-        let mut entries = vec![SessionEntry::ToolResult {
+        self.record_tool_settlement_with_context(
             turn,
-            result,
-            projection,
-        }];
+            crate::ToolSettlement::observed(result, projection),
+            context,
+        )
+    }
+
+    pub(crate) fn record_tool_settlement_with_context(
+        &self,
+        turn: u64,
+        result: crate::ToolSettlement,
+        context: Option<ModelContextSnapshot>,
+    ) -> Result<(), SessionError> {
+        let mut entries = vec![SessionEntry::ToolResult { turn, result }];
         if let Some(context) = context {
             entries.push(SessionEntry::ModelContextChanged { turn, context });
         }
@@ -1513,14 +1521,40 @@ impl Session {
         Ok(outcome)
     }
 
-    pub(crate) fn end_turn(&self, turn: u64, reason: TurnEndReason) -> Result<(), SessionError> {
+    pub(crate) fn end_turn(
+        &self,
+        turn: u64,
+        reason: TurnEndReason,
+        unstarted: &BTreeSet<String>,
+    ) -> Result<Vec<(crate::ToolSettlement, ToolActivity)>, SessionError> {
         let mut store = self.store.lock().map_err(|_| SessionError::Poisoned)?;
         if store.state.active != Some(turn) {
             return Err(SessionError::InvalidHistory);
         }
-        let mut entries = unknown_results(turn, &store.state.pending);
+        if unstarted.iter().any(|id| {
+            !store
+                .state
+                .pending
+                .iter()
+                .any(|pending| &pending.call_id == id)
+        }) {
+            return Err(SessionError::InvalidHistory);
+        }
+        let settlements = store
+            .state
+            .pending
+            .iter()
+            .map(|pending| {
+                (
+                    pending_settlement(pending, unstarted),
+                    pending.activity.clone(),
+                )
+            })
+            .collect();
+        let mut entries = pending_results(turn, &store.state.pending, unstarted);
         entries.push(SessionEntry::TurnEnded { turn, reason });
-        append(&mut store, &entries)
+        append(&mut store, &entries)?;
+        Ok(settlements)
     }
 }
 
@@ -1534,7 +1568,7 @@ fn interrupted_operation_entries(state: &State) -> Vec<SessionEntry> {
     let Some(turn) = state.active else {
         return Vec::new();
     };
-    let mut entries = unknown_results(turn, &state.pending);
+    let mut entries = pending_results(turn, &state.pending, &BTreeSet::new());
     entries.push(SessionEntry::TurnEnded {
         turn,
         reason: TurnEndReason::Interrupted,
@@ -1542,16 +1576,46 @@ fn interrupted_operation_entries(state: &State) -> Vec<SessionEntry> {
     entries
 }
 
-fn unknown_results(turn: u64, pending: &[PendingTool]) -> Vec<SessionEntry> {
-    pending.iter().flat_map(|pending| {
-        pending.children.iter().map(|child| SessionEntry::ChildToolResult {
-            turn, parent: pending.occurrence, child: *child, outcome: crate::ChildOutcome::Unknown,
-        }).chain(std::iter::once(SessionEntry::ToolResult { turn, result: ToolResult {
-            call_id: pending.call_id.clone(), name: pending.name.clone(),
-            result: serde_json::json!({"error":"The tool result was not committed. Its external effect is unknown; inspect the working directory before retrying."}),
-            images: Vec::new(), is_error: true,
-        }, projection: crate::ToolResultProjection::Observed }))
-    }).collect()
+fn pending_results(
+    turn: u64,
+    pending: &[PendingTool],
+    unstarted: &BTreeSet<String>,
+) -> Vec<SessionEntry> {
+    pending
+        .iter()
+        .flat_map(|pending| {
+            pending
+                .children
+                .iter()
+                .map(|child| SessionEntry::ChildToolResult {
+                    turn,
+                    parent: pending.occurrence,
+                    child: *child,
+                    outcome: crate::ChildOutcome::Unknown,
+                })
+                .chain(std::iter::once(SessionEntry::ToolResult {
+                    turn,
+                    result: pending_settlement(pending, unstarted),
+                }))
+        })
+        .collect()
+}
+
+fn pending_settlement(
+    pending: &PendingTool,
+    unstarted: &BTreeSet<String>,
+) -> crate::ToolSettlement {
+    crate::ToolSettlement {
+        call_id: pending.call_id.clone(),
+        name: pending.name.clone(),
+        outcome: if unstarted.contains(&pending.call_id) {
+            crate::ToolOutcome::NotDispatched {
+                reason: "the operation ended before dispatch".into(),
+            }
+        } else {
+            crate::ToolOutcome::Unknown
+        },
+    }
 }
 
 fn append(store: &mut Store, entries: &[SessionEntry]) -> Result<(), SessionError> {
@@ -1737,9 +1801,7 @@ fn projected_entry_messages(entries: &[SessionEntry], display: bool) -> Vec<Opti
                 shell_outcome_at(entries, index + 1),
                 *exclude_from_context,
             )),
-            SessionEntry::ToolResult { result, .. } if display => {
-                Some(crate::ToolResultProjection::Observed.message(result))
-            }
+            SessionEntry::ToolResult { result, .. } if display => Some(result.message(true)),
             SessionEntry::Assistant { message, .. } if !display => Some(model_message(message)),
             other => message_from_entry(other),
         })
@@ -1766,9 +1828,7 @@ fn message_from_entry(entry: &SessionEntry) -> Option<Message> {
         SessionEntry::TurnStarted { input, .. } => Some(input.clone()),
         SessionEntry::Steering { input, .. } => Some(input.clone()),
         SessionEntry::Assistant { message, .. } => Some(message.clone()),
-        SessionEntry::ToolResult {
-            result, projection, ..
-        } => Some(projection.message(result)),
+        SessionEntry::ToolResult { result, .. } => Some(result.message(false)),
         SessionEntry::ChildToolAdmitted { .. }
         | SessionEntry::ChildToolResult { .. }
         | SessionEntry::UserShellAdmitted { .. }
@@ -2145,8 +2205,22 @@ mod tests {
             })
         ));
         assert!(
-            matches!(&recovered.entries[recovered.entries.len() - 3], SessionEntry::ToolResult { result, .. } if result.call_id == "unsettled" && result.is_error)
+            matches!(&recovered.entries[recovered.entries.len() - 3], SessionEntry::ToolResult { result, .. } if result.call_id == "unsettled" && matches!(result.outcome, crate::ToolOutcome::Unknown))
         );
+        let projection = crate::TranscriptProjection::from_session(&recovered);
+        let activity = projection
+            .items
+            .iter()
+            .find_map(|item| match item {
+                crate::TranscriptItem::ActivityGroup(group) => group.activities.first(),
+                _ => None,
+            })
+            .unwrap();
+        assert_eq!(activity.state, crate::ActivityState::Unknown);
+        let encoded =
+            serde_json::to_value(&recovered.entries[recovered.entries.len() - 3]).unwrap();
+        assert_eq!(encoded["data"]["result"]["outcome"]["state"], "unknown");
+        assert!(encoded["data"]["result"]["outcome"].get("output").is_none());
         permit
             .record(serde_json::json!({"stdout":"new","exit_code":0}), false)
             .unwrap();
@@ -2155,6 +2229,23 @@ mod tests {
         assert!(
             matches!(reopened.view().unwrap().entries.last(), Some(SessionEntry::UserShellSettled { outcome: UserShellOutcome::Observed { output, .. }, .. }) if output["stdout"] == "new")
         );
+        for copy in [
+            reopened.clone_to(root.join("clone.sqlite")).unwrap(),
+            reopened
+                .fork_to(root.join("fork.sqlite"), ForkPoint::AfterTurn(turn))
+                .unwrap(),
+        ] {
+            let projected = crate::TranscriptProjection::from_session(&copy.view().unwrap());
+            let activity = projected
+                .items
+                .iter()
+                .find_map(|item| match item {
+                    crate::TranscriptItem::ActivityGroup(group) => group.activities.first(),
+                    _ => None,
+                })
+                .unwrap();
+            assert_eq!(activity.state, crate::ActivityState::Unknown);
+        }
         drop(reopened);
         fs::remove_dir_all(root).unwrap();
     }
@@ -2293,7 +2384,9 @@ mod tests {
                 let (turn, _) = session
                     .begin_turn("new input".into(), test_execution().route.logical)
                     .unwrap();
-                session.end_turn(turn, TurnEndReason::Cancelled).unwrap();
+                session
+                    .end_turn(turn, TurnEndReason::Cancelled, &BTreeSet::new())
+                    .unwrap();
             }
             let recovered = session.view().unwrap();
             assert_eq!(recovered.unfinished_user_shell, None);
@@ -2658,7 +2751,9 @@ mod tests {
         let (turn, _) = session
             .begin_turn_message(input.clone(), model.clone())
             .unwrap();
-        session.end_turn(turn, TurnEndReason::Cancelled).unwrap();
+        session
+            .end_turn(turn, TurnEndReason::Cancelled, &BTreeSet::new())
+            .unwrap();
         let before = session.entry_count().unwrap();
         assert!(
             serde_json::from_value::<ion_ai::ImageContent>(serde_json::json!({
@@ -3598,7 +3693,9 @@ mod tests {
             )
             .unwrap();
         session.record_tool_result(turn, result).unwrap();
-        session.end_turn(turn, TurnEndReason::Completed).unwrap();
+        session
+            .end_turn(turn, TurnEndReason::Completed, &BTreeSet::new())
+            .unwrap();
         drop(session);
         Session::open(&path).unwrap();
         fs::remove_dir_all(root).unwrap();

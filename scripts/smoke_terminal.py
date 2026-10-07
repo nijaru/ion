@@ -185,7 +185,7 @@ with tempfile.TemporaryDirectory(prefix="ion-terminal-") as temporary:
             inspected = subprocess.run([binary, "--cwd", workspace, "--session", session_id, "inspect"], env=env, check=True, capture_output=True)
             entries = json.loads(inspected.stdout)["entries"]
             assert "**MARKDOWN_BOLD**" in str(entries), "formatted view replaced the original saved Markdown"
-            edits = [entry["data"]["result"]["result"]["diff"] for entry in entries if entry["kind"] == "tool_result" and "diff" in entry["data"]["result"]["result"]]
+            edits = [entry["data"]["result"]["outcome"]["output"]["value"]["diff"] for entry in entries if entry["kind"] == "tool_result" and entry["data"]["result"]["outcome"]["state"] == "observed" and "diff" in entry["data"]["result"]["outcome"]["output"]["value"]]
             assert len(edits) == 1 and not edits[0]["truncated"], edits
             assert "-sample data\n-second token\n+sample data updated\n+second token updated\n" in edits[0]["text"], edits
             exported = subprocess.run([binary, "--cwd", workspace, "--session", session_id, "export"], env=env, check=True, capture_output=True, text=True).stdout

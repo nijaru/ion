@@ -121,7 +121,7 @@ mod tests {
             arguments: json!({"path":"file"}),
             state: ActivityState::Completed,
             result: Some(ActivityResult {
-                projection: ToolResultProjection::Observed,
+                projection: Some(ToolResultProjection::Observed),
                 value: json!({"path":"file", "diff":{"text":text,"truncated":true}}),
                 image_mime_types: vec![],
                 is_error: false,

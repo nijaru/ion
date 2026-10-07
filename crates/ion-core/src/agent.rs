@@ -2,7 +2,7 @@
 use ion_ai::{
     Content, GenerationControls, IncompleteReason, Message, ModelExecution, ModelRef, ModelRequest,
     ModelResponse, ModelRoute, ModelRouteReason, ModelService, ProviderError, ProviderErrorKind,
-    Reasoning, ResponseTermination, Role, ToolChoice, ToolResult,
+    Reasoning, ResponseTermination, Role, ToolChoice,
 };
 use serde_json::Value;
 use std::collections::{BTreeSet, VecDeque};
@@ -14,7 +14,6 @@ use crate::{
     generation::{GeneratedResponse, generate_with_retry, refresh_prompt_cache},
     request::{PreparedRequest, RequestStep},
     session::{ModelContextSnapshot, Session, SessionError, StoredToolActivity, TurnEndReason},
-    tool_result::{ToolOutput, ToolResultProjection},
     tool_set::{ToolActivity, ToolDispatch, ToolExecution, ToolSet, ToolSource},
 };
 
@@ -623,20 +622,8 @@ impl Agent {
         if interrupted > 0 {
             observe(AgentEvent::InterruptedCalls(interrupted));
         }
-        let outcome = self
-            .drive(session, turn, instructions, &stop, steering, observe)
-            .await;
-        match outcome {
-            Ok(answer) => Ok(answer),
-            Err(error) => {
-                // A failed storage write may leave the effect boundary uncertain.
-                // Do not issue another write to disguise that failure.
-                if !matches!(error, AgentError::Session(_)) {
-                    session.end_turn(turn, error.end_reason())?;
-                }
-                Err(error)
-            }
-        }
+        self.drive(session, turn, instructions, &stop, steering, observe)
+            .await
     }
 
     async fn drive<F>(
@@ -651,362 +638,412 @@ impl Agent {
     where
         F: FnMut(AgentEvent) + Send,
     {
-        let mut length_recovery_attempted = false;
-        let mut assistant_seen_in_turn = false;
-        let mut prefix_bound_continuation = false;
-        let mut replay_rebased = false;
-        let mut route_reason = ModelRouteReason::UserRequest;
-        loop {
-            // Keep a fast in-process model from starving terminal input and
-            // cancellation during a long tool sequence.
-            tokio::task::yield_now().await;
-            if stop.is_cancelled() {
-                return Err(AgentError::Cancelled);
-            }
-            if let Some(inbox) = steering {
-                for input in inbox.record_pending(session, turn, self.limits)? {
-                    observe(AgentEvent::SteeringCommitted { turn, input });
-                }
-            }
-            let mut recovered_overflow = false;
-            let step = loop {
-                for diagnostic in self.tools.refresh(stop.clone()).await {
-                    observe(AgentEvent::ToolCatalogWarning(diagnostic));
-                }
+        // Only this running operation knows which reserved calls never received
+        // execution authority. Process-loss recovery remains conservatively Unknown.
+        let mut unstarted = BTreeSet::new();
+        let outcome = async {
+            let mut length_recovery_attempted = false;
+            let mut assistant_seen_in_turn = false;
+            let mut prefix_bound_continuation = false;
+            let mut replay_rebased = false;
+            let mut route_reason = ModelRouteReason::UserRequest;
+            loop {
+                // Keep a fast in-process model from starving terminal input and
+                // cancellation during a long tool sequence.
+                tokio::task::yield_now().await;
                 if stop.is_cancelled() {
                     return Err(AgentError::Cancelled);
                 }
-                let prepared = match PreparedRequest::new(
-                    session,
-                    turn,
-                    &self.tools,
-                    self.model.clone(),
-                    route_reason,
-                    &instructions,
-                    self.limits,
-                ) {
-                    Ok(prepared) => prepared,
-                    Err(AgentError::ContextTooLarge) if !prefix_bound_continuation => {
-                        if self
-                            .compact_inner(session, stop, self.keep_bytes(), observe)
-                            .await?
-                            .is_some()
-                        {
-                            continue;
-                        }
-                        return Err(AgentError::ContextTooLarge);
+                if let Some(inbox) = steering {
+                    for input in inbox.record_pending(session, turn, self.limits)? {
+                        observe(AgentEvent::SteeringCommitted { turn, input });
                     }
-                    Err(error) => return Err(error),
-                };
-                let output_budget = prepared.output_budget();
-                let mut emitted_output = false;
-                let issued = prepared
-                    .issue(&self.service, stop, &mut |event| {
-                        if matches!(
-                            event,
-                            AgentEvent::TextDelta(_)
-                                | AgentEvent::ThinkingDelta { .. }
-                                | AgentEvent::ModelOutputObserved
-                        ) {
-                            emitted_output = true;
-                        }
-                        observe(event);
-                    })
-                    .await;
-                let generated = issued.as_ref().map(|step| &step.generated);
-                if !assistant_seen_in_turn
-                    && !replay_rebased
-                    && matches!(&generated, Err(AgentError::ReplayContextChanged))
-                {
-                    session.rebase_provider_replay(turn)?;
-                    observe(AgentEvent::ProviderReplayRebased);
-                    replay_rebased = true;
-                    continue;
                 }
-                let overflow = matches!(
-                    &generated,
-                    Err(AgentError::Provider(ProviderError {
-                        kind: ProviderErrorKind::ContextLength,
-                        ..
-                    }))
-                ) || matches!(
-                    &generated,
-                    Ok(GeneratedResponse {
-                        response: ModelResponse {
-                            termination: ResponseTermination::Incomplete(
-                                IncompleteReason::ContextLength
-                            ),
+                let mut recovered_overflow = false;
+                let step = loop {
+                    for diagnostic in self.tools.refresh(stop.clone()).await {
+                        observe(AgentEvent::ToolCatalogWarning(diagnostic));
+                    }
+                    if stop.is_cancelled() {
+                        return Err(AgentError::Cancelled);
+                    }
+                    let prepared = match PreparedRequest::new(
+                        session,
+                        turn,
+                        &self.tools,
+                        self.model.clone(),
+                        route_reason,
+                        &instructions,
+                        self.limits,
+                    ) {
+                        Ok(prepared) => prepared,
+                        Err(AgentError::ContextTooLarge) if !prefix_bound_continuation => {
+                            if self
+                                .compact_inner(session, stop, self.keep_bytes(), observe)
+                                .await?
+                                .is_some()
+                            {
+                                continue;
+                            }
+                            return Err(AgentError::ContextTooLarge);
+                        }
+                        Err(error) => return Err(error),
+                    };
+                    let output_budget = prepared.output_budget();
+                    let mut emitted_output = false;
+                    let issued = prepared
+                        .issue(&self.service, stop, &mut |event| {
+                            if matches!(
+                                event,
+                                AgentEvent::TextDelta(_)
+                                    | AgentEvent::ThinkingDelta { .. }
+                                    | AgentEvent::ModelOutputObserved
+                            ) {
+                                emitted_output = true;
+                            }
+                            observe(event);
+                        })
+                        .await;
+                    let generated = issued.as_ref().map(|step| &step.generated);
+                    if !assistant_seen_in_turn
+                        && !replay_rebased
+                        && matches!(&generated, Err(AgentError::ReplayContextChanged))
+                    {
+                        session.rebase_provider_replay(turn)?;
+                        observe(AgentEvent::ProviderReplayRebased);
+                        replay_rebased = true;
+                        continue;
+                    }
+                    let overflow = matches!(
+                        &generated,
+                        Err(AgentError::Provider(ProviderError {
+                            kind: ProviderErrorKind::ContextLength,
                             ..
-                        },
-                        ..
-                    })
-                );
-                let recoverable_length = !length_recovery_attempted
-                    && matches!(
+                        }))
+                    ) || matches!(
                         &generated,
                         Ok(GeneratedResponse {
                             response: ModelResponse {
                                 termination: ResponseTermination::Incomplete(
-                                    IncompleteReason::MaxOutputTokens
+                                    IncompleteReason::ContextLength
                                 ),
-                                usage: ion_ai::Usage {
-                                    output_tokens: Some(output),
-                                    ..
-                                },
                                 ..
                             },
                             ..
-                        }) if *output < u64::from(output_budget)
+                        })
                     );
-                if ((overflow && !emitted_output) || recoverable_length)
-                    && !prefix_bound_continuation
-                    && !recovered_overflow
-                    && self
-                        .compact_inner(session, stop, self.keep_bytes(), observe)
-                        .await?
-                        .is_some()
+                    let recoverable_length = !length_recovery_attempted
+                        && matches!(
+                            &generated,
+                            Ok(GeneratedResponse {
+                                response: ModelResponse {
+                                    termination: ResponseTermination::Incomplete(
+                                        IncompleteReason::MaxOutputTokens
+                                    ),
+                                    usage: ion_ai::Usage {
+                                        output_tokens: Some(output),
+                                        ..
+                                    },
+                                    ..
+                                },
+                                ..
+                            }) if *output < u64::from(output_budget)
+                        );
+                    if ((overflow && !emitted_output) || recoverable_length)
+                        && !prefix_bound_continuation
+                        && !recovered_overflow
+                        && self
+                            .compact_inner(session, stop, self.keep_bytes(), observe)
+                            .await?
+                            .is_some()
+                    {
+                        recovered_overflow = true;
+                        if recoverable_length {
+                            length_recovery_attempted = true;
+                            observe(AgentEvent::ResponseRestarted);
+                        }
+                        continue;
+                    }
+                    break issued?;
+                };
+                let RequestStep {
+                    generated: GeneratedResponse { response, route },
+                    prepared,
+                    started,
+                } = step;
+                let tool_catalog = prepared.catalog();
+                let execution = ModelExecution {
+                    route,
+                    returned_model: response.returned_model.clone(),
+                };
+                let truncated_calls = matches!(
+                    response.termination,
+                    ResponseTermination::Incomplete(IncompleteReason::MaxOutputTokens)
+                ) && response
+                    .message
+                    .content
+                    .iter()
+                    .any(|part| matches!(part, Content::ToolCall(_)));
+                if response.message.role != Role::Assistant
+                    || (!matches!(response.termination, ResponseTermination::Completed)
+                        && !truncated_calls)
                 {
-                    recovered_overflow = true;
-                    if recoverable_length {
-                        length_recovery_attempted = true;
-                        observe(AgentEvent::ResponseRestarted);
+                    return Err(AgentError::IncompleteModelResponse);
+                }
+                if response
+                    .message
+                    .provider_replay
+                    .as_ref()
+                    .is_some_and(|replay| {
+                        !replay.is_compatible_with(&execution.route.effective.provider)
+                    })
+                {
+                    return Err(AgentError::InvalidProviderReplay);
+                }
+                let mut ids = std::collections::HashSet::new();
+                let mut calls = Vec::new();
+                for content in &response.message.content {
+                    if let Content::ToolCall(call) = content {
+                        if call.id.is_empty() || call.name.is_empty() || !ids.insert(&call.id) {
+                            return Err(AgentError::InvalidToolCall);
+                        }
+                        calls.push(call.clone());
+                    }
+                }
+                let tool_activities = calls
+                    .iter()
+                    .map(|call| StoredToolActivity {
+                        call_id: call.id.clone(),
+                        activity: tool_catalog.activity(call),
+                    })
+                    .collect::<Vec<_>>();
+                prefix_bound_continuation |= response
+                    .message
+                    .provider_replay
+                    .as_ref()
+                    .is_some_and(|replay| replay.prefix_bound);
+                let committed_content = response.message.content.clone();
+                if truncated_calls {
+                    assistant_seen_in_turn = true;
+                    let results = session.record_truncated_assistant(
+                        turn,
+                        response.message,
+                        tool_activities.clone(),
+                        execution.clone(),
+                        response.usage,
+                    )?;
+                    observe(AgentEvent::AssistantCommitted {
+                        turn,
+                        content: committed_content,
+                        tool_activities,
+                        termination: response.termination,
+                    });
+                    for result in results {
+                        let activity = calls
+                            .iter()
+                            .find(|call| call.id == result.call_id)
+                            .map_or_else(
+                                || ToolActivity::external(&result.name),
+                                |call| tool_catalog.activity(call),
+                            );
+                        observe(AgentEvent::ToolFinished {
+                            call_id: result.call_id,
+                            name: result.name,
+                            activity,
+                            outcome: result.outcome,
+                        });
                     }
                     continue;
                 }
-                break issued?;
-            };
-            let RequestStep {
-                generated: GeneratedResponse { response, route },
-                prepared,
-                started,
-            } = step;
-            let tool_catalog = prepared.catalog();
-            let execution = ModelExecution {
-                route,
-                returned_model: response.returned_model.clone(),
-            };
-            let truncated_calls = matches!(
-                response.termination,
-                ResponseTermination::Incomplete(IncompleteReason::MaxOutputTokens)
-            ) && response
-                .message
-                .content
-                .iter()
-                .any(|part| matches!(part, Content::ToolCall(_)));
-            if response.message.role != Role::Assistant
-                || (!matches!(response.termination, ResponseTermination::Completed)
-                    && !truncated_calls)
-            {
-                return Err(AgentError::IncompleteModelResponse);
-            }
-            if response
-                .message
-                .provider_replay
-                .as_ref()
-                .is_some_and(|replay| {
-                    !replay.is_compatible_with(&execution.route.effective.provider)
-                })
-            {
-                return Err(AgentError::InvalidProviderReplay);
-            }
-            let mut ids = std::collections::HashSet::new();
-            let mut calls = Vec::new();
-            for content in &response.message.content {
-                if let Content::ToolCall(call) = content {
-                    if call.id.is_empty() || call.name.is_empty() || !ids.insert(&call.id) {
-                        return Err(AgentError::InvalidToolCall);
-                    }
-                    calls.push(call.clone());
+                let final_text = response
+                    .message
+                    .content
+                    .iter()
+                    .filter_map(|content| {
+                        if let Content::Text(text) = content {
+                            Some(text.as_str())
+                        } else {
+                            None
+                        }
+                    })
+                    .collect::<Vec<_>>()
+                    .join("\n");
+                if calls.is_empty() && final_text.trim().is_empty() {
+                    return Err(AgentError::IncompleteModelResponse);
                 }
-            }
-            let tool_activities = calls
-                .iter()
-                .map(|call| StoredToolActivity {
-                    call_id: call.id.clone(),
-                    activity: tool_catalog.activity(call),
-                })
-                .collect::<Vec<_>>();
-            prefix_bound_continuation |= response
-                .message
-                .provider_replay
-                .as_ref()
-                .is_some_and(|replay| replay.prefix_bound);
-            let committed_content = response.message.content.clone();
-            if truncated_calls {
-                assistant_seen_in_turn = true;
-                let results = session.record_truncated_assistant(
-                    turn,
-                    response.message,
-                    tool_activities.clone(),
-                    execution.clone(),
-                    response.usage,
-                )?;
+                // Steering arriving during a tool stays in the host inbox until
+                // the tool result is durable. A final answer and its queued
+                // steering enter the Session together or neither does.
+                let (complete, committed_steering) = if calls.is_empty()
+                    && let Some(inbox) = steering
+                {
+                    inbox.record_assistant(
+                        session,
+                        turn,
+                        response.message,
+                        tool_activities.clone(),
+                        execution.clone(),
+                        response.usage,
+                        self.limits,
+                    )?
+                } else {
+                    (
+                        session.record_assistant_with_activities(
+                            turn,
+                            response.message,
+                            tool_activities.clone(),
+                            execution.clone(),
+                            response.usage,
+                            false,
+                        )?,
+                        Vec::new(),
+                    )
+                };
                 observe(AgentEvent::AssistantCommitted {
                     turn,
                     content: committed_content,
                     tool_activities,
                     termination: response.termination,
                 });
-                for result in results {
-                    let activity = calls
-                        .iter()
-                        .find(|call| call.id == result.call_id)
-                        .map_or_else(
-                            || ToolActivity::external(&result.name),
-                            |call| tool_catalog.activity(call),
-                        );
-                    observe(AgentEvent::ToolRejected {
-                        call_id: result.call_id,
-                        name: result.name,
-                        activity,
-                        output: ToolOutput {
-                            value: result.result,
-                            images: Vec::new(),
-                            is_error: true,
-                        },
-                    });
+                for input in committed_steering {
+                    observe(AgentEvent::SteeringCommitted { turn, input });
                 }
-                continue;
-            }
-            let final_text = response
-                .message
-                .content
-                .iter()
-                .filter_map(|content| {
-                    if let Content::Text(text) = content {
-                        Some(text.as_str())
-                    } else {
-                        None
-                    }
-                })
-                .collect::<Vec<_>>()
-                .join("\n");
-            if calls.is_empty() && final_text.trim().is_empty() {
-                return Err(AgentError::IncompleteModelResponse);
-            }
-            // Steering arriving during a tool stays in the host inbox until
-            // the tool result is durable. A final answer and its queued
-            // steering enter the Session together or neither does.
-            let (complete, committed_steering) = if calls.is_empty()
-                && let Some(inbox) = steering
-            {
-                inbox.record_assistant(
-                    session,
-                    turn,
-                    response.message,
-                    tool_activities.clone(),
-                    execution.clone(),
-                    response.usage,
-                    self.limits,
-                )?
-            } else {
-                (
-                    session.record_assistant_with_activities(
+                assistant_seen_in_turn = true;
+                if complete {
+                    observe(AgentEvent::TurnEnded {
                         turn,
-                        response.message,
-                        tool_activities.clone(),
-                        execution.clone(),
-                        response.usage,
-                        false,
-                    )?,
-                    Vec::new(),
-                )
-            };
-            observe(AgentEvent::AssistantCommitted {
-                turn,
-                content: committed_content,
-                tool_activities,
-                termination: response.termination,
-            });
-            for input in committed_steering {
-                observe(AgentEvent::SteeringCommitted { turn, input });
-            }
-            assistant_seen_in_turn = true;
-            if complete {
-                observe(AgentEvent::Final(final_text.clone()));
-                return Ok(final_text);
-            }
-            route_reason = if calls.is_empty() {
-                ModelRouteReason::Steering
-            } else {
-                ModelRouteReason::ToolContinuation
-            };
-            let call_count = calls.len();
-            let mut cache_warmer = if call_count == 0 {
-                None
-            } else {
-                self.limits.prompt_cache_warming.and_then(|policy| {
-                    PromptCacheWarmer::new(
-                        policy,
-                        prepared.warming_request(),
-                        response.usage,
-                        started,
-                    )
-                })
-            };
-            let mut activate_tools = BTreeSet::new();
-            for (index, call) in calls.into_iter().enumerate() {
-                if stop.is_cancelled() {
-                    return Err(AgentError::Cancelled);
+                        reason: TurnEndReason::Completed,
+                    });
+                    observe(AgentEvent::Final(final_text.clone()));
+                    return Ok(final_text);
                 }
-                let activity = tool_catalog.activity(&call);
-                observe(AgentEvent::ToolStarted {
-                    call_id: call.id.clone(),
-                    name: call.name.clone(),
-                    arguments: call.arguments.clone(),
-                    activity: activity.clone(),
-                });
-                let tool = Box::pin(async {
-                    match tool_catalog.execute_model_call(&call, stop.clone()) {
-                        ToolDispatch::Composition(runtime, limits) => crate::code_gateway::run(
-                            runtime,
-                            limits,
-                            session,
-                            turn,
-                            tool_catalog,
-                            &call,
-                            stop,
-                            observe,
+                route_reason = if calls.is_empty() {
+                    ModelRouteReason::Steering
+                } else {
+                    ModelRouteReason::ToolContinuation
+                };
+                unstarted.extend(calls.iter().map(|call| call.id.clone()));
+                let call_count = calls.len();
+                let mut cache_warmer = if call_count == 0 {
+                    None
+                } else {
+                    self.limits.prompt_cache_warming.and_then(|policy| {
+                        PromptCacheWarmer::new(
+                            policy,
+                            prepared.warming_request(),
+                            response.usage,
+                            started,
                         )
-                        .await
-                        .map(ToolExecution::output),
-                        ToolDispatch::Execution(execution) => Ok(execution.await),
-                        ToolDispatch::Rejected(output) => Ok(ToolExecution::output(output)),
+                    })
+                };
+                let mut activate_tools = BTreeSet::new();
+                for (index, call) in calls.into_iter().enumerate() {
+                    if stop.is_cancelled() {
+                        return Err(AgentError::Cancelled);
                     }
-                });
-                let execution = self
-                    .execute_tool_with_cache_warming(session, turn, tool, stop, &mut cache_warmer)
-                    .await?;
-                let output = execution.output;
-                activate_tools.extend(execution.activate);
-                let projection = output
-                    .model_projection(self.limits.image_input, self.limits.max_request_bytes)?;
-                let next_context =
-                    (index + 1 == call_count && !activate_tools.is_empty()).then(|| {
-                        ModelContextSnapshot {
-                            instructions: instructions.clone(),
-                            tools: tool_catalog.declared_specs_with(&activate_tools),
+                    let activity = tool_catalog.activity(&call);
+                    let dispatch = tool_catalog.execute_model_call(&call, stop.clone());
+                    let rejection = match &dispatch {
+                        ToolDispatch::Rejected(reason) => Some(reason.clone()),
+                        _ => None,
+                    };
+                    let rejected = rejection.is_some();
+                    let tool = Box::pin(async {
+                        if stop.is_cancelled() {
+                            return Err(AgentError::Cancelled);
+                        }
+                        if !rejected {
+                            unstarted.remove(&call.id);
+                            observe(AgentEvent::ToolStarted {
+                                call_id: call.id.clone(),
+                                name: call.name.clone(),
+                                arguments: call.arguments.clone(),
+                                activity: activity.clone(),
+                            });
+                        }
+                        match dispatch {
+                            ToolDispatch::Composition(runtime, limits) => crate::code_gateway::run(
+                                runtime,
+                                limits,
+                                session,
+                                turn,
+                                tool_catalog,
+                                &call,
+                                stop,
+                                observe,
+                            )
+                            .await
+                            .map(ToolExecution::output),
+                            ToolDispatch::Execution(execution) => Ok(execution.await),
+                            ToolDispatch::Rejected(reason) => Ok(ToolExecution::output(
+                                crate::ToolOutcome::NotDispatched { reason }
+                                    .inspection_output()
+                                    .into_owned(),
+                            )),
                         }
                     });
-                session.record_tool_result_with_context(
-                    turn,
-                    ToolResult {
-                        call_id: call.id.clone(),
-                        name: call.name.clone(),
-                        result: output.value.clone(),
-                        images: output.images.clone(),
-                        is_error: output.is_error,
-                    },
-                    projection,
-                    next_context,
-                )?;
-                observe(AgentEvent::ToolFinished {
-                    call_id: call.id,
-                    name: call.name,
-                    activity,
-                    output,
-                    projection,
-                });
+                    let execution = self
+                        .execute_tool_with_cache_warming(
+                            session,
+                            turn,
+                            tool,
+                            stop,
+                            &mut cache_warmer,
+                        )
+                        .await?;
+                    let output = execution.output;
+                    activate_tools.extend(execution.activate);
+                    let next_context = (index + 1 == call_count && !activate_tools.is_empty())
+                        .then(|| ModelContextSnapshot {
+                            instructions: instructions.clone(),
+                            tools: tool_catalog.declared_specs_with(&activate_tools),
+                        });
+                    let outcome = if let Some(reason) = rejection {
+                        crate::ToolOutcome::NotDispatched { reason }
+                    } else {
+                        let projection = output.model_projection(
+                            self.limits.image_input,
+                            self.limits.max_request_bytes,
+                        )?;
+                        crate::ToolOutcome::Observed { output, projection }
+                    };
+                    session.record_tool_settlement_with_context(
+                        turn,
+                        crate::ToolSettlement {
+                            call_id: call.id.clone(),
+                            name: call.name.clone(),
+                            outcome: outcome.clone(),
+                        },
+                        next_context,
+                    )?;
+                    unstarted.remove(&call.id);
+                    observe(AgentEvent::ToolFinished {
+                        call_id: call.id,
+                        name: call.name,
+                        activity,
+                        outcome,
+                    });
+                }
+            }
+        }
+        .await;
+        match outcome {
+            Ok(answer) => Ok(answer),
+            Err(error) => {
+                // Never disguise failed storage with a second write.
+                if !matches!(error, AgentError::Session(_)) {
+                    let reason = error.end_reason();
+                    for (result, activity) in session.end_turn(turn, reason.clone(), &unstarted)? {
+                        observe(AgentEvent::ToolFinished {
+                            call_id: result.call_id,
+                            name: result.name,
+                            activity,
+                            outcome: result.outcome,
+                        });
+                    }
+                    observe(AgentEvent::TurnEnded { turn, reason });
+                }
+                Err(error)
             }
         }
     }
@@ -1016,6 +1053,10 @@ impl Agent {
 pub enum AgentEvent {
     TurnAccepted {
         turn: u64,
+    },
+    TurnEnded {
+        turn: u64,
+        reason: TurnEndReason,
     },
     /// Generated content without a human delta. Not call admission or an effect.
     ModelOutputObserved,
@@ -1060,18 +1101,12 @@ pub enum AgentEvent {
         arguments: Value,
         activity: ToolActivity,
     },
+    /// Published after the typed settlement is durable, including operation closure.
     ToolFinished {
         call_id: String,
         name: String,
         activity: ToolActivity,
-        output: ToolOutput,
-        projection: ToolResultProjection,
-    },
-    ToolRejected {
-        call_id: String,
-        name: String,
-        activity: ToolActivity,
-        output: ToolOutput,
+        outcome: crate::ToolOutcome,
     },
     ChildToolAdmitted {
         parent_call_id: String,
@@ -1155,6 +1190,7 @@ impl AgentError {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::tool_result::ToolOutput;
     use crate::{
         CodingSession, ForkPoint, ToolActivityKind, ToolDefinition, ToolExecutor, ToolExposure,
         ToolPresentation, ToolRegistration,
@@ -2328,8 +2364,14 @@ mod tests {
                     _ => None,
                 })
                 .unwrap();
+            let crate::ToolOutcome::Observed {
+                output: observed, ..
+            } = &observed.outcome
+            else {
+                panic!("missing observed host output")
+            };
             assert_eq!(
-                observed.result, output.value,
+                observed.value, output.value,
                 "model rejection replaced the observed result"
             );
             assert_eq!(observed.images, output.images);
@@ -2354,7 +2396,7 @@ mod tests {
                     .as_ref()
                     .unwrap()
                     .projection
-                    .notice()
+                    .and_then(crate::ToolResultProjection::notice)
                     .is_some()
             );
             assert_eq!(live.projection(), &saved);
@@ -2693,7 +2735,12 @@ mod tests {
                     "test".into(),
                     CancellationToken::new(),
                     |event| {
-                        if let AgentEvent::ToolRejected { call_id, .. } = event {
+                        if let AgentEvent::ToolFinished {
+                            call_id,
+                            outcome: crate::ToolOutcome::NotDispatched { .. },
+                            ..
+                        } = event
+                        {
                             rejected.push(call_id);
                         }
                     },
@@ -3739,10 +3786,223 @@ mod tests {
         assert_eq!(scripts.requests().len(), 2);
         let result = &scripts.requests()[1].messages[2].content[0];
         assert!(
-            matches!(result, Content::ToolResult(result) if result.result["error"] == "tool was not declared for this request: not_a_tool")
+            matches!(result, Content::ToolResult(result) if result.is_error && result.result["error"].as_str().is_some_and(|error| error.contains("tool was not declared for this request: not_a_tool")))
         );
         drop(session);
         std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[tokio::test]
+    async fn cancellation_durably_rejects_only_unstarted_calls() {
+        struct ConstructorEffect(std::path::PathBuf);
+        impl ToolSource for ConstructorEffect {
+            fn registrations(self: Arc<Self>) -> Vec<ToolRegistration> {
+                vec![ToolRegistration::new(
+                    ToolDefinition::external(ToolSpec {
+                        name: "effect".into(),
+                        description: "record constructor authority".into(),
+                        input_schema: serde_json::json!({"type":"object"}),
+                    }),
+                    self,
+                )]
+            }
+        }
+        impl ToolExecutor for ConstructorEffect {
+            fn execute<'a>(
+                &'a self,
+                call: &'a ToolCall,
+                _stop: CancellationToken,
+            ) -> BoxFuture<'a, ToolOutput> {
+                // Deliberately synchronous: selecting a route must not run this.
+                std::fs::write(self.0.join(&call.id), "observed effect").unwrap();
+                Box::pin(async {
+                    ToolOutput {
+                        // The words are not execution truth; this is an observed error.
+                        value: serde_json::json!({"error":"The tool result was not committed. Its external effect is unknown; inspect the working directory before retrying."}),
+                        images: Vec::new(),
+                        is_error: true,
+                    }
+                })
+            }
+        }
+        for (at_admission, closure_fault) in [(true, false), (false, false), (true, true)] {
+            let root = std::env::temp_dir().join(format!("ion-unstarted-{}", uuid::Uuid::now_v7()));
+            std::fs::create_dir(&root).unwrap();
+            let path = root.join("session.sqlite");
+            let session = CodingSession::create(&path, &root).unwrap();
+            if closure_fault {
+                rusqlite::Connection::open(&path).unwrap().execute_batch("CREATE TRIGGER reject_close BEFORE INSERT ON entries WHEN json_extract(NEW.body,'$.kind')='turn_ended' BEGIN SELECT RAISE(ABORT,'closure unavailable'); END;").unwrap();
+            }
+            let tools = Arc::new(ConstructorEffect(root.clone()));
+            let scripts = Arc::new(ScriptedModelService::new([
+                response(
+                    ["first", "unused"]
+                        .into_iter()
+                        .map(|id| {
+                            Content::ToolCall(ToolCall {
+                                id: id.into(),
+                                name: "effect".into(),
+                                arguments: serde_json::json!({}),
+                                raw_arguments: None,
+                            })
+                        })
+                        .collect(),
+                ),
+                response(vec![Content::Text("recovered without dispatch".into())]),
+            ]));
+            let agent = Agent::new(scripts.clone(), tools.clone(), model());
+            let stop = CancellationToken::new();
+            let mut live = crate::LiveTranscript::with_user_input(&Message::user_input(
+                "cancel".into(),
+                std::iter::empty(),
+            ));
+            let mut started = 0;
+            let mut closures = 0;
+            let result = agent
+                .submit(
+                    &session,
+                    "cancel".into(),
+                    "test".into(),
+                    stop.clone(),
+                    |event| {
+                        if (at_admission && matches!(event, AgentEvent::AssistantCommitted { .. }))
+                            || (!at_admission
+                                && matches!(
+                                    event,
+                                    AgentEvent::ToolFinished {
+                                        outcome: crate::ToolOutcome::Observed { .. },
+                                        ..
+                                    }
+                                ))
+                        {
+                            stop.cancel();
+                        }
+                        if matches!(event, AgentEvent::ToolStarted { .. }) {
+                            started += 1;
+                        }
+                        if matches!(
+                            event,
+                            AgentEvent::ToolFinished { .. } | AgentEvent::TurnEnded { .. }
+                        ) {
+                            closures += 1;
+                        }
+                        live.observe(event);
+                    },
+                )
+                .await;
+            if closure_fault {
+                assert!(matches!(result, Err(AgentError::Session(_))), "{result:?}");
+                assert_eq!(closures, 0, "failed closure published uncommitted facts");
+                let view = session.view().unwrap();
+                assert_eq!(view.unfinished_turn, Some(1));
+                assert!(!view.entries.iter().any(|entry| matches!(
+                    entry,
+                    crate::SessionEntry::ToolResult { .. } | crate::SessionEntry::TurnEnded { .. }
+                )));
+                assert!(!root.join("first").exists() && !root.join("unused").exists());
+                rusqlite::Connection::open(&path)
+                    .unwrap()
+                    .execute_batch("DROP TRIGGER reject_close;")
+                    .unwrap();
+                agent
+                    .submit(
+                        &session,
+                        "explicit recovery".into(),
+                        "test".into(),
+                        CancellationToken::new(),
+                        |_| {},
+                    )
+                    .await
+                    .unwrap();
+                let outcomes = session
+                    .view()
+                    .unwrap()
+                    .entries
+                    .into_iter()
+                    .filter_map(|entry| match entry {
+                        crate::SessionEntry::ToolResult { result, .. } => Some(result.outcome),
+                        _ => None,
+                    })
+                    .collect::<Vec<_>>();
+                assert_eq!(
+                    outcomes,
+                    vec![crate::ToolOutcome::Unknown, crate::ToolOutcome::Unknown],
+                    "uncommitted knowledge cannot survive as a fact"
+                );
+                assert!(!root.join("first").exists() && !root.join("unused").exists());
+                assert_eq!(scripts.requests().len(), 2);
+                drop(session);
+                std::fs::remove_dir_all(root).unwrap();
+                continue;
+            }
+            assert!(matches!(result, Err(AgentError::Cancelled)), "{result:?}");
+            assert_eq!(started, usize::from(!at_admission));
+            assert_eq!(root.join("first").exists(), !at_admission);
+            assert!(!root.join("unused").exists());
+            assert_eq!(scripts.requests().len(), 1);
+            let view = session.view().unwrap();
+            let saved = crate::TranscriptProjection::from_session(&view);
+            assert_eq!(live.projection(), &saved);
+            let states = saved
+                .items
+                .iter()
+                .filter_map(|item| match item {
+                    crate::TranscriptItem::ActivityGroup(group) => Some(
+                        group
+                            .activities
+                            .iter()
+                            .map(|activity| activity.state)
+                            .collect::<Vec<_>>(),
+                    ),
+                    _ => None,
+                })
+                .flatten()
+                .collect::<Vec<_>>();
+            assert_eq!(
+                states,
+                vec![
+                    if at_admission {
+                        crate::ActivityState::Rejected
+                    } else {
+                        crate::ActivityState::Failed
+                    },
+                    crate::ActivityState::Rejected
+                ]
+            );
+            assert!(view.entries.iter().any(|entry| matches!(entry, crate::SessionEntry::ToolResult { result, .. }
+                if result.call_id == "unused" && matches!(result.outcome, crate::ToolOutcome::NotDispatched { .. }))));
+            for copy in [
+                session.clone_to(root.join("clone.sqlite")).unwrap(),
+                session
+                    .fork_to(root.join("fork.sqlite"), ForkPoint::AfterTurn(1))
+                    .unwrap(),
+            ] {
+                assert_eq!(
+                    crate::TranscriptProjection::from_session(&copy.view().unwrap()),
+                    saved
+                );
+            }
+            drop(session);
+            let reopened = CodingSession::open(&path).unwrap();
+            assert_eq!(
+                crate::TranscriptProjection::from_session(&reopened.view().unwrap()),
+                saved
+            );
+            drop(reopened);
+            // Even the public low-level route only grants authority when polled.
+            let catalog = ToolSet::new([tools as Arc<dyn ToolSource>]).snapshot();
+            let call = ToolCall {
+                id: "lazy".into(),
+                name: "effect".into(),
+                arguments: serde_json::json!({}),
+                raw_arguments: None,
+            };
+            let future = catalog.execute(&call, CancellationToken::new());
+            assert!(!root.join("lazy").exists());
+            future.await;
+            assert!(root.join("lazy").exists());
+            std::fs::remove_dir_all(root).unwrap();
+        }
     }
 
     #[tokio::test]

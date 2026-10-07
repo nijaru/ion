@@ -298,7 +298,10 @@ fn render_activity(
     render_json(rows, &activity.arguments, width);
     push_wrapped(rows, "Result", width);
     if let Some(result) = &activity.result {
-        if let Some(notice) = result.projection.notice() {
+        if let Some(notice) = result
+            .projection
+            .and_then(ion_core::ToolResultProjection::notice)
+        {
             push_wrapped(rows, notice, width);
         }
         if let Some(diff) = crate::edit_diff::recorded(activity) {
@@ -400,14 +403,16 @@ mod tests {
         assert!(initial.contains("queued"));
         assert!(initial.contains("no committed result"));
         live.observe(AgentEvent::ToolFinished {
-            projection: ion_core::ToolResultProjection::Observed,
             call_id: "call".into(),
             name: "exec".into(),
             activity,
-            output: ToolOutput {
-                value: serde_json::json!({"stdout": format!("{}\nEND_MARKER", "x".repeat(4_000))}),
-                images: Vec::new(),
-                is_error: false,
+            outcome: ion_core::ToolOutcome::Observed {
+                projection: ion_core::ToolResultProjection::Observed,
+                output: ToolOutput {
+                    value: serde_json::json!({"stdout": format!("{}\nEND_MARKER", "x".repeat(4_000))}),
+                    images: Vec::new(),
+                    is_error: false,
+                },
             },
         });
         live.observe(AgentEvent::TextDelta("PROVISIONAL_TEXT".into()));

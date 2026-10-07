@@ -150,7 +150,8 @@ def terminal_failure_settles_operation(workspace, env, mode, coding, fault):
         if coding:
             results = [entry["data"]["result"] for entry in view["entries"] if entry["kind"] == "tool_result"]
             assert len(results) == 1, ("coding tool outcome was lost on rendering failure", [entry["kind"] for entry in view["entries"]])
-            result = results[0]["result"]
+            assert results[0]["outcome"]["state"] == "observed", results[0]
+            result = results[0]["outcome"]["output"]["value"]
             assert view["unfinished_turn"] is None and view["entries"][-1]["data"]["reason"] == "cancelled", view["unfinished_turn"]
         else:
             shells = observed_shells(view)

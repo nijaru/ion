@@ -37,7 +37,10 @@ class Handler(BaseHTTPRequestHandler):
         try:
             if users and "IO_SETTLEMENT" in str(users[-1].get("content")):
                 arguments = {"command": "printf '%s\\n' $$ > io.pid; printf 'OBSERVED_BEFORE_DISCONNECT\\n'; touch io.ready; exec sleep 30", "timeout_ms": 120000}
-                event({"tool_calls": [{"index": 0, "id": "io-call", "type": "function", "function": {"name": "exec", "arguments": json.dumps(arguments)}}]}, "tool_calls")
+                event({"tool_calls": [
+                    {"index": 0, "id": "io-call", "type": "function", "function": {"name": "exec", "arguments": json.dumps(arguments)}},
+                    {"index": 1, "id": "unused-io", "type": "function", "function": {"name": "exec", "arguments": json.dumps({"command": "touch io.unused"})}},
+                ]}, "tool_calls")
                 self.wfile.write(b"data: [DONE]\n\n")
                 self.wfile.flush()
                 return
@@ -364,8 +367,12 @@ with tempfile.TemporaryDirectory(prefix="ion-rpc-") as temporary:
             assert b"Broken pipe" in disconnected.stderr.read()
             view = json.loads(subprocess.run([binary, "--cwd", workspace, "--session", disconnected_session, "inspect"], env=env, capture_output=True, check=True).stdout)
             results = [entry["data"]["result"] for entry in view["entries"] if entry["kind"] == "tool_result"]
-            assert len(results) == 1, ("native outcome was not committed on output failure", [entry["kind"] for entry in view["entries"]], view["unfinished_turn"])
-            output = results[0]["result"]
+            assert len(results) == 2, ("native and unused outcomes were not committed on output failure", [entry["kind"] for entry in view["entries"]], view["unfinished_turn"])
+            by_call = {result["call_id"]: result["outcome"] for result in results}
+            assert by_call["io-call"]["state"] == "observed", results
+            assert by_call["unused-io"]["state"] == "not_dispatched" and "output" not in by_call["unused-io"], results
+            assert not (workspace / "io.unused").exists(), "disconnect dispatched the unused call"
+            output = by_call["io-call"]["output"]["value"]
             assert output["stdout"] == "OBSERVED_BEFORE_DISCONNECT\n" and output["cancelled"] is True, output
             assert output["signal"] is not None and output["wait_error"] is None, output
             assert view["unfinished_turn"] is None and view["entries"][-1]["data"]["reason"] == "cancelled", view

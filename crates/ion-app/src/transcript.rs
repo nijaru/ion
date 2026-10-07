@@ -32,20 +32,32 @@ pub fn render(view: &SessionView) -> String {
                 let _ = write!(text, "\nAssistant\n");
                 message(&mut text, answer);
             }
-            SessionEntry::ToolResult {
-                result, projection, ..
-            } => {
+            SessionEntry::ToolResult { result, .. } => {
+                let output = result.outcome.inspection_output();
                 let _ = writeln!(
                     text,
                     "\nTool result · {} · {}",
                     result.name,
-                    if result.is_error { "error" } else { "ok" }
+                    match &result.outcome {
+                        ion_core::ToolOutcome::Observed { output, .. } =>
+                            if output.is_error {
+                                "error"
+                            } else {
+                                "ok"
+                            },
+                        ion_core::ToolOutcome::NotDispatched { .. } => "not dispatched",
+                        ion_core::ToolOutcome::Unknown => "external effect unknown",
+                    }
                 );
-                if let Some(notice) = projection.notice() {
+                if let Some(notice) = result
+                    .outcome
+                    .projection()
+                    .and_then(ion_core::ToolResultProjection::notice)
+                {
                     let _ = writeln!(text, "  {notice}");
                 }
-                json_value(&mut text, &result.result);
-                for image in &result.images {
+                json_value(&mut text, &output.value);
+                for image in &output.images {
                     let _ = writeln!(text, "  [image: {}]", image.mime_type().as_str());
                 }
             }
@@ -74,7 +86,16 @@ pub fn render(view: &SessionView) -> String {
                     parent.assistant_entry,
                     parent.ordinal,
                     child,
-                    if output.is_error { "error" } else { "ok" }
+                    match outcome {
+                        ion_core::ChildOutcome::Observed { .. } =>
+                            if output.is_error {
+                                "error"
+                            } else {
+                                "ok"
+                            },
+                        ion_core::ChildOutcome::NotDispatched { .. } => "not dispatched",
+                        ion_core::ChildOutcome::Unknown => "external effect unknown",
+                    }
                 );
                 json_value(&mut text, &output.value);
                 for image in &output.images {

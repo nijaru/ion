@@ -170,18 +170,18 @@ then a `run_end` record with `completed`, `cancelled` or `failed` status.
 It carries no content and does not mean a tool was admitted or ran.
 `tool_started` and `tool_finished` share a `call_id` and include a semantic
 `activity` object (kind plus bounded subject when available). `tool_finished`
-contains the observed output and `model_projection`: `observed`,
-`images_unsupported` or `request_limit_exceeded`. The latter two withhold the
-payload from model context, not from saved inspection; `is_error` describes the
-actual tool outcome, not the delivery limit.
+records `state`: `observed`, `not_dispatched` or `unknown`. Only `observed` has a
+`model_projection`: `observed`, `images_unsupported` or `request_limit_exceeded`.
+The latter two withhold the payload from model context, not saved inspection;
+`is_error` describes the observed tool outcome, not the delivery limit. Other
+states carry a diagnostic instead of an invented host observation. `turn_ended`
+publishes a committed Turn closure; clients still await their operation task.
 Code Mode adds `child_tool_admitted` (intent and parent call ID),
 `child_tool_started` (progress), and `child_tool_finished` (committed host output,
 MIME markers and `observed`/`not_dispatched`/`unknown` state). Parent identity is
 `{assistant_entry, ordinal}` and each child has its own ordinal; provider call
 IDs can repeat in later steps. An observed host cancellation response need not
 establish that a remote server stopped its external effects.
-`tool_rejected` reports a call that was never dispatched because the model
-response was truncated.
 `assistant_committed` publishes a durable assistant boundary with `turn`,
 `content`, `tool_activities` and `termination`; `content` uses the library's
 `Content` encoding (for example, `{"Text":"answer"}` or `{"ToolCall":{...}}).
@@ -418,10 +418,13 @@ its original executor, including an MCP connection and remote tool name. This
 freezes local dispatch identity, not the remote server's implementation.
 
 Tools act directly in the working directory with the host user's permissions.
-There is no implicit sandbox. If a process stops during a tool call, Ion
-records its effect as unknown when the next prompt begins; it does not rerun
-the call automatically. `ion --continue inspect` reads the existing log
-without making that repair. `exec` retains the final 64 KiB observed from each
+There is no implicit sandbox. Settlements distinguish observed host output,
+calls known not to have been dispatched, and unknown effects. Cancellation
+closes unused calls as not dispatched. After process loss, a call without a
+committed result remains unknown even if dispatch might not have started. The
+next explicit prompt commits that recovery without rerunning the call;
+reopen, fork and export preserve the distinction. `ion --continue inspect`
+reads the existing log without making that repair. `exec` retains the final 64 KiB observed from each
 output stream. A complete truncated stream also has a private temporary file
 at `stdout_full_path` or `stderr_full_path` so earlier output can be inspected
 without rerunning the command. These files may expire across launches. Ion

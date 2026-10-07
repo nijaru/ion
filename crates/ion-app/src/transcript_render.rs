@@ -742,10 +742,11 @@ fn coalesced_observation(
 }
 
 fn model_result_notice(activity: &TranscriptActivity) -> Option<&'static str> {
-    activity
-        .result
-        .as_ref()
-        .and_then(|result| result.projection.notice())
+    activity.result.as_ref().and_then(|result| {
+        result
+            .projection
+            .and_then(ion_core::ToolResultProjection::notice)
+    })
 }
 
 fn nested_exception(activity: &TranscriptActivity) -> Option<&TranscriptActivity> {
@@ -1223,7 +1224,7 @@ mod tests {
             ),
         );
         read.result.as_mut().unwrap().projection =
-            ion_core::ToolResultProjection::RequestLimitExceeded;
+            Some(ion_core::ToolResultProjection::RequestLimitExceeded);
         let second = activity(
             "r2",
             ToolActivityKind::Read,
@@ -1591,7 +1592,7 @@ mod tests {
             children: Vec::new(),
             state,
             result: result.map(|value| ActivityResult {
-                projection: ion_core::ToolResultProjection::Observed,
+                projection: Some(ion_core::ToolResultProjection::Observed),
                 value,
                 image_mime_types: Vec::new(),
                 is_error: state != ActivityState::Completed,
@@ -1671,7 +1672,7 @@ mod tests {
                 ActivityState::Completed,
                 Some(serde_json::json!({"path":"observed"})),
             );
-            read.result.as_mut().unwrap().projection = projection;
+            read.result.as_mut().unwrap().projection = Some(projection);
             let history = TranscriptProjection {
                 items: vec![TranscriptItem::ActivityGroup(ActivityGroup {
                     turn: 1,
