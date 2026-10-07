@@ -557,10 +557,16 @@ async fn child_images_stay_inspectable_and_reply_limit_is_cumulative() {
 
 #[tokio::test]
 async fn reply_and_audit_budgets_preserve_observations_and_stop_dependents() {
-    for audit in [false, true] {
+    // The third case admits and executes the read, then exhausts audit capacity
+    // on its observed result before the guest can consume it/start a dependent.
+    for (max_json_bytes, audit_admission_bytes, observed) in [
+        (1024, 32 * 1024 * 1024, true),
+        (1024, 1, false),
+        (128 * 1024, 8192, true),
+    ] {
         let root = Workspace::new();
         let session = root.session();
-        fs::write(root.0.join("report"), "PRIVATE_REPORT_".repeat(200)).unwrap();
+        fs::write(root.0.join("report"), "PRIVATE_REPORT_".repeat(4000)).unwrap();
         let (agent, model) = make_agent(
             &root.0,
             [
@@ -571,8 +577,8 @@ async fn reply_and_audit_budgets_preserve_observations_and_stop_dependents() {
                 response(vec![Content::Text("LIMIT_REPORTED".into())]),
             ],
             CodeLimits {
-                max_json_bytes: 1024,
-                audit_admission_bytes: if audit { 1 } else { 32 * 1024 * 1024 },
+                max_json_bytes,
+                audit_admission_bytes,
                 ..CodeLimits::default()
             },
         );
@@ -587,7 +593,7 @@ async fn reply_and_audit_budgets_preserve_observations_and_stop_dependents() {
             .await
             .unwrap();
         let view = session.view().unwrap();
-        if audit {
+        if !observed {
             assert!(view.entries.iter().any(|entry| matches!(
                 entry,
                 SessionEntry::ChildToolResult {
@@ -597,6 +603,12 @@ async fn reply_and_audit_budgets_preserve_observations_and_stop_dependents() {
             )));
         } else {
             assert!(view.entries.iter().any(|entry| matches!(entry, SessionEntry::ChildToolResult { outcome: ChildOutcome::Observed { output }, .. } if !output.is_error && output.value.to_string().contains("PRIVATE_REPORT_"))));
+        }
+        if audit_admission_bytes == 8192 {
+            assert!(view.entries.iter().any(|entry| matches!(entry,
+                SessionEntry::ToolResult { result, .. }
+                if result.is_error && result.result["error"].as_str().is_some_and(|error| error.contains("audit admission byte limit"))
+            )));
         }
         assert!(!root.0.join("dependent").exists());
         assert!(

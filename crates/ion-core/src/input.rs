@@ -1,13 +1,10 @@
 //! Admission and retained-byte ownership for host inputs awaiting Session commit.
-use std::{
-    io::{self, Write},
-    sync::{Arc, Mutex},
-};
+use std::sync::{Arc, Mutex};
 
 use ion_ai::{Content, Message};
 use serde::Serialize;
 
-use crate::{AgentLimits, CodingAgentError, session::valid_user_message};
+use crate::{AgentLimits, CodingAgentError, json_size::encoded_len, session::valid_user_message};
 
 /// Shared by steering and follow-ups, not a process-RSS or model-context quota.
 /// The default preserves the existing RPC retained-input allowance.
@@ -55,7 +52,7 @@ impl InputBudget {
         limits: AgentLimits,
     ) -> Result<InputReservation, CodingAgentError> {
         validate_input(message, limits)?;
-        let bytes = encoded_bytes(&(message, metadata))?;
+        let bytes = encoded_len(&(message, metadata))?;
         let mut used = self
             .used
             .lock()
@@ -128,31 +125,12 @@ pub(crate) fn validate_input(
     {
         return Err(CodingAgentError::ImagesUnsupported);
     }
-    if encoded_bytes(message)? > limits.max_request_bytes {
+    if encoded_len(message)? > limits.max_request_bytes {
         return Err(CodingAgentError::InputTooLarge {
             max_encoded_bytes: limits.max_request_bytes,
         });
     }
     Ok(())
-}
-
-fn encoded_bytes(value: &impl Serialize) -> Result<usize, serde_json::Error> {
-    struct Counter(usize);
-    impl Write for Counter {
-        fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
-            self.0 = self
-                .0
-                .checked_add(bytes.len())
-                .ok_or_else(|| io::Error::other("input size overflow"))?;
-            Ok(bytes.len())
-        }
-        fn flush(&mut self) -> io::Result<()> {
-            Ok(())
-        }
-    }
-    let mut counter = Counter(0);
-    serde_json::to_writer(&mut counter, value)?;
-    Ok(counter.0)
 }
 
 #[cfg(test)]
@@ -162,7 +140,7 @@ mod tests {
     #[test]
     fn shared_admission_accounts_metadata_and_retains_transferred_inputs() {
         let message = Message::user_input("next".into(), []);
-        let size = encoded_bytes(&(&message, &())).unwrap();
+        let size = encoded_len(&(&message, &())).unwrap();
         let budget = InputBudget::new(size * 2);
         let steering = budget
             .admit(message.clone(), &(), AgentLimits::default())

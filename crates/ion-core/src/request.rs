@@ -2,14 +2,16 @@
 use std::sync::Arc;
 
 use ion_ai::{
-    Content, GenerationControls, ModelRef, ModelRequest, ModelRoute, ModelRouteReason,
-    ModelService, Reasoning, ToolChoice,
+    Content, GenerationControls, Message, ModelRef, ModelRequest, ModelRoute, ModelRouteReason,
+    ModelService, PromptCacheIntent, Reasoning, ToolChoice, ToolSpec,
 };
+use serde::Serialize;
 use tokio_util::sync::CancellationToken;
 
 use crate::{
     agent::{AgentError, AgentEvent, AgentLimits},
     generation::{GeneratedResponse, generate_with_retry},
+    json_size::encoded_len,
     session::{ModelContextSnapshot, Session},
     tool_set::{ToolCatalog, ToolSet},
 };
@@ -156,9 +158,40 @@ impl AgentLimits {
         ceiling: u32,
     ) -> Result<Option<u32>, serde_json::Error> {
         // Timelines optimize adapters, not the latest provider-neutral prompt.
-        let mut encoded = request.clone();
-        encoded.context_timeline = None;
-        let bytes = serde_json::to_vec(&encoded)?.len();
+        // Borrow only the latest snapshot; do not clone replay/images or encode
+        // historical loadouts just to discard them. Exhaustive destructuring
+        // makes new request fields require an explicit sizing decision.
+        #[derive(Serialize)]
+        struct LatestRequest<'a> {
+            route: &'a ModelRoute,
+            provider_session_id: &'a Option<String>,
+            instructions: &'a Option<String>,
+            messages: &'a [Message],
+            tools: &'a [ToolSpec],
+            context_timeline: Option<()>,
+            prompt_cache: &'a PromptCacheIntent,
+            controls: &'a GenerationControls,
+        }
+        let ModelRequest {
+            route,
+            provider_session_id,
+            instructions,
+            messages,
+            tools,
+            context_timeline: _,
+            prompt_cache,
+            controls,
+        } = request;
+        let bytes = encoded_len(&LatestRequest {
+            route,
+            provider_session_id,
+            instructions,
+            messages,
+            tools,
+            context_timeline: None,
+            prompt_cache,
+            controls,
+        })?;
         let (encoded_images, image_count) = request
             .messages
             .iter()

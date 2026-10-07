@@ -3,6 +3,8 @@ use ion_ai::{Content, Message, Role, ToolResult};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
+use crate::json_size::encoded_len;
+
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct ToolOutput {
     pub value: Value,
@@ -32,7 +34,7 @@ impl ToolOutput {
         }
         // ImageContent validates at construction/deserialization. It is not an
         // arbitrary base64 string requiring another tolerant validation branch.
-        if serde_json::to_vec(&(&self.value, &self.images))?.len() > max_request_bytes {
+        if encoded_len(&(&self.value, &self.images))? > max_request_bytes {
             return Ok(ToolResultProjection::RequestLimitExceeded);
         }
         Ok(ToolResultProjection::Observed)

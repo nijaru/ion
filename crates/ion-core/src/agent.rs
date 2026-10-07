@@ -1377,6 +1377,52 @@ mod tests {
         let requests = scripts.requests();
         assert_eq!(requests[0].controls.max_output_tokens, 128_000);
         assert!((90_000..92_000).contains(&requests[1].controls.max_output_tokens));
+
+        // Compare the borrowed sizing view with the original encoded neutral
+        // request, including escaped text, both image locations and a large
+        // historical timeline that must not consume the current prompt budget.
+        let mut request = requests[1].clone();
+        request.instructions = Some("quoted \"\\text\n🦀\0".into());
+        let image = tiny_image();
+        request.messages.push(Message {
+            role: Role::User,
+            content: vec![Content::Text("look".into()), Content::Image(image.clone())],
+            provider_replay: None,
+        });
+        request.messages.push(Message {
+            role: Role::Tool,
+            content: vec![Content::ToolResult(ion_ai::ToolResult {
+                call_id: "image".into(),
+                name: "read".into(),
+                result: serde_json::json!({"note":"quoted \" 🦀"}),
+                images: vec![image.clone()],
+                is_error: false,
+            })],
+            provider_replay: None,
+        });
+        let mut reference = request.clone();
+        reference.context_timeline = None;
+        let bytes = serde_json::to_vec(&reference).unwrap().len();
+        let input = bytes.saturating_sub(2 * image.data().len()).div_ceil(3) as u64 + 2 * 16_384;
+        let limits = AgentLimits {
+            max_request_bytes: bytes,
+            context_window_tokens: Some(50_000),
+            ..agent.limits
+        };
+        assert_eq!(
+            limits.request_output_budget(&request, 128_000).unwrap(),
+            limits.output_budget(bytes, input, 128_000),
+        );
+        assert!(limits.output_budget(bytes, input, 128_000).is_some());
+        assert_eq!(
+            AgentLimits {
+                max_request_bytes: bytes - 1,
+                ..limits
+            }
+            .request_output_budget(&request, 128_000)
+            .unwrap(),
+            None,
+        );
         drop(session);
         std::fs::remove_dir_all(root).unwrap();
     }
@@ -2235,6 +2281,17 @@ mod tests {
                 is_error: false,
             },
         ] {
+            let bytes = serde_json::to_vec(&(&output.value, &output.images))
+                .unwrap()
+                .len();
+            assert_eq!(
+                output.model_projection(true, bytes).unwrap(),
+                crate::ToolResultProjection::Observed,
+            );
+            assert_eq!(
+                output.model_projection(true, bytes - 1).unwrap(),
+                crate::ToolResultProjection::RequestLimitExceeded,
+            );
             let root =
                 std::env::temp_dir().join(format!("ion-result-views-{}", uuid::Uuid::now_v7()));
             std::fs::create_dir(&root).unwrap();

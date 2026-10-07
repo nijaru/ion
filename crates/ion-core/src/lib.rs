@@ -5,6 +5,7 @@ mod code_gateway;
 mod composition;
 mod generation;
 mod input;
+mod json_size;
 mod request;
 mod session;
 mod tool_result;

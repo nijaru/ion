@@ -625,21 +625,27 @@ mod tests {
     use serde_json::json;
     use std::sync::atomic::{AtomicBool, Ordering};
 
-    struct Stub(&'static str, &'static str);
+    struct Stub {
+        definition: ToolDefinition,
+        result: &'static str,
+    }
+
+    impl Stub {
+        fn new(name: &'static str, result: &'static str) -> Self {
+            Self {
+                definition: ToolDefinition::external(ToolSpec {
+                    name: name.into(),
+                    description: result.into(),
+                    input_schema: json!({"type":"object"}),
+                }),
+                result,
+            }
+        }
+    }
 
     impl ToolSource for Stub {
         fn registrations(self: Arc<Self>) -> Vec<ToolRegistration> {
-            let definitions = {
-                vec![ToolDefinition::external(ToolSpec {
-                    name: self.0.into(),
-                    description: self.1.into(),
-                    input_schema: json!({"type":"object"}),
-                })]
-            };
-            definitions
-                .into_iter()
-                .map(|definition| ToolRegistration::new(definition, self.clone()))
-                .collect()
+            vec![ToolRegistration::new(self.definition.clone(), self)]
         }
     }
 
@@ -651,37 +657,12 @@ mod tests {
         ) -> BoxFuture<'a, ToolOutput> {
             Box::pin(async move {
                 ToolOutput {
-                    value: json!(self.1),
+                    value: json!(self.result),
                     images: Vec::new(),
                     is_error: false,
                 }
             })
         }
-    }
-
-    #[tokio::test]
-    async fn later_tool_replaces_one_name_without_removing_others() {
-        let sources: Vec<Arc<dyn ToolSource>> = vec![
-            Arc::new(Stub("read", "builtin")),
-            Arc::new(Stub("custom", "added")),
-            Arc::new(Stub("read", "override")),
-        ];
-        let tools = ToolSet::new(sources);
-        let catalog = tools.snapshot();
-        assert_eq!(catalog.specs().len(), 2);
-        assert_eq!(catalog.specs()[0].description, "override");
-        let result = catalog
-            .execute(
-                &ToolCall {
-                    id: "1".into(),
-                    name: "read".into(),
-                    arguments: json!({}),
-                    raw_arguments: None,
-                },
-                CancellationToken::new(),
-            )
-            .await;
-        assert_eq!(result.value, json!("override"));
     }
 
     struct ChangingHost(AtomicBool);
@@ -699,25 +680,29 @@ mod tests {
                     description: "changing".into(),
                     input_schema: json!({"type":"object"}),
                 }),
-                Arc::new(Stub(name, result)),
+                Arc::new(Stub::new(name, result)),
             )]
         }
     }
 
     #[tokio::test]
-    async fn old_catalog_keeps_the_route_that_was_advertised() {
+    async fn replacement_preserves_unrelated_tools_and_frozen_routes() {
         let changing = Arc::new(ChangingHost(AtomicBool::new(false)));
         let tools = ToolSet::new([
-            Arc::new(Stub("read", "builtin")) as Arc<dyn ToolSource>,
+            Arc::new(Stub::new("read", "builtin")) as Arc<dyn ToolSource>,
+            Arc::new(Stub::new("custom", "added")),
             changing.clone(),
         ]);
         let before = tools.snapshot();
-        assert_eq!(before.specs().len(), 1);
-        assert_eq!(before.specs()[0].description, "changing");
+        assert_eq!(before.specs().len(), 2);
+        assert_eq!(
+            before.definition("read").unwrap().spec.description,
+            "changing"
+        );
 
         changing.0.store(true, Ordering::Release);
         let after = tools.snapshot();
-        assert_eq!(after.specs().len(), 2);
+        assert_eq!(after.specs().len(), 3);
         assert_eq!(
             after.definition("read").unwrap().spec.description,
             "builtin"
@@ -730,6 +715,15 @@ mod tests {
             arguments: json!({}),
             raw_arguments: None,
         };
+        for catalog in [&before, &after] {
+            assert_eq!(
+                catalog
+                    .execute(&call("custom"), CancellationToken::new())
+                    .await
+                    .value,
+                json!("added"),
+            );
+        }
         assert_eq!(
             before
                 .execute(&call("read"), CancellationToken::new())
@@ -743,6 +737,13 @@ mod tests {
                 .await
                 .value,
             json!("builtin")
+        );
+        assert_eq!(
+            after
+                .execute(&call("new"), CancellationToken::new())
+                .await
+                .value,
+            json!("changing:new")
         );
     }
 
@@ -832,21 +833,19 @@ mod tests {
 
     impl ToolSource for MixedForRestore {
         fn registrations(self: Arc<Self>) -> Vec<ToolRegistration> {
-            let definitions = {
-                vec![
-                    ToolDefinition::external(ToolSpec {
-                        name: "direct".into(),
-                        description: "direct".into(),
-                        input_schema: json!({"type":"object"}),
-                    }),
-                    ToolDefinition::external(ToolSpec {
-                        name: "deferred".into(),
-                        description: "deferred".into(),
-                        input_schema: json!({"type":"object"}),
-                    })
-                    .deferred(),
-                ]
-            };
+            let definitions = vec![
+                ToolDefinition::external(ToolSpec {
+                    name: "direct".into(),
+                    description: "direct".into(),
+                    input_schema: json!({"type":"object"}),
+                }),
+                ToolDefinition::external(ToolSpec {
+                    name: "deferred".into(),
+                    description: "deferred".into(),
+                    input_schema: json!({"type":"object"}),
+                })
+                .deferred(),
+            ];
             definitions
                 .into_iter()
                 .map(|definition| ToolRegistration::new(definition, self.clone()))
@@ -872,10 +871,9 @@ mod tests {
 
     #[test]
     fn activity_resolves_a_semantic_subject_without_terminal_formatting() {
-        let tools = ToolSet::new([Arc::new(Stub("read", "builtin")) as Arc<dyn ToolSource>]);
-        let mut catalog = tools.snapshot();
-        catalog.entries[0].definition.presentation =
-            ToolPresentation::argument(ToolActivityKind::Read, "path");
+        let mut source = Stub::new("read", "builtin");
+        source.definition.presentation = ToolPresentation::argument(ToolActivityKind::Read, "path");
+        let catalog = ToolSet::new([Arc::new(source) as Arc<dyn ToolSource>]).snapshot();
         let activity = catalog.activity(&ToolCall {
             id: "1".into(),
             name: "read".into(),

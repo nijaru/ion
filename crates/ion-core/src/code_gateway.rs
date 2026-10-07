@@ -17,6 +17,7 @@ use crate::{
     CodeTask, ToolOccurrence,
     agent::{AgentError, AgentEvent},
     composition::failure,
+    json_size::encoded_len,
     session::{Session, SessionError},
     tool_result::ToolOutput,
     tool_set::ToolCatalog,
@@ -65,10 +66,9 @@ impl<F: FnMut(AgentEvent)> Gate<'_, F> {
     }
 
     fn audit(&mut self, observation: &impl Serialize) {
-        let mut count = ByteCount(0);
-        serde_json::to_writer(&mut count, observation)
-            .expect("audit contains JSON values and validated images");
-        self.audit_bytes = self.audit_bytes.saturating_add(count.0);
+        let bytes =
+            encoded_len(observation).expect("audit contains JSON values and validated images");
+        self.audit_bytes = self.audit_bytes.saturating_add(bytes);
         if self.audit_bytes > self.limits.audit_admission_bytes {
             self.close("code_mode audit admission byte limit exceeded");
         }
@@ -263,16 +263,6 @@ impl<F: FnMut(AgentEvent)> Gate<'_, F> {
     }
 }
 
-struct ByteCount(usize);
-impl Write for ByteCount {
-    fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
-        self.0 = self.0.saturating_add(bytes.len());
-        Ok(bytes.len())
-    }
-    fn flush(&mut self) -> io::Result<()> {
-        Ok(())
-    }
-}
 struct BoundedJson {
     data: Vec<u8>,
     limit: usize,
