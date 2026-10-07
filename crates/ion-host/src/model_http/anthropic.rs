@@ -317,6 +317,10 @@ pub(super) fn anthropic_body_for_route(
     }
     if let Some(tools) = tools {
         body["tools"] = tools;
+    }
+    // Inline additions can make tools available without any leading definitions.
+    // Historical definitions still need restrictions even when later removed.
+    if !current_context.tools.is_empty() || !top_level_context.tools.is_empty() {
         let mut choice = match &request.controls.tool_choice {
             ToolChoice::None => json!({"type":"none"}),
             ToolChoice::Auto => json!({"type":"auto"}),

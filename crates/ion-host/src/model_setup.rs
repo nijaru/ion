@@ -465,6 +465,13 @@ mod tests {
                 model: "claude-opus-5-5".into(),
             })
             .unwrap();
+        let openrouter = store
+            .resolve_identity(&ModelRef {
+                provider: "openrouter".into(),
+                model: "openai/gpt-5.4".into(),
+            })
+            .unwrap();
+        assert_eq!(openrouter.wire, HttpWire::OpenRouterChat);
         assert!(claude.capabilities.context_mutation.mid_conversation_system);
         assert!(claude.capabilities.context_mutation.mid_conversation_tools);
         assert_eq!(

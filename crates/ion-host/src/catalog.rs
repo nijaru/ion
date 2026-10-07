@@ -293,7 +293,7 @@ const MODELS: &[CatalogModel] = &[
         provider: "openrouter",
         id: "openai/gpt-5.4",
         label: "GPT-5.4 via OpenRouter",
-        wire: CatalogWire::ChatCompletions,
+        wire: CatalogWire::OpenRouterChat,
         endpoint: OPENROUTER_ENDPOINT,
         api_key_env: "OPENROUTER_API_KEY",
         context_window: 1_050_000,

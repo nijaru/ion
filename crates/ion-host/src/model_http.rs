@@ -1032,7 +1032,7 @@ mod tests {
         net::TcpListener,
     };
 
-    async fn consume_request(socket: &mut tokio::net::TcpStream) {
+    async fn read_request_body(socket: &mut tokio::net::TcpStream) -> Vec<u8> {
         let mut reader = BufReader::new(socket);
         let mut length = 0;
         loop {
@@ -1047,7 +1047,9 @@ mod tests {
                 length = value.trim().parse().unwrap();
             }
         }
-        reader.read_exact(&mut vec![0; length]).await.unwrap();
+        let mut body = vec![0; length];
+        reader.read_exact(&mut body).await.unwrap();
+        body
     }
 
     async fn serve(body: String, status: &str) -> String {
@@ -1060,7 +1062,7 @@ mod tests {
         let status = status.to_owned();
         tokio::spawn(async move {
             let (mut socket, _) = listener.accept().await.unwrap();
-            consume_request(&mut socket).await;
+            read_request_body(&mut socket).await;
             let response = format!(
                 "HTTP/1.1 {status}\r\nContent-Type: text/event-stream\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
                 body.len()
@@ -1152,6 +1154,65 @@ mod tests {
         assert!(chat_body(&request, HttpWire::OpenRouterChat).is_ok());
     }
 
+    #[tokio::test]
+    async fn catalog_openrouter_route_keeps_affinity_controls_and_structured_replay() {
+        let store = crate::model_setup::ModelStore::new(
+            std::env::temp_dir().join("ion-unused-catalog-config"),
+        );
+        let identity = ModelRef {
+            provider: "openrouter".into(),
+            model: "openai/gpt-5.4".into(),
+        };
+        let selection = store.resolve_identity(&identity).unwrap();
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let endpoint = format!(
+            "http://{}/v1/chat/completions",
+            listener.local_addr().unwrap()
+        );
+        let detail = json!({"type":"reasoning.encrypted","data":"fixture-opaque","index":0});
+        let event = json!({"choices":[{"index":0,"delta":{"reasoning_details":[detail.clone()],"content":"done"},"finish_reason":"stop"}]});
+        let body = format!("data: {event}\n\ndata: [DONE]\n\n");
+        let server = tokio::spawn(async move {
+            let (mut socket, _) = listener.accept().await.unwrap();
+            let captured: Value =
+                serde_json::from_slice(&read_request_body(&mut socket).await).unwrap();
+            socket.write_all(format!(
+                "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                body.len(),
+            ).as_bytes()).await.unwrap();
+            captured
+        });
+        let mut request = request();
+        request.route = ModelRoute::direct(identity, ModelRouteReason::UserRequest);
+        request.provider_session_id = Some("fixture-session".into());
+        request.controls.reasoning = Reasoning::High;
+        let service = HttpModelService::new(&endpoint, selection.wire, Arc::new(|| None)).unwrap();
+        let mut stream = service.stream(request.clone()).await.unwrap();
+        let mut completed = None;
+        while let Some(event) = stream.next().await {
+            if let ModelStreamEvent::Completed(response) = event.unwrap() {
+                completed = Some(response);
+            }
+        }
+        let captured = server.await.unwrap();
+        assert_eq!(captured["session_id"], "fixture-session");
+        assert_eq!(captured["reasoning"]["effort"], "high");
+        let response = completed.unwrap();
+        assert_eq!(response.message.content, vec![Content::Text("done".into())]);
+        request.messages.push(response.message);
+        request
+            .messages
+            .push(Message::user_input("continue".into(), []));
+        let continuation = chat_body(&request, selection.wire).unwrap();
+        let assistant = continuation["messages"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|message| message["role"] == "assistant")
+            .unwrap();
+        assert_eq!(assistant["reasoning_details"], json!([detail]));
+    }
+
     #[test]
     fn anthropic_inline_tool_deltas_keep_the_initial_top_level_prefix() {
         let search = ToolSpec {
@@ -1238,6 +1299,59 @@ mod tests {
             ])
         );
         assert!(anthropic_body_uses_inline_tools(&body));
+    }
+
+    #[test]
+    fn anthropic_inline_tools_preserve_requested_tool_restrictions() {
+        let mut request = request();
+        request.route.effective.provider = "anthropic".into();
+        request.route.effective.model = "claude-opus-5-5".into();
+        request.context_timeline = Some(ModelContextTimeline {
+            initial: ModelContextState {
+                instructions: request.instructions.clone(),
+                tools: Vec::new(),
+            },
+            changes: vec![ModelContextChange {
+                after_message: 1,
+                context: ModelContextState {
+                    instructions: request.instructions.clone(),
+                    tools: request.tools.clone(),
+                },
+            }],
+        });
+        for (choice, parallel, expected) in [
+            (ToolChoice::None, false, json!({"type":"none"})),
+            (
+                ToolChoice::Auto,
+                false,
+                json!({"type":"auto","disable_parallel_tool_use":true}),
+            ),
+            (
+                ToolChoice::Auto,
+                true,
+                json!({"type":"auto","disable_parallel_tool_use":false}),
+            ),
+        ] {
+            request.controls.tool_choice = choice;
+            request.controls.parallel_tool_calls = parallel;
+            let body = anthropic_body_for_route(&request, true, true).unwrap();
+            assert!(body.get("tools").is_none());
+            assert!(anthropic_body_uses_inline_tools(&body));
+            assert_eq!(
+                body["messages"][1]["content"][0]["tool"]["definition"]["name"],
+                "read"
+            );
+            assert_eq!(body["tool_choice"], expected);
+        }
+
+        let timeline = request.context_timeline.as_mut().unwrap();
+        timeline.initial.tools = std::mem::take(&mut request.tools);
+        timeline.changes[0].context.tools.clear();
+        request.controls.tool_choice = ToolChoice::None;
+        let body = anthropic_body_for_route(&request, true, true).unwrap();
+        assert_eq!(body["tools"][0]["name"], "read");
+        assert_eq!(body["messages"][1]["content"][0]["type"], "tool_removal");
+        assert_eq!(body["tool_choice"], json!({"type":"none"}));
     }
 
     #[test]
@@ -2479,7 +2593,7 @@ mod tests {
                 loop {
                     let (mut socket, _) = listener.accept().await.unwrap();
                     count.fetch_add(1, Ordering::SeqCst);
-                    consume_request(&mut socket).await;
+                    read_request_body(&mut socket).await;
                     let reply = format!("HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len());
                     socket.write_all(reply.as_bytes()).await.unwrap();
                 }
