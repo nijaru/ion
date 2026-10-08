@@ -105,17 +105,23 @@ struct Frontend {
     pending: VecDeque<TurnInput>,
     input_budget: InputBudget,
     prompt_history: Vec<String>,
-    history_cursor: Option<usize>,
-    saved_draft: String,
+    browsing: Option<PromptBrowse>,
     details: Option<DetailView>,
     clipboard_job: Option<tokio::task::JoinHandle<Result<PreparedPaste>>>,
     cwd: PathBuf,
 }
 
+struct PromptBrowse {
+    index: usize,
+    end: usize,
+    draft: String,
+    cursor: usize,
+}
+
 struct TurnInput {
     prompt: String,
     images: Vec<LoadedImage>,
-    reservation: Option<InputReservation>,
+    _reservation: Option<InputReservation>,
 }
 
 impl TurnInput {
@@ -123,7 +129,7 @@ impl TurnInput {
         Self {
             prompt,
             images,
-            reservation: None,
+            _reservation: None,
         }
     }
 
@@ -159,7 +165,7 @@ impl TurnInput {
         Self {
             prompt,
             images,
-            reservation: Some(reservation),
+            _reservation: Some(reservation),
         }
     }
 }
@@ -636,10 +642,7 @@ async fn edit_draft_in_terminal(
     *input = terminal
         .input()
         .context("resume terminal input after editor")?;
-    Ok(edited.map(|edited| {
-        ui.draft = edited;
-        ui.cursor = ui.draft.len();
-    }))
+    Ok(edited.map(|edited| ui.replace_draft(edited)))
 }
 
 fn apply_fork(
@@ -1151,6 +1154,7 @@ fn return_pending_to_editor(ui: &mut Frontend) {
     if ui.pending.is_empty() {
         return;
     }
+    ui.restore_browsed_draft();
     let mut restored = Vec::new();
     let remaining = ui
         .pending
@@ -1314,27 +1318,13 @@ async fn run_turn(
     terminal
         .check_active()
         .context("terminal lifecycle failed before turn admission")?;
-    let TurnInput {
-        prompt,
-        images: attached,
-        mut reservation,
-    } = incoming;
     let session = runtime.session();
     let selected = runtime.selected();
-    let prior_entry_count = match session.entry_count() {
-        Ok(count) => count as usize,
-        Err(error) => {
-            ui.images.splice(0..0, attached);
-            ui.draft = if ui.draft.is_empty() {
-                prompt
-            } else {
-                format!("{prompt}\n\n{}", ui.draft)
-            };
-            ui.cursor = ui.draft.len();
-            return Err(error.into());
-        }
-    };
-    let user_message = Message::user_input(prompt.clone(), attached.iter().cloned());
+    let user_message =
+        Message::user_input(incoming.prompt.clone(), incoming.images.iter().cloned());
+    // Core's admission event transfers custody. A later history read cannot
+    // decide whether the original input (and its reservation) still belongs here.
+    let mut unaccepted = Some(incoming);
     let progress = Arc::new(Mutex::new(LiveTranscript::with_user_input(&user_message)));
     let observer = progress.clone();
     let stop = CancellationToken::new();
@@ -1348,9 +1338,9 @@ async fn run_turn(
             runtime.instructions().to_owned(),
             stop.clone(),
             &steering,
-            move |event| {
+            |event| {
                 if matches!(&event, ion_core::CodingAgentEvent::TurnAccepted { .. }) {
-                    drop(reservation.take());
+                    drop(unaccepted.take());
                 }
                 observer
                     .lock()
@@ -1410,29 +1400,27 @@ async fn run_turn(
     for input in steering.take_uncommitted() {
         ui.pending.push_back(TurnInput::from_accepted(input));
     }
-    if result.is_err() {
+    if let Some(incoming) = unaccepted {
+        ui.pending.push_front(incoming);
+        return_pending_to_editor(ui);
+    } else if result.is_err() {
         return_pending_to_editor(ui);
     }
-    let view = session.view()?;
-    if result.is_err()
-        && !view.entries[prior_entry_count..]
-            .iter()
-            .any(|entry| matches!(entry, ion_core::SessionEntry::TurnStarted { .. }))
-    {
-        ui.images.splice(0..0, attached);
-        ui.draft = if ui.draft.is_empty() {
-            prompt
-        } else {
-            format!("{prompt}\n\n{}", ui.draft)
-        };
-        ui.cursor = ui.draft.len();
-    }
-    ui.load_history(session, &view);
-    ui.scroll = 0;
     ui.status = match result {
         Ok(_) => String::new(),
         Err(error) => format!("Turn ended: {error}"),
     };
+    match session.view() {
+        Ok(view) => ui.load_history(session, &view),
+        Err(error) => {
+            // Stop queued dispatch, but retain the editor and report the read
+            // failure. Started work has already settled; accepted input is never
+            // restored or replayed merely because presentation cannot refresh.
+            return_pending_to_editor(ui);
+            ui.note(format!("Session history refresh failed: {error}"));
+        }
+    }
+    ui.scroll = 0;
     if let Some(error) = output_error {
         return Err(error.context("terminal output failed after operation settlement"));
     }
@@ -1567,7 +1555,7 @@ impl Frontend {
         if let Some(details) = &mut self.details {
             details.invalidate();
         }
-        self.prompt_history = view
+        let prompt_history = view
             .entries
             .iter()
             .filter_map(|entry| match entry {
@@ -1586,8 +1574,29 @@ impl Frontend {
                 _ => None,
             })
             .collect();
-        self.history_cursor = None;
-        self.saved_draft.clear();
+        self.replace_prompt_history(prompt_history, same_session);
+    }
+
+    fn replace_prompt_history(&mut self, prompts: Vec<String>, same_session: bool) {
+        if self.browsing.as_ref().is_some_and(|browse| {
+            !same_session || !prompts.starts_with(&self.prompt_history[..browse.end])
+        }) {
+            self.restore_browsed_draft();
+        }
+        self.prompt_history = prompts;
+    }
+
+    fn restore_browsed_draft(&mut self) {
+        if let Some(browse) = self.browsing.take() {
+            self.draft = browse.draft;
+            self.cursor = browse.cursor;
+        }
+    }
+
+    fn replace_draft(&mut self, draft: String) {
+        self.browsing = None;
+        self.draft = draft;
+        self.cursor = self.draft.len();
     }
 
     fn pending_history_rows(&self, width: usize) -> Vec<Line<'static>> {
@@ -1682,7 +1691,7 @@ impl Frontend {
                         if self.draft.len() - range.len() + text.len() <= MAX_DRAFT {
                             self.draft.replace_range(range, &text);
                             self.cursor = cursor;
-                            self.history_cursor = None;
+                            self.browsing = None;
                         } else {
                             self.status = format!("Prompt is limited to {MAX_DRAFT} bytes");
                         }
@@ -1701,8 +1710,7 @@ impl Frontend {
                 if self.draft.is_empty() {
                     Action::Quit
                 } else {
-                    self.draft.clear();
-                    self.cursor = 0;
+                    self.replace_draft(String::new());
                     Action::None
                 }
             }
@@ -1754,6 +1762,7 @@ impl Frontend {
                 code: KeyCode::Enter,
                 modifiers,
             } if modifiers.contains(Modifiers::ALT) => {
+                self.browsing = None;
                 let prompt = std::mem::take(&mut self.draft);
                 self.cursor = 0;
                 if prompt.trim().is_empty() {
@@ -1782,6 +1791,7 @@ impl Frontend {
                 code: KeyCode::Enter,
                 ..
             } => {
+                self.browsing = None;
                 let prompt = std::mem::take(&mut self.draft);
                 self.cursor = 0;
                 let syntax = prompt.trim();
@@ -1817,7 +1827,7 @@ impl Frontend {
                 code: KeyCode::Backspace,
                 ..
             } => {
-                self.history_cursor = None;
+                self.browsing = None;
                 let start = previous_grapheme(&self.draft, self.cursor);
                 self.draft.replace_range(start..self.cursor, "");
                 self.cursor = start;
@@ -1827,7 +1837,7 @@ impl Frontend {
                 code: KeyCode::Delete,
                 ..
             } => {
-                self.history_cursor = None;
+                self.browsing = None;
                 let end = next_grapheme(&self.draft, self.cursor);
                 self.draft.replace_range(self.cursor..end, "");
                 Action::None
@@ -2065,7 +2075,7 @@ impl Frontend {
         }
         self.draft.replace_range(start..end, &mention);
         self.cursor = start + mention.len();
-        self.history_cursor = None;
+        self.browsing = None;
     }
     fn insert(&mut self, text: &str) {
         self.completion.clear();
@@ -2091,7 +2101,7 @@ impl Frontend {
             self.status = format!("Prompt is limited to {MAX_DRAFT} bytes");
             return;
         }
-        self.history_cursor = None;
+        self.browsing = None;
         self.draft.insert_str(self.cursor, &clean);
         self.cursor += clean.len();
     }
@@ -2100,31 +2110,28 @@ impl Frontend {
         if self.prompt_history.is_empty() {
             return;
         }
-        let index = match self.history_cursor {
-            Some(0) => 0,
-            Some(index) => index - 1,
-            None => {
-                self.saved_draft = self.draft.clone();
-                self.prompt_history.len() - 1
-            }
-        };
-        self.history_cursor = Some(index);
-        self.draft = self.prompt_history[index].clone();
+        let browse = self.browsing.get_or_insert_with(|| PromptBrowse {
+            index: self.prompt_history.len(),
+            end: self.prompt_history.len(),
+            draft: self.draft.clone(),
+            cursor: self.cursor,
+        });
+        browse.index = browse.index.saturating_sub(1);
+        self.draft = self.prompt_history[browse.index].clone();
         self.cursor = self.draft.len();
     }
 
     fn history_next(&mut self) {
-        let Some(index) = self.history_cursor else {
+        let Some(browse) = &mut self.browsing else {
             return;
         };
-        if index + 1 < self.prompt_history.len() {
-            self.history_cursor = Some(index + 1);
-            self.draft = self.prompt_history[index + 1].clone();
+        if browse.index + 1 < browse.end {
+            browse.index += 1;
+            self.draft = self.prompt_history[browse.index].clone();
+            self.cursor = self.draft.len();
         } else {
-            self.history_cursor = None;
-            self.draft = std::mem::take(&mut self.saved_draft);
+            self.restore_browsed_draft();
         }
-        self.cursor = self.draft.len();
     }
 
     fn queue_follow_up(
@@ -2159,7 +2166,7 @@ impl Frontend {
                 self.pending.push_back(TurnInput {
                     prompt,
                     images: std::mem::take(&mut self.images),
-                    reservation: Some(reservation),
+                    _reservation: Some(reservation),
                 });
                 self.status = format!("{} follow-up(s) queued", self.pending.len());
             }
@@ -2173,6 +2180,7 @@ impl Frontend {
 
     fn dequeue(&mut self) {
         if let Some(TurnInput { prompt, images, .. }) = self.pending.pop_back() {
+            self.restore_browsed_draft();
             self.images.extend(images);
             if self.draft.is_empty() {
                 self.draft = prompt;
@@ -2180,7 +2188,7 @@ impl Frontend {
                 self.draft = format!("{}\n\n{prompt}", self.draft);
             }
             self.cursor = self.draft.len();
-            self.history_cursor = None;
+            self.browsing = None;
             self.status = format!("{} follow-up(s) remain queued", self.pending.len());
         }
     }
@@ -2874,6 +2882,52 @@ mod tests {
             assert!(!status.contains("Ctrl-C cancels"), "{status}");
         }
         assert_eq!(visible_status(&ui, None).unwrap(), "Details closed");
+    }
+
+    #[test]
+    fn history_refresh_preserves_browsed_draft_and_cursor() {
+        let mut ui = Frontend {
+            prompt_history: vec!["older".into()],
+            draft: "unsent 🦀 draft".into(),
+            cursor: "unsent ".len(),
+            ..Frontend::default()
+        };
+        ui.history_previous();
+        assert_eq!(ui.draft, "older");
+        // Completion/model refresh updates history, not ownership of the editor.
+        ui.replace_prompt_history(vec!["older".into(), "newly committed".into()], true);
+        ui.history_next();
+        assert_eq!(ui.draft, "unsent 🦀 draft");
+        assert_eq!(ui.cursor, "unsent ".len());
+        ui.history_previous();
+        ui.replace_prompt_history(vec!["different session".into()], false);
+        assert_eq!(ui.draft, "unsent 🦀 draft");
+        assert_eq!(ui.cursor, "unsent ".len());
+    }
+
+    #[test]
+    fn recovered_input_and_explicit_clear_end_history_browsing() {
+        let mut ui = Frontend {
+            prompt_history: vec!["older".into()],
+            draft: "unsent".into(),
+            cursor: 6,
+            ..Frontend::default()
+        };
+        ui.history_previous();
+        ui.pending
+            .push_back(TurnInput::direct("recovered".into(), vec![]));
+        return_pending_to_editor(&mut ui);
+        ui.history_next();
+        assert_eq!(ui.draft, "recovered\n\nunsent");
+        ui.history_previous();
+        ui.key(KeyEvent::new(KeyCode::Char('c'), Modifiers::CONTROL), None);
+        ui.history_next();
+        assert!(ui.draft.is_empty());
+        ui.insert("another unsent");
+        ui.history_previous();
+        ui.replace_draft("editor replacement".into());
+        ui.history_next();
+        assert_eq!(ui.draft, "editor replacement");
     }
 
     #[test]

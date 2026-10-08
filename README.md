@@ -258,8 +258,10 @@ recent queued follow-up to the editor, and Ctrl-C cancels. The terminal uses the
 same shared queued-input allowance and route checks as RPC. Rejected input
 remains in the editor with its attachments; recovered steering retains image
 notes with their corresponding images. Queued resource commands expand before
-admission, so later resource changes do not rewrite an accepted follow-up. Up and Down browse
-earlier prompts when the cursor reaches the first or last editor line. Type
+admission, so later resource changes do not rewrite an accepted follow-up.
+Up and Down browse earlier prompts when the cursor reaches the first or last
+editor line. Returning from history restores the unsent draft and its cursor,
+even if a running Turn refreshed history. Type
 `@` to pick a project file, or use Tab after a partial `@path`; the picker
 inserts a path reference for the model to read, not the file's contents.
 Type `/` to discover terminal commands, prompt templates and `/skill:NAME`.
@@ -272,9 +274,10 @@ assistant text, in a full-screen detail view. Left/Right browse earlier/newer
 pages (32 messages, calls or shell records); Up/Down and Page-Up/Page-Down
 scroll. Results retain their full stored content, including capture paths.
 `/tools` lists calls, `/tool` opens the latest and `/tool N` selects one. Esc or Ctrl-O
-closes details and restores the selected chat renderer. Input
-that has not reached the model returns to the editor if the turn fails or is
-cancelled.
+closes details and restores the selected chat renderer. Input not yet accepted
+by the Session returns to the editor if the turn fails or is cancelled.
+A history refresh failure reports a notice and returns queued input; it never
+replays input already accepted by the Session.
 Ctrl-G edits the current draft in `$VISUAL`, then `$EDITOR`, falling back to
 `vi`; Ion keeps the original draft if the editor fails. Ctrl-X or `/copy`
 copies the last committed assistant answer to the system clipboard when one

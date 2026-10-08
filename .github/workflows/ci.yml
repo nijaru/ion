@@ -50,6 +50,8 @@ jobs:
         run: python3 scripts/smoke_mcp.py
       - name: Selected-point fork smoke
         run: python3 scripts/smoke_fork.py
+      - name: Input custody smoke
+        run: python3 scripts/smoke_input.py
       - name: Resource reload smoke
         run: python3 scripts/smoke_resources.py
 
