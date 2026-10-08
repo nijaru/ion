@@ -24,7 +24,9 @@ pub(crate) fn open_regular(path: &Path) -> io::Result<File> {
     Ok(file)
 }
 
-pub(crate) fn read_bounded(path: &Path, limit: usize) -> io::Result<Vec<u8>> {
+/// Read at most `limit` bytes from a verified regular file or its symlink.
+/// Special files are rejected without a blocking open; oversized data is an error.
+pub fn read_bounded(path: &Path, limit: usize) -> io::Result<Vec<u8>> {
     let bound = u64::try_from(limit)
         .ok()
         .and_then(|limit| limit.checked_add(1))

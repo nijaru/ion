@@ -65,7 +65,7 @@ class KeyboardTerminal:
         self.pending = self.pending[start:] if start >= 0 else b""
 
 
-def exercise(mode, supported=True, panic=False):
+def exercise(mode, supported=True, panic=False, editor_fault=None):
     with tempfile.TemporaryDirectory(prefix="ion-keyboard-") as temporary:
         work = Path(temporary)
         requests = []
@@ -100,8 +100,17 @@ def exercise(mode, supported=True, panic=False):
             f" open({str(marker)!r},'w').write(re.search(rb'\\x1b\\[\\?(\\d+)u',data)[1].decode())\n"
             "finally: termios.tcsetattr(0,termios.TCSANOW,old)\n"
         )
+        if editor_fault:
+            with editor.open("a") as script:
+                script.write(
+                    "import sys\n"
+                    "path=sys.argv[-1]; os.unlink(path)\n"
+                    f"pipe=path+'.pipe' if {editor_fault!r} == 'symlink-fifo' else path\n"
+                    "os.mkfifo(pipe)\n"
+                    "if pipe != path: os.symlink(pipe,path)\n"
+                )
         editor.chmod(0o755)
-        env.update(EDITOR=str(editor), VISUAL=str(editor))
+        env.update(EDITOR=str(editor), VISUAL=str(editor), TMPDIR=str(work))
         if panic:
             env["ION_SMOKE_PANIC_AFTER_FIRST_DRAW"] = "1"
         master, slave = pty.openpty()
@@ -159,7 +168,12 @@ def exercise(mode, supported=True, panic=False):
                     drain()
                     users = [message for message in requests[0]["messages"] if message["role"] == "user"]
                     assert users[-1]["content"] == "START_first\nsecond", users[-1]
-                    os.write(master, b"/editor\r")
+                    if editor_fault:
+                        # Keep a multiline literal and mid-line cursor through
+                        # editor rejection; resume type-ahead inserts at it.
+                        os.write(master, b"  retained\x1b[13;2udraft\x1b[D\x07")
+                    else:
+                        os.write(master, b"/editor\r")
                     until(lambda: marker.exists() and terminal.stacks[terminal.alternate][-1] == 1)
                     assert marker.read_text() == "4", "editor inherited Ion's keyboard push"
                     until(lambda: terminal.cursor_queries == 2)
@@ -167,7 +181,10 @@ def exercise(mode, supported=True, panic=False):
                     os.write(master, b"after\r")
                     until(lambda: len(requests) == 2 and b"done" in output[checkpoint:])
                     users = [message for message in requests[-1]["messages"] if message["role"] == "user"]
-                    assert users[-1]["content"] == "RESUME_after", users[-1]
+                    expected_input = "  retained\ndrafRESUME_aftert" if editor_fault else "RESUME_after"
+                    assert users[-1]["content"] == expected_input, users[-1]
+                    if editor_fault:
+                        assert b"not a regular file" in output, "editor special-file failure was not reported"
                 if mode == "inline":
                     os.write(master, b"\x0f")
                     until(lambda: terminal.alternate)
@@ -181,7 +198,8 @@ def exercise(mode, supported=True, panic=False):
                 assert child.wait() == 0, output[-2000:]
             assert not terminal.alternate
             assert terminal.stacks == [[4], [8]], terminal.stacks
-            print(f"Ion {mode} {'supported' if supported else 'unsupported'} keyboard custody {'panic' if panic else 'draft/editor/modal/exit'}: OK")
+            outcome = editor_fault or ('panic' if panic else 'draft/editor/modal/exit')
+            print(f"Ion {mode} {'supported' if supported else 'unsupported'} keyboard custody {outcome}: OK")
         finally:
             if child is not None and child.poll() is None:
                 child.kill()
@@ -199,3 +217,5 @@ exercise("inline")
 exercise("fullscreen")
 exercise("fullscreen", panic=True)
 exercise("fullscreen", supported=False, panic=True)
+exercise("inline", editor_fault="fifo")
+exercise("fullscreen", editor_fault="symlink-fifo")

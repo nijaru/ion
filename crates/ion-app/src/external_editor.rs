@@ -46,11 +46,15 @@ async fn edit_with_command(command: &str, content: &str, max_bytes: usize) -> Re
         .await
         .with_context(|| format!("cannot launch editor {program}"))?;
     ensure!(status.success(), "editor exited with {status}");
-    ensure!(
-        fs::metadata(&path)?.len() <= (max_bytes + 3) as u64,
-        "edited draft exceeds {max_bytes} bytes"
-    );
-    let mut edited = fs::read_to_string(&path).context("edited draft is not UTF-8")?;
+    // Editors may atomically replace the draft. Validate and bound the opened
+    // descriptor, not a separate path stat that can race or admit a FIFO.
+    // Normalization removes at most a three-byte BOM and one final newline.
+    let read_limit = max_bytes
+        .checked_add(4)
+        .context("editor draft byte bound overflow")?;
+    let bytes = ion_host::file_io::read_bounded(&path, read_limit)
+        .with_context(|| format!("cannot read edited draft within {max_bytes}-byte limit"))?;
+    let mut edited = String::from_utf8(bytes).context("edited draft is not UTF-8")?;
     if edited.starts_with('\u{feff}') {
         edited.remove(0);
     }
@@ -81,6 +85,16 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(edited, "changed");
+        assert_eq!(
+            edit_with_command(
+                r#"/bin/sh -c 'printf "\357\273\277abcd\n" > "$0"'"#,
+                "original",
+                4
+            )
+            .await
+            .unwrap(),
+            "abcd"
+        );
         assert!(
             edit_with_command("/bin/sh -c 'exit 7'", "original", 64)
                 .await
