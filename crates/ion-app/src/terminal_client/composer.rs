@@ -22,39 +22,62 @@ impl WrappedInput {
 }
 
 pub(super) fn wrap_input(draft: &str, cursor: usize, width: usize) -> WrappedInput {
-    let width = width.max(3);
+    let width = width.max(1);
+    let (prompt, indent) = match width {
+        1 | 2 => ("", ""),
+        3 => ("›", " "),
+        _ => ("› ", "  "),
+    };
+    let margin = UnicodeWidthStr::width(prompt);
     let mut lines = Vec::new();
-    let mut line = "› ".to_owned();
-    let mut col = 2;
-    let mut position = (0, 2);
+    let mut line = prompt.to_owned();
+    let mut col = margin;
+    let mut position = (0, margin);
     for (byte, grapheme) in draft.grapheme_indices(true) {
         if grapheme == "\n" {
             if byte == cursor {
-                position = (lines.len(), col);
+                position = if col == width {
+                    (lines.len() + 1, margin)
+                } else {
+                    (lines.len(), col)
+                };
             }
             lines.push(line);
-            line = "  ".into();
-            col = 2;
+            line = indent.into();
+            col = margin;
             continue;
         }
-        let display = if grapheme == "\t" { "    " } else { grapheme };
-        let size = UnicodeWidthStr::width(display).max(1);
-        if col + size > width && col > 2 {
-            lines.push(line);
-            line = "  ".into();
-            col = 2;
+        let (unit, repetitions) = if grapheme == "\t" {
+            (" ", 4)
+        } else {
+            (grapheme, 1)
+        };
+        // Expand tabs across rows. A glyph wider than the entire content area
+        // needs a display-only placeholder; the literal and byte cursor stay intact.
+        for (part, unit) in std::iter::repeat_n(unit, repetitions).enumerate() {
+            let size = UnicodeWidthStr::width(unit);
+            let (unit, size) = if size > width - margin {
+                ("�", 1)
+            } else {
+                (unit, size)
+            };
+            if col >= width || col + size > width {
+                lines.push(line);
+                line = indent.into();
+                col = margin;
+            }
+            if part == 0 && (byte..byte + grapheme.len()).contains(&cursor) {
+                position = (lines.len(), col);
+            }
+            line.push_str(unit);
+            col += size;
         }
-        if byte == cursor {
-            position = (lines.len(), col);
-        }
-        line.push_str(display);
-        col += size;
     }
     if cursor == draft.len() {
         if col >= width {
             lines.push(line);
-            line = "  ".into();
-            col = 2;
+            line = indent.into();
+            col = margin;
         }
         position = (lines.len(), col);
     }
@@ -85,10 +108,40 @@ mod tests {
     }
 
     #[test]
+    fn narrow_rows_and_tabs_keep_cells_and_cursor_inside_the_surface() {
+        for width in 1..=8 {
+            for draft in ["a", "🦀", "a\tb", "\u{0301}a", "one\ntwo"] {
+                for cursor in draft
+                    .char_indices()
+                    .map(|(byte, _)| byte)
+                    .chain([draft.len()])
+                {
+                    let input = wrap_input(draft, cursor, width);
+                    assert!(input.cursor_col < width, "{width}: {draft:?}");
+                    assert!(input.lines.iter().all(|line| line.width() <= width));
+                    assert!(input.visible_range(1).contains(&input.cursor_row));
+                }
+            }
+        }
+        // Four display spaces survive wrapping; the source tab is never rewritten.
+        assert_eq!(wrap_input("\t", 1, 2).lines, ["  ", "  ", ""]);
+    }
+
+    #[test]
+    fn cursor_inside_a_joined_grapheme_stays_on_its_wrapped_row() {
+        let draft = "first\n👩\u{200d}🦀";
+        let input = wrap_input(draft, "first\n👩\u{200d}".len(), 30);
+        assert_eq!((input.cursor_row, input.cursor_col), (1, 2));
+    }
+
+    #[test]
     fn unicode_cursor_tracks_the_original_byte_position() {
         let draft = "ab🦀\nnext";
         let input = wrap_input(draft, draft.len(), 8);
         assert_eq!(input.lines, vec!["› ab🦀", "  next"]);
         assert_eq!((input.cursor_row, input.cursor_col), (1, 6));
+        let leading_combining = "\u{0301}a";
+        let input = wrap_input(leading_combining, leading_combining.len(), 8);
+        assert_eq!((input.cursor_row, input.cursor_col), (0, 3));
     }
 }
