@@ -148,8 +148,11 @@ permanent footer rows; `/session` exposes Session/context detail on demand.
 Cloning copies committed conversation and context into a new session with
 independent future turns. Both sessions still use the same live working
 directory; cloning does not copy or restore files.
-`/fork` opens a searchable Turn picker and restores the selected user input
-to the editor in a new Session; `/fork TURN` selects directly. `/fork-after
+`/fork` opens a searchable Turn picker and restores the selected prompt and
+images, including each image's coordinate note, in a new Session;
+`/fork TURN` selects directly. Oversized prompts or multipart input that the
+editor cannot represent report a notice and leave the current draft intact;
+the selected input remains in the source Session. `/fork-after
 TURN` continues after that Turn's recorded end. CLI `fork` prints the new
 Session ID. The source retains all later history. These operations copy
 conversation facts, not working files, and an unfinished Turn cannot be an

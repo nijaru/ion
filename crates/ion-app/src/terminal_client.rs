@@ -135,39 +135,49 @@ impl TurnInput {
 
     fn from_accepted(input: AcceptedInput) -> Self {
         let (input, reservation) = input.into_parts();
-        // This private inbox is populated only through Message::user_input:
-        // one prompt, then each optional image note immediately before its image.
-        let mut parts = input.content.into_iter();
-        let Some(Content::Text(prompt)) = parts.next() else {
-            unreachable!("terminal input must retain its original prompt");
-        };
-        let mut images = Vec::new();
-        while let Some(part) = parts.next() {
-            match part {
-                Content::Image(content) => images.push(LoadedImage {
-                    content,
-                    note: None,
-                }),
-                Content::Text(note) => {
-                    let Some(Content::Image(content)) = parts.next() else {
-                        unreachable!("terminal image note must precede its image");
-                    };
-                    images.push(LoadedImage {
-                        content,
-                        note: Some(note),
-                    });
-                }
-                Content::Thinking(_) | Content::ToolCall(_) | Content::ToolResult(_) => {
-                    unreachable!("admitted input cannot contain tools");
-                }
-            }
-        }
+        // The private inbox only accepts messages built by Message::user_input.
+        let (prompt, images) = split_editor_input(input)
+            .expect("terminal inbox must retain the prompt and image-note layout");
         Self {
             prompt,
             images,
             _reservation: Some(reservation),
         }
     }
+}
+
+// Inverse of Message::user_input, not a lossy flattening of arbitrary multipart
+// messages from embedded clients. Notes belong to the immediately following image.
+fn split_editor_input(input: Message) -> Result<(String, Vec<LoadedImage>), &'static str> {
+    if input.role != ion_ai::Role::User || input.provider_replay.is_some() {
+        return Err("selected input cannot be represented in the editor");
+    }
+    let mut parts = input.content.into_iter();
+    let Some(Content::Text(prompt)) = parts.next() else {
+        return Err("selected input cannot be represented in the editor");
+    };
+    let mut images = Vec::new();
+    while let Some(part) = parts.next() {
+        match part {
+            Content::Image(content) => images.push(LoadedImage {
+                content,
+                note: None,
+            }),
+            Content::Text(note) => {
+                let Some(Content::Image(content)) = parts.next() else {
+                    return Err("selected input cannot be represented in the editor");
+                };
+                images.push(LoadedImage {
+                    content,
+                    note: Some(note),
+                });
+            }
+            Content::Thinking(_) | Content::ToolCall(_) | Content::ToolResult(_) => {
+                return Err("selected input cannot be represented in the editor");
+            }
+        }
+    }
+    Ok((prompt, images))
 }
 
 enum PreparedPaste {
@@ -653,41 +663,10 @@ fn apply_fork(
 ) -> Result<()> {
     let id = runtime.fork_session(point)?;
     ui.refresh_session(runtime.session())?;
-    let mut too_large_to_restore = false;
-    if let Some(input) = restore {
-        let draft = input
-            .content
-            .iter()
-            .filter_map(|part| match part {
-                Content::Text(text) => Some(text.as_str()),
-                _ => None,
-            })
-            .collect::<Vec<_>>()
-            .join("\n");
-        if draft.len() > MAX_DRAFT {
-            too_large_to_restore = true;
-            ui.draft.clear();
-            ui.cursor = 0;
-            ui.images.clear();
-        } else {
-            ui.draft = draft;
-            ui.cursor = ui.draft.len();
-            ui.images = input
-                .content
-                .into_iter()
-                .filter_map(|part| match part {
-                    Content::Image(content) => Some(LoadedImage {
-                        content,
-                        note: None,
-                    }),
-                    _ => None,
-                })
-                .collect();
-        }
-    }
-    ui.status = if too_large_to_restore {
+    let restore_error = restore.and_then(|input| ui.restore_input(input).err());
+    ui.status = if let Some(error) = restore_error {
         format!(
-            "Forked as {}; selected input exceeds editor limit; inspect source to copy it",
+            "Forked as {}; {error}; draft retained; inspect source to copy selected input",
             &id[..id.len().min(12)]
         )
     } else {
@@ -1496,6 +1475,16 @@ enum Action {
 }
 
 impl Frontend {
+    fn restore_input(&mut self, input: Message) -> Result<(), &'static str> {
+        let (draft, images) = split_editor_input(input)?;
+        if draft.len() > MAX_DRAFT {
+            return Err("selected input exceeds editor limit");
+        }
+        self.replace_draft(draft);
+        self.images = images;
+        Ok(())
+    }
+
     fn refresh_session(&mut self, session: &CodingSession) -> Result<()> {
         self.completion.clear();
         let view = session.view()?;
@@ -3180,6 +3169,30 @@ mod tests {
             Message::user_input(recovered.prompt, recovered.images),
             message
         );
+        let mut ui = Frontend::default();
+        ui.restore_input(message.clone()).unwrap();
+        assert_eq!(Message::user_input(ui.draft, ui.images), message);
+    }
+
+    #[test]
+    fn fork_restore_refuses_lossy_shapes_without_discarding_editor() {
+        let mut multipart = Message::user_input("first".into(), []);
+        multipart.content.push(Content::Text("second".into()));
+        for input in [
+            multipart,
+            Message::user_input("x".repeat(MAX_DRAFT + 1), []),
+        ] {
+            let mut ui = Frontend {
+                draft: "keep unsent".into(),
+                cursor: 4,
+                images: vec![ion_ai::normalize_rgba(1, 1, vec![0, 255, 0, 255]).unwrap()],
+                ..Frontend::default()
+            };
+            assert!(ui.restore_input(input).is_err());
+            assert_eq!(ui.draft, "keep unsent");
+            assert_eq!(ui.cursor, 4);
+            assert_eq!(ui.images.len(), 1);
+        }
     }
 
     #[test]

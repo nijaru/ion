@@ -1,5 +1,6 @@
 """Exercise selected-point Session forks through the built CLI and terminal."""
 
+import errno
 import fcntl
 import json
 import os
@@ -12,6 +13,7 @@ import tempfile
 import termios
 import threading
 import time
+import zlib
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
@@ -149,7 +151,64 @@ with tempfile.TemporaryDirectory(prefix="ion-fork-") as temporary:
                 child.send_signal(signal.SIGKILL)
                 child.wait()
             os.close(master)
-        print("Ion fork/clone, provider affinity across reopen/compaction and terminal control: OK")
+        # The normalized image carries a coordinate note. Fork restoration must
+        # keep that note with its image, not fold it into the editable prompt.
+        def png_chunk(kind, payload):
+            return struct.pack(">I", len(payload)) + kind + payload + struct.pack(">I", zlib.crc32(kind + payload) & 0xffffffff)
+
+        picture = workspace / "wide.png"
+        picture.write_bytes(b"\x89PNG\r\n\x1a\n" + png_chunk(b"IHDR", struct.pack(">IIBBBBB", 2001, 1, 8, 6, 0, 0, 0)) + png_chunk(b"IDAT", zlib.compress(b"\x00" + b"\xff\x00\x00\xff" * 2001)) + png_chunk(b"IEND", b""))
+        subprocess.run([binary, "use", "smoke", "fork-model", "--endpoint", endpoint, "--wire", "openrouter-chat", "--images"], env=env, check=True, capture_output=True)
+        image_turn = ion("--image", "wide.png", "run", "Preserve image coordinates.")
+        image_session = image_turn.stderr.split("[session: ")[1].split("]")[0]
+        original = requests[-1]["messages"][-1]["content"]
+        assert [part["type"] for part in original] == ["text", "text", "image_url"]
+        for mode in ("inline", "fullscreen"):
+            master, slave = pty.openpty()
+            fcntl.ioctl(slave, termios.TIOCSWINSZ, struct.pack("HHHH", 30, 100, 0, 0))
+            child = subprocess.Popen([binary, "--cwd", workspace, "--session", image_session, "--tui-mode", mode, "chat"], env={**env, "TERM": "xterm-256color"}, stdin=slave, stdout=slave, stderr=slave, preexec_fn=attach_terminal)
+            os.close(slave)
+            output = bytearray()
+            fork_sent = submit_sent = quit_sent = False
+            before = len(requests)
+            deadline = time.monotonic() + 12
+            try:
+                while time.monotonic() < deadline:
+                    readable, _, _ = select.select([master], [], [], 0.05)
+                    if readable:
+                        try:
+                            data = os.read(master, 65536)
+                        except OSError as error:
+                            if error.errno != errno.EIO:
+                                raise
+                            data = b""
+                        output.extend(data)
+                        if b"\x1b[6n" in data:
+                            os.write(master, b"\x1b[2;1R")
+                    if b"\xe2\x80\xba " in output and not fork_sent:
+                        os.write(master, b"/fork 1\r")
+                        fork_sent = True
+                    if fork_sent and b"Forked as" in output and not submit_sent:
+                        assert len(requests) == before, "fork dispatched restored input"
+                        os.write(master, b"\r")
+                        output.clear()
+                        submit_sent = True
+                    if submit_sent and len(requests) > before and b"FORK_OK" in output and not quit_sent:
+                        assert len(requests) == before + 1
+                        assert requests[-1]["messages"][-1]["content"] == original, "fork changed prompt/image-note associations"
+                        os.write(master, b"\x03")
+                        quit_sent = True
+                    if child.poll() is not None:
+                        break
+                assert quit_sent, (mode, fork_sent, submit_sent, len(requests) - before, output[-1200:])
+                child.wait(timeout=5)
+                assert child.returncode == 0, output[-1200:]
+            finally:
+                if child.poll() is None:
+                    child.kill()
+                    child.wait(timeout=5)
+                os.close(master)
+        print("Ion fork/clone, provider affinity, terminal control and image-note restoration: OK")
     finally:
         server.shutdown()
         server.server_close()
