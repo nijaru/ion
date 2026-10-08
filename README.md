@@ -215,7 +215,7 @@ Session. Keep reading progress records with that Turn ID until `turn_end`
 reports `completed`, `cancelled` or `failed`; a response alone is not the
 answer. `final` is the committed answer. Other commands are `steer`,
 `follow_up`, `clear_queue`, `abort`, `get_state`, `inspect`, `list_sessions`, `list_turns`, `list_models`,
-`list_resources`, `reload_resources`, `compact`, `set_model`, `new_session`,
+`list_resources`, `reload_resources`, `shell`, `compact`, `set_model`, `new_session`,
 `clone_session`, `fork`, `switch_session` and `set_name`.
 `prompt`, `steer` and `follow_up` accept `images` as an array of local paths (relative to the
 Session's working directory) or inline `{ "mime_type": "image/png", "data": "BASE64" }`
@@ -243,7 +243,18 @@ effects remain unknown and are not retried automatically. Pending steering and
 follow-ups are returned, including a starting follow-up whose input had not
 entered the Session; input already accepted by the Session is never returned
 as uncommitted.
-Session, resource, model and manual-compaction changes require an idle Turn.
+Session, resource, model, shell and manual-compaction commands require an idle
+operation. Send `{"id":"s","type":"shell","command":"cargo test"}` to run a direct
+command. Its acknowledgement means the operation started, not that the command
+was dispatched. Read through the correlated `shell_end` record for
+completed/cancelled/failed status. An `outcome` with `kind: "observed"` contains
+the committed native output and `is_error`; an error without an outcome makes
+no effect claim. Inspect the Session after admission/storage failure.
+Shell commands share their command and outcome with later model context by
+default; `exclude_from_context: true` excludes both, like terminal `!!`.
+Shell operations make no model request or coding Turn and accept `abort`, not
+steering or follow-ups. EOF and connection faults still cancel and await
+settlement. `get_state.operation` distinguishes `shell`, `turn` and `compact`.
 `compact` acknowledges that the operation started, can be cancelled with
 `abort`, and later emits `compact_end` with completed/cancelled/failed status
 and whether the model-context projection changed. `steer` and `follow_up`

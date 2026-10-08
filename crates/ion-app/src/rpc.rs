@@ -26,10 +26,45 @@ use input::CommandReader;
 
 struct Active {
     stop: CancellationToken,
-    /// Only coding Turns accept steering or follow-ups.
-    steering: Option<Arc<SteeringInbox>>,
-    submission: Option<Arc<Submission>>,
+    operation: Operation,
     task: JoinHandle<Vec<Value>>,
+}
+
+enum Operation {
+    Turn {
+        steering: Arc<SteeringInbox>,
+        submission: Arc<Submission>,
+    },
+    Compact {
+        id: Option<Value>,
+    },
+    Shell {
+        id: Option<Value>,
+    },
+}
+
+impl Operation {
+    fn name(&self) -> &'static str {
+        match self {
+            Self::Turn { .. } => "turn",
+            Self::Compact { .. } => "compact",
+            Self::Shell { .. } => "shell",
+        }
+    }
+
+    fn id(&self) -> &Option<Value> {
+        match self {
+            Self::Turn { submission, .. } => &submission.id,
+            Self::Compact { id } | Self::Shell { id } => id,
+        }
+    }
+
+    fn steering(&self) -> Option<&Arc<SteeringInbox>> {
+        match self {
+            Self::Turn { steering, .. } => Some(steering),
+            _ => None,
+        }
+    }
 }
 
 /// Live custody survives task failure. Admission is the explicit Core event,
@@ -114,15 +149,14 @@ impl Control {
             Err(error) => {
                 let error = anyhow::Error::new(error)
                     .context("RPC operation task failed; unfinished effects remain unknown");
-                let mut record = json!({"type":"operation_failed","error":format!("{error:#}")});
-                if let Some(submission) = &active.submission {
-                    record["id"] = json!(submission.id);
-                    if let Some(turn) = submission.turn() {
-                        record["turn"] = json!(turn);
-                    }
+                let mut record = json!({"type":"operation_failed","operation":active.operation.name(),"id":active.operation.id(),"error":format!("{error:#}")});
+                if let Operation::Turn { submission, .. } = &active.operation
+                    && let Some(turn) = submission.turn()
+                {
+                    record["turn"] = json!(turn);
                 }
                 let mut records = vec![record];
-                if let Some(submission) = &active.submission
+                if let Operation::Turn { submission, .. } = &active.operation
                     && let Some(recovery) = submission.recover(&format!("{error:#}"))
                 {
                     records.push(recovery);
@@ -130,7 +164,7 @@ impl Control {
                 (records, Some(error))
             }
         };
-        if let Some(steering) = active.steering {
+        if let Operation::Turn { steering, .. } = active.operation {
             records.extend(steering.take_uncommitted().into_iter().map(
                 |pending| json!({"type":"uncommitted_steering","input":pending.into_message()}),
             ));
@@ -174,7 +208,7 @@ impl Control {
             match command {
                 "steer" => {
                     let active = self.active.as_ref().context("no active operation")?;
-                    let steering = active.steering.as_ref().context("no active Turn")?;
+                    let steering = active.operation.steering().context("no active Turn")?;
                     let message = required_string(&value, "message")?;
                     let prompt = expand_input(self.binding.resources(), message.to_owned())?;
                     let images = self.load_images(&value)?;
@@ -186,7 +220,7 @@ impl Control {
                     ensure!(
                         self.active
                             .as_ref()
-                            .is_some_and(|active| active.steering.is_some()),
+                            .is_some_and(|active| active.operation.steering().is_some()),
                         "no active Turn; use prompt instead"
                     );
                     let message = required_string(&value, "message")?;
@@ -205,7 +239,7 @@ impl Control {
                     let steering = self
                         .active
                         .as_ref()
-                        .and_then(|active| active.steering.as_ref())
+                        .and_then(|active| active.operation.steering())
                         .map_or_else(Vec::new, |steering| steering.take_uncommitted())
                         .into_iter().map(AcceptedInput::into_message).collect::<Vec<_>>();
                     let follow_up = self.follow_ups.drain(..).map(|pending| {
@@ -215,15 +249,13 @@ impl Control {
                     Ok(json!({"steering":steering,"follow_up":follow_up}))
                 }
                 "abort" => {
-                    let active = self.active.as_ref().context("no active Turn")?;
+                    let active = self.active.as_ref().context("no active operation")?;
                     active.stop.cancel();
                     Ok(json!({"disposition":"requested"}))
                 }
                 "get_state" => {
                     let view = self.binding.session().view()?;
-                    let operation = self.active.as_ref().map(|active| {
-                        if active.steering.is_some() { "turn" } else { "compact" }
-                    });
+                    let operation = self.active.as_ref().map(|active| active.operation.name());
                     Ok(json!({"session":self.session_id(),"cwd":view.cwd,"name":view.name,"model":self.binding.selected().identity(),"busy":self.active.is_some(),"operation":operation,"entries":view.entries.len(),"follow_ups":self.follow_ups.len()}))
                 }
                 "inspect" => {
@@ -241,6 +273,14 @@ impl Control {
                     Ok(json!({"skills":self.binding.resources().skills().count(),"prompts":self.binding.resources().templates().count()}))
                 }
                 "compact" => self.start_compaction(id.clone()),
+                "shell" => {
+                    let command = required_string(&value, "command")?;
+                    ensure!(!command.trim().is_empty(), "command is empty");
+                    let excluded = value.get("exclude_from_context").map_or(Ok(false), |value| {
+                        value.as_bool().context("exclude_from_context must be a boolean")
+                    })?;
+                    self.start_shell(command, excluded, id.clone())
+                }
                 "set_model" => {
                     self.idle()?;
                     let provider = required_string(&value, "provider")?;
@@ -342,6 +382,50 @@ impl Control {
         })
     }
 
+    fn start_shell(
+        &mut self,
+        command: &str,
+        exclude_from_context: bool,
+        id: Option<Value>,
+    ) -> Result<Value> {
+        self.idle()?;
+        let stop = CancellationToken::new();
+        let running = self
+            .binding
+            .run_user_shell(command, stop.clone(), exclude_from_context);
+        let task_id = id.clone();
+        let task = tokio::spawn(async move {
+            let record = match running.await {
+                Ok(output) => {
+                    let status = if output.value["cancelled"] == true {
+                        "cancelled"
+                    } else if output.is_error {
+                        "failed"
+                    } else {
+                        "completed"
+                    };
+                    let outcome = ion_core::UserShellOutcome::Observed {
+                        output: output.value,
+                        is_error: output.is_error,
+                    };
+                    json!({"type":"shell_end","id":task_id,"status":status,"outcome":outcome})
+                }
+                // No observation claim on admission or storage failure. Passive
+                // Session inspection distinguishes absent authority from unknown effects.
+                Err(error) => {
+                    json!({"type":"shell_end","id":task_id,"status":"failed","error":format!("{error:#}")})
+                }
+            };
+            vec![record]
+        });
+        self.active = Some(Active {
+            stop,
+            operation: Operation::Shell { id },
+            task,
+        });
+        Ok(json!({"disposition":"started"}))
+    }
+
     fn start_compaction(&mut self, id: Option<Value>) -> Result<Value> {
         self.idle()?;
         let agent = self.binding.agent().clone();
@@ -349,6 +433,7 @@ impl Control {
         let stop = CancellationToken::new();
         let task_stop = stop.clone();
         let output = self.output.clone();
+        let task_id = id.clone();
         let task = tokio::spawn(async move {
             let mut output_fault = None;
             let result = agent
@@ -364,7 +449,7 @@ impl Control {
                 Err(ion_core::CodingAgentError::Cancelled) => "cancelled",
                 Err(_) => "failed",
             };
-            let mut record = json!({"type":"compact_end","id":id,"status":status});
+            let mut record = json!({"type":"compact_end","id":task_id,"status":status});
             if let Ok(changed) = result {
                 record["changed"] = json!(changed);
             } else if let Err(error) = result {
@@ -377,8 +462,7 @@ impl Control {
         });
         self.active = Some(Active {
             stop,
-            steering: None,
-            submission: None,
+            operation: Operation::Compact { id },
             task,
         });
         Ok(json!({"disposition":"started"}))
@@ -478,8 +562,10 @@ impl Control {
         });
         self.active = Some(Active {
             stop,
-            steering: Some(steering),
-            submission: Some(submission),
+            operation: Operation::Turn {
+                steering,
+                submission,
+            },
             task,
         });
         Ok(())
@@ -553,6 +639,16 @@ mod tests {
         (control, events, root)
     }
 
+    fn empty_submission() -> Arc<Submission> {
+        Arc::new(Submission {
+            id: None,
+            admission: Mutex::new(Admission {
+                turn: None,
+                pending: None,
+            }),
+        })
+    }
+
     #[tokio::test(flavor = "current_thread")]
     async fn steering_accepted_after_task_completion_is_returned_at_join() {
         let (mut control, _events, root) = fixture();
@@ -562,8 +658,10 @@ mod tests {
         ));
         control.active = Some(Active {
             stop: CancellationToken::new(),
-            steering: Some(steering),
-            submission: None,
+            operation: Operation::Turn {
+                steering,
+                submission: empty_submission(),
+            },
             task: tokio::spawn(async { vec![json!({"type":"turn_end","status":"completed"})] }),
         });
         // The task is complete but the connection has not closed admission yet.
@@ -593,8 +691,10 @@ mod tests {
             .unwrap();
         control.active = Some(Active {
             stop: CancellationToken::new(),
-            steering: Some(steering),
-            submission: None,
+            operation: Operation::Turn {
+                steering,
+                submission: empty_submission(),
+            },
             task: tokio::spawn(async { panic!("injected RPC operation panic") }),
         });
         let joined = (&mut control.active.as_mut().unwrap().task).await;
@@ -636,8 +736,13 @@ mod tests {
             }
             control.active = Some(Active {
                 stop: CancellationToken::new(),
-                steering: None,
-                submission: Some(submission),
+                operation: Operation::Turn {
+                    steering: Arc::new(SteeringInbox::new(
+                        control.binding.agent().limits(),
+                        control.input_budget.clone(),
+                    )),
+                    submission,
+                },
                 task: tokio::spawn(async { panic!("injected RPC operation panic") }),
             });
             let joined = (&mut control.active.as_mut().unwrap().task).await;
@@ -705,8 +810,7 @@ mod tests {
         control.output.try_send(json!({"type":"progress"})).unwrap();
         control.active = Some(Active {
             stop,
-            steering: None,
-            submission: None,
+            operation: Operation::Compact { id: None },
             task: tokio::spawn(async move {
                 task_stop.cancelled().await;
                 task_settled.store(true, Ordering::SeqCst);
@@ -791,7 +895,7 @@ mod tests {
         );
         assert!(control.idle().is_err());
         let active = control.active.as_ref().unwrap();
-        assert!(active.steering.is_none());
+        assert!(active.operation.steering().is_none());
         active.stop.cancel();
 
         let terminal = control.active.take().unwrap().task.await.unwrap();
@@ -864,8 +968,10 @@ mod tests {
         control.follow_ups.push_back(queued);
         control.active = Some(Active {
             stop,
-            steering: Some(steering),
-            submission: None,
+            operation: Operation::Turn {
+                steering,
+                submission: empty_submission(),
+            },
             task,
         });
         let mut records = Vec::new();
@@ -901,24 +1007,31 @@ mod tests {
         let (mut control, events, root) = fixture();
         control.active = Some(Active {
             stop: CancellationToken::new(),
-            steering: None,
-            submission: None,
+            operation: Operation::Shell {
+                id: Some(json!("shell-panic")),
+            },
             task: tokio::spawn(async { panic!("injected RPC operation panic") }),
         });
         let (input, _open_client) = tokio::io::duplex(64);
+        let mut records = Vec::new();
         let error = tokio::time::timeout(
             std::time::Duration::from_secs(2),
             connection(
                 control,
                 CommandReader::new(BufReader::new(input)),
                 events,
-                Vec::new(),
+                &mut records,
             ),
         )
         .await
         .expect("RPC stranded its active slot after panic")
         .unwrap_err();
         assert!(format!("{error:#}").contains("injected RPC operation panic"));
+        let record: Value =
+            serde_json::from_slice(records.split(|byte| *byte == b'\n').next().unwrap()).unwrap();
+        assert_eq!(record["type"], "operation_failed");
+        assert_eq!(record["operation"], "shell");
+        assert_eq!(record["id"], "shell-panic");
         std::fs::remove_dir_all(root).unwrap();
     }
 }

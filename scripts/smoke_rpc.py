@@ -129,6 +129,26 @@ with tempfile.TemporaryDirectory(prefix="ion-rpc-") as temporary:
         send(child, {"id": "empty-state", "type": "get_state"})
         assert read(child)["data"]["entries"] == 0
 
+        before_shell = len(requests)
+        for command in ({"command": "  "}, {"command": "touch forbidden", "exclude_from_context": "false"}):
+            send(child, {"id": "invalid-shell", "type": "shell", **command})
+            refused = read(child)
+            assert refused["id"] == "invalid-shell" and not refused["success"], refused
+        for identity, excluded in (("RPC_SHELL_SHARED", False), ("RPC_SHELL_PRIVATE", True)):
+            send(child, {"id": identity, "type": "shell", "command": f"printf '{identity}\\n'", "exclude_from_context": excluded})
+            ack = read(child)
+            assert ack["id"] == identity and ack["success"] and ack["data"]["disposition"] == "started", ack
+            ended = until(child, lambda r: r["type"] == "shell_end")[-1]
+            assert ended["id"] == identity and ended["status"] == "completed", ended
+            assert ended["outcome"]["kind"] == "observed" and not ended["outcome"]["is_error"], ended
+            assert ended["outcome"]["output"]["stdout"] == identity + "\n", ended
+        send(child, {"id": "exit-error", "type": "shell", "command": "printf failure >&2; exit 7", "exclude_from_context": True})
+        assert read(child)["success"]
+        ended = until(child, lambda r: r["type"] == "shell_end")[-1]
+        assert ended["id"] == "exit-error" and ended["status"] == "failed" and ended["outcome"]["is_error"], ended
+        assert ended["outcome"]["output"]["exit_code"] == 7 and ended["outcome"]["output"]["stderr"] == "failure", ended
+        assert len(requests) == before_shell, "direct shell requested model generation"
+
         send(child, {"id": "first", "type": "prompt", "message": "/check RPC"})
         records = until(child, lambda r: r["type"] == "turn_end")
         accepted = [r for r in records if r.get("id") == "first"]
@@ -140,6 +160,8 @@ with tempfile.TemporaryDirectory(prefix="ion-rpc-") as temporary:
         assert "RPC_OK" in str(committed[0]["content"]), committed
         assert records.index(committed[0]) < next(i for i, r in enumerate(records) if r["type"] == "final"), records
         assert "Check RPC." in str(requests[0]["messages"])
+        assert "RPC_SHELL_SHARED" in str(requests[0]["messages"]), requests[0]["messages"]
+        assert "RPC_SHELL_PRIVATE" not in str(requests[0]["messages"]), requests[0]["messages"]
 
         send(child, {"id": "fragment-parent", "type": "prompt", "message": "SLOW"})
         until(child, lambda r: r.get("id") == "fragment-parent")

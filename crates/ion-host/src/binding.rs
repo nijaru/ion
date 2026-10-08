@@ -74,20 +74,25 @@ impl SessionBinding {
         self.resources.instructions()
     }
 
-    pub async fn run_user_shell(
+    /// Capture the Session without borrowing the mutable client binding. The
+    /// returned operation grants no external authority until durable admission.
+    pub fn run_user_shell(
         &self,
         command: &str,
         stop: CancellationToken,
         exclude_from_context: bool,
-    ) -> Result<CodingToolOutput> {
-        let tools = LocalTools::new(self.session.cwd())?;
-        let permit = self
-            .session
-            .begin_user_shell(command.to_owned(), exclude_from_context, stop.clone())
-            .await?;
-        let output = tools.run_user_shell(permit.command(), stop).await;
-        permit.record(output.value.clone(), output.is_error)?;
-        Ok(output)
+    ) -> impl std::future::Future<Output = Result<CodingToolOutput>> + Send + use<> {
+        let session = self.session.clone();
+        let command = command.to_owned();
+        async move {
+            let tools = LocalTools::new(session.cwd())?;
+            let permit = session
+                .begin_user_shell(command, exclude_from_context, stop.clone())
+                .await?;
+            let output = tools.run_user_shell(permit.command(), stop).await;
+            permit.record(output.value.clone(), output.is_error)?;
+            Ok(output)
+        }
     }
 
     pub fn session_id(&self) -> String {
@@ -240,7 +245,7 @@ mod tests {
         let selected = host.models().save_default(&route("one")).unwrap();
         let path = host.sessions(cwd.clone()).new_path().unwrap();
         let session = Arc::new(CodingSession::create(&path, &cwd).unwrap());
-        let binding = SessionBinding::new(host, session.clone(), selected, None).unwrap();
+        let mut binding = SessionBinding::new(host, session.clone(), selected, None).unwrap();
         drop(
             session
                 .begin_user_shell("old command".into(), false, CancellationToken::new())
@@ -257,6 +262,26 @@ mod tests {
         );
         assert_eq!(session.view().unwrap().entries, before.entries);
         assert!(!root.join("moved-work/must-not-dispatch").exists());
+
+        fs::rename(root.join("moved-work"), &cwd).unwrap();
+        let running = binding.run_user_shell("printf captured", CancellationToken::new(), false);
+        binding.new_session().unwrap();
+        // Preparation is inert, and a later binding change cannot redirect it.
+        assert_eq!(session.view().unwrap().entries, before.entries);
+        assert!(!running.await.unwrap().is_error);
+        let original = session.view().unwrap();
+        assert!(
+            matches!(original.entries.last(), Some(ion_core::SessionEntry::UserShellSettled { outcome: ion_core::UserShellOutcome::Observed { output, .. }, .. }) if output["stdout"] == "captured")
+        );
+        assert!(
+            !binding
+                .session()
+                .view()
+                .unwrap()
+                .entries
+                .iter()
+                .any(|entry| matches!(entry, ion_core::SessionEntry::UserShellAdmitted { .. }))
+        );
         drop(binding);
         drop(session);
         fs::remove_dir_all(root).unwrap();

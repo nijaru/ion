@@ -44,6 +44,8 @@ jobs:
         run: python3 scripts/smoke_shell_recovery.py
       - name: RPC smoke
         run: python3 scripts/smoke_rpc.py
+      - name: RPC direct-shell authority and recovery smoke
+        run: python3 scripts/smoke_rpc_shell.py
       - name: Code Mode effect and inspection smoke
         run: python3 scripts/smoke_code_mode.py
       - name: MCP refresh smoke
