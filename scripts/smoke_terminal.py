@@ -17,6 +17,25 @@ import time
 from pathlib import Path
 
 
+def drain_terminal(fd, output):
+    """Collect queued restoration bytes after process exit, through PTY closure."""
+    deadline = time.monotonic() + 2
+    while time.monotonic() < deadline:
+        readable, _, _ = select.select([fd], [], [], 0.05)
+        if not readable:
+            continue
+        try:
+            data = os.read(fd, 65536)
+        except OSError as error:
+            if error.errno != errno.EIO:
+                raise
+            return
+        if not data:
+            return
+        output.extend(data)
+    raise AssertionError("terminal PTY stayed open after process exit")
+
+
 root = Path(__file__).resolve().parent.parent
 binary = Path(os.environ.get("ION_SMOKE_BIN", root / "target/debug/ion"))
 deadline = time.monotonic() + 30
@@ -63,7 +82,9 @@ with tempfile.TemporaryDirectory(prefix="ion-terminal-") as temporary:
                 if readable:
                     try:
                         data = os.read(master, 65536)
-                    except OSError:
+                    except OSError as error:
+                        if error.errno != errno.EIO:
+                            raise
                         data = b""
                     output.extend(data)
                     if b"\x1b[6n" in data:
@@ -162,6 +183,8 @@ with tempfile.TemporaryDirectory(prefix="ion-terminal-") as temporary:
                     sent_quit = True
                 if child.poll() is not None:
                     break
+            if child.poll() is not None:
+                drain_terminal(master, output)
             assert closed_active, "Ctrl-O did not open the first-Turn conversation"
             assert child.poll() == 0, f"terminal did not exit cleanly: {child.poll()}; tail={output[-2000:]!r}"
             alt_enters = output.count(b"\x1b[?1049h")
@@ -227,7 +250,9 @@ with tempfile.TemporaryDirectory(prefix="ion-terminal-") as temporary:
                     if readable:
                         try:
                             data = os.read(fullscreen_master, 65536)
-                        except OSError:
+                        except OSError as error:
+                            if error.errno != errno.EIO:
+                                raise
                             data = b""
                         fullscreen_output.extend(data)
                         if b"\x1b[6n" in data:
@@ -257,6 +282,8 @@ with tempfile.TemporaryDirectory(prefix="ion-terminal-") as temporary:
                         sent_fullscreen_quit = True
                     if fullscreen.poll() is not None:
                         break
+                if fullscreen.poll() is not None:
+                    drain_terminal(fullscreen_master, fullscreen_output)
                 assert fullscreen.poll() == 0, (
                     f"fullscreen terminal did not exit cleanly: {fullscreen.poll()}; "
                     f"tail={fullscreen_output[-2000:]!r}"
@@ -299,7 +326,9 @@ with tempfile.TemporaryDirectory(prefix="ion-terminal-") as temporary:
                     if readable:
                         try:
                             data = os.read(panic_master, 65536)
-                        except OSError:
+                        except OSError as error:
+                            if error.errno != errno.EIO:
+                                raise
                             data = b""
                         panic_output.extend(data)
                         if b"\x1b[6n" in data:
@@ -307,6 +336,7 @@ with tempfile.TemporaryDirectory(prefix="ion-terminal-") as temporary:
                     if panic.poll() is not None:
                         break
                 status = panic.wait(timeout=2)
+                drain_terminal(panic_master, panic_output)
                 assert status != 0, "panic probe unexpectedly exited successfully"
                 assert b"ION smoke panic after first terminal draw" in panic_output, panic_output[-2000:]
                 for sequence, label in (
