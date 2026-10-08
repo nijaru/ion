@@ -25,6 +25,7 @@ pub(crate) async fn generate_with_retry<F>(
 where
     F: FnMut(AgentEvent) + Send,
 {
+    model.validate_controls(&request.route.effective, &request.controls)?;
     for attempt in 0..=2 {
         let mut attempt_request = request.clone();
         if attempt > 0 {

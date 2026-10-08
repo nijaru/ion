@@ -1,9 +1,11 @@
 //! One coding loop for library, headless and terminal clients.
 use ion_ai::{
-    Content, GenerationControls, IncompleteReason, Message, ModelExecution, ModelRef, ModelRequest,
-    ModelResponse, ModelRoute, ModelRouteReason, ModelService, ProviderError, ProviderErrorKind,
-    Reasoning, ResponseTermination, Role, ToolChoice,
+    Content, IncompleteReason, Message, ModelExecution, ModelRef, ModelRequest, ModelResponse,
+    ModelRoute, ModelRouteReason, ModelService, ProviderError, ProviderErrorKind, Reasoning,
+    ResponseTermination, Role,
 };
+#[cfg(test)]
+use ion_ai::{GenerationControls, ToolChoice};
 use serde_json::Value;
 use std::collections::{BTreeSet, VecDeque};
 use std::sync::{Arc, Mutex};
@@ -307,6 +309,41 @@ impl Agent {
         self.limits
     }
 
+    /// Validate a restored or prospective preference for both coding and summary
+    /// requests. The service, not Core, owns wire/model-specific constraints.
+    pub fn validate_reasoning(&self, reasoning: Reasoning) -> Result<(), AgentError> {
+        for with_tools in [true, false] {
+            self.service
+                .validate_controls(&self.model, &self.limits.controls(reasoning, with_tools))?;
+        }
+        Ok(())
+    }
+
+    pub fn select_reasoning(
+        &self,
+        session: &Session,
+        reasoning: Reasoning,
+    ) -> Result<(), AgentError> {
+        let guard = session
+            .submit_gate
+            .try_lock()
+            .map_err(|_| SessionError::OperationActive)?;
+        self.validate_reasoning(reasoning)?;
+        session.record_selection(&guard, self.model.clone(), Some(reasoning))?;
+        Ok(())
+    }
+
+    /// Publish this agent's model only if the retained preference is supported.
+    pub fn select_model(&self, session: &Session) -> Result<(), AgentError> {
+        let guard = session
+            .submit_gate
+            .try_lock()
+            .map_err(|_| SessionError::OperationActive)?;
+        self.validate_reasoning(session.reasoning()?)?;
+        session.record_selection(&guard, self.model.clone(), None)?;
+        Ok(())
+    }
+
     pub fn tool_catalog(&self) -> crate::tool_set::ToolCatalog {
         self.tools.snapshot()
     }
@@ -380,6 +417,7 @@ impl Agent {
             guard = session.submit_gate.lock() => guard,
             () = stop.cancelled() => return Err(AgentError::Cancelled),
         };
+        self.validate_reasoning(session.reasoning()?)?;
         let keep_bytes = self
             .keep_bytes()
             .min(serde_json::to_vec(&session.context_messages()?)?.len() / 2);
@@ -452,14 +490,7 @@ impl Agent {
                 tools: Vec::new(),
                 context_timeline: None,
                 prompt_cache: ion_ai::PromptCacheIntent::Default,
-                controls: GenerationControls {
-                    max_output_tokens: output_tokens,
-                    temperature: None,
-                    top_p: None,
-                    reasoning: Reasoning::ProviderDefault,
-                    tool_choice: ToolChoice::None,
-                    parallel_tool_calls: false,
-                },
+                controls: self.limits.controls(session.reasoning()?, false),
             };
             if self.limits.request_output_budget(&request, output_tokens)? == Some(output_tokens) {
                 break (plan.through_entry, plan.chunked, request);
@@ -617,6 +648,7 @@ impl Agent {
         if stop.is_cancelled() {
             return Err(AgentError::Cancelled);
         }
+        self.validate_reasoning(session.reasoning()?)?;
         crate::input::validate_input(&input, self.limits)?;
         if !self.limits.image_input
             && session.context_messages()?.iter().any(|message| {
@@ -3443,7 +3475,42 @@ mod tests {
             response(vec![Content::Text("First task is complete.".into())]),
             response(vec![Content::Text("continued".into())]),
         ]));
-        let agent = Agent::new(scripts.clone(), Arc::new(TestTools::new(&root)), model());
+        struct ReasoningScripts(Arc<ScriptedModelService>);
+        impl ModelService for ReasoningScripts {
+            fn validate_controls(
+                &self,
+                _: &ModelRef,
+                controls: &GenerationControls,
+            ) -> Result<(), ProviderError> {
+                controls.validate()?;
+                if controls.reasoning == Reasoning::Medium
+                    && controls.tool_choice == ToolChoice::None
+                {
+                    return Err(ProviderError {
+                        kind: ProviderErrorKind::Unsupported,
+                        message: "fixture summary cannot use medium effort".into(),
+                        retry_after_ms: None,
+                    });
+                }
+                Ok(())
+            }
+            fn stream<'a>(
+                &'a self,
+                request: ModelRequest,
+            ) -> BoxFuture<'a, Result<ion_ai::ModelStream, ProviderError>> {
+                self.0.stream(request)
+            }
+        }
+        let agent = Agent::new(
+            Arc::new(ReasoningScripts(scripts.clone())),
+            Arc::new(TestTools::new(&root)),
+            model(),
+        );
+        agent.select_reasoning(&session, Reasoning::High).unwrap();
+        let before = session.view().unwrap().entries;
+        assert!(agent.select_reasoning(&session, Reasoning::Medium).is_err());
+        assert_eq!(session.view().unwrap().entries, before);
+        assert!(scripts.requests().is_empty());
         agent
             .submit(
                 &session,
@@ -3482,6 +3549,12 @@ mod tests {
             request.provider_session_id.as_deref() == Some(provider_id.as_str())
         }));
         assert_eq!(requests[2].messages.len(), 2);
+        assert!(
+            requests
+                .iter()
+                .all(|request| request.controls.reasoning == Reasoning::High)
+        );
+        assert_eq!(session.reasoning().unwrap(), Reasoning::High);
         assert_eq!(session.messages().unwrap().len(), 4);
         drop(session);
         std::fs::remove_dir_all(root).unwrap();

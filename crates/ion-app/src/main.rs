@@ -59,6 +59,9 @@ struct Cli {
     /// Exact model ID for this invocation; use with --provider.
     #[arg(long, global = true)]
     model: Option<String>,
+    /// Generation effort: default, off, low, medium, high or budget:TOKENS; route support varies.
+    #[arg(long, global = true)]
+    reasoning: Option<ion_ai::Reasoning>,
     /// Attach an image file to the first submitted prompt (repeatable).
     #[arg(long, global = true)]
     image: Vec<PathBuf>,
@@ -155,6 +158,14 @@ async fn main() {
 }
 
 async fn run_cli(cli: Cli) -> Result<()> {
+    if cli.reasoning.is_some()
+        && !matches!(
+            &cli.action,
+            Some(Action::Run { .. } | Action::Chat | Action::Rpc | Action::Compact) | None
+        )
+    {
+        bail!("--reasoning requires a coding prompt, chat, RPC or compaction");
+    }
     if !cli.image.is_empty()
         && !matches!(
             &cli.action,
@@ -481,7 +492,8 @@ async fn run_cli(cli: Cli) -> Result<()> {
             let external_tools: Option<Arc<dyn CodingToolSource>> = external_mcp
                 .as_ref()
                 .map(|tools| tools.clone() as Arc<dyn CodingToolSource>);
-            let binding = SessionBinding::new(host, session, selected, external_tools)?;
+            let binding =
+                SessionBinding::new(host, session, selected, external_tools, cli.reasoning)?;
             for diagnostic in binding.resources().diagnostics() {
                 startup_diagnostics.push(format!(
                     "[resource: {}: {}]",

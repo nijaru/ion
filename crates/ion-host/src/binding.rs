@@ -30,11 +30,17 @@ impl SessionBinding {
         session: Arc<CodingSession>,
         selected: Selection,
         external_tools: Option<Arc<dyn CodingToolSource>>,
+        reasoning: Option<ion_ai::Reasoning>,
     ) -> Result<Self> {
         let catalog = host.sessions(session.cwd().to_path_buf());
         let resources = host.resources(session.cwd())?;
         let agent =
             host.agent_with_optional_tools(session.cwd(), &selected, external_tools.clone())?;
+        if let Some(reasoning) = reasoning {
+            agent.select_reasoning(&session, reasoning)?;
+        } else {
+            agent.validate_reasoning(session.reasoning()?)?;
+        }
         Ok(Self {
             host,
             catalog,
@@ -124,9 +130,14 @@ impl SessionBinding {
             &selected,
             self.external_tools.clone(),
         )?;
-        self.session.select_model(model)?;
+        agent.select_model(&self.session)?;
         self.selected = selected;
         self.agent = agent;
+        Ok(())
+    }
+
+    pub fn select_reasoning(&self, reasoning: ion_ai::Reasoning) -> Result<()> {
+        self.agent.select_reasoning(&self.session, reasoning)?;
         Ok(())
     }
 
@@ -138,13 +149,14 @@ impl SessionBinding {
         let (resources, agent) = self.prepare(self.session.cwd(), &selected)?;
         let path = self.catalog.new_path()?;
         let session = Arc::new(CodingSession::create(&path, self.session.cwd())?);
-        session.select_model(selected.identity())?;
+        agent.select_model(&session)?;
         self.publish(session, selected, agent, resources);
         Ok(())
     }
 
     pub fn clone_session(&mut self) -> Result<String> {
         let (resources, agent) = self.prepare(self.session.cwd(), &self.selected)?;
+        agent.validate_reasoning(self.session.reasoning()?)?;
         let path = self.catalog.new_path()?;
         let session = Arc::new(self.session.clone_to(&path)?);
         let id = path
@@ -160,19 +172,21 @@ impl SessionBinding {
         let turn = match point {
             ForkPoint::BeforeTurn(turn) | ForkPoint::AfterTurn(turn) => turn,
         };
-        let model = self
+        let selected_turn = self
             .session
             .view()?
             .turns()
             .into_iter()
             .find(|item| item.turn == turn)
-            .context("selected Turn does not exist")?
-            .model;
-        let selected =
-            self.host
-                .models()
-                .choose(None, None, Some(model), self.host.credentials())?;
+            .context("selected Turn does not exist")?;
+        let selected = self.host.models().choose(
+            None,
+            None,
+            Some(selected_turn.model),
+            self.host.credentials(),
+        )?;
         let (resources, agent) = self.prepare(self.session.cwd(), &selected)?;
+        agent.validate_reasoning(selected_turn.reasoning)?;
         let path = self.catalog.new_path()?;
         let session = Arc::new(self.session.fork_to(&path, point)?);
         let id = path
@@ -200,6 +214,7 @@ impl SessionBinding {
                 .models()
                 .choose(None, None, view.last_model, self.host.credentials())?;
         let (resources, agent) = self.prepare(session.cwd(), &selected)?;
+        agent.validate_reasoning(session.reasoning()?)?;
         self.publish(session, selected, agent, resources);
         Ok(())
     }
@@ -245,7 +260,7 @@ mod tests {
         let selected = host.models().save_default(&route("one")).unwrap();
         let path = host.sessions(cwd.clone()).new_path().unwrap();
         let session = Arc::new(CodingSession::create(&path, &cwd).unwrap());
-        let mut binding = SessionBinding::new(host, session.clone(), selected, None).unwrap();
+        let mut binding = SessionBinding::new(host, session.clone(), selected, None, None).unwrap();
         drop(
             session
                 .begin_user_shell("old command".into(), false, CancellationToken::new())
@@ -288,6 +303,45 @@ mod tests {
     }
 
     #[test]
+    fn idle_override_and_effort_restore_as_one_selection() {
+        let root = std::env::temp_dir().join(format!("ion-binding-{}", uuid::Uuid::now_v7()));
+        let cwd = root.join("work");
+        fs::create_dir_all(&cwd).unwrap();
+        let host = Arc::new(Host::new(root.join("config"), root.join("state")));
+        let mut limited = route("limited");
+        limited.wire = Some(Wire::LlamaCppNoThinking);
+        let limited = host.models().save_default(&limited).unwrap();
+        let selected = host.models().save_default(&route("override")).unwrap();
+        let path = host.sessions(cwd.clone()).new_path().unwrap();
+        let session = Arc::new(CodingSession::create(&path, &cwd).unwrap());
+        session.select_model(limited.identity()).unwrap();
+        let binding =
+            SessionBinding::new(host.clone(), session.clone(), selected, None, None).unwrap();
+        binding.select_reasoning(ion_ai::Reasoning::High).unwrap();
+        drop(binding);
+        drop(session);
+        let session = Arc::new(CodingSession::open(path).unwrap());
+        let selected = host
+            .models()
+            .choose(
+                None,
+                None,
+                session.view().unwrap().last_model,
+                host.credentials(),
+            )
+            .unwrap();
+        let binding = SessionBinding::new(host.clone(), session, selected, None, None).unwrap();
+        assert_eq!(binding.selected().model, "override");
+        assert_eq!(
+            binding.session().reasoning().unwrap(),
+            ion_ai::Reasoning::High
+        );
+        drop(binding);
+        drop(host);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
     fn replacement_restores_model_and_keeps_old_binding_on_preflight_failure() {
         let root = std::env::temp_dir().join(format!("ion-binding-{}", uuid::Uuid::now_v7()));
         let cwd = root.join("work");
@@ -297,12 +351,38 @@ mod tests {
         let first_path = host.sessions(cwd.clone()).new_path().unwrap();
         let first = Arc::new(CodingSession::create(&first_path, &cwd).unwrap());
         first.select_model(first_model.identity()).unwrap();
-        let mut binding = SessionBinding::new(host.clone(), first, first_model, None).unwrap();
+        let mut binding =
+            SessionBinding::new(host.clone(), first, first_model, None, None).unwrap();
 
+        binding.select_reasoning(ion_ai::Reasoning::High).unwrap();
+        let entries = binding.session().view().unwrap().entries;
+        assert!(
+            binding
+                .select_reasoning(ion_ai::Reasoning::BudgetTokens(128))
+                .is_err()
+        );
+        assert_eq!(binding.session().view().unwrap().entries, entries);
+        let mut limited = route("limited");
+        limited.wire = Some(Wire::LlamaCppNoThinking);
+        host.models().save_default(&limited).unwrap();
+        assert!(
+            binding
+                .select_model(ion_ai::ModelRef {
+                    provider: "desktop".into(),
+                    model: "limited".into()
+                })
+                .is_err()
+        );
+        assert_eq!(binding.selected().model, "one");
+        assert_eq!(binding.session().view().unwrap().entries, entries);
         host.models().save_default(&route("two")).unwrap();
         binding.new_session().unwrap();
         let second_id = binding.session_id();
         assert_eq!(binding.selected().model, "two");
+        assert_eq!(
+            binding.session().reasoning().unwrap(),
+            ion_ai::Reasoning::ProviderDefault
+        );
 
         let moved = root.join("moved-work");
         fs::rename(&cwd, &moved).unwrap();
@@ -313,6 +393,10 @@ mod tests {
 
         binding.switch_session(first_path).unwrap();
         assert_eq!(binding.selected().model, "one");
+        assert_eq!(
+            binding.session().reasoning().unwrap(),
+            ion_ai::Reasoning::High
+        );
         assert_ne!(binding.session_id(), second_id);
         fs::create_dir_all(cwd.join(".ion/prompts")).unwrap();
         fs::write(cwd.join(".ion/prompts/hello.md"), "Hello $1").unwrap();

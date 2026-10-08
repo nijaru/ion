@@ -70,6 +70,26 @@ in `$XDG_CONFIG_HOME/ion/models.json` (or `~/.config/ion/models.json`), with
 concurrent saves serialized. After updating from a development build with the
 older split preferences, select your default and configure custom routes again.
 
+Use `--reasoning high` for headless/chat/RPC startup or manual compaction,
+`/reasoning high` in an idle terminal, or RPC
+`{"id":"r","type":"set_reasoning","effort":"high"}`. Values are `default`,
+`off`, `low`, `medium`, `high` and `budget:TOKENS`. The preference is
+Session-owned: reopen and clone retain it, forks restore the selected Turn's
+preference, and new Sessions start at `default`. Coding and compaction freeze
+the same preference. Changes require an idle, settled Session; they do not
+recover unfinished effects. Unsupported adapter controls refuse before saving
+the preference or making a model request. Model changes also preflight the
+retained preference rather than silently resetting it. Explicit effort selection
+saves the bound model and effort together, including an invocation-only model override.
+
+Support is route-specific, not proof of remote model support or entitlement.
+Messages currently accepts only `default`; llama.cpp's no-thinking route
+accepts `default` and `off`, both disabling thinking. Other Chat routes accept
+the five non-budget choices. DeepSeek maps medium/high to its high setting;
+MiMo maps all three levels to enabled thinking. Every current HTTP route refuses
+exact token budgets. Effort affects future generation, not retained historical
+reasoning or signed continuation. `/settings thinking` remains display-only.
+
 Terminal chat is inline-first. Settled transcript rows are appended once to
 native terminal scrollback; Ion keeps only the active composer/progress region
 mutable. Resuming or switching to a saved Session bootstraps at most the latest
@@ -216,7 +236,8 @@ reports `completed`, `cancelled` or `failed`; a response alone is not the
 answer. `final` is the committed answer. Other commands are `steer`,
 `follow_up`, `clear_queue`, `abort`, `get_state`, `inspect`, `list_sessions`, `list_turns`, `list_models`,
 `list_resources`, `reload_resources`, `shell`, `compact`, `set_model`, `new_session`,
-`clone_session`, `fork`, `switch_session` and `set_name`.
+`clone_session`, `fork`, `switch_session`, `set_reasoning` and `set_name`.
+`get_state.reasoning` reports the active Session's generation preference.
 `prompt`, `steer` and `follow_up` accept `images` as an array of local paths (relative to the
 Session's working directory) or inline `{ "mime_type": "image/png", "data": "BASE64" }`
 objects. Ion validates and normalizes both before accepting the input.
@@ -598,10 +619,17 @@ conversation; `Host::agent_with_tools` accepts a custom `CodingToolSource`.
 Host-created agents bind the selected logical model, transport and limits.
 Core agent constructors also take a `ModelRef`; submission and compaction use
 that bound model without another model argument. Construct a new agent to
-change models. `Host::resources` loads project skills and prompt templates. For a long-lived
+change models; `CodingAgent::select_model(&session)` validates and persists its
+identity against the retained generation preference. `Host::resources` loads project skills and prompt templates. For a long-lived
 Rust client, `ion-host::SessionBinding` owns the active Session, model, agent
 and resources and handles idle model and Session changes. `ion rpc` provides
-long-lived subprocess control.
+long-lived subprocess control. `CodingAgent::select_reasoning(&session, effort)`
+validates and saves a preference; `validate_reasoning(effort)` performs pure
+preflight without saving it. `SessionBinding::new` takes an optional initial
+reasoning override as its fifth argument; `None` restores the Session's choice.
+Custom `ModelService` implementations must implement pure `validate_controls`
+to accept explicit reasoning; the default refuses it. HTTP preflight and encoding
+use the same compiler, before credential lookup or transport.
 
 ## License
 

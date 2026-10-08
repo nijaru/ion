@@ -76,9 +76,10 @@ with tempfile.TemporaryDirectory(prefix="ion-resources-") as temporary:
         listing = subprocess.run([binary, "--cwd", workspace, "resources"], env=env, check=True, capture_output=True, text=True)
         assert "skill\taudit\t" in listing.stdout and "prompt\tcheck\t" in listing.stdout
         for command in ("/check Rust", "/skill:audit src/lib.rs"):
-            result = subprocess.run([binary, "--cwd", workspace, "run", command], env=env, check=True, capture_output=True, text=True)
+            result = subprocess.run([binary, "--cwd", workspace, "--reasoning", "low", "run", command], env=env, check=True, capture_output=True, text=True)
             assert result.stdout.strip() == "RESOURCE_OK", result
         assert len(requests) == 2, requests
+        assert all(request["reasoning_effort"] == "low" for request in requests), requests
         instructions = requests[0]["messages"][0]["content"]
         assert "PROJECT_MARKER" in instructions
         assert "Audit code when checking a change" not in instructions
@@ -139,6 +140,10 @@ with tempfile.TemporaryDirectory(prefix="ion-resources-") as temporary:
                         phase = 3
                     elif phase == 3 and b"Reloaded resources" in current:
                         checkpoint = len(output)
+                        os.write(master, b"/reasoning high\r")
+                        phase = 31
+                    elif phase == 31 and b"Generation effort: high" in current:
+                        checkpoint = len(output)
                         os.write(master, b"/la")
                         phase = 4
                     elif phase == 4 and b"A later prompt" in current:
@@ -157,6 +162,7 @@ with tempfile.TemporaryDirectory(prefix="ion-resources-") as temporary:
                 assert len(requests) == before + 2, "completion duplicated submission"
                 assert requests[before]["messages"][-1]["content"].strip() == "Check TUI; scope all."
                 assert requests[before + 1]["messages"][-1]["content"].strip() == "A later prompt."
+                assert requests[before + 1]["reasoning_effort"] == "high", requests[before + 1]
             finally:
                 if child.poll() is None:
                     child.send_signal(signal.SIGKILL)

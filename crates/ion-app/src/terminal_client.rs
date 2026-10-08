@@ -732,6 +732,17 @@ fn handle_command(
     match Builtin::parse(name) {
         Some(Builtin::Help) => ui.note(Builtin::help()),
         Some(Builtin::Settings) => ui.output_settings(args)?,
+        Some(Builtin::Reasoning) => {
+            if args.is_empty() {
+                ui.note(format!("Generation effort: {}. Use /reasoning default|off|low|medium|high|budget:TOKENS; route support varies", runtime.session().reasoning()?));
+            } else {
+                let reasoning = args
+                    .parse::<ion_ai::Reasoning>()
+                    .map_err(anyhow::Error::msg)?;
+                runtime.select_reasoning(reasoning)?;
+                ui.status = format!("Generation effort: {reasoning}");
+            }
+        }
         Some(Builtin::Tui) => match args {
             "" => ui.note(format!(
                 "TUI mode: {}. Use /tui inline or /tui fullscreen",
@@ -2761,6 +2772,7 @@ mod tests {
             unfinished_user_shell: None,
             last_end: None,
             last_model: None,
+            reasoning: ion_ai::Reasoning::ProviderDefault,
             last_effective_model: None,
             last_context: None,
             compacted_through: None,

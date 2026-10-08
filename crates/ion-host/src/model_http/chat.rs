@@ -3,18 +3,16 @@ use super::*;
 
 pub(super) fn chat_body(request: &ModelRequest, wire: HttpWire) -> Result<Value, ProviderError> {
     validate_request(request)?;
-    if matches!(request.controls.reasoning, Reasoning::BudgetTokens(_)) {
-        return Err(unsupported(
-            "exact reasoning-token budgets are unsupported by Chat Completions",
-        ));
-    }
+    let mut body = control_fields(&request.route.effective, &request.controls, wire, false)?;
     let mut messages = Vec::new();
     if let Some(instructions) = &request.instructions {
         messages.push(json!({"role":"system","content":instructions}));
     }
     messages.extend(wire_messages(request, wire)?);
-    let mut body = json!({"model":request.route.effective.model,"messages":messages,"stream":true,
-        "stream_options":{"include_usage":true},"max_completion_tokens":request.controls.max_output_tokens});
+    body["model"] = json!(request.route.effective.model);
+    body["messages"] = json!(messages);
+    body["stream"] = json!(true);
+    body["stream_options"] = json!({"include_usage":true});
     if wire == HttpWire::OpenRouterChat
         && let Some(id) = &request.provider_session_id
     {
@@ -25,12 +23,7 @@ pub(super) fn chat_body(request: &ModelRequest, wire: HttpWire) -> Result<Value,
         }
         body["session_id"] = json!(id);
     }
-    if let Some(temperature) = request.controls.temperature {
-        body["temperature"] = json!(temperature);
-    }
-    if let Some(top_p) = request.controls.top_p {
-        body["top_p"] = json!(top_p);
-    }
+
     if !request.tools.is_empty() {
         body["tools"] = Value::Array(
             request
@@ -50,57 +43,7 @@ pub(super) fn chat_body(request: &ModelRequest, wire: HttpWire) -> Result<Value,
         };
         body["parallel_tool_calls"] = json!(request.controls.parallel_tool_calls);
     }
-    match wire {
-        HttpWire::ChatCompletions => match request.controls.reasoning {
-            Reasoning::ProviderDefault => {}
-            Reasoning::Off => body["reasoning_effort"] = json!("none"),
-            Reasoning::Low => body["reasoning_effort"] = json!("low"),
-            Reasoning::Medium => body["reasoning_effort"] = json!("medium"),
-            Reasoning::High => body["reasoning_effort"] = json!("high"),
-            Reasoning::BudgetTokens(_) => unreachable!("rejected above"),
-        },
-        HttpWire::LlamaCppNoThinking => {
-            if !matches!(
-                request.controls.reasoning,
-                Reasoning::ProviderDefault | Reasoning::Off
-            ) {
-                return Err(unsupported("llama.cpp thinking needs reasoning replay"));
-            }
-            body["chat_template_kwargs"] = json!({"enable_thinking":false});
-        }
-        HttpWire::DeepSeekChat => {
-            body.as_object_mut()
-                .expect("constructed object")
-                .remove("max_completion_tokens");
-            body["max_tokens"] = json!(request.controls.max_output_tokens);
-            match request.controls.reasoning {
-                Reasoning::ProviderDefault => {}
-                Reasoning::Off => body["thinking"] = json!({"type":"disabled"}),
-                Reasoning::Low => body["reasoning_effort"] = json!("low"),
-                Reasoning::Medium | Reasoning::High => {
-                    body["reasoning_effort"] = json!("high");
-                }
-                Reasoning::BudgetTokens(_) => unreachable!("rejected above"),
-            }
-        }
-        HttpWire::MiMoChat => match request.controls.reasoning {
-            Reasoning::ProviderDefault => {}
-            Reasoning::Off => body["thinking"] = json!({"type":"disabled"}),
-            Reasoning::Low | Reasoning::Medium | Reasoning::High => {
-                body["thinking"] = json!({"type":"enabled"});
-            }
-            Reasoning::BudgetTokens(_) => unreachable!("rejected above"),
-        },
-        HttpWire::OpenRouterChat => match request.controls.reasoning {
-            Reasoning::ProviderDefault => {}
-            Reasoning::Off => body["reasoning"] = json!({"enabled":false}),
-            Reasoning::Low => body["reasoning"] = json!({"effort":"low"}),
-            Reasoning::Medium => body["reasoning"] = json!({"effort":"medium"}),
-            Reasoning::High => body["reasoning"] = json!({"effort":"high"}),
-            Reasoning::BudgetTokens(_) => unreachable!("rejected above"),
-        },
-        HttpWire::AnthropicMessages => unreachable!("Anthropic uses its own encoder"),
-    }
+
     Ok(body)
 }
 

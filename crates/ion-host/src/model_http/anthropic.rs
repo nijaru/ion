@@ -276,36 +276,21 @@ pub(super) fn anthropic_body_for_route(
     inline_tools_supported: bool,
 ) -> Result<Value, ProviderError> {
     validate_request(request)?;
-    if native_api
-        && managed_anthropic_thinking(&request.route.effective.model)
-        && matches!(
-            request.controls.tool_choice,
-            ToolChoice::Required | ToolChoice::Named(_)
-        )
-    {
-        return Err(unsupported("this Claude model cannot force tool use"));
-    }
-    if request.controls.reasoning != Reasoning::ProviderDefault
-        || request.controls.temperature.is_some()
-        || request.controls.top_p.is_some()
-    {
-        return Err(unsupported(
-            "explicit reasoning and sampling controls are unsupported by Messages",
-        ));
-    }
-
+    let mut body = control_fields(
+        &request.route.effective,
+        &request.controls,
+        HttpWire::AnthropicMessages,
+        native_api,
+    )?;
     let context_plan = anthropic_context_plan(request, native_api && inline_tools_supported)?;
     let messages = wire_messages_with_anthropic_context(
         request,
         HttpWire::AnthropicMessages,
         context_plan.as_ref(),
     )?;
-    let mut body = json!({"model":request.route.effective.model,"messages":messages,"stream":true,
-        "max_tokens":request.controls.max_output_tokens});
-    if native_api && managed_anthropic_thinking(&request.route.effective.model) {
-        body["thinking"] = json!({"type":"adaptive","block_binding":{
-            "prefix_mismatch_behavior":"error"}});
-    }
+    body["model"] = json!(request.route.effective.model);
+    body["messages"] = json!(messages);
+    body["stream"] = json!(true);
 
     let current_context = anthropic_context_state(request);
     let top_level_context = context_plan

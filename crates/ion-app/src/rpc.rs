@@ -256,7 +256,7 @@ impl Control {
                 "get_state" => {
                     let view = self.binding.session().view()?;
                     let operation = self.active.as_ref().map(|active| active.operation.name());
-                    Ok(json!({"session":self.session_id(),"cwd":view.cwd,"name":view.name,"model":self.binding.selected().identity(),"busy":self.active.is_some(),"operation":operation,"entries":view.entries.len(),"follow_ups":self.follow_ups.len()}))
+                    Ok(json!({"session":self.session_id(),"cwd":view.cwd,"name":view.name,"model":self.binding.selected().identity(),"reasoning":view.reasoning.to_string(),"busy":self.active.is_some(),"operation":operation,"entries":view.entries.len(),"follow_ups":self.follow_ups.len()}))
                 }
                 "inspect" => {
                     let mut view = serde_json::to_value(self.binding.session().view()?)?;
@@ -280,6 +280,12 @@ impl Control {
                         value.as_bool().context("exclude_from_context must be a boolean")
                     })?;
                     self.start_shell(command, excluded, id.clone())
+                }
+                "set_reasoning" => {
+                    self.idle()?;
+                    let reasoning = required_string(&value, "effort")?.parse::<ion_ai::Reasoning>().map_err(anyhow::Error::msg)?;
+                    self.binding.select_reasoning(reasoning)?;
+                    Ok(json!({"reasoning":reasoning.to_string()}))
                 }
                 "set_model" => {
                     self.idle()?;
@@ -626,7 +632,7 @@ mod tests {
         let session_path = host.sessions(cwd.clone()).new_path().unwrap();
         let session = Arc::new(CodingSession::create(&session_path, &cwd).unwrap());
         session.select_model(selected.identity()).unwrap();
-        let binding = SessionBinding::new(host, session, selected, None).unwrap();
+        let binding = SessionBinding::new(host, session, selected, None, None).unwrap();
         let (output, events) = mpsc::channel(16);
         let control = Control {
             binding,

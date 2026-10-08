@@ -41,11 +41,7 @@ impl GenerationControls {
         {
             return Err(invalid("top_p must be a finite number in (0, 1]"));
         }
-        if let Reasoning::BudgetTokens(budget) = self.reasoning
-            && budget == 0
-        {
-            return Err(invalid("a reasoning token budget must be positive"));
-        }
+        self.reasoning.validate()?;
         if let ToolChoice::Named(name) = &self.tool_choice
             && name.is_empty()
         {
@@ -74,9 +70,10 @@ impl GenerationControls {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Reasoning {
     /// Omit the reasoning field entirely.
+    #[default]
     ProviderDefault,
     /// Explicitly disable reasoning, or fail as unsupported.
     Off,
@@ -88,10 +85,50 @@ pub enum Reasoning {
 }
 
 impl Reasoning {
+    pub fn validate(self) -> Result<(), ProviderError> {
+        if self == Self::BudgetTokens(0) {
+            return Err(invalid("a reasoning token budget must be positive"));
+        }
+        Ok(())
+    }
+
     /// Whether the provider must encode this as a disabled reasoning field.
     #[must_use]
     pub const fn is_off(&self) -> bool {
         matches!(self, Self::Off)
+    }
+}
+
+impl std::fmt::Display for Reasoning {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
+            Self::ProviderDefault => "default",
+            Self::Off => "off",
+            Self::Low => "low",
+            Self::Medium => "medium",
+            Self::High => "high",
+            Self::BudgetTokens(tokens) => return write!(f, "budget:{tokens}"),
+        })
+    }
+}
+
+impl std::str::FromStr for Reasoning {
+    type Err = String;
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        match value {
+            "default" => Ok(Self::ProviderDefault),
+            "off" => Ok(Self::Off),
+            "low" => Ok(Self::Low),
+            "medium" => Ok(Self::Medium),
+            "high" => Ok(Self::High),
+            _ if value.starts_with("budget:") => value[7..]
+                .parse::<u32>()
+                .ok()
+                .filter(|tokens| *tokens > 0)
+                .map(Self::BudgetTokens)
+                .ok_or_else(|| "reasoning budget must be a positive u32".into()),
+            _ => Err("reasoning must be default, off, low, medium, high or budget:TOKENS".into()),
+        }
     }
 }
 

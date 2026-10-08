@@ -26,6 +26,7 @@ use crate::{CredentialResolver, catalog::ModelCapabilities};
 
 mod anthropic;
 mod chat;
+mod controls;
 #[cfg(test)]
 use anthropic::anthropic_body;
 #[cfg(test)]
@@ -35,6 +36,7 @@ use anthropic::{
     anthropic_body_uses_inline_tools, managed_anthropic_thinking, validated_anthropic_replay,
 };
 use chat::{ChatState, chat_body};
+use controls::control_fields;
 
 const MAX_FRAME: usize = 256 * 1024;
 const MAX_ERROR_BODY: usize = 16 * 1024;
@@ -167,12 +169,21 @@ fn parse_endpoint(endpoint: &str) -> Result<Url, ProviderError> {
 }
 
 impl ModelService for HttpModelService {
+    fn validate_controls(
+        &self,
+        model: &ion_ai::ModelRef,
+        controls: &ion_ai::GenerationControls,
+    ) -> Result<(), ProviderError> {
+        let native = self.wire == HttpWire::AnthropicMessages
+            && self.endpoint.host_str() == Some("api.anthropic.com");
+        control_fields(model, controls, self.wire, native).map(|_| ())
+    }
+
     fn stream<'a>(
         &'a self,
         request: ModelRequest,
     ) -> BoxFuture<'a, Result<ModelStream, ProviderError>> {
         Box::pin(async move {
-            request.controls.validate()?;
             let native_anthropic = self.wire == HttpWire::AnthropicMessages
                 && self.endpoint.host_str() == Some("api.anthropic.com");
             let mut body = if self.wire.is_chat() {

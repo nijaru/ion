@@ -145,6 +145,8 @@ with tempfile.TemporaryDirectory(prefix="ion-terminal-") as temporary:
                     os.write(master, b"/compact\r")
                     sent_compact = True
                 if sent_compact and b"Context summarized; raw history retained" in output and not sent_clone:
+                    snapshot = subprocess.run([binary, "--cwd", workspace, "--continue", "inspect"], env=env, check=True, capture_output=True)
+                    source_before_clone = json.loads(snapshot.stdout)["entries"]
                     os.write(master, b"/clone\r")
                     sent_clone = True
                 if sent_clone and b"Cloned conversation as" in output and not sent_controls:
@@ -216,13 +218,14 @@ with tempfile.TemporaryDirectory(prefix="ion-terminal-") as temporary:
             source = [line for line in listing.splitlines() if "\t\t2 turn(s)" in line]
             assert len(source) == 1, listing
             original = subprocess.run([binary, "--cwd", workspace, "--session", source[0].split("\t")[0], "inspect"], env=env, check=True, capture_output=True)
-            assert json.loads(original.stdout)["entries"] == entries[:-1], "clone changed the source transcript"
+            assert json.loads(original.stdout)["entries"] == source_before_clone, "clone changed the source transcript"
+            assert entries == source_before_clone, "clone changed the copied transcript"
             assert [entry["kind"] for entry in entries].count("turn_ended") == 2
             assert [entry["kind"] for entry in entries].count("steering") == 1
             assert [entry["kind"] for entry in entries].count("compacted") == 1
             turns = [entry["data"]["input"]["content"][0]["Text"] for entry in entries if entry["kind"] == "turn_started"]
             assert len(turns) == 2 and turns[1] == "What did we finish previously?", turns
-            assert entries[-1]["kind"] == "model_selected", entries[-1]
+            assert json.loads(inspected.stdout)["last_model"] == {"provider": "smoke", "model": "smoke-model"}
             assert not (work / "config" / "ion" / "credentials" / "smoke.key").exists()
 
             fullscreen_master, fullscreen_slave = pty.openpty()

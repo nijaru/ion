@@ -5,6 +5,7 @@ import json
 import os
 import select
 import socket
+import sqlite3
 import struct
 import subprocess
 import tempfile
@@ -149,6 +150,14 @@ with tempfile.TemporaryDirectory(prefix="ion-rpc-") as temporary:
         assert ended["outcome"]["output"]["exit_code"] == 7 and ended["outcome"]["output"]["stderr"] == "failure", ended
         assert len(requests) == before_shell, "direct shell requested model generation"
 
+        send(child, {"id": "reasoning-high", "type": "set_reasoning", "effort": "high"})
+        chosen = read(child)
+        assert chosen["success"] and chosen["data"]["reasoning"] == "high", chosen
+        send(child, {"id": "reasoning-unsupported", "type": "set_reasoning", "effort": "budget:128"})
+        assert not read(child)["success"]
+        send(child, {"id": "reasoning-state", "type": "get_state"})
+        assert read(child)["data"]["reasoning"] == "high"
+        assert len(requests) == before_shell, "reasoning selection requested generation"
         send(child, {"id": "first", "type": "prompt", "message": "/check RPC"})
         records = until(child, lambda r: r["type"] == "turn_end")
         accepted = [r for r in records if r.get("id") == "first"]
@@ -159,6 +168,7 @@ with tempfile.TemporaryDirectory(prefix="ion-rpc-") as temporary:
         assert len(committed) == 1 and committed[0]["turn"] == accepted[0]["data"]["turn"], records
         assert "RPC_OK" in str(committed[0]["content"]), committed
         assert records.index(committed[0]) < next(i for i, r in enumerate(records) if r["type"] == "final"), records
+        assert requests[0]["reasoning_effort"] == "high", requests[0]
         assert "Check RPC." in str(requests[0]["messages"])
         assert "RPC_SHELL_SHARED" in str(requests[0]["messages"]), requests[0]["messages"]
         assert "RPC_SHELL_PRIVATE" not in str(requests[0]["messages"]), requests[0]["messages"]
@@ -184,6 +194,7 @@ with tempfile.TemporaryDirectory(prefix="ion-rpc-") as temporary:
         compact_records = until(child, lambda r: r["type"] == "compact_end")
         assert compact_records[-1]["id"] == "compact"
         assert compact_records[-1]["status"] == "completed", compact_records
+        assert requests[-1]["reasoning_effort"] == "high" and not requests[-1].get("tools"), requests[-1]
 
         inline = {"mime_type": "image/png", "data": base64.b64encode(tiny_png()).decode()}
         send(child, {"id": "bad-inline", "type": "prompt", "message": "Look", "images": [{**inline, "mime_type": "image/jpeg"}]})
@@ -250,6 +261,8 @@ with tempfile.TemporaryDirectory(prefix="ion-rpc-") as temporary:
         send(child, {"id": "blocked", "type": "new_session"})
         blocked = until(child, lambda r: r.get("id") == "blocked")[-1]
         assert blocked["success"] is False  # A running Turn owns its Session.
+        send(child, {"id": "busy-reasoning", "type": "set_reasoning", "effort": "low"})
+        assert not until(child, lambda r: r.get("id") == "busy-reasoning")[-1]["success"]
         send(child, {"id": "clear-me", "type": "follow_up", "message": "NEVER"})
         assert until(child, lambda r: r.get("id") == "clear-me")[-1]["success"]
         send(child, {"id": "clear", "type": "clear_queue"})
@@ -268,6 +281,21 @@ with tempfile.TemporaryDirectory(prefix="ion-rpc-") as temporary:
         inspected = read(child)
         assert inspected["success"] and inspected["data"]["last_model"]["provider"] == "rpc-alt", inspected
         source_before_clone = inspected["data"]
+        database = next((work / "state").rglob(f"{session}.sqlite"))
+        with sqlite3.connect(database) as connection:
+            connection.execute("CREATE TRIGGER refuse_model BEFORE INSERT ON entries BEGIN SELECT RAISE(ABORT, 'injected model publication failure'); END")
+        try:
+            send(child, {"id": "model-write-failed", "type": "set_model", "provider": "rpc-smoke", "model": "rpc-model"})
+            refused = read(child)
+            assert not refused["success"], refused
+            send(child, {"id": "model-after-write-fault", "type": "get_state"})
+            retained = read(child)["data"]
+            assert retained["model"]["provider"] == "rpc-alt" and retained["reasoning"] == "high", retained
+            send(child, {"id": "facts-after-write-fault", "type": "inspect"})
+            assert read(child)["data"]["entries"] == source_before_clone["entries"]
+        finally:
+            with sqlite3.connect(database) as connection:
+                connection.execute("DROP TRIGGER refuse_model")
 
         send(child, {"id": "clone", "type": "clone_session"})
         cloned = read(child)
@@ -279,6 +307,7 @@ with tempfile.TemporaryDirectory(prefix="ion-rpc-") as temporary:
         assert clone_view["data"]["entries"] == source_before_clone["entries"], clone_view
         assert clone_view["data"]["cwd"] == source_before_clone["cwd"], clone_view
         assert clone_view["data"]["last_model"]["provider"] == "rpc-alt", clone_view
+        assert clone_view["data"]["reasoning"] == "High", clone_view
         send(child, {"id": "clone-source", "type": "switch_session", "session": session})
         source_again = read(child)
         assert source_again["success"] and source_again["data"]["session"] == session, source_again
@@ -295,6 +324,7 @@ with tempfile.TemporaryDirectory(prefix="ion-rpc-") as temporary:
         send(child, {"id": "fresh-prompt", "type": "prompt", "message": "Fresh session"})
         assert until(child, lambda r: r["type"] == "turn_end")[-1]["status"] == "completed"
         assert requests[-1]["model"] == "rpc-model", requests[-1]
+        assert "reasoning_effort" not in requests[-1], "new Session inherited effort"
         moved = work / "workspace-moved"
         workspace.rename(moved)
         try:
@@ -324,6 +354,7 @@ with tempfile.TemporaryDirectory(prefix="ion-rpc-") as temporary:
         send(reopened, {"id": "reopened-model", "type": "get_state"})
         selected = read(reopened)
         assert selected["success"] and selected["data"]["model"]["provider"] == "rpc-alt", selected
+        assert selected["data"]["reasoning"] == "high", selected
         reopened.stdin.close()
         assert reopened.wait(timeout=8) == 0, reopened.stderr.read()
         closing = subprocess.Popen([binary, "--cwd", workspace, "rpc"], env=env, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, bufsize=0)

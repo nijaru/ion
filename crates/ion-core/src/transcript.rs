@@ -159,6 +159,7 @@ impl TranscriptProjection {
                 }
                 SessionEntry::TurnEnded { .. } => builder.close_group(),
                 SessionEntry::ModelSelected { .. }
+                | SessionEntry::ReasoningSelected { .. }
                 | SessionEntry::EffectiveModelChanged { .. }
                 | SessionEntry::ProviderReplayRebased { .. }
                 | SessionEntry::ModelContextChanged { .. }
@@ -813,6 +814,7 @@ mod tests {
             unfinished_user_shell: None,
             last_end: None,
             last_model: None,
+            reasoning: ion_ai::Reasoning::ProviderDefault,
             last_effective_model: None,
             last_context: None,
             compacted_through: None,

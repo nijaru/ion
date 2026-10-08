@@ -58,14 +58,7 @@ impl<'s> PreparedRequest<'s> {
             instructions: Some(context.instructions),
             tools: context.tools,
             prompt_cache: ion_ai::PromptCacheIntent::Reusable,
-            controls: GenerationControls {
-                max_output_tokens: limits.max_output_tokens,
-                temperature: None,
-                top_p: None,
-                reasoning: Reasoning::ProviderDefault,
-                tool_choice: ToolChoice::Auto,
-                parallel_tool_calls: true,
-            },
+            controls: limits.controls(session.reasoning()?, true),
         };
         if !limits.image_input
             && request
@@ -111,6 +104,7 @@ impl<'s> PreparedRequest<'s> {
     where
         F: FnMut(AgentEvent) + Send,
     {
+        model.validate_controls(&self.request.route.effective, &self.request.controls)?;
         self.session.admit_request(
             self.turn,
             self.request.route.effective.clone(),
@@ -136,6 +130,25 @@ impl<'s> PreparedRequest<'s> {
 }
 
 impl AgentLimits {
+    pub(crate) fn controls(self, reasoning: Reasoning, with_tools: bool) -> GenerationControls {
+        GenerationControls {
+            max_output_tokens: if with_tools {
+                self.max_output_tokens
+            } else {
+                self.max_output_tokens.min(4096)
+            },
+            temperature: None,
+            top_p: None,
+            reasoning,
+            tool_choice: if with_tools {
+                ToolChoice::Auto
+            } else {
+                ToolChoice::None
+            },
+            parallel_tool_calls: with_tools,
+        }
+    }
+
     pub(crate) fn output_budget(
         self,
         bytes: usize,

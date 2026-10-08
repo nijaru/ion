@@ -14,8 +14,8 @@ use crate::tool_set::ToolActivity;
 use ion_ai::ToolResult;
 use ion_ai::{
     Content, IncompleteReason, Message, ModelContextChange, ModelContextState,
-    ModelContextTimeline, ModelExecution, ModelRef, ResponseTermination, Role, ToolCall, ToolSpec,
-    Usage,
+    ModelContextTimeline, ModelExecution, ModelRef, Reasoning, ResponseTermination, Role, ToolCall,
+    ToolSpec, Usage,
 };
 use rusqlite::{Connection, OpenFlags, OptionalExtension, params};
 use rustix::fs::{FlockOperation, flock};
@@ -45,6 +45,9 @@ struct Header {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "kind", content = "data", rename_all = "snake_case")]
 pub enum SessionEntry {
+    ReasoningSelected {
+        reasoning: Reasoning,
+    },
     ModelSelected {
         model: ModelRef,
     },
@@ -192,6 +195,7 @@ pub struct SessionView {
     pub unfinished_user_shell: Option<UnobservedUserShell>,
     pub last_end: Option<(u64, TurnEndReason)>,
     pub last_model: Option<ModelRef>,
+    pub reasoning: Reasoning,
     pub last_effective_model: Option<ModelRef>,
     pub last_context: Option<ModelContextSnapshot>,
     pub compacted_through: Option<u64>,
@@ -202,6 +206,7 @@ pub struct SessionView {
 #[derive(Debug, Clone)]
 pub struct TurnSummary {
     pub turn: u64,
+    pub reasoning: Reasoning,
     pub input: Message,
     pub model: ModelRef,
     pub end: Option<TurnEndReason>,
@@ -223,10 +228,15 @@ impl SessionView {
 
     pub fn turns(&self) -> Vec<TurnSummary> {
         let mut turns: Vec<TurnSummary> = Vec::new();
+        let mut reasoning = Reasoning::ProviderDefault;
         for entry in &self.entries {
             match entry {
+                SessionEntry::ReasoningSelected {
+                    reasoning: selected,
+                } => reasoning = *selected,
                 SessionEntry::TurnStarted { turn, input, model } => turns.push(TurnSummary {
                     turn: *turn,
+                    reasoning,
                     input: input.clone(),
                     model: model.clone(),
                     end: None,
@@ -277,6 +287,7 @@ struct State {
     last_id: u64,
     last_end: Option<(u64, TurnEndReason)>,
     last_model: Option<ModelRef>,
+    reasoning: Reasoning,
     last_effective_model: Option<ModelRef>,
     last_context: Option<ModelContextSnapshot>,
     // Derived from effective-model transitions/rebases; older opaque replay stays
@@ -312,6 +323,15 @@ impl State {
         new_settled: &mut Vec<u64>,
     ) -> Result<(), SessionError> {
         match entry {
+            SessionEntry::ReasoningSelected { reasoning } => {
+                if self.active.is_some() || self.pending_shell.is_some() {
+                    return Err(SessionError::InvalidHistory);
+                }
+                reasoning
+                    .validate()
+                    .map_err(|_| SessionError::InvalidHistory)?;
+                self.reasoning = *reasoning;
+            }
             SessionEntry::ModelSelected { model } => {
                 if self.active.is_some() || self.pending_shell.is_some() {
                     return Err(SessionError::InvalidHistory);
@@ -792,6 +812,7 @@ impl Session {
             }),
             last_end: state.last_end,
             last_model: state.last_model,
+            reasoning: state.reasoning,
             last_effective_model: state.last_effective_model,
             last_context: state.last_context,
             compacted_through: state.compaction.map(|(through, _)| through),
@@ -1056,6 +1077,7 @@ impl Session {
                 | SessionEntry::Assistant { .. }
                 | SessionEntry::ToolResult { .. } => true,
                 SessionEntry::ModelSelected { .. }
+                | SessionEntry::ReasoningSelected { .. }
                 | SessionEntry::EffectiveModelChanged { .. }
                 | SessionEntry::ProviderReplayRebased { .. }
                 | SessionEntry::ModelContextChanged { .. }
@@ -1156,6 +1178,7 @@ impl Session {
             }),
             last_end: store.state.last_end.clone(),
             last_model: store.state.last_model.clone(),
+            reasoning: store.state.reasoning,
             last_effective_model: store.state.last_effective_model.clone(),
             last_context: store.state.last_context.clone(),
             compacted_through: store.state.compaction.as_ref().map(|(through, _)| *through),
@@ -1180,10 +1203,48 @@ impl Session {
         Ok(())
     }
 
-    /// Persist an idle Session's choice even when no new Turn has been sent.
+    /// Persist an idle Session's identity without route validation. Use
+    /// `CodingAgent::select_model` to preflight the retained generation preference.
     pub fn select_model(&self, model: ModelRef) -> Result<(), SessionError> {
+        let guard = self
+            .submit_gate
+            .try_lock()
+            .map_err(|_| SessionError::OperationActive)?;
+        self.record_selection(&guard, model, None)
+    }
+
+    pub fn reasoning(&self) -> Result<Reasoning, SessionError> {
+        Ok(self
+            .store
+            .lock()
+            .map_err(|_| SessionError::Poisoned)?
+            .state
+            .reasoning)
+    }
+
+    /// Caller holds this Session's operation gate through preflight and publication.
+    /// Persist the validated pair together: an invocation-only model override must
+    /// not leave a preference incompatible with the model restored on reopen.
+    pub(crate) fn record_selection(
+        &self,
+        _guard: &AsyncMutexGuard<'_, ()>,
+        model: ModelRef,
+        reasoning: Option<Reasoning>,
+    ) -> Result<(), SessionError> {
         let mut store = self.store.lock().map_err(|_| SessionError::Poisoned)?;
-        append(&mut store, &[SessionEntry::ModelSelected { model }])
+        let mut entries = Vec::new();
+        if store.state.last_model.as_ref() != Some(&model) {
+            entries.push(SessionEntry::ModelSelected { model });
+        }
+        if let Some(reasoning) = reasoning
+            && store.state.reasoning != reasoning
+        {
+            entries.push(SessionEntry::ReasoningSelected { reasoning });
+        }
+        if entries.is_empty() {
+            return Ok(());
+        }
+        append(&mut store, &entries)
     }
 
     /// Close any interrupted Turn and accept the next input in one transaction.
@@ -1834,6 +1895,7 @@ fn message_from_entry(entry: &SessionEntry) -> Option<Message> {
         | SessionEntry::UserShellAdmitted { .. }
         | SessionEntry::UserShellSettled { .. }
         | SessionEntry::ModelSelected { .. }
+        | SessionEntry::ReasoningSelected { .. }
         | SessionEntry::EffectiveModelChanged { .. }
         | SessionEntry::ProviderReplayRebased { .. }
         | SessionEntry::ModelContextChanged { .. }
@@ -2050,6 +2112,8 @@ fn lock(path: &Path) -> Result<SessionLock, SessionError> {
 pub enum SessionError {
     #[error("session does not exist")]
     NotFound,
+    #[error("session has an active operation")]
+    OperationActive,
     #[error("session is already open for writing")]
     AlreadyOpen,
     #[error("hard-linked session databases are unsupported; use Session clone or fork")]
@@ -3109,6 +3173,86 @@ mod tests {
         assert!(reopened.view().unwrap().name.is_none());
         drop(reopened);
         fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn reasoning_preference_is_atomic_exclusive_and_prefix_owned() {
+        let root = std::env::temp_dir().join(format!("ion-reasoning-{}", uuid::Uuid::now_v7()));
+        std::fs::create_dir(&root).unwrap();
+        let path = root.join("session.sqlite");
+        let session = Session::create(&path, &root).unwrap();
+        let choose = |session: &Session, reasoning| -> Result<(), SessionError> {
+            let guard = session
+                .submit_gate
+                .try_lock()
+                .map_err(|_| SessionError::OperationActive)?;
+            session.record_selection(&guard, test_execution().route.logical, Some(reasoning))
+        };
+        choose(&session, Reasoning::High).unwrap();
+        let before = session.view().unwrap().entries;
+        choose(&session, Reasoning::High).unwrap();
+        assert_eq!(session.view().unwrap().entries, before);
+        assert!(choose(&session, Reasoning::BudgetTokens(0)).is_err());
+        assert_eq!(session.view().unwrap().entries, before);
+        {
+            let _operation = session.submit_gate.try_lock().unwrap();
+            assert!(matches!(
+                choose(&session, Reasoning::Off),
+                Err(SessionError::OperationActive)
+            ));
+            assert!(matches!(
+                session.select_model(test_execution().route.logical),
+                Err(SessionError::OperationActive)
+            ));
+        }
+        let (turn, _) = session
+            .begin_turn("first".into(), test_execution().route.logical)
+            .unwrap();
+        assert!(choose(&session, Reasoning::Off).is_err());
+        session
+            .end_turn(turn, TurnEndReason::Cancelled, &BTreeSet::new())
+            .unwrap();
+        choose(&session, Reasoning::Off).unwrap();
+        for (name, point) in [
+            ("before", ForkPoint::BeforeTurn(turn)),
+            ("after", ForkPoint::AfterTurn(turn)),
+        ] {
+            let fork = session
+                .fork_to(root.join(format!("{name}.sqlite")), point)
+                .unwrap();
+            assert_eq!(fork.reasoning().unwrap(), Reasoning::High);
+        }
+        let clone = session.clone_to(root.join("clone.sqlite")).unwrap();
+        assert_eq!(clone.reasoning().unwrap(), Reasoning::Off);
+        drop(clone);
+        let before = session.view().unwrap().entries;
+        session.store.lock().unwrap().connection.execute_batch("CREATE TRIGGER refuse_setting BEFORE INSERT ON entries WHEN json_extract(CAST(NEW.body AS TEXT), '$.kind') = 'reasoning_selected' BEGIN SELECT RAISE(FAIL, 'injected preference failure'); END").unwrap();
+        {
+            let guard = session.submit_gate.try_lock().unwrap();
+            assert!(
+                session
+                    .record_selection(
+                        &guard,
+                        ModelRef {
+                            provider: "test".into(),
+                            model: "other".into()
+                        },
+                        Some(Reasoning::Low)
+                    )
+                    .is_err()
+            );
+        }
+        assert_eq!(session.reasoning().unwrap(), Reasoning::Off);
+        assert_eq!(session.view().unwrap().entries, before);
+        drop(session);
+        let reopened = Session::open(path).unwrap();
+        assert_eq!(reopened.reasoning().unwrap(), Reasoning::Off);
+        assert_eq!(
+            reopened.view().unwrap().turns()[0].reasoning,
+            Reasoning::High
+        );
+        drop(reopened);
+        std::fs::remove_dir_all(root).unwrap();
     }
 
     #[test]

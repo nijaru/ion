@@ -32,6 +32,7 @@ commands! {
     Session => ("session", "", "Show Session and context information"),
     Name => ("name", "[NAME]", "Show or change the Session name"),
     Model => ("model", "[PROVIDER/MODEL]", "Choose a model"),
+    Reasoning => ("reasoning", "[default|off|low|medium|high|budget:TOKENS]", "Select generation effort (route support varies)"),
     Compact => ("compact", "", "Summarize settled context"),
     Tools => ("tools", "", "List recorded tool operations"),
     Tool => ("tool", "[N]", "Inspect recorded tool evidence"),
