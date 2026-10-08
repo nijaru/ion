@@ -44,7 +44,9 @@ const MAX_RESPONSE: usize = 8 * 1024 * 1024;
 const PROVIDER_IDLE_TIMEOUT: Duration = Duration::from_secs(300);
 const CHAT_REASONING_CONTENT_REPLAY: &str = "chat_reasoning_content";
 const OPENROUTER_PLAIN_REASONING_REPLAY: &str = "openrouter_plain_reasoning";
-const OPENROUTER_DETAILS_REPLAY: &str = "openrouter_reasoning_details";
+// Scope structured/signed replay to this tool-message encoding. Reject prior
+// records rather than silently rewriting a prefix that may carry signatures.
+const OPENROUTER_DETAILS_REPLAY: &str = "openrouter_reasoning_details_tool_status";
 const ANTHROPIC_CONTENT_REPLAY: &str = "anthropic_content_blocks";
 const ANTHROPIC_BINDING_BETA: &str = "thinking-binding-controls-2026-08-01";
 const ANTHROPIC_INLINE_TOOLS_BETA: &str = "inline-tools-2026-09-15";
@@ -751,7 +753,11 @@ fn wire_messages_with_anthropic_context(
             {
                 None
             }
-            Some(_) => return Err(unsupported("provider replay is incompatible with route")),
+            Some(_) => {
+                return Err(unsupported(
+                    "provider replay is incompatible with route or wire encoding; explicitly compact or start a new Session",
+                ));
+            }
             None => None,
         };
         if message.content.is_empty() {
@@ -831,7 +837,7 @@ fn wire_messages_with_anthropic_context(
                         }
                         blocks.push(json!({"type":"tool_result","tool_use_id":result.call_id,"content":content,"is_error":result.is_error}));
                     } else {
-                        results.push(json!({"role":"tool","tool_call_id":result.call_id,"content":result.result.to_string()}));
+                        results.push(json!({"role":"tool","tool_call_id":result.call_id,"content":chat::tool_result_content(result)?}));
                         for image in &result.images {
                             image
                                 .validate()
@@ -1745,6 +1751,52 @@ mod tests {
     }
 
     #[test]
+    fn chat_preserves_tool_status_independently_of_arbitrary_payload() {
+        for wire in [
+            HttpWire::ChatCompletions,
+            HttpWire::LlamaCppNoThinking,
+            HttpWire::DeepSeekChat,
+            HttpWire::MiMoChat,
+            HttpWire::OpenRouterChat,
+        ] {
+            for payload in [
+                json!(null),
+                json!({"is_error":true,"error":"user data","result":[1,"quoted\\\""]}),
+            ] {
+                for is_error in [false, true] {
+                    let mut request = request();
+                    request.messages.push(Message {
+                        role: Role::Assistant,
+                        content: vec![Content::ToolCall(ToolCall {
+                            id: "call".into(),
+                            name: "read".into(),
+                            arguments: json!({}),
+                            raw_arguments: None,
+                        })],
+                        provider_replay: None,
+                    });
+                    request.messages.push(Message {
+                        role: Role::Tool,
+                        content: vec![Content::ToolResult(ToolResult {
+                            call_id: "call".into(),
+                            name: "read".into(),
+                            result: payload.clone(),
+                            images: Vec::new(),
+                            is_error,
+                        })],
+                        provider_replay: None,
+                    });
+                    let body = chat_body(&request, wire).unwrap();
+                    let content: Value =
+                        serde_json::from_str(body["messages"][3]["content"].as_str().unwrap())
+                            .unwrap();
+                    assert_eq!(content, json!({"is_error":is_error,"result":payload}));
+                }
+            }
+        }
+    }
+
+    #[test]
     fn replay_preserves_call_ids_and_rejects_orphans() {
         let mut request = request();
         request.messages.push(Message {
@@ -2178,6 +2230,18 @@ mod tests {
         assert_eq!(body["messages"][2]["tool_calls"][0]["id"], "provider-call");
         assert_eq!(body["messages"][3]["tool_call_id"], "provider-call");
 
+        let mut prior_encoding = request.clone();
+        prior_encoding.messages[1]
+            .provider_replay
+            .as_mut()
+            .unwrap()
+            .kind = "openrouter_reasoning_details".into();
+        assert_eq!(
+            chat_body(&prior_encoding, HttpWire::OpenRouterChat)
+                .unwrap_err()
+                .kind,
+            ProviderErrorKind::Unsupported
+        );
         let mut wrong_provider = request.clone();
         wrong_provider.route.effective.provider = "other".into();
         assert_eq!(

@@ -161,7 +161,7 @@ with tempfile.TemporaryDirectory(prefix="ion-images-") as temporary:
         assert requests[4]["messages"][-1]["content"] == "Read workspace picture."
         tool_messages = requests[5]["messages"]
         assert tool_messages[-2]["role"] == "tool"
-        assert tool_messages[-2]["content"] == '{"content":"Read image file [image/png]","note":null,"path":"red.png"}'
+        assert json.loads(tool_messages[-2]["content"]) == {"is_error": False, "result": {"content": "Read image file [image/png]", "note": None, "path": "red.png"}}
         assert tool_messages[-1]["role"] == "user"
         assert tool_messages[-1]["content"][1]["image_url"]["url"].startswith("data:image/png;base64,")
         inspected = subprocess.run([binary, "--cwd", workspace, "--continue", "inspect"], env=env, check=True, capture_output=True, text=True).stdout

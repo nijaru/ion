@@ -123,7 +123,9 @@ class Provider(BaseHTTPRequestHandler):
                 {"id": "mcp", "choices": [{"index": 0, "delta": {}, "finish_reason": "tool_calls"}]},
             ]
         elif len(requests) == 17:
-            result = json.loads(body["messages"][-1]["content"])
+            envelope = json.loads(body["messages"][-1]["content"])
+            assert envelope["is_error"] is False, envelope
+            result = envelope["result"]
             assert result["truncated"] is True and len(result["content"]) < 64 * 1024, result
             path = Path(result["full_output_path"])
             full = json.loads(path.read_text())

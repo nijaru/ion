@@ -1,6 +1,21 @@
 //! Chat-compatible request encoding, streamed decoding, and reasoning replay.
 use super::*;
 
+// Chat has no native tool-error field. Preserve status separately from arbitrary
+// JSON payloads, without cloning or changing the observed payload.
+pub(super) fn tool_result_content(result: &ion_ai::ToolResult) -> Result<String, ProviderError> {
+    #[derive(serde::Serialize)]
+    struct Envelope<'a> {
+        is_error: bool,
+        result: &'a Value,
+    }
+    serde_json::to_string(&Envelope {
+        is_error: result.is_error,
+        result: &result.result,
+    })
+    .map_err(|_| invalid("cannot encode tool result"))
+}
+
 pub(super) fn chat_body(request: &ModelRequest, wire: HttpWire) -> Result<Value, ProviderError> {
     validate_request(request)?;
     let mut body = control_fields(&request.route.effective, &request.controls, wire, false)?;

@@ -605,9 +605,14 @@ reasoning needed for tool-call continuation across saved Turns. The Gemini
 route completed a signed tool continuation and another Turn after cross-process
 resume. An offline headless Anthropic Messages check completed signed tool
 continuation, cross-process resume and durable reasoning resets after
-compaction and project instructions changed. The native route still needs a
-live Anthropic credential and account qualification; thinking on custom
-llama.cpp routes remains unsupported. Context pressure uses an approximate
+compaction and project instructions changed. Chat-compatible tool messages encode
+`{"is_error": bool, "result": original_payload}` as their text content; Session
+inspection retains the original payload and status separately. Saved OpenRouter
+structured reasoning from the earlier tool-message encoding is explicitly
+incompatible: compact the Session or start a new one before continuing. Ion does
+not silently rewrite a potentially signed prefix or discard its reasoning.
+The native route still needs a live Anthropic credential and account
+qualification; thinking on custom llama.cpp routes remains unsupported. Context pressure uses an approximate
 token estimate; custom routes without a known context window use only the
 encoded request bound. See [ARCHITECTURE.md](ARCHITECTURE.md) for the design
 contract and [AGENTS.md](AGENTS.md) for repository checks.
