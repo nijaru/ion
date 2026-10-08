@@ -673,11 +673,14 @@ async fn headless(
 }
 
 fn write_json_record(value: &serde_json::Value) -> io::Result<()> {
+    write_json_record_to(&mut io::stdout().lock(), value)
+}
+
+fn write_json_record_to(output: &mut impl Write, value: &serde_json::Value) -> io::Result<()> {
     let mut bytes = serde_json::to_vec(value).map_err(io::Error::other)?;
     bytes.push(b'\n');
-    let mut stdout = io::stdout().lock();
-    stdout.write_all(&bytes)?;
-    stdout.flush()
+    output.write_all(&bytes)?;
+    output.flush()
 }
 
 fn redact_image_payloads(value: &mut serde_json::Value) {

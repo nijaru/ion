@@ -225,14 +225,19 @@ also satisfy the active route's message-size and image-input limits before Ion
 acknowledges it. Accepted input keeps its reservation until Session acceptance
 or return to the editor/client, including while a follow-up waits to start.
 This is a queued-input bound, not a process-memory or context-fit guarantee.
-Closing stdin cancels active work and returns pending
-follow-ups as `uncommitted_follow_up` records. Returned typed inputs can include
-image payloads, so clients should handle them as their own input data.
-Input/output errors also cancel and await active work before the process exits
-with an error. If stdout is broken, no terminal record can be promised; reopen
-or inspect the Session for committed outcomes. An operation panic terminates
-the connection with an error rather than leaving it permanently busy;
-uncommitted effects remain unknown and are not retried automatically.
+Closing stdin cancels active work and returns uncommitted steering and
+follow-ups as `uncommitted_steering` and `uncommitted_follow_up` records.
+Returned typed inputs can include image payloads, so clients should handle them
+as their own input data. Input errors also cancel and await active work, then
+return terminal records and pending inputs while stdout remains healthy before
+exiting with an error. If stdout is broken, no terminal record can be promised;
+reopen or inspect the Session for committed outcomes.
+An operation panic emits `operation_failed` when stdout is healthy and ends the
+connection with an error. This record is not durable Turn closure: unfinished
+effects remain unknown and are not retried automatically. Pending steering and
+follow-ups are returned, including a starting follow-up whose input had not
+entered the Session; input already accepted by the Session is never returned
+as uncommitted.
 Session, resource, model and manual-compaction changes require an idle Turn.
 `compact` acknowledges that the operation started, can be cancelled with
 `abort`, and later emits `compact_end` with completed/cancelled/failed status

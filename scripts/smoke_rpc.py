@@ -4,6 +4,7 @@ import base64
 import json
 import os
 import select
+import socket
 import struct
 import subprocess
 import tempfile
@@ -98,7 +99,8 @@ with tempfile.TemporaryDirectory(prefix="ion-rpc-") as temporary:
     prompts = workspace / ".ion" / "prompts"
     prompts.mkdir(parents=True)
     (prompts / "check.md").write_text("Check $1.\n")
-    env = {**os.environ, "XDG_CONFIG_HOME": str(work / "config"), "XDG_STATE_HOME": str(work / "state")}
+    env = {key: os.environ[key] for key in ("PATH", "SHELL", "TMPDIR") if key in os.environ}
+    env.update(HOME=str(work / "home"), XDG_CONFIG_HOME=str(work / "config"), XDG_STATE_HOME=str(work / "state"))
     server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
@@ -325,6 +327,76 @@ with tempfile.TemporaryDirectory(prefix="ion-rpc-") as temporary:
         records = [json.loads(line) for line in incomplete.stdout.splitlines()]
         assert [record["type"] for record in records] == ["ready", "response"], records
         assert records[1]["command"] == "parse" and "final newline" in records[1]["error"], records
+        # Reset only stdin's TCP stream, leaving stdout healthy. Unlike PTY
+        # hangup (which can be EOF), this produces an actual OS read error.
+        fault_workspace = work / "input-fault"
+        fault_workspace.mkdir()
+        listener = socket.socket()
+        listener.bind(("127.0.0.1", 0))
+        listener.listen(1)
+        feeder = socket.create_connection(listener.getsockname())
+        reader, _ = listener.accept()
+        listener.close()
+        input_fault = None
+        native_pid = None
+        try:
+            input_fault = subprocess.Popen([binary, "--cwd", fault_workspace, "rpc"], env=env, stdin=reader, stdout=subprocess.PIPE, stderr=subprocess.PIPE, bufsize=0)
+            reader.close()
+            fault_session = read(input_fault)["session"]
+            before = len(requests)
+
+            def stream_send(command):
+                feeder.sendall(json.dumps(command).encode() + b"\n")
+
+            stream_send({"id": "fault-parent", "type": "prompt", "message": "IO_SETTLEMENT"})
+            until(input_fault, lambda record: record["type"] == "tool_started")
+            deadline = time.monotonic() + 8
+            while not (fault_workspace / "io.ready").exists() and time.monotonic() < deadline:
+                time.sleep(0.01)
+            assert (fault_workspace / "io.ready").exists(), "input-fault native call did not start"
+            native_pid = int((fault_workspace / "io.pid").read_text())
+            for kind, message in (("steer", "RETAIN_STEERING"), ("follow_up", "RETAIN_FOLLOW_UP")):
+                stream_send({"id": kind, "type": kind, "message": message, "images": [inline]})
+                assert until(input_fault, lambda record: record.get("id") == kind)[-1]["success"]
+            feeder.setsockopt(socket.SOL_SOCKET, socket.SO_LINGER, struct.pack("ii", 1, 0))
+            feeder.close()
+            records = until(input_fault, lambda record: record["type"] == "uncommitted_follow_up")
+            assert input_fault.wait(timeout=8) != 0, "stdin read failure was reported as success"
+            assert b"Connection reset" in input_fault.stderr.read()
+            terminal = [record for record in records if record["type"] == "turn_end"]
+            steering = [record for record in records if record["type"] == "uncommitted_steering"]
+            assert len(terminal) == 1 and terminal[0]["status"] == "cancelled", records
+            assert len(steering) == 1, records
+            returned = records[-1]
+            assert returned["id"] == "follow_up", returned
+            for record, message in ((steering[0], "RETAIN_STEERING"), (returned, "RETAIN_FOLLOW_UP")):
+                content = record["input"]["content"]
+                assert content[0]["Text"] == message and content[1]["Image"]["data"] == inline["data"], record
+            assert records.index(terminal[0]) < records.index(steering[0]) < records.index(returned), records
+            assert len(requests) == before + 1, "input failure admitted queued work"
+            view = json.loads(subprocess.run([binary, "--cwd", fault_workspace, "--session", fault_session, "inspect"], env=env, capture_output=True, check=True).stdout)
+            outcomes = {entry["data"]["result"]["call_id"]: entry["data"]["result"]["outcome"] for entry in view["entries"] if entry["kind"] == "tool_result"}
+            assert outcomes["io-call"]["state"] == "observed" and outcomes["io-call"]["output"]["value"]["cancelled"] is True, outcomes
+            assert outcomes["unused-io"]["state"] == "not_dispatched" and not (fault_workspace / "io.unused").exists(), outcomes
+            assert view["unfinished_turn"] is None, view
+            try:
+                os.kill(native_pid, 0)
+            except ProcessLookupError:
+                native_pid = None
+            else:
+                raise AssertionError("native call survived input-fault settlement")
+        finally:
+            feeder.close()
+            reader.close()
+            if input_fault is not None and input_fault.poll() is None:
+                input_fault.kill()
+                input_fault.wait()
+            if native_pid is not None:
+                try:
+                    os.kill(native_pid, 9)
+                except ProcessLookupError:
+                    pass
+
         # A short command can expand beyond the route's message limit. It must
         # be refused before queue acknowledgement, not poison the active Turn.
         (prompts / "oversize.md").write_text("$1 $1\n")
