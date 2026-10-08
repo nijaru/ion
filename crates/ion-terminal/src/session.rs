@@ -8,7 +8,8 @@ use std::sync::{
 
 use crossterm::{SynchronizedUpdate, terminal};
 
-use crate::input::InputStream;
+use crate::CapabilitySupport;
+use crate::input::{InputEvent, InputStream};
 use crate::requirements::TerminalRequirements;
 use crate::{Frame, Screen};
 
@@ -99,14 +100,15 @@ impl Write for TerminalWriter<'_> {
 /// output, and the panic hook use the same mode custody and output lock.
 pub struct TerminalSession {
     state: Arc<Mutex<State>>,
+    input: InputStream,
 }
 
 impl TerminalSession {
-    pub fn enter() -> io::Result<Self> {
-        Self::with_requirements(TerminalRequirements::default())
+    pub async fn enter() -> io::Result<Self> {
+        Self::with_requirements(TerminalRequirements::default()).await
     }
 
-    pub fn with_requirements(requirements: TerminalRequirements) -> io::Result<Self> {
+    pub async fn with_requirements(requirements: TerminalRequirements) -> io::Result<Self> {
         install_panic_hook();
         let state = {
             let mut owner = PANIC_OWNER
@@ -123,9 +125,12 @@ impl TerminalSession {
             *owner = Arc::downgrade(&state);
             state
         };
-        let session = Self { state };
-        let result = { session.lock().activate() };
-        result?;
+        let mut session = Self {
+            state,
+            input: InputStream::new()?,
+        };
+        session.lock().activate()?;
+        session.negotiate_keyboard().await?;
         Ok(session)
     }
 
@@ -150,9 +155,30 @@ impl TerminalSession {
         self.lock().usable()
     }
 
-    pub fn input(&self) -> io::Result<InputStream> {
-        self.check_active()?;
-        InputStream::new()
+    pub async fn next_input(&mut self) -> Option<io::Result<InputEvent>> {
+        if let Err(error) = self.check_active() {
+            return Some(Err(error));
+        }
+        let event = self.input.next().await;
+        if let Err(error) = self.check_active() {
+            return Some(Err(error));
+        }
+        event
+    }
+
+    async fn negotiate_keyboard(&mut self) -> io::Result<()> {
+        if !self.lock().requirements.keyboard_enhancement {
+            return Ok(());
+        }
+        // Queries use the same intake as keys; the output lease ends before waiting.
+        self.output()?.write_all(b"\x1b[?u\x1b[c")?;
+        self.output()?.flush()?;
+        let support = match self.input.keyboard_support().await? {
+            Some(true) => CapabilitySupport::Supported,
+            Some(false) => CapabilitySupport::Unsupported,
+            None => CapabilitySupport::Unknown,
+        };
+        self.lock().set_keyboard_support(support)
     }
 
     /// Own a keyboard push on the alternate surface while it is in use.
@@ -174,10 +200,12 @@ impl TerminalSession {
         terminal::size()
     }
 
-    pub fn cursor_position(&self) -> io::Result<(u16, u16)> {
-        let state = self.lock();
-        state.usable()?;
-        crossterm::cursor::position()
+    pub async fn cursor_position(&mut self) -> io::Result<(u16, u16)> {
+        self.output()?.write_all(b"\x1b[6n")?;
+        self.output()?.flush()?;
+        let position = self.input.cursor_position().await?;
+        self.check_active()?;
+        Ok(position)
     }
 
     pub fn render(&mut self, screen: &mut Screen, frame: &Frame<'_>) -> io::Result<()> {
@@ -198,16 +226,28 @@ impl TerminalSession {
         result
     }
 
+    /// Quarantine pre-read bytes at the secret-entry boundary. They must never
+    /// resume as chat events, even if a user typed the command and key together.
+    pub fn suspend_for_credentials(&mut self) -> io::Result<()> {
+        let restored = self.restore();
+        let discarded = self.input.discard_for_credentials();
+        restored.and(discarded)
+    }
+
     pub fn suspend(&mut self) -> io::Result<()> {
         self.restore()
     }
 
-    pub fn resume(&mut self) -> io::Result<()> {
-        self.lock().activate()
+    pub async fn resume(&mut self) -> io::Result<()> {
+        self.input.resume()?;
+        self.lock().activate()?;
+        self.negotiate_keyboard().await
     }
 
     pub fn restore(&mut self) -> io::Result<()> {
-        self.lock().restore()
+        let input = self.input.suspend();
+        let modes = self.lock().restore();
+        input.and(modes)
     }
 }
 

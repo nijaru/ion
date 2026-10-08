@@ -24,8 +24,7 @@ use ion_core::{
 use ion_host::image_input::LoadedImage;
 use ion_host::{CredentialStatus, CredentialStore, Resources, Selection};
 use ion_terminal::{
-    Frame, InputEvent, InputStream, KeyCode, KeyEvent, Modifiers, MouseKind, Screen,
-    TerminalSession,
+    Frame, InputEvent, KeyCode, KeyEvent, Modifiers, MouseKind, Screen, TerminalSession,
 };
 use ratatui::text::Line;
 use tokio::time::{Duration, interval};
@@ -257,9 +256,10 @@ pub async fn chat(init: ChatInit) -> Result<()> {
     let tui_mode = init.tui_mode;
     let mut runtime = init.binding;
     let images = init.images;
-    let mut terminal = TerminalSession::enter().context("interactive chat requires a terminal")?;
-    let mut screen = new_inline_screen(&mut terminal)?;
-    let mut input = terminal.input()?;
+    let mut terminal = TerminalSession::enter()
+        .await
+        .context("interactive chat requires a terminal")?;
+    let mut screen = new_inline_screen(&mut terminal).await?;
     let mut ui = Frontend {
         mode: tui_mode,
         images,
@@ -276,15 +276,7 @@ pub async fn chat(init: ChatInit) -> Result<()> {
         if let Some(incoming) = ui.pending.pop_front() {
             ui.status.clear();
             ui.scroll = 0;
-            run_turn(
-                &mut terminal,
-                &mut screen,
-                &mut input,
-                &mut ui,
-                &runtime,
-                incoming,
-            )
-            .await?;
+            run_turn(&mut terminal, &mut screen, &mut ui, &runtime, incoming).await?;
             continue;
         }
         draw(&mut terminal, &mut screen, &mut ui, None, None)?;
@@ -292,7 +284,7 @@ pub async fn chat(init: ChatInit) -> Result<()> {
         if std::env::var_os("ION_SMOKE_PANIC_AFTER_FIRST_DRAW").is_some() {
             panic!("ION smoke panic after first terminal draw");
         }
-        let Some(event) = input.next().await else {
+        let Some(event) = terminal.next_input().await else {
             break;
         };
         terminal
@@ -320,7 +312,6 @@ pub async fn chat(init: ChatInit) -> Result<()> {
                         run_turn(
                             &mut terminal,
                             &mut screen,
-                            &mut input,
                             &mut ui,
                             &runtime,
                             TurnInput::prepared(
@@ -338,7 +329,6 @@ pub async fn chat(init: ChatInit) -> Result<()> {
                         if let Err(error) = run_user_shell(
                             &mut terminal,
                             &mut screen,
-                            &mut input,
                             &mut ui,
                             &runtime,
                             command.clone(),
@@ -361,22 +351,16 @@ pub async fn chat(init: ChatInit) -> Result<()> {
                             match login_in_terminal(
                                 &mut terminal,
                                 &mut screen,
-                                &mut input,
                                 runtime.host().credentials(),
                                 args,
-                            )? {
+                            )
+                            .await?
+                            {
                                 Ok(()) => ui.status = "Credential saved".into(),
                                 Err(error) => ui.status = format!("{error:#}"),
                             }
                         } else if builtin == Some(Builtin::Compact) && args.is_empty() {
-                            run_compaction(
-                                &mut terminal,
-                                &mut screen,
-                                &mut input,
-                                &mut ui,
-                                &runtime,
-                            )
-                            .await?;
+                            run_compaction(&mut terminal, &mut screen, &mut ui, &runtime).await?;
                         } else if builtin == Some(Builtin::Copy) && args.is_empty() {
                             match copy_last_answer(runtime.session(), &mut terminal).await {
                                 Ok(crate::clipboard::CopyOutcome::Copied) => {
@@ -389,13 +373,8 @@ pub async fn chat(init: ChatInit) -> Result<()> {
                             }
                         } else if builtin == Some(Builtin::Editor) && args.is_empty() {
                             ui.completion.clear();
-                            match edit_draft_in_terminal(
-                                &mut terminal,
-                                &mut screen,
-                                &mut input,
-                                &mut ui,
-                            )
-                            .await?
+                            match edit_draft_in_terminal(&mut terminal, &mut screen, &mut ui)
+                                .await?
                             {
                                 Ok(()) => ui.status = "Draft returned from editor".into(),
                                 Err(error) => {
@@ -412,7 +391,6 @@ pub async fn chat(init: ChatInit) -> Result<()> {
                                     run_turn(
                                         &mut terminal,
                                         &mut screen,
-                                        &mut input,
                                         &mut ui,
                                         &runtime,
                                         TurnInput::prepared(
@@ -482,6 +460,7 @@ pub async fn chat(init: ChatInit) -> Result<()> {
                 }
             }
             InputEvent::Paste(text) => ui.insert(&text),
+            InputEvent::Rejected(error) => ui.status = error.to_string(),
             InputEvent::Resize(size) => screen.resize(size.columns, size.rows),
             InputEvent::Mouse(mouse) => match mouse.kind() {
                 MouseKind::ScrollUp => ui.scroll = ui.scroll.saturating_add(3),
@@ -490,7 +469,6 @@ pub async fn chat(init: ChatInit) -> Result<()> {
             },
         }
     }
-    input.suspend()?;
     if terminal.is_alt_screen()? {
         terminal.leave_alt_screen()?;
         screen.invalidate();
@@ -500,13 +478,14 @@ pub async fn chat(init: ChatInit) -> Result<()> {
     Ok(())
 }
 
-fn new_inline_screen(terminal: &mut TerminalSession) -> Result<Screen> {
+async fn new_inline_screen(terminal: &mut TerminalSession) -> Result<Screen> {
     if terminal.is_alt_screen()? {
         terminal.leave_alt_screen()?;
     }
     let (width, height) = terminal.size().context("read terminal size")?;
     let (_, cursor_row) = terminal
         .cursor_position()
+        .await
         .context("read terminal cursor position")?;
     Ok(Screen::with_live_height(
         width,
@@ -627,28 +606,28 @@ fn clipboard_paths(paths: &[PathBuf], shell: bool) -> Result<String> {
     Ok(formatted.join(if shell { " " } else { "\n" }))
 }
 
-fn login_in_terminal(
+async fn login_in_terminal(
     terminal: &mut TerminalSession,
     screen: &mut Screen,
-    input: &mut InputStream,
     credentials: &CredentialStore,
     provider: &str,
 ) -> Result<Result<()>> {
     anyhow::ensure!(!provider.is_empty(), "use /login PROVIDER");
-    input
-        .suspend()
-        .context("release terminal input for login")?;
-    terminal.suspend().context("suspend terminal for login")?;
+    terminal
+        .suspend_for_credentials()
+        .context("suspend terminal for login")?;
     let result = (|| -> Result<()> {
         let key = rpassword::prompt_password(format!("{provider} API key: "))
             .context("read login credential")?;
         credentials.save_api_key(provider, &key)
     })();
-    terminal.resume().context("resume terminal after login")?;
-    *screen = new_inline_screen(terminal).context("restore inline chat after login")?;
-    *input = terminal
-        .input()
-        .context("resume terminal input after login")?;
+    terminal
+        .resume()
+        .await
+        .context("resume terminal after login")?;
+    *screen = new_inline_screen(terminal)
+        .await
+        .context("restore inline chat after login")?;
     Ok(result)
 }
 
@@ -698,19 +677,17 @@ fn last_committed_answer(view: &SessionView) -> Result<String> {
 async fn edit_draft_in_terminal(
     terminal: &mut TerminalSession,
     screen: &mut Screen,
-    input: &mut InputStream,
     ui: &mut Frontend,
 ) -> Result<Result<()>> {
-    input
-        .suspend()
-        .context("release terminal input for editor")?;
     terminal.suspend().context("suspend terminal for editor")?;
     let edited = crate::external_editor::edit(&ui.draft, MAX_DRAFT).await;
-    terminal.resume().context("resume terminal after editor")?;
-    *screen = new_inline_screen(terminal).context("restore inline chat after editor")?;
-    *input = terminal
-        .input()
-        .context("resume terminal input after editor")?;
+    terminal
+        .resume()
+        .await
+        .context("resume terminal after editor")?;
+    *screen = new_inline_screen(terminal)
+        .await
+        .context("restore inline chat after editor")?;
     Ok(edited.map(|edited| ui.replace_draft(edited)))
 }
 
@@ -983,7 +960,6 @@ fn handle_command(
 async fn run_compaction(
     terminal: &mut TerminalSession,
     screen: &mut Screen,
-    input: &mut InputStream,
     ui: &mut Frontend,
     runtime: &ion_host::SessionBinding,
 ) -> Result<()> {
@@ -1011,7 +987,7 @@ async fn run_compaction(
             }
             tokio::select! {
                 result = &mut compact => break result,
-                event = input.next(), if !input_ended => {
+                event = terminal.next_input(), if !input_ended => {
                     if let Err(error) = terminal.check_active() {
                         output_error = Some(error.into());
                         input_ended = true;
@@ -1025,6 +1001,7 @@ async fn run_compaction(
                     },
                     Some(Ok(InputEvent::Key(key))) => busy_key(ui, key, &stop, None, Some(runtime.resources()), runtime.agent().limits()),
                     Some(Ok(InputEvent::Paste(text))) => ui.insert(&text),
+                    Some(Ok(InputEvent::Rejected(error))) => ui.status = error.to_string(),
                     Some(Ok(InputEvent::Resize(size))) => screen.resize(size.columns, size.rows),
                     Some(Ok(InputEvent::Mouse(mouse))) => match mouse.kind() {
                         MouseKind::ScrollUp => ui.scroll = ui.scroll.saturating_add(3),
@@ -1269,7 +1246,6 @@ fn context_label(view: &ion_core::SessionView, window: Option<u32>) -> String {
 async fn run_user_shell(
     terminal: &mut TerminalSession,
     screen: &mut Screen,
-    input: &mut InputStream,
     ui: &mut Frontend,
     runtime: &ion_host::SessionBinding,
     command: String,
@@ -1296,7 +1272,7 @@ async fn run_user_shell(
             }
             tokio::select! {
                 result = &mut running => break result,
-                event = input.next(), if !input_ended => {
+                event = terminal.next_input(), if !input_ended => {
                     if let Err(error) = terminal.check_active() {
                         output_error = Some(error.into());
                         input_ended = true;
@@ -1312,6 +1288,7 @@ async fn run_user_shell(
                     },
                     Some(Ok(InputEvent::Key(key))) => busy_key(ui, key, &stop, None, Some(runtime.resources()), runtime.agent().limits()),
                     Some(Ok(InputEvent::Paste(text))) => ui.insert(&text),
+                    Some(Ok(InputEvent::Rejected(error))) => ui.status = error.to_string(),
                     Some(Ok(InputEvent::Resize(size))) => screen.resize(size.columns, size.rows),
                     Some(Ok(InputEvent::Mouse(mouse))) => match mouse.kind() {
                         MouseKind::ScrollUp => ui.scroll = ui.scroll.saturating_add(3),
@@ -1366,7 +1343,6 @@ async fn run_user_shell(
 async fn run_turn(
     terminal: &mut TerminalSession,
     screen: &mut Screen,
-    input: &mut InputStream,
     ui: &mut Frontend,
     runtime: &ion_host::SessionBinding,
     incoming: TurnInput,
@@ -1416,7 +1392,7 @@ async fn run_turn(
             }
             tokio::select! {
                 result = &mut turn => break result,
-                event = input.next(), if !input_ended => {
+                event = terminal.next_input(), if !input_ended => {
                     if let Err(error) = terminal.check_active() {
                         output_error = Some(error.into());
                         input_ended = true;
@@ -1430,6 +1406,7 @@ async fn run_turn(
                     },
                     Some(Ok(InputEvent::Key(key))) => busy_key(ui, key, &stop, Some(&steering), Some(runtime.resources()), runtime.agent().limits()),
                     Some(Ok(InputEvent::Paste(text))) => ui.insert(&text),
+                    Some(Ok(InputEvent::Rejected(error))) => ui.status = error.to_string(),
                     Some(Ok(InputEvent::Resize(size))) => screen.resize(size.columns, size.rows),
                     Some(Ok(InputEvent::Mouse(mouse))) => match mouse.kind() {
                         MouseKind::ScrollUp => ui.scroll = ui.scroll.saturating_add(3),

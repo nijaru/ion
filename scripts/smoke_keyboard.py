@@ -22,8 +22,10 @@ CSI = re.compile(rb"\x1b\[([0-?]*)([ -/]*)([@-~])")
 
 
 class KeyboardTerminal:
-    def __init__(self, master, supported):
+    def __init__(self, master, supported, typeahead=False):
         self.master, self.supported = master, supported
+        self.typeahead = typeahead
+        self.keyboard_queries = self.cursor_queries = 0
         self.alternate = False
         # The caller already owns entries on both independent surfaces.
         self.stacks = [[4], [8]]
@@ -36,7 +38,10 @@ class KeyboardTerminal:
             self.pending = self.pending[match.end():]
             if final == b"u":
                 if parameters == b"?":
+                    self.keyboard_queries += 1
                     if self.supported:
+                        if self.typeahead and self.keyboard_queries == 1:
+                            os.write(self.master, b"START_")
                         os.write(self.master, f"\x1b[?{self.stacks[self.alternate][-1]}u".encode())
                 elif parameters.startswith(b">"):
                     self.stacks[self.alternate].append(int(parameters[1:] or b"0"))
@@ -49,8 +54,11 @@ class KeyboardTerminal:
             elif final == b"l" and parameters == b"?1049":
                 self.alternate = False
             elif final == b"n" and parameters == b"6":
+                self.cursor_queries += 1
+                if self.typeahead and self.cursor_queries == 2:
+                    os.write(self.master, b"RESUME_")
                 os.write(self.master, b"\x1b[2;1R")
-            elif final == b"c" and parameters in (b"", b"0"):
+            elif final == b"c" and parameters in (b"", b"0") and not self.supported:
                 os.write(self.master, b"\x1b[?1;2c")
         # Preserve an incomplete escape sequence, not arbitrary rendered text.
         start = self.pending.rfind(b"\x1b")
@@ -109,7 +117,7 @@ def exercise(mode, supported=True, panic=False):
             child = subprocess.Popen([BINARY, "--cwd", work, "chat", "--tui-mode", mode], env=env, stdin=slave, stdout=slave, stderr=slave, preexec_fn=controlling_terminal)
             os.close(slave)
             slave = None
-            terminal = KeyboardTerminal(master, supported)
+            terminal = KeyboardTerminal(master, supported, supported and not panic)
             output = bytearray()
 
             def drain(seconds=0.1):
@@ -150,10 +158,16 @@ def exercise(mode, supported=True, panic=False):
                     until(lambda: len(requests) == 1 and b"done" in output)
                     drain()
                     users = [message for message in requests[0]["messages"] if message["role"] == "user"]
-                    assert users[-1]["content"] == "first\nsecond", users[-1]
+                    assert users[-1]["content"] == "START_first\nsecond", users[-1]
                     os.write(master, b"/editor\r")
                     until(lambda: marker.exists() and terminal.stacks[terminal.alternate][-1] == 1)
                     assert marker.read_text() == "4", "editor inherited Ion's keyboard push"
+                    until(lambda: terminal.cursor_queries == 2)
+                    checkpoint = len(output)
+                    os.write(master, b"after\r")
+                    until(lambda: len(requests) == 2 and b"done" in output[checkpoint:])
+                    users = [message for message in requests[-1]["messages"] if message["role"] == "user"]
+                    assert users[-1]["content"] == "RESUME_after", users[-1]
                 if mode == "inline":
                     os.write(master, b"\x0f")
                     until(lambda: terminal.alternate)
@@ -171,10 +185,11 @@ def exercise(mode, supported=True, panic=False):
         finally:
             if child is not None and child.poll() is None:
                 child.kill()
-                child.wait()
             if slave is not None:
                 os.close(slave)
             os.close(master)
+            if child is not None:
+                child.wait(timeout=5)
             server.shutdown()
             server.server_close()
             thread.join()

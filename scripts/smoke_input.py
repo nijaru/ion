@@ -55,6 +55,7 @@ class Handler(BaseHTTPRequestHandler):
 class Terminal:
     def __init__(self, cwd, env, mode):
         self.master, slave = pty.openpty()
+        os.set_blocking(self.master, False)
         fcntl.ioctl(slave, termios.TIOCSWINSZ, struct.pack("HHHH", 30, 100, 0, 0))
 
         def attach():
@@ -66,7 +67,19 @@ class Terminal:
         self.output = bytearray()
 
     def send(self, data):
-        os.write(self.master, data.encode() if isinstance(data, str) else data)
+        data = data.encode() if isinstance(data, str) else data
+        deadline = time.monotonic() + 10
+        while data:
+            assert time.monotonic() < deadline and self.child.poll() is None, "terminal write stalled"
+            readable, writable, _ = select.select([self.master], [self.master], [], 0.03)
+            if readable:
+                self.pump()
+            if writable:
+                try:
+                    written = os.write(self.master, data[:4096])
+                except BlockingIOError:
+                    continue
+                data = data[written:]
 
     def pump(self):
         if select.select([self.master], [], [], 0.03)[0]:
@@ -106,8 +119,8 @@ class Terminal:
     def close(self):
         if self.child.poll() is None:
             self.child.kill()
-            self.child.wait(timeout=5)
         os.close(self.master)
+        self.child.wait(timeout=5)
 
 
 with tempfile.TemporaryDirectory(prefix="ion-input-") as temporary:
@@ -120,6 +133,43 @@ with tempfile.TemporaryDirectory(prefix="ion-input-") as temporary:
     try:
         subprocess.run([binary, "use", "smoke", "smoke-model", "--endpoint", f"http://127.0.0.1:{server.server_port}/v1/chat/completions", "--wire", "chat-completions"], env=env, check=True, capture_output=True)
         for mode in ("inline", "fullscreen"):
+            cwd = work / (mode + "-intake")
+            cwd.mkdir()
+            terminal = Terminal(cwd, env, mode)
+            try:
+                terminal.wait(lambda: "› " in terminal.text())
+                before = len(requests)
+                print(f"Intake {mode}: malformed paste", flush=True)
+                terminal.send(b"BASE\x1b[H\x1b[200")
+                terminal.paint()  # Split the opener beyond Escape grace.
+                terminal.send(b"~body\r\xff\x1b[201~")
+                terminal.wait(lambda: "invalid UTF-8" in terminal.text())
+                assert len(requests) == before, "malformed paste submitted input"
+                print(f"Intake {mode}: oversized paste", flush=True)
+                terminal.send(b"\x1b[200~" + b"x" * (64 * 1024 + 1))
+                terminal.wait(lambda: "Paste exceeds terminal input limit" in terminal.text())
+                assert len(requests) == before, "overflow submitted a truncated paste"
+                print(f"Intake {mode}: submit preserved draft", flush=True)
+                terminal.send(b"\x1b[201~PREFIX_\r")
+                terminal.wait(lambda: len(requests) == before + 1)
+                assert user_text(requests[-1]) == "PREFIX_BASE", user_text(requests[-1])
+                terminal.wait(lambda: "DONE_PREFIX_BASE" in terminal.text())
+                terminal.paint()
+                terminal.output.clear()
+                print(f"Intake {mode}: credential quarantine", flush=True)
+                terminal.send(b"/login smoke\rPRE_READ_DISPOSABLE\r")
+                terminal.wait(lambda: "smoke API key:" in terminal.text())
+                terminal.send(b"ACTUAL_DISPOSABLE\r")
+                terminal.wait(lambda: "Credential saved" in terminal.text())
+                terminal.paint()
+                terminal.send(b"\r")
+                terminal.paint()
+                assert len(requests) == before + 1, "pre-read credential became chat input"
+                assert "DISPOSABLE" not in terminal.text(), "credential leaked to terminal"
+                terminal.finish()
+            finally:
+                terminal.close()
+
             cwd = work / (mode + "-history")
             cwd.mkdir()
             terminal = Terminal(cwd, env, mode)

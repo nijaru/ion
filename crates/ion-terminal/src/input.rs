@@ -13,6 +13,13 @@ use termwiz::input::{self as term_input, InputParser};
 use tokio::signal::unix::{Signal, SignalKind, signal};
 use tokio::sync::mpsc;
 
+mod error;
+mod paste;
+mod query;
+pub use error::InputError;
+use paste::{Frame as InputFrame, PasteFramer};
+use query::TerminalReplyFilter;
+
 /// Terminal dimensions in columns and rows.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Size {
@@ -164,18 +171,29 @@ impl MouseEvent {
 pub enum InputEvent {
     Key(KeyEvent),
     Paste(String),
+    Rejected(InputError),
     Mouse(MouseEvent),
     Resize(Size),
 }
 
+#[derive(Debug)]
+struct ReaderReturn {
+    file: File,
+    unsent: Option<io::Result<Vec<u8>>>,
+}
+
 /// The single terminal input reader for a live frontend.
 #[derive(Debug)]
-pub struct InputStream {
-    reader: Option<JoinHandle<()>>,
+pub(crate) struct InputStream {
+    reader: Option<JoinHandle<ReaderReturn>>,
+    file: Option<File>,
+    unsent: Option<io::Result<Vec<u8>>>,
     stop: Arc<AtomicBool>,
     chunks: mpsc::Receiver<io::Result<Vec<u8>>>,
     resize: Signal,
     parser: InputParser,
+    utf8: Vec<u8>,
+    paste: PasteFramer,
     replies: TerminalReplyFilter,
     pending: VecDeque<InputEvent>,
     escape_deadline: Option<tokio::time::Instant>,
@@ -196,15 +214,25 @@ impl InputStream {
         let reader_stop = Arc::clone(&stop);
         let reader = thread::Builder::new()
             .name("ion-terminal-input".into())
-            .spawn(move || read_chunks(stdin, sender, &reader_stop))?;
+            .spawn(move || {
+                let unsent = read_chunks(&stdin, sender, &reader_stop);
+                ReaderReturn {
+                    file: stdin,
+                    unsent,
+                }
+            })?;
         let remote =
             std::env::var_os("SSH_CONNECTION").is_some() || std::env::var_os("SSH_TTY").is_some();
         Ok(Self {
             reader: Some(reader),
+            file: None,
+            unsent: None,
             stop,
             chunks,
             resize,
             parser: InputParser::new(),
+            utf8: Vec::new(),
+            paste: PasteFramer::default(),
             replies: TerminalReplyFilter::default(),
             pending: VecDeque::new(),
             escape_deadline: None,
@@ -214,19 +242,129 @@ impl InputStream {
     }
 
     /// Release stdin before a synchronous credential prompt takes it.
-    pub fn suspend(&mut self) -> io::Result<()> {
+    pub(crate) fn suspend(&mut self) -> io::Result<()> {
         self.stop.store(true, Ordering::Release);
         if let Some(reader) = self.reader.take() {
-            reader
+            let returned = reader
                 .join()
                 .map_err(|_| io::Error::other("terminal reader panicked"))?;
+            self.file = Some(returned.file);
+            self.unsent = returned.unsent;
         }
         Ok(())
     }
 
+    pub(crate) fn resume(&mut self) -> io::Result<()> {
+        let Some(file) = self.file.take() else {
+            return Ok(());
+        };
+        while let Ok(chunk) = self.chunks.try_recv() {
+            self.parse(&chunk?, true);
+        }
+        if let Some(chunk) = self.unsent.take() {
+            self.parse(&chunk?, true);
+        }
+        let (sender, chunks) = mpsc::channel(32);
+        self.stop.store(false, Ordering::Release);
+        let stop = Arc::clone(&self.stop);
+        self.reader = Some(
+            thread::Builder::new()
+                .name("ion-terminal-input".into())
+                .spawn(move || {
+                    let unsent = read_chunks(&file, sender, &stop);
+                    ReaderReturn { file, unsent }
+                })?,
+        );
+        self.chunks = chunks;
+        Ok(())
+    }
+
+    pub(crate) fn discard_for_credentials(&mut self) -> io::Result<()> {
+        debug_assert!(self.reader.is_none());
+        self.pending.clear();
+        self.parser = InputParser::new();
+        self.utf8.clear();
+        self.paste = PasteFramer::default();
+        self.replies = TerminalReplyFilter::default();
+        self.escape_deadline = None;
+        let mut error = None;
+        while let Ok(chunk) = self.chunks.try_recv() {
+            if let Err(failure) = chunk {
+                error.get_or_insert(failure);
+            }
+        }
+        if let Some(Err(failure)) = self.unsent.take() {
+            error.get_or_insert(failure);
+        }
+        error.map_or(Ok(()), Err)
+    }
+
+    pub(crate) async fn keyboard_support(&mut self) -> io::Result<Option<bool>> {
+        self.replies.keyboard = None;
+        self.await_reply(|replies| replies.keyboard.take(), false)
+            .await
+    }
+
+    pub(crate) async fn cursor_position(&mut self) -> io::Result<(u16, u16)> {
+        self.replies.cursor = None;
+        let result = self
+            .await_reply(|replies| replies.cursor.take(), true)
+            .await;
+        result?.ok_or_else(|| {
+            io::Error::new(io::ErrorKind::TimedOut, "terminal cursor query timed out")
+        })
+    }
+
+    async fn await_reply<T>(
+        &mut self,
+        reply: impl Fn(&mut TerminalReplyFilter) -> Option<T>,
+        cursor_query: bool,
+    ) -> io::Result<Option<T>> {
+        let deadline = tokio::time::Instant::now() + Duration::from_millis(500);
+        loop {
+            let now = tokio::time::Instant::now();
+            if now >= deadline {
+                self.parse(&[], false);
+                return Ok(None);
+            }
+            if let Some(value) = reply(&mut self.replies) {
+                return Ok(Some(value));
+            }
+            if self.escape_deadline.is_some_and(|escape| now >= escape) {
+                self.parse_for_query(&[], false, cursor_query);
+                continue;
+            }
+            let escape_deadline = self.escape_deadline;
+            let chunk = tokio::select! {
+                chunk = self.chunks.recv() => chunk,
+                () = tokio::time::sleep_until(deadline) => continue,
+                () = wait_escape(escape_deadline) => continue,
+            };
+            match chunk {
+                Some(Ok(bytes)) => {
+                    if tokio::time::Instant::now() >= deadline {
+                        // Receive has transferred custody; preserve late type-ahead
+                        // through ordinary intake, never as an accepted query reply.
+                        self.parse(&bytes, true);
+                        self.parse(&[], false);
+                        return Ok(None);
+                    }
+                    self.parse_for_query(&bytes, true, cursor_query);
+                }
+                Some(Err(error)) => return Err(error),
+                None => {
+                    return Err(io::Error::new(
+                        io::ErrorKind::UnexpectedEof,
+                        "terminal input ended during query",
+                    ));
+                }
+            }
+        }
+    }
+
     /// Read the next decoded event, preserving stream termination and I/O
     /// errors for the owning runtime to handle explicitly.
-    pub async fn next(&mut self) -> Option<io::Result<InputEvent>> {
+    pub(crate) async fn next(&mut self) -> Option<io::Result<InputEvent>> {
         loop {
             if let Some(event) = self.pending.pop_front() {
                 return Some(Ok(event));
@@ -240,6 +378,13 @@ impl InputStream {
                     None => {
                         self.eof = true;
                         self.parse(&[], false);
+                        if !self.utf8.is_empty() {
+                            self.utf8.clear();
+                            self.pending.push_back(InputEvent::Rejected(InputError::InvalidUtf8));
+                        }
+                        if let Some(error) = self.paste.finish() {
+                            self.pending.push_back(InputEvent::Rejected(error));
+                        }
                     }
                     Some(Ok(bytes)) => self.parse(&bytes, true),
                     Some(Err(error)) => return Some(Err(error)),
@@ -253,20 +398,85 @@ impl InputStream {
                         Err(error) => return Some(Err(error)),
                     }
                 },
-                () = async {
-                    match escape_deadline {
-                        Some(deadline) => tokio::time::sleep_until(deadline).await,
-                        None => std::future::pending().await,
-                    }
-                } => self.parse(&[], false),
+                () = wait_escape(escape_deadline) => self.parse(&[], false),
             }
         }
     }
 
     fn parse(&mut self, bytes: &[u8], maybe_more: bool) {
-        let bytes = self.replies.feed(bytes, !maybe_more);
+        self.parse_for_query(bytes, maybe_more, false);
+    }
+
+    fn parse_for_query(&mut self, bytes: &[u8], maybe_more: bool, cursor_query: bool) {
+        for frame in self.paste.feed(bytes) {
+            match frame {
+                InputFrame::Bytes(bytes) => self.parse_keys(&bytes, maybe_more, cursor_query),
+                InputFrame::Paste(text) => {
+                    self.parse_keys(&[], false, cursor_query);
+                    self.pending.push_back(InputEvent::Paste(text));
+                }
+                InputFrame::Rejected(error) => {
+                    self.parse_keys(&[], false, cursor_query);
+                    self.pending.push_back(InputEvent::Rejected(error));
+                }
+            }
+        }
+        if !maybe_more {
+            let prefix = self.paste.flush_prefix();
+            self.parse_keys(&prefix, false, cursor_query);
+        }
+        self.escape_deadline = maybe_more.then(|| tokio::time::Instant::now() + self.escape_grace);
+    }
+
+    fn parse_keys(&mut self, bytes: &[u8], maybe_more: bool, cursor_query: bool) {
+        for frame in self.replies.feed(bytes, !maybe_more, cursor_query) {
+            match frame {
+                query::KeyFrame::Bytes(bytes) => self.parse_key_bytes(&bytes, maybe_more),
+                query::KeyFrame::Reply => self.parse_key_bytes(&[], false),
+            }
+        }
+        if !maybe_more {
+            self.parse_key_bytes(&[], false);
+        }
+    }
+
+    fn parse_key_bytes(&mut self, bytes: &[u8], maybe_more: bool) {
+        let mut joined = std::mem::take(&mut self.utf8);
+        let mut remaining = if joined.is_empty() {
+            bytes
+        } else {
+            joined.extend_from_slice(bytes);
+            joined.as_slice()
+        };
+        while !remaining.is_empty() {
+            match std::str::from_utf8(remaining) {
+                Ok(_) => {
+                    self.decode_key_bytes(remaining, maybe_more);
+                    break;
+                }
+                Err(error) => {
+                    let valid = error.valid_up_to();
+                    self.decode_key_bytes(&remaining[..valid], maybe_more);
+                    if let Some(invalid) = error.error_len() {
+                        self.decode_key_bytes(&[], false);
+                        self.pending
+                            .push_back(InputEvent::Rejected(InputError::InvalidUtf8));
+                        remaining = &remaining[valid + invalid..];
+                    } else {
+                        self.utf8.extend_from_slice(&remaining[valid..]);
+                        break;
+                    }
+                }
+            }
+        }
+        if !maybe_more {
+            self.decode_key_bytes(&[], false);
+        }
+    }
+
+    fn decode_key_bytes(&mut self, bytes: &[u8], maybe_more: bool) {
         self.parser.parse(
-            &bytes,
+            bytes,
             |event| {
                 if let Some(decoded) = Self::decode(event) {
                     self.pending.push_back(decoded);
@@ -274,8 +484,6 @@ impl InputStream {
             },
             maybe_more,
         );
-        // New bytes renew disambiguation grace; cancelling a read does not.
-        self.escape_deadline = maybe_more.then(|| tokio::time::Instant::now() + self.escape_grace);
     }
 
     fn decode(event: term_input::InputEvent) -> Option<InputEvent> {
@@ -291,7 +499,9 @@ impl InputStream {
                 };
                 Some(InputEvent::Key(KeyEvent { code, modifiers }))
             }
-            term_input::InputEvent::Paste(text) => Some(InputEvent::Paste(text)),
+            // Paste openers never reach this decoder: the bounded framer owns
+            // them, and removed replies cannot bridge key sequence boundaries.
+            term_input::InputEvent::Paste(_) => None,
             term_input::InputEvent::Mouse(mouse) => Some(InputEvent::Mouse(MouseEvent(mouse))),
             term_input::InputEvent::Resized { cols, rows } => Some(InputEvent::Resize(Size {
                 columns: cols.try_into().unwrap_or(u16::MAX),
@@ -302,84 +512,10 @@ impl InputStream {
     }
 }
 
-/// Crossterm's startup query can leave a late private CSI reply in the tty.
-/// Termwiz decodes keys but treats these replies as Alt+[ followed by text.
-#[derive(Debug, Default)]
-struct TerminalReplyFilter {
-    state: ReplyState,
-}
-
-#[derive(Debug, Default)]
-enum ReplyState {
-    #[default]
-    Ground,
-    Esc,
-    Csi,
-    Private(Vec<u8>),
-}
-
-impl TerminalReplyFilter {
-    fn feed(&mut self, bytes: &[u8], flush: bool) -> Vec<u8> {
-        let mut output = Vec::with_capacity(bytes.len());
-        for &byte in bytes {
-            let state = std::mem::take(&mut self.state);
-            self.state = match state {
-                ReplyState::Ground if byte == b'\x1b' => ReplyState::Esc,
-                ReplyState::Ground => {
-                    output.push(byte);
-                    ReplyState::Ground
-                }
-                ReplyState::Esc if byte == b'[' => ReplyState::Csi,
-                ReplyState::Esc => {
-                    output.push(b'\x1b');
-                    if byte == b'\x1b' {
-                        ReplyState::Esc
-                    } else {
-                        output.push(byte);
-                        ReplyState::Ground
-                    }
-                }
-                ReplyState::Csi if byte == b'?' => ReplyState::Private(Vec::new()),
-                ReplyState::Csi => {
-                    output.extend_from_slice(b"\x1b[");
-                    if byte == b'\x1b' {
-                        ReplyState::Esc
-                    } else {
-                        output.push(byte);
-                        ReplyState::Ground
-                    }
-                }
-                ReplyState::Private(_) if byte == b'\x1b' => ReplyState::Esc,
-                ReplyState::Private(mut body) => {
-                    body.push(byte);
-                    if (0x40..=0x7e).contains(&byte) || body.len() >= 128 {
-                        if !matches!(body.last(), Some(b'u' | b'c'))
-                            || !body[..body.len() - 1]
-                                .iter()
-                                .all(|value| value.is_ascii_digit() || *value == b';')
-                        {
-                            output.extend_from_slice(b"\x1b[?");
-                            output.extend_from_slice(&body);
-                        }
-                        ReplyState::Ground
-                    } else {
-                        ReplyState::Private(body)
-                    }
-                }
-            };
-        }
-        if flush {
-            match std::mem::take(&mut self.state) {
-                ReplyState::Esc => output.push(b'\x1b'),
-                ReplyState::Csi => output.extend_from_slice(b"\x1b["),
-                ReplyState::Private(body) => {
-                    output.extend_from_slice(b"\x1b[?");
-                    output.extend_from_slice(&body);
-                }
-                ReplyState::Ground => {}
-            }
-        }
-        output
+async fn wait_escape(deadline: Option<tokio::time::Instant>) {
+    match deadline {
+        Some(deadline) => tokio::time::sleep_until(deadline).await,
+        None => std::future::pending().await,
     }
 }
 
@@ -389,40 +525,44 @@ impl Drop for InputStream {
     }
 }
 
-fn read_chunks(file: File, sender: mpsc::Sender<io::Result<Vec<u8>>>, stop: &AtomicBool) {
+fn read_chunks(
+    file: &File,
+    sender: mpsc::Sender<io::Result<Vec<u8>>>,
+    stop: &AtomicBool,
+) -> Option<io::Result<Vec<u8>>> {
     let mut buffer = [0u8; 8192];
     while !stop.load(Ordering::Acquire) {
-        match rustix::io::read(&file, &mut buffer) {
+        match rustix::io::read(file, &mut buffer) {
             Ok(0) => break,
             Ok(size) => {
-                if !send_chunk(&sender, Ok(buffer[..size].to_vec()), stop) {
-                    return;
+                if let Err(unsent) = send_chunk(&sender, Ok(buffer[..size].to_vec()), stop) {
+                    return Some(unsent);
                 }
             }
             Err(error) if error == rustix::io::Errno::AGAIN => {
                 thread::sleep(Duration::from_millis(5));
             }
             Err(error) => {
-                let _ = send_chunk(&sender, Err(error.into()), stop);
-                return;
+                return send_chunk(&sender, Err(error.into()), stop).err();
             }
         }
     }
+    None
 }
 
 fn send_chunk(
     sender: &mpsc::Sender<io::Result<Vec<u8>>>,
     mut item: io::Result<Vec<u8>>,
     stop: &AtomicBool,
-) -> bool {
+) -> Result<(), io::Result<Vec<u8>>> {
     loop {
         match sender.try_send(item) {
-            Ok(()) => return true,
-            Err(mpsc::error::TrySendError::Closed(_)) => return false,
+            Ok(()) => return Ok(()),
+            Err(mpsc::error::TrySendError::Closed(unsent)) => return Err(unsent),
             Err(mpsc::error::TrySendError::Full(unsent)) => item = unsent,
         }
         if stop.load(Ordering::Acquire) {
-            return false;
+            return Err(item);
         }
         thread::sleep(Duration::from_millis(5));
     }
@@ -470,21 +610,215 @@ fn decode_modifiers(modifiers: term_input::Modifiers) -> Modifiers {
 mod tests {
     use super::*;
 
-    #[tokio::test]
-    async fn escape_grace_survives_cancelled_reads_without_breaking_split_keys() {
-        let (sender, chunks) = mpsc::channel(4);
-        let mut stream = InputStream {
+    fn stream(chunks: mpsc::Receiver<io::Result<Vec<u8>>>) -> InputStream {
+        InputStream {
             reader: None,
+            file: None,
+            unsent: None,
             stop: Arc::new(AtomicBool::new(false)),
             chunks,
             resize: signal(SignalKind::window_change()).unwrap(),
             parser: InputParser::new(),
+            utf8: Vec::new(),
+            paste: PasteFramer::default(),
             replies: TerminalReplyFilter::default(),
             pending: VecDeque::new(),
             escape_deadline: None,
             eof: false,
             escape_grace: Duration::from_millis(100),
-        };
+        }
+    }
+
+    #[tokio::test]
+    async fn queries_preserve_typeahead_and_cancel_without_filtering_keys() {
+        let (sender, chunks) = mpsc::channel(4);
+        let mut input = stream(chunks);
+        sender.send(Ok(b"early\x1b[?1u".to_vec())).await.unwrap();
+        assert_eq!(input.keyboard_support().await.unwrap(), Some(true));
+        sender.send(Ok(b"later\x1b[2;3R".to_vec())).await.unwrap();
+        assert_eq!(input.cursor_position().await.unwrap(), (2, 1));
+        assert_eq!(input.pending.len(), "earlylater".len());
+        input.pending.clear();
+        assert!(
+            tokio::time::timeout(Duration::from_millis(20), input.cursor_position())
+                .await
+                .is_err()
+        );
+        sender.send(Ok(b"\x1b[1;2R".to_vec())).await.unwrap();
+        assert_eq!(
+            input.next().await.unwrap().unwrap(),
+            InputEvent::Key(KeyEvent::new(KeyCode::F(3), Modifiers::SHIFT))
+        );
+        assert_eq!(input.keyboard_support().await.unwrap(), None);
+    }
+
+    #[tokio::test]
+    async fn late_ready_reply_cannot_extend_the_absolute_query_deadline() {
+        use std::future::Future;
+        use std::task::{Context, Poll, Waker};
+
+        let (sender, chunks) = mpsc::channel(4);
+        let mut input = stream(chunks);
+        let mut query = Box::pin(input.keyboard_support());
+        let mut context = Context::from_waker(Waker::noop());
+        assert!(query.as_mut().poll(&mut context).is_pending());
+        // Deliberately stop polling, as a synchronous frontend operation can.
+        std::thread::sleep(Duration::from_millis(550));
+        sender.try_send(Ok(b"late\x1b[?1u".to_vec())).unwrap();
+        assert!(matches!(
+            query.as_mut().poll(&mut context),
+            Poll::Ready(Ok(None))
+        ));
+        drop(query);
+        assert_eq!(
+            input.next().await.unwrap().unwrap(),
+            InputEvent::Key(KeyEvent::new(KeyCode::Char('l'), Modifiers::NONE))
+        );
+    }
+
+    #[tokio::test]
+    async fn delayed_paste_marker_and_unterminated_input_never_become_keys() {
+        let (sender, chunks) = mpsc::channel(4);
+        let mut input = stream(chunks);
+        sender.send(Ok(b"\x1b[200".to_vec())).await.unwrap();
+        assert!(
+            tokio::time::timeout(Duration::from_millis(150), input.next())
+                .await
+                .is_err()
+        );
+        sender.send(Ok(b"~body\r\x1b[201~".to_vec())).await.unwrap();
+        assert_eq!(
+            input.next().await.unwrap().unwrap(),
+            InputEvent::Paste("body\r".into())
+        );
+        sender
+            .send(Ok(b"\x1b[200~unfinished".to_vec()))
+            .await
+            .unwrap();
+        drop(sender);
+        assert_eq!(
+            input.next().await.unwrap().unwrap(),
+            InputEvent::Rejected(InputError::IncompletePaste)
+        );
+        assert!(input.next().await.is_none());
+    }
+
+    #[tokio::test]
+    async fn paste_is_bounded_validated_and_literal_before_reply_parsing() {
+        let (_sender, chunks) = mpsc::channel(4);
+        let mut input = stream(chunks);
+        for bytes in [
+            b"\x1b[20".as_slice(),
+            b"0~a\x1b[?1u",
+            b"\xe9\x81",
+            b"\x93\x1b[201",
+            b"~z",
+        ] {
+            input.parse(bytes, true);
+        }
+        assert_eq!(
+            input.pending.pop_front(),
+            Some(InputEvent::Paste("a\x1b[?1u道".into()))
+        );
+        assert_eq!(
+            input.pending.pop_front(),
+            Some(InputEvent::Key(KeyEvent::new(
+                KeyCode::Char('z'),
+                Modifiers::NONE
+            )))
+        );
+        // A removed reply must not join two key fragments into a new paste
+        // opener downstream of the bounded framer.
+        input.parse(b"\x1b[\x1b[?1u200~\xff\x1b[201~", false);
+        assert!(
+            input
+                .pending
+                .iter()
+                .all(|event| !matches!(event, InputEvent::Paste(_)))
+        );
+        assert!(
+            input
+                .pending
+                .contains(&InputEvent::Rejected(InputError::InvalidUtf8))
+        );
+        input.parse(b"\x1b[20\x1b[?1u0~\xff\x1b[201~", false);
+        assert!(
+            input
+                .pending
+                .iter()
+                .all(|event| !matches!(event, InputEvent::Paste(_)))
+        );
+        input.pending.clear();
+        input.parse(b"\x1b[200~\xff\x1b[201~", false);
+        assert_eq!(
+            input.pending.pop_front(),
+            Some(InputEvent::Rejected(InputError::InvalidPasteUtf8))
+        );
+        input.parse(b"\x1b[200~", true);
+        input.parse(&vec![b'x'; paste::MAX_PASTE_BYTES + 1], true);
+        input.parse(b"more discarded\x1b[201~k", false);
+        assert_eq!(
+            input.pending.pop_front(),
+            Some(InputEvent::Rejected(InputError::PasteTooLarge))
+        );
+        assert_eq!(
+            input.pending.pop_front(),
+            Some(InputEvent::Key(KeyEvent::new(
+                KeyCode::Char('k'),
+                Modifiers::NONE
+            )))
+        );
+        assert!(input.pending.is_empty());
+        input.parse(b"\xf0\x9f", true);
+        input.parse(&[], false);
+        input.parse(b"\xa6\x80", false);
+        assert_eq!(
+            input.pending.pop_front(),
+            Some(InputEvent::Key(KeyEvent::new(
+                KeyCode::Char('🦀'),
+                Modifiers::NONE
+            )))
+        );
+    }
+
+    #[tokio::test]
+    async fn credential_handoff_quarantines_all_pre_read_input() {
+        let (sender, chunks) = mpsc::channel(4);
+        let mut input = stream(chunks);
+        input.parse(b"/login provider\rDISPOSABLE_KEY\r", true);
+        sender.send(Ok(b"MORE_PRE_READ".to_vec())).await.unwrap();
+        input.unsent = Some(Ok(b"UNSENT".to_vec()));
+        input.discard_for_credentials().unwrap();
+        assert!(input.pending.is_empty());
+        assert!(input.chunks.try_recv().is_err());
+        assert!(input.unsent.is_none());
+        input.parse(b"\x1b[200~unfinished", true);
+        input.discard_for_credentials().unwrap();
+        input.parse(b"a", false);
+        assert_eq!(
+            input.pending.pop_front(),
+            Some(InputEvent::Key(KeyEvent::new(
+                KeyCode::Char('a'),
+                Modifiers::NONE
+            )))
+        );
+    }
+
+    #[tokio::test]
+    async fn suspension_returns_the_already_read_backpressured_chunk() {
+        let (sender, mut chunks) = mpsc::channel(1);
+        sender.try_send(Ok(b"queued".to_vec())).unwrap();
+        let unsent = send_chunk(&sender, Ok(b"retained".to_vec()), &AtomicBool::new(true))
+            .unwrap_err()
+            .unwrap();
+        assert_eq!(chunks.try_recv().unwrap().unwrap(), b"queued");
+        assert_eq!(unsent, b"retained");
+    }
+
+    #[tokio::test]
+    async fn escape_grace_survives_cancelled_reads_without_breaking_split_keys() {
+        let (sender, chunks) = mpsc::channel(4);
+        let mut stream = stream(chunks);
         sender.send(Ok(b"\x1b".to_vec())).await.unwrap();
         let mut refresh = tokio::time::interval(Duration::from_millis(30));
         let event = tokio::time::timeout(Duration::from_secs(1), async {
@@ -539,12 +873,6 @@ mod tests {
     }
 
     #[test]
-    fn decoding_keeps_paste_as_one_semantic_event() {
-        let decoded = InputStream::decode(term_input::InputEvent::Paste("one\ntwo".to_owned()));
-        assert_eq!(decoded, Some(InputEvent::Paste("one\ntwo".to_owned())));
-    }
-
-    #[test]
     fn split_kitty_alt_enter_is_one_key() {
         let mut parser = InputParser::new();
         let first = parser.parse_as_vec(b"\x1b", true);
@@ -564,13 +892,16 @@ mod tests {
     fn enabled_mouse_and_private_replies_do_not_become_draft_text() {
         let mut parser = InputParser::new();
         let mut replies = TerminalReplyFilter::default();
-        for sequence in [
-            b"\x1b[<64;3;4M".as_slice(),
-            b"\x1b[200~pasted\x1b[201~",
-            b"\x1b[?1u",
-        ] {
-            let bytes = replies.feed(sequence, true);
-            let events = parser.parse_as_vec(&bytes, false);
+        for sequence in [b"\x1b[<64;3;4M".as_slice(), b"\x1b[?1u"] {
+            let mut events = Vec::new();
+            for frame in replies.feed(sequence, true, false) {
+                match frame {
+                    query::KeyFrame::Bytes(bytes) => {
+                        events.extend(parser.parse_as_vec(&bytes, false))
+                    }
+                    query::KeyFrame::Reply => events.extend(parser.parse_as_vec(&[], false)),
+                }
+            }
             assert!(
                 !events.iter().any(|event| matches!(
                     event,
@@ -587,7 +918,11 @@ mod tests {
     #[test]
     fn split_private_reply_is_consumed_without_losing_following_key() {
         let mut replies = TerminalReplyFilter::default();
-        assert!(replies.feed(b"\x1b[?1;", false).is_empty());
-        assert_eq!(replies.feed(b"2cA", false), b"A");
+        assert!(replies.feed(b"\x1b[?1;", false, false).is_empty());
+        assert!(
+            matches!(replies.feed(b"2cA", false, false).as_slice(), [query::KeyFrame::Reply, query::KeyFrame::Bytes(bytes)] if bytes == b"A")
+        );
+        replies.feed(b"\x1b[?1;2c\x1b[?1u\x1b[?1;2c", true, false);
+        assert_eq!(replies.keyboard, Some(true));
     }
 }

@@ -12,7 +12,7 @@ pub mod screen;
 
 pub use capabilities::{CapabilitySupport, TerminalCapabilities};
 pub use input::{
-    InputEvent, InputStream, KeyCode, KeyEvent, Modifiers, MouseEvent, MouseKind, Size,
+    InputError, InputEvent, KeyCode, KeyEvent, Modifiers, MouseEvent, MouseKind, Size,
 };
 pub use requirements::TerminalRequirements;
 pub use screen::{Frame, Screen, Surface};

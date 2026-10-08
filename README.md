@@ -266,6 +266,11 @@ The prepared prompt stays separate from the literal command, arguments and
 editor cursor: dequeue or cancellation restores the literal, not its expansion.
 Both the model message and retained editor metadata count against the shared
 pending-input allowance. Clipboard preparation finishes before input admission.
+Terminal queries share the key reader and use a 500 ms response deadline;
+type-ahead survives startup and external-editor return. Login deliberately
+discards pre-read input so credentials cannot return as chat text. Bracketed
+paste is limited to 64 KiB of valid UTF-8. Malformed, oversized or unfinished
+paste is discarded without submitting a prefix or replacing the current draft.
 Up and Down browse earlier prompts when the cursor reaches the first or last
 editor line. Returning from history restores the unsent draft and its cursor,
 even if a running Turn refreshed history. Type

@@ -210,17 +210,10 @@ impl<W: Write> TerminalState<W> {
                 self.capabilities.mouse = CapabilitySupport::Unsupported;
             }
             self.capabilities.kitty_keyboard = if self.requirements.keyboard_enhancement {
-                match terminal::supports_keyboard_enhancement() {
-                    Ok(true) => CapabilitySupport::Supported,
-                    Ok(false) => CapabilitySupport::Unsupported,
-                    Err(_) => CapabilitySupport::Unknown,
-                }
+                CapabilitySupport::Unknown
             } else {
                 CapabilitySupport::Unsupported
             };
-            if self.capabilities.kitty_keyboard == CapabilitySupport::Supported {
-                self.push_keyboard(false)?;
-            }
             Ok(())
         })();
         if result.is_err() {
@@ -228,6 +221,18 @@ impl<W: Write> TerminalState<W> {
             let _ = self.restore();
         }
         result
+    }
+
+    pub(crate) fn set_keyboard_support(&mut self, support: CapabilitySupport) -> io::Result<()> {
+        self.usable()?;
+        self.capabilities.kitty_keyboard = support;
+        if support == CapabilitySupport::Supported
+            && let Err(error) = self.push_keyboard(false)
+        {
+            self.fail();
+            return Err(error);
+        }
+        Ok(())
     }
 
     pub(crate) fn restore(&mut self) -> io::Result<()> {
