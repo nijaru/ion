@@ -464,29 +464,26 @@ impl Agent {
             if stop.is_cancelled() {
                 return Err(AgentError::Cancelled);
             }
-            let Some(plan) = session.compaction_plan(keep_bytes, budget)? else {
-                return if session.compaction_plan(keep_bytes, usize::MAX)?.is_some() {
+            let Some(plan) =
+                session.compaction_plan(keep_bytes, budget, self.limits.image_input)?
+            else {
+                return if session
+                    .compaction_plan(keep_bytes, usize::MAX, self.limits.image_input)?
+                    .is_some()
+                {
                     Err(AgentError::ContextTooLarge)
                 } else {
                     Ok(None)
                 };
             };
-            let mut transcript = plan.messages;
-            for message in &mut transcript {
-                message.provider_replay = None;
-            }
             let request = ModelRequest {
                 route: ModelRoute::direct(self.model.clone(), ModelRouteReason::Auxiliary),
                 provider_session_id: Some(session.provider_session_id().to_string()),
-                instructions: Some("Summarize the coding conversation for continued work. Preserve the user's goal and constraints, current file changes and test results, important tool findings, unresolved errors, and precise next steps. Distinguish observations from guesses. Return only the summary.".into()),
-                messages: vec![ion_ai::Message {
-                    role: Role::User,
-                    content: vec![Content::Text(format!(
-                        "Conversation to summarize (JSON messages):\n{}",
-                        serde_json::to_string(&transcript)?
-                    ))],
-                    provider_replay: None,
-                }],
+                instructions: Some(crate::summary::INSTRUCTIONS.into()),
+                messages: vec![crate::summary::input(
+                    plan.messages,
+                    self.limits.image_input,
+                )?],
                 tools: Vec::new(),
                 context_timeline: None,
                 prompt_cache: ion_ai::PromptCacheIntent::Default,
@@ -4288,6 +4285,97 @@ mod tests {
         );
         drop(session);
         std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[tokio::test]
+    async fn compaction_projects_images_and_excludes_opaque_replay_from_its_budget() {
+        for (vision, opaque) in [(true, false), (true, true), (false, true)] {
+            let root = std::env::temp_dir()
+                .join(format!("ion-summary-input-probe-{}", uuid::Uuid::now_v7()));
+            std::fs::create_dir(&root).unwrap();
+            let session = CodingSession::create(root.join("session.sqlite"), &root).unwrap();
+            let image = tiny_image();
+            let (turn, _) = session
+                .begin_turn_message(
+                    Message {
+                        role: Role::User,
+                        content: vec![
+                            Content::Text("describe this image".into()),
+                            Content::Image(image.clone()),
+                        ],
+                        provider_replay: None,
+                    },
+                    model(),
+                )
+                .unwrap();
+            session
+                .record_assistant(
+                    turn,
+                    Message {
+                        role: Role::Assistant,
+                        content: vec![Content::Text("image findings recorded".into())],
+                        provider_replay: opaque.then(|| {
+                            ion_ai::ProviderReplay::new(
+                                model().provider,
+                                "fixture",
+                                serde_json::Value::String("x".repeat(32_768)),
+                            )
+                        }),
+                    },
+                    Usage::unknown(),
+                    false,
+                )
+                .unwrap();
+            let before = session.view().unwrap().entries;
+            let scripts = Arc::new(ScriptedModelService::new([response(vec![Content::Text(
+                "summary".into(),
+            )])]));
+            let agent = Agent::new(scripts.clone(), Arc::new(TestTools::new(&root)), model())
+                .with_limits(AgentLimits {
+                    max_request_bytes: 4_096,
+                    max_output_tokens: 128,
+                    image_input: vision,
+                    ..AgentLimits::default()
+                });
+            let outcome = agent
+                .compact(&session, CancellationToken::new(), |_| {})
+                .await;
+            let requests = scripts.requests();
+            let typed_images = requests
+                .iter()
+                .flat_map(|r| &r.messages)
+                .flat_map(|m| &m.content)
+                .filter(|c| matches!(c, Content::Image(_)))
+                .count();
+            let image_as_text = requests
+                .iter()
+                .flat_map(|r| &r.messages)
+                .flat_map(|m| &m.content)
+                .any(|c| matches!(c, Content::Text(text) if text.contains(image.data())));
+            assert!(outcome.unwrap());
+            assert_eq!(requests.len(), 1);
+            assert_eq!(typed_images, usize::from(vision));
+            assert!(
+                !image_as_text,
+                "image bytes must not become plaintext transcript data"
+            );
+            assert!(
+                requests[0]
+                    .messages
+                    .iter()
+                    .all(|m| m.provider_replay.is_none())
+            );
+            let after = session.view().unwrap();
+            assert_eq!(&after.entries[..before.len()], before.as_slice());
+            assert!(after.compacted_through.is_some());
+            let context_before_reopen = session.context_messages().unwrap();
+            let path = session.path().to_path_buf();
+            drop(session);
+            let reopened = CodingSession::open(&path).unwrap();
+            assert_eq!(reopened.context_messages().unwrap(), context_before_reopen);
+            drop(reopened);
+            std::fs::remove_dir_all(root).unwrap();
+        }
     }
 
     #[tokio::test]

@@ -1022,6 +1022,7 @@ impl Session {
         &self,
         keep_bytes: usize,
         max_summary_bytes: usize,
+        summary_images: bool,
     ) -> Result<Option<CompactionPlan>, SessionError> {
         let store = self.store.lock().map_err(|_| SessionError::Poisoned)?;
         let entries = read_entries(&store.connection)?;
@@ -1035,17 +1036,22 @@ impl Session {
             .state
             .compaction
             .as_ref()
-            .map(|(_, summary)| serde_json::to_vec(&summary_message(summary)))
+            .map(|(_, summary)| crate::json_size::encoded_len(&summary_message(summary)))
             .transpose()?
-            .map_or(0, |bytes| bytes.len() + 1);
+            .map_or(0, |bytes| bytes + 1);
         let suffix_budget = keep_bytes.saturating_sub(summary_bytes);
-        let mut prefix_bytes = summary_bytes.saturating_add(2);
+        let mut prefix_bytes = match &store.state.compaction {
+            Some((_, summary)) => {
+                crate::summary::content_bytes(&summary_message(summary), summary_images)?
+                    .saturating_add(1)
+            }
+            None => 1,
+        };
         let mut prefix_fit = None;
         for boundary in (previous + 1)..=entries.len() as u64 {
             if let Some(message) = &projected[boundary as usize - 1] {
                 prefix_bytes = prefix_bytes
-                    .saturating_add(serde_json::to_vec(&message)?.len())
-                    .saturating_add(1);
+                    .saturating_add(crate::summary::content_bytes(message, summary_images)?);
             }
             if prefix_bytes <= max_summary_bytes && store.settled.contains(&boundary) {
                 prefix_fit = Some(boundary);
@@ -1058,7 +1064,9 @@ impl Session {
                 through = Some(boundary);
             }
             if let Some(message) = &projected[boundary as usize - 1] {
-                suffix_bytes = suffix_bytes.saturating_add(serde_json::to_vec(&message)?.len() + 1);
+                suffix_bytes = suffix_bytes
+                    .saturating_add(crate::json_size::encoded_len(message)?)
+                    .saturating_add(1);
             }
         }
         let through =
@@ -2466,7 +2474,10 @@ mod tests {
             assert_eq!(context.contains("interrupted-command"), !excluded);
             assert_eq!(context.contains("external effect unknown"), !excluded);
             // Settled prefix cuts cannot bisect shell intent and outcome.
-            let plan = session.compaction_plan(0, usize::MAX).unwrap().unwrap();
+            let plan = session
+                .compaction_plan(0, usize::MAX, true)
+                .unwrap()
+                .unwrap();
             assert!(plan.through_entry >= 2);
             assert_eq!(
                 serde_json::to_string(&plan.messages)
@@ -2656,7 +2667,10 @@ mod tests {
         assert!(context.contains("suffix-observation"));
         assert!(!context.contains("external effect unknown"));
         assert!(!context.contains("private"));
-        let plan = reopened.compaction_plan(0, usize::MAX).unwrap().unwrap();
+        let plan = reopened
+            .compaction_plan(0, usize::MAX, true)
+            .unwrap()
+            .unwrap();
         assert!(
             serde_json::to_string(&plan.messages)
                 .unwrap()
@@ -3292,7 +3306,10 @@ mod tests {
                 false,
             )
             .unwrap();
-        let plan = session.compaction_plan(0, usize::MAX).unwrap().unwrap();
+        let plan = session
+            .compaction_plan(0, usize::MAX, true)
+            .unwrap()
+            .unwrap();
         assert_eq!(plan.through_entry, 3);
         assert_eq!(plan.messages.len(), 2);
         assert!(
@@ -3888,7 +3905,12 @@ mod tests {
                 },
             )
             .unwrap();
-        assert!(session.compaction_plan(0, usize::MAX).unwrap().is_none());
+        assert!(
+            session
+                .compaction_plan(0, usize::MAX, true)
+                .unwrap()
+                .is_none()
+        );
         session
             .record_tool_result(
                 turn,
@@ -3903,7 +3925,7 @@ mod tests {
             .unwrap();
         assert_eq!(
             session
-                .compaction_plan(0, usize::MAX)
+                .compaction_plan(0, usize::MAX, true)
                 .unwrap()
                 .unwrap()
                 .through_entry,
@@ -3911,7 +3933,7 @@ mod tests {
         );
         assert_eq!(
             session
-                .compaction_plan(1000, usize::MAX)
+                .compaction_plan(1000, usize::MAX, true)
                 .unwrap()
                 .unwrap()
                 .through_entry,
@@ -3974,7 +3996,10 @@ mod tests {
                 },
             )
             .unwrap();
-        let plan = session.compaction_plan(1000, usize::MAX).unwrap().unwrap();
+        let plan = session
+            .compaction_plan(1000, usize::MAX, true)
+            .unwrap()
+            .unwrap();
         assert_eq!(plan.through_entry, 3);
         assert_eq!(plan.messages.len(), 2);
         session
@@ -4031,7 +4056,7 @@ mod tests {
             .unwrap();
         assert_eq!(
             session
-                .compaction_plan(0, usize::MAX)
+                .compaction_plan(0, usize::MAX, true)
                 .unwrap()
                 .unwrap()
                 .through_entry,
@@ -4041,7 +4066,7 @@ mod tests {
         let reopened = Session::open(&path).unwrap();
         assert_eq!(
             reopened
-                .compaction_plan(0, usize::MAX)
+                .compaction_plan(0, usize::MAX, true)
                 .unwrap()
                 .unwrap()
                 .through_entry,

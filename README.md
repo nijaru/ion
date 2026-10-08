@@ -510,7 +510,12 @@ nears a known model's context window or exceeds its transport bound, and can
 retry one model request after a provider reports context overflow. The raw
 conversation remains inspectable; `compact` and `/compact` also trigger this
 explicitly. Longer saved histories are summarized in bounded steps when one
-summary request cannot fit. Tool results that individually exceed the route's
+summary request cannot fit. Summary requests treat the selected prefix as
+historical data, exclude opaque replay and human thinking, and carry its images
+as typed attachments when the summary model supports them. Text-only summary
+models receive explicit image-omission notices instead of base64 transcript text.
+Summaries are model-generated and can be wrong; the raw facts remain inspectable.
+Tool results that individually exceed the route's
 request bound, or return images to a text-only route, give the model a bounded
 explanation. Their observed output remains available in Session inspection,
 export and tool detail, with a notice that it was not shared. The Session's

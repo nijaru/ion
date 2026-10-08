@@ -8,6 +8,7 @@ mod input;
 mod json_size;
 mod request;
 mod session;
+mod summary;
 mod tool_result;
 mod tool_set;
 mod transcript;

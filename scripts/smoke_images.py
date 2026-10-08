@@ -235,7 +235,30 @@ with tempfile.TemporaryDirectory(prefix="ion-images-") as temporary:
             if child.poll() is None:
                 child.send_signal(signal.SIGKILL)
                 child.wait(timeout=5)
-        print("Ion image input, resume, inspection, terminal attachment and withheld-result truth: OK")
+        # Summaries must carry pixels as typed images, never base64 transcript
+        # text. Exercise the actual compact/reopen entry point on a fresh scope.
+        summary_work = work / "summary-workspace"
+        summary_work.mkdir()
+        (summary_work / "red.png").write_bytes(tiny_png())
+        subprocess.run([binary, "use", "smoke", "vision", "--endpoint", endpoint, "--wire", "chat-completions", "--images"], env=env, check=True, capture_output=True)
+        start = len(requests)
+        subprocess.run([binary, "--cwd", summary_work, "--image", "red.png", "run", "Retain the visual findings."], env=env, check=True, capture_output=True)
+        before = json.loads(subprocess.run([binary, "--cwd", summary_work, "--continue", "inspect"], env=env, check=True, capture_output=True, text=True).stdout)["entries"]
+        subprocess.run([binary, "--cwd", summary_work, "--continue", "compact"], env=env, check=True, capture_output=True)
+        assert len(requests) == start + 2
+        summary_request = requests[-1]
+        assert not summary_request.get("tools"), summary_request
+        parts = summary_request["messages"][-1]["content"]
+        assert isinstance(parts, list), parts
+        image_parts = [part for part in parts if part["type"] == "image_url"]
+        assert len(image_parts) == 1 and image_parts[0]["image_url"]["url"].startswith("data:image/png;base64,")
+        assert not any("iVBORw0KGgo" in part.get("text", "") for part in parts)
+        after = json.loads(subprocess.run([binary, "--cwd", summary_work, "--continue", "inspect"], env=env, check=True, capture_output=True, text=True).stdout)
+        assert after["entries"][:len(before)] == before and after["compacted_through"] is not None
+        subprocess.run([binary, "--cwd", summary_work, "--continue", "run", "Continue after the visual summary."], env=env, check=True, capture_output=True)
+        assert len(requests) == start + 3
+        assert not any("iVBORw0KGgo" in json.dumps(message.get("content")) for message in requests[-1]["messages"])
+        print("Ion image input, resume, inspection, terminal attachment, withheld-result truth and typed summary images: OK")
     finally:
         server.shutdown()
         server.server_close()
