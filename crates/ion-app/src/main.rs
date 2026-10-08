@@ -20,6 +20,7 @@ use tokio_util::sync::CancellationToken;
 
 mod agent_events;
 mod clipboard;
+mod clipboard_reader;
 mod display_text;
 mod edit_diff;
 mod external_editor;
@@ -74,6 +75,9 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Action {
+    /// Private clipboard transfer helper; never initializes model or Session services.
+    #[command(name = "__clipboard-read", hide = true)]
+    ClipboardRead,
     /// List models Ion can route to; account access may differ.
     Models { query: Option<String> },
     /// Select a catalog model, or configure a custom compatible endpoint.
@@ -158,6 +162,9 @@ async fn main() {
 }
 
 async fn run_cli(cli: Cli) -> Result<()> {
+    if matches!(cli.action, Some(Action::ClipboardRead)) {
+        return clipboard_reader::write_native();
+    }
     if cli.reasoning.is_some()
         && !matches!(
             &cli.action,
@@ -184,6 +191,7 @@ async fn run_cli(cli: Cli) -> Result<()> {
     let credentials = host.credentials();
     let models = host.models();
     match cli.action {
+        Some(Action::ClipboardRead) => unreachable!("clipboard helper handled before Host setup"),
         Some(_) if cli.print.is_some() => bail!("--print cannot be combined with a subcommand"),
         Some(Action::Models { query }) => {
             let query = query.unwrap_or_default().to_ascii_lowercase();

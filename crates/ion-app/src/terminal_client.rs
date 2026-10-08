@@ -108,7 +108,7 @@ struct Frontend {
     prompt_history: Vec<String>,
     browsing: Option<PromptBrowse>,
     details: Option<DetailView>,
-    clipboard_job: Option<tokio::task::JoinHandle<Result<PreparedPaste>>>,
+    clipboard_job: Option<ClipboardJob>,
     cwd: PathBuf,
 }
 
@@ -205,6 +205,11 @@ enum PreparedPaste {
     Text(String),
 }
 
+struct ClipboardJob {
+    stop: CancellationToken,
+    task: tokio::task::JoinHandle<Result<PreparedPaste>>,
+}
+
 enum PickerValue {
     Session(PathBuf),
     Model(ModelRef),
@@ -271,6 +276,7 @@ pub async fn chat(init: ChatInit) -> Result<()> {
     for diagnostic in init.startup_diagnostics {
         ui.note(diagnostic);
     }
+    let outcome = async {
     loop {
         terminal
             .check_active()
@@ -482,6 +488,11 @@ pub async fn chat(init: ChatInit) -> Result<()> {
     screen.finish(&mut terminal.output()?)?;
     terminal.restore()?;
     Ok(())
+    }.await;
+    // Every normal/error exit retains custody until the helper is stopped and
+    // reaped; dropping a JoinHandle would detach native clipboard work.
+    let cleanup = cancel_clipboard_paste(&mut ui).await;
+    outcome.and(cleanup)
 }
 
 async fn new_inline_screen(terminal: &mut TerminalSession) -> Result<Screen> {
@@ -512,14 +523,15 @@ fn start_clipboard_paste(ui: &mut Frontend, selected: &Selection) {
         return;
     }
     let selected = selected.clone();
-    ui.clipboard_job = Some(tokio::spawn(async move {
-        let content = tokio::time::timeout(Duration::from_secs(3), crate::clipboard::read())
-            .await
-            .context("clipboard read timed out")??;
-        tokio::task::spawn_blocking(move || prepare_clipboard(&selected, content))
-            .await
-            .context("clipboard image preparation stopped")?
-    }));
+    let stop = CancellationToken::new();
+    let reader_stop = stop.clone();
+    ui.clipboard_job = Some(ClipboardJob {
+        stop,
+        task: tokio::spawn(async move {
+            let content = crate::clipboard_reader::read(&reader_stop).await?;
+            prepare_clipboard(&selected, content)
+        }),
+    });
     ui.status = "Reading clipboard…".into();
 }
 
@@ -528,7 +540,7 @@ async fn finish_clipboard_paste(ui: &mut Frontend) -> Result<()> {
         .clipboard_job
         .take()
         .context("no clipboard paste is pending")?;
-    let content = job.await.context("clipboard reader stopped")??;
+    let content = job.task.await.context("clipboard reader stopped")??;
     if matches!(
         ui.status.as_str(),
         "Reading clipboard…" | "Wait for clipboard paste, then send the prompt"
@@ -542,7 +554,7 @@ async fn finish_ready_clipboard_paste(ui: &mut Frontend) {
     if ui
         .clipboard_job
         .as_ref()
-        .is_some_and(tokio::task::JoinHandle::is_finished)
+        .is_some_and(|job| job.task.is_finished())
     {
         finish_pending_clipboard_paste(ui).await;
     }
@@ -556,20 +568,30 @@ async fn finish_pending_clipboard_paste(ui: &mut Frontend) {
     }
 }
 
+async fn cancel_clipboard_paste(ui: &mut Frontend) -> Result<()> {
+    if let Some(job) = ui.clipboard_job.take() {
+        job.stop.cancel();
+        // The input is being discarded, but its task must finish. An ordinary
+        // clipboard refusal/cancellation is not a terminal-exit failure.
+        let _discarded = job
+            .task
+            .await
+            .context("clipboard reader stopped during exit")?;
+    }
+    Ok(())
+}
+
 fn prepare_clipboard(
     selected: &Selection,
-    content: crate::clipboard::PasteContent,
+    content: crate::clipboard_reader::PasteContent,
 ) -> Result<PreparedPaste> {
     match content {
-        crate::clipboard::PasteContent::Files(paths) => Ok(PreparedPaste::Files(paths)),
-        crate::clipboard::PasteContent::Image {
-            width,
-            height,
-            rgba,
-        } => Ok(PreparedPaste::Image(ion_host::image_input::load_rgba(
-            selected, width, height, rgba,
-        )?)),
-        crate::clipboard::PasteContent::Text(text) => Ok(PreparedPaste::Text(text)),
+        crate::clipboard_reader::PasteContent::Files(paths) => Ok(PreparedPaste::Files(paths)),
+        crate::clipboard_reader::PasteContent::Image { content, note } => {
+            ion_host::image_input::require_image_input(selected)?;
+            Ok(PreparedPaste::Image(LoadedImage { content, note }))
+        }
+        crate::clipboard_reader::PasteContent::Text(text) => Ok(PreparedPaste::Text(text)),
     }
 }
 
@@ -3023,14 +3045,40 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn clipboard_exit_joins_cancelled_work_without_applying_input() {
+        let stop = CancellationToken::new();
+        let reader_stop = stop.clone();
+        let (settled, mut observed) = tokio::sync::oneshot::channel();
+        let mut ui = Frontend {
+            draft: "retained draft".into(),
+            clipboard_job: Some(ClipboardJob {
+                stop,
+                task: tokio::spawn(async move {
+                    reader_stop.cancelled().await;
+                    settled.send(()).unwrap();
+                    Ok(PreparedPaste::Text("unadmitted paste".into()))
+                }),
+            }),
+            ..Frontend::default()
+        };
+        cancel_clipboard_paste(&mut ui).await.unwrap();
+        assert!(observed.try_recv().is_ok());
+        assert!(ui.clipboard_job.is_none());
+        assert_eq!(ui.draft, "retained draft");
+    }
+
+    #[tokio::test]
     async fn completed_file_paste_clears_reader_status() {
         let mut ui = Frontend {
             status: "Reading clipboard…".into(),
-            clipboard_job: Some(tokio::spawn(async {
-                Ok(PreparedPaste::Files(vec![PathBuf::from(
-                    "/tmp/path with spaces.txt",
-                )]))
-            })),
+            clipboard_job: Some(ClipboardJob {
+                stop: CancellationToken::new(),
+                task: tokio::spawn(async {
+                    Ok(PreparedPaste::Files(vec![PathBuf::from(
+                        "/tmp/path with spaces.txt",
+                    )]))
+                }),
+            }),
             ..Frontend::default()
         };
         finish_clipboard_paste(&mut ui).await.unwrap();
@@ -3053,14 +3101,13 @@ mod tests {
             capabilities: ion_host::catalog::ModelCapabilities::conservative(),
         };
         let mut ui = Frontend::default();
-        let prepared = prepare_clipboard(
-            &selected,
-            crate::clipboard::PasteContent::Image {
-                width: 2,
-                height: 1,
-                rgba: vec![255, 0, 0, 255, 0, 0, 255, 255],
-            },
-        )
+        let prepared = prepare_clipboard(&selected, {
+            let image = ion_ai::normalize_rgba(2, 1, vec![255, 0, 0, 255, 0, 0, 255, 255]).unwrap();
+            crate::clipboard_reader::PasteContent::Image {
+                content: image.content,
+                note: image.note,
+            }
+        })
         .unwrap();
         apply_clipboard(&mut ui, prepared).unwrap();
         ui.insert("describe the picture");
@@ -3099,9 +3146,10 @@ mod tests {
         let mut ui = Frontend::default();
         ui.insert("describe this");
         ui.status = "Reading clipboard…".into();
-        ui.clipboard_job = Some(tokio::spawn(async {
-            Ok(PreparedPaste::Text(" image".into()))
-        }));
+        ui.clipboard_job = Some(ClipboardJob {
+            stop: CancellationToken::new(),
+            task: tokio::spawn(async { Ok(PreparedPaste::Text(" image".into())) }),
+        });
         let steering = SteeringInbox::new(
             AgentLimits {
                 image_input: true,
@@ -3138,7 +3186,10 @@ mod tests {
             let mut ui = Frontend {
                 draft: literal.into(),
                 cursor: 2,
-                clipboard_job: Some(tokio::spawn(std::future::pending())),
+                clipboard_job: Some(ClipboardJob {
+                    stop: CancellationToken::new(),
+                    task: tokio::spawn(std::future::pending()),
+                }),
                 ..Frontend::default()
             };
             assert!(matches!(
@@ -3148,7 +3199,7 @@ mod tests {
             assert_eq!(ui.draft, literal);
             assert_eq!(ui.cursor, 2);
             assert!(ui.pending.is_empty());
-            ui.clipboard_job.take().unwrap().abort();
+            ui.clipboard_job.take().unwrap().task.abort();
         }
     }
 

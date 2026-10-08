@@ -4,7 +4,7 @@ use std::path::Path;
 
 use anyhow::{Context, Result, ensure};
 use base64::{Engine, engine::general_purpose::STANDARD};
-use ion_ai::{ImageMime, MAX_SOURCE_BYTES, normalize_image, normalize_rgba};
+use ion_ai::{ImageMime, MAX_SOURCE_BYTES, normalize_image};
 
 use crate::Selection;
 
@@ -41,17 +41,8 @@ pub fn load_encoded_image(
     normalize_image(&bytes).context("invalid inline image")
 }
 
-pub fn load_rgba(
-    selected: &Selection,
-    width: usize,
-    height: usize,
-    rgba: Vec<u8>,
-) -> Result<LoadedImage> {
-    require_image_input(selected)?;
-    normalize_rgba(width, height, rgba).context("invalid clipboard image")
-}
-
-fn require_image_input(selected: &Selection) -> Result<()> {
+/// Validate input capability without preparing already-normalized image bytes.
+pub fn require_image_input(selected: &Selection) -> Result<()> {
     ensure!(
         selected.image_input,
         "{}/{} does not declare image input; choose an image-capable model or configure the custom route with --images",

@@ -409,8 +409,11 @@ Attach JPEG, PNG, GIF or WebP files with `ion --image PATH run "PROMPT"` or
 `ion --image PATH chat`; repeat `--image` for several images. In chat,
 `/image PATH` attaches a file to the next prompt. Ctrl-V reads the clipboard
 on the host running Ion: copied files enter as paths, copied image pixels
-attach to the prompt, and otherwise text is pasted. Enter steers attached
-images during a running Turn; Alt-Enter queues a separate follow-up. A terminal's
+attach to the prompt, and otherwise text is pasted. Native reads and image
+preparation run in a helper process with a three-second deadline. Ion stops and
+reaps it on timeout or terminal exit. Helper transfers are limited to 32 MiB
+before editor/input limits apply; this is not a process-memory bound.
+Enter steers attached images during a running Turn; Alt-Enter queues a separate follow-up. A terminal's
 ordinary text paste still works. Relative paths resolve in
 the Session's working directory. Ion decodes and checks the file, applies
 image orientation and resizes large images before accepting the Turn. Source
