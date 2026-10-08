@@ -27,6 +27,10 @@ class Handler(BaseHTTPRequestHandler):
     def do_POST(self):
         body = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
         requests.append(body)
+        cwd_line = next(line.removeprefix("Current working directory: ")
+                        for line in body["messages"][0]["content"].splitlines()
+                        if line.startswith("Current working directory: "))
+        assert Path(json.loads(cwd_line)) == workspace.resolve(), "request omitted or changed Host cwd"
         waiting = body["messages"][-1].get("content") == "RESOURCE_WAIT"
         if waiting:
             assert release.wait(20), "resource qualification did not settle"
