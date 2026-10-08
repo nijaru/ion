@@ -1461,25 +1461,49 @@ mod tests {
 
     #[tokio::test]
     async fn post_exit_output_activity_keeps_the_pipe_open_until_idle() {
-        let tools = ion_core::ToolSet::new([
-            Arc::new(LocalTools::new(std::env::temp_dir()).unwrap()) as Arc<dyn ToolSource>,
-        ])
-        .snapshot();
-        let output = tools
-            .execute(
-                &ToolCall {
-                    id: "active-pipe".into(),
-                    name: "exec".into(),
-                    arguments: json!({"command":"(n=1; while [ \"$n\" -le 24 ]; do sleep 0.05; printf 'CHUNK_%s\\n' \"$n\"; n=$((n+1)); done) &"}),
-                    raw_arguments: None,
-                },
-                CancellationToken::new(),
-            )
-            .await;
-        assert!(!output.is_error, "{}", output.value);
-        let expected = (1..=24).map(|n| format!("CHUNK_{n}\n")).collect::<String>();
-        assert_eq!(output.value["stdout"], expected);
-        assert_eq!(output.value["stdout_truncated"], false);
+        // A native producer sleeping 50ms can actually remain quiet beyond the
+        // 100ms idle contract under load. Model readable arrivals in poll_read:
+        // even if scheduling is delayed, available bytes beat an expired timer.
+        // Native held-pipe, cancellation and spool custody have separate coverage.
+        struct Pulse {
+            next: std::pin::Pin<Box<tokio::time::Sleep>>,
+            count: u8,
+        }
+        impl tokio::io::AsyncRead for Pulse {
+            fn poll_read(
+                mut self: std::pin::Pin<&mut Self>,
+                cx: &mut std::task::Context<'_>,
+                buf: &mut tokio::io::ReadBuf<'_>,
+            ) -> std::task::Poll<std::io::Result<()>> {
+                use std::future::Future;
+                if self.count == 24 {
+                    return std::task::Poll::Ready(Ok(()));
+                }
+                if self.next.as_mut().poll(cx).is_pending() {
+                    return std::task::Poll::Pending;
+                }
+                buf.put_slice(&[b'a' + self.count]);
+                self.count += 1;
+                self.next
+                    .as_mut()
+                    .reset(tokio::time::Instant::now() + POST_EXIT_OUTPUT_IDLE / 4);
+                std::task::Poll::Ready(Ok(()))
+            }
+        }
+        let reader = Pulse {
+            next: Box::pin(tokio::time::sleep(POST_EXIT_OUTPUT_IDLE / 4)),
+            count: 0,
+        };
+        let (output, cancelled) = tokio::time::timeout(
+            Duration::from_secs(3),
+            OutputCapture::start(reader).finish(&CancellationToken::new(), false),
+        )
+        .await
+        .expect("active output failed to settle");
+        assert!(!cancelled);
+        assert_eq!(output.bytes, (b'a'..=b'x').collect::<Vec<_>>());
+        assert!(output.complete);
+        assert_eq!(output.omitted_bytes, Some(0));
     }
 
     #[tokio::test]
