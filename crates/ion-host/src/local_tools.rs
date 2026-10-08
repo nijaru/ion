@@ -1508,35 +1508,43 @@ mod tests {
 
     #[tokio::test]
     async fn cancellation_stops_post_exit_capture() {
-        let tools = ion_core::ToolSet::new([
-            Arc::new(LocalTools::new(std::env::temp_dir()).unwrap()) as Arc<dyn ToolSource>,
-        ])
-        .snapshot();
+        // A periodic native writer can exceed the idle deadline before a timer
+        // cancels it. Trigger cancellation from an actual read instead, while
+        // acquisition is provably active and normal direct-exit drain has begun.
+        struct CancelAfterRead {
+            stop: CancellationToken,
+            read: bool,
+        }
+        impl tokio::io::AsyncRead for CancelAfterRead {
+            fn poll_read(
+                mut self: std::pin::Pin<&mut Self>,
+                _: &mut std::task::Context<'_>,
+                buf: &mut tokio::io::ReadBuf<'_>,
+            ) -> std::task::Poll<std::io::Result<()>> {
+                if self.read {
+                    return std::task::Poll::Pending;
+                }
+                buf.put_slice(b"x");
+                self.read = true;
+                self.stop.cancel();
+                std::task::Poll::Ready(Ok(()))
+            }
+        }
         let stop = CancellationToken::new();
-        let trigger = stop.clone();
-        let task = tokio::spawn(async move {
-            tools
-                .execute(
-                    &ToolCall {
-                        id: "cancel-active-pipe".into(),
-                        name: "exec".into(),
-                        arguments: json!({"command":"(while :; do printf x; sleep 0.05; done) &"}),
-                        raw_arguments: None,
-                    },
-                    stop,
-                )
-                .await
-        });
-        tokio::time::sleep(Duration::from_millis(250)).await;
-        trigger.cancel();
-        let output = tokio::time::timeout(Duration::from_secs(2), task)
-            .await
-            .expect("post-exit capture ignored cancellation")
-            .unwrap();
-        assert!(output.is_error);
-        assert_eq!(output.value["cancelled"], true);
-        assert_eq!(output.value["stdout_truncated"], true);
-        assert!(!output.value["stdout"].as_str().unwrap().is_empty());
+        let reader = CancelAfterRead {
+            stop: stop.clone(),
+            read: false,
+        };
+        let (output, cancelled) = tokio::time::timeout(
+            Duration::from_secs(2),
+            OutputCapture::start(reader).finish(&stop, false),
+        )
+        .await
+        .expect("post-exit capture ignored cancellation");
+        assert!(cancelled);
+        assert!(!output.complete);
+        assert_eq!(output.omitted_bytes, None);
+        assert_eq!(output.bytes, b"x");
     }
 
     #[tokio::test]
