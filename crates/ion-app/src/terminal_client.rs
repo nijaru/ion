@@ -32,7 +32,7 @@ use tokio_util::sync::CancellationToken;
 use unicode_segmentation::UnicodeSegmentation;
 
 mod composer;
-use composer::wrap_input;
+use composer::input_window;
 
 const MAX_DRAFT: usize = 64 * 1024;
 const LIVE_REGION_MAX_ROWS: usize = 12;
@@ -2397,10 +2397,13 @@ fn draw(
     // Keep an editable cursor line first, then a status/control row when space
     // allows. Select the composer window only after reserving that real budget.
     let status_height = usize::from(status.is_some()).min(row_budget - 1);
-    let composer = wrap_input(&ui.draft, ui.cursor, width);
-    let composer_range = composer.visible_range((row_budget - status_height).min(4));
-    let composer_height = composer_range.len();
-    let composer_start = composer_range.start;
+    let composer = input_window(
+        &ui.draft,
+        ui.cursor,
+        width,
+        (row_budget - status_height).min(4),
+    );
+    let composer_height = composer.lines.len();
     let progress_height =
         (usize::from(operation.is_some()) * 2).min(row_budget - composer_height - status_height);
     let completions = ui.completion.rows(
@@ -2426,15 +2429,10 @@ fn draw(
     });
     live_rows.extend(chrome.into_iter().map(Line::raw));
     let composer_offset = live_rows.len();
-    for line in composer
-        .lines
-        .iter()
-        .skip(composer_start)
-        .take(composer_height)
-    {
+    for line in &composer.lines {
         live_rows.push(Line::raw(line.as_str()));
     }
-    let mut cursor_row = Some(composer_offset + composer.cursor_row - composer_start);
+    let mut cursor_row = Some(composer_offset + composer.cursor_row);
 
     let desired_live_height = live_rows.len().clamp(1, row_budget);
     if desired_live_height > screen.live_height() {
@@ -2555,10 +2553,8 @@ fn draw_chat_fullscreen(
 
     let status = visible_status(ui, operation);
     let status_height = usize::from(status.is_some()).min(height - 1);
-    let composer = wrap_input(&ui.draft, ui.cursor, width);
-    let composer_range = composer.visible_range((height - status_height).min(4));
-    let composer_height = composer_range.len();
-    let composer_start = composer_range.start;
+    let composer = input_window(&ui.draft, ui.cursor, width, (height - status_height).min(4));
+    let composer_height = composer.lines.len();
     let completions = ui.completion.rows(
         width,
         height.saturating_sub(composer_height + status_height),
@@ -2586,18 +2582,12 @@ fn draw_chat_fullscreen(
             next_row += 1;
         }
     }
-    for (index, line) in composer
-        .lines
-        .iter()
-        .skip(composer_start)
-        .take(composer_height)
-        .enumerate()
-    {
+    for (index, line) in composer.lines.iter().enumerate() {
         if next_row + index < height {
             rows[next_row + index] = Line::raw(line.as_str());
         }
     }
-    let cursor_row = next_row + composer.cursor_row - composer_start;
+    let cursor_row = next_row + composer.cursor_row;
     let cursor = (cursor_row < height).then_some((
         cursor_row,
         composer.cursor_col.min(width.saturating_sub(1)) as u16,
@@ -2625,7 +2615,6 @@ fn draw_modal_fullscreen(
     let width = width.max(1) as usize;
     let height = height.max(1) as usize;
     let mut content = Vec::new();
-    let mut composer = None;
 
     if let Some(view) = &mut ui.details {
         view.prepare(&ui.history, progress, width);
@@ -2643,7 +2632,6 @@ fn draw_modal_fullscreen(
                 fit_line(label, width.saturating_sub(2))
             ));
         }
-        composer = Some(wrap_input(&picker.query, picker.query.len(), width));
     }
 
     let content = ui
@@ -2653,12 +2641,16 @@ fn draw_modal_fullscreen(
     let controls = ui.details.as_ref().map(DetailView::controls);
     let status = visible_status(ui, operation);
     let status_height = (usize::from(controls.is_some()) + usize::from(status.is_some()))
-        .min(height - usize::from(composer.is_some()));
-    let composer = composer.map(|input| {
-        let range = input.visible_range((height - status_height).min(3));
-        (input, range)
+        .min(height - usize::from(ui.picker.is_some()));
+    let composer = ui.picker.as_ref().map(|picker| {
+        input_window(
+            &picker.query,
+            picker.query.len(),
+            width,
+            (height - status_height).min(3),
+        )
     });
-    let composer_height = composer.as_ref().map_or(0, |(_, range)| range.len());
+    let composer_height = composer.as_ref().map_or(0, |input| input.lines.len());
     let viewport = height.saturating_sub(composer_height + status_height);
     let scroll = ui.details.as_ref().map_or(0, |view| view.scroll);
     let end = content.len().saturating_sub(scroll.min(content.len()));
@@ -2677,20 +2669,13 @@ fn draw_modal_fullscreen(
             next_row += 1;
         }
     }
-    if let Some((composer, range)) = &composer {
-        let start = range.start;
-        for (index, line) in composer
-            .lines
-            .iter()
-            .skip(start)
-            .take(composer_height)
-            .enumerate()
-        {
+    if let Some(composer) = &composer {
+        for (index, line) in composer.lines.iter().enumerate() {
             if next_row + index < height {
                 rows[next_row + index] = Line::raw(line.as_str());
             }
         }
-        let row = next_row + composer.cursor_row - start;
+        let row = next_row + composer.cursor_row;
         if row < height {
             cursor = Some((row, composer.cursor_col.min(width.saturating_sub(1)) as u16));
         }

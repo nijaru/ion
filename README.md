@@ -298,6 +298,9 @@ notes with their corresponding images. Queued resource commands expand before
 admission, so later resource changes do not rewrite an accepted follow-up.
 The prepared prompt stays separate from the literal command, arguments and
 editor cursor: dequeue or cancellation restores the literal, not its expansion.
+Recovered aggregate drafts remain intact even when larger than the normal
+64 KiB editor limit. Composer layout retains only its cursor-containing window,
+not every wrapped row of the recovered input.
 Both the model message and retained editor metadata count against the shared
 pending-input allowance. Clipboard preparation finishes before input admission.
 Terminal queries share the key reader and use a 500 ms response deadline;
