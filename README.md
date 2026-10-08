@@ -78,7 +78,7 @@ complete Session remains available through inspect/export and tool detail.
 Publication uses available terminal rows before scrolling. Ordinary redraw and
 resize do not publish live rows; terminal-native reflow remains emulator-owned.
 The active operation and cancellation status remain visible alongside steering,
-queue and detail-close notices. On terminal input or rendering failure during a
+queue and detail-close notices when there is room beyond the editable cursor line. On terminal input or rendering failure during a
 Turn, shell or compaction, Ion cancels and awaits started work, then exits without
 admitting queued prompts. Inspect the Session for saved outcomes when the
 terminal can no longer display them.
@@ -89,7 +89,9 @@ remain queued. Overflow selects whole actions, favoring running work rather
 than a flattened tail. Individual rows may be omitted; Ctrl-O retains the full
 current conversation. Missing saved results are unknown, not still running.
 After settled history is published, an expanded live band shrinks back to the
-rows the active composer/status actually need. Related tool calls are rendered
+rows the active composer/status actually need. Short viewports select a
+cursor-containing composer window within their actual row budget, reserving a
+status/control row when space allows. Related tool calls are rendered
 as semantic activity groups with a restrained tree (`•`, `├`, `└`) instead of
 raw tool-call/result protocol rows. Semantic emphasis and terminal-palette
 colors distinguish active work, mutations and exceptions without colored
@@ -303,7 +305,9 @@ overwritten.
 In the terminal, `!command` runs a shell command in the live working
 directory and shares the command and its outcome with later model context.
 `!!command` runs it without sharing the command or outcome with the model.
-Both commands remain visible in the saved Session. The terminal shows bounded
+Both commands remain visible in the saved Session. Shell input refused during
+another operation stays in the editor with its literal syntax and cursor intact.
+The terminal shows bounded
 stdout/stderr previews, observed exit/signal and cancellation/timeout status, capture notices
 and the `!!` sharing choice; Ctrl-O inspects the full stored result.
 Before dispatch, the Session commits the command and sharing choice, then holds

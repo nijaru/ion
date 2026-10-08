@@ -170,6 +170,34 @@ with tempfile.TemporaryDirectory(prefix="ion-input-") as temporary:
             finally:
                 terminal.close()
 
+            cwd = work / (mode + "-shell-refusal")
+            cwd.mkdir()
+            terminal = Terminal(cwd, env, mode)
+            try:
+                terminal.wait(lambda: "› " in terminal.text())
+                before = len(requests)
+                release.clear()
+                terminal.send("WAIT_HISTORY\r")
+                terminal.wait(lambda: len(requests) == before + 1)
+                terminal.send(b"  !touch MUST_NOT_EXIST  \x1b[H\r")
+                terminal.wait(lambda: "Shell commands are available after this operation" in terminal.text())
+                terminal.output.clear()
+                release.set()
+                terminal.wait(lambda: "DONE_WAIT_HISTORY" in terminal.text())
+                terminal.paint()
+                terminal.send("SAFE_\r")
+                terminal.wait(lambda: len(requests) == before + 2 or bool(list(cwd.glob("MUST_NOT_EXIST*"))))
+                assert not list(cwd.glob("MUST_NOT_EXIST*")), "refused shell input was executed"
+                assert len(requests) == before + 2, "preserved literal was not submitted"
+                assert user_text(requests[-1]) == "SAFE_  !touch MUST_NOT_EXIST  ", user_text(requests[-1])
+                terminal.wait(lambda: "DONE_SAFE_" in terminal.text())
+                terminal.paint()
+                terminal.finish()
+                print(f"Ion {mode} busy shell literal/cursor refusal: OK")
+            finally:
+                release.set()
+                terminal.close()
+
             cwd = work / (mode + "-history")
             cwd.mkdir()
             terminal = Terminal(cwd, env, mode)

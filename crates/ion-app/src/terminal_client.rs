@@ -30,7 +30,9 @@ use ratatui::text::Line;
 use tokio::time::{Duration, interval};
 use tokio_util::sync::CancellationToken;
 use unicode_segmentation::UnicodeSegmentation;
-use unicode_width::UnicodeWidthStr;
+
+mod composer;
+use composer::wrap_input;
 
 const MAX_DRAFT: usize = 64 * 1024;
 const LIVE_REGION_MAX_ROWS: usize = 12;
@@ -325,7 +327,11 @@ pub async fn chat(init: ChatInit) -> Result<()> {
                         )
                         .await?;
                     }
-                    Action::Shell(command, exclude_from_context) => {
+                    Action::Shell {
+                        command,
+                        exclude_from_context,
+                        ..
+                    } => {
                         if let Err(error) = run_user_shell(
                             &mut terminal,
                             &mut screen,
@@ -1155,13 +1161,9 @@ fn busy_key(
             ui.draft = source.literal;
             ui.cursor = source.cursor;
         }
-        Action::Shell(command, exclude_from_context) => {
-            ui.draft = format!(
-                "{}{}",
-                if exclude_from_context { "!!" } else { "!" },
-                command
-            );
-            ui.cursor = ui.draft.len();
+        Action::Shell { source, .. } => {
+            ui.draft = source.literal;
+            ui.cursor = source.cursor;
             ui.status = "Shell commands are available after this operation".into();
         }
         Action::Quit => stop.cancel(),
@@ -1520,7 +1522,11 @@ fn resume_history_tail(items: &[TranscriptItem]) -> ResumeHistoryTail {
 enum Action {
     None,
     Submit(String),
-    Shell(String, bool),
+    Shell {
+        command: String,
+        exclude_from_context: bool,
+        source: EditorDraft,
+    },
     Queue(String),
     PasteClipboard,
     Command(String),
@@ -1846,6 +1852,7 @@ impl Frontend {
                 ..
             } => {
                 self.browsing = None;
+                let cursor = self.cursor;
                 let prompt = std::mem::take(&mut self.draft);
                 self.cursor = 0;
                 let syntax = prompt.trim();
@@ -1858,20 +1865,34 @@ impl Frontend {
                 } else if let Some(command) = syntax.strip_prefix("!!") {
                     if command.trim().is_empty() {
                         self.draft = prompt;
-                        self.cursor = self.draft.len();
+                        self.cursor = cursor;
                         self.status = "Type a shell command after !!".into();
                         Action::None
                     } else {
-                        Action::Shell(command.trim().to_owned(), true)
+                        Action::Shell {
+                            command: command.trim().to_owned(),
+                            exclude_from_context: true,
+                            source: EditorDraft {
+                                literal: prompt,
+                                cursor,
+                            },
+                        }
                     }
                 } else if let Some(command) = syntax.strip_prefix('!') {
                     if command.trim().is_empty() {
                         self.draft = prompt;
-                        self.cursor = self.draft.len();
+                        self.cursor = cursor;
                         self.status = "Type a shell command after !".into();
                         Action::None
                     } else {
-                        Action::Shell(command.trim().to_owned(), false)
+                        Action::Shell {
+                            command: command.trim().to_owned(),
+                            exclude_from_context: false,
+                            source: EditorDraft {
+                                literal: prompt,
+                                cursor,
+                            },
+                        }
                     }
                 } else {
                     Action::Submit(prompt)
@@ -2331,22 +2352,24 @@ fn draw(
         };
         chrome.push(fit_line(&format!("{label} · {notice}"), width));
     }
-    if let Some(status) = visible_status(ui, operation) {
+    let status = visible_status(ui, operation);
+    if let Some(status) = &status {
         if operation.is_some() {
-            chrome.push(fit_line(&status, width));
+            chrome.push(fit_line(status, width));
         } else {
-            push_wrapped(&mut chrome, &status, width);
+            push_wrapped(&mut chrome, status, width);
         }
     }
 
+    // Keep an editable cursor line first, then a status/control row when space
+    // allows. Select the composer window only after reserving that real budget.
+    let status_height = usize::from(status.is_some()).min(row_budget - 1);
     let composer = wrap_input(&ui.draft, ui.cursor, width);
-    let composer_height = composer.lines.len().min(4);
-    let composer_start = composer
-        .cursor_row
-        .saturating_sub(composer_height.saturating_sub(1))
-        .min(composer.lines.len().saturating_sub(composer_height));
-    let progress_height = usize::from(operation.is_some()) * 2;
-    let status_height = usize::from(visible_status(ui, operation).is_some());
+    let composer_range = composer.visible_range((row_budget - status_height).min(4));
+    let composer_height = composer_range.len();
+    let composer_start = composer_range.start;
+    let progress_height =
+        (usize::from(operation.is_some()) * 2).min(row_budget - composer_height - status_height);
     let completions = ui.completion.rows(
         width,
         row_budget.saturating_sub(composer_height + progress_height + status_height),
@@ -2360,7 +2383,7 @@ fn draw(
     }
     chrome.extend(completions);
     let content_budget = row_budget.saturating_sub(composer_height + chrome.len());
-    let mut live_rows = progress.map_or_else(Vec::new, |progress| {
+    let mut live_rows: Vec<Line<'_>> = progress.map_or_else(Vec::new, |progress| {
         crate::transcript_render::live_rows(
             progress.projection(),
             width,
@@ -2376,9 +2399,9 @@ fn draw(
         .skip(composer_start)
         .take(composer_height)
     {
-        live_rows.push(Line::raw(line.clone()));
+        live_rows.push(Line::raw(line.as_str()));
     }
-    let mut cursor_row = composer_offset + composer.cursor_row.saturating_sub(composer_start);
+    let mut cursor_row = Some(composer_offset + composer.cursor_row - composer_start);
 
     let desired_live_height = live_rows.len().clamp(1, row_budget);
     if desired_live_height > screen.live_height() {
@@ -2392,14 +2415,13 @@ fn draw(
     if live_rows.len() > live_height {
         let drop = live_rows.len() - live_height;
         live_rows.drain(..drop);
-        cursor_row = cursor_row.saturating_sub(drop);
+        cursor_row = cursor_row.and_then(|row| row.checked_sub(drop));
     }
 
     let live = live_rows;
-    let cursor = (cursor_row < live.len()).then_some((
-        cursor_row,
-        composer.cursor_col.min(width.saturating_sub(1)) as u16,
-    ));
+    let cursor = cursor_row
+        .filter(|row| *row < live.len())
+        .map(|row| (row, composer.cursor_col.min(width.saturating_sub(1)) as u16));
     terminal.render(
         screen,
         &Frame {
@@ -2498,14 +2520,12 @@ fn draw_chat_fullscreen(
     ui.fullscreen_rows = content.len();
     ui.scroll = ui.scroll.min(content.len());
 
-    let composer = wrap_input(&ui.draft, ui.cursor, width);
-    let composer_height = composer.lines.len().min(4);
-    let composer_start = composer
-        .cursor_row
-        .saturating_sub(composer_height.saturating_sub(1))
-        .min(composer.lines.len().saturating_sub(composer_height));
     let status = visible_status(ui, operation);
-    let status_height = usize::from(status.is_some());
+    let status_height = usize::from(status.is_some()).min(height - 1);
+    let composer = wrap_input(&ui.draft, ui.cursor, width);
+    let composer_range = composer.visible_range((height - status_height).min(4));
+    let composer_height = composer_range.len();
+    let composer_start = composer_range.start;
     let completions = ui.completion.rows(
         width,
         height.saturating_sub(composer_height + status_height),
@@ -2522,7 +2542,7 @@ fn draw_chat_fullscreen(
 
     let mut next_row = viewport;
     if let Some(status) = status
-        && next_row < height
+        && status_height > 0
     {
         rows[next_row] = Line::raw(fit_line(&status, width));
         next_row += 1;
@@ -2541,10 +2561,10 @@ fn draw_chat_fullscreen(
         .enumerate()
     {
         if next_row + index < height {
-            rows[next_row + index] = Line::raw(line.clone());
+            rows[next_row + index] = Line::raw(line.as_str());
         }
     }
-    let cursor_row = next_row + composer.cursor_row.saturating_sub(composer_start);
+    let cursor_row = next_row + composer.cursor_row - composer_start;
     let cursor = (cursor_row < height).then_some((
         cursor_row,
         composer.cursor_col.min(width.saturating_sub(1)) as u16,
@@ -2599,10 +2619,13 @@ fn draw_modal_fullscreen(
         .map_or(content.as_slice(), DetailView::rows);
     let controls = ui.details.as_ref().map(DetailView::controls);
     let status = visible_status(ui, operation);
-    let composer_height = composer
-        .as_ref()
-        .map_or(0, |composer| composer.lines.len().min(3));
-    let status_height = usize::from(controls.is_some()) + usize::from(status.is_some());
+    let status_height = (usize::from(controls.is_some()) + usize::from(status.is_some()))
+        .min(height - usize::from(composer.is_some()));
+    let composer = composer.map(|input| {
+        let range = input.visible_range((height - status_height).min(3));
+        (input, range)
+    });
+    let composer_height = composer.as_ref().map_or(0, |(_, range)| range.len());
     let viewport = height.saturating_sub(composer_height + status_height);
     let scroll = ui.details.as_ref().map_or(0, |view| view.scroll);
     let end = content.len().saturating_sub(scroll.min(content.len()));
@@ -2615,17 +2638,14 @@ fn draw_modal_fullscreen(
 
     let mut cursor = None;
     let mut next_row = viewport;
-    for label in controls.iter().chain(status.iter()) {
+    for label in controls.iter().chain(status.iter()).take(status_height) {
         if next_row < height {
             rows[next_row] = Line::raw(fit_line(label, width));
             next_row += 1;
         }
     }
-    if let Some(composer) = composer {
-        let start = composer
-            .cursor_row
-            .saturating_sub(composer_height.saturating_sub(1))
-            .min(composer.lines.len().saturating_sub(composer_height));
+    if let Some((composer, range)) = &composer {
+        let start = range.start;
         for (index, line) in composer
             .lines
             .iter()
@@ -2634,10 +2654,10 @@ fn draw_modal_fullscreen(
             .enumerate()
         {
             if next_row + index < height {
-                rows[next_row + index] = Line::raw(line.clone());
+                rows[next_row + index] = Line::raw(line.as_str());
             }
         }
-        let row = next_row + composer.cursor_row.saturating_sub(start);
+        let row = next_row + composer.cursor_row - start;
         if row < height {
             cursor = Some((row, composer.cursor_col.min(width.saturating_sub(1)) as u16));
         }
@@ -2645,56 +2665,6 @@ fn draw_modal_fullscreen(
 
     screen.draw_fullscreen(&mut terminal.output()?, &rows, cursor)?;
     Ok(())
-}
-
-struct WrappedInput {
-    lines: Vec<String>,
-    cursor_row: usize,
-    cursor_col: usize,
-}
-fn wrap_input(draft: &str, cursor: usize, width: usize) -> WrappedInput {
-    let width = width.max(3);
-    let mut lines = Vec::new();
-    let mut line = "› ".to_owned();
-    let mut col = 2;
-    let mut position = (0, 2);
-    for (byte, grapheme) in draft.grapheme_indices(true) {
-        if grapheme == "\n" {
-            if byte == cursor {
-                position = (lines.len(), col);
-            }
-            lines.push(line);
-            line = "  ".into();
-            col = 2;
-            continue;
-        }
-        let display = if grapheme == "\t" { "    " } else { grapheme };
-        let size = UnicodeWidthStr::width(display).max(1);
-        if col + size > width && col > 2 {
-            lines.push(line);
-            line = "  ".into();
-            col = 2;
-        }
-        if byte == cursor {
-            position = (lines.len(), col);
-        }
-        line.push_str(display);
-        col += size;
-    }
-    if cursor == draft.len() {
-        if col >= width {
-            lines.push(line);
-            line = "  ".into();
-            col = 2;
-        }
-        position = (lines.len(), col);
-    }
-    lines.push(line);
-    WrappedInput {
-        lines,
-        cursor_row: position.0,
-        cursor_col: position.1,
-    }
 }
 
 fn previous_grapheme(text: &str, cursor: usize) -> usize {
@@ -2713,6 +2683,7 @@ fn next_grapheme(text: &str, cursor: usize) -> usize {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use unicode_width::UnicodeWidthStr;
 
     #[test]
     fn resume_history_tail_keeps_the_last_six_turns() {
@@ -2799,19 +2770,49 @@ mod tests {
         assert_eq!(last_committed_answer(&view).unwrap(), "finished");
     }
     #[test]
-    fn composer_keeps_unicode_cursor_across_lines() {
-        let draft = "ab🦀\nnext";
-        let input = wrap_input(draft, draft.len(), 8);
-        assert_eq!(input.lines, vec!["› ab🦀", "  next"]);
-        assert_eq!((input.cursor_row, input.cursor_col), (1, 6));
-        assert_eq!(previous_grapheme(draft, 6), 2);
-    }
-    #[test]
     fn display_replaces_terminal_controls() {
         let mut rows = Vec::new();
         push_wrapped(&mut rows, "safe\u{1b}[31m", 30);
         assert_eq!(rows, vec!["safe�[31m"]);
     }
+    #[test]
+    fn refused_shell_input_retains_literal_syntax_and_cursor() {
+        for (literal, excluded) in [("  !echo ok  ", false), ("  !!echo 🦀  ", true)] {
+            let mut ui = Frontend {
+                draft: literal.into(),
+                cursor: 1,
+                ..Frontend::default()
+            };
+            let stop = CancellationToken::new();
+            busy_key(
+                &mut ui,
+                KeyEvent::new(KeyCode::Enter, Modifiers::NONE),
+                &stop,
+                None,
+                None,
+                AgentLimits::default(),
+            );
+            assert_eq!(ui.draft, literal);
+            assert_eq!(ui.cursor, 1);
+            assert!(ui.pending.is_empty() && !stop.is_cancelled());
+            assert!(
+                matches!(ui.key(KeyEvent::new(KeyCode::Enter, Modifiers::NONE), None), Action::Shell { exclude_from_context, source, .. } if exclude_from_context == excluded && source.literal == literal && source.cursor == 1)
+            );
+        }
+        for literal in ["   !   ", "   !!  "] {
+            let mut ui = Frontend {
+                draft: literal.into(),
+                cursor: 1,
+                ..Frontend::default()
+            };
+            assert!(matches!(
+                ui.key(KeyEvent::new(KeyCode::Enter, Modifiers::NONE), None),
+                Action::None
+            ));
+            assert_eq!((ui.draft.as_str(), ui.cursor), (literal, 1));
+        }
+    }
+
     #[test]
     fn alt_enter_queues_a_followup_without_discarding_the_editor() {
         let mut ui = Frontend::default();

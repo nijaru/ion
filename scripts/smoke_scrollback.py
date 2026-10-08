@@ -174,6 +174,46 @@ with tempfile.TemporaryDirectory(prefix="ion-scrollback-") as temporary:
         tmux("resize-window", "-t", "ion", "-x", "60", "-y", "20")
         time.sleep(0.15)
         check_history()
+        for mode in ("inline", "fullscreen"):
+            target = f"tiny-{mode}"
+            tiny_exit = work / f"{target}.exit"
+            tiny_launcher = work / f"{target}.sh"
+            tiny_launcher.write_text(
+                f"#!/bin/sh\n{shlex.quote(str(binary))} --session {shlex.quote(str(work / (target + '.sqlite')))} chat --tui-mode {mode}\n"
+                f"printf '%s\\n' \"$?\" > {shlex.quote(str(tiny_exit))}\n"
+            )
+            tiny_launcher.chmod(0o700)
+            tmux("new-session", "-d", "-s", target, "-x", "30", "-y", "2",
+                 "-c", str(workspace), str(tiny_launcher))
+            tmux("set-option", "-w", "-t", target, "remain-on-exit", "on")
+            tiny_deadline = time.monotonic() + 8
+
+            def until_tiny(predicate):
+                while not predicate():
+                    assert time.monotonic() < tiny_deadline, tmux("capture-pane", "-p", "-t", target)
+                    time.sleep(0.02)
+
+            until_tiny(lambda: "›" in tmux("capture-pane", "-p", "-t", target))
+            tmux("send-keys", "-t", target, "-l", "\x1b[200~FIRST_LINE\nSECOND_LINE\nTHIRD_LINE\nFOURTH_LINE\x1b[201~")
+            tmux("send-keys", "-t", target, "Up", "Up", "Up", "Home")
+
+            def cursor_on(text):
+                pane = tmux("capture-pane", "-p", "-t", target).splitlines()
+                row, visible = tmux("display-message", "-p", "-t", target, "#{cursor_y} #{cursor_flag}").split()
+                return visible == "1" and int(row) < len(pane) and pane[int(row)].strip() == text
+
+            until_tiny(lambda: cursor_on("› FIRST_LINE"))
+            tmux("send-keys", "-t", target, "Down", "Down", "Down", "End")
+            until_tiny(lambda: cursor_on("FOURTH_LINE"))
+            assert len(requests) == 4, "composer navigation submitted a model request"
+            tmux("send-keys", "-t", target, "C-c")
+            time.sleep(0.05)
+            tmux("send-keys", "-t", target, "C-c")
+            until_tiny(tiny_exit.exists)
+            assert tiny_exit.read_text().strip() == "0", "tiny composer failed on exit"
+            tmux("kill-session", "-t", target)
+            print(f"Ion {mode} two-row cursor-containing composer: OK")
+
         tmux("send-keys", "-t", "ion", "C-c")
         while not exit_path.exists():
             assert time.monotonic() < deadline, "inline client did not exit"
