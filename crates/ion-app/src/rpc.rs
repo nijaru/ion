@@ -71,17 +71,12 @@ struct Completion {
     error: Option<anyhow::Error>,
 }
 
-struct QueuedFollowUp {
-    id: Option<Value>,
-    input: AcceptedInput,
-}
-
 /// The only mutable control state. The Session and selected route are fixed
 /// inside each spawned Turn, so idle commands cannot change a running Turn.
 struct Control {
     binding: ion_host::SessionBinding,
     active: Option<Active>,
-    follow_ups: VecDeque<QueuedFollowUp>,
+    follow_ups: VecDeque<AcceptedInput<Option<Value>>>,
     input_budget: InputBudget,
     output: mpsc::Sender<Value>,
 }
@@ -184,7 +179,7 @@ impl Control {
                     let prompt = expand_input(self.binding.resources(), message.to_owned())?;
                     let images = self.load_images(&value)?;
                     ensure!(!prompt.trim().is_empty() || !images.is_empty(), "message is empty");
-                    steering.push_message(Message::user_input(prompt, images))?;
+                    steering.push_message(Message::user_input(prompt, images), ())?;
                     Ok(json!({"disposition":"queued"}))
                 }
                 "follow_up" => {
@@ -200,10 +195,10 @@ impl Control {
                     ensure!(!prompt.trim().is_empty() || !images.is_empty(), "message is empty");
                     let input = self.input_budget.admit(
                         Message::user_input(prompt, images),
-                        &id,
+                        id.clone(),
                         self.binding.agent().limits(),
                     )?;
-                    self.follow_ups.push_back(QueuedFollowUp { id: id.clone(), input });
+                    self.follow_ups.push_back(input);
                     Ok(json!({"disposition":"queued","position":self.follow_ups.len()}))
                 }
                 "clear_queue" => {
@@ -213,7 +208,10 @@ impl Control {
                         .and_then(|active| active.steering.as_ref())
                         .map_or_else(Vec::new, |steering| steering.take_uncommitted())
                         .into_iter().map(AcceptedInput::into_message).collect::<Vec<_>>();
-                    let follow_up = self.follow_ups.drain(..).map(|pending| json!({"id":pending.id,"input":pending.input.into_message()})).collect::<Vec<_>>();
+                    let follow_up = self.follow_ups.drain(..).map(|pending| {
+                        let (input, id, _reservation) = pending.into_parts();
+                        json!({"id":id,"input":input})
+                    }).collect::<Vec<_>>();
                     Ok(json!({"steering":steering,"follow_up":follow_up}))
                 }
                 "abort" => {
@@ -331,17 +329,16 @@ impl Control {
     fn start_next_follow_up(&mut self) -> Result<()> {
         self.idle()?;
         if let Some(pending) = self.follow_ups.pop_front() {
-            let (input, reservation) = pending.input.into_parts();
-            self.start_message(input, pending.id, Some(reservation))?;
+            let (input, id, reservation) = pending.into_parts();
+            self.start_message(input, id, Some(reservation))?;
         }
         Ok(())
     }
 
     fn take_uncommitted_follow_ups(&mut self) -> impl Iterator<Item = Value> + '_ {
         self.follow_ups.drain(..).map(|pending| {
-            json!({
-                "type":"uncommitted_follow_up","id":pending.id,"input":pending.input.into_message()
-            })
+            let (input, id, _reservation) = pending.into_parts();
+            json!({"type":"uncommitted_follow_up","id":id,"input":input})
         })
     }
 
@@ -592,7 +589,7 @@ mod tests {
             control.input_budget.clone(),
         ));
         steering
-            .push_message(Message::user_input("retain after panic".into(), []))
+            .push_message(Message::user_input("retain after panic".into(), []), ())
             .unwrap();
         control.active = Some(Active {
             stop: CancellationToken::new(),
@@ -624,9 +621,9 @@ mod tests {
                 InputBudget::new(serde_json::to_vec(&(&message, &id)).unwrap().len());
             let input = control
                 .input_budget
-                .admit(message, &id, control.binding.agent().limits())
+                .admit(message, id, control.binding.agent().limits())
                 .unwrap();
-            let (message, reservation) = input.into_parts();
+            let (message, id, reservation) = input.into_parts();
             let submission = Arc::new(Submission {
                 id,
                 admission: Mutex::new(Admission {
@@ -748,11 +745,9 @@ mod tests {
         control.input_budget = InputBudget::new(serde_json::to_vec(&(&input, &())).unwrap().len());
         let input = control
             .input_budget
-            .admit(input, &(), control.binding.agent().limits())
+            .admit(input, None, control.binding.agent().limits())
             .unwrap();
-        control
-            .follow_ups
-            .push_back(QueuedFollowUp { id: None, input });
+        control.follow_ups.push_back(input);
         control.start_next_follow_up().unwrap();
         tokio::task::yield_now().await;
         assert!(matches!(
@@ -856,20 +851,17 @@ mod tests {
             control.input_budget.clone(),
         ));
         steering
-            .push_message(Message::user_input("KEEP_STEERING".into(), []))
+            .push_message(Message::user_input("KEEP_STEERING".into(), []), ())
             .unwrap();
         let queued = control
             .input_budget
             .admit(
                 Message::user_input("KEEP_FOLLOW_UP".into(), []),
-                &(),
+                Some(json!("keep")),
                 control.binding.agent().limits(),
             )
             .unwrap();
-        control.follow_ups.push_back(QueuedFollowUp {
-            id: Some(json!("keep")),
-            input: queued,
-        });
+        control.follow_ups.push_back(queued);
         control.active = Some(Active {
             stop,
             steering: Some(steering),

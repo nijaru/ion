@@ -20,12 +20,16 @@ from pathlib import Path
 root = Path(__file__).resolve().parent.parent
 binary = Path(os.environ.get("ION_SMOKE_BIN", root / "target/debug/ion"))
 requests = []
+release = threading.Event()
 
 
 class Handler(BaseHTTPRequestHandler):
     def do_POST(self):
         body = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
         requests.append(body)
+        waiting = body["messages"][-1].get("content") == "RESOURCE_WAIT"
+        if waiting:
+            assert release.wait(20), "resource qualification did not settle"
         events = [
             {"id": "resources", "choices": [{"index": 0, "delta": {"content": "RESOURCE_OK"}, "finish_reason": None}]},
             {"id": "resources", "choices": [{"index": 0, "delta": {}, "finish_reason": "stop"}]},
@@ -35,7 +39,11 @@ class Handler(BaseHTTPRequestHandler):
         self.send_header("Content-Type", "text/event-stream")
         self.send_header("Content-Length", str(len(payload)))
         self.end_headers()
-        self.wfile.write(payload)
+        try:
+            self.wfile.write(payload)
+        except (BrokenPipeError, ConnectionResetError):
+            if not waiting:
+                raise
 
     def log_message(self, format, *args):
         pass
@@ -154,7 +162,66 @@ with tempfile.TemporaryDirectory(prefix="ion-resources-") as temporary:
                     child.send_signal(signal.SIGKILL)
                     child.wait()
                 os.close(master)
-        print("Ion headless resources and both-mode non-executing command completion/reload: OK")
+        for mode in ("inline", "fullscreen"):
+            for steer in (False, True):
+                master, slave = pty.openpty()
+                fcntl.ioctl(slave, termios.TIOCSWINSZ, struct.pack("HHHH", 30, 100, 0, 0))
+                child = subprocess.Popen([binary, "--cwd", workspace, "--tui-mode", mode, "chat"], env={**env, "TERM": "xterm-256color"}, stdin=slave, stdout=slave, stderr=slave, preexec_fn=attach_terminal)
+                os.close(slave)
+                output = bytearray()
+                phase = 0
+                before = len(requests)
+                release.clear()
+                literal = "  /skill:audit src/lib.rs 🦀\n" if steer else "  /check Rust 🦀\n"
+                deadline = time.monotonic() + 15
+                try:
+                    while time.monotonic() < deadline:
+                        readable, _, _ = select.select([master], [], [], 0.05)
+                        if readable:
+                            try:
+                                data = os.read(master, 65536)
+                            except OSError as error:
+                                if error.errno != errno.EIO:
+                                    raise
+                                data = b""
+                            output.extend(data)
+                            if b"\x1b[6n" in data:
+                                os.write(master, b"\x1b[2;1R")
+                        if phase == 0 and b"\xe2\x80\xba " in output:
+                            os.write(master, b"RESOURCE_WAIT\r")
+                            output.clear()
+                            phase = 1
+                        elif phase == 1 and len(requests) == before + 1:
+                            os.write(master, b"\x1b[200~" + literal.encode() + b"\x1b[201~\x1b[A\x1b[H" + (b"\r" if steer else b"\x1b\r"))
+                            output.clear()
+                            phase = 2
+                        elif phase == 2 and (b"Steering sent" if steer else b"follow-up(s) queued") in output:
+                            assert len(requests) == before + 1, "queued resource dispatched early"
+                            os.write(master, b"\x03")
+                            output.clear()
+                            phase = 3
+                        elif phase == 3 and b"Turn ended: turn was cancelled" in output:
+                            release.set()
+                            os.write(master, b"PREFIX_\r")
+                            output.clear()
+                            phase = 4
+                        elif phase == 4 and len(requests) > before + 1 and b"RESOURCE_OK" in output:
+                            assert len(requests) == before + 2
+                            assert requests[-1]["messages"][-1]["content"] == "PREFIX_" + literal, (mode, steer, "resource recovery lost literal arguments/cursor", requests[-1]["messages"][-1]["content"])
+                            os.write(master, b"\x03")
+                            phase = 5
+                        if child.poll() is not None:
+                            break
+                    assert phase == 5, (mode, steer, phase, output[-1200:])
+                    child.wait(timeout=5)
+                    assert child.returncode == 0, output[-1200:]
+                finally:
+                    release.set()
+                    if child.poll() is None:
+                        child.kill()
+                        child.wait(timeout=5)
+                    os.close(master)
+        print("Ion resources: non-executing completion/reload and both-mode literal/cursor recovery: OK")
     finally:
         server.shutdown()
         server.server_close()

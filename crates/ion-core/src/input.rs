@@ -28,17 +28,18 @@ impl InputBudget {
         }
     }
 
-    /// Validate before accepting ownership. Metadata is retained host data (for
-    /// example a correlation ID or image notes), never model-visible content.
-    pub fn admit(
+    /// Validate before acknowledging admission. Metadata stays with the input
+    /// (for example a correlation ID or literal editor draft), never in model content.
+    pub fn admit<M: Serialize>(
         &self,
         message: Message,
-        metadata: &impl Serialize,
+        metadata: M,
         limits: AgentLimits,
-    ) -> Result<AcceptedInput, CodingAgentError> {
-        let reservation = self.reserve(&message, metadata, limits)?;
+    ) -> Result<AcceptedInput<M>, CodingAgentError> {
+        let reservation = self.reserve(&message, &metadata, limits)?;
         Ok(AcceptedInput {
             message,
+            metadata,
             reservation,
         })
     }
@@ -71,14 +72,15 @@ impl InputBudget {
     }
 }
 
-/// An accepted input retains its budget while moving between host queues.
+/// An accepted input retains its host metadata and budget between queues.
 /// Releasing it into a Session/editor/response transfers ownership, not replay.
-pub struct AcceptedInput {
+pub struct AcceptedInput<M = ()> {
     message: Message,
+    metadata: M,
     reservation: InputReservation,
 }
 
-impl AcceptedInput {
+impl<M> AcceptedInput<M> {
     pub fn message(&self) -> &Message {
         &self.message
     }
@@ -87,8 +89,8 @@ impl AcceptedInput {
         self.message
     }
 
-    pub fn into_parts(self) -> (Message, InputReservation) {
-        (self.message, self.reservation)
+    pub fn into_parts(self) -> (Message, M, InputReservation) {
+        (self.message, self.metadata, self.reservation)
     }
 }
 
@@ -177,6 +179,30 @@ mod tests {
         drop(next);
         assert_eq!(*budget.used.lock().unwrap(), 0);
         assert!(budget.admit(message, &(), AgentLimits::default()).is_ok());
+    }
+
+    #[test]
+    fn owned_metadata_and_reservation_survive_input_transfer() {
+        let message = Message::user_input("prepared".into(), []);
+        let metadata = ("  /check ARG 🦀\n".to_owned(), 3usize);
+        let bytes = encoded_len(&(&message, &metadata)).unwrap();
+        let budget = InputBudget::new(bytes);
+        let input = budget
+            .admit(message.clone(), metadata.clone(), AgentLimits::default())
+            .unwrap();
+        let (prepared, original, reservation) = input.into_parts();
+        assert_eq!(prepared, message);
+        assert_eq!(original, metadata);
+        assert!(matches!(
+            budget.admit(message.clone(), (), AgentLimits::default()),
+            Err(CodingAgentError::InputQueueFull { .. })
+        ));
+        drop(reservation);
+        assert!(
+            budget
+                .admit(message, metadata, AgentLimits::default())
+                .is_ok()
+        );
     }
 
     #[test]

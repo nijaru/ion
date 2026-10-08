@@ -25,15 +25,15 @@ fn user_text(prompt: String) -> Message {
     }
 }
 
-/// Host-owned input waiting for a Session commit. A failed write leaves the
-/// messages here so the host can return them to its editor after the Turn.
-pub struct SteeringInbox {
-    pending: Mutex<VecDeque<crate::AcceptedInput>>,
+/// Host-owned prepared input and metadata waiting for a Session commit.
+/// A failed write retains both for recovery; only the message enters the Session.
+pub struct SteeringInbox<M = ()> {
+    pending: Mutex<VecDeque<crate::AcceptedInput<M>>>,
     budget: crate::InputBudget,
     limits: AgentLimits,
 }
 
-impl SteeringInbox {
+impl<M> SteeringInbox<M> {
     pub fn new(limits: AgentLimits, budget: crate::InputBudget) -> Self {
         Self {
             pending: Mutex::new(VecDeque::new()),
@@ -42,12 +42,11 @@ impl SteeringInbox {
         }
     }
 
-    pub fn push(&self, prompt: String) -> Result<(), AgentError> {
-        self.push_message(user_text(prompt))
-    }
-
-    pub fn push_message(&self, input: Message) -> Result<(), AgentError> {
-        let input = self.budget.admit(input, &(), self.limits)?;
+    pub fn push_message(&self, input: Message, metadata: M) -> Result<(), AgentError>
+    where
+        M: serde::Serialize,
+    {
+        let input = self.budget.admit(input, metadata, self.limits)?;
         self.pending
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
@@ -57,7 +56,7 @@ impl SteeringInbox {
 
     /// Return inputs that never entered the Session. Call after the Turn
     /// future finishes; the host can restore them to its editor or queue.
-    pub fn take_uncommitted(&self) -> Vec<crate::AcceptedInput> {
+    pub fn take_uncommitted(&self) -> Vec<crate::AcceptedInput<M>> {
         self.pending
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
@@ -86,8 +85,12 @@ impl SteeringInbox {
                 .map(|input| input.message().clone())
                 .collect(),
         )?;
-        Ok(pending
-            .drain(..)
+        let accepted = pending.drain(..).collect::<Vec<_>>();
+        drop(pending);
+        // Host metadata may run user-defined Drop code. Never release it while
+        // holding the inbox lock, including after the atomic Session commit.
+        Ok(accepted
+            .into_iter()
             .map(crate::AcceptedInput::into_message)
             .collect())
     }
@@ -122,18 +125,26 @@ impl SteeringInbox {
                 .map(|input| input.message().clone())
                 .collect(),
         )?;
+        let accepted = pending.drain(..).collect::<Vec<_>>();
+        drop(pending);
         Ok((
             complete,
-            pending
-                .drain(..)
+            accepted
+                .into_iter()
                 .map(crate::AcceptedInput::into_message)
                 .collect(),
         ))
     }
 }
 
-fn validate_steering(
-    pending: &VecDeque<crate::AcceptedInput>,
+impl SteeringInbox<()> {
+    pub fn push(&self, prompt: String) -> Result<(), AgentError> {
+        self.push_message(user_text(prompt), ())
+    }
+}
+
+fn validate_steering<M>(
+    pending: &VecDeque<crate::AcceptedInput<M>>,
     limits: AgentLimits,
 ) -> Result<(), AgentError> {
     // Embedded callers may pass an inbox admitted under another route. Validate
@@ -509,7 +520,7 @@ impl Agent {
         if prompt.trim().is_empty() {
             return Err(AgentError::EmptyPrompt);
         }
-        self.submit_inner(
+        self.submit_inner::<_, ()>(
             session,
             user_text(prompt),
             instructions,
@@ -532,19 +543,19 @@ impl Agent {
     where
         F: FnMut(AgentEvent) + Send,
     {
-        self.submit_inner(session, input, instructions, stop, None, &mut observe)
+        self.submit_inner::<_, ()>(session, input, instructions, stop, None, &mut observe)
             .await
     }
 
     /// Accept user steering at model-step boundaries during an active turn.
     /// Prompts not committed when the Turn ends remain in the host-owned inbox.
-    pub async fn submit_with_steering<F>(
+    pub async fn submit_with_steering<F, M: Send>(
         &self,
         session: &Session,
         prompt: String,
         instructions: String,
         stop: CancellationToken,
-        steering: &SteeringInbox,
+        steering: &SteeringInbox<M>,
         mut observe: F,
     ) -> Result<String, AgentError>
     where
@@ -564,13 +575,13 @@ impl Agent {
         .await
     }
 
-    pub async fn submit_message_with_steering<F>(
+    pub async fn submit_message_with_steering<F, M: Send>(
         &self,
         session: &Session,
         input: Message,
         instructions: String,
         stop: CancellationToken,
-        steering: &SteeringInbox,
+        steering: &SteeringInbox<M>,
         mut observe: F,
     ) -> Result<String, AgentError>
     where
@@ -587,13 +598,13 @@ impl Agent {
         .await
     }
 
-    async fn submit_inner<F>(
+    async fn submit_inner<F, M: Send>(
         &self,
         session: &Session,
         input: Message,
         instructions: String,
         stop: CancellationToken,
-        steering: Option<&SteeringInbox>,
+        steering: Option<&SteeringInbox<M>>,
         observe: &mut F,
     ) -> Result<String, AgentError>
     where
@@ -626,13 +637,13 @@ impl Agent {
             .await
     }
 
-    async fn drive<F>(
+    async fn drive<F, M: Send>(
         &self,
         session: &Session,
         turn: u64,
         instructions: String,
         stop: &CancellationToken,
-        steering: Option<&SteeringInbox>,
+        steering: Option<&SteeringInbox<M>>,
         observe: &mut F,
     ) -> Result<String, AgentError>
     where
@@ -3181,14 +3192,17 @@ mod tests {
                 |event| {
                     if matches!(event, AgentEvent::TextDelta(_)) {
                         steering
-                            .push_message(Message {
-                                role: Role::User,
-                                content: vec![
-                                    Content::Text("look at this".into()),
-                                    Content::Image(image.clone()),
-                                ],
-                                provider_replay: None,
-                            })
+                            .push_message(
+                                Message {
+                                    role: Role::User,
+                                    content: vec![
+                                        Content::Text("look at this".into()),
+                                        Content::Image(image.clone()),
+                                    ],
+                                    provider_replay: None,
+                                },
+                                (),
+                            )
                             .unwrap();
                     }
                 },
@@ -3220,6 +3234,91 @@ mod tests {
     }
 
     #[test]
+    fn steering_commit_releases_host_metadata_outside_inbox_lock() {
+        use std::sync::{
+            Weak,
+            atomic::{AtomicUsize, Ordering},
+        };
+        #[derive(serde::Serialize)]
+        struct Metadata {
+            literal: String,
+            #[serde(skip)]
+            inbox: Weak<SteeringInbox<Metadata>>,
+            #[serde(skip)]
+            dropped: Arc<AtomicUsize>,
+        }
+        impl Drop for Metadata {
+            fn drop(&mut self) {
+                let inbox = self.inbox.upgrade().unwrap();
+                assert!(
+                    inbox.pending.try_lock().is_ok(),
+                    "metadata dropped under inbox lock"
+                );
+                self.dropped.fetch_add(1, Ordering::SeqCst);
+            }
+        }
+        let root =
+            std::env::temp_dir().join(format!("ion-steering-metadata-{}", uuid::Uuid::now_v7()));
+        std::fs::create_dir(&root).unwrap();
+        for assistant in [false, true] {
+            let session =
+                CodingSession::create(root.join(format!("{assistant}.sqlite")), &root).unwrap();
+            let (turn, _) = session
+                .begin_turn_message(user_text("start".into()), model())
+                .unwrap();
+            let dropped = Arc::new(AtomicUsize::new(0));
+            let inbox = Arc::new(SteeringInbox::new(
+                AgentLimits::default(),
+                crate::InputBudget::default(),
+            ));
+            inbox
+                .push_message(
+                    user_text("prepared".into()),
+                    Metadata {
+                        literal: "PRIVATE_LITERAL".into(),
+                        inbox: Arc::downgrade(&inbox),
+                        dropped: dropped.clone(),
+                    },
+                )
+                .unwrap();
+            let messages = if assistant {
+                inbox
+                    .record_assistant(
+                        &session,
+                        turn,
+                        Message {
+                            role: Role::Assistant,
+                            content: vec![Content::Text("answer".into())],
+                            provider_replay: None,
+                        },
+                        vec![],
+                        ModelExecution {
+                            route: ModelRoute::direct(model(), ModelRouteReason::UserRequest),
+                            returned_model: Some("test".into()),
+                        },
+                        ion_ai::Usage::unknown(),
+                        AgentLimits::default(),
+                    )
+                    .unwrap()
+                    .1
+            } else {
+                inbox
+                    .record_pending(&session, turn, AgentLimits::default())
+                    .unwrap()
+            };
+            assert_eq!(messages, vec![user_text("prepared".into())]);
+            assert_eq!(dropped.load(Ordering::SeqCst), 1);
+            assert!(inbox.take_uncommitted().is_empty());
+            assert!(
+                !serde_json::to_string(&session.view().unwrap().messages)
+                    .unwrap()
+                    .contains("PRIVATE_LITERAL")
+            );
+        }
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
     fn image_steering_cannot_commit_on_a_text_only_route() {
         let root =
             std::env::temp_dir().join(format!("ion-image-steering-route-{}", uuid::Uuid::now_v7()));
@@ -3240,7 +3339,7 @@ mod tests {
             content: vec![Content::Text("look".into()), Content::Image(tiny_image())],
             provider_replay: None,
         };
-        steering.push_message(input.clone()).unwrap();
+        steering.push_message(input.clone(), ()).unwrap();
         assert!(matches!(
             steering.record_pending(&session, turn, AgentLimits::default()),
             Err(AgentError::ImagesUnsupported)

@@ -262,6 +262,10 @@ same shared queued-input allowance and route checks as RPC. Rejected input
 remains in the editor with its attachments; recovered steering retains image
 notes with their corresponding images. Queued resource commands expand before
 admission, so later resource changes do not rewrite an accepted follow-up.
+The prepared prompt stays separate from the literal command, arguments and
+editor cursor: dequeue or cancellation restores the literal, not its expansion.
+Both the model message and retained editor metadata count against the shared
+pending-input allowance. Clipboard preparation finishes before input admission.
 Up and Down browse earlier prompts when the cursor reaches the first or last
 editor line. Returning from history restores the unsent draft and its cursor,
 even if a running Turn refreshed history. Type

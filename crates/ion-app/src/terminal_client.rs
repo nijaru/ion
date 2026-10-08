@@ -118,28 +118,46 @@ struct PromptBrowse {
     cursor: usize,
 }
 
+#[derive(Clone, serde::Serialize)]
+struct EditorDraft {
+    literal: String,
+    cursor: usize,
+}
+
+impl EditorDraft {
+    fn at_end(literal: String) -> Self {
+        Self {
+            cursor: literal.len(),
+            literal,
+        }
+    }
+}
+
 struct TurnInput {
     prompt: String,
+    source: EditorDraft,
     images: Vec<LoadedImage>,
     _reservation: Option<InputReservation>,
 }
 
 impl TurnInput {
-    fn direct(prompt: String, images: Vec<LoadedImage>) -> Self {
+    fn prepared(prompt: String, source: EditorDraft, images: Vec<LoadedImage>) -> Self {
         Self {
             prompt,
+            source,
             images,
             _reservation: None,
         }
     }
 
-    fn from_accepted(input: AcceptedInput) -> Self {
-        let (input, reservation) = input.into_parts();
+    fn from_accepted(input: AcceptedInput<EditorDraft>) -> Self {
+        let (input, source, reservation) = input.into_parts();
         // The private inbox only accepts messages built by Message::user_input.
         let (prompt, images) = split_editor_input(input)
             .expect("terminal inbox must retain the prompt and image-note layout");
         Self {
             prompt,
+            source,
             images,
             _reservation: Some(reservation),
         }
@@ -281,147 +299,188 @@ pub async fn chat(init: ChatInit) -> Result<()> {
             .check_active()
             .context("terminal lifecycle failed while awaiting input")?;
         match event? {
-            InputEvent::Key(key) => match ui.key(key, Some(runtime.resources())) {
-                Action::None => {}
-                Action::Quit => break,
-                Action::Submit(prompt) => {
-                    ui.status.clear();
-                    ui.scroll = 0;
-                    let images = std::mem::take(&mut ui.images);
-                    run_turn(
-                        &mut terminal,
-                        &mut screen,
-                        &mut input,
-                        &mut ui,
-                        &runtime,
-                        TurnInput::direct(prompt, images),
-                    )
-                    .await?;
-                }
-                Action::Shell(command, exclude_from_context) => {
-                    if let Err(error) = run_user_shell(
-                        &mut terminal,
-                        &mut screen,
-                        &mut input,
-                        &mut ui,
-                        &runtime,
-                        command.clone(),
-                        exclude_from_context,
-                    )
-                    .await?
-                    {
-                        ui.status = format!(
-                            "Shell operation failed: {error:#}; inspect the Session and working directory before retrying\nShell command: {command}"
-                        );
-                    }
-                }
-                Action::Command(command) => {
-                    let (name, args) = command
-                        .split_once(char::is_whitespace)
-                        .unwrap_or((&command, ""));
-                    let args = args.trim();
-                    let builtin = Builtin::parse(name);
-                    if builtin == Some(Builtin::Login) && !args.is_empty() {
-                        match login_in_terminal(
-                            &mut terminal,
-                            &mut screen,
-                            &mut input,
-                            runtime.host().credentials(),
-                            args,
-                        )? {
-                            Ok(()) => ui.status = "Credential saved".into(),
-                            Err(error) => ui.status = format!("{error:#}"),
-                        }
-                    } else if builtin == Some(Builtin::Compact) && args.is_empty() {
-                        run_compaction(&mut terminal, &mut screen, &mut input, &mut ui, &runtime)
-                            .await?;
-                    } else if builtin == Some(Builtin::Copy) && args.is_empty() {
-                        match copy_last_answer(runtime.session(), &mut terminal).await {
-                            Ok(crate::clipboard::CopyOutcome::Copied) => {
-                                ui.status = "Copied last assistant answer".into()
-                            }
-                            Ok(crate::clipboard::CopyOutcome::RequestedFromTerminal) => {
-                                ui.status = "Sent clipboard request to terminal".into()
-                            }
-                            Err(error) => ui.status = format!("Copy failed: {error:#}"),
-                        }
-                    } else if builtin == Some(Builtin::Editor) && args.is_empty() {
-                        ui.completion.clear();
-                        match edit_draft_in_terminal(
+            InputEvent::Key(key) => {
+                let submitted_cursor = ui.cursor;
+                let raw_command = (key.code == KeyCode::Enter
+                    && !key.modifiers.contains(Modifiers::SHIFT)
+                    && !key.modifiers.contains(Modifiers::CONTROL)
+                    && !key.modifiers.contains(Modifiers::ALT)
+                    && ui.draft.trim_start().starts_with('/'))
+                .then(|| EditorDraft {
+                    literal: ui.draft.clone(),
+                    cursor: ui.cursor,
+                });
+                match ui.key(key, Some(runtime.resources())) {
+                    Action::None => {}
+                    Action::Quit => break,
+                    Action::Submit(prompt) => {
+                        ui.status.clear();
+                        ui.scroll = 0;
+                        let images = std::mem::take(&mut ui.images);
+                        run_turn(
                             &mut terminal,
                             &mut screen,
                             &mut input,
                             &mut ui,
+                            &runtime,
+                            TurnInput::prepared(
+                                prompt.clone(),
+                                EditorDraft {
+                                    literal: prompt,
+                                    cursor: submitted_cursor,
+                                },
+                                images,
+                            ),
+                        )
+                        .await?;
+                    }
+                    Action::Shell(command, exclude_from_context) => {
+                        if let Err(error) = run_user_shell(
+                            &mut terminal,
+                            &mut screen,
+                            &mut input,
+                            &mut ui,
+                            &runtime,
+                            command.clone(),
+                            exclude_from_context,
                         )
                         .await?
                         {
-                            Ok(()) => ui.status = "Draft returned from editor".into(),
-                            Err(error) => {
-                                ui.status =
-                                    format!("Editor failed: {error:#}; original draft retained")
+                            ui.status = format!(
+                                "Shell operation failed: {error:#}; inspect the Session and working directory before retrying\nShell command: {command}"
+                            );
+                        }
+                    }
+                    Action::Command(command) => {
+                        let (name, args) = command
+                            .split_once(char::is_whitespace)
+                            .unwrap_or((&command, ""));
+                        let args = args.trim();
+                        let builtin = Builtin::parse(name);
+                        if builtin == Some(Builtin::Login) && !args.is_empty() {
+                            match login_in_terminal(
+                                &mut terminal,
+                                &mut screen,
+                                &mut input,
+                                runtime.host().credentials(),
+                                args,
+                            )? {
+                                Ok(()) => ui.status = "Credential saved".into(),
+                                Err(error) => ui.status = format!("{error:#}"),
+                            }
+                        } else if builtin == Some(Builtin::Compact) && args.is_empty() {
+                            run_compaction(
+                                &mut terminal,
+                                &mut screen,
+                                &mut input,
+                                &mut ui,
+                                &runtime,
+                            )
+                            .await?;
+                        } else if builtin == Some(Builtin::Copy) && args.is_empty() {
+                            match copy_last_answer(runtime.session(), &mut terminal).await {
+                                Ok(crate::clipboard::CopyOutcome::Copied) => {
+                                    ui.status = "Copied last assistant answer".into()
+                                }
+                                Ok(crate::clipboard::CopyOutcome::RequestedFromTerminal) => {
+                                    ui.status = "Sent clipboard request to terminal".into()
+                                }
+                                Err(error) => ui.status = format!("Copy failed: {error:#}"),
+                            }
+                        } else if builtin == Some(Builtin::Editor) && args.is_empty() {
+                            ui.completion.clear();
+                            match edit_draft_in_terminal(
+                                &mut terminal,
+                                &mut screen,
+                                &mut input,
+                                &mut ui,
+                            )
+                            .await?
+                            {
+                                Ok(()) => ui.status = "Draft returned from editor".into(),
+                                Err(error) => {
+                                    ui.status =
+                                        format!("Editor failed: {error:#}; original draft retained")
+                                }
+                            }
+                        } else {
+                            match handle_command(&mut runtime, &mut ui, &command) {
+                                Ok(Some(prompt)) => {
+                                    ui.status.clear();
+                                    ui.scroll = 0;
+                                    let images = std::mem::take(&mut ui.images);
+                                    run_turn(
+                                        &mut terminal,
+                                        &mut screen,
+                                        &mut input,
+                                        &mut ui,
+                                        &runtime,
+                                        TurnInput::prepared(
+                                            prompt,
+                                            raw_command
+                                                .expect("resource command comes from the editor"),
+                                            images,
+                                        ),
+                                    )
+                                    .await?;
+                                }
+                                Ok(None) => {}
+                                Err(error) => {
+                                    if let Some(source) = raw_command {
+                                        ui.draft = source.literal;
+                                        ui.cursor = source.cursor;
+                                    }
+                                    ui.status = format!("{error:#}");
+                                }
                             }
                         }
-                    } else {
-                        match handle_command(&mut runtime, &mut ui, &command) {
-                            Ok(Some(prompt)) => {
-                                ui.status.clear();
-                                ui.scroll = 0;
-                                let images = std::mem::take(&mut ui.images);
-                                run_turn(
-                                    &mut terminal,
-                                    &mut screen,
-                                    &mut input,
-                                    &mut ui,
-                                    &runtime,
-                                    TurnInput::direct(prompt, images),
-                                )
-                                .await?;
+                    }
+                    Action::Queue(prompt) => ui.queue_follow_up(
+                        EditorDraft {
+                            literal: prompt,
+                            cursor: submitted_cursor,
+                        },
+                        runtime.agent().limits(),
+                        Some(runtime.resources()),
+                    ),
+                    Action::PasteClipboard => {
+                        if let Err(error) = paste_clipboard(&mut ui, runtime.selected()).await {
+                            ui.status = format!("Paste failed: {error:#}");
+                        }
+                    }
+                    Action::Pick(value) => {
+                        if let PickerValue::File { path, start, end } = value {
+                            ui.insert_file(path, start, end);
+                            continue;
+                        }
+                        if let PickerValue::ForkBefore { turn, input } = value {
+                            if let Err(error) = apply_fork(
+                                &mut runtime,
+                                &mut ui,
+                                ForkPoint::BeforeTurn(turn),
+                                Some(input),
+                            ) {
+                                ui.status = format!("{error:#}");
                             }
-                            Ok(None) => {}
+                            continue;
+                        }
+                        let result = match value {
+                            PickerValue::Session(path) => runtime.switch_session(path),
+                            PickerValue::Model(model) => runtime.select_model(model),
+                            PickerValue::File { .. } | PickerValue::ForkBefore { .. } => {
+                                unreachable!("handled above")
+                            }
+                        };
+                        match result {
+                            Ok(()) => {
+                                ui.refresh_session(runtime.session())?;
+                                ui.status = "Ready".into();
+                            }
                             Err(error) => ui.status = format!("{error:#}"),
                         }
                     }
                 }
-                Action::Queue(prompt) => {
-                    ui.queue_follow_up(prompt, runtime.agent().limits(), Some(runtime.resources()))
-                }
-                Action::PasteClipboard => {
-                    if let Err(error) = paste_clipboard(&mut ui, runtime.selected()).await {
-                        ui.status = format!("Paste failed: {error:#}");
-                    }
-                }
-                Action::Pick(value) => {
-                    if let PickerValue::File { path, start, end } = value {
-                        ui.insert_file(path, start, end);
-                        continue;
-                    }
-                    if let PickerValue::ForkBefore { turn, input } = value {
-                        if let Err(error) = apply_fork(
-                            &mut runtime,
-                            &mut ui,
-                            ForkPoint::BeforeTurn(turn),
-                            Some(input),
-                        ) {
-                            ui.status = format!("{error:#}");
-                        }
-                        continue;
-                    }
-                    let result = match value {
-                        PickerValue::Session(path) => runtime.switch_session(path),
-                        PickerValue::Model(model) => runtime.select_model(model),
-                        PickerValue::File { .. } | PickerValue::ForkBefore { .. } => {
-                            unreachable!("handled above")
-                        }
-                    };
-                    match result {
-                        Ok(()) => {
-                            ui.refresh_session(runtime.session())?;
-                            ui.status = "Ready".into();
-                        }
-                        Err(error) => ui.status = format!("{error:#}"),
-                    }
-                }
-            },
+            }
             InputEvent::Paste(text) => ui.insert(&text),
             InputEvent::Resize(size) => screen.resize(size.columns, size.rows),
             InputEvent::Mouse(mouse) => match mouse.kind() {
@@ -1020,53 +1079,60 @@ fn busy_key(
     ui: &mut Frontend,
     key: KeyEvent,
     stop: &CancellationToken,
-    steering: Option<&SteeringInbox>,
+    steering: Option<&SteeringInbox<EditorDraft>>,
     resources: Option<&Resources>,
     limits: AgentLimits,
 ) {
+    let submitted_cursor = ui.cursor;
     let raw_command = (key.code == KeyCode::Enter
         && !key.modifiers.contains(Modifiers::SHIFT)
         && !key.modifiers.contains(Modifiers::CONTROL)
+        && !key.modifiers.contains(Modifiers::ALT)
         && ui.draft.trim_start().starts_with('/'))
-    .then(|| ui.draft.clone());
+    .then(|| EditorDraft {
+        literal: ui.draft.clone(),
+        cursor: ui.cursor,
+    });
     let action = ui.key(key, resources);
-    let action = if ui.clipboard_job.is_some() {
-        match action {
-            Action::Submit(prompt) | Action::Queue(prompt) => {
-                ui.draft = if ui.draft.is_empty() {
-                    prompt
-                } else {
-                    format!("{prompt}\n\n{}", ui.draft)
-                };
-                ui.cursor = ui.draft.len();
-                ui.status = "Wait for clipboard paste, then send the prompt".into();
-                return;
-            }
-            other => other,
-        }
-    } else {
-        action
-    };
     match action {
         Action::Submit(prompt) => {
             if let Some(steering) = steering {
-                match steering.push_message(Message::user_input(prompt.clone(), ui.images.clone()))
-                {
+                match steering.push_message(
+                    Message::user_input(prompt.clone(), ui.images.clone()),
+                    EditorDraft {
+                        literal: prompt.clone(),
+                        cursor: submitted_cursor,
+                    },
+                ) {
                     Ok(()) => {
                         ui.images.clear();
                         ui.status = "Steering sent for the next model step".into();
                     }
                     Err(error) => {
                         ui.draft = prompt;
-                        ui.cursor = ui.draft.len();
+                        ui.cursor = submitted_cursor;
                         ui.status = format!("Steering was not queued: {error}");
                     }
                 }
             } else {
-                ui.queue_follow_up(prompt, limits, resources);
+                ui.queue_follow_up(
+                    EditorDraft {
+                        literal: prompt,
+                        cursor: submitted_cursor,
+                    },
+                    limits,
+                    resources,
+                );
             }
         }
-        Action::Queue(prompt) => ui.queue_follow_up(prompt, limits, resources),
+        Action::Queue(prompt) => ui.queue_follow_up(
+            EditorDraft {
+                literal: prompt,
+                cursor: submitted_cursor,
+            },
+            limits,
+            resources,
+        ),
         Action::Command(command) => {
             let (name, args) = command
                 .split_once(char::is_whitespace)
@@ -1089,7 +1155,11 @@ fn busy_key(
             {
                 match expanded {
                     Ok(prompt) => {
-                        match steering.push_message(Message::user_input(prompt, ui.images.clone()))
+                        let source = raw_command
+                            .clone()
+                            .expect("resource command comes from the editor");
+                        match steering
+                            .push_message(Message::user_input(prompt, ui.images.clone()), source)
                         {
                             Ok(()) => {
                                 ui.images.clear();
@@ -1104,8 +1174,9 @@ fn busy_key(
             } else {
                 ui.status = "Commands are available after this operation".into();
             }
-            ui.draft = raw_command.unwrap_or(command);
-            ui.cursor = ui.draft.len();
+            let source = raw_command.unwrap_or_else(|| EditorDraft::at_end(command));
+            ui.draft = source.literal;
+            ui.cursor = source.cursor;
         }
         Action::Shell(command, exclude_from_context) => {
             ui.draft = format!(
@@ -1134,13 +1205,19 @@ fn return_pending_to_editor(ui: &mut Frontend) {
         return;
     }
     ui.restore_browsed_draft();
+    let cursor = ui
+        .pending
+        .front()
+        .expect("pending input exists")
+        .source
+        .cursor;
     let mut restored = Vec::new();
     let remaining = ui
         .pending
         .drain(..)
-        .map(|TurnInput { prompt, images, .. }| {
+        .map(|TurnInput { source, images, .. }| {
             restored.extend(images);
-            prompt
+            source.literal
         })
         .collect::<Vec<_>>()
         .join("\n\n");
@@ -1151,7 +1228,7 @@ fn return_pending_to_editor(ui: &mut Frontend) {
     } else {
         ui.draft = format!("{remaining}\n\n{}", ui.draft);
     }
-    ui.cursor = ui.draft.len();
+    ui.cursor = cursor;
 }
 
 fn scan_files(cwd: &Path) -> Vec<String> {
@@ -1691,6 +1768,17 @@ impl Frontend {
                 _ => {}
             }
         }
+        // Clipboard preparation owns future attachments. Preserve the literal
+        // editor input until it completes, before any client can acknowledge it.
+        if self.clipboard_job.is_some()
+            && key.code == KeyCode::Enter
+            && !key.modifiers.contains(Modifiers::SHIFT)
+            && !key.modifiers.contains(Modifiers::CONTROL)
+            && Builtin::parse(self.draft.split_whitespace().next().unwrap_or("")).is_none()
+        {
+            self.status = "Wait for clipboard paste, then send the prompt".into();
+            return Action::None;
+        }
         let action = match key {
             KeyEvent {
                 code: KeyCode::Char('c'),
@@ -2125,14 +2213,15 @@ impl Frontend {
 
     fn queue_follow_up(
         &mut self,
-        original: String,
+        source: EditorDraft,
         limits: AgentLimits,
         resources: Option<&Resources>,
     ) {
+        let original = &source.literal;
         let name = original.split_whitespace().next().unwrap_or("");
         if Builtin::parse(name).is_some() {
-            self.draft = original;
-            self.cursor = self.draft.len();
+            self.draft = source.literal;
+            self.cursor = source.cursor;
             self.status =
                 "Terminal commands cannot be queued; submit a prompt or resource command".into();
             return;
@@ -2141,8 +2230,8 @@ impl Frontend {
             Some(resources) => match expand_resource_input(resources, original.clone()) {
                 Ok(prompt) => prompt,
                 Err((_, error)) => {
-                    self.draft = original;
-                    self.cursor = self.draft.len();
+                    self.draft = source.literal;
+                    self.cursor = source.cursor;
                     self.status = format!("Follow-up was not queued: {error:#}");
                     return;
                 }
@@ -2150,33 +2239,35 @@ impl Frontend {
             None => original.clone(),
         };
         let message = Message::user_input(prompt.clone(), self.images.clone());
-        match self.input_budget.reserve(&message, &(), limits) {
+        match self.input_budget.reserve(&message, &source, limits) {
             Ok(reservation) => {
                 self.pending.push_back(TurnInput {
                     prompt,
+                    source,
                     images: std::mem::take(&mut self.images),
                     _reservation: Some(reservation),
                 });
                 self.status = format!("{} follow-up(s) queued", self.pending.len());
             }
             Err(error) => {
-                self.draft = original;
-                self.cursor = self.draft.len();
+                self.draft = source.literal;
+                self.cursor = source.cursor;
                 self.status = format!("Follow-up was not queued: {error}");
             }
         }
     }
 
     fn dequeue(&mut self) {
-        if let Some(TurnInput { prompt, images, .. }) = self.pending.pop_back() {
+        if let Some(TurnInput { source, images, .. }) = self.pending.pop_back() {
             self.restore_browsed_draft();
             self.images.extend(images);
             if self.draft.is_empty() {
-                self.draft = prompt;
+                self.draft = source.literal;
+                self.cursor = source.cursor;
             } else {
-                self.draft = format!("{}\n\n{prompt}", self.draft);
+                self.cursor = self.draft.len() + 2 + source.cursor;
+                self.draft = format!("{}\n\n{}", self.draft, source.literal);
             }
-            self.cursor = self.draft.len();
             self.browsing = None;
             self.status = format!("{} follow-up(s) remain queued", self.pending.len());
         }
@@ -2903,8 +2994,11 @@ mod tests {
             ..Frontend::default()
         };
         ui.history_previous();
-        ui.pending
-            .push_back(TurnInput::direct("recovered".into(), vec![]));
+        ui.pending.push_back(TurnInput::prepared(
+            "recovered".into(),
+            EditorDraft::at_end("recovered".into()),
+            vec![],
+        ));
         return_pending_to_editor(&mut ui);
         ui.history_next();
         assert_eq!(ui.draft, "recovered\n\nunsent");
@@ -3044,8 +3138,32 @@ mod tests {
         assert!(ui.status.is_empty());
     }
 
+    #[tokio::test]
+    async fn pending_clipboard_keeps_literal_input_before_admission() {
+        for (literal, modifiers) in [
+            ("prompt", Modifiers::NONE),
+            ("  /skill:audit ARG\n", Modifiers::NONE),
+            ("  /check ARG\n", Modifiers::ALT),
+        ] {
+            let mut ui = Frontend {
+                draft: literal.into(),
+                cursor: 2,
+                clipboard_job: Some(tokio::spawn(std::future::pending())),
+                ..Frontend::default()
+            };
+            assert!(matches!(
+                ui.key(KeyEvent::new(KeyCode::Enter, modifiers), None),
+                Action::None
+            ));
+            assert_eq!(ui.draft, literal);
+            assert_eq!(ui.cursor, 2);
+            assert!(ui.pending.is_empty());
+            ui.clipboard_job.take().unwrap().abort();
+        }
+    }
+
     #[test]
-    fn skill_command_during_a_turn_is_expanded_before_steering() {
+    fn resource_inputs_keep_frozen_preparation_and_literal_recovery() {
         let root = std::env::temp_dir().join(format!(
             "ion-terminal-resource-{}-{}",
             std::process::id(),
@@ -3063,38 +3181,68 @@ mod tests {
         )
         .unwrap();
         let resources = Resources::load(&root, &root.join("config")).unwrap();
-        let mut ui = Frontend::default();
-        ui.images
-            .push(ion_ai::normalize_rgba(1, 1, vec![255, 0, 0, 255]).unwrap());
-        ui.insert("/skill:ion-terminal-audit-test src/lib.rs");
-        let steering = SteeringInbox::new(
-            AgentLimits {
-                image_input: true,
-                ..AgentLimits::default()
-            },
-            ui.input_budget.clone(),
-        );
-        busy_key(
-            &mut ui,
-            KeyEvent::new(KeyCode::Enter, Modifiers::NONE),
-            &CancellationToken::new(),
-            Some(&steering),
-            Some(&resources),
-            AgentLimits {
-                image_input: true,
-                ..AgentLimits::default()
-            },
-        );
-        assert!(ui.draft.is_empty());
-        let queued = steering.take_uncommitted();
-        assert_eq!(queued.len(), 1);
-        let Content::Text(prompt) = &queued[0].message().content[0] else {
-            panic!("expected text steering");
+        let literal = "  /skill:ion-terminal-audit-test src/lib.rs 🦀\n";
+        let cursor = "  /skill:".len();
+        let limits = AgentLimits {
+            image_input: true,
+            ..AgentLimits::default()
         };
-        assert!(prompt.contains("AUDIT_MARKER"));
-        assert!(prompt.contains("User request: src/lib.rs"));
-        assert!(matches!(queued[0].message().content[1], Content::Image(_)));
-        assert!(ui.images.is_empty());
+        for steer in [false, true] {
+            fs::write(skill.join("SKILL.md"), "---\nname: ion-terminal-audit-test\ndescription: Audit a change.\n---\nAUDIT_MARKER\n").unwrap();
+            let mut ui = Frontend::default();
+            let mut image = ion_ai::normalize_rgba(1, 1, vec![255, 0, 0, 255]).unwrap();
+            image.note = Some("Coordinate note".into());
+            ui.images.push(image);
+            ui.insert(literal);
+            ui.cursor = cursor;
+            let steering = SteeringInbox::new(limits, ui.input_budget.clone());
+            busy_key(
+                &mut ui,
+                KeyEvent::new(
+                    KeyCode::Enter,
+                    if steer {
+                        Modifiers::NONE
+                    } else {
+                        Modifiers::ALT
+                    },
+                ),
+                &CancellationToken::new(),
+                steer.then_some(&steering),
+                Some(&resources),
+                limits,
+            );
+            assert!(ui.draft.is_empty());
+            assert!(ui.images.is_empty());
+            if steer {
+                for input in steering.take_uncommitted() {
+                    ui.pending.push_back(TurnInput::from_accepted(input));
+                }
+            }
+            let queued = ui.pending.front().unwrap();
+            assert!(queued.prompt.contains("AUDIT_MARKER"));
+            assert!(queued.prompt.contains("User request: src/lib.rs 🦀"));
+            fs::write(skill.join("SKILL.md"), "---\nname: ion-terminal-audit-test\ndescription: Audit a change.\n---\nRELOADED_MARKER\n").unwrap();
+            let reloaded = Resources::load(&root, &root.join("config")).unwrap();
+            assert!(
+                reloaded
+                    .expand_command(literal.trim())
+                    .unwrap()
+                    .unwrap()
+                    .contains("RELOADED_MARKER")
+            );
+            assert!(
+                !ui.pending
+                    .front()
+                    .unwrap()
+                    .prompt
+                    .contains("RELOADED_MARKER")
+            );
+            ui.dequeue();
+            assert_eq!(ui.draft, literal);
+            assert_eq!(ui.cursor, cursor);
+            assert_eq!(ui.images.len(), 1);
+            assert_eq!(ui.images[0].note.as_deref(), Some("Coordinate note"));
+        }
         fs::remove_dir_all(root).unwrap();
     }
 
@@ -3105,12 +3253,16 @@ mod tests {
             ..AgentLimits::default()
         };
         let message = Message::user_input("first".into(), []);
-        let budget = InputBudget::new(serde_json::to_vec(&(&message, &())).unwrap().len());
+        let budget = InputBudget::new(
+            serde_json::to_vec(&(&message, EditorDraft::at_end("first".into())))
+                .unwrap()
+                .len(),
+        );
         let mut ui = Frontend {
             input_budget: budget.clone(),
             ..Frontend::default()
         };
-        ui.queue_follow_up("first".into(), limits, None);
+        ui.queue_follow_up(EditorDraft::at_end("first".into()), limits, None);
         let image = ion_ai::normalize_rgba(1, 1, vec![255, 0, 0, 255]).unwrap();
         ui.images.push(image.clone());
         ui.insert("  second\n");
@@ -3129,22 +3281,38 @@ mod tests {
         assert!(ui.status.contains("not queued"));
         let steering = SteeringInbox::new(limits, budget);
         assert!(matches!(
-            steering.push("x".into()),
+            steering.push_message(
+                Message::user_input("x".into(), []),
+                EditorDraft::at_end("x".into())
+            ),
             Err(ion_core::CodingAgentError::InputQueueFull { .. })
         ));
         ui.dequeue();
         assert_eq!(ui.draft, "  second\n\n\nfirst");
-        steering.push("x".into()).unwrap();
+        steering
+            .push_message(
+                Message::user_input("x".into(), []),
+                EditorDraft::at_end("x".into()),
+            )
+            .unwrap();
         let accepted = steering.take_uncommitted().pop().unwrap();
         ui.pending.push_back(TurnInput::from_accepted(accepted));
         assert!(matches!(
-            steering.push("x".into()),
+            steering.push_message(
+                Message::user_input("x".into(), []),
+                EditorDraft::at_end("x".into())
+            ),
             Err(ion_core::CodingAgentError::InputQueueFull { .. })
         ));
         ui.dequeue();
         assert_eq!(ui.draft, "  second\n\n\nfirst\n\nx");
         assert_eq!(ui.images.len(), 1);
-        steering.push("x".into()).unwrap();
+        steering
+            .push_message(
+                Message::user_input("x".into(), []),
+                EditorDraft::at_end("x".into()),
+            )
+            .unwrap();
     }
 
     #[test]
@@ -3157,7 +3325,7 @@ mod tests {
         let accepted = InputBudget::default()
             .admit(
                 message.clone(),
-                &(),
+                EditorDraft::at_end("  inspect both\n".into()),
                 AgentLimits {
                     image_input: true,
                     ..AgentLimits::default()
