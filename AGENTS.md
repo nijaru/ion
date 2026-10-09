@@ -29,10 +29,11 @@
 
 ## Priorities and approach
 
-- Prioritize common coding-workflow parity, correctness, maintainability and
-  performance over new protocol integrations or feature breadth. A newly
-  mentioned reference feature is not automatically the next task. Choose work
-  from concrete gaps in the affected workflow, not release checkboxes.
+- Raise all supported parts toward Pi-level common-workflow quality: Core/Session,
+  Host tools/resources, providers/model access, shared clients, terminal usability
+  and end-to-end coding. Choose the next concrete contract or qualification gap,
+  not a new protocol, reference feature or release checkbox. Reuse valid evidence
+  for unchanged inputs; do not repeat completed work to inflate progress.
 - Review the affected source, callers and qualification harness before expensive
   live coding or native GUI runs. Look first for violated invariants, ignored
   errors, stale or duplicated state, ownership/cleanup mistakes and unnecessary
@@ -93,8 +94,13 @@ different things.
 Use bounded, isolated live tasks after the relevant source/harness review and
 cheap checks. Prefer available local or verified free routes; paid qualification
 needs explicit authorization. Qualification budgets are fixture limits, not
-production loop caps. Readiness claims require representative workflow evidence
-and disclosed gaps, not test counts, source parity or a single successful recap.
+production loop caps. Judge workflow completion against actual requests,
+committed facts and independently checked final host effects, including after
+cancellation, compaction and reopen. Distinguish a fresh model-issued mutation
+from automatic replay. Do not mask adherence failures with transcript rewrites,
+canned summaries or fixture-specific duplicate suppression. Readiness requires
+representative workflow evidence and disclosed gaps, not test counts, source
+parity or a single successful recap.
 
 Keep this the only repository agent-instruction file. Private research,
 decisions and continuation state belong in the knowledge repository, not new

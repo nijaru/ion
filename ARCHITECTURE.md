@@ -167,7 +167,9 @@ observed output with an error in raw history or classify successful work as
 failed. Reopen, fork and compaction use the recorded model projection; human
 inspection retains the observed output and delivery notice. Storage limits
 still apply, and failed commits leave unknown effects rather than invented
-outcomes. Compaction changes model context, not raw history.
+outcomes. Generated answers and summaries are claims, not independent
+observations of the working directory; committing them does not certify their
+accuracy. Compaction changes model context, not raw history.
 It commits atomically, respects complete call/result cuts, uses bounded settled
 prefixes when needed, and leaves the old projection intact if cancelled before
 commit. Measure successful continuation, not merely summary compression.

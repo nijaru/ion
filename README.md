@@ -591,6 +591,20 @@ retention guarantee. No comparative latency/token benefit is established yet.
 
 ## Current limits
 
+Common coding workflows are implemented, but Pi-level reliability and terminal
+usability are not yet qualified. Controlled tests cover persistence, admission,
+cancellation, recovery and shared-client behavior. Selected moderate live coding
+tasks have succeeded; longer captured-output workflows have also produced false
+summaries, inaccurate final reports and fresh duplicate mutations. Those failures
+remain unresolved. Mechanical compaction and absence of automatic replay do not
+establish truthful recall or once-only model behavior. Check saved outcomes,
+working-directory changes and native tests rather than trusting a recap alone.
+
+Native clipboard backends, representative native-emulator use and human terminal
+polish remain incompletely qualified. Owner-level full-budget recovery and layout
+measurements do not prove fatal-path recovery through every client, sustained
+whole-application latency or a process-memory bound.
+
 The required CI gate now includes Linux PTY, RPC, MCP refresh/withdrawal,
 selected-point fork and resource-reload workflows in addition to format, strict
 Clippy and workspace tests. The terminal workflow exercises inline startup, grouped tool activity,
