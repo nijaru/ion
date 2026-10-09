@@ -498,7 +498,7 @@ impl Agent {
             }
         };
         let GeneratedResponse { response, route } =
-            generate_with_retry(&self.service, request, stop, &mut |_| {}).await?;
+            generate_with_retry(&self.service, &request, stop, &mut |_| {}).await?;
         if !matches!(response.termination, ResponseTermination::Completed)
             || response.message.role != Role::Assistant
             || response
@@ -1840,7 +1840,7 @@ mod tests {
         let mut retry_delay = None;
         let generated = generate_with_retry(
             &agent.service,
-            request.clone(),
+            &request,
             &CancellationToken::new(),
             &mut |event| {
                 if let AgentEvent::ProviderRetry { delay_ms, .. } = event {
@@ -1865,7 +1865,7 @@ mod tests {
         let mut visible = String::new();
         let error = generate_with_retry(
             &agent.service,
-            request.clone(),
+            &request,
             &CancellationToken::new(),
             &mut |event| {
                 if let AgentEvent::TextDelta(text) = event {
@@ -1890,7 +1890,7 @@ mod tests {
         let agent = Agent::new(service.clone(), Arc::new(TestTools::new(&root)), model());
         let error = generate_with_retry(
             &agent.service,
-            request,
+            &request,
             &CancellationToken::new(),
             &mut |_| {},
         )

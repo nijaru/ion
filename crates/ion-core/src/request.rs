@@ -118,7 +118,7 @@ impl<'s> PreparedRequest<'s> {
             },
         )?;
         let started = tokio::time::Instant::now();
-        let generated = generate_with_retry(model, self.request.clone(), stop, observe).await?;
+        let generated = generate_with_retry(model, &self.request, stop, observe).await?;
         // Retain the route actually used by pre-output retry for cache warming.
         self.request.route = generated.route.clone();
         Ok(RequestStep {

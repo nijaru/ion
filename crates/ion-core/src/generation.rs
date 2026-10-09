@@ -18,7 +18,7 @@ pub(crate) struct GeneratedResponse {
 
 pub(crate) async fn generate_with_retry<F>(
     model: &Arc<dyn ModelService>,
-    request: ModelRequest,
+    request: &ModelRequest,
     stop: &CancellationToken,
     observe: &mut F,
 ) -> Result<GeneratedResponse, AgentError>
@@ -27,6 +27,8 @@ where
 {
     model.validate_controls(&request.route.effective, &request.controls)?;
     for attempt in 0..=2 {
+        // The caller retains the frozen base; only the dispatched attempt
+        // needs an owned copy. Borrowing avoids a second full-history clone.
         let mut attempt_request = request.clone();
         if attempt > 0 {
             attempt_request.route.reason = ModelRouteReason::Retry;
