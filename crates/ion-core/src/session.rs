@@ -605,11 +605,21 @@ impl State {
     }
 }
 
+struct HistoryProjection {
+    state: State,
+    settled: BTreeSet<u64>,
+    messages: Vec<Message>,
+    context_changes: Vec<ModelContextChange>,
+}
+
 struct Store {
     connection: Connection,
     state: State,
     settled: BTreeSet<u64>,
     messages: Vec<Message>,
+    // Sparse, rebuildable projection of committed context boundaries. It does
+    // not retain or reproject historical tool payloads on each model request.
+    context_changes: Vec<ModelContextChange>,
 }
 
 /// A writable Session holds a cross-process lock. `submit_gate` also keeps
@@ -698,6 +708,7 @@ impl Session {
                 state: State::default(),
                 settled: BTreeSet::new(),
                 messages: Vec::new(),
+                context_changes: Vec::new(),
             }),
             _lock: lock,
             header,
@@ -712,7 +723,12 @@ impl Session {
         let connection = Connection::open(&path)?;
         configure_connection(&connection)?;
         let header = read_header(&connection)?;
-        let (state, settled, messages) = project(&read_entries(&connection)?)?;
+        let HistoryProjection {
+            state,
+            settled,
+            messages,
+            context_changes,
+        } = project(&read_entries(&connection)?)?;
         prepare_writer(&connection)?;
         Ok(Self {
             store: Mutex::new(Store {
@@ -720,6 +736,7 @@ impl Session {
                 state,
                 settled,
                 messages,
+                context_changes,
             }),
             _lock: lock,
             header,
@@ -800,7 +817,9 @@ impl Session {
         let connection = Connection::open_with_flags(path, OpenFlags::SQLITE_OPEN_READ_ONLY)?;
         let header = read_header(&connection)?;
         let entries = read_entries(&connection)?;
-        let (state, _, messages) = project(&entries)?;
+        let HistoryProjection {
+            state, messages, ..
+        } = project(&entries)?;
         Ok(SessionView {
             cwd: header.cwd,
             name: header.name,
@@ -927,43 +946,25 @@ impl Session {
             return Ok(None);
         }
 
-        let mut message_count = 0usize;
-        let mut initial = None;
-        let mut changes = Vec::new();
-        let mut last = None;
-        let entries = read_entries(&store.connection)?;
-        let projected = projected_entry_messages(&entries, false);
-        for (entry, message) in entries.into_iter().zip(projected) {
-            match entry {
-                SessionEntry::ModelContextChanged { context, .. } => {
-                    let state = model_context_state(&context);
-                    if initial.is_none() {
-                        initial = Some(state.clone());
-                    } else if last.as_ref() != Some(&state) {
-                        changes.push(ModelContextChange {
-                            after_message: message_count,
-                            context: state.clone(),
-                        });
-                    }
-                    last = Some(state);
-                }
-                _ => {
-                    if message.is_some() {
-                        message_count = message_count.saturating_add(1);
-                    }
-                }
-            }
-        }
-
         let current = model_context_state(current);
-        let initial = initial.unwrap_or_else(|| current.clone());
-        if last.as_ref().is_some_and(|last| last != &current) {
+        let Some((first, rest)) = store.context_changes.split_first() else {
+            return Ok(Some(ModelContextTimeline {
+                initial: current,
+                changes: Vec::new(),
+            }));
+        };
+        let mut changes = rest.to_vec();
+        let last = changes.last().unwrap_or(first);
+        if last.context != current {
             changes.push(ModelContextChange {
-                after_message: message_count,
-                context: current.clone(),
+                after_message: store.messages.len(),
+                context: current,
             });
         }
-        Ok(Some(ModelContextTimeline { initial, changes }))
+        Ok(Some(ModelContextTimeline {
+            initial: first.context.clone(),
+            changes,
+        }))
     }
 
     /// Project a request for one model without reviving opaque replay from a
@@ -1699,11 +1700,19 @@ fn append(store: &mut Store, entries: &[SessionEntry]) -> Result<(), SessionErro
         .map(|shell| shell_message(&shell.command, &UserShellOutcome::Unknown, false));
     let replace_pending_message = pending_message.is_some();
     let mut new_messages: Vec<_> = pending_message.into_iter().collect();
+    let message_start = store.messages.len() - usize::from(replace_pending_message);
+    let mut new_context_changes = Vec::new();
     let mut new_settled = Vec::new();
     let encoded = entries
         .iter()
         .map(|entry| {
             candidate.apply(entry, &mut new_messages, &store.settled, &mut new_settled)?;
+            if let SessionEntry::ModelContextChanged { context, .. } = entry {
+                new_context_changes.push(ModelContextChange {
+                    after_message: message_start + new_messages.len(),
+                    context: model_context_state(context),
+                });
+            }
             let bytes = serde_json::to_vec(entry)?;
             if bytes.len() > MAX_ENTRY_BYTES {
                 return Err(SessionError::EntryTooLarge);
@@ -1722,6 +1731,7 @@ fn append(store: &mut Store, entries: &[SessionEntry]) -> Result<(), SessionErro
         store.messages.pop();
     }
     store.messages.extend(new_messages);
+    store.context_changes.extend(new_context_changes);
     Ok(())
 }
 
@@ -2001,16 +2011,28 @@ pub(crate) fn valid_user_message(message: &Message) -> bool {
         })
 }
 
-fn project(entries: &[SessionEntry]) -> Result<(State, BTreeSet<u64>, Vec<Message>), SessionError> {
+fn project(entries: &[SessionEntry]) -> Result<HistoryProjection, SessionError> {
     let mut state = State::default();
     let mut settled = BTreeSet::new();
     let mut messages = Vec::new();
+    let mut context_changes = Vec::new();
     for entry in entries {
         let mut new_settled = Vec::new();
         state.apply(entry, &mut messages, &settled, &mut new_settled)?;
+        if let SessionEntry::ModelContextChanged { context, .. } = entry {
+            context_changes.push(ModelContextChange {
+                after_message: messages.len(),
+                context: model_context_state(context),
+            });
+        }
         settled.extend(new_settled);
     }
-    Ok((state, settled, messages))
+    Ok(HistoryProjection {
+        state,
+        settled,
+        messages,
+        context_changes,
+    })
 }
 
 fn read_entries(connection: &Connection) -> Result<Vec<SessionEntry>, SessionError> {
@@ -4176,6 +4198,159 @@ mod tests {
         fs::remove_dir_all(root).unwrap();
     }
 
+    #[tokio::test]
+    async fn context_timeline_tracks_committed_message_boundaries() {
+        let (root, path) = fixture();
+        let session = Session::create(&path, &root).unwrap();
+        let model = ModelRef {
+            provider: "test".into(),
+            model: "test".into(),
+        };
+        let context = |instructions: &str| ModelContextSnapshot {
+            instructions: instructions.into(),
+            tools: Vec::new(),
+        };
+        let (first, _) = session.begin_turn("first".into(), model.clone()).unwrap();
+        session
+            .admit_request(first, model.clone(), context("A"))
+            .unwrap();
+        session
+            .record_assistant(
+                first,
+                Message {
+                    role: Role::Assistant,
+                    content: ["one", "two"]
+                        .into_iter()
+                        .map(|id| {
+                            Content::ToolCall(ToolCall {
+                                id: id.into(),
+                                name: "read".into(),
+                                arguments: serde_json::json!({}),
+                                raw_arguments: None,
+                            })
+                        })
+                        .collect(),
+                    provider_replay: None,
+                },
+                Usage::unknown(),
+                true,
+            )
+            .unwrap();
+        for id in ["one", "two"] {
+            session
+                .record_tool_result_with_context(
+                    first,
+                    ToolResult {
+                        call_id: id.into(),
+                        name: "read".into(),
+                        result: serde_json::json!({"ok":true}),
+                        images: Vec::new(),
+                        is_error: false,
+                    },
+                    crate::ToolResultProjection::Observed,
+                    (id == "two").then(|| context("B")),
+                )
+                .unwrap();
+        }
+        session
+            .record_steerings(
+                first,
+                vec![Message {
+                    role: Role::User,
+                    content: vec![Content::Text("steer".into())],
+                    provider_replay: None,
+                }],
+            )
+            .unwrap();
+        session
+            .record_assistant(
+                first,
+                Message {
+                    role: Role::Assistant,
+                    content: vec![Content::Text("done".into())],
+                    provider_replay: None,
+                },
+                Usage::unknown(),
+                false,
+            )
+            .unwrap();
+        for excluded in [false, true] {
+            session
+                .begin_user_shell("echo observed".into(), excluded, CancellationToken::new())
+                .await
+                .unwrap()
+                .record(
+                    serde_json::json!({"stdout":"observed","exit_code":0}),
+                    false,
+                )
+                .unwrap();
+        }
+        let (second, _) = session.begin_turn("second".into(), model.clone()).unwrap();
+        // user + assistant + two results + steering + answer + shared shell +
+        // user = eight. The excluded shell adds no neutral transcript message.
+        let expected = |later: &[&str]| ModelContextTimeline {
+            initial: model_context_state(&context("A")),
+            changes: std::iter::once(ModelContextChange {
+                after_message: 4,
+                context: model_context_state(&context("B")),
+            })
+            .chain(later.iter().map(|name| ModelContextChange {
+                after_message: 8,
+                context: model_context_state(&context(name)),
+            }))
+            .collect(),
+        };
+        assert_eq!(
+            session.context_timeline_for(&model, &context("C")).unwrap(),
+            Some(expected(&["C"]))
+        );
+        session.store.lock().unwrap().connection.execute_batch(
+            "CREATE TRIGGER reject_context BEFORE INSERT ON entries WHEN json_extract(CAST(NEW.body AS TEXT), '$.kind') = 'model_context_changed' BEGIN SELECT RAISE(ABORT, 'storage unavailable'); END;"
+        ).unwrap();
+        assert!(
+            session
+                .admit_request(second, model.clone(), context("C"))
+                .is_err()
+        );
+        assert_eq!(
+            session.context_timeline_for(&model, &context("B")).unwrap(),
+            Some(expected(&[]))
+        );
+        session
+            .store
+            .lock()
+            .unwrap()
+            .connection
+            .execute_batch("DROP TRIGGER reject_context")
+            .unwrap();
+        for name in ["C", "D"] {
+            session
+                .admit_request(second, model.clone(), context(name))
+                .unwrap();
+        }
+        assert_eq!(
+            session.context_timeline_for(&model, &context("D")).unwrap(),
+            Some(expected(&["C", "D"]))
+        );
+        drop(session);
+        let reopened = Session::open(&path).unwrap();
+        assert_eq!(
+            reopened
+                .context_timeline_for(&model, &context("D"))
+                .unwrap(),
+            Some(expected(&["C", "D"]))
+        );
+        reopened.rebase_provider_replay(second).unwrap();
+        assert_eq!(
+            reopened
+                .context_timeline_for(&model, &context("D"))
+                .unwrap(),
+            None
+        );
+        drop(reopened);
+        fs::remove_dir_all(root).unwrap();
+    }
+
     #[test]
     fn clone_and_fork_follow_model_context_history() {
         let (root, path) = fixture();
@@ -4212,7 +4387,7 @@ mod tests {
 
         let (second, _) = session.begin_turn("second".into(), model.clone()).unwrap();
         session
-            .admit_request(second, model, context("second context"))
+            .admit_request(second, model.clone(), context("second context"))
             .unwrap();
         session
             .record_assistant(
@@ -4255,6 +4430,33 @@ mod tests {
             "second context"
         );
 
+        for (copy, latest, changes) in [
+            (&before, "first context", Vec::new()),
+            (
+                &clone,
+                "second context",
+                vec![ModelContextChange {
+                    after_message: 3,
+                    context: model_context_state(&context("second context")),
+                }],
+            ),
+            (
+                &after,
+                "second context",
+                vec![ModelContextChange {
+                    after_message: 3,
+                    context: model_context_state(&context("second context")),
+                }],
+            ),
+        ] {
+            assert_eq!(
+                copy.context_timeline_for(&model, &context(latest)).unwrap(),
+                Some(ModelContextTimeline {
+                    initial: model_context_state(&context("first context")),
+                    changes,
+                })
+            );
+        }
         drop(after);
         drop(before);
         drop(clone);
