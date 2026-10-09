@@ -486,13 +486,28 @@ fn is_context_error_message(message: &str) -> bool {
 }
 
 fn provider_error_detail_value(value: &Value) -> Option<String> {
-    let detail = value
+    let summary = value
         .pointer("/error/message")
         .and_then(Value::as_str)
         .or_else(|| value.get("message").and_then(Value::as_str))
-        .or_else(|| value.pointer("/error/code").and_then(Value::as_str))?;
-    let detail: String = detail
+        .or_else(|| value.pointer("/error/code").and_then(Value::as_str));
+    // Routers can wrap the actionable upstream reason in metadata while
+    // supplying only a generic message. Retain text, never arbitrary metadata.
+    let upstream = value
+        .pointer("/error/metadata/raw")
+        .or_else(|| value.pointer("/metadata/raw"))
+        .and_then(Value::as_str)
+        .filter(|raw| !raw.trim().is_empty() && Some(*raw) != summary);
+    let separator = if summary.is_some() && upstream.is_some() {
+        ": "
+    } else {
+        ""
+    };
+    let detail: String = summary
+        .unwrap_or("")
         .chars()
+        .chain(separator.chars())
+        .chain(upstream.unwrap_or("").chars())
         .filter(|ch| !ch.is_control())
         .take(500)
         .collect();
@@ -1652,6 +1667,53 @@ mod tests {
             provider_error_detail_value(&json!({"error":{"message":"bad\nrequest"}})).as_deref(),
             Some("badrequest")
         );
+    }
+
+    #[test]
+    fn wrapped_provider_errors_retain_bounded_upstream_text() {
+        for value in [
+            json!({"error":{"code":429,"message":"Provider returned error","metadata":{
+                "raw":"Laguna is temporarily rate-limited upstream. Retry shortly.",
+                "provider_name":"Poolside","limit_source":"upstream_provider_shared_pool"
+            }}}),
+            json!({"code":429,"message":"Provider returned error","metadata":{
+                "raw":"Laguna is temporarily rate-limited upstream. Retry shortly."
+            }}),
+        ] {
+            let detail = provider_error_detail_value(&value).unwrap();
+            assert_eq!(
+                detail,
+                "Provider returned error: Laguna is temporarily rate-limited upstream. Retry shortly."
+            );
+            let error = chat_stream_error(&json!({"error": value.get("error").unwrap_or(&value)}));
+            assert_eq!(error.kind, ProviderErrorKind::RateLimited);
+            assert!(error.message.contains(&detail));
+        }
+        assert_eq!(
+            provider_error_detail_value(&json!({"error":{"metadata":{"raw":"upstream reason"}}}))
+                .as_deref(),
+            Some("upstream reason")
+        );
+        for raw in [
+            json!("failed"),
+            json!(""),
+            json!({"secret":"not diagnostic text"}),
+        ] {
+            assert_eq!(
+                provider_error_detail_value(
+                    &json!({"error":{"message":"failed","metadata":{"raw":raw}}})
+                )
+                .as_deref(),
+                Some("failed")
+            );
+        }
+        let detail = provider_error_detail_value(&json!({"error":{
+            "message":"failed","metadata":{"raw":format!("\n\u{1b}\t{}", "界".repeat(600))}
+        }}))
+        .unwrap();
+        assert_eq!(detail.chars().count(), 500);
+        assert!(detail.starts_with("failed: 界"));
+        assert!(!detail.chars().any(char::is_control));
     }
 
     #[test]
