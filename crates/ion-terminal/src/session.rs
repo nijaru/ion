@@ -7,6 +7,7 @@ use std::sync::{
 };
 
 use crossterm::{SynchronizedUpdate, terminal};
+use tokio::sync::Notify;
 
 use crate::CapabilitySupport;
 use crate::input::{InputEvent, InputStream};
@@ -23,6 +24,8 @@ static PANIC_HOOK: Once = Once::new();
 // A process panic invalidates the live lease even when either mutex is busy.
 // It is an event generation, not a second owner of physical mode custody.
 static PANIC_GENERATION: LazyLock<Arc<AtomicU64>> = LazyLock::new(|| Arc::new(AtomicU64::new(0)));
+// Notification only wakes intake; the generation still determines lease validity.
+static PANIC_WAKE: Notify = Notify::const_new();
 
 /// Output that mirrors bytes to the optional PTY capture without changing the
 /// writer contract used by the renderer.
@@ -156,14 +159,24 @@ impl TerminalSession {
     }
 
     pub async fn next_input(&mut self) -> Option<io::Result<InputEvent>> {
-        if let Err(error) = self.check_active() {
-            return Some(Err(error));
+        loop {
+            // notify_waiters reaches futures created before the notification,
+            // even before their first poll. Create this before checking custody
+            // so a panic between the check and await cannot strand idle intake.
+            let panicked = PANIC_WAKE.notified();
+            if let Err(error) = self.check_active() {
+                return Some(Err(error));
+            }
+            let event = tokio::select! {
+                biased;
+                () = panicked => continue,
+                event = self.input.next() => event,
+            };
+            if let Err(error) = self.check_active() {
+                return Some(Err(error));
+            }
+            return event;
         }
-        let event = self.input.next().await;
-        if let Err(error) = self.check_active() {
-            return Some(Err(error));
-        }
-        event
     }
 
     async fn negotiate_keyboard(&mut self) -> io::Result<()> {
@@ -282,6 +295,7 @@ fn install_panic_hook() {
         let previous = std::panic::take_hook();
         std::panic::set_hook(Box::new(move |info| {
             record_panic(&PANIC_GENERATION);
+            PANIC_WAKE.notify_waiters();
             let owner = PANIC_OWNER
                 .try_lock()
                 .ok()
