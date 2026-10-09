@@ -24,6 +24,7 @@ mod clipboard_reader;
 mod display_text;
 mod edit_diff;
 mod external_editor;
+mod inspection;
 mod markdown;
 mod rpc;
 mod terminal_client;
@@ -393,9 +394,7 @@ async fn run_cli(cli: Cli) -> Result<()> {
             }
             if matches!(action, Some(Action::Inspect)) {
                 let view = existing.context("session does not exist")?;
-                let mut output = serde_json::to_value(view)?;
-                redact_image_payloads(&mut output);
-                println!("{}", serde_json::to_string_pretty(&output)?);
+                inspection::write(&view, &mut io::stdout().lock())?;
                 return Ok(());
             }
             if let Some(Action::Export { path: output }) = &action {
@@ -701,30 +700,6 @@ fn write_json_record_to(output: &mut impl Write, value: &serde_json::Value) -> i
     bytes.push(b'\n');
     output.write_all(&bytes)?;
     output.flush()
-}
-
-fn redact_image_payloads(value: &mut serde_json::Value) {
-    match value {
-        serde_json::Value::Object(fields) => {
-            if fields
-                .get("mime_type")
-                .and_then(serde_json::Value::as_str)
-                .is_some_and(|mime| mime.starts_with("image/"))
-                && let Some(serde_json::Value::String(data)) = fields.get_mut("data")
-            {
-                *data = format!("[base64 image data omitted: {} characters]", data.len());
-            }
-            for child in fields.values_mut() {
-                redact_image_payloads(child);
-            }
-        }
-        serde_json::Value::Array(items) => {
-            for child in items {
-                redact_image_payloads(child);
-            }
-        }
-        _ => {}
-    }
 }
 
 fn with_piped_input(prompt: String) -> Result<String> {

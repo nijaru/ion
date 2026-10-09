@@ -15,7 +15,7 @@ use tokio::{io::BufReader, sync::mpsc, task::JoinHandle};
 use tokio_util::sync::CancellationToken;
 
 use crate::{
-    agent_events::event_record, expand_input, preview_input, redact_image_payloads,
+    agent_events::event_record, expand_input, inspection::redact_image_payloads, preview_input,
     write_json_record,
 };
 
