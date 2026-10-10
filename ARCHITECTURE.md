@@ -13,7 +13,7 @@ continues the conversation after relaunch. Terminal, headless, RPC and embedded
 hosts use the same coding semantics. Native tools inherit host permissions;
 there is no implicit sandbox, private workspace importer or rollback promise.
 
-Pi 1.0 is the primary reference for mature workflows and harness semantics.
+Current Pi is the primary reference for mature workflows and harness semantics.
 fx is the primary reference for terminal presentation. Adopt useful outcomes
 and ownership boundaries, not either implementation's class hierarchy, runtime
 or complete feature inventory. A smaller implementation is not an improvement

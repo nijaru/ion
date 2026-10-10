@@ -9,10 +9,10 @@
   Rust coding loop for terminal, headless, RPC and embedded clients. Pi is the
   primary open-source reference for workflows and harness/provider semantics;
   fx is the primary reference for polished, restrained terminal presentation.
-  Codex, Amp, Droid and other strong agents inform appropriate choices, not a
-  union of feature inventories. Verify relevant moving source revisions and
-  distinguish source evidence from vendor claims. Copy neither architecture nor
-  appearance wholesale.
+  Codex, Amp, Droid, Prime Agent and other strong agents inform appropriate
+  choices, not a union of feature inventories. Verify relevant moving source
+  revisions and distinguish source evidence from vendor claims. Copy neither
+  architecture nor appearance wholesale.
 - Prioritize inline native scrollback, legible activity hierarchy, an editable
   composer and progressive disclosure. Keep fullscreen as a secondary view of
   the same semantics; preserve its correctness without letting separate polish
@@ -27,26 +27,29 @@
 - Workers, personal memory, scheduling and generic workflow authoring remain
   outside the current coding-agent scope.
 
-## Priorities and approach
+## Delivery and navigation
 
-- Raise all supported parts toward Pi-level common-workflow quality: Core/Session,
-  Host tools/resources, providers/model access, shared clients, terminal usability
-  and end-to-end coding. Choose the next concrete contract or qualification gap,
-  not a new protocol, reference feature or release checkbox. Reuse valid evidence
-  for unchanged inputs; do not repeat completed work to inflate progress.
-- Review the affected source, callers and qualification harness before expensive
-  live coding or native GUI runs. Look first for violated invariants, ignored
-  errors, stale or duplicated state, ownership/cleanup mistakes and unnecessary
-  hot-path work. Use focused independent review where risk warrants it, not a
-  mandatory whole-repository audit before every change.
-- Refactor and prune the affected subsystem as part of fixing it. Prefer clear
-  ownership and idiomatic Rust to translated TypeScript architecture, extra
-  wrappers or speculative frameworks. Preserve independent effect, recovery and
-  concurrency protections when replacing code and consolidating tests.
-- Address obvious redundant work directly; measure representative before/after
-  behavior before claiming performance gains or adding speed-only complexity.
-  Include long-history/context, rendering, tool output and resource lifecycle
-  costs where relevant. Faster model output is not evidence of a faster harness.
+- Finish coherent coding-workflow slices, including affected callers, cleanup and
+  built-client verification. A model's final answer, a feature's presence or a
+  passing helper test is not task completion. Reassess design at meaningful
+  workflow/ownership changes; do not restart a blanket audit after each repair.
+- Start inline interaction work in `crates/ion-app/src/terminal_client.rs` and
+  its submodules; semantic activity comes from `crates/ion-core/src/transcript.rs`,
+  rendering from App's `transcript_render.rs` / `tool_output.rs`, semantic styles
+  from `presentation_style.rs`, and physical publication from
+  `crates/ion-terminal/src/screen.rs`. Keep input custody distinct from rendering.
+- Shared client changes belong in `crates/ion-host/src/binding.rs`, not another
+  client loop. Core's `request.rs` binds executable capabilities;
+  `code_gateway.rs` retains composed effects, while Host's `code_mode.rs` owns
+  only the guest VM.
+- Review these owners and the relevant qualification harness before live coding
+  or GUI runs. Use narrow independent reviews for risky boundaries, not review
+  chains or multiple writers restructuring the same owner. Preserve distinct
+  effect, recovery and concurrency protections when pruning tests.
+- Provider availability must not halt independent product work or become a route
+  inventory project. Reuse valid evidence for unchanged inputs. Measure startup,
+  typing/redraw, history and tool-output costs before performance claims; faster
+  model output is not evidence of a faster harness.
 
 ## Semantic owners
 
