@@ -19,6 +19,7 @@ pub const CODE_MODE_NAME: &str = "code_mode";
 
 /// One occurrence, independent of provider IDs reused in later assistant steps.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct ToolOccurrence {
     pub assistant_entry: u64,
     pub ordinal: usize,
@@ -59,6 +60,7 @@ pub type CodeReply = Result<String, String>;
 pub enum CodeRequestKind {
     Call { name: String, args_json: String },
     Describe { name: String },
+    Inspect { query_json: String },
 }
 pub struct CodeRequest {
     pub kind: CodeRequestKind,
@@ -124,7 +126,7 @@ pub(crate) fn definition(limits: CodeLimits) -> ToolDefinition {
         spec: ToolSpec {
             name: CODE_MODE_NAME.into(),
             description: format!(
-                "Run an async JavaScript function body without ambient filesystem, network, modules or timers. Await tools.call(name,args) for {{value,is_error,image_mime_types}}; tools.describe(query) returns up to 10 frozen capability definitions. Return JSON selected for the model; raw child outputs stay inspectable and are not automatically added to model context. Tool errors are envelopes, not exceptions. Transferred requests settle even if unawaited. Failure/cancellation stops new dispatch and awaits started effects; no rollback or script replay. Limits: {}ms guest deadline, {} bridge requests, {} concurrent tools, {} byte JS heap, {} byte JSON value, {} cumulative host reply bytes. Direct tools remain available.",
+                "Run an async JavaScript function body without ambient filesystem, network, modules or timers. Await tools.call(name,args) for {{value,is_error,image_mime_types}}; tools.describe(query) returns up to 10 frozen capability definitions. Return JSON selected for the model; raw child outputs stay inspectable and are not automatically added to model context. After a failed parent, tools.inspect({{kind:'children',parent}}) pages saved child metadata; pass next_after as after for more. tools.inspect({{kind:'output',parent,child,pointer:'/stdout_full_path'}}) returns UTF-8 chunks of encoded saved output.value as json with next_offset and total_bytes; pointer defaults to the whole value, offset to 0, limit to 4096 (4..65536 bytes). parent is the prior envelope's Session-scoped locator; pointer is a JSON Pointer. Inspection is read-only, excludes image bytes and general history, and preserves observed/not_dispatched/unknown states. Return only selected evidence. Invalid inspection queries reject; tools.call errors are envelopes, not exceptions. Transferred requests settle even if unawaited. Failure/cancellation stops new dispatch and awaits started effects; no rollback or script replay. Limits: {}ms guest deadline, {} bridge requests, {} concurrent tools, {} byte JS heap, {} byte JSON value, {} cumulative host reply bytes. Direct tools remain available.",
                 limits.deadline.as_millis(),
                 limits.max_calls,
                 limits.max_concurrency,

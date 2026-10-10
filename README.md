@@ -575,9 +575,37 @@ metadata, not image bytes. The selected JSON return value, call count and
 failure/skip counts reach the model. Raw child arguments and observations remain
 in the Session, export and nested Ctrl-O/tool detail, without automatic addition
 to model context. A guest can explicitly select their content in its return.
-If it fails before returning, the model receives the parent error and counters,
-not the original child outputs or their capture paths. It may inspect workspace
-effects through direct tools, but must disclose evidence it cannot recover.
+If it fails before returning, the model receives the parent error, counters and
+Session-scoped `parent` locator, not the original child outputs. A later guest
+can explicitly retrieve saved evidence without rerunning the failed script:
+
+```js
+const parent = {assistant_entry: 12, ordinal: 0}; // use the earlier result's locator
+const children = await tools.inspect({kind: 'children', parent});
+const page = await tools.inspect({
+  kind: 'output', parent, child: 0, pointer: '/stdout_full_path'
+});
+return {children, capture_path: JSON.parse(page.json), original_failed: page.is_error};
+```
+
+`children` returns up to ten summaries with a `next_after` marker; pass it as
+`after` to continue. Names and nondispatch reasons are bounded display labels
+(`name_truncated`, `reason_truncated`); key discovery omits oversized keys
+(`keys_truncated`). `root_value_type` describes the saved root, not the selected
+pointer. `output` selects a JSON
+Pointer into saved `output.value` and returns encoded JSON text in `json`.
+`offset` and `next_offset` are UTF-8 byte positions; `limit` defaults to 4096
+and accepts 4–65536 bytes. Concatenate pages before parsing a larger value.
+Observed results preserve `is_error`; `not_dispatched` and `unknown` have no
+invented output. Only settled parents with saved children are inspectable.
+
+Inspection is read-only and shares the guest's bridge/reply budgets. Invalid
+queries reject their promise. Page size bounds returned data, not lookup CPU:
+a saved value is still decoded synchronously under Session ownership. It exposes
+neither normalized image bytes, private direct-shell history nor provider replay.
+Only the later guest's selected return enters model context. Saved observations
+are not fresh verification, and a stored capture path does not guarantee the file
+still exists. Inspect current host effects or disclose evidence that is missing.
 
 Child intent commits before dispatch and output before guest consumption. A
 normal return drains requests already transferred by the guest, even if
@@ -643,10 +671,14 @@ without repeating it. One Session completed six explicit Turns across five
 process reopens, adding JSON, stdin and filtering while accurately retaining an
 earlier rejected-input report.
 
-Code Mode recovery passed after a successful producer, failed verifier and guest
-exception: the agent discovered the workspace ledger,
+Before explicit saved-child retrieval, Code Mode recovery passed after a
+successful producer, failed verifier and guest exception: the agent discovered the workspace ledger,
 repaired its library/CLI and verified all 12,000 records without rerunning the
 producer. It correctly disclosed that original child outputs were unavailable.
+With saved-child retrieval, another bounded live task recovered an original
+hidden nonce and exit 7 from a 100,050-byte capture after guest failure, without
+rerunning its non-idempotent producer. Built headless reopen and read-only RPC
+inspection also passed; these are bounded evidence, not universal recovery.
 A separate two-file CLI repair verified a 288,000-byte full capture. Another
 completed real compaction, Session reopen and a feature change without rewriting
 raw facts or repeating the earlier command. Live RPC steering during a native

@@ -24,6 +24,9 @@ use thiserror::Error;
 use tokio::sync::{Mutex as AsyncMutex, MutexGuard as AsyncMutexGuard};
 use tokio_util::sync::CancellationToken;
 
+pub(crate) mod code_inspection;
+use code_inspection::ChildRecordIndex;
+
 const FORMAT_VERSION: u32 = 10;
 // An 8 MiB raw prompt or streamed response can grow up to sixfold when JSON
 // escapes control characters. Keep the storage bound above that encoded size.
@@ -610,6 +613,7 @@ struct HistoryProjection {
     settled: BTreeSet<u64>,
     messages: Vec<Message>,
     context_changes: Vec<ModelContextChange>,
+    child_records: ChildRecordIndex,
 }
 
 struct Store {
@@ -620,6 +624,7 @@ struct Store {
     // Sparse, rebuildable projection of committed context boundaries. It does
     // not retain or reproject historical tool payloads on each model request.
     context_changes: Vec<ModelContextChange>,
+    child_records: ChildRecordIndex,
 }
 
 /// A writable Session holds a cross-process lock. `submit_gate` also keeps
@@ -709,6 +714,7 @@ impl Session {
                 settled: BTreeSet::new(),
                 messages: Vec::new(),
                 context_changes: Vec::new(),
+                child_records: ChildRecordIndex::default(),
             }),
             _lock: lock,
             header,
@@ -728,6 +734,7 @@ impl Session {
             settled,
             messages,
             context_changes,
+            child_records,
         } = project(&read_entries(&connection)?)?;
         prepare_writer(&connection)?;
         Ok(Self {
@@ -737,6 +744,7 @@ impl Session {
                 settled,
                 messages,
                 context_changes,
+                child_records,
             }),
             _lock: lock,
             header,
@@ -1725,6 +1733,11 @@ fn append(store: &mut Store, entries: &[SessionEntry]) -> Result<(), SessionErro
         tx.execute("INSERT INTO entries(body) VALUES (?1)", params![body])?;
     }
     tx.commit()?;
+    let mut sequence = store.state.sequence;
+    for entry in entries {
+        sequence += 1;
+        store.child_records.observe(sequence, entry);
+    }
     store.state = candidate;
     store.settled.extend(new_settled);
     if replace_pending_message {
@@ -2016,9 +2029,11 @@ fn project(entries: &[SessionEntry]) -> Result<HistoryProjection, SessionError> 
     let mut settled = BTreeSet::new();
     let mut messages = Vec::new();
     let mut context_changes = Vec::new();
+    let mut child_records = ChildRecordIndex::default();
     for entry in entries {
         let mut new_settled = Vec::new();
         state.apply(entry, &mut messages, &settled, &mut new_settled)?;
+        child_records.observe(state.sequence, entry);
         if let SessionEntry::ModelContextChanged { context, .. } = entry {
             context_changes.push(ModelContextChange {
                 after_message: messages.len(),
@@ -2032,6 +2047,7 @@ fn project(entries: &[SessionEntry]) -> Result<HistoryProjection, SessionError> 
         settled,
         messages,
         context_changes,
+        child_records,
     })
 }
 
@@ -3881,6 +3897,169 @@ mod tests {
             .unwrap();
         drop(session);
         Session::open(&path).unwrap();
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn code_inspection_preserves_states_exact_values_and_bounded_metadata() {
+        let (root, path) = fixture();
+        let session = Session::create(&path, &root).unwrap();
+        let (turn, _) = session
+            .begin_turn(
+                "compose".into(),
+                ModelRef {
+                    provider: "test".into(),
+                    model: "test".into(),
+                },
+            )
+            .unwrap();
+        session
+            .record_assistant(
+                turn,
+                Message {
+                    role: Role::Assistant,
+                    content: vec![Content::ToolCall(ToolCall {
+                        id: "parent".into(),
+                        name: "code_mode".into(),
+                        arguments: serde_json::json!({"code":"return true"}),
+                        raw_arguments: None,
+                    })],
+                    provider_replay: None,
+                },
+                Usage::unknown(),
+                false,
+            )
+            .unwrap();
+        let parent = session.tool_occurrence(turn, "parent").unwrap();
+        let list = serde_json::json!({"kind":"children","parent":parent});
+        assert!(session.inspect_code(&list.to_string()).is_err());
+        for child in 0..12 {
+            session
+                .record_child_intent(
+                    turn,
+                    crate::ChildIntent {
+                        parent,
+                        child,
+                        call: ToolCall {
+                            id: format!("child{child}"),
+                            name: "test".into(),
+                            arguments: serde_json::json!({}),
+                            raw_arguments: None,
+                        },
+                        definition: ToolSpec {
+                            name: "test".into(),
+                            description: String::new(),
+                            input_schema: serde_json::json!({"type":"object"}),
+                        },
+                        activity: crate::ToolActivity::external("test"),
+                    },
+                )
+                .unwrap();
+            let outcome = match child {
+                1 => crate::ChildOutcome::Unknown,
+                2 => crate::ChildOutcome::NotDispatched {
+                    reason: "STOPPED_".repeat(200_000),
+                },
+                _ => crate::ChildOutcome::Observed {
+                    output: crate::tool_result::ToolOutput {
+                        value: match child {
+                            0 => serde_json::json!(u64::MAX),
+                            3 => serde_json::Value::Null,
+                            4 => serde_json::json!("😀"),
+                            6 => serde_json::json!({"x".repeat(1024*1024+1):"large key","small":1}),
+                            _ => serde_json::json!({"a/b~":child,"private":"PRIVATE_FACT"}),
+                        },
+                        images: Vec::new(),
+                        is_error: child == 3,
+                    },
+                },
+            };
+            session
+                .record_child_outcome(turn, parent, child, outcome)
+                .unwrap();
+        }
+        session
+            .record_tool_result(
+                turn,
+                ToolResult {
+                    call_id: "parent".into(),
+                    name: "code_mode".into(),
+                    result: serde_json::json!({"error":"stopped"}),
+                    images: Vec::new(),
+                    is_error: true,
+                },
+            )
+            .unwrap();
+        session
+            .end_turn(turn, TurnEndReason::Completed, &BTreeSet::new())
+            .unwrap();
+        let before = session.view().unwrap().entries;
+        let first = session.inspect_code(&list.to_string()).unwrap();
+        assert_eq!(first["children"].as_array().unwrap().len(), 10);
+        assert_eq!(first["next_after"], 9);
+        assert_eq!(first["children"][1]["state"], "unknown");
+        assert_eq!(first["children"][2]["state"], "not_dispatched");
+        assert_eq!(first["children"][2]["reason_truncated"], true);
+        assert!(first["children"][2]["reason"].as_str().unwrap().len() <= 1024);
+        assert!(!first.to_string().contains("PRIVATE_FACT"));
+        assert!(first.to_string().len() < 32768);
+        assert_eq!(first["children"][6]["keys_truncated"], true);
+        let small = session.inspect_code(&serde_json::json!({"kind":"output","parent":parent,"child":6,"pointer":"/small","limit":4}).to_string()).unwrap();
+        assert_eq!(small["json"], "1");
+        assert!(small.to_string().len() < 1024);
+        let second = session
+            .inspect_code(
+                &serde_json::json!({"kind":"children","parent":parent,"after":9}).to_string(),
+            )
+            .unwrap();
+        assert_eq!(second["children"].as_array().unwrap().len(), 2);
+        assert_eq!(second["next_after"], serde_json::Value::Null);
+        for (child, expected) in [(0, u64::MAX.to_string()), (3, "null".into())] {
+            let page = session
+                .inspect_code(
+                    &serde_json::json!({"kind":"output","parent":parent,"child":child}).to_string(),
+                )
+                .unwrap();
+            assert_eq!(page["json"], expected);
+        }
+        for child in [1, 2] {
+            let result = session
+                .inspect_code(
+                    &serde_json::json!({"kind":"output","parent":parent,"child":child}).to_string(),
+                )
+                .unwrap();
+            assert!(result.get("json").is_none());
+            assert!(result.get("is_error").is_none());
+        }
+        let selected = session
+            .inspect_code(
+                &serde_json::json!({"kind":"output","parent":parent,"child":5,"pointer":"/a~1b~0"})
+                    .to_string(),
+            )
+            .unwrap();
+        assert_eq!(selected["json"], "5");
+        assert_eq!(selected["root_value_type"], "object");
+        assert!(selected.get("pointer").is_none());
+        for invalid in [
+            serde_json::json!({"kind":"output","parent":parent,"child":4,"offset":2}),
+            serde_json::json!({"kind":"output","parent":parent,"child":0,"limit":65537}),
+            serde_json::json!({"kind":"output","parent":parent,"child":5,"pointer":"/images"}),
+            serde_json::json!({"kind":"children","parent":parent,"entry":1}),
+            serde_json::json!({"kind":"children","parent":{"assistant_entry":1,"ordinal":0}}),
+        ] {
+            assert!(
+                session.inspect_code(&invalid.to_string()).is_err(),
+                "{invalid}"
+            );
+        }
+        assert_eq!(session.view().unwrap().entries, before);
+        drop(session);
+        let reopened = Session::open(&path).unwrap();
+        assert_eq!(reopened.inspect_code(&list.to_string()).unwrap(), first);
+        let copy = reopened.clone_to(root.join("copy.sqlite")).unwrap();
+        assert_eq!(copy.inspect_code(&list.to_string()).unwrap(), first);
+        drop(copy);
+        drop(reopened);
         fs::remove_dir_all(root).unwrap();
     }
 

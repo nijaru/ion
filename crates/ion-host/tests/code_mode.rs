@@ -451,6 +451,120 @@ async fn child_intent_fault_prevents_native_dispatch() {
 }
 
 #[tokio::test]
+async fn failed_guest_evidence_is_selected_after_reopen_without_reexecuting_children() {
+    let root = Workspace::new();
+    let session = root.session();
+    let report = "PRIVATE_RAW_😀é".repeat(300);
+    fs::write(root.0.join("report"), &report).unwrap();
+    let (agent, model) = make_agent(
+        &root.0,
+        [
+            response(vec![code(
+                "original",
+                "await tools.call('read',{path:'report'}); await tools.call('exec',{command:'printf ONCE >> effects; printf ORIGINAL_FAILURE >&2; exit 7'}); throw new Error('after effects');",
+            )]),
+            response(vec![Content::Text("FAILED_GUEST".into())]),
+        ],
+        CodeLimits::default(),
+    );
+    agent
+        .submit(
+            &session,
+            "run".into(),
+            String::new(),
+            CancellationToken::new(),
+            |_| {},
+        )
+        .await
+        .unwrap();
+    assert!(
+        !serde_json::to_string(&model.requests()[1])
+            .unwrap()
+            .contains("PRIVATE_RAW")
+    );
+    let parent = session
+        .view()
+        .unwrap()
+        .entries
+        .into_iter()
+        .find_map(|entry| match entry {
+            SessionEntry::ToolResult { result, .. } if result.call_id == "original" => {
+                Some(result.outcome.inspection_output().value["parent"].clone())
+            }
+            _ => None,
+        })
+        .unwrap();
+    assert!(
+        parent.is_object(),
+        "failed guest did not expose a recovery locator"
+    );
+    fs::remove_file(root.0.join("report")).unwrap();
+    drop(session);
+    let reopened = CodingSession::open(root.0.join("session.sqlite")).unwrap();
+    let script = format!("const parent={parent};
+        const meta=await tools.inspect({{kind:'children',parent}});
+        let offset=0, text='';
+        do {{ const page=await tools.inspect({{kind:'output',parent,child:0,pointer:'/content',offset,limit:512}});
+             text+=page.json; offset=page.next_offset; }} while(offset!==null);
+        const failure=await tools.inspect({{kind:'output',parent,child:1}});
+        return {{content:JSON.parse(text), original_failed:failure.is_error, original:JSON.parse(failure.json), states:meta.children.map(c=>c.state)}};");
+    let (next, next_model) = make_agent(
+        &root.0,
+        [
+            response(vec![code("recover", &script)]),
+            response(vec![Content::Text("RECOVERED".into())]),
+        ],
+        CodeLimits::default(),
+    );
+    next.submit(
+        &reopened,
+        "recover saved evidence".into(),
+        String::new(),
+        CancellationToken::new(),
+        |_| {},
+    )
+    .await
+    .unwrap();
+    let view = reopened.view().unwrap();
+    let output = view
+        .entries
+        .iter()
+        .find_map(|entry| match entry {
+            SessionEntry::ToolResult { result, .. } if result.call_id == "recover" => {
+                Some(result.outcome.inspection_output())
+            }
+            _ => None,
+        })
+        .unwrap();
+    assert!(!output.is_error, "{:?}", output.value);
+    assert_eq!(output.value["calls"], 0);
+    assert_eq!(output.value["result"]["content"], report);
+    assert_eq!(output.value["result"]["original_failed"], true);
+    assert_eq!(output.value["result"]["original"]["exit_code"], 7);
+    assert_eq!(
+        output.value["result"]["original"]["stderr"],
+        "ORIGINAL_FAILURE"
+    );
+    assert_eq!(
+        output.value["result"]["states"],
+        json!(["observed", "observed"])
+    );
+    assert!(
+        serde_json::to_string(&next_model.requests()[1])
+            .unwrap()
+            .contains("PRIVATE_RAW")
+    );
+    assert_eq!(
+        view.entries
+            .iter()
+            .filter(|entry| matches!(entry, SessionEntry::ChildToolAdmitted { .. }))
+            .count(),
+        2
+    );
+    assert_eq!(fs::read_to_string(root.0.join("effects")).unwrap(), "ONCE");
+}
+
+#[tokio::test]
 async fn guest_failure_retains_prior_mutation_and_deadline_settles_native_capture() {
     for timeout in [false, true] {
         let root = Workspace::new();

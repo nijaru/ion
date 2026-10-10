@@ -18,7 +18,7 @@ use crate::{
     agent::{AgentError, AgentEvent},
     composition::failure,
     json_size::encoded_len,
-    session::{Session, SessionError},
+    session::{Session, SessionError, code_inspection::InspectionError},
     tool_result::ToolOutput,
     tool_set::ToolCatalog,
 };
@@ -121,6 +121,28 @@ impl<F: FnMut(AgentEvent)> Gate<'_, F> {
                     .take(10)
                     .collect::<Vec<_>>();
                 self.reply(request.reply, &specs);
+            }
+            CodeRequestKind::Inspect { query_json } => {
+                if self.stop.is_cancelled() {
+                    let _ = request.reply.send(Err("guest stopped".into()));
+                } else if query_json.len() > self.limits.max_json_bytes {
+                    let _ = request
+                        .reply
+                        .send(Err("inspection query JSON byte limit exceeded".into()));
+                } else {
+                    match self.session.inspect_code(&query_json) {
+                        Ok(value) => self.reply(request.reply, &value),
+                        Err(InspectionError::Request(error)) => {
+                            let _ = request.reply.send(Err(error));
+                        }
+                        Err(InspectionError::Session(error)) => {
+                            self.storage_fault(error);
+                            let _ = request
+                                .reply
+                                .send(Err("saved child evidence could not be read".into()));
+                        }
+                    }
+                }
             }
             CodeRequestKind::Call { name, args_json } => {
                 if self.stop.is_cancelled() {
@@ -430,6 +452,7 @@ pub(crate) async fn run<F: FnMut(AgentEvent) + Send>(
         .value
         .as_object_mut()
         .expect("gateway output is an envelope");
+    counters.insert("parent".into(), json!(parent));
     counters.insert("calls".into(), json!(gate.calls));
     counters.insert("failed_calls".into(), json!(gate.failed));
     counters.insert("skipped_calls".into(), json!(gate.skipped));

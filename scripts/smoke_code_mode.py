@@ -5,6 +5,7 @@ import json
 import os
 import pty
 import select
+import shlex
 import signal
 import struct
 import subprocess
@@ -41,6 +42,10 @@ if len(sys.argv) > 1 and sys.argv[1] == "mcp":
 
 
 def program(prompt):
+    if prompt == "RECOVER_FAIL":
+        producer = "import secrets; print(secrets.token_hex(24)); print('X'*100000)"
+        command = f"printf ONCE >> effects; {shlex.quote(sys.executable)} -c {shlex.quote(producer)}; exit 7"
+        return "await tools.call('exec'," + json.dumps({"command": command}) + "); throw new Error('after effect');"
     if prompt == "ACTIVE":
         return "await Promise.all(['a','b'].map(x=>tools.call('exec',{command:`touch ${x}.ready; sleep 1.5; printf done`}))); return true;"
     if prompt == "MCP":
@@ -63,7 +68,19 @@ class Provider(BaseHTTPRequestHandler):
         prompt = messages[user_index]["content"]
         enabled = "code_mode" in {tool["function"]["name"] for tool in body.get("tools", [])}
         assert "PRIVATE_" not in json.dumps(body), "child payload entered model context"
-        if enabled and prompt in ("FANOUT", "MCP", "IO", "STDERR", "ACTIVE") and not any(message["role"] == "tool" for message in messages[user_index + 1:]):
+        fresh = not any(message["role"] == "tool" for message in messages[user_index + 1:])
+        if enabled and prompt in ("RECOVER_CAPTURE", "INSPECT_RPC") and fresh:
+            failed = [json.loads(message["content"])["result"] for message in messages[:user_index] if message["role"] == "tool" and json.loads(message["content"])["is_error"]][-1]
+            assert set(failed) == {"parent", "error", "calls", "failed_calls", "skipped_calls"}, failed
+            assert failed["calls"] == 1 and failed["failed_calls"] == 1, failed
+            parent = failed.get("parent")
+            assert isinstance(parent, dict), "failed guest has no stable evidence locator"
+            code = "const parent=" + json.dumps(parent) + "; const meta=await tools.inspect({kind:'children',parent}); const path=await tools.inspect({kind:'output',parent,child:0,pointer:'/stdout_full_path'}); const exit=await tools.inspect({kind:'output',parent,child:0,pointer:'/exit_code'}); const saved=await tools.call('read',{path:JSON.parse(path.json),limit:1024}); if(saved.is_error) return {read_failure:saved.value}; return {nonce:saved.value.content.split('\\n')[0], original_failed:path.is_error, exit:JSON.parse(exit.json), states:meta.children.map(c=>c.state)};"
+            if prompt == "INSPECT_RPC":
+                code = "const parent=" + json.dumps(parent) + "; const exit=await tools.inspect({kind:'output',parent,child:0,pointer:'/exit_code'}); return {exit:JSON.parse(exit.json), original_failed:exit.is_error};"
+            delta = {"tool_calls": [{"index": 0, "id": "inspect", "type": "function", "function": {"name": "code_mode", "arguments": json.dumps({"code": code})}}]}
+            reason = "tool_calls"
+        elif enabled and prompt in ("FANOUT", "MCP", "IO", "STDERR", "ACTIVE", "RECOVER_FAIL") and fresh:
             delta = {"tool_calls": [{"index": 0, "id": "parent", "type": "function", "function": {"name": "code_mode", "arguments": json.dumps({"code": program(prompt)})}}]}
             reason = "tool_calls"
         else:
@@ -135,6 +152,61 @@ with tempfile.TemporaryDirectory(prefix="ion-code-mode-") as temporary:
         assert parent["output"]["result"] == {"total": 3}, parent
         assert len([record for record in records if record["type"] == "child_tool_finished"]) == 2
         config.unlink()
+
+        # The nonce exists only at the start of a retained complete capture,
+        # not in the bounded native tail or any model-visible parent output.
+        recovery_work = work / "recovery"
+        recovery_work.mkdir()
+        records = [json.loads(line) for line in run(env, recovery_work, "--code-mode", "--json", "run", "RECOVER_FAIL").stdout.splitlines()]
+        recovery_id = next(record["id"] for record in records if record["type"] == "session")
+        original = next(record for record in records if record["type"] == "child_tool_finished")
+        capture = Path(original["output"]["stdout_full_path"])
+        try:
+            failed_parent = next(record for record in records if record["type"] == "tool_finished")
+            assert isinstance(failed_parent["output"].get("parent"), dict), "failed guest has no stable evidence locator"
+            saved_bytes = capture.read_bytes()
+            nonce = saved_bytes.splitlines()[0].decode()
+            assert len(saved_bytes) == 100050 and len(nonce) == 48
+            assert nonce not in original["output"]["stdout"]
+            before_recovery = len(requests)
+            records = [json.loads(line) for line in run(env, recovery_work, "--session", recovery_id, "--code-mode", "--json", "run", "RECOVER_CAPTURE").stdout.splitlines()]
+            recovered = next(record for record in records if record["type"] == "tool_finished")
+            assert not recovered["is_error"], recovered
+            assert recovered["output"]["result"] == {"nonce": nonce, "original_failed": True, "exit": 7, "states": ["observed"]}, recovered
+            assert recovered["output"]["calls"] == 1
+            assert len([record for record in records if record["type"] == "child_tool_finished"]) == 1
+            assert nonce not in json.dumps(requests[before_recovery])
+            assert (recovery_work / "effects").read_text() == "ONCE"
+            assert capture.read_bytes() == saved_bytes
+        finally:
+            capture.unlink()
+
+        # Read the same settled facts through RPC after another process reopen,
+        # even though the external capture has now been removed.
+        inspector = subprocess.Popen([binary, "--cwd", recovery_work, "--session", recovery_id, "--code-mode", "rpc"], env=env, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, bufsize=0)
+        try:
+            assert read_record(inspector)["type"] == "ready"
+            inspector.stdin.write(b'{"type":"prompt","message":"INSPECT_RPC"}\n')
+            rpc_records = []
+            while True:
+                record = read_record(inspector)
+                rpc_records.append(record)
+                if record["type"] == "turn_end":
+                    assert record["status"] == "completed", record
+                    break
+            evidence = next(record for record in rpc_records if record["type"] == "tool_finished")
+            assert evidence["output"]["result"] == {"exit": 7, "original_failed": True}, evidence
+            assert evidence["output"]["calls"] == 0
+            assert not any(record["type"] == "child_tool_finished" for record in rpc_records)
+            assert (recovery_work / "effects").read_text() == "ONCE"
+            inspector.stdin.close()
+            inspector.stdin = None
+            _, stderr = inspector.communicate(timeout=10)
+            assert inspector.returncode == 0, stderr
+        finally:
+            if inspector.poll() is None:
+                inspector.kill()
+                inspector.wait(timeout=5)
 
         rpc_work = work / "rpc"
         rpc_work.mkdir()

@@ -115,17 +115,15 @@ fn json_text<'js>(ctx: &Ctx<'js>, value: Value<'js>, limit: usize) -> rquickjs::
 fn enqueue<'js>(
     ctx: &Ctx<'js>,
     bridge: &Bridge,
-    name: String,
-    args: Option<Value<'js>>,
+    kind: CodeRequestKind,
 ) -> rquickjs::Result<Promise<'js>> {
-    if name.len() > bridge.limits.max_json_bytes {
+    if let CodeRequestKind::Call { name, .. } | CodeRequestKind::Describe { name } = &kind
+        && name.len() > bridge.limits.max_json_bytes
+    {
         return Err(Exception::throw_range(ctx, "bridge name byte limit"));
     }
-    let args_json = args
-        .map(|v| json_text(ctx, v, bridge.limits.max_json_bytes))
-        .transpose()?;
-    // Serialization may reenter tools.call via toJSON/getters. Never reserve
-    // capacity or hold a RefCell borrow across guest execution.
+    // Guest serialization occurs before admission: toJSON/getters can reenter
+    // any bridge method. Never reserve or borrow across guest execution.
     if bridge.admitted.get() >= bridge.limits.max_calls
         || bridge.pending.borrow().len() >= bridge.limits.max_calls
     {
@@ -133,10 +131,6 @@ fn enqueue<'js>(
     }
     let (promise, resolve, reject) = Promise::new(ctx)?;
     let (reply, receiver) = oneshot::channel();
-    let kind = match args_json {
-        Some(args_json) => CodeRequestKind::Call { name, args_json },
-        None => CodeRequestKind::Describe { name },
-    };
     // A native callback must never block: blocking would evade the interrupt.
     bridge
         .sender
@@ -181,16 +175,23 @@ fn start_guest<'js>(
     let call = Function::new(
         ctx.clone(),
         move |ctx: Ctx<'js>, name: String, args: Value<'js>| {
-            enqueue(&ctx, &calls, name, Some(args))
+            let args_json = json_text(&ctx, args, calls.limits.max_json_bytes)?;
+            enqueue(&ctx, &calls, CodeRequestKind::Call { name, args_json })
         },
     )?;
     let descriptions = bridge.clone();
     let describe = Function::new(ctx.clone(), move |ctx: Ctx<'js>, name: String| {
-        enqueue(&ctx, &descriptions, name, None)
+        enqueue(&ctx, &descriptions, CodeRequestKind::Describe { name })
+    })?;
+    let inspections = bridge.clone();
+    let inspect = Function::new(ctx.clone(), move |ctx: Ctx<'js>, query: Value<'js>| {
+        let query_json = json_text(&ctx, query, inspections.limits.max_json_bytes)?;
+        enqueue(&ctx, &inspections, CodeRequestKind::Inspect { query_json })
     })?;
     let tools = Object::new(ctx.clone())?;
     tools.set("call", call)?;
     tools.set("describe", describe)?;
+    tools.set("inspect", inspect)?;
     let input: Function = ctx.eval(format!("(async (tools) => {{\n{code}\n}})"))?;
     let root: Promise = input.call((tools,))?;
     Ok(Persistent::save(&ctx, root))
@@ -367,9 +368,9 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn awaited_json_calls_and_describe() {
+    async fn awaited_json_calls_describe_and_inspect() {
         let (mut task, stop) = start(
-            "const a = await tools.call('echo', {n: 1}); const b = await tools.describe('ec'); return {a, b};",
+            "const a = await tools.call('echo', {n: 1}); const b = await tools.describe('ec'); const c = await tools.inspect({kind:'children',parent:{assistant_entry:12,ordinal:0}}); return {a, b, c};",
             limits(),
         );
         let call = request(&mut task).await;
@@ -383,9 +384,15 @@ mod tests {
         let describe = request(&mut task).await;
         assert!(matches!(describe.kind, CodeRequestKind::Describe { name } if name == "ec"));
         describe.reply.send(Ok("[\"echo\"]".into())).unwrap();
+        let inspect = request(&mut task).await;
+        assert!(
+            matches!(inspect.kind, CodeRequestKind::Inspect { query_json }
+            if serde_json::from_str::<serde_json::Value>(&query_json).unwrap() == json!({"kind":"children","parent":{"assistant_entry":12,"ordinal":0}}))
+        );
+        inspect.reply.send(Ok("{\"children\":[]}".into())).unwrap();
         assert_eq!(
             serde_json::from_str::<serde_json::Value>(&finish(&mut task).await.unwrap()).unwrap(),
-            json!({"a": {"value": 2, "is_error": false}, "b": ["echo"]}),
+            json!({"a": {"value": 2, "is_error": false}, "b": ["echo"], "c":{"children":[]}}),
         );
         assert!(!stop.is_cancelled());
         assert!(task.requests.recv().await.is_none());
@@ -500,7 +507,7 @@ mod tests {
         );
         assert_eq!(
             finish(&mut task).await.unwrap(),
-            "{\"absent\":true,\"bridge\":[\"call\",\"describe\"]}"
+            "{\"absent\":true,\"bridge\":[\"call\",\"describe\",\"inspect\"]}"
         );
         assert!(!stop.is_cancelled());
     }

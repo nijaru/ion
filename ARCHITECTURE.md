@@ -299,11 +299,20 @@ selects its model-visible return. A parent cannot commit its result while childr
 are pending. Recovery closes unknown children before the parent, without rerunning
 code.
 
-A guest failure can prevent that selection. Durable child facts alone do not
-make effects or capture paths discoverable to the model. Recovery must distinguish
-inspected host effects from unavailable evidence; neither failure nor counters
-establish rollback or successful verification. Bounded model-directed retrieval
-remains an open design choice, not permission for implicit replay.
+A guest failure can prevent that selection. Surface the stable Session-scoped
+parent locator, not raw child outputs. A later guest can explicitly inspect
+settled children through the Core gateway: bounded metadata pages and UTF-8 JSON
+windows into saved native values, with original observed/not-dispatched/unknown
+states. Keep lookup coordinates rebuildable from committed child facts; do not
+clone the whole history or give the VM Session authority. Exclude general history,
+private direct-shell facts, provider replay and normalized image bytes. Inspection
+is read-only, shares bridge/reply budgets and admits no new child effect.
+
+Recovery must distinguish saved observations, current host inspection and missing
+evidence. Neither failure nor counters establish rollback or successful
+verification; a recorded capture path is not a retention promise. Retrieval adds
+only the later guest's selected return to context, never implicit injection or
+permission to replay code or tools.
 
 A successful guest return closes its sender; drain already-transferred requests
 and started effects before the parent settles. Failure, cancellation or a
