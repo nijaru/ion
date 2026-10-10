@@ -107,12 +107,33 @@ impl ToolExecutor for LocalExecutor {
             if stop.is_cancelled() {
                 return error("cancelled before tool start");
             }
-            match self.operation {
-                LocalOperation::Read => self.tools.read(&call.arguments),
-                LocalOperation::Edit => self.tools.edit(&call.arguments),
-                LocalOperation::Write => self.tools.write(&call.arguments),
-                LocalOperation::Exec => self.tools.exec(&call.arguments, stop).await,
-            }
+            let execute: fn(&LocalTools, &Value) -> ToolOutput = match self.operation {
+                LocalOperation::Read => LocalTools::read,
+                LocalOperation::Edit => LocalTools::edit,
+                LocalOperation::Write => LocalTools::write,
+                LocalOperation::Exec => return self.tools.exec(&call.arguments, stop).await,
+            };
+            let tools = self.tools.clone();
+            let arguments = call.arguments.clone();
+            // Filesystem calls, hashing and image normalization must not block
+            // the coding operation's async poll. Retain the worker through
+            // settlement; cancellation cannot interrupt an in-flight syscall.
+            tokio::task::spawn_blocking(move || {
+                if stop.is_cancelled() {
+                    error("cancelled before tool start")
+                } else {
+                    execute(&tools, &arguments)
+                }
+            })
+            .await
+            .unwrap_or_else(|failure| {
+                // A panic is not an observed tool failure: prior effects may be
+                // unknown. Preserve the operation's existing panic/recovery path.
+                if failure.is_panic() {
+                    std::panic::resume_unwind(failure.into_panic());
+                }
+                panic!("native file worker stopped without an observation: {failure}");
+            })
         })
     }
 }
@@ -890,6 +911,64 @@ fn specs() -> Vec<ToolSpec> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn queued_file_work_keeps_async_polling_live_and_cancels_before_effects() {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .max_blocking_threads(1)
+            .build()
+            .unwrap();
+        runtime.block_on(async {
+            let root =
+                std::env::temp_dir().join(format!("ion-file-dispatch-{}", uuid::Uuid::now_v7()));
+            fs::create_dir(&root).unwrap();
+            fs::write(root.join("file.txt"), "old").unwrap();
+            let catalog = ion_core::ToolSet::new([
+                Arc::new(LocalTools::new(&root).unwrap()) as Arc<dyn ToolSource>
+            ])
+            .snapshot();
+            for (name, arguments) in [
+                ("read", json!({"path":"file.txt"})),
+                (
+                    "edit",
+                    json!({"path":"file.txt","edits":[{"old_text":"old","new_text":"new"}]}),
+                ),
+                ("write", json!({"path":"file.txt","content":"new"})),
+            ] {
+                // Hold the real blocking-pool resource, not a fake native tool.
+                // Cancellation must remain serviceable while dispatch is queued.
+                let (entered, started) = tokio::sync::oneshot::channel();
+                let (release, held) = tokio::sync::oneshot::channel();
+                let blocker = tokio::task::spawn_blocking(move || {
+                    entered.send(()).unwrap();
+                    held.blocking_recv().unwrap();
+                });
+                started.await.unwrap();
+                let call = ToolCall {
+                    id: name.into(),
+                    name: name.into(),
+                    arguments,
+                    raw_arguments: None,
+                };
+                let stop = CancellationToken::new();
+                let mut work = Box::pin(catalog.execute(&call, stop.clone()));
+                let observed = tokio::time::timeout(Duration::from_millis(10), &mut work).await;
+                let pending = observed.is_err();
+                stop.cancel();
+                release.send(()).unwrap();
+                let output = match observed {
+                    Ok(output) => output,
+                    Err(_) => work.await,
+                };
+                blocker.await.unwrap();
+                assert!(pending, "{name} bypassed bounded blocking dispatch");
+                assert!(output.is_error, "{name}: {}", output.value);
+                assert_eq!(fs::read_to_string(root.join("file.txt")).unwrap(), "old");
+            }
+            fs::remove_dir_all(root).unwrap();
+        });
+    }
 
     #[test]
     fn write_preserves_existing_symlink() {
