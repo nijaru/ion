@@ -636,9 +636,11 @@ Bounded macOS headless workflows also passed through a temporary, OAuth-only
 ChatGPT subscription bridge using `gpt-6.1-sol`: inspect/edit/native-test/report,
 cross-process Session reopen with a feature change, truthful reporting of a failed
 verification command, cancellation after a mutation followed by completion
-without repeating it, and Code Mode failure after a child mutation followed by
-inspection and completion without rerunning the script. A larger two-file CLI
-repair verified a 288,000-byte full capture. Another completed real compaction,
+without repeating it. Code Mode recovery passed after a successful producer,
+failed verifier and guest exception: the agent discovered the workspace ledger,
+repaired its library/CLI and verified all 12,000 records without rerunning the
+producer. It correctly disclosed that original child outputs were unavailable.
+A separate two-file CLI repair verified a 288,000-byte full capture. Another completed real compaction,
 Session reopen and a feature change without rewriting raw facts or repeating the
 earlier command. Live RPC steering during a native call and a separately queued
 follow-up also passed. A live embedded fixture with a 48 KiB request budget
