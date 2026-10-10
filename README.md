@@ -637,10 +637,18 @@ ChatGPT subscription bridge using `gpt-6.1-sol`: inspect/edit/native-test/report
 cross-process Session reopen with a feature change, truthful reporting of a failed
 verification command, cancellation after a mutation followed by completion
 without repeating it, and Code Mode failure after a child mutation followed by
-inspection and completion without rerunning the script. Final files, protected files and native checks were verified
-independently. This is coding-loop evidence, not a native Ion subscription
-implementation, client parity or sustained-workflow qualification. The bridge
-retained replay in memory; its restart and compaction paths were not qualified.
+inspection and completion without rerunning the script. A larger two-file CLI
+repair verified a 288,000-byte full capture. Another completed real compaction,
+Session reopen and a feature change without rewriting raw facts or repeating the
+earlier command. Live RPC steering during a native call and a separately queued
+follow-up also passed. Final files, protected files and native checks were verified
+independently.
+
+This is coding-loop evidence, not a native Ion subscription implementation,
+client parity or sustained-workflow qualification. The bridge retained replay in
+memory. Manual compaction required a single parent-authorized handoff preserving
+an exact known suffix; protected-reasoning rebases and bridge restart remained
+unsupported. Automatic compaction during a Turn was not qualified.
 
 Direct DeepSeek and MiMo and the qualified OpenRouter routes retain the
 reasoning needed for tool-call continuation across saved Turns. The Gemini
