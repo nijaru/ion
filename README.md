@@ -313,6 +313,10 @@ editor line. Returning from history restores the unsent draft and its cursor,
 even if a running Turn refreshed history. Type
 `@` to pick a project file, or use Tab after a partial `@path`; the picker
 inserts a path reference for the model to read, not the file's contents.
+Discovery runs off the client event loop, so you can filter or dismiss the picker
+while it scans. Limits and traversal errors are reported rather than hidden.
+Closing the picker cancels further traversal and prevents stale results from
+reopening it; exit still waits for any filesystem call already underway.
 Type `/` to discover terminal commands, prompt templates and `/skill:NAME`.
 Up/Down selects a suggestion; Tab or Enter inserts it without executing it.
 Submit the completed draft separately. Esc closes discovery without discarding

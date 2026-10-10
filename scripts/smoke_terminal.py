@@ -36,8 +36,131 @@ def drain_terminal(fd, output):
     raise AssertionError("terminal PTY stayed open after process exit")
 
 
+def exercise_file_discovery():
+    """Hold a real traversal read; input and settlement must not wait for it."""
+    with tempfile.TemporaryDirectory(prefix="ion-file-discovery-") as temporary:
+        work = Path(temporary)
+        env = {name: value for name, value in os.environ.items() if name in ("PATH", "SHELL", "TMPDIR")}
+        env.update(HOME=str(work / "home"), XDG_CONFIG_HOME=str(work / "config"), XDG_STATE_HOME=str(work / "state"), TERM="xterm-256color")
+        # Selection alone does not contact this endpoint; these are offline
+        # composer/direct-shell checks, not provider qualification.
+        subprocess.run([binary, "use", "smoke", "smoke-model", "--endpoint", "http://127.0.0.1:1/v1/chat/completions", "--wire", "chat-completions"], env=env, check=True, capture_output=True)
+        for mode in ("inline", "fullscreen"):
+            workspace = work / mode
+            workspace.mkdir()
+            (workspace / "data.txt").write_text("sample\n")
+            master, slave = pty.openpty()
+            fcntl.ioctl(slave, termios.TIOCSWINSZ, struct.pack("HHHH", 30, 100, 0, 0))
+
+            def attach():
+                os.setsid()
+                fcntl.ioctl(slave, termios.TIOCSCTTY, 0)
+
+            child = subprocess.Popen([binary, "--cwd", workspace, "--tui-mode", mode, "chat"], env=env, stdin=slave, stdout=slave, stderr=slave, preexec_fn=attach)
+            os.close(slave)
+            output = bytearray()
+            writer = None
+
+            def pump():
+                if select.select([master], [], [], 0.03)[0]:
+                    try:
+                        data = os.read(master, 65536)
+                    except OSError as error:
+                        if error.errno != errno.EIO:
+                            raise
+                        data = b""
+                    output.extend(data)
+                    if b"\x1b[6n" in data:
+                        os.write(master, b"\x1b[2;1R")
+
+            def wait(predicate):
+                end = time.monotonic() + 5
+                while not predicate():
+                    assert child.poll() is None and time.monotonic() < end, (child.poll(), output[-2500:])
+                    pump()
+
+            def hold_read():
+                # A FIFO ignore file blocks inside the real WalkBuilder I/O.
+                # Opening its writer confirms a reader, then withholding EOF
+                # keeps the step held without production fault hooks.
+                end = time.monotonic() + 5
+                while True:
+                    try:
+                        return os.open(workspace / ".ignore", os.O_WRONLY | os.O_NONBLOCK)
+                    except OSError as error:
+                        if error.errno != errno.ENXIO:
+                            raise
+                        assert time.monotonic() < end and child.poll() is None, output[-2500:]
+                        pump()
+
+            try:
+                wait(lambda: "› ".encode() in output)
+                # Create it only after host startup resource discovery settles.
+                os.mkfifo(workspace / ".ignore")
+                for busy in (False, True):
+                    output.clear()
+                    if busy:
+                        os.write(master, b"!sleep 30\r")
+                        wait(lambda: b"Running shell" in output)
+                    os.write(master, b"Read @")
+                    writer = hold_read()
+                    wait(lambda: "discovering project files…".encode() in output)
+                    os.write(master, b"data.txt\r")
+                    wait(lambda: "› data.txt".encode() in output)
+                    output.clear()
+                    os.close(writer)
+                    writer = None
+                    # Completion must paint without any additional input.
+                    wait(lambda: b"1 match(es)" in output)
+                    os.write(master, b"\r")
+                    wait(lambda: b"Read @data.txt" in output)
+                    if not busy:
+                        output.clear()
+                        os.write(master, b"\x03")  # Explicitly clear the draft.
+                        wait(lambda: "›           ".encode() in output)
+                    else:
+                        output.clear()
+                        os.write(master, b"\t")  # Reopen the current mention.
+                        writer = hold_read()
+                        wait(lambda: "discovering project files…".encode() in output)
+                        os.write(master, b"\x1b")
+                        wait(lambda: b"Read @data.txt" in output)
+                        output.clear()
+                        os.write(master, b"\x03")
+                        # Shell cancellation/settlement cannot await discovery.
+                        wait(lambda: b"Shell finished" in output)
+                        output.clear()
+                        os.close(writer)
+                        writer = None
+                        end = time.monotonic() + 0.2
+                        while time.monotonic() < end:
+                            pump()
+                        assert b"Choose file" not in output, "dismissed discovery reopened its modal"
+                        output.clear()
+                        os.write(master, b"\x03")
+                        wait(lambda: "›           ".encode() in output)
+                os.write(master, b"\x03")
+                end = time.monotonic() + 5
+                while child.poll() is None:
+                    assert time.monotonic() < end, ("file-discovery terminal did not settle", output[-2500:])
+                    pump()
+                drain_terminal(master, output)
+                assert child.returncode == 0, output[-2500:]
+            finally:
+                if writer is not None:
+                    os.close(writer)
+                if child.poll() is None:
+                    child.kill()
+                os.close(master)
+                child.wait(timeout=5)
+    print("Ion owned file discovery: idle/busy wake, pending input, dismissal and shell cancellation: OK")
+
+
 root = Path(__file__).resolve().parent.parent
 binary = Path(os.environ.get("ION_SMOKE_BIN", root / "target/debug/ion"))
+if sys.argv[1:] == ["--file-discovery-only"]:
+    exercise_file_discovery()
+    raise SystemExit(0)
 deadline = time.monotonic() + 30
 with tempfile.TemporaryDirectory(prefix="ion-terminal-") as temporary:
     work = Path(temporary)
@@ -69,6 +192,7 @@ with tempfile.TemporaryDirectory(prefix="ion-terminal-") as temporary:
         child = subprocess.Popen([binary, "--cwd", workspace, "chat"], env=env, stdin=slave, stdout=slave, stderr=slave, preexec_fn=attach_controlling_terminal)
         os.close(slave)
         output = bytearray()
+        file_query_sent = False
         sent_file_start = selected_file = sent_first = sent_steering = sent_second = resized = sent_tool = closed_tool = sent_compact = sent_clone = sent_controls = sent_login = sent_key = sent_logout = sent_copy = sent_quit = False
         saw_inline_start = False
         sent_help = False
@@ -94,8 +218,11 @@ with tempfile.TemporaryDirectory(prefix="ion-terminal-") as temporary:
                     saw_inline_start = True
                     os.write(master, b"Read @")
                     sent_file_start = True
-                if sent_file_start and b"Choose file" in output and not selected_file:
-                    os.write(master, b"data.txt\r")
+                if sent_file_start and b"Choose file" in output and not file_query_sent:
+                    os.write(master, b"data.txt")
+                    file_query_sent = True
+                if file_query_sent and b"1 match(es)" in output and not selected_file:
+                    os.write(master, b"\r")
                     selected_file = True
                 if selected_file and b"Read @data.txt" in output and not sent_first:
                     os.write(master, b", edit it, create created.txt, then verify both files with shell.\r")
@@ -445,4 +572,5 @@ def exercise_active_band():
             server.terminate()
             server.wait(timeout=5)
 
+exercise_file_discovery()
 exercise_active_band()

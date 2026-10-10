@@ -14,7 +14,6 @@ use crate::terminal_commands::{Builtin, Completion};
 use crate::transcript_detail::{DetailView, tools};
 use crate::transcript_render::kind_label;
 use anyhow::{Context, Result, ensure};
-use ignore::WalkBuilder;
 use ion_ai::{Content, Message, ModelRef};
 use ion_core::{
     AcceptedInput, AgentLimits, CodingSession, ForkPoint, InputBudget, InputReservation,
@@ -32,7 +31,9 @@ use tokio_util::sync::CancellationToken;
 use unicode_segmentation::UnicodeSegmentation;
 
 mod composer;
+mod picker;
 use composer::input_window;
+use picker::{Picker, PickerItem, PickerValue, Pickers};
 
 const MAX_DRAFT: usize = 64 * 1024;
 const LIVE_REGION_MAX_ROWS: usize = 12;
@@ -101,7 +102,7 @@ struct Frontend {
     scroll: usize,
     status: String,
     notices: Vec<String>,
-    picker: Option<Picker>,
+    pickers: Pickers,
     completion: Completion,
     pending: VecDeque<TurnInput>,
     input_budget: InputBudget,
@@ -210,48 +211,6 @@ struct ClipboardJob {
     task: tokio::task::JoinHandle<Result<PreparedPaste>>,
 }
 
-enum PickerValue {
-    Session(PathBuf),
-    Model(ModelRef),
-    ForkBefore {
-        turn: u64,
-        input: Message,
-    },
-    File {
-        path: String,
-        start: usize,
-        end: usize,
-    },
-}
-
-struct PickerItem {
-    label: String,
-    value: PickerValue,
-}
-
-struct Picker {
-    title: &'static str,
-    query: String,
-    selected: usize,
-    items: Vec<PickerItem>,
-}
-
-impl Picker {
-    fn matches(&self) -> Vec<usize> {
-        let query = self.query.to_ascii_lowercase();
-        self.items
-            .iter()
-            .enumerate()
-            .filter_map(|(index, item)| {
-                item.label
-                    .to_ascii_lowercase()
-                    .contains(&query)
-                    .then_some(index)
-            })
-            .collect()
-    }
-}
-
 pub struct ChatInit {
     pub binding: ion_host::SessionBinding,
     pub images: Vec<LoadedImage>,
@@ -276,7 +235,7 @@ pub async fn chat(init: ChatInit) -> Result<()> {
     for diagnostic in init.startup_diagnostics {
         ui.note(diagnostic);
     }
-    let outcome = async {
+    let outcome: Result<()> = async {
     loop {
         terminal
             .check_active()
@@ -292,7 +251,16 @@ pub async fn chat(init: ChatInit) -> Result<()> {
         if std::env::var_os("ION_SMOKE_PANIC_AFTER_FIRST_DRAW").is_some() {
             panic!("ION smoke panic after first terminal draw");
         }
-        let Some(event) = terminal.next_input().await else {
+        let event = tokio::select! {
+            event = terminal.next_input() => event,
+            notice = ui.pickers.complete(), if ui.pickers.has_job() => {
+                if let Some(notice) = notice {
+                    ui.note(notice);
+                }
+                continue;
+            }
+        };
+        let Some(event) = event else {
             break;
         };
         terminal
@@ -489,10 +457,23 @@ pub async fn chat(init: ChatInit) -> Result<()> {
     terminal.restore()?;
     Ok(())
     }.await;
-    // Every normal/error exit retains custody until the helper is stopped and
-    // reaped; dropping a JoinHandle would detach native clipboard work.
-    let cleanup = cancel_clipboard_paste(&mut ui).await;
-    outcome.and(cleanup)
+    // Stop discovery admission/publication before joining either helper. Every
+    // normal/error exit retains custody until both jobs have been reaped.
+    ui.pickers.close();
+    let clipboard_cleanup = cancel_clipboard_paste(&mut ui).await;
+    let discovery_cleanup = ui.pickers.shutdown().await;
+    let mut outcome = outcome;
+    for cleanup in [clipboard_cleanup, discovery_cleanup] {
+        if let Err(error) = cleanup {
+            outcome = Err(match outcome {
+                Ok(()) => error,
+                Err(primary) => {
+                    primary.context(format!("Terminal helper cleanup also failed: {error:#}"))
+                }
+            });
+        }
+    }
+    outcome
 }
 
 async fn new_inline_screen(terminal: &mut TerminalSession) -> Result<Screen> {
@@ -869,7 +850,7 @@ fn handle_command(
                         },
                     })
                     .collect();
-                ui.picker = Some(Picker {
+                ui.pickers.open(Picker {
                     title: "Fork before Turn",
                     query: String::new(),
                     selected: 0,
@@ -908,7 +889,7 @@ fn handle_command(
                         value: PickerValue::Session(session.path),
                     })
                     .collect();
-                ui.picker = Some(Picker {
+                ui.pickers.open(Picker {
                     title: "Resume session",
                     query: String::new(),
                     selected: 0,
@@ -963,7 +944,7 @@ fn handle_command(
                         })
                     })
                     .collect::<Result<Vec<_>>>()?;
-                ui.picker = Some(Picker {
+                ui.pickers.open(Picker {
                     title: "Choose model",
                     query: String::new(),
                     selected: 0,
@@ -1024,8 +1005,21 @@ async fn run_compaction(
                 input_ended = true;
                 stop.cancel();
             }
+            if input_ended {
+                ui.pickers.close();
+            }
             tokio::select! {
                 result = &mut compact => break result,
+                notice = ui.pickers.complete(), if ui.pickers.has_job() => {
+                    if let Some(notice) = notice { ui.note(notice); }
+                    if output_error.is_none()
+                        && let Err(error) = draw(terminal, screen, ui, None, Some(ActiveOperation::Compaction(&stop)))
+                    {
+                        output_error = Some(error);
+                        input_ended = true;
+                        stop.cancel();
+                    }
+                },
                 event = terminal.next_input(), if !input_ended => {
                     if let Err(error) = terminal.check_active() {
                         output_error = Some(error.into());
@@ -1035,7 +1029,7 @@ async fn run_compaction(
                     }
                     match event {
                     Some(Ok(InputEvent::Key(KeyEvent { code: KeyCode::Char('c'), modifiers }))) if modifiers.contains(Modifiers::CONTROL) => stop.cancel(),
-                    Some(Ok(InputEvent::Key(key))) if is_clipboard_shortcut(key) && ui.picker.is_none() && ui.details.is_none() => {
+                    Some(Ok(InputEvent::Key(key))) if is_clipboard_shortcut(key) && ui.pickers.active().is_none() && ui.details.is_none() => {
                         start_clipboard_paste(ui, selected);
                     },
                     Some(Ok(InputEvent::Key(key))) => busy_key(ui, key, &stop, None, Some(runtime.resources()), runtime.agent().limits()),
@@ -1216,6 +1210,7 @@ fn return_pending_to_editor(ui: &mut Frontend) {
     if ui.pending.is_empty() {
         return;
     }
+    ui.pickers.close();
     ui.restore_browsed_draft();
     let cursor = ui
         .pending
@@ -1241,27 +1236,6 @@ fn return_pending_to_editor(ui: &mut Frontend) {
         ui.draft = format!("{remaining}\n\n{}", ui.draft);
     }
     ui.cursor = cursor;
-}
-
-fn scan_files(cwd: &Path) -> Vec<String> {
-    let mut files = Vec::new();
-    for entry in WalkBuilder::new(cwd)
-        .follow_links(false)
-        .require_git(false)
-        .build()
-        .flatten()
-    {
-        if entry.file_type().is_some_and(|kind| kind.is_file())
-            && let Ok(relative) = entry.path().strip_prefix(cwd)
-        {
-            files.push(relative.to_string_lossy().into_owned());
-            if files.len() >= 20_000 {
-                break;
-            }
-        }
-    }
-    files.sort();
-    files
 }
 
 fn context_label(view: &ion_core::SessionView, window: Option<u32>) -> String {
@@ -1305,8 +1279,21 @@ async fn run_user_shell(
                 input_ended = true;
                 stop.cancel();
             }
+            if input_ended {
+                ui.pickers.close();
+            }
             tokio::select! {
                 result = &mut running => break result,
+                notice = ui.pickers.complete(), if ui.pickers.has_job() => {
+                    if let Some(notice) = notice { ui.note(notice); }
+                    if output_error.is_none()
+                        && let Err(error) = draw(terminal, screen, ui, None, Some(ActiveOperation::Shell(&stop)))
+                    {
+                        output_error = Some(error);
+                        input_ended = true;
+                        stop.cancel();
+                    }
+                },
                 event = terminal.next_input(), if !input_ended => {
                     if let Err(error) = terminal.check_active() {
                         output_error = Some(error.into());
@@ -1318,7 +1305,7 @@ async fn run_user_shell(
                     Some(Ok(InputEvent::Key(KeyEvent { code: KeyCode::Char('c'), modifiers }))) if modifiers.contains(Modifiers::CONTROL) => {
                         stop.cancel();
                     }
-                    Some(Ok(InputEvent::Key(key))) if is_clipboard_shortcut(key) && ui.picker.is_none() && ui.details.is_none() => {
+                    Some(Ok(InputEvent::Key(key))) if is_clipboard_shortcut(key) && ui.pickers.active().is_none() && ui.details.is_none() => {
                         start_clipboard_paste(ui, runtime.selected());
                     },
                     Some(Ok(InputEvent::Key(key))) => busy_key(ui, key, &stop, None, Some(runtime.resources()), runtime.agent().limits()),
@@ -1425,8 +1412,22 @@ async fn run_turn(
                 input_ended = true;
                 stop.cancel();
             }
+            if input_ended {
+                ui.pickers.close();
+            }
             tokio::select! {
                 result = &mut turn => break result,
+                notice = ui.pickers.complete(), if ui.pickers.has_job() => {
+                    if let Some(notice) = notice { ui.note(notice); }
+                    let preview = progress.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+                    if output_error.is_none()
+                        && let Err(error) = draw(terminal, screen, ui, Some(&preview), Some(ActiveOperation::Coding(&stop)))
+                    {
+                        output_error = Some(error);
+                        input_ended = true;
+                        stop.cancel();
+                    }
+                },
                 event = terminal.next_input(), if !input_ended => {
                     if let Err(error) = terminal.check_active() {
                         output_error = Some(error.into());
@@ -1436,7 +1437,7 @@ async fn run_turn(
                     }
                     match event {
                     Some(Ok(InputEvent::Key(KeyEvent { code: KeyCode::Char('c'), modifiers }))) if modifiers.contains(Modifiers::CONTROL) => stop.cancel(),
-                    Some(Ok(InputEvent::Key(key))) if is_clipboard_shortcut(key) && ui.picker.is_none() && ui.details.is_none() => {
+                    Some(Ok(InputEvent::Key(key))) if is_clipboard_shortcut(key) && ui.pickers.active().is_none() && ui.details.is_none() => {
                         start_clipboard_paste(ui, selected);
                     },
                     Some(Ok(InputEvent::Key(key))) => busy_key(ui, key, &stop, Some(&steering), Some(runtime.resources()), runtime.agent().limits()),
@@ -1580,6 +1581,7 @@ impl Frontend {
 
     fn refresh_session(&mut self, session: &CodingSession) -> Result<()> {
         self.completion.clear();
+        self.pickers.close();
         let view = session.view()?;
         self.load_history(session, &view);
         self.details = None;
@@ -1676,6 +1678,7 @@ impl Frontend {
     }
 
     fn replace_draft(&mut self, draft: String) {
+        self.pickers.close();
         self.browsing = None;
         self.draft = draft;
         self.cursor = self.draft.len();
@@ -1742,9 +1745,9 @@ impl Frontend {
             self.completion.clear();
             return self.detail_key(key);
         }
-        if self.picker.is_some() {
+        if self.pickers.active().is_some() {
             self.completion.clear();
-            return self.picker_key(key);
+            return self.pickers.key(key).map_or(Action::None, Action::Pick);
         }
         let menu_was_visible = self.completion.visible();
         self.completion.refresh(
@@ -1819,7 +1822,8 @@ impl Frontend {
                     .map_or(0, |at| at + 1);
                 let token = &self.draft[start..self.cursor];
                 if let Some(query) = token.strip_prefix('@') {
-                    self.open_file_picker(start, self.cursor, query.to_owned());
+                    self.pickers
+                        .open_files(&self.cwd, start, self.cursor, query.to_owned());
                 } else {
                     self.insert("\t");
                 }
@@ -1877,7 +1881,8 @@ impl Frontend {
             } if !modifiers.contains(Modifiers::CONTROL) && !modifiers.contains(Modifiers::ALT) => {
                 let start = self.cursor;
                 self.insert("@");
-                self.open_file_picker(start, self.cursor, String::new());
+                self.pickers
+                    .open_files(&self.cwd, start, self.cursor, String::new());
                 Action::None
             }
             KeyEvent {
@@ -2031,71 +2036,13 @@ impl Frontend {
             }
             _ => Action::None,
         };
-        if self.picker.is_some() || self.details.is_some() {
+        if self.pickers.active().is_some() || self.details.is_some() {
             self.completion.clear();
         } else {
             self.completion
                 .refresh(&self.draft, self.cursor, resources, false);
         }
         action
-    }
-
-    fn picker_key(&mut self, key: KeyEvent) -> Action {
-        let picker = self.picker.as_mut().expect("picker is active");
-        match key.code {
-            KeyCode::Esc => {
-                self.picker = None;
-                Action::None
-            }
-            KeyCode::Char('c') if key.modifiers.contains(Modifiers::CONTROL) => {
-                self.picker = None;
-                Action::None
-            }
-            KeyCode::Up => {
-                picker.selected = picker.selected.saturating_sub(1);
-                Action::None
-            }
-            KeyCode::Down => {
-                picker.selected =
-                    (picker.selected + 1).min(picker.matches().len().saturating_sub(1));
-                Action::None
-            }
-            KeyCode::Backspace => {
-                picker.query.pop();
-                picker.selected = 0;
-                Action::None
-            }
-            KeyCode::Char(ch)
-                if !key.modifiers.contains(Modifiers::CONTROL)
-                    && !key.modifiers.contains(Modifiers::ALT) =>
-            {
-                picker.query.push(ch);
-                picker.selected = 0;
-                Action::None
-            }
-            KeyCode::Enter => {
-                let matching = picker.matches();
-                let selected = matching
-                    .get(picker.selected)
-                    .and_then(|index| picker.items.get(*index));
-                let value = selected.map(|item| match &item.value {
-                    PickerValue::Session(path) => PickerValue::Session(path.clone()),
-                    PickerValue::Model(model) => PickerValue::Model(model.clone()),
-                    PickerValue::ForkBefore { turn, input } => PickerValue::ForkBefore {
-                        turn: *turn,
-                        input: input.clone(),
-                    },
-                    PickerValue::File { path, start, end } => PickerValue::File {
-                        path: path.clone(),
-                        start: *start,
-                        end: *end,
-                    },
-                });
-                self.picker = None;
-                value.map_or(Action::None, Action::Pick)
-            }
-            _ => Action::None,
-        }
     }
 
     fn detail_key(&mut self, key: KeyEvent) -> Action {
@@ -2147,27 +2094,6 @@ impl Frontend {
         self.details = Some(DetailView::new(selected));
     }
 
-    fn open_file_picker(&mut self, start: usize, end: usize, query: String) {
-        let files = scan_files(&self.cwd);
-        if files.is_empty() {
-            self.status = "No project files available for completion".into();
-            return;
-        }
-        let items = files
-            .into_iter()
-            .map(|path| PickerItem {
-                label: path.clone(),
-                value: PickerValue::File { path, start, end },
-            })
-            .collect();
-        self.picker = Some(Picker {
-            title: "Choose file",
-            query,
-            selected: 0,
-            items,
-        });
-    }
-
     fn insert_file(&mut self, path: String, start: usize, end: usize) {
         if end > self.draft.len() || start > end {
             return;
@@ -2187,14 +2113,7 @@ impl Frontend {
     }
     fn insert(&mut self, text: &str) {
         self.completion.clear();
-        if let Some(picker) = &mut self.picker {
-            picker.query.push_str(
-                &text
-                    .chars()
-                    .filter(|ch| !ch.is_control())
-                    .collect::<String>(),
-            );
-            picker.selected = 0;
+        if self.pickers.insert(text) {
             return;
         }
         let clean = text
@@ -2341,7 +2260,7 @@ fn draw(
     let (width, height) = terminal.size()?;
     screen.resize(width, height);
 
-    if ui.details.is_some() || ui.picker.is_some() {
+    if ui.details.is_some() || ui.pickers.active().is_some() {
         terminal.enter_alt_screen()?;
         return draw_modal_fullscreen(terminal, screen, ui, progress, operation, width, height);
     }
@@ -2612,53 +2531,53 @@ fn draw_modal_fullscreen(
     width: u16,
     height: u16,
 ) -> Result<()> {
+    let (rows, cursor) = modal_rows(ui, progress, operation, width, height);
+    screen.draw_fullscreen(&mut terminal.output()?, &rows, cursor)?;
+    Ok(())
+}
+
+fn modal_rows(
+    ui: &mut Frontend,
+    progress: Option<&LiveTranscript>,
+    operation: Option<ActiveOperation<'_>>,
+    width: u16,
+    height: u16,
+) -> (Vec<Line<'static>>, Option<(usize, u16)>) {
     let width = width.max(1) as usize;
     let height = height.max(1) as usize;
-    let mut content = Vec::new();
-
     if let Some(view) = &mut ui.details {
         view.prepare(&ui.history, progress, width);
     }
-    if let Some(picker) = &ui.picker {
-        let matching = picker.matches();
-        content.push(format!("{} · {} match(es)", picker.title, matching.len()));
-        let visible = height.saturating_sub(2);
-        let start = picker.selected.saturating_sub(visible.saturating_sub(1));
-        for (index, item) in matching.iter().enumerate().skip(start).take(visible) {
-            let label = &picker.items[*item].label;
-            content.push(format!(
-                "{} {}",
-                if index == picker.selected { '›' } else { ' ' },
-                fit_line(label, width.saturating_sub(2))
-            ));
-        }
-    }
-
-    let content = ui
-        .details
-        .as_ref()
-        .map_or(content.as_slice(), DetailView::rows);
     let controls = ui.details.as_ref().map(DetailView::controls);
     let status = visible_status(ui, operation);
+    let picker = ui.pickers.active();
+    // Leave a selected result visible alongside the query when at least two
+    // physical rows exist. Status is less important than choosing visibly.
+    let reserve_content = usize::from(picker.is_some() && height > 1);
     let status_height = (usize::from(controls.is_some()) + usize::from(status.is_some()))
-        .min(height - usize::from(ui.picker.is_some()));
-    let composer = ui.picker.as_ref().map(|picker| {
+        .min(height - usize::from(picker.is_some()) - reserve_content);
+    let composer = picker.map(|picker| {
         input_window(
             &picker.query,
             picker.query.len(),
             width,
-            (height - status_height).min(3),
+            (height - status_height - reserve_content).min(3),
         )
     });
     let composer_height = composer.as_ref().map_or(0, |input| input.lines.len());
     let viewport = height.saturating_sub(composer_height + status_height);
+    let content = ui.pickers.rows(width, viewport);
+    let content = ui
+        .details
+        .as_ref()
+        .map_or(content.as_slice(), DetailView::rows);
     let scroll = ui.details.as_ref().map_or(0, |view| view.scroll);
     let end = content.len().saturating_sub(scroll.min(content.len()));
     let start = end.saturating_sub(viewport);
     let mut rows = vec![Line::raw(""); height];
     let padding = viewport.saturating_sub(end - start);
     for (index, row) in content[start..end].iter().enumerate() {
-        rows[padding + index] = Line::raw(row.clone());
+        rows[padding + index] = Line::raw(fit_line(row, width));
     }
 
     let mut cursor = None;
@@ -2669,10 +2588,10 @@ fn draw_modal_fullscreen(
             next_row += 1;
         }
     }
-    if let Some(composer) = &composer {
-        for (index, line) in composer.lines.iter().enumerate() {
+    if let Some(composer) = composer {
+        for (index, line) in composer.lines.into_iter().enumerate() {
             if next_row + index < height {
-                rows[next_row + index] = Line::raw(line.as_str());
+                rows[next_row + index] = Line::raw(line);
             }
         }
         let row = next_row + composer.cursor_row;
@@ -2681,8 +2600,7 @@ fn draw_modal_fullscreen(
         }
     }
 
-    screen.draw_fullscreen(&mut terminal.output()?, &rows, cursor)?;
-    Ok(())
+    (rows, cursor)
 }
 
 fn previous_grapheme(text: &str, cursor: usize) -> usize {
@@ -3580,8 +3498,89 @@ mod tests {
         assert_eq!(ui.draft, "unsent");
     }
 
+    #[tokio::test]
+    async fn session_refresh_invalidates_discovery_without_transferring_editor_or_queue() {
+        let root =
+            std::env::temp_dir().join(format!("ion-picker-session-{}", uuid::Uuid::now_v7()));
+        fs::create_dir_all(root.join("next")).unwrap();
+        fs::write(root.join("old.rs"), "old").unwrap();
+        let session =
+            CodingSession::create(root.join("session.sqlite"), root.join("next")).unwrap();
+        let mut image = ion_ai::normalize_rgba(1, 1, vec![0, 255, 0, 255]).unwrap();
+        image.note = Some("literal image note".into());
+        let mut ui = Frontend {
+            cwd: root.clone(),
+            images: vec![image.clone()],
+            ..Frontend::default()
+        };
+        ui.insert("  Read ");
+        ui.key(KeyEvent::new(KeyCode::Char('@'), Modifiers::NONE), None);
+        ui.pending.push_back(TurnInput::prepared(
+            "queued".into(),
+            EditorDraft::at_end("  /literal queue  ".into()),
+            vec![image],
+        ));
+        ui.refresh_session(&session).unwrap();
+        assert!(ui.pickers.active().is_none());
+        assert!(ui.pickers.complete().await.is_none());
+        assert!(ui.pickers.active().is_none());
+        assert_eq!(ui.draft, "  Read @");
+        assert_eq!(ui.cursor, ui.draft.len());
+        assert_eq!(ui.images[0].note.as_deref(), Some("literal image note"));
+        assert_eq!(
+            ui.pending.front().unwrap().source.literal,
+            "  /literal queue  "
+        );
+        assert_eq!(
+            ui.pending.front().unwrap().images[0].note.as_deref(),
+            Some("literal image note")
+        );
+        assert_eq!(ui.cwd, root.join("next").canonicalize().unwrap());
+        drop(session);
+        fs::remove_dir_all(root).unwrap();
+    }
+
     #[test]
-    fn file_picker_inserts_a_selected_project_path() {
+    fn picker_selection_stays_visible_beside_wrapped_query_and_status() {
+        let mut ui = Frontend {
+            status: "Ready".into(),
+            ..Frontend::default()
+        };
+        for selected in [0, 1, 19] {
+            ui.pickers.open(Picker {
+                title: "Choose file",
+                query: "matching-long-project-file".into(),
+                selected,
+                items: (0..20)
+                    .map(|index| PickerItem {
+                        label: format!("{index:02}-matching-long-project-file.rs"),
+                        value: PickerValue::File {
+                            path: format!("file-{index}"),
+                            start: 0,
+                            end: 1,
+                        },
+                    })
+                    .collect(),
+            });
+            for width in [8, 12, 80] {
+                for height in 2..12 {
+                    let (rows, cursor) = modal_rows(&mut ui, None, None, width, height);
+                    assert_eq!(rows.len(), height as usize);
+                    assert!(rows.iter().all(|row| row.width() <= width as usize));
+                    assert!(
+                        rows.iter()
+                            .any(|row| row.to_string().starts_with(&format!("› {selected:02}-"))),
+                        "selected item hidden at {width}x{height}"
+                    );
+                    let (row, column) = cursor.expect("query cursor stays visible");
+                    assert!(row < height as usize && column < width);
+                }
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn file_picker_inserts_a_selected_project_path() {
         let root = std::env::temp_dir().join(format!("ion-files-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&root);
         std::fs::create_dir_all(root.join("src")).unwrap();
@@ -3592,11 +3591,14 @@ mod tests {
             cwd: root.clone(),
             ..Frontend::default()
         };
-        assert!(scan_files(&root).contains(&"src/main.rs".into()));
-        assert!(!scan_files(&root).contains(&"src/skip.rs".into()));
         ui.insert("Read ");
         ui.key(KeyEvent::new(KeyCode::Char('@'), Modifiers::NONE), None);
         ui.key(KeyEvent::new(KeyCode::Char('m'), Modifiers::NONE), None);
+        assert!(ui.pickers.complete().await.is_none());
+        let picker = ui.pickers.active().unwrap();
+        assert_eq!(picker.query, "m");
+        assert_eq!(picker.items.len(), 1);
+        assert_eq!(picker.items[0].label, "src/main.rs");
         let chosen = ui.key(KeyEvent::new(KeyCode::Enter, Modifiers::NONE), None);
         let Action::Pick(PickerValue::File { path, start, end }) = chosen else {
             panic!("file picker did not choose a path")
