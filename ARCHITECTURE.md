@@ -13,11 +13,19 @@ continues the conversation after relaunch. Terminal, headless, RPC and embedded
 hosts use the same coding semantics. Native tools inherit host permissions;
 there is no implicit sandbox, private workspace importer or rollback promise.
 
-Current Pi is the primary reference for mature workflows and harness semantics.
-fx is the primary reference for terminal presentation. Adopt useful outcomes
-and ownership boundaries, not either implementation's class hierarchy, runtime
-or complete feature inventory. A smaller implementation is not an improvement
-if it merely transfers execution or recovery responsibility to every client.
+Current Pi's established coding product is the primary reference for mature
+workflows and harness semantics; its experimental work is a separate source of
+ideas, not equally proven behavior. fx is the scoped reference for terminal
+presentation. Other agents, articles and research are optional references for
+specific questions, not equal authorities or product requirements. Their
+engineering maturity and stability/simplicity trade-offs vary; distinguish
+observed behavior and inspected source from proposals and vendor claims.
+
+Adopt a reference's useful outcome only for a concrete Ion need, preserving
+coherent ownership, stability and simplicity. Copy no class hierarchy, runtime,
+appearance or complete feature inventory. A smaller implementation is not an
+improvement if it merely transfers execution or recovery responsibility to every
+client.
 
 The common-workflow target includes file/shell tools, project instructions,
 models and credentials, images, skills/templates, tool discovery, custom/MCP

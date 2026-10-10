@@ -7,12 +7,15 @@
   a passing test establishes that the implementation meets those contracts.
 - Build Pi-level common-workflow functionality through one cohesive, idiomatic
   Rust coding loop for terminal, headless, RPC and embedded clients. Pi is the
-  primary open-source reference for workflows and harness/provider semantics;
-  fx is the primary reference for polished, restrained terminal presentation.
-  Codex, Amp, Droid, Prime Agent and other strong agents inform appropriate
-  choices, not a union of feature inventories. Verify relevant moving source
-  revisions and distinguish source evidence from vendor claims. Copy neither
-  architecture nor appearance wholesale.
+  primary mature open-source reference for workflows and harness/provider
+  semantics; fx is the scoped reference for polished, restrained presentation.
+  Other agents and research are optional sources of specific insights, not equal
+  authorities, requirements or templates. Weigh their evidence, maturity and
+  stability/simplicity trade-offs; Pi's experiments do not inherit its established
+  product's status. Verify moving revisions when a decision depends on them,
+  distinguishing observed behavior, inspected source and research/vendor claims.
+  Adopt only for a concrete Ion need; copy no architecture, appearance or feature
+  inventory wholesale.
 - Prioritize inline native scrollback, legible activity hierarchy, an editable
   composer and progressive disclosure. Keep fullscreen as a secondary view of
   the same semantics; preserve its correctness without letting separate polish
