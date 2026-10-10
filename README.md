@@ -641,14 +641,17 @@ inspection and completion without rerunning the script. A larger two-file CLI
 repair verified a 288,000-byte full capture. Another completed real compaction,
 Session reopen and a feature change without rewriting raw facts or repeating the
 earlier command. Live RPC steering during a native call and a separately queued
-follow-up also passed. Final files, protected files and native checks were verified
-independently.
+follow-up also passed. A live embedded fixture with a 48 KiB request budget
+completed two automatic compactions during a Turn, preserved a prior
+non-idempotent effect, repaired the code and passed native tests without repeating
+that effect. This budget is a fixture limit, not Ion's production limit. Final
+files, protected files and native checks were verified independently.
 
 This is coding-loop evidence, not a native Ion subscription implementation,
 client parity or sustained-workflow qualification. The bridge retained replay in
-memory. Manual compaction required a single parent-authorized handoff preserving
-an exact known suffix; protected-reasoning rebases and bridge restart remained
-unsupported. Automatic compaction during a Turn was not qualified.
+memory. Compaction used parent-side authorization of unchanged Core requests,
+an exact known suffix and fresh User/Tool records; protected-reasoning rebases
+and bridge restart remained unsupported.
 
 Direct DeepSeek and MiMo and the qualified OpenRouter routes retain the
 reasoning needed for tool-call continuation across saved Turns. The Gemini
