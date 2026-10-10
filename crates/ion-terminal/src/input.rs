@@ -1,6 +1,6 @@
 use std::collections::VecDeque;
 use std::fs::File;
-use std::io;
+use std::io::{self, Read};
 use std::os::fd::AsFd;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -205,7 +205,7 @@ impl InputStream {
     pub(crate) fn new() -> io::Result<Self> {
         let resize = signal(SignalKind::window_change())?;
         // A separate open file description keeps O_NONBLOCK off stdout and
-        // the synchronous stdin used by masked credential prompts.
+        // the caller's stdin.
         let stdin = File::open("/dev/tty")?;
         let original_flags = fcntl_getfl(stdin.as_fd())?;
         fcntl_setfl(stdin.as_fd(), original_flags | OFlags::NONBLOCK)?;
@@ -241,7 +241,7 @@ impl InputStream {
         })
     }
 
-    /// Release stdin before a synchronous credential prompt takes it.
+    /// Join the reader before releasing or quarantining input custody.
     pub(crate) fn suspend(&mut self) -> io::Result<()> {
         self.stop.store(true, Ordering::Release);
         if let Some(reader) = self.reader.take() {
@@ -284,19 +284,82 @@ impl InputStream {
         self.pending.clear();
         self.parser = InputParser::new();
         self.utf8.clear();
-        self.paste = PasteFramer::default();
+        self.paste.quarantine();
         self.replies = TerminalReplyFilter::default();
         self.escape_deadline = None;
         let mut error = None;
         while let Ok(chunk) = self.chunks.try_recv() {
-            if let Err(failure) = chunk {
-                error.get_or_insert(failure);
+            match chunk {
+                Ok(bytes) => self.discard_secret_chunk(&bytes),
+                Err(failure) => {
+                    error.get_or_insert(failure);
+                }
             }
         }
-        if let Some(Err(failure)) = self.unsent.take() {
-            error.get_or_insert(failure);
+        if let Some(chunk) = self.unsent.take() {
+            match chunk {
+                Ok(bytes) => self.discard_secret_chunk(&bytes),
+                Err(failure) => {
+                    error.get_or_insert(failure);
+                }
+            }
         }
         error.map_or(Ok(()), Err)
+    }
+
+    /// Quarantine both decoded/read-ahead input and bytes still in the kernel.
+    /// Keep the terminal raw throughout; secret entry must never enable echo.
+    pub(crate) fn quarantine(&mut self) -> io::Result<()> {
+        self.suspend()?;
+        self.discard_for_credentials()?;
+        // Drain a bounded snapshot rather than flushing blindly: a queued
+        // closing marker must reach the framer, never erase its discard boundary.
+        let mut remaining = rustix::io::ioctl_fionread(
+            self.file
+                .as_ref()
+                .ok_or_else(|| io::Error::other("terminal input custody is unavailable"))?,
+        )?;
+        let mut buffer = [0u8; 8192];
+        while remaining > 0 {
+            let count = usize::try_from(remaining.min(buffer.len() as u64))
+                .map_err(|_| io::Error::other("terminal input size overflow"))?;
+            let mut file = self
+                .file
+                .as_ref()
+                .ok_or_else(|| io::Error::other("terminal input custody is unavailable"))?;
+            match file.read(&mut buffer[..count]) {
+                Ok(0) => break,
+                Ok(count) => {
+                    remaining = remaining.saturating_sub(count as u64);
+                    self.discard_secret_chunk(&buffer[..count]);
+                }
+                Err(error) if error.kind() == io::ErrorKind::WouldBlock => break,
+                Err(error) => return Err(error),
+            }
+        }
+        self.resume()
+    }
+
+    pub(crate) fn secret_paste_is_open(&self) -> bool {
+        self.paste.is_open()
+    }
+
+    /// Settle a rejected streamed paste before a caller negotiates replies or
+    /// resumes its composer. No payload or suffix becomes a decoded event.
+    pub(crate) async fn settle_secret_paste(&mut self) -> io::Result<()> {
+        self.paste.quarantine();
+        while self.paste.is_open() {
+            let chunk = self.chunks.recv().await.ok_or_else(|| {
+                io::Error::new(io::ErrorKind::UnexpectedEof, "secret paste input ended")
+            })??;
+            self.discard_secret_chunk(&chunk);
+        }
+        Ok(())
+    }
+
+    fn discard_secret_chunk(&mut self, bytes: &[u8]) {
+        let _discarded = self.paste.feed(bytes);
+        self.paste.quarantine();
     }
 
     pub(crate) async fn keyboard_support(&mut self) -> io::Result<Option<bool>> {
@@ -794,7 +857,9 @@ mod tests {
         assert!(input.unsent.is_none());
         input.parse(b"\x1b[200~unfinished", true);
         input.discard_for_credentials().unwrap();
-        input.parse(b"a", false);
+        input.parse(b"DELAYED_SECRET\r", false);
+        assert!(input.pending.is_empty());
+        input.parse(b"\x1b[201~a", false);
         assert_eq!(
             input.pending.pop_front(),
             Some(InputEvent::Key(KeyEvent::new(

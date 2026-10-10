@@ -91,6 +91,18 @@ impl PasteFramer {
         frames
     }
 
+    /// Forget secret content, but retain framing until its closing marker.
+    /// Resetting this state would release a delayed paste tail as ordinary keys.
+    pub(super) fn is_open(&self) -> bool {
+        self.active.is_some()
+    }
+
+    pub(super) fn quarantine(&mut self) {
+        if let Some(active) = &mut self.active {
+            active.body = None;
+        }
+    }
+
     pub(super) fn flush_prefix(&mut self) -> Vec<u8> {
         // A lone Escape is a key; a recognizable CSI/paste candidate is not.
         // Retain the latter across key grace expiry so a delayed marker cannot

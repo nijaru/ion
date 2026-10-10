@@ -237,10 +237,20 @@ async fn run_cli(cli: Cli) -> Result<()> {
         }
         Some(Action::Login { provider }) => {
             ensure!(
-                io::stdin().is_terminal(),
+                io::stdin().is_terminal() && io::stdout().is_terminal(),
                 "API-key login requires a terminal; use an environment variable in headless mode"
             );
-            let key = rpassword::prompt_password(format!("{provider} API key: "))?;
+            let mut terminal = ion_terminal::TerminalSession::with_requirements(
+                ion_terminal::TerminalRequirements {
+                    keyboard_enhancement: false,
+                    ..Default::default()
+                },
+            )
+            .await?;
+            let key = terminal
+                .read_secret(&format!("{provider} API key: "))
+                .await?;
+            terminal.restore()?;
             credentials.save_api_key(&provider, &key)?;
             println!("Saved {provider} credential.");
             Ok(())

@@ -622,18 +622,10 @@ async fn login_in_terminal(
     provider: &str,
 ) -> Result<Result<()>> {
     anyhow::ensure!(!provider.is_empty(), "use /login PROVIDER");
-    terminal
-        .suspend_for_credentials()
-        .context("suspend terminal for login")?;
-    let result = (|| -> Result<()> {
-        let key = rpassword::prompt_password(format!("{provider} API key: "))
-            .context("read login credential")?;
-        credentials.save_api_key(provider, &key)
-    })();
-    terminal
-        .resume()
-        .await
-        .context("resume terminal after login")?;
+    let result = match terminal.read_secret(&format!("{provider} API key: ")).await {
+        Ok(key) => credentials.save_api_key(provider, &key),
+        Err(error) => Err(error).context("read login credential"),
+    };
     *screen = new_inline_screen(terminal)
         .await
         .context("restore inline chat after login")?;

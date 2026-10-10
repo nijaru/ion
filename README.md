@@ -305,7 +305,10 @@ Both the model message and retained editor metadata count against the shared
 pending-input allowance. Clipboard preparation finishes before input admission.
 Terminal queries share the key reader and use a 500 ms response deadline;
 type-ahead survives startup and external-editor return. Login deliberately
-discards pre-read input so credentials cannot return as chat text. Bracketed
+discards queued input before and after secret entry. CLI and chat login keep echo
+disabled before showing the prompt; Ctrl-C cancels without saving a partial key.
+Secrets must be valid single-line UTF-8 of at most 4096 bytes. Rejected or cancelled
+unfinished pastes remain discarded through their closing marker. Bracketed
 paste is limited to 64 KiB of valid UTF-8. Malformed, oversized or unfinished
 paste is discarded without submitting a prefix or replacing the current draft.
 Up and Down browse earlier prompts when the cursor reaches the first or last

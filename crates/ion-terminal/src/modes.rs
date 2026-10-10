@@ -1,3 +1,5 @@
+use rustix::termios::{self, OptionalActions, Termios};
+use std::fs::File;
 use std::io::{self, Write};
 use std::sync::{
     Arc,
@@ -9,9 +11,9 @@ use crossterm::event::{
     DisableBracketedPaste, DisableMouseCapture, EnableBracketedPaste, EnableMouseCapture,
     KeyboardEnhancementFlags, PopKeyboardEnhancementFlags, PushKeyboardEnhancementFlags,
 };
+use crossterm::execute;
 use crossterm::style::{Attribute, SetAttribute};
 use crossterm::terminal::{EnterAlternateScreen, LeaveAlternateScreen};
-use crossterm::{execute, terminal};
 
 use crate::capabilities::{CapabilitySupport, TerminalCapabilities};
 use crate::requirements::TerminalRequirements;
@@ -38,6 +40,33 @@ enum Lifecycle {
     Failed { restored: bool },
 }
 
+struct RawMode {
+    terminal: File,
+    original: Termios,
+}
+
+impl RawMode {
+    fn capture() -> io::Result<Self> {
+        // Match InputStream's controlling terminal, not a possibly redirected
+        // stdin TTY. Restore through this same descriptor even after redirection.
+        let terminal = File::open("/dev/tty")?;
+        let original = termios::tcgetattr(&terminal)?;
+        Ok(Self { terminal, original })
+    }
+
+    fn enable(&self) -> io::Result<()> {
+        let mut raw = self.original.clone();
+        raw.make_raw();
+        termios::tcsetattr(&self.terminal, OptionalActions::Now, &raw)?;
+        Ok(())
+    }
+
+    fn restore(&self) -> io::Result<()> {
+        termios::tcsetattr(&self.terminal, OptionalActions::Now, &self.original)?;
+        Ok(())
+    }
+}
+
 /// All physical output and mode custody share one lock, including the panic
 /// hook. An ambiguous write consumes destructive authority: retrying a pop
 /// could remove the caller's keyboard stack rather than ours.
@@ -48,7 +77,7 @@ pub(crate) struct TerminalState<W> {
     lifecycle: Lifecycle,
     panic_generation: Arc<AtomicU64>,
     acquired_generation: u64,
-    raw: bool,
+    raw: Option<RawMode>,
     paste: bool,
     mouse: bool,
     surface: Surface,
@@ -70,7 +99,7 @@ impl<W: Write> TerminalState<W> {
             lifecycle: Lifecycle::Suspended,
             panic_generation,
             acquired_generation,
-            raw: false,
+            raw: None,
             paste: false,
             mouse: false,
             surface: Surface::Primary,
@@ -192,8 +221,7 @@ impl<W: Write> TerminalState<W> {
             Lifecycle::Suspended => {}
         }
         let result = (|| {
-            terminal::enable_raw_mode()?;
-            self.raw = true;
+            self.raw.insert(RawMode::capture()?).enable()?;
             self.lifecycle = Lifecycle::Active;
             if self.requirements.bracketed_paste {
                 self.paste = true;
@@ -284,10 +312,10 @@ impl<W: Write> TerminalState<W> {
         }
         record(execute!(self.output, Show));
         record(execute!(self.output, SetAttribute(Attribute::Reset)));
-        if self.raw {
-            let result = terminal::disable_raw_mode();
+        if let Some(raw) = &self.raw {
+            let result = raw.restore();
             if result.is_ok() {
-                self.raw = false;
+                self.raw = None;
             }
             record(result);
         }

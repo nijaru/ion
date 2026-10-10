@@ -18,6 +18,9 @@ use crate::{Frame, Screen};
 mod modes;
 use modes::TerminalState;
 
+#[path = "secret.rs"]
+mod secret;
+
 type State = TerminalState<Stdout>;
 static PANIC_OWNER: Mutex<Weak<Mutex<State>>> = Mutex::new(Weak::new());
 static PANIC_HOOK: Once = Once::new();
@@ -237,14 +240,6 @@ impl TerminalSession {
             state.fail();
         }
         result
-    }
-
-    /// Quarantine pre-read bytes at the secret-entry boundary. They must never
-    /// resume as chat events, even if a user typed the command and key together.
-    pub fn suspend_for_credentials(&mut self) -> io::Result<()> {
-        let restored = self.restore();
-        let discarded = self.input.discard_for_credentials();
-        restored.and(discarded)
     }
 
     pub fn suspend(&mut self) -> io::Result<()> {

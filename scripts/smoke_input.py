@@ -53,7 +53,7 @@ class Handler(BaseHTTPRequestHandler):
 
 
 class Terminal:
-    def __init__(self, cwd, env, mode):
+    def __init__(self, cwd, env, mode, args=None, redirected_tty=False):
         self.master, slave = pty.openpty()
         os.set_blocking(self.master, False)
         fcntl.ioctl(slave, termios.TIOCSWINSZ, struct.pack("HHHH", 30, 100, 0, 0))
@@ -62,8 +62,16 @@ class Terminal:
             os.setsid()
             fcntl.ioctl(slave, termios.TIOCSCTTY, 0)
 
-        self.child = subprocess.Popen([binary, "--cwd", cwd, "--tui-mode", mode, "chat"], env=env, stdin=slave, stdout=slave, stderr=slave, preexec_fn=attach)
+        self.original_modes = termios.tcgetattr(slave)
+        self.redirected_master = None
+        if redirected_tty:
+            self.redirected_master, redirected_slave = pty.openpty()
+            self.redirected_modes = termios.tcgetattr(redirected_slave)
+        command = [binary, "--cwd", cwd, "--tui-mode", mode, "chat"] if args is None else [binary, *args]
+        self.child = subprocess.Popen(command, env=env, stdin=redirected_slave if redirected_tty else slave, stdout=slave, stderr=slave, preexec_fn=attach)
         os.close(slave)
+        if redirected_tty:
+            os.close(redirected_slave)
         self.output = bytearray()
 
     def send(self, data):
@@ -120,6 +128,8 @@ class Terminal:
         if self.child.poll() is None:
             self.child.kill()
         os.close(self.master)
+        if self.redirected_master is not None:
+            os.close(self.redirected_master)
         self.child.wait(timeout=5)
 
 
@@ -132,6 +142,37 @@ with tempfile.TemporaryDirectory(prefix="ion-input-") as temporary:
     thread.start()
     try:
         subprocess.run([binary, "use", "smoke", "smoke-model", "--endpoint", f"http://127.0.0.1:{server.server_port}/v1/chat/completions", "--wire", "chat-completions"], env=env, check=True, capture_output=True)
+        # A long prompt blocks its writer before rpassword could disable echo.
+        # Inspect the real kernel state at the visible prefix, not a timing race.
+        terminal = Terminal(work, env, "inline", ["login", "smoke API key: " + "x" * 65536])
+        try:
+            terminal.wait(lambda: "smoke API key:" in terminal.text())
+            assert not termios.tcgetattr(terminal.master)[3] & (termios.ECHO | termios.ECHONL), "visible secret prompt still enables echo"
+        finally:
+            terminal.close()
+
+        for ending, redirected in ((b"\r", False), (b"\x03", False), (b"\x04", False), (b"\x03", True)):
+            terminal = Terminal(work, env, "inline", ["login", "smoke"], redirected_tty=redirected)
+            try:
+                terminal.wait(lambda: "smoke API key:" in terminal.text())
+                assert not termios.tcgetattr(terminal.master)[3] & (termios.ECHO | termios.ECHONL)
+                terminal.send(b"CLI_DISPOSABLE" + ending if ending != b"\x04" else ending)
+                deadline = time.monotonic() + 10
+                while terminal.child.poll() is None:
+                    assert time.monotonic() < deadline, "CLI secret entry did not settle"
+                    terminal.pump()
+                terminal.paint()
+                assert terminal.child.returncode == (0 if ending == b"\r" else 1), terminal.text()
+                assert termios.tcgetattr(terminal.master) == terminal.original_modes, "CLI secret entry did not restore terminal"
+                if redirected:
+                    assert termios.tcgetattr(terminal.redirected_master) == terminal.redirected_modes, "login changed an unrelated stdin TTY"
+                assert "DISPOSABLE" not in terminal.text(), "CLI credential leaked"
+                key_path = work / "config/ion/credentials/smoke.key"
+                assert key_path.read_bytes() == b"CLI_DISPOSABLE", "cancel/EOF changed the saved key"
+            finally:
+                terminal.close()
+        print("CLI secret visibility, success/cancel/EOF and termios restoration: OK", flush=True)
+
         for mode in ("inline", "fullscreen"):
             cwd = work / (mode + "-intake")
             cwd.mkdir()
@@ -159,14 +200,39 @@ with tempfile.TemporaryDirectory(prefix="ion-input-") as temporary:
                 print(f"Intake {mode}: credential quarantine", flush=True)
                 terminal.send(b"/login smoke\rPRE_READ_DISPOSABLE\r")
                 terminal.wait(lambda: "smoke API key:" in terminal.text())
-                terminal.send(b"ACTUAL_DISPOSABLE\r")
+                assert not termios.tcgetattr(terminal.master)[3] & (termios.ECHO | termios.ECHONL)
+                terminal.send(b"ACTUAL_DISPOSABLE\rPOST_READ_DISPOSABLE\r")
                 terminal.wait(lambda: "Credential saved" in terminal.text())
                 terminal.paint()
                 terminal.send(b"\r")
                 terminal.paint()
+                assert (work / "config/ion/credentials/smoke.key").read_bytes() == b"ACTUAL_DISPOSABLE", "credential entry lost bytes or saved type-ahead"
                 assert len(requests) == before + 1, "pre-read credential became chat input"
                 assert "DISPOSABLE" not in terminal.text(), "credential leaked to terminal"
+                for ending in (b"\x03", b"\x04", b"\x1b[200~bad\nvalue\x1b[201~"):
+                    terminal.output.clear()
+                    terminal.send(b"/login smoke\r")
+                    terminal.wait(lambda: "smoke API key:" in terminal.text())
+                    terminal.send(ending + b"CANCELLED_DISPOSABLE\r")
+                    terminal.wait(lambda: "read login credential" in terminal.text())
+                    terminal.paint()
+                    assert "DISPOSABLE" not in terminal.text(), "cancelled/rejected credential became chat input"
+                    assert len(requests) == before + 1, "secret suffix was admitted"
+                terminal.output.clear()
+                terminal.send(b"/login smoke\r")
+                terminal.wait(lambda: "smoke API key:" in terminal.text())
+                terminal.send(b"\x1b[200~" + b"x" * (64 * 1024 + 1))
+                terminal.wait(lambda: "Secret paste discarded; waiting for its closing marker" in terminal.text())
+                terminal.send(b"DELAYED_DISPOSABLE\r")
+                terminal.paint()
+                assert len(requests) == before + 1, "overflow secret tail submitted a model request"
+                assert "DISPOSABLE" not in terminal.text(), "overflow secret tail escaped discard boundary"
+                terminal.send(b"\x1b[201~")
+                terminal.wait(lambda: "read login credential" in terminal.text())
+                terminal.paint()
+                assert (work / "config/ion/credentials/smoke.key").read_bytes() == b"ACTUAL_DISPOSABLE", "rejected/cancelled entry replaced the saved credential"
                 terminal.finish()
+                assert termios.tcgetattr(terminal.master) == terminal.original_modes, "chat secret entry did not restore terminal"
             finally:
                 terminal.close()
 

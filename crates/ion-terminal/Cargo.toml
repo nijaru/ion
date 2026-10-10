@@ -10,7 +10,7 @@ description = "Ion terminal lifecycle, input, capabilities, and renderer"
 [dependencies]
 crossterm = "0.29.0"
 ratatui = "0.30.2"
-rustix = { version = "1.1.4", features = ["fs"] }
+rustix = { version = "1.1.4", features = ["fs", "termios"] }
 termwiz = { version = "0.23.3", default-features = false }
 tokio.workspace = true
 
