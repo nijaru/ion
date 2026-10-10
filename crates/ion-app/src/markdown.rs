@@ -1,12 +1,17 @@
 //! Assistant-only Markdown presentation. No HTML renderer, fetches or terminal links.
 use pulldown_cmark::{CodeBlockKind, Event, Parser, Tag, TagEnd};
 use ratatui::{
-    style::{Color, Modifier, Style},
+    style::{Modifier, Style},
     text::{Line, Span},
 };
 use unicode_width::UnicodeWidthStr;
 
-use crate::display_text::push_styled;
+use crate::{
+    display_text::push_styled,
+    presentation_style::{Role, style},
+};
+#[cfg(test)]
+use ratatui::style::Color;
 
 struct Prefix {
     first: String,
@@ -46,7 +51,7 @@ pub(super) fn render(rows: &mut Vec<Line<'static>>, source: &str, width: usize) 
             }
             Event::Code(text) => view.spans.push(Span::styled(
                 text.into_string(),
-                view.style().fg(Color::Magenta),
+                view.style().patch(style(Role::Code)),
             )),
             Event::SoftBreak => view.text(" ".into()),
             Event::HardBreak => view.text("\n".into()),
@@ -178,16 +183,16 @@ impl View<'_> {
                 {
                     self.spans.push(Span::styled(
                         format!("code · {info}"),
-                        Style::default().add_modifier(Modifier::DIM),
+                        style(Role::Secondary),
                     ));
                     self.flush();
                 }
                 self.push_prefix("  ".into(), "  ".into());
-                self.styles.push(self.style().fg(Color::Magenta));
+                self.styles.push(self.style().patch(style(Role::Code)));
             }
             Tag::Link { dest_url, .. } | Tag::Image { dest_url, .. } => {
                 self.links.push((dest_url.into_string(), self.spans.len()));
-                self.styles.push(self.style().fg(Color::Cyan));
+                self.styles.push(self.style().patch(style(Role::Link)));
                 if image {
                     self.text("[image: ".into());
                 }

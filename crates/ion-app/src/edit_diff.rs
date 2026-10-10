@@ -1,9 +1,9 @@
 //! Presentation of a recorded edit observation; patch syntax never determines effect state.
+use crate::presentation_style::{Role, style};
 use ion_core::{ActivityState, ToolActivityKind, TranscriptActivity};
-use ratatui::{
-    style::{Color, Modifier, Style},
-    text::{Line, Span},
-};
+#[cfg(test)]
+use ratatui::style::Color;
+use ratatui::text::{Line, Span};
 use serde_json::{Map, Value};
 use unicode_width::UnicodeWidthStr;
 
@@ -60,10 +60,10 @@ pub(crate) fn render(
         let last = index + 1 == lines.len() && footer.is_none();
         // These are syntax styles only. The Completed state above comes from Core facts.
         let style = match text.as_bytes().first() {
-            Some(b'+') => Style::default().fg(Color::Green),
-            Some(b'-') => Style::default().fg(Color::Red),
-            Some(b'@') => Style::default().fg(Color::Cyan),
-            _ => Style::default().add_modifier(Modifier::DIM),
+            Some(b'+') => style(Role::Added),
+            Some(b'-') => style(Role::Removed),
+            Some(b'@') => style(Role::Hunk),
+            _ => style(Role::Secondary),
         };
         // Bound physical preview rows; long source lines remain in inspection.
         let visible = if expanded {
@@ -89,7 +89,7 @@ pub(crate) fn render(
                     footer,
                     width.saturating_sub(prefix.width() + 2).max(1),
                 ),
-                Style::default().add_modifier(Modifier::DIM),
+                style(Role::Secondary),
             ),
             width,
         );

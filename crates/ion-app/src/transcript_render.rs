@@ -1,13 +1,20 @@
 //! Pure compact rendering for the typed coding transcript.
-use crate::{display_text::fit_line, tool_output::OutputDetail};
+use crate::{
+    display_text::fit_line,
+    presentation_style::{Role, style},
+    tool_output::OutputDetail,
+};
 use ion_core::{
     ActivityGroup, ActivityResult, ActivityState, ToolActivityKind, TranscriptActivity,
     TranscriptItem, TranscriptMessage, TranscriptPart, TranscriptProjection, UserShellActivity,
 };
 use ratatui::{
-    style::{Color, Modifier, Style},
+    style::Style,
     text::{Line, Span},
 };
+
+#[cfg(test)]
+use ratatui::style::{Color, Modifier};
 
 pub(super) fn kind_label(kind: ToolActivityKind) -> &'static str {
     match kind {
@@ -136,7 +143,7 @@ pub(super) fn live_rows(
             width.max(1),
         );
         for row in &mut selected {
-            row.style = heading();
+            row.style = style(Role::Heading);
         }
         selected.truncate(budget.saturating_sub(2).clamp(1, 3));
         if budget > selected.len()
@@ -168,7 +175,7 @@ pub(super) fn live_rows(
     } else {
         selected.push(Line::styled(
             fit_line("… earlier conversation · Ctrl-O", width),
-            subdued(),
+            style(Role::Secondary),
         ));
     }
     let remaining = budget.saturating_sub(selected.len());
@@ -257,7 +264,7 @@ fn render_current_group(
     }
     rows.push(Line::styled(
         fit_line("• Current activity", width),
-        heading(),
+        style(Role::Heading),
     ));
     let reserve_omission = usize::from(indices.len() > capacity && capacity > 1);
     indices.sort_by_key(|&index| (display[index].priority(), std::cmp::Reverse(index)));
@@ -288,7 +295,7 @@ fn render_current_group(
     if reserve_omission > 0 {
         rows.push(Line::styled(
             fit_line(&format!("└ {omitted} more · Ctrl-O"), width),
-            subdued(),
+            style(Role::Secondary),
         ));
     }
 }
@@ -320,12 +327,15 @@ pub(super) fn render_message(
 }
 
 fn render_thinking(rows: &mut Vec<Line<'static>>, text: &str, width: usize) {
-    rows.push(Line::styled(fit_line("Thinking", width), subdued()));
+    rows.push(Line::styled(
+        fit_line("Thinking", width),
+        style(Role::Secondary),
+    ));
     crate::display_text::push_styled(
         rows,
         "  ",
         "  ",
-        Line::from(Span::styled(text, subdued())),
+        Line::from(Span::styled(text, style(Role::Secondary))),
         width,
     );
 }
@@ -372,7 +382,7 @@ pub(super) fn render_source_message(
     }
     if user {
         for row in &mut rows[start..] {
-            row.style = Style::default().fg(Color::Blue);
+            row.style = style(Role::UserInput);
         }
     }
 }
@@ -391,7 +401,7 @@ fn render_shell(
     let start = rows.len();
     push_prefixed(rows, prefix, "  ", &shell.command, width);
     for row in &mut rows[start..] {
-        row.style = Style::default().fg(Color::Blue);
+        row.style = style(Role::UserInput);
     }
     let ion_core::UserShellOutcome::Observed { output, is_error } = &shell.outcome else {
         if shell.exclude_from_context {
@@ -400,7 +410,7 @@ fn render_shell(
         let start = rows.len();
         push_wrapped(rows, ion_core::UserShellOutcome::unknown_notice(), width);
         for row in &mut rows[start..] {
-            row.style = heading().fg(Color::Yellow);
+            row.style = style(Role::Warning);
         }
         return;
     };
@@ -428,9 +438,9 @@ fn render_shell(
     let start = rows.len();
     push_wrapped(rows, &format!("  {state}"), width);
     let style = if *is_error {
-        heading().fg(Color::Red)
+        style(Role::Error)
     } else {
-        subdued()
+        style(Role::Secondary)
     };
     for row in &mut rows[start..] {
         row.style = style;
@@ -496,7 +506,7 @@ fn render_group(
 
     rows.push(Line::styled(
         fit_line(&group_header(group.activities.iter()), width),
-        heading(),
+        style(Role::Heading),
     ));
     let total_children = display.len();
     for (index, item) in display.iter().enumerate() {
@@ -1022,26 +1032,21 @@ fn clean_inline(text: &str) -> String {
         .join(" ")
 }
 
-fn heading() -> Style {
-    Style::default().add_modifier(Modifier::BOLD)
-}
-fn subdued() -> Style {
-    Style::default().add_modifier(Modifier::DIM)
-}
 fn activity_style(state: ActivityState, notice: bool, observation: bool) -> Style {
-    if notice {
-        return heading().fg(Color::Yellow);
-    }
-    match state {
-        ActivityState::Failed | ActivityState::Rejected => heading().fg(Color::Red),
-        ActivityState::Unknown | ActivityState::Cancelled | ActivityState::TimedOut => {
-            heading().fg(Color::Yellow)
+    let role = if notice {
+        Role::Warning
+    } else {
+        match state {
+            ActivityState::Failed | ActivityState::Rejected => Role::Error,
+            ActivityState::Unknown | ActivityState::Cancelled | ActivityState::TimedOut => {
+                Role::Warning
+            }
+            ActivityState::Running => Role::Running,
+            ActivityState::Completed if !observation => Role::Heading,
+            ActivityState::Queued | ActivityState::Completed => Role::Secondary,
         }
-        ActivityState::Running => heading().fg(Color::Cyan),
-        ActivityState::Queued => subdued(),
-        ActivityState::Completed if !observation => heading(),
-        ActivityState::Completed => Style::default(),
-    }
+    };
+    style(role)
 }
 fn push_prefixed(
     rows: &mut Vec<Line<'static>>,
@@ -1084,7 +1089,7 @@ fn push_detail(
     let start = rows.len();
     push_prefixed(rows, prefix, continuation, text, width);
     for row in &mut rows[start..] {
-        row.style = subdued();
+        row.style = style(Role::Secondary);
     }
 }
 
@@ -1156,7 +1161,7 @@ mod tests {
                     .spans
                     .iter()
                     .filter(|span| !span.content.trim().is_empty())
-                    .all(|span| span.style.add_modifier.contains(Modifier::DIM))
+                    .all(|span| !span.style.add_modifier.contains(Modifier::DIM))
         }));
         assert!(
             shown
@@ -1250,16 +1255,26 @@ mod tests {
                 activities: vec![read.clone(), command.clone()],
             })],
         };
-        let compact = rows(
+        let compact_rows = rows(
             &single,
             120,
             OutputDetail::Compact,
             ThinkingVisibility::Hidden,
-        )
-        .iter()
-        .map(ToString::to_string)
-        .collect::<Vec<_>>()
-        .join("\n");
+        );
+        // Ranges, omission notices and capture paths are essential evidence,
+        // not decoration whose legibility may depend on terminal faint support.
+        assert!(compact_rows.iter().all(|row| {
+            !row.style.add_modifier.contains(Modifier::DIM)
+                && row
+                    .spans
+                    .iter()
+                    .all(|span| !span.style.add_modifier.contains(Modifier::DIM))
+        }));
+        let compact = compact_rows
+            .iter()
+            .map(ToString::to_string)
+            .collect::<Vec<_>>()
+            .join("\n");
         assert!(
             compact.contains("**literal**") && !compact.contains("FOURTH_READ"),
             "{compact}"

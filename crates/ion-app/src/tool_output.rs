@@ -1,9 +1,7 @@
 //! Literal observed output disclosure, independent of effect state and model delivery.
+use crate::presentation_style::{Role, style};
 use ion_core::{ActivityState, ToolActivityKind, TranscriptActivity};
-use ratatui::{
-    style::{Modifier, Style},
-    text::Line,
-};
+use ratatui::text::Line;
 use serde_json::Value;
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -269,10 +267,7 @@ fn note(rows: &mut Vec<Line<'static>>, prefix: &str, text: &str, width: usize) {
         rows,
         &format!("{prefix}└ "),
         &format!("{prefix}  "),
-        Line::styled(
-            text.to_owned(),
-            Style::default().add_modifier(Modifier::DIM),
-        ),
+        Line::styled(text.to_owned(), style(Role::Secondary)),
         width,
     );
 }

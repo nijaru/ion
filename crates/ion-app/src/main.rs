@@ -26,6 +26,7 @@ mod edit_diff;
 mod external_editor;
 mod inspection;
 mod markdown;
+mod presentation_style;
 mod rpc;
 mod terminal_client;
 mod terminal_commands;
