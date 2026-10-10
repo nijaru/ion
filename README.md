@@ -632,6 +632,15 @@ two-replacement `edit` call with a `read.base_digest` guard and verified the
 result with shell. Anthropic and
 direct OpenAI have not been live-qualified.
 
+Bounded macOS headless workflows also passed through a temporary, OAuth-only
+ChatGPT subscription bridge using `gpt-6.1-sol`: inspect/edit/native-test/report,
+cross-process Session reopen with a feature change, truthful reporting of a failed
+verification command, and cancellation after a mutation followed by completion
+without repeating it. Final files, protected files and native checks were verified
+independently. This is coding-loop evidence, not a native Ion subscription
+implementation, client parity or sustained-workflow qualification. The bridge
+retained replay in memory; its restart and compaction paths were not qualified.
+
 Direct DeepSeek and MiMo and the qualified OpenRouter routes retain the
 reasoning needed for tool-call continuation across saved Turns. The Gemini
 route completed a signed tool continuation and another Turn after cross-process
