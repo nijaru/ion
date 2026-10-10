@@ -469,21 +469,37 @@ impl ToolExecutor for McpExecutor {
     ) -> BoxFuture<'a, CodingToolOutput> {
         Box::pin(async move {
             let server = &self.server;
-            let client = server.client.read().await;
-            let Some(client) = client.as_ref() else {
-                return tool_error(format!("MCP server {} is closed", server.name));
-            };
-            let Some(args) = call.arguments.as_object() else {
-                return tool_error("MCP tool arguments must be an object".to_owned());
-            };
-            let request =
-                CallToolRequestParams::new(self.original_name.clone()).with_arguments(args.clone());
-            let result = tokio::select! {
-                () = stop.cancelled() => return tool_error(format!("MCP tool {} cancelled; effects may be unknown",call.name)),
-                result = client.call_tool(request) => result,
+            let result = {
+                let client = server.client.read().await;
+                let Some(client) = client.as_ref() else {
+                    return tool_error(format!("MCP server {} is closed", server.name));
+                };
+                let Some(args) = call.arguments.as_object() else {
+                    return tool_error("MCP tool arguments must be an object".to_owned());
+                };
+                let request = CallToolRequestParams::new(self.original_name.clone())
+                    .with_arguments(args.clone());
+                tokio::select! {
+                    () = stop.cancelled() => return tool_error(format!("MCP tool {} cancelled; effects may be unknown",call.name)),
+                    result = client.call_tool(request) => result,
+                }
             };
             match result {
-                Ok(result) => convert_tool_result(&call.name, result),
+                Ok(result) => {
+                    let name = call.name.clone();
+                    // Image normalization and artifact writes must not block
+                    // async polling. The server outcome is already observed:
+                    // retain and join conversion even if cancellation or
+                    // connection shutdown occurs while its worker is queued.
+                    tokio::task::spawn_blocking(move || convert_tool_result(&name, result))
+                        .await
+                        .unwrap_or_else(|failure| {
+                            if failure.is_panic() {
+                                std::panic::resume_unwind(failure.into_panic());
+                            }
+                            panic!("MCP result worker stopped without an observation: {failure}");
+                        })
+                }
                 Err(error) => tool_error(format!(
                     "MCP server {} tool call failed: {error}",
                     server.name
@@ -695,6 +711,94 @@ for line in sys.stdin:
         assert_eq!(observed.value["structured_content"]["called"], "probe");
         assert!(closed.is_error);
         assert_eq!(closed.value["error"], "MCP server bound is closed");
+    }
+
+    #[test]
+    fn observed_result_waits_for_worker_through_cancellation_and_connection_shutdown() {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .max_blocking_threads(1)
+            .build()
+            .unwrap();
+        runtime.block_on(async {
+            let root = std::env::temp_dir().join(format!("ion-mcp-settlement-{}", uuid::Uuid::now_v7()));
+            fs::create_dir(&root).unwrap();
+            let config = McpConfig::new(&root);
+            let server = r#"
+import json, sys
+from pathlib import Path
+for line in sys.stdin:
+    request = json.loads(line)
+    if "id" not in request:
+        continue
+    method = request["method"]
+    if method == "initialize":
+        result = {"protocolVersion": request["params"]["protocolVersion"],
+                  "capabilities": {"tools": {}}, "serverInfo": {"name": "settlement", "version": "1"}}
+    elif method == "tools/list":
+        result = {"tools": [{"name": "probe", "inputSchema": {"type": "object"}}]}
+    elif method == "tools/call":
+        with Path("effects").open("a") as effects:
+            effects.write("ONCE\n")
+        result = {"content": [{"type": "text", "text": "x" * 70000}],
+                  "structuredContent": {"observed": 7}, "isError": True}
+    else:
+        continue
+    print(json.dumps({"jsonrpc": "2.0", "id": request["id"], "result": result}), flush=True)
+"#;
+            config.add("settlement", McpServer::Stdio(McpStdioServer {
+                command: "python3".into(), args: vec!["-c".into(), server.into()],
+            })).unwrap();
+            let startup = McpTools::connect(&config, &root).await;
+            assert!(startup.diagnostics.is_empty(), "{:?}", startup.diagnostics);
+            let source = startup.tools.unwrap();
+            let issued = ion_core::ToolSet::new([source.clone() as Arc<dyn CodingToolSource>]).snapshot();
+            let (entered, started) = tokio::sync::oneshot::channel();
+            let (release, held) = tokio::sync::oneshot::channel::<()>();
+            let blocker = tokio::task::spawn_blocking(move || {
+                let _ = entered.send(());
+                let _ = held.blocking_recv();
+            });
+            started.await.unwrap();
+            let stop = CancellationToken::new();
+            let task_stop = stop.clone();
+            let mut work = tokio::spawn(async move {
+                issued.execute(&ToolCall {
+                    id: "observed".into(), name: "mcp__settlement__probe".into(),
+                    arguments: json!({}), raw_arguments: None,
+                }, task_stop).await
+            });
+            // An actual server effect precedes its response. Shutdown waits for
+            // network consumption, but must not wait for local result work.
+            let effect = tokio::time::timeout(Duration::from_secs(2), async {
+                while !root.join("effects").exists() {
+                    tokio::time::sleep(Duration::from_millis(5)).await;
+                }
+            }).await;
+            let closed = tokio::time::timeout(Duration::from_secs(4), source.shutdown()).await;
+            let early = tokio::time::timeout(Duration::from_millis(10), &mut work).await;
+            let pending = early.is_err();
+            stop.cancel();
+            let still_pending = !work.is_finished();
+            drop(release);
+            blocker.await.unwrap();
+            let output = match early {
+                Ok(output) => output.unwrap(),
+                Err(_) => work.await.unwrap(),
+            };
+            let effects = fs::read_to_string(root.join("effects")).unwrap();
+            fs::remove_dir_all(root).unwrap();
+            let path = output.value["full_output_path"].as_str().unwrap();
+            let saved: Value = serde_json::from_slice(&fs::read(path).unwrap()).unwrap();
+            fs::remove_file(path).unwrap();
+            assert!(effect.is_ok(), "server effect not observed");
+            assert!(closed.is_ok(), "conversion held the MCP connection");
+            assert!(pending && still_pending, "MCP result bypassed owned blocking dispatch");
+            assert_eq!(effects, "ONCE\n");
+            assert!(output.is_error, "original server error must survive cancellation");
+            assert_eq!(saved["content"], "x".repeat(70000));
+            assert_eq!(saved["structured_content"]["observed"], 7);
+        });
     }
 
     #[test]
