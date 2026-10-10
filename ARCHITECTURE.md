@@ -284,10 +284,18 @@ No comparative performance benefit is established.
 
 Identify a parent by committed assistant-entry sequence and call ordinal, not a
 reusable provider ID. Commit child intent with frozen definition/activity before
-dispatch, then observed output before guest consumption. Raw child facts enter
-human inspection and recovery, never ordinary model messages or fabricated
-assistant calls. A parent cannot commit its result while children are pending.
-Recovery closes unknown children before the parent, without rerunning code.
+dispatch, then observed output before guest consumption. Raw child facts remain
+available to human inspection and recovery; do not automatically inject them as
+ordinary model messages or fabricated assistant calls. The guest explicitly
+selects its model-visible return. A parent cannot commit its result while children
+are pending. Recovery closes unknown children before the parent, without rerunning
+code.
+
+A guest failure can prevent that selection. Durable child facts alone do not
+make effects or capture paths discoverable to the model. Recovery must distinguish
+inspected host effects from unavailable evidence; neither failure nor counters
+establish rollback or successful verification. Bounded model-directed retrieval
+remains an open design choice, not permission for implicit replay.
 
 A successful guest return closes its sender; drain already-transferred requests
 and started effects before the parent settles. Failure, cancellation or a

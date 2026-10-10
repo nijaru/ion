@@ -575,6 +575,9 @@ metadata, not image bytes. The selected JSON return value, call count and
 failure/skip counts reach the model. Raw child arguments and observations remain
 in the Session, export and nested Ctrl-O/tool detail, without automatic addition
 to model context. A guest can explicitly select their content in its return.
+If it fails before returning, the model receives the parent error and counters,
+not the original child outputs or their capture paths. It may inspect workspace
+effects through direct tools, but must disclose evidence it cannot recover.
 
 Child intent commits before dispatch and output before guest consumption. A
 normal return drains requests already transferred by the guest, even if
@@ -636,14 +639,18 @@ Bounded macOS headless workflows also passed through a temporary, OAuth-only
 ChatGPT subscription bridge using `gpt-6.1-sol`: inspect/edit/native-test/report,
 cross-process Session reopen with a feature change, truthful reporting of a failed
 verification command, cancellation after a mutation followed by completion
-without repeating it. Code Mode recovery passed after a successful producer,
-failed verifier and guest exception: the agent discovered the workspace ledger,
+without repeating it. One Session completed six explicit Turns across five
+process reopens, adding JSON, stdin and filtering while accurately retaining an
+earlier rejected-input report.
+
+Code Mode recovery passed after a successful producer, failed verifier and guest
+exception: the agent discovered the workspace ledger,
 repaired its library/CLI and verified all 12,000 records without rerunning the
 producer. It correctly disclosed that original child outputs were unavailable.
-A separate two-file CLI repair verified a 288,000-byte full capture. Another completed real compaction,
-Session reopen and a feature change without rewriting raw facts or repeating the
-earlier command. Live RPC steering during a native call and a separately queued
-follow-up also passed. A live embedded fixture with a 48 KiB request budget
+A separate two-file CLI repair verified a 288,000-byte full capture. Another
+completed real compaction, Session reopen and a feature change without rewriting
+raw facts or repeating the earlier command. Live RPC steering during a native
+call and a separately queued follow-up also passed. A live embedded fixture with a 48 KiB request budget
 completed two automatic compactions during a Turn, preserved a prior
 non-idempotent effect, repaired the code and passed native tests without repeating
 that effect. This budget is a fixture limit, not Ion's production limit. Final
