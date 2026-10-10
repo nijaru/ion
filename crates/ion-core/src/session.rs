@@ -262,6 +262,7 @@ pub(crate) struct CompactionPlan {
     pub through_entry: u64,
     pub messages: Vec<Message>,
     pub chunked: bool,
+    pub smaller_through_entry: Option<u64>,
 }
 
 #[derive(Clone)]
@@ -1032,6 +1033,7 @@ impl Session {
         keep_bytes: usize,
         max_summary_bytes: usize,
         summary_images: bool,
+        max_through_entry: u64,
     ) -> Result<Option<CompactionPlan>, SessionError> {
         let store = self.store.lock().map_err(|_| SessionError::Poisoned)?;
         let entries = read_entries(&store.connection)?;
@@ -1056,14 +1058,17 @@ impl Session {
             }
             None => 1,
         };
-        let mut prefix_fit = None;
+        let mut prefix_fits = Vec::new();
         for boundary in (previous + 1)..=entries.len() as u64 {
             if let Some(message) = &projected[boundary as usize - 1] {
                 prefix_bytes = prefix_bytes
                     .saturating_add(crate::summary::content_bytes(message, summary_images)?);
             }
-            if prefix_bytes <= max_summary_bytes && store.settled.contains(&boundary) {
-                prefix_fit = Some(boundary);
+            if boundary <= max_through_entry
+                && prefix_bytes <= max_summary_bytes
+                && store.settled.contains(&boundary)
+            {
+                prefix_fits.push(boundary);
             }
         }
         let mut suffix_bytes = 2usize;
@@ -1125,10 +1130,16 @@ impl Session {
         } else {
             through
         };
-        let Some((suffix_target, prefix_fit)) = through.zip(prefix_fit) else {
+        let Some((suffix_target, prefix_fit)) = through.zip(prefix_fits.last().copied()) else {
             return Ok(None);
         };
         let through_entry = suffix_target.min(prefix_fit);
+        // On capacity rejection halve actual settled candidates, not bytes.
+        // This bounds retries without jumping below the earliest valid cut.
+        let smaller_count = prefix_fits.partition_point(|&cut| cut < through_entry);
+        let smaller_through_entry = smaller_count
+            .checked_sub(1)
+            .map(|last| prefix_fits[last / 2]);
         let mut messages = Vec::new();
         if let Some((_, summary)) = &store.state.compaction {
             messages.push(summary_message(summary));
@@ -1140,6 +1151,7 @@ impl Session {
             through_entry,
             messages,
             chunked: through_entry < suffix_target,
+            smaller_through_entry,
         }))
     }
 
@@ -2513,7 +2525,7 @@ mod tests {
             assert_eq!(context.contains("external effect unknown"), !excluded);
             // Settled prefix cuts cannot bisect shell intent and outcome.
             let plan = session
-                .compaction_plan(0, usize::MAX, true)
+                .compaction_plan(0, usize::MAX, true, u64::MAX)
                 .unwrap()
                 .unwrap();
             assert!(plan.through_entry >= 2);
@@ -2706,7 +2718,7 @@ mod tests {
         assert!(!context.contains("external effect unknown"));
         assert!(!context.contains("private"));
         let plan = reopened
-            .compaction_plan(0, usize::MAX, true)
+            .compaction_plan(0, usize::MAX, true, u64::MAX)
             .unwrap()
             .unwrap();
         assert!(
@@ -3345,7 +3357,7 @@ mod tests {
             )
             .unwrap();
         let plan = session
-            .compaction_plan(0, usize::MAX, true)
+            .compaction_plan(0, usize::MAX, true, u64::MAX)
             .unwrap()
             .unwrap();
         assert_eq!(plan.through_entry, 3);
@@ -4108,7 +4120,7 @@ mod tests {
             .unwrap();
         assert!(
             session
-                .compaction_plan(0, usize::MAX, true)
+                .compaction_plan(0, usize::MAX, true, u64::MAX)
                 .unwrap()
                 .is_none()
         );
@@ -4126,7 +4138,7 @@ mod tests {
             .unwrap();
         assert_eq!(
             session
-                .compaction_plan(0, usize::MAX, true)
+                .compaction_plan(0, usize::MAX, true, u64::MAX)
                 .unwrap()
                 .unwrap()
                 .through_entry,
@@ -4134,7 +4146,7 @@ mod tests {
         );
         assert_eq!(
             session
-                .compaction_plan(1000, usize::MAX, true)
+                .compaction_plan(1000, usize::MAX, true, u64::MAX)
                 .unwrap()
                 .unwrap()
                 .through_entry,
@@ -4198,7 +4210,7 @@ mod tests {
             )
             .unwrap();
         let plan = session
-            .compaction_plan(1000, usize::MAX, true)
+            .compaction_plan(1000, usize::MAX, true, u64::MAX)
             .unwrap()
             .unwrap();
         assert_eq!(plan.through_entry, 3);
@@ -4257,7 +4269,7 @@ mod tests {
             .unwrap();
         assert_eq!(
             session
-                .compaction_plan(0, usize::MAX, true)
+                .compaction_plan(0, usize::MAX, true, u64::MAX)
                 .unwrap()
                 .unwrap()
                 .through_entry,
@@ -4267,7 +4279,7 @@ mod tests {
         let reopened = Session::open(&path).unwrap();
         assert_eq!(
             reopened
-                .compaction_plan(0, usize::MAX, true)
+                .compaction_plan(0, usize::MAX, true, u64::MAX)
                 .unwrap()
                 .unwrap()
                 .through_entry,

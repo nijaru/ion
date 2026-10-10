@@ -459,16 +459,20 @@ impl Agent {
         F: FnMut(AgentEvent) + Send,
     {
         let output_tokens = self.limits.max_output_tokens.min(4096);
-        let mut budget = self.limits.max_request_bytes;
+        let mut max_through_entry = u64::MAX;
         let (through_entry, chunked, request) = loop {
             if stop.is_cancelled() {
                 return Err(AgentError::Cancelled);
             }
-            let Some(plan) =
-                session.compaction_plan(keep_bytes, budget, self.limits.image_input)?
+            let Some(plan) = session.compaction_plan(
+                keep_bytes,
+                self.limits.max_request_bytes,
+                self.limits.image_input,
+                max_through_entry,
+            )?
             else {
                 return if session
-                    .compaction_plan(keep_bytes, usize::MAX, self.limits.image_input)?
+                    .compaction_plan(keep_bytes, usize::MAX, self.limits.image_input, u64::MAX)?
                     .is_some()
                 {
                     Err(AgentError::ContextTooLarge)
@@ -476,7 +480,7 @@ impl Agent {
                     Ok(None)
                 };
             };
-            let request = ModelRequest {
+            let mut request = ModelRequest {
                 route: ModelRoute::direct(self.model.clone(), ModelRouteReason::Auxiliary),
                 provider_session_id: Some(session.provider_session_id().to_string()),
                 instructions: Some(crate::summary::INSTRUCTIONS.into()),
@@ -489,13 +493,13 @@ impl Agent {
                 prompt_cache: ion_ai::PromptCacheIntent::Default,
                 controls: self.limits.controls(session.reasoning()?, false),
             };
-            if self.limits.request_output_budget(&request, output_tokens)? == Some(output_tokens) {
+            if let Some(available) = self.limits.request_output_budget(&request, output_tokens)? {
+                request.controls.max_output_tokens = available;
                 break (plan.through_entry, plan.chunked, request);
             }
-            budget /= 2;
-            if budget == 0 {
-                return Err(AgentError::ContextTooLarge);
-            }
+            max_through_entry = plan
+                .smaller_through_entry
+                .ok_or(AgentError::ContextTooLarge)?;
         };
         let GeneratedResponse { response, route } =
             generate_with_retry(&self.service, &request, stop, &mut |_| {}).await?;
@@ -4515,6 +4519,88 @@ mod tests {
         assert!(session.view().unwrap().compacted_through.is_some());
         drop(session);
         std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[tokio::test]
+    async fn compaction_uses_available_capacity_without_skipping_valid_settled_prefixes() {
+        for (window, lengths) in [(12_000, vec![10]), (50_000, vec![49_900, 13_400, 34_900])] {
+            let root =
+                std::env::temp_dir().join(format!("ion-summary-capacity-{}", uuid::Uuid::now_v7()));
+            std::fs::create_dir(&root).unwrap();
+            let path = root.join("session.sqlite");
+            let session = CodingSession::create(&path, &root).unwrap();
+            let seed_service =
+                Arc::new(ScriptedModelService::new(lengths.iter().map(|&length| {
+                    response(vec![Content::Text("b".repeat(length))])
+                })));
+            let seed_agent = Agent::new(seed_service, Arc::new(TestTools::new(&root)), model())
+                .with_limits(AgentLimits {
+                    max_output_tokens: 100_000,
+                    ..AgentLimits::default()
+                });
+            for length in lengths {
+                seed_agent
+                    .submit(
+                        &session,
+                        "a".repeat(length),
+                        "test".into(),
+                        CancellationToken::new(),
+                        |_| {},
+                    )
+                    .await
+                    .unwrap();
+            }
+            let before = session.view().unwrap().entries;
+            let scripts =
+                Arc::new(ScriptedModelService::new((0..3).map(|_| {
+                    response(vec![Content::Text("Retained settled history.".into())])
+                })));
+            let agent = Agent::new(scripts.clone(), Arc::new(TestTools::new(&root)), model())
+                .with_limits(AgentLimits {
+                    context_window_tokens: Some(window),
+                    ..AgentLimits::default()
+                });
+            let mut cuts = Vec::new();
+            let changed = agent
+                .compact(&session, CancellationToken::new(), |event| {
+                    if let AgentEvent::ContextCompacted { through_entry } = event {
+                        cuts.push(through_entry);
+                    }
+                })
+                .await;
+            let after = session.view().unwrap().entries;
+            drop(session);
+            let reopened = CodingSession::open(&path).unwrap();
+            let reopened_entries = reopened.view().unwrap().entries;
+            drop(reopened);
+            std::fs::remove_dir_all(root).unwrap();
+            assert!(changed.unwrap(), "window {window}");
+            assert!(after.starts_with(&before));
+            assert_eq!(reopened_entries, after);
+            let requests = scripts.requests();
+            if window == 12_000 {
+                assert_eq!(cuts.len(), 1);
+                assert!(requests[0].controls.max_output_tokens > 0);
+                assert!(requests[0].controls.max_output_tokens < 4096);
+            } else {
+                assert_eq!(cuts.len(), 2);
+                assert!(cuts[0] < cuts[1]);
+                assert_eq!(requests.len(), 2);
+                assert_eq!(
+                    requests[0].messages[0].content.len(),
+                    2,
+                    "the first settled Turn must remain a candidate"
+                );
+            }
+            for request in requests {
+                assert_eq!(request.route.reason, ModelRouteReason::Auxiliary);
+                assert!(request.tools.is_empty());
+                assert_eq!(
+                    agent.limits.request_output_budget(&request, 4096).unwrap(),
+                    Some(request.controls.max_output_tokens)
+                );
+            }
+        }
     }
 
     #[tokio::test]
