@@ -683,6 +683,17 @@ struct CaptureState {
     full_error: Option<String>,
 }
 
+impl CaptureState {
+    fn record_error(&mut self, message: String) {
+        if let Some(previous) = &mut self.full_error {
+            previous.push_str("; ");
+            previous.push_str(&message);
+        } else {
+            self.full_error = Some(message);
+        }
+    }
+}
+
 impl Drop for CaptureState {
     fn drop(&mut self) {
         // A dropped client must not leave an unclaimed completed artifact.
@@ -805,7 +816,7 @@ impl OutputCapture {
                                 Ok(file) => spool = Some(file),
                                 Err(error) => {
                                     spool_failed = true;
-                                    state.full_error = Some(error.to_string());
+                                    state.record_error(error.to_string());
                                 }
                             }
                         } else if let Some(file) = &mut spool
@@ -813,10 +824,18 @@ impl OutputCapture {
                         {
                             spool_failed = true;
                             spool = None;
-                            state.full_error = Some(error.to_string());
+                            state.record_error(error.to_string());
                         }
                     }
-                    Err(_) => break,
+                    Err(error) if error.kind() == std::io::ErrorKind::Interrupted => {
+                        // A signal is not EOF or a permanent capture fault.
+                        // Yield so repeated interruptions cannot starve stop.
+                        tokio::task::yield_now().await;
+                    }
+                    Err(error) => {
+                        state.record_error(format!("output pipe read failed: {error}"));
+                        break;
+                    }
                 }
             }
             // Acquisition has stopped, but every started filesystem operation
@@ -824,7 +843,7 @@ impl OutputCapture {
             if let Some(spool) = spool {
                 match spool.finish(state.complete).await {
                     Ok(path) => state.full_path = path,
-                    Err(error) => state.full_error = Some(error.to_string()),
+                    Err(error) => state.record_error(error.to_string()),
                 }
             }
             state
@@ -1433,6 +1452,79 @@ mod tests {
                 }
             }
         });
+    }
+
+    #[tokio::test]
+    async fn interrupted_capture_retries_and_fatal_pipe_errors_remain_visible() {
+        use std::{
+            io::ErrorKind,
+            pin::Pin,
+            task::{Context, Poll},
+        };
+        use tokio::io::{AsyncRead, ReadBuf};
+        struct FaultThenTail {
+            prefix: std::io::Cursor<Vec<u8>>,
+            fault: Option<ErrorKind>,
+            tail: std::io::Cursor<Vec<u8>>,
+        }
+        impl AsyncRead for FaultThenTail {
+            fn poll_read(
+                mut self: Pin<&mut Self>,
+                cx: &mut Context<'_>,
+                buf: &mut ReadBuf<'_>,
+            ) -> Poll<std::io::Result<()>> {
+                if self.prefix.position() < self.prefix.get_ref().len() as u64 {
+                    return Pin::new(&mut self.prefix).poll_read(cx, buf);
+                }
+                if let Some(kind) = self.fault.take() {
+                    return Poll::Ready(Err(std::io::Error::new(kind, "injected pipe fault")));
+                }
+                Pin::new(&mut self.tail).poll_read(cx, buf)
+            }
+        }
+        let prefix = b"x\n".repeat(35000);
+        let tail = b"END_MARKER\n";
+        for kind in [ErrorKind::Interrupted, ErrorKind::Other] {
+            let (captured, cancelled) = OutputCapture::start(FaultThenTail {
+                prefix: std::io::Cursor::new(prefix.clone()),
+                fault: Some(kind),
+                tail: std::io::Cursor::new(tail.to_vec()),
+            })
+            .finish(&CancellationToken::new(), false)
+            .await;
+            assert!(!cancelled);
+            if kind == ErrorKind::Interrupted {
+                let saved = captured
+                    .full_path
+                    .as_ref()
+                    .map(|path| fs::read(path).unwrap());
+                if let Some(path) = &captured.full_path {
+                    fs::remove_file(path).unwrap();
+                }
+                assert!(captured.complete, "an interrupted read is retryable");
+                let payload = [prefix.as_slice(), tail].concat();
+                assert_eq!(captured.bytes, payload[payload.len() - MAX_OUTPUT_BYTES..]);
+                assert_eq!(
+                    captured.omitted_bytes,
+                    Some((payload.len() - MAX_OUTPUT_BYTES) as u64)
+                );
+                assert_eq!(saved, Some(payload));
+                assert_eq!(captured.full_error, None);
+            } else {
+                assert!(!captured.complete);
+                assert_eq!(captured.omitted_bytes, None);
+                assert_eq!(captured.full_path, None);
+                assert_eq!(captured.bytes, prefix[prefix.len() - MAX_OUTPUT_BYTES..]);
+                assert!(
+                    captured
+                        .full_error
+                        .as_deref()
+                        .is_some_and(|message| message.contains("injected pipe fault")),
+                    "missing read failure: {:?}",
+                    captured.full_error
+                );
+            }
+        }
     }
 
     #[tokio::test]
