@@ -56,6 +56,7 @@ pub(super) async fn connection<R: AsyncBufRead + Unpin, W: Write>(
         let mut closing = false;
         loop {
             let busy = control.active.is_some();
+            let preparing = control.pending_input.is_some();
             tokio::select! {
                 Some(record) = events.recv(), if busy => {
                     output.write(&record)?;
@@ -65,6 +66,13 @@ pub(super) async fn connection<R: AsyncBufRead + Unpin, W: Write>(
                     let completion = control.finish_operation(joined);
                     operation_error = completion.error;
                     while let Ok(record) = events.try_recv() { output.write(&record)?; }
+                    output.records(completion.records)?;
+                    if operation_error.is_some() { break; }
+                    if !closing { control.start_next_follow_up()?; }
+                }
+                joined = async { (&mut control.pending_input.as_mut().expect("pending input").task).await }, if preparing => {
+                    let completion = control.finish_preparation(joined);
+                    operation_error = completion.error;
                     output.records(completion.records)?;
                     if operation_error.is_some() { break; }
                     if !closing { control.start_next_follow_up()?; }
@@ -79,11 +87,12 @@ pub(super) async fn connection<R: AsyncBufRead + Unpin, W: Write>(
                         Input::Eof => {
                             closing = true;
                             if let Some(active) = &control.active { active.stop.cancel(); }
+                            control.cancel_preparation();
                         }
                     }
                 }
             }
-            if closing && control.active.is_none() { break; }
+            if closing && control.active.is_none() && control.pending_input.is_none() { break; }
         }
         Ok(())
     }.await;
@@ -91,20 +100,31 @@ pub(super) async fn connection<R: AsyncBufRead + Unpin, W: Write>(
     // Close admission and unblock progress sends before joining. Input failure
     // does not revoke a healthy stdout's ability to deliver terminal/recovery.
     events.close();
-    let records = if let Some(active) = control.active.as_mut() {
+    control.cancel_preparation();
+    let mut settlement = operation_error.map_or(Ok(()), Err);
+    let mut records = Vec::new();
+    if let Some(active) = control.active.as_mut() {
         active.stop.cancel();
         let joined = (&mut active.task).await;
         let completion = control.finish_operation(joined);
-        operation_error = completion.error;
-        completion.records
-    } else {
-        Vec::new()
-    };
-    let result = combine_errors(
-        result,
-        operation_error.map_or(Ok(()), Err),
-        "settlement also failed",
-    );
+        settlement = combine_errors(
+            settlement,
+            completion.error.map_or(Ok(()), Err),
+            "operation settlement also failed",
+        );
+        records.extend(completion.records);
+    }
+    if let Some(pending) = control.pending_input.as_mut() {
+        let joined = (&mut pending.task).await;
+        let completion = control.finish_preparation(joined);
+        settlement = combine_errors(
+            settlement,
+            completion.error.map_or(Ok(()), Err),
+            "input settlement also failed",
+        );
+        records.extend(completion.records);
+    }
+    let result = combine_errors(result, settlement, "settlement also failed");
     let publication = if output.healthy {
         (|| {
             while let Ok(record) = events.try_recv() {

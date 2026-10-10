@@ -101,6 +101,29 @@ impl SessionBinding {
         }
     }
 
+    /// Capture image sources against this binding, without borrowing it while
+    /// normalization runs. Clients retain the future until settlement.
+    pub fn prepare_images(
+        &self,
+        mut sources: Vec<crate::image_input::ImageSource>,
+        stop: CancellationToken,
+    ) -> impl std::future::Future<Output = Result<Vec<crate::image_input::LoadedImage>>> + Send + use<>
+    {
+        for source in &mut sources {
+            if let crate::image_input::ImageSource::Path(path) = source
+                && !path.is_absolute()
+            {
+                *path = self.session.cwd().join(&*path);
+            }
+        }
+        crate::image_input::prepare_images(
+            &self.selected,
+            sources,
+            self.agent.limits().max_request_bytes,
+            stop,
+        )
+    }
+
     pub fn session_id(&self) -> String {
         self.session
             .path()

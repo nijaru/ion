@@ -479,18 +479,27 @@ async fn run_cli(cli: Cli) -> Result<()> {
             let previous = existing.as_ref().and_then(|view| view.last_model.clone());
             let selected = models.choose(cli.provider, cli.model, previous, credentials)?;
             selected.require_access(credentials)?;
-            let images = cli
+            let sources = cli
                 .image
                 .iter()
                 .map(|path| {
-                    let path = if path.is_absolute() {
+                    ion_host::image_input::ImageSource::Path(if path.is_absolute() {
                         path.clone()
                     } else {
                         session_cwd.join(path)
-                    };
-                    ion_host::image_input::load_image(&selected, &path)
+                    })
                 })
-                .collect::<Result<Vec<_>>>()?;
+                .collect();
+            // Startup has not admitted a Session operation or taken terminal
+            // custody. Preserve default SIGINT here; registering Tokio's handler
+            // would also change the later interactive terminal's signal behavior.
+            let images = ion_host::image_input::prepare_images(
+                &selected,
+                sources,
+                ion_core::AgentLimits::default().max_request_bytes,
+                tokio_util::sync::CancellationToken::new(),
+            )
+            .await?;
             let session = Arc::new(if path.is_file() {
                 CodingSession::open(&path)?
             } else {

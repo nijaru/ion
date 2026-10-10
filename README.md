@@ -241,6 +241,14 @@ answer. `final` is the committed answer. Other commands are `steer`,
 `prompt`, `steer` and `follow_up` accept `images` as an array of local paths (relative to the
 Session's working directory) or inline `{ "mime_type": "image/png", "data": "BASE64" }`
 objects. Ion validates and normalizes both before accepting the input.
+Image preparation occupies one pending-input slot, not an accepted queue entry.
+`get_state` reports `busy: true` and `preparing_input: true`; controls such as
+`abort` remain available. Another input or binding-changing command is refused
+until preparation settles. `abort`, `clear_queue` and connection closure cancel
+pending preparation and await its owned work; the original command then receives
+a correlated failure rather than a queue acknowledgement. Already-running image
+decoding cannot be forcibly interrupted. Steering preparation is refused if its
+original Turn ends; follow-up preparation can finish and queue after that Turn.
 `steer` queues typed input for the active Turn. `follow_up` queues a separate
 Turn while one is active; its acknowledgement means only that Ion holds the
 prepared input. A later `follow_up_started` record gives its committed Turn ID.
@@ -265,7 +273,7 @@ follow-ups are returned, including a starting follow-up whose input had not
 entered the Session; input already accepted by the Session is never returned
 as uncommitted.
 Session, resource, model, shell and manual-compaction commands require an idle
-operation. Send `{"id":"s","type":"shell","command":"cargo test"}` to run a direct
+operation with no pending input preparation. Send `{"id":"s","type":"shell","command":"cargo test"}` to run a direct
 command. Its acknowledgement means the operation started, not that the command
 was dispatched. Read through the correlated `shell_end` record for
 completed/cancelled/failed status. An `outcome` with `kind: "observed"` contains
@@ -417,12 +425,15 @@ configured key in cleartext; use HTTPS when the endpoint offers it.
 
 Attach JPEG, PNG, GIF or WebP files with `ion --image PATH run "PROMPT"` or
 `ion --image PATH chat`; repeat `--image` for several images. In chat,
-`/image PATH` attaches a file to the next prompt. Ctrl-V reads the clipboard
-on the host running Ion: copied files enter as paths, copied image pixels
-attach to the prompt, and otherwise text is pasted. Native reads and image
-preparation run in a helper process with a three-second deadline. Ion stops and
-reaps it on timeout or terminal exit. Helper transfers are limited to 32 MiB
-before editor/input limits apply; this is not a process-memory bound.
+`/image PATH` prepares a file for the next prompt without locking the editor.
+Wait for attachment completion before sending; Ctrl-C cancels preparation while
+retaining typed input. File preparation uses an owned blocking worker. Cancellation
+and exit join it, but cannot interrupt an already-running decoder.
+Ctrl-V reads the clipboard on the host running Ion: copied files enter as paths,
+copied image pixels attach to the prompt, and otherwise text is pasted.
+Clipboard reads and normalization run in a helper process with a three-second
+deadline. Ion stops and reaps it on timeout or terminal exit. Helper transfers
+are limited to 32 MiB before editor/input limits apply; this is not a process-memory bound.
 Enter steers attached images during a running Turn; Alt-Enter queues a separate follow-up. A terminal's
 ordinary text paste still works. Relative paths resolve in
 the Session's working directory. Ion decodes and checks the file, applies

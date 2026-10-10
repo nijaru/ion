@@ -13,7 +13,7 @@ use crate::display_text::{fit_line, push_wrapped};
 use crate::terminal_commands::{Builtin, Completion};
 use crate::transcript_detail::{DetailView, tools};
 use crate::transcript_render::kind_label;
-use anyhow::{Context, Result, ensure};
+use anyhow::{Context, Result};
 use ion_ai::{Content, Message, ModelRef};
 use ion_core::{
     AcceptedInput, AgentLimits, CodingSession, ForkPoint, InputBudget, InputReservation,
@@ -21,7 +21,7 @@ use ion_core::{
     TurnEndReason,
 };
 use ion_host::image_input::LoadedImage;
-use ion_host::{CredentialStatus, CredentialStore, Resources, Selection};
+use ion_host::{CredentialStatus, CredentialStore, Resources};
 use ion_terminal::{
     Frame, InputEvent, KeyCode, KeyEvent, Modifiers, MouseKind, Screen, TerminalSession,
 };
@@ -31,8 +31,10 @@ use tokio_util::sync::CancellationToken;
 use unicode_segmentation::UnicodeSegmentation;
 
 mod composer;
+mod input_preparation;
 mod picker;
 use composer::input_window;
+use input_preparation::*;
 use picker::{Picker, PickerItem, PickerValue, Pickers};
 
 const MAX_DRAFT: usize = 64 * 1024;
@@ -106,10 +108,12 @@ struct Frontend {
     completion: Completion,
     pending: VecDeque<TurnInput>,
     input_budget: InputBudget,
+    input_limits: AgentLimits,
     prompt_history: Vec<String>,
     browsing: Option<PromptBrowse>,
     details: Option<DetailView>,
     clipboard_job: Option<ClipboardJob>,
+    image_job: Option<ImageJob>,
     cwd: PathBuf,
 }
 
@@ -200,17 +204,6 @@ fn split_editor_input(input: Message) -> Result<(String, Vec<LoadedImage>), &'st
     Ok((prompt, images))
 }
 
-enum PreparedPaste {
-    Files(Vec<PathBuf>),
-    Image(LoadedImage),
-    Text(String),
-}
-
-struct ClipboardJob {
-    stop: CancellationToken,
-    task: tokio::task::JoinHandle<Result<PreparedPaste>>,
-}
-
 pub struct ChatInit {
     pub binding: ion_host::SessionBinding,
     pub images: Vec<LoadedImage>,
@@ -237,6 +230,7 @@ pub async fn chat(init: ChatInit) -> Result<()> {
     }
     let outcome: Result<()> = async {
     loop {
+        ui.input_limits = runtime.agent().limits();
         terminal
             .check_active()
             .context("terminal lifecycle failed before input dispatch")?;
@@ -253,6 +247,16 @@ pub async fn chat(init: ChatInit) -> Result<()> {
         }
         let event = tokio::select! {
             event = terminal.next_input() => event,
+            joined = async { (&mut ui.image_job.as_mut().expect("pending image").task).await }, if ui.image_job.is_some() => {
+                finish_image_preparation(&mut ui, joined);
+                continue;
+            },
+            joined = async { (&mut ui.clipboard_job.as_mut().expect("pending clipboard").task).await }, if ui.clipboard_job.is_some() => {
+                if let Err(error) = finish_joined_clipboard_paste(&mut ui, joined) {
+                    ui.status = format!("Paste failed: {error:#}");
+                }
+                continue;
+            },
             notice = ui.pickers.complete(), if ui.pickers.has_job() => {
                 if let Some(notice) = notice {
                     ui.note(notice);
@@ -327,6 +331,16 @@ pub async fn chat(init: ChatInit) -> Result<()> {
                             .unwrap_or((&command, ""));
                         let args = args.trim();
                         let builtin = Builtin::parse(name);
+                        if (ui.image_job.is_some() || ui.clipboard_job.is_some())
+                            && !matches!(builtin, Some(Builtin::Help | Builtin::Tui | Builtin::Settings | Builtin::Copy))
+                        {
+                            if let Some(source) = raw_command {
+                                ui.draft = source.literal;
+                                ui.cursor = source.cursor;
+                            }
+                            ui.status = "Wait for input preparation or cancel it with Ctrl-C".into();
+                            continue;
+                        }
                         if builtin == Some(Builtin::Login) && !args.is_empty() {
                             match login_in_terminal(
                                 &mut terminal,
@@ -402,13 +416,15 @@ pub async fn chat(init: ChatInit) -> Result<()> {
                         Some(runtime.resources()),
                     ),
                     Action::PasteClipboard => {
-                        if let Err(error) = paste_clipboard(&mut ui, runtime.selected()).await {
-                            ui.status = format!("Paste failed: {error:#}");
-                        }
+                        start_clipboard_paste(&mut ui, runtime.selected());
                     }
                     Action::Pick(value) => {
                         if let PickerValue::File { path, start, end } = value {
                             ui.insert_file(path, start, end);
+                            continue;
+                        }
+                        if ui.image_job.is_some() || ui.clipboard_job.is_some() {
+                            ui.status = "Wait for input preparation or cancel it with Ctrl-C".into();
                             continue;
                         }
                         if let PickerValue::ForkBefore { turn, input } = value {
@@ -460,10 +476,11 @@ pub async fn chat(init: ChatInit) -> Result<()> {
     // Stop discovery admission/publication before joining either helper. Every
     // normal/error exit retains custody until both jobs have been reaped.
     ui.pickers.close();
+    let image_cleanup = cancel_image_preparation(&mut ui).await;
     let clipboard_cleanup = cancel_clipboard_paste(&mut ui).await;
     let discovery_cleanup = ui.pickers.shutdown().await;
     let mut outcome = outcome;
-    for cleanup in [clipboard_cleanup, discovery_cleanup] {
+    for cleanup in [image_cleanup, clipboard_cleanup, discovery_cleanup] {
         if let Err(error) = cleanup {
             outcome = Err(match outcome {
                 Ok(()) => error,
@@ -491,128 +508,6 @@ async fn new_inline_screen(terminal: &mut TerminalSession) -> Result<Screen> {
         height,
         1,
     ))
-}
-
-async fn paste_clipboard(ui: &mut Frontend, selected: &Selection) -> Result<()> {
-    start_clipboard_paste(ui, selected);
-    finish_clipboard_paste(ui).await
-}
-
-fn start_clipboard_paste(ui: &mut Frontend, selected: &Selection) {
-    if ui.clipboard_job.is_some() {
-        ui.status = "Clipboard paste is already in progress".into();
-        return;
-    }
-    let selected = selected.clone();
-    let stop = CancellationToken::new();
-    let reader_stop = stop.clone();
-    ui.clipboard_job = Some(ClipboardJob {
-        stop,
-        task: tokio::spawn(async move {
-            let content = crate::clipboard_reader::read(&reader_stop).await?;
-            prepare_clipboard(&selected, content)
-        }),
-    });
-    ui.status = "Reading clipboard…".into();
-}
-
-async fn finish_clipboard_paste(ui: &mut Frontend) -> Result<()> {
-    let job = ui
-        .clipboard_job
-        .take()
-        .context("no clipboard paste is pending")?;
-    let content = job.task.await.context("clipboard reader stopped")??;
-    if matches!(
-        ui.status.as_str(),
-        "Reading clipboard…" | "Wait for clipboard paste, then send the prompt"
-    ) {
-        ui.status.clear();
-    }
-    apply_clipboard(ui, content)
-}
-
-async fn finish_ready_clipboard_paste(ui: &mut Frontend) {
-    if ui
-        .clipboard_job
-        .as_ref()
-        .is_some_and(|job| job.task.is_finished())
-    {
-        finish_pending_clipboard_paste(ui).await;
-    }
-}
-
-async fn finish_pending_clipboard_paste(ui: &mut Frontend) {
-    if ui.clipboard_job.is_some()
-        && let Err(error) = finish_clipboard_paste(ui).await
-    {
-        ui.status = format!("Paste failed: {error:#}");
-    }
-}
-
-async fn cancel_clipboard_paste(ui: &mut Frontend) -> Result<()> {
-    if let Some(job) = ui.clipboard_job.take() {
-        job.stop.cancel();
-        // The input is being discarded, but its task must finish. An ordinary
-        // clipboard refusal/cancellation is not a terminal-exit failure.
-        let _discarded = job
-            .task
-            .await
-            .context("clipboard reader stopped during exit")?;
-    }
-    Ok(())
-}
-
-fn prepare_clipboard(
-    selected: &Selection,
-    content: crate::clipboard_reader::PasteContent,
-) -> Result<PreparedPaste> {
-    match content {
-        crate::clipboard_reader::PasteContent::Files(paths) => Ok(PreparedPaste::Files(paths)),
-        crate::clipboard_reader::PasteContent::Image { content, note } => {
-            ion_host::image_input::require_image_input(selected)?;
-            Ok(PreparedPaste::Image(LoadedImage { content, note }))
-        }
-        crate::clipboard_reader::PasteContent::Text(text) => Ok(PreparedPaste::Text(text)),
-    }
-}
-
-fn apply_clipboard(ui: &mut Frontend, content: PreparedPaste) -> Result<()> {
-    match content {
-        PreparedPaste::Files(paths) => {
-            let shell = ui.draft.trim_start().starts_with('!');
-            let text = clipboard_paths(&paths, shell)?;
-            let before = ui.draft[..ui.cursor].chars().next_back();
-            let after = ui.draft[ui.cursor..].chars().next();
-            let prefix = before.filter(|ch| !ch.is_whitespace()).map_or("", |_| " ");
-            let suffix = after.filter(|ch| !ch.is_whitespace()).map_or("", |_| " ");
-            ui.insert(&format!("{prefix}{text}{suffix}"));
-        }
-        PreparedPaste::Image(image) => {
-            ui.images.push(image);
-            ui.status = format!("{} image(s) attached to the next prompt", ui.images.len());
-        }
-        PreparedPaste::Text(text) => ui.insert(&text),
-    }
-    Ok(())
-}
-
-fn clipboard_paths(paths: &[PathBuf], shell: bool) -> Result<String> {
-    let mut formatted = Vec::with_capacity(paths.len());
-    for path in paths {
-        let path = path.to_str().context("clipboard path is not UTF-8")?;
-        ensure!(
-            !path.chars().any(char::is_control),
-            "clipboard path contains control characters"
-        );
-        formatted.push(if shell {
-            shlex::try_quote(path)
-                .context("clipboard path cannot be shell quoted")?
-                .into_owned()
-        } else {
-            path.to_owned()
-        });
-    }
-    Ok(formatted.join(if shell { " " } else { "\n" }))
 }
 
 async fn login_in_terminal(
@@ -758,17 +653,7 @@ fn handle_command(
         },
         Some(Builtin::Image) => {
             anyhow::ensure!(!args.is_empty(), "use /image PATH");
-            let path = Path::new(args);
-            let path = if path.is_absolute() {
-                path.to_owned()
-            } else {
-                runtime.session().cwd().join(path)
-            };
-            ui.images.push(ion_host::image_input::load_image(
-                runtime.selected(),
-                &path,
-            )?);
-            ui.status = format!("{} image(s) attached to the next prompt", ui.images.len());
+            start_image_preparation(runtime, ui, PathBuf::from(args))?;
         }
         Some(Builtin::Skills) => ui.note(
             runtime
@@ -1048,7 +933,7 @@ async fn run_compaction(
             }
         }
     };
-    finish_pending_clipboard_paste(ui).await;
+    finish_ready_clipboard_paste(ui).await;
     if result.is_err() {
         return_pending_to_editor(ui);
     }
@@ -1328,7 +1213,7 @@ async fn run_user_shell(
             }
         }
     };
-    finish_pending_clipboard_paste(ui).await;
+    finish_ready_clipboard_paste(ui).await;
     // Terminal failure is fatal even when Session inspection or shell settlement
     // also failed. The operation has settled; queued input has no new authority.
     if let Some(error) = output_error {
@@ -1457,7 +1342,7 @@ async fn run_turn(
             }
         }
     };
-    finish_pending_clipboard_paste(ui).await;
+    finish_ready_clipboard_paste(ui).await;
     for input in steering.take_uncommitted() {
         ui.pending.push_back(TurnInput::from_accepted(input));
     }
@@ -1568,6 +1453,26 @@ impl Frontend {
         }
         self.replace_draft(draft);
         self.images = images;
+        Ok(())
+    }
+
+    fn attach_images(&mut self, images: Vec<LoadedImage>) -> Result<()> {
+        let bytes = self
+            .images
+            .iter()
+            .chain(&images)
+            .try_fold(0usize, |bytes, image| {
+                bytes
+                    .checked_add(image.content.data().len())
+                    .and_then(|bytes| bytes.checked_add(image.note.as_ref().map_or(0, String::len)))
+            })
+            .context("image payload size overflow")?;
+        anyhow::ensure!(
+            bytes <= self.input_limits.max_request_bytes,
+            "attached images exceed input byte limit"
+        );
+        self.images.extend(images);
+        self.status = format!("{} image(s) attached to the next prompt", self.images.len());
         Ok(())
     }
 
@@ -1781,14 +1686,33 @@ impl Frontend {
         }
         // Clipboard preparation owns future attachments. Preserve the literal
         // editor input until it completes, before any client can acknowledge it.
-        if self.clipboard_job.is_some()
+        if (self.clipboard_job.is_some() || self.image_job.is_some())
             && key.code == KeyCode::Enter
             && !key.modifiers.contains(Modifiers::SHIFT)
             && !key.modifiers.contains(Modifiers::CONTROL)
             && Builtin::parse(self.draft.split_whitespace().next().unwrap_or("")).is_none()
         {
-            self.status = "Wait for clipboard paste, then send the prompt".into();
+            self.status = if self.image_job.is_some() {
+                "Wait for image preparation, then send the prompt"
+            } else {
+                "Wait for clipboard paste, then send the prompt"
+            }
+            .into();
             return Action::None;
+        }
+        if key.code == KeyCode::Char('c') && key.modifiers.contains(Modifiers::CONTROL) {
+            let stop = self
+                .image_job
+                .as_ref()
+                .map(|job| &job.stop)
+                .or_else(|| self.clipboard_job.as_ref().map(|job| &job.stop));
+            if let Some(stop) = stop
+                && !stop.is_cancelled()
+            {
+                stop.cancel();
+                self.status = "Cancelling input preparation…".into();
+                return Action::None;
+            }
         }
         let action = match key {
             KeyEvent {
@@ -2611,6 +2535,7 @@ fn next_grapheme(text: &str, cursor: usize) -> usize {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use ion_host::Selection;
     use unicode_width::UnicodeWidthStr;
 
     #[test]
@@ -2937,6 +2862,75 @@ mod tests {
             ui.key(KeyEvent::new(KeyCode::Char('v'), Modifiers::CONTROL), None),
             Action::PasteClipboard
         ));
+    }
+
+    #[tokio::test]
+    async fn image_preparation_retains_edits_and_discards_cancelled_success() {
+        let mut ui = Frontend::default();
+        let (release, held) = tokio::sync::oneshot::channel();
+        ui.image_job = Some(ImageJob {
+            stop: CancellationToken::new(),
+            task: tokio::spawn(async {
+                held.await.unwrap();
+                Ok(vec![
+                    ion_ai::normalize_rgba(1, 1, vec![255, 0, 0, 255]).unwrap(),
+                ])
+            }),
+        });
+        ui.insert("retained draft");
+        assert!(matches!(
+            ui.key(KeyEvent::new(KeyCode::Enter, Modifiers::NONE), None),
+            Action::None
+        ));
+        assert_eq!(ui.draft, "retained draft");
+        assert!(matches!(
+            ui.key(KeyEvent::new(KeyCode::Char('!'), Modifiers::NONE), None),
+            Action::None
+        ));
+        assert_eq!(ui.draft, "retained draft!");
+        assert!(matches!(
+            ui.key(KeyEvent::new(KeyCode::Char('c'), Modifiers::CONTROL), None),
+            Action::None
+        ));
+        assert!(ui.image_job.as_ref().unwrap().stop.is_cancelled());
+        release.send(()).unwrap();
+        let joined = (&mut ui.image_job.as_mut().unwrap().task).await;
+        finish_image_preparation(&mut ui, joined);
+        assert!(ui.images.is_empty());
+        assert_eq!(ui.draft, "retained draft!");
+        assert!(ui.image_job.is_none());
+    }
+
+    #[tokio::test]
+    async fn image_exit_joins_owned_work_and_attachment_capacity_is_atomic() {
+        let stop = CancellationToken::new();
+        let task_stop = stop.clone();
+        let (cancelled, observed) = tokio::sync::oneshot::channel();
+        let (release, held) = tokio::sync::oneshot::channel();
+        let mut ui = Frontend {
+            image_job: Some(ImageJob {
+                stop,
+                task: tokio::spawn(async move {
+                    task_stop.cancelled().await;
+                    cancelled.send(()).unwrap();
+                    held.await.unwrap();
+                    Ok(Vec::new())
+                }),
+            }),
+            ..Frontend::default()
+        };
+        let cleanup = cancel_image_preparation(&mut ui);
+        tokio::pin!(cleanup);
+        tokio::select! { result = &mut cleanup => panic!("abandoned image work: {result:?}"), _ = observed => {} }
+        release.send(()).unwrap();
+        cleanup.await.unwrap();
+        let image = ion_ai::normalize_rgba(1, 1, vec![255, 0, 0, 255]).unwrap();
+        let bytes = image.content.data().len();
+        let mut ui = Frontend::default();
+        ui.input_limits.max_request_bytes = bytes;
+        ui.attach_images(vec![image.clone()]).unwrap();
+        assert!(ui.attach_images(vec![image]).is_err());
+        assert_eq!(ui.images.len(), 1);
     }
 
     #[tokio::test]

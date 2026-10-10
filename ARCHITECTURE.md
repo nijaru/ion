@@ -91,6 +91,11 @@ final steering drain. Preserve literal editor input and image-note association
 on refusal/recovery; expand queued resources at admission, not later dispatch.
 Queue acceptance is not Session acceptance, and a stop request is not operation
 completion. Queue limits do not promise process-RSS or full model-context fit.
+Host image preparation must not stall client input or controls. Retain its
+captured route, resources and input association until validation and admission;
+preparation alone grants no queue or Session acceptance. Cancellation invalidates
+prepared results, including success racing with stop, and clients join owned
+preparation on controlled exit. Active bounded decoding need not support hard interruption.
 
 ## Session and recovery
 

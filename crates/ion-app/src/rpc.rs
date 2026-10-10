@@ -21,8 +21,10 @@ use crate::{
 
 mod connection;
 mod input;
+mod preparation;
 use connection::connection;
 use input::CommandReader;
+use preparation::PendingInput;
 
 struct Active {
     stop: CancellationToken,
@@ -111,6 +113,7 @@ struct Completion {
 struct Control {
     binding: ion_host::SessionBinding,
     active: Option<Active>,
+    pending_input: Option<PendingInput>,
     follow_ups: VecDeque<AcceptedInput<Option<Value>>>,
     input_budget: InputBudget,
     output: mpsc::Sender<Value>,
@@ -121,6 +124,7 @@ pub async fn run(binding: ion_host::SessionBinding) -> Result<()> {
     let control = Control {
         binding,
         active: None,
+        pending_input: None,
         follow_ups: VecDeque::new(),
         input_budget: InputBudget::default(),
         output,
@@ -165,6 +169,13 @@ impl Control {
             }
         };
         if let Operation::Turn { steering, .. } = active.operation {
+            if self
+                .pending_input
+                .as_ref()
+                .is_some_and(|pending| matches!(pending.kind, preparation::InputKind::Steer(_)))
+            {
+                self.cancel_preparation();
+            }
             records.extend(steering.take_uncommitted().into_iter().map(
                 |pending| json!({"type":"uncommitted_steering","input":pending.into_message()}),
             ));
@@ -178,8 +189,8 @@ impl Control {
 
     fn idle(&self) -> Result<()> {
         ensure!(
-            self.active.is_none(),
-            "an operation is active; abort or wait for its terminal record"
+            self.active.is_none() && self.pending_input.is_none(),
+            "an operation or input preparation is active; abort or wait for settlement"
         );
         Ok(())
     }
@@ -198,44 +209,16 @@ impl Control {
                 "command must be an object with an optional string id",
             ));
         }
-        if command == "prompt" {
-            return self
-                .prompt(&value, id.clone())
-                .err()
-                .map(|error| failure(id, command, &format!("{error:#}")));
+        if matches!(command, "prompt" | "steer" | "follow_up") {
+            return match self.prepare_input(&value, id.clone(), command) {
+                Ok(record) => record,
+                Err(error) => Some(failure(id, command, &format!("{error:#}"))),
+            };
         }
         let outcome: Result<Value> = (|| {
             match command {
-                "steer" => {
-                    let active = self.active.as_ref().context("no active operation")?;
-                    let steering = active.operation.steering().context("no active Turn")?;
-                    let message = required_string(&value, "message")?;
-                    let prompt = expand_input(self.binding.resources(), message.to_owned())?;
-                    let images = self.load_images(&value)?;
-                    ensure!(!prompt.trim().is_empty() || !images.is_empty(), "message is empty");
-                    steering.push_message(Message::user_input(prompt, images), ())?;
-                    Ok(json!({"disposition":"queued"}))
-                }
-                "follow_up" => {
-                    ensure!(
-                        self.active
-                            .as_ref()
-                            .is_some_and(|active| active.operation.steering().is_some()),
-                        "no active Turn; use prompt instead"
-                    );
-                    let message = required_string(&value, "message")?;
-                    let prompt = expand_input(self.binding.resources(), message.to_owned())?;
-                    let images = self.load_images(&value)?;
-                    ensure!(!prompt.trim().is_empty() || !images.is_empty(), "message is empty");
-                    let input = self.input_budget.admit(
-                        Message::user_input(prompt, images),
-                        id.clone(),
-                        self.binding.agent().limits(),
-                    )?;
-                    self.follow_ups.push_back(input);
-                    Ok(json!({"disposition":"queued","position":self.follow_ups.len()}))
-                }
                 "clear_queue" => {
+                    self.cancel_preparation();
                     let steering = self
                         .active
                         .as_ref()
@@ -249,14 +232,15 @@ impl Control {
                     Ok(json!({"steering":steering,"follow_up":follow_up}))
                 }
                 "abort" => {
-                    let active = self.active.as_ref().context("no active operation")?;
-                    active.stop.cancel();
+                    ensure!(self.active.is_some() || self.pending_input.is_some(), "no active operation or input preparation");
+                    if let Some(active) = &self.active { active.stop.cancel(); }
+                    self.cancel_preparation();
                     Ok(json!({"disposition":"requested"}))
                 }
                 "get_state" => {
                     let view = self.binding.session().view()?;
                     let operation = self.active.as_ref().map(|active| active.operation.name());
-                    Ok(json!({"session":self.session_id(),"cwd":view.cwd,"name":view.name,"model":self.binding.selected().identity(),"reasoning":view.reasoning.to_string(),"busy":self.active.is_some(),"operation":operation,"entries":view.entries.len(),"follow_ups":self.follow_ups.len()}))
+                    Ok(json!({"session":self.session_id(),"cwd":view.cwd,"name":view.name,"model":self.binding.selected().identity(),"reasoning":view.reasoning.to_string(),"busy":self.active.is_some() || self.pending_input.is_some(),"operation":operation,"preparing_input":self.pending_input.is_some(),"entries":view.entries.len(),"follow_ups":self.follow_ups.len()}))
                 }
                 "inspect" => {
                     let mut view = serde_json::to_value(self.binding.session().view()?)?;
@@ -331,49 +315,10 @@ impl Control {
         })
     }
 
-    fn load_images(&self, value: &Value) -> Result<Vec<ion_host::image_input::LoadedImage>> {
-        value.get("images").map_or(Ok(Vec::new()), |images| {
-            images
-                .as_array()
-                .context("images must be an array of local paths or inline images")?
-                .iter()
-                .map(|image| {
-                    if let Some(path) = image.as_str() {
-                        let path = PathBuf::from(path);
-                        let path = if path.is_absolute() {
-                            path
-                        } else {
-                            self.binding.session().cwd().join(path)
-                        };
-                        ion_host::image_input::load_image(self.binding.selected(), &path)
-                    } else {
-                        let mime_type = required_string(image, "mime_type")?;
-                        let data = required_string(image, "data")?;
-                        ion_host::image_input::load_encoded_image(
-                            self.binding.selected(),
-                            mime_type,
-                            data,
-                        )
-                    }
-                })
-                .collect::<Result<Vec<_>>>()
-        })
-    }
-
-    fn prompt(&mut self, value: &Value, id: Option<Value>) -> Result<()> {
-        self.idle()?;
-        let prompt = required_string(value, "message")?;
-        let prompt = expand_input(self.binding.resources(), prompt.to_owned())?;
-        let images = self.load_images(value)?;
-        ensure!(
-            !prompt.trim().is_empty() || !images.is_empty(),
-            "message is empty"
-        );
-        self.start_message(Message::user_input(prompt, images), id, None)
-    }
-
     fn start_next_follow_up(&mut self) -> Result<()> {
-        self.idle()?;
+        if self.active.is_some() || self.pending_input.is_some() {
+            return Ok(());
+        }
         if let Some(pending) = self.follow_ups.pop_front() {
             let (input, id, reservation) = pending.into_parts();
             self.start_message(input, id, Some(reservation))?;
@@ -637,6 +582,7 @@ mod tests {
         let control = Control {
             binding,
             active: None,
+            pending_input: None,
             follow_ups: VecDeque::new(),
             input_budget: InputBudget::default(),
             output,
@@ -950,6 +896,20 @@ mod tests {
         let output = control.output.clone();
         let settled = Arc::new(AtomicBool::new(false));
         let task_settled = settled.clone();
+        let preparation_settled = Arc::new(AtomicBool::new(false));
+        let task_preparation_settled = preparation_settled.clone();
+        let preparation_stop = CancellationToken::new();
+        let task_preparation_stop = preparation_stop.clone();
+        control.pending_input = Some(PendingInput {
+            kind: preparation::InputKind::FollowUp,
+            id: Some(json!("preparation-fault")),
+            stop: preparation_stop,
+            task: tokio::spawn(async move {
+                task_preparation_stop.cancelled().await;
+                task_preparation_settled.store(true, Ordering::SeqCst);
+                panic!("injected preparation panic during settlement");
+            }),
+        });
         let task = tokio::spawn(async move {
             task_stop.cancelled().await;
             assert!(output.send(json!({"type":"terminal"})).await.is_err());
@@ -989,7 +949,10 @@ mod tests {
         )
         .await
         .unwrap_err();
-        assert!(error.to_string().contains("injected RPC input failure"));
+        let detail = format!("{error:#}");
+        assert!(detail.contains("injected RPC input failure"));
+        assert!(detail.contains("injected preparation panic during settlement"));
+        assert!(preparation_settled.load(Ordering::SeqCst));
         let records = records
             .split(|byte| *byte == b'\n')
             .filter(|line| !line.is_empty())
@@ -998,14 +961,145 @@ mod tests {
         assert_eq!(records[0]["type"], "settled_terminal");
         assert_eq!(records[1]["type"], "uncommitted_steering");
         assert_eq!(records[1]["input"]["content"][0]["Text"], "KEEP_STEERING");
-        assert_eq!(records[2]["type"], "uncommitted_follow_up");
-        assert_eq!(records[2]["id"], "keep");
-        assert_eq!(records[2]["input"]["content"][0]["Text"], "KEEP_FOLLOW_UP");
+        let preparation = records
+            .iter()
+            .find(|record| record["id"] == "preparation-fault")
+            .unwrap();
+        assert_eq!(preparation["success"], false);
+        let follow_up = records
+            .iter()
+            .find(|record| record["type"] == "uncommitted_follow_up")
+            .unwrap();
+        assert_eq!(follow_up["id"], "keep");
+        assert_eq!(follow_up["input"]["content"][0]["Text"], "KEEP_FOLLOW_UP");
         assert!(
             settled.load(Ordering::SeqCst),
             "connection returned before operation settlement"
         );
         std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn pending_input_keeps_controls_live_and_eof_joins_cancelled_success() {
+        use tokio::io::AsyncWriteExt;
+        struct SharedOutput(Arc<Mutex<Vec<u8>>>);
+        impl Write for SharedOutput {
+            fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+                self.0.lock().unwrap().extend_from_slice(bytes);
+                Ok(bytes.len())
+            }
+            fn flush(&mut self) -> std::io::Result<()> {
+                Ok(())
+            }
+        }
+        let (mut control, events, root) = fixture();
+        let session = control.binding.session().clone();
+        let stop = CancellationToken::new();
+        let task_stop = stop.clone();
+        let (cancelled, observed) = tokio::sync::oneshot::channel();
+        let (release, held) = tokio::sync::oneshot::channel();
+        control.pending_input = Some(PendingInput {
+            kind: preparation::InputKind::Prompt,
+            id: Some(json!("original")),
+            stop,
+            task: tokio::spawn(async move {
+                task_stop.cancelled().await;
+                cancelled.send(()).unwrap();
+                held.await.unwrap();
+                Ok(Message::user_input("MUST_NOT_COMMIT".into(), []))
+            }),
+        });
+        let output = Arc::new(Mutex::new(Vec::new()));
+        let (input, mut client) = tokio::io::duplex(4096);
+        let running = tokio::spawn(connection(
+            control,
+            CommandReader::new(BufReader::new(input)),
+            events,
+            SharedOutput(output.clone()),
+        ));
+        client.write_all(b"{\"type\":\"get_state\",\"id\":\"state\"}\n{\"type\":\"prompt\",\"id\":\"second\",\"message\":\"no\"}\n{\"type\":\"new_session\",\"id\":\"replace\"}\n{\"type\":\"abort\",\"id\":\"abort\"}\n").await.unwrap();
+        tokio::time::timeout(std::time::Duration::from_secs(2), observed)
+            .await
+            .unwrap()
+            .unwrap();
+        client.shutdown().await.unwrap();
+        tokio::task::yield_now().await;
+        assert!(!running.is_finished(), "EOF abandoned owned preparation");
+        let records = output
+            .lock()
+            .unwrap()
+            .split(|byte| *byte == b'\n')
+            .filter(|line| !line.is_empty())
+            .map(|line| serde_json::from_slice::<Value>(line).unwrap())
+            .collect::<Vec<_>>();
+        assert_eq!(records.len(), 4);
+        assert_eq!(records[0]["data"]["busy"], true);
+        assert_eq!(records[0]["data"]["preparing_input"], true);
+        assert_eq!(records[1]["success"], false);
+        assert_eq!(records[2]["success"], false);
+        assert_eq!(records[3]["id"], "abort");
+        assert_eq!(records[3]["success"], true);
+        release.send(()).unwrap();
+        running.await.unwrap().unwrap();
+        let records = output
+            .lock()
+            .unwrap()
+            .split(|byte| *byte == b'\n')
+            .filter(|line| !line.is_empty())
+            .map(|line| serde_json::from_slice::<Value>(line).unwrap())
+            .collect::<Vec<_>>();
+        assert_eq!(records.last().unwrap()["id"], "original");
+        assert_eq!(records.last().unwrap()["success"], false);
+        assert!(session.view().unwrap().turns().is_empty());
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn turn_settlement_refuses_pending_steering_but_preserves_follow_up() {
+        for follow_up in [false, true] {
+            let (mut control, _events, root) = fixture();
+            let steering = Arc::new(SteeringInbox::new(
+                control.binding.agent().limits(),
+                control.input_budget.clone(),
+            ));
+            control.active = Some(Active {
+                stop: CancellationToken::new(),
+                operation: Operation::Turn {
+                    steering: steering.clone(),
+                    submission: empty_submission(),
+                },
+                task: tokio::spawn(async { Vec::new() }),
+            });
+            let (release, held) = tokio::sync::oneshot::channel();
+            control.pending_input = Some(PendingInput {
+                kind: if follow_up {
+                    preparation::InputKind::FollowUp
+                } else {
+                    preparation::InputKind::Steer(steering.clone())
+                },
+                id: Some(json!("prepared")),
+                stop: CancellationToken::new(),
+                task: tokio::spawn(async {
+                    held.await.unwrap();
+                    Ok(Message::user_input("next".into(), []))
+                }),
+            });
+            let joined = (&mut control.active.as_mut().unwrap().task).await;
+            control.finish_operation(joined);
+            control.start_next_follow_up().unwrap();
+            assert!(control.active.is_none());
+            assert!(control.idle().is_err());
+            release.send(()).unwrap();
+            let joined = (&mut control.pending_input.as_mut().unwrap().task).await;
+            let completion = control.finish_preparation(joined);
+            assert!(completion.error.is_none());
+            assert_eq!(completion.records[0]["id"], "prepared");
+            assert_eq!(completion.records[0]["success"], follow_up);
+            assert_eq!(control.follow_ups.len(), usize::from(follow_up));
+            assert!(steering.take_uncommitted().is_empty());
+            drop(control);
+            std::fs::remove_dir_all(root).unwrap();
+        }
     }
 
     #[tokio::test(flavor = "current_thread")]
