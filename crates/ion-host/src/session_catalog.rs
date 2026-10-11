@@ -184,32 +184,23 @@ mod tests {
         Content, Message, ModelResponse, ModelStreamEvent, ResponseTermination, Role, Script,
         ScriptedModelService, Usage,
     };
-    use ion_core::CodingAgent;
+    use ion_core::{AgentLimits, CodingAgent};
 
     use crate::LocalTools;
     use tokio_util::sync::CancellationToken;
 
-    #[tokio::test]
-    async fn empty_sessions_do_not_displace_recent_work() {
-        let root = std::env::temp_dir().join(format!("ion-catalog-{}", std::process::id()));
-        let _ = fs::remove_dir_all(&root);
+    fn fixture() -> (PathBuf, SessionCatalog) {
+        let root = std::env::temp_dir().join(format!("ion-catalog-{}", uuid::Uuid::now_v7()));
         let workspace = root.join("workspace");
         fs::create_dir_all(&workspace).unwrap();
-        let workspace = workspace.canonicalize().unwrap();
-        let catalog = SessionCatalog::new(root.join("state"), workspace.clone());
-        assert!(catalog.list().unwrap().is_empty());
-        let first = catalog.new_path().unwrap();
-        let second = catalog.new_path().unwrap();
-        assert_ne!(first, second);
-        let session = Arc::new(CodingSession::create(&first, &workspace).unwrap());
-        session.set_name(Some("First task")).unwrap();
-        let model = ModelRef {
-            provider: "script".into(),
-            model: "script".into(),
-        };
-        let agent = CodingAgent::new(
-            Arc::new(ScriptedModelService::new([Script::Stream(vec![
-                ModelStreamEvent::Completed(ModelResponse {
+        let catalog = SessionCatalog::new(root.join("state"), workspace.canonicalize().unwrap());
+        (root, catalog)
+    }
+
+    fn agent(catalog: &SessionCatalog, responses: usize) -> CodingAgent {
+        CodingAgent::new(
+            Arc::new(ScriptedModelService::new((0..responses).map(|_| {
+                Script::Stream(vec![ModelStreamEvent::Completed(ModelResponse {
                     message: Message {
                         role: Role::Assistant,
                         content: vec![Content::Text("done".into())],
@@ -218,12 +209,30 @@ mod tests {
                     usage: Usage::unknown(),
                     termination: ResponseTermination::Completed,
                     returned_model: None,
-                }),
-            ])])),
-            Arc::new(LocalTools::new(&workspace).unwrap()),
-            model,
-        );
-        agent
+                })])
+            }))),
+            Arc::new(LocalTools::new(&catalog.cwd).unwrap()),
+            ModelRef {
+                provider: "script".into(),
+                model: "script".into(),
+            },
+        )
+        .with_limits(AgentLimits {
+            image_input: true,
+            ..AgentLimits::default()
+        })
+    }
+
+    #[tokio::test]
+    async fn empty_sessions_do_not_displace_recent_work() {
+        let (root, catalog) = fixture();
+        assert!(catalog.list().unwrap().is_empty());
+        let first = catalog.new_path().unwrap();
+        let second = catalog.new_path().unwrap();
+        assert_ne!(first, second);
+        let session = Arc::new(CodingSession::create(&first, &catalog.cwd).unwrap());
+        session.set_name(Some("First task")).unwrap();
+        agent(&catalog, 1)
             .submit(
                 session.clone(),
                 "first prompt".into(),
@@ -234,7 +243,7 @@ mod tests {
             .await
             .unwrap();
         drop(session);
-        let session = Arc::new(CodingSession::create(&second, &workspace).unwrap());
+        let session = CodingSession::create(&second, &catalog.cwd).unwrap();
         session.set_name(Some("Second task")).unwrap();
         drop(session);
         let listed = catalog.list().unwrap();
@@ -242,15 +251,74 @@ mod tests {
         let id = &listed[0].id;
         assert_eq!(catalog.by_id(id).unwrap(), listed[0].path);
         assert_eq!(catalog.latest().unwrap(), listed[0].path);
-        assert!(
-            listed
-                .iter()
-                .any(|summary| summary.name.as_deref() == Some("First task"))
-        );
         assert_eq!(listed[0].name.as_deref(), Some("First task"));
         fs::write(first.with_file_name("damaged.sqlite"), b"partial database").unwrap();
         assert_eq!(catalog.list().unwrap().len(), 1);
         assert_eq!(catalog.latest().unwrap(), listed[0].path);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[tokio::test]
+    async fn first_input_previews_include_images_and_preserve_bounded_text() {
+        let (root, catalog) = fixture();
+        let image: ion_ai::ImageContent = serde_json::from_value(serde_json::json!({
+            "mime_type": "image/png",
+            "data": "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGP4z8DwHwAFAAH/iZk9HQAAAABJRU5ErkJggg=="
+        })).unwrap();
+        let text = format!("\t{}Z\nSECOND_LINE", "🦀é界".repeat(40));
+        let expected = format!(
+            " {}",
+            "🦀é界".repeat(40).chars().take(119).collect::<String>()
+        );
+        for (content, preview) in [
+            (vec![Content::Image(image.clone())], "[image]".to_owned()),
+            (
+                vec![Content::Text(text.clone()), Content::Image(image)],
+                expected.clone(),
+            ),
+            (vec![Content::Text(text)], expected),
+        ] {
+            let path = catalog.new_path().unwrap();
+            let session = Arc::new(CodingSession::create(&path, &catalog.cwd).unwrap());
+            let agent = agent(&catalog, 2);
+            agent
+                .submit_message(
+                    session.clone(),
+                    Message {
+                        role: Role::User,
+                        content,
+                        provider_replay: None,
+                    },
+                    String::new(),
+                    CancellationToken::new(),
+                    |_| {},
+                )
+                .await
+                .unwrap();
+            agent
+                .submit(
+                    session.clone(),
+                    "latest prompt".into(),
+                    String::new(),
+                    CancellationToken::new(),
+                    |_| {},
+                )
+                .await
+                .unwrap();
+            let before = CodingSession::inspect(&path).unwrap().entries;
+            let listed = catalog.list().unwrap();
+            let summary = listed.iter().find(|summary| summary.path == path).unwrap();
+            assert_eq!(summary.preview.as_deref(), Some(preview.as_str()));
+            assert_eq!(summary.turns, 2);
+            assert_eq!(CodingSession::inspect(&path).unwrap().entries, before);
+            drop(session);
+            let reopened = CodingSession::open(&path).unwrap();
+            let listed = catalog.list().unwrap();
+            let summary = listed.iter().find(|summary| summary.path == path).unwrap();
+            assert_eq!(summary.preview.as_deref(), Some(preview.as_str()));
+            assert_eq!(CodingSession::inspect(&path).unwrap().entries, before);
+            drop(reopened);
+        }
         fs::remove_dir_all(root).unwrap();
     }
 }

@@ -2625,6 +2625,45 @@ mod tests {
     }
 
     #[test]
+    fn prompt_metadata_uses_only_the_first_line_bounded_by_unicode_characters() {
+        for (prompt, expected) in [
+            ("短🦀é\nSECOND_LINE".into(), "短🦀é".into()),
+            (
+                format!("{}\nSECOND_LINE", "🦀é界".repeat(40)),
+                "🦀é界".repeat(40),
+            ),
+            (
+                format!("{}Z\nSECOND_LINE", "🦀é界".repeat(40)),
+                "🦀é界".repeat(40),
+            ),
+        ] {
+            let (root, path) = fixture();
+            let session = Session::create(&path, &root).unwrap();
+            let model = test_execution().route.logical;
+            let (turn, _) = session.begin_turn(prompt, model.clone()).unwrap();
+            session
+                .end_turn(turn, TurnEndReason::Cancelled, &BTreeSet::new())
+                .unwrap();
+            session.begin_turn("latest prompt".into(), model).unwrap();
+            let before = session.view().unwrap().entries;
+            let metadata = Session::inspect_metadata(&path).unwrap();
+            assert_eq!(
+                metadata.first_input,
+                Some(SessionInputPreview::Prompt {
+                    text: Some(expected)
+                })
+            );
+            assert_eq!(session.view().unwrap().entries, before);
+            drop(session);
+            let reopened = Session::open(&path).unwrap();
+            assert_eq!(Session::inspect_metadata(&path).unwrap(), metadata);
+            assert_eq!(reopened.view().unwrap().entries, before);
+            drop(reopened);
+            fs::remove_dir_all(root).unwrap();
+        }
+    }
+
+    #[test]
     fn metadata_projection_retains_only_pending_shared_shell_slot() {
         let (root, path) = fixture();
         let session = Session::create(&path, &root).unwrap();
@@ -2951,44 +2990,60 @@ mod tests {
 
     #[test]
     fn image_input_survives_reopen_and_malformed_image_cannot_be_constructed() {
-        let (root, path) = fixture();
-        let session = Session::create(&path, &root).unwrap();
         let image: ion_ai::ImageContent = serde_json::from_value(serde_json::json!({
             "mime_type":"image/png",
             "data":"iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGP4z8DwHwAFAAH/iZk9HQAAAABJRU5ErkJggg=="
         }))
         .unwrap();
-        let input = Message {
-            role: Role::User,
-            content: vec![
-                Content::Text("inspect".into()),
-                Content::Image(image.clone()),
-            ],
-            provider_replay: None,
-        };
-        let model = ModelRef {
-            provider: "test".into(),
-            model: "vision".into(),
-        };
-        let (turn, _) = session
-            .begin_turn_message(input.clone(), model.clone())
-            .unwrap();
-        session
-            .end_turn(turn, TurnEndReason::Cancelled, &BTreeSet::new())
-            .unwrap();
-        let before = session.entry_count().unwrap();
-        assert!(
-            serde_json::from_value::<ion_ai::ImageContent>(serde_json::json!({
-                "mime_type":"image/png", "data":"broken"
-            }))
-            .is_err()
-        );
-        assert_eq!(session.entry_count().unwrap(), before);
-        drop(session);
-        let reopened = Session::open(&path).unwrap();
-        assert_eq!(reopened.context_messages().unwrap()[0], input);
-        drop(reopened);
-        fs::remove_dir_all(root).unwrap();
+        for text in [Some("inspect"), None] {
+            let (root, path) = fixture();
+            let session = Session::create(&path, &root).unwrap();
+            let mut content = Vec::new();
+            if let Some(text) = text {
+                content.push(Content::Text(text.into()));
+            }
+            content.push(Content::Image(image.clone()));
+            let input = Message {
+                role: Role::User,
+                content,
+                provider_replay: None,
+            };
+            let model = ModelRef {
+                provider: "test".into(),
+                model: "vision".into(),
+            };
+            let (turn, _) = session
+                .begin_turn_message(input.clone(), model.clone())
+                .unwrap();
+            session
+                .end_turn(turn, TurnEndReason::Cancelled, &BTreeSet::new())
+                .unwrap();
+            session.begin_turn("latest prompt".into(), model).unwrap();
+            let facts = session.view().unwrap().entries;
+            let metadata = Session::inspect_metadata(&path).unwrap();
+            assert_eq!(
+                metadata.first_input,
+                Some(SessionInputPreview::Prompt {
+                    text: text.map(str::to_owned)
+                })
+            );
+            assert_eq!(session.view().unwrap().entries, facts);
+            let before = session.entry_count().unwrap();
+            assert!(
+                serde_json::from_value::<ion_ai::ImageContent>(serde_json::json!({
+                    "mime_type":"image/png", "data":"broken"
+                }))
+                .is_err()
+            );
+            assert_eq!(session.entry_count().unwrap(), before);
+            drop(session);
+            let reopened = Session::open(&path).unwrap();
+            assert_eq!(reopened.context_messages().unwrap()[0], input);
+            assert_eq!(Session::inspect_metadata(&path).unwrap(), metadata);
+            assert_eq!(reopened.view().unwrap().entries, facts);
+            drop(reopened);
+            fs::remove_dir_all(root).unwrap();
+        }
     }
 
     #[test]
