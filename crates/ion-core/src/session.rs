@@ -3822,6 +3822,149 @@ mod tests {
     }
 
     #[test]
+    fn code_parent_discovery_pages_coordinates_and_excludes_unsettled_calls() {
+        let (root, path) = fixture();
+        let session = Session::create(&path, &root).unwrap();
+        let (turn, _) = session
+            .begin_turn(
+                "compose".into(),
+                ModelRef {
+                    provider: "test".into(),
+                    model: "test".into(),
+                },
+            )
+            .unwrap();
+        session
+            .record_assistant(
+                turn,
+                Message {
+                    role: Role::Assistant,
+                    content: (0..12)
+                        .map(|ordinal| {
+                            Content::ToolCall(ToolCall {
+                                id: format!("parent{ordinal}"),
+                                name: "code_mode".into(),
+                                arguments: serde_json::json!({"code":"PRIVATE_CODE"}),
+                                raw_arguments: None,
+                            })
+                        })
+                        .collect(),
+                    provider_replay: None,
+                },
+                Usage::unknown(),
+                false,
+            )
+            .unwrap();
+        let mut parents = Vec::new();
+        for ordinal in 0..12 {
+            let id = format!("parent{ordinal}");
+            let parent = session.tool_occurrence(turn, &id).unwrap();
+            parents.push(parent);
+            session
+                .record_child_intent(
+                    turn,
+                    crate::ChildIntent {
+                        parent,
+                        child: 0,
+                        call: ToolCall {
+                            id: format!("child{ordinal}"),
+                            name: "PRIVATE_TOOL".into(),
+                            arguments: serde_json::json!({"private":"PRIVATE_ARGUMENT"}),
+                            raw_arguments: None,
+                        },
+                        definition: ToolSpec {
+                            name: "PRIVATE_TOOL".into(),
+                            description: String::new(),
+                            input_schema: serde_json::json!({"type":"object"}),
+                        },
+                        activity: crate::ToolActivity::external("PRIVATE_TOOL"),
+                    },
+                )
+                .unwrap();
+            session
+                .record_child_outcome(turn, parent, 0, crate::ChildOutcome::Unknown)
+                .unwrap();
+            if ordinal < 11 {
+                session
+                    .record_tool_result(
+                        turn,
+                        ToolResult {
+                            call_id: id,
+                            name: "code_mode".into(),
+                            result: serde_json::json!(null),
+                            images: Vec::new(),
+                            is_error: true,
+                        },
+                    )
+                    .unwrap();
+            }
+        }
+        let before = session.view().unwrap().entries;
+        let first = session.inspect_code(r#"{"kind":"parents"}"#).unwrap();
+        let expected = parents[1..11]
+            .iter()
+            .rev()
+            .map(|parent| serde_json::json!({"parent":parent,"child_count":1}))
+            .collect::<Vec<_>>();
+        assert_eq!(first["parents"], serde_json::json!(expected));
+        assert_eq!(first["next_before"], serde_json::json!(parents[1]));
+        assert!(!first.to_string().contains("PRIVATE"));
+        let last = session
+            .inspect_code(
+                &serde_json::json!({
+                    "kind":"parents","before":first["next_before"]
+                })
+                .to_string(),
+            )
+            .unwrap();
+        assert_eq!(
+            last,
+            serde_json::json!({
+                "parents":[{"parent":parents[0],"child_count":1}],"next_before":null
+            })
+        );
+        let empty = session
+            .inspect_code(
+                &serde_json::json!({
+                    "kind":"parents","before":parents[0]
+                })
+                .to_string(),
+            )
+            .unwrap();
+        assert_eq!(empty, serde_json::json!({"parents":[],"next_before":null}));
+        for invalid in [
+            serde_json::json!({"kind":"parents","parent":parents[0]}),
+            serde_json::json!({"kind":"parents","before":{"assistant_entry":-1,"ordinal":0}}),
+            serde_json::json!({"kind":"parents","before":{"assistant_entry":1}}),
+        ] {
+            assert!(
+                session.inspect_code(&invalid.to_string()).is_err(),
+                "{invalid}"
+            );
+        }
+        assert_eq!(session.view().unwrap().entries, before);
+        session
+            .end_turn(turn, TurnEndReason::Cancelled, &BTreeSet::new())
+            .unwrap();
+        let settled = session.inspect_code(r#"{"kind":"parents"}"#).unwrap();
+        assert_eq!(
+            settled["parents"][0]["parent"],
+            serde_json::json!(parents[11])
+        );
+        drop(session);
+        let reopened = Session::open(&path).unwrap();
+        assert_eq!(
+            reopened.inspect_code(r#"{"kind":"parents"}"#).unwrap(),
+            settled
+        );
+        let copy = reopened.clone_to(root.join("copy.sqlite")).unwrap();
+        assert_eq!(copy.inspect_code(r#"{"kind":"parents"}"#).unwrap(), settled);
+        drop(copy);
+        drop(reopened);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
     fn code_inspection_preserves_states_exact_values_and_bounded_metadata() {
         let (root, path) = fixture();
         let session = Session::create(&path, &root).unwrap();

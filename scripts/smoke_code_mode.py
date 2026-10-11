@@ -70,14 +70,12 @@ class Provider(BaseHTTPRequestHandler):
         assert "PRIVATE_" not in json.dumps(body), "child payload entered model context"
         fresh = not any(message["role"] == "tool" for message in messages[user_index + 1:])
         if enabled and prompt in ("RECOVER_CAPTURE", "INSPECT_RPC") and fresh:
-            failed = [json.loads(message["content"])["result"] for message in messages[:user_index] if message["role"] == "tool" and json.loads(message["content"])["is_error"]][-1]
-            assert set(failed) == {"parent", "error", "calls", "failed_calls", "skipped_calls"}, failed
-            assert failed["calls"] == 1 and failed["failed_calls"] == 1, failed
-            parent = failed.get("parent")
-            assert isinstance(parent, dict), "failed guest has no stable evidence locator"
-            code = "const parent=" + json.dumps(parent) + "; const meta=await tools.inspect({kind:'children',parent}); const path=await tools.inspect({kind:'output',parent,child:0,pointer:'/stdout_full_path'}); const exit=await tools.inspect({kind:'output',parent,child:0,pointer:'/exit_code'}); const saved=await tools.call('read',{path:JSON.parse(path.json),limit:1024}); if(saved.is_error) return {read_failure:saved.value}; return {nonce:saved.value.content.split('\\n')[0], original_failed:path.is_error, exit:JSON.parse(exit.json), states:meta.children.map(c=>c.state)};"
+            if prompt == "RECOVER_CAPTURE":
+                assert "assistant_entry" not in json.dumps(messages), "cut retained the original locator"
+            discovery = "const refs=await tools.inspect({kind:'parents'}); let parent; for(const ref of refs.parents) { const cs=await tools.inspect({kind:'children',parent:ref.parent}); if(cs.children.some(c=>c.name==='exec')) { parent=ref.parent; break; } } if(!parent) throw new Error('saved exec not found'); "
+            code = discovery + "const meta=await tools.inspect({kind:'children',parent}); const path=await tools.inspect({kind:'output',parent,child:0,pointer:'/stdout_full_path'}); const exit=await tools.inspect({kind:'output',parent,child:0,pointer:'/exit_code'}); const saved=await tools.call('read',{path:JSON.parse(path.json),limit:1024}); if(saved.is_error) return {read_failure:saved.value}; return {nonce:saved.value.content.split('\\n')[0], original_failed:path.is_error, exit:JSON.parse(exit.json), states:meta.children.map(c=>c.state)};"
             if prompt == "INSPECT_RPC":
-                code = "const parent=" + json.dumps(parent) + "; const exit=await tools.inspect({kind:'output',parent,child:0,pointer:'/exit_code'}); return {exit:JSON.parse(exit.json), original_failed:exit.is_error};"
+                code = discovery + "const exit=await tools.inspect({kind:'output',parent,child:0,pointer:'/exit_code'}); return {exit:JSON.parse(exit.json), original_failed:exit.is_error};"
             delta = {"tool_calls": [{"index": 0, "id": "inspect", "type": "function", "function": {"name": "code_mode", "arguments": json.dumps({"code": code})}}]}
             reason = "tool_calls"
         elif enabled and prompt in ("FANOUT", "MCP", "IO", "STDERR", "ACTIVE", "RECOVER_FAIL") and fresh:
@@ -168,6 +166,9 @@ with tempfile.TemporaryDirectory(prefix="ion-code-mode-") as temporary:
             nonce = saved_bytes.splitlines()[0].decode()
             assert len(saved_bytes) == 100050 and len(nonce) == 48
             assert nonce not in original["output"]["stdout"]
+            # The controlled summary omits locators. This tests the cut/reopen
+            # boundary, not live-model summary fidelity or adherence.
+            run(env, recovery_work, "--session", recovery_id, "compact")
             before_recovery = len(requests)
             records = [json.loads(line) for line in run(env, recovery_work, "--session", recovery_id, "--code-mode", "--json", "run", "RECOVER_CAPTURE").stdout.splitlines()]
             recovered = next(record for record in records if record["type"] == "tool_finished")

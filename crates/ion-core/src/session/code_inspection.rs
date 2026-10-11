@@ -1,6 +1,6 @@
 //! Explicit, read-only access to composed child facts, never general history.
 use std::{
-    collections::{BTreeMap, HashMap},
+    collections::BTreeMap,
     ops::Bound::{Excluded, Unbounded},
     path::PathBuf,
 };
@@ -9,11 +9,11 @@ use rusqlite::{Connection, OpenFlags, params};
 use serde::Deserialize;
 use serde_json::{Value, json};
 
-use super::{Session, SessionEntry, SessionError};
+use super::{Session, SessionEntry, SessionError, Store};
 use crate::ToolOccurrence;
 
 #[derive(Default)]
-pub(super) struct ChildRecordIndex(HashMap<ToolOccurrence, BTreeMap<usize, ChildRecords>>);
+pub(super) struct ChildRecordIndex(BTreeMap<ToolOccurrence, BTreeMap<usize, ChildRecords>>);
 #[derive(Clone, Copy, Default)]
 struct ChildRecords {
     intent: u64,
@@ -55,6 +55,9 @@ pub(crate) enum InspectionError {
 #[derive(Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 enum Query {
+    Parents {
+        before: Option<ToolOccurrence>,
+    },
     Children {
         parent: ToolOccurrence,
         after: Option<usize>,
@@ -79,11 +82,15 @@ fn page_limit() -> usize {
 pub(crate) struct CodeInspection {
     path: PathBuf,
     session_id: uuid::Uuid,
-    parent: ToolOccurrence,
     selection: Selection,
 }
 enum Selection {
+    Parents {
+        rows: Vec<(ToolOccurrence, usize)>,
+        next_before: Option<ToolOccurrence>,
+    },
     Children {
+        parent: ToolOccurrence,
         rows: Vec<(usize, ChildRecords)>,
         next_after: Option<usize>,
     },
@@ -104,25 +111,32 @@ impl Session {
         let query: Query = serde_json::from_str(query).map_err(|error| {
             InspectionError::Request(format!("invalid inspection query: {error}"))
         })?;
-        let parent = match &query {
-            Query::Children { parent, .. } | Query::Output { parent, .. } => *parent,
-        };
         let store = self.store.lock().map_err(|_| SessionError::Poisoned)?;
-        if store
-            .state
-            .pending
-            .iter()
-            .any(|pending| pending.occurrence == parent)
-        {
-            return Err(InspectionError::Request(
-                "inspection requires a settled parent call".into(),
-            ));
-        }
-        let children = store.child_records.0.get(&parent).ok_or_else(|| {
-            InspectionError::Request("parent has no saved Code Mode child calls".into())
-        })?;
         let selection = match query {
-            Query::Children { after, .. } => {
+            Query::Parents { before } => {
+                let upper = before.map_or(Unbounded, Excluded);
+                let mut parents = store
+                    .child_records
+                    .0
+                    .range((Unbounded, upper))
+                    .rev()
+                    .filter(|(parent, _)| {
+                        !store
+                            .state
+                            .pending
+                            .iter()
+                            .any(|pending| pending.occurrence == **parent)
+                    });
+                let rows = parents
+                    .by_ref()
+                    .take(10)
+                    .map(|(&parent, children)| (parent, children.len()))
+                    .collect::<Vec<_>>();
+                let next_before = parents.next().and_then(|_| rows.last().map(|row| row.0));
+                Selection::Parents { rows, next_before }
+            }
+            Query::Children { parent, after } => {
+                let children = settled_children(&store, parent)?;
                 let lower = after.map_or(Unbounded, Excluded);
                 let mut children = children.range((lower, Unbounded));
                 let rows = children
@@ -131,14 +145,18 @@ impl Session {
                     .map(|(&child, &records)| (child, records))
                     .collect::<Vec<_>>();
                 let next_after = children.next().and_then(|_| rows.last().map(|row| row.0));
-                Selection::Children { rows, next_after }
+                Selection::Children {
+                    parent,
+                    rows,
+                    next_after,
+                }
             }
             Query::Output {
+                parent,
                 child,
                 pointer,
                 offset,
                 limit,
-                ..
             } => {
                 if !(4..=65536).contains(&limit)
                     || !(pointer.is_empty() || pointer.starts_with('/'))
@@ -147,7 +165,7 @@ impl Session {
                         "output limit must be 4..65536 bytes and pointer a JSON Pointer".into(),
                     ));
                 }
-                let records = *children
+                let records = *settled_children(&store, parent)?
                     .get(&child)
                     .ok_or_else(|| InspectionError::Request("unknown child ordinal".into()))?;
                 Selection::Output {
@@ -162,7 +180,6 @@ impl Session {
         Ok(CodeInspection {
             path: self.path.clone(),
             session_id: self.header.provider_session_id,
-            parent,
             selection,
         })
     }
@@ -171,6 +188,27 @@ impl Session {
     pub(crate) fn inspect_code(&self, query: &str) -> Result<Value, InspectionError> {
         self.prepare_code_inspection(query)?.read()
     }
+}
+
+fn settled_children(
+    store: &Store,
+    parent: ToolOccurrence,
+) -> Result<&BTreeMap<usize, ChildRecords>, InspectionError> {
+    if store
+        .state
+        .pending
+        .iter()
+        .any(|pending| pending.occurrence == parent)
+    {
+        return Err(InspectionError::Request(
+            "inspection requires a settled parent call".into(),
+        ));
+    }
+    store
+        .child_records
+        .0
+        .get(&parent)
+        .ok_or_else(|| InspectionError::Request("parent has no saved Code Mode child calls".into()))
 }
 
 impl CodeInspection {
@@ -188,12 +226,23 @@ impl CodeInspection {
             return Err(SessionError::InvalidDatabase.into());
         }
         match self.selection {
-            Selection::Children { rows, next_after } => {
+            Selection::Parents { rows, next_before } => {
+                let parents = rows
+                    .into_iter()
+                    .map(|(parent, child_count)| json!({"parent":parent,"child_count":child_count}))
+                    .collect::<Vec<_>>();
+                Ok(json!({"parents":parents,"next_before":next_before}))
+            }
+            Selection::Children {
+                parent,
+                rows,
+                next_after,
+            } => {
                 let summaries = rows
                     .into_iter()
                     .map(|(child, records)| summary(&snapshot, child, &records, true))
                     .collect::<Result<Vec<_>, _>>()?;
-                Ok(json!({"parent":self.parent,"children":summaries,"next_after":next_after}))
+                Ok(json!({"parent":parent,"children":summaries,"next_after":next_after}))
             }
             Selection::Output {
                 child,

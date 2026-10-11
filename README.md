@@ -638,16 +638,24 @@ in the Session, export and nested Ctrl-O/tool detail, without automatic addition
 to model context. A guest can explicitly select their content in its return.
 If it fails before returning, the model receives the parent error, counters and
 Session-scoped `parent` locator, not the original child outputs. A later guest
-can explicitly retrieve saved evidence without rerunning the failed script:
+can explicitly retrieve saved evidence without rerunning the failed script,
+even if compaction has removed that locator from visible context:
 
 ```js
-const parent = {assistant_entry: 12, ordinal: 0}; // use the earlier result's locator
+const saved = await tools.inspect({kind: 'parents'});
+const parent = saved.parents[0].parent; // select the relevant saved parent
 const children = await tools.inspect({kind: 'children', parent});
 const page = await tools.inspect({
   kind: 'output', parent, child: 0, pointer: '/stdout_full_path'
 });
 return {children, capture_path: JSON.parse(page.json), original_failed: page.is_error};
 ```
+
+`parents` returns up to ten settled parents with saved children, newest first,
+with their locators and `child_count`. Pass `next_before` as `before` for older
+pages; a null marker ends pagination. The earlier result's locator also works.
+These coordinates are local to the current Session, including copied fork/clone
+history; the page contains no code, arguments or raw output.
 
 `children` returns up to ten summaries with a `next_after` marker; pass it as
 `after` to continue. Names and nondispatch reasons are bounded display labels
@@ -662,7 +670,8 @@ invented output. Only settled parents with saved children are inspectable.
 
 Inspection is read-only and shares the guest's bridge/reply budgets. Invalid
 queries reject their promise. Page size bounds returned data, not lookup CPU:
-a saved value is still decoded synchronously under Session ownership. It exposes
+a saved value is decoded by an owned read task outside the Session writer lock
+and guest VM; cancellation stops delivery but still joins that read. It exposes
 neither normalized image bytes, private direct-shell history nor provider replay.
 Only the later guest's selected return enters model context. Saved observations
 are not fresh verification, and a stored capture path does not guarantee the file

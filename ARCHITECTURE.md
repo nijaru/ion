@@ -324,7 +324,9 @@ are pending. Recovery closes unknown children before the parent, without rerunni
 code.
 
 A guest failure can prevent that selection. Surface the stable Session-scoped
-parent locator, not raw child outputs. A later guest can explicitly inspect
+parent locator, not raw child outputs. Keep those locators explicitly discoverable
+from committed child coordinates after a context cut or reopen, without pinned
+summaries or implicit evidence injection. A later guest can explicitly inspect
 settled children through the Core gateway: bounded metadata pages and UTF-8 JSON
 windows into saved native values, with original observed/not-dispatched/unknown
 states. Keep lookup coordinates rebuildable from committed child facts; do not

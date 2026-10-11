@@ -505,7 +505,7 @@ async fn child_intent_fault_prevents_native_dispatch() {
 }
 
 #[tokio::test]
-async fn failed_guest_evidence_is_selected_after_reopen_without_reexecuting_children() {
+async fn failed_guest_evidence_is_rediscovered_after_cut_and_reopen_without_reexecution() {
     let root = Workspace::new();
     let session = root.session();
     let report = "PRIVATE_RAW_😀é".repeat(300);
@@ -518,6 +518,9 @@ async fn failed_guest_evidence_is_selected_after_reopen_without_reexecuting_chil
                 "await tools.call('read',{path:'report'}); await tools.call('exec',{command:'printf ONCE >> effects; printf ORIGINAL_FAILURE >&2; exit 7'}); throw new Error('after effects');",
             )]),
             response(vec![Content::Text("FAILED_GUEST".into())]),
+            // Deliberately omit the locator to exercise a lossy summary boundary,
+            // not to claim that a live model preserves or understands evidence.
+            response(vec![Content::Text("Earlier work omitted.".into())]),
         ],
         CodeLimits::default(),
     );
@@ -552,20 +555,32 @@ async fn failed_guest_evidence_is_selected_after_reopen_without_reexecuting_chil
         parent.is_object(),
         "failed guest did not expose a recovery locator"
     );
+    assert!(
+        agent
+            .compact(session.clone(), CancellationToken::new(), |_| {})
+            .await
+            .unwrap()
+    );
+    assert!(
+        !serde_json::to_string(&session.context_messages().unwrap())
+            .unwrap()
+            .contains("assistant_entry")
+    );
     fs::remove_file(root.0.join("report")).unwrap();
     drop(session);
     let reopened = Arc::new(CodingSession::open(root.0.join("session.sqlite")).unwrap());
-    let script = format!("const parent={parent};
-        const meta=await tools.inspect({{kind:'children',parent}});
+    let script = "const parents=await tools.inspect({kind:'parents'});
+        const parent=parents.parents[0].parent;
+        const meta=await tools.inspect({kind:'children',parent});
         let offset=0, text='';
-        do {{ const page=await tools.inspect({{kind:'output',parent,child:0,pointer:'/content',offset,limit:512}});
-             text+=page.json; offset=page.next_offset; }} while(offset!==null);
-        const failure=await tools.inspect({{kind:'output',parent,child:1}});
-        return {{content:JSON.parse(text), original_failed:failure.is_error, original:JSON.parse(failure.json), states:meta.children.map(c=>c.state)}};");
+        do { const page=await tools.inspect({kind:'output',parent,child:0,pointer:'/content',offset,limit:512});
+             text+=page.json; offset=page.next_offset; } while(offset!==null);
+        const failure=await tools.inspect({kind:'output',parent,child:1});
+        return {parents,content:JSON.parse(text), original_failed:failure.is_error, original:JSON.parse(failure.json), states:meta.children.map(c=>c.state)};";
     let (next, next_model) = make_agent(
         &root.0,
         [
-            response(vec![code("recover", &script)]),
+            response(vec![code("recover", script)]),
             response(vec![Content::Text("RECOVERED".into())]),
         ],
         CodeLimits::default(),
@@ -592,6 +607,14 @@ async fn failed_guest_evidence_is_selected_after_reopen_without_reexecuting_chil
         .unwrap();
     assert!(!output.is_error, "{:?}", output.value);
     assert_eq!(output.value["calls"], 0);
+    assert_eq!(
+        output.value["result"]["parents"]["parents"],
+        json!([{"parent":parent,"child_count":2}])
+    );
+    assert_eq!(
+        output.value["result"]["parents"]["next_before"],
+        serde_json::Value::Null
+    );
     assert_eq!(output.value["result"]["content"], report);
     assert_eq!(output.value["result"]["original_failed"], true);
     assert_eq!(output.value["result"]["original"]["exit_code"], 7);
