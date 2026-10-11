@@ -395,7 +395,7 @@ async fn run_cli(cli: Cli) -> Result<()> {
                 catalog.new_path()?
             };
             let existing = if path.is_file() {
-                Some(CodingSession::inspect(&path)?)
+                Some(CodingSession::inspect_metadata(&path)?)
             } else {
                 None
             };
@@ -407,29 +407,32 @@ async fn run_cli(cli: Cli) -> Result<()> {
                 );
             }
             if matches!(action, Some(Action::Inspect)) {
-                let view = existing.context("session does not exist")?;
+                ensure!(existing.is_some(), "session does not exist");
+                let view = CodingSession::inspect(&path)?;
                 inspection::write(&view, &mut io::stdout().lock())?;
                 return Ok(());
             }
             if let Some(Action::Export { path: output }) = &action {
-                let view = existing.as_ref().context("session does not exist")?;
+                ensure!(existing.is_some(), "session does not exist");
+                let view = CodingSession::inspect(&path)?;
                 if let Some(output) = output {
                     let target = if output.is_absolute() {
                         output.clone()
                     } else {
                         view.cwd.join(output)
                     };
-                    transcript::save_new(view, &target).with_context(|| {
+                    transcript::save_new(&view, &target).with_context(|| {
                         format!("cannot save transcript to {}", target.display())
                     })?;
                     println!("{}", target.display());
                 } else {
-                    io::stdout().write_all(transcript::render(view).as_bytes())?;
+                    io::stdout().write_all(transcript::render(&view).as_bytes())?;
                 }
                 return Ok(());
             }
             if matches!(action, Some(Action::Turns)) {
-                let view = existing.context("session does not exist")?;
+                ensure!(existing.is_some(), "session does not exist");
+                let view = CodingSession::inspect(&path)?;
                 for turn in view.turns() {
                     println!(
                         "{}\t{}\t{}",

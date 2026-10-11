@@ -9,8 +9,8 @@ use std::{
 };
 
 use anyhow::{Context, Result, bail};
-use ion_ai::{Content, ModelRef};
-use ion_core::{CodingSession, SessionEntry};
+use ion_ai::ModelRef;
+use ion_core::{CodingSession, SessionInputPreview};
 use sha2::{Digest, Sha256};
 
 pub struct SessionCatalog {
@@ -95,58 +95,22 @@ impl SessionCatalog {
         // Discovery must remain usable if one file is damaged or only
         // partially initialized. Opening that path explicitly still reports
         // its real error.
-        let view = CodingSession::inspect(&path).ok()?;
+        let view = CodingSession::inspect_metadata(&path).ok()?;
         if view.cwd != self.cwd {
             return None;
         }
         let updated = modified(&path).ok()?;
-        let preview = view.entries.iter().find_map(|entry| match entry {
-            SessionEntry::TurnStarted { input, .. } => Some(
-                input
-                    .content
-                    .iter()
-                    .find_map(|part| match part {
-                        Content::Text(text) if !text.trim().is_empty() => Some(text.as_str()),
-                        _ => None,
-                    })
-                    .unwrap_or("[image]")
-                    .lines()
-                    .next()
-                    .unwrap_or("")
-                    .chars()
-                    .take(120)
-                    .map(|ch| if ch.is_control() { ' ' } else { ch })
-                    .collect(),
-            ),
-            SessionEntry::UserShellAdmitted {
-                command,
-                exclude_from_context,
-            } => Some(format!(
-                "{}{}",
-                if *exclude_from_context { "!!" } else { "!" },
-                command
-                    .lines()
-                    .next()
-                    .unwrap_or("")
-                    .chars()
-                    .take(120)
-                    .collect::<String>()
-            )),
-            _ => None,
+        let preview = view.first_input.map(|input| match input {
+            SessionInputPreview::Prompt { text } => text
+                .unwrap_or_else(|| "[image]".into())
+                .chars()
+                .map(|ch| if ch.is_control() { ' ' } else { ch })
+                .collect(),
+            SessionInputPreview::Shell { command, excluded } => {
+                format!("{}{command}", if excluded { "!!" } else { "!" })
+            }
         });
-        let turns = view
-            .entries
-            .iter()
-            .filter(|entry| matches!(entry, SessionEntry::TurnStarted { .. }))
-            .count();
-        if turns == 0
-            && !view
-                .entries
-                .iter()
-                .any(|entry| matches!(entry, SessionEntry::UserShellAdmitted { .. }))
-        {
-            return None;
-        }
+        preview.as_ref()?;
         let id = path.file_stem()?.to_string_lossy().into_owned();
         Some(SessionSummary {
             id,
@@ -154,7 +118,7 @@ impl SessionCatalog {
             name: view.name,
             preview,
             model: view.last_model,
-            turns,
+            turns: view.turns,
             updated,
         })
     }

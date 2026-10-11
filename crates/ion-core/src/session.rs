@@ -1,6 +1,7 @@
 //! The single durable authority for a local coding conversation.
 //! SQLite commits related events atomically before any external effect runs.
 use std::{
+    borrow::Borrow,
     collections::BTreeSet,
     fs::{self, File, OpenOptions},
     os::unix::fs::{MetadataExt, OpenOptionsExt},
@@ -616,7 +617,25 @@ impl State {
     }
 }
 
+/// Passive, bounded input labels and preferences, not a raw-history export.
+#[derive(Debug, PartialEq, Eq)]
+pub struct SessionMetadata {
+    pub cwd: PathBuf,
+    pub name: Option<String>,
+    pub last_model: Option<ModelRef>,
+    pub turns: usize,
+    pub first_input: Option<SessionInputPreview>,
+}
+
+#[derive(Debug, PartialEq, Eq)]
+pub enum SessionInputPreview {
+    Prompt { text: Option<String> },
+    Shell { command: String, excluded: bool },
+}
+
 struct HistoryProjection {
+    turns: usize,
+    first_input: Option<SessionInputPreview>,
     state: State,
     settled: BTreeSet<u64>,
     messages: Vec<ProjectedMessage>,
@@ -713,7 +732,8 @@ impl Session {
             messages,
             context_changes,
             child_records,
-        } = project(&read_entries(&connection)?)?;
+            ..
+        } = project_connection(&connection)?;
         prepare_writer(&connection)?;
         Ok(Self {
             store: Mutex::new(Store {
@@ -797,6 +817,25 @@ impl Session {
         Ok(clone)
     }
 
+    /// Validate committed history without retaining raw child outputs. Labels
+    /// contain at most 120 characters from the first input's first line.
+    pub fn inspect_metadata(path: impl AsRef<Path>) -> Result<SessionMetadata, SessionError> {
+        let path = database_path(path.as_ref())?;
+        let connection = Connection::open_with_flags(path, OpenFlags::SQLITE_OPEN_READ_ONLY)?;
+        configure_connection(&connection)?;
+        let snapshot = connection.unchecked_transaction()?;
+        let header = read_header(&snapshot)?;
+        let projection = project_connection(&snapshot)?;
+
+        Ok(SessionMetadata {
+            cwd: header.cwd,
+            name: header.name,
+            last_model: projection.state.last_model,
+            turns: projection.turns,
+            first_input: projection.first_input,
+        })
+    }
+
     /// Read persisted facts without taking write ownership or repairing history.
     pub fn inspect(path: impl AsRef<Path>) -> Result<SessionView, SessionError> {
         let path = database_path(path.as_ref())?;
@@ -805,7 +844,7 @@ impl Session {
         let entries = read_entries(&connection)?;
         let HistoryProjection {
             state, messages, ..
-        } = project(&entries)?;
+        } = project(entries.iter().map(Ok))?;
         Ok(SessionView {
             cwd: header.cwd,
             name: header.name,
@@ -1137,6 +1176,16 @@ impl Session {
     pub fn select_model(&self, model: ModelRef) -> Result<(), SessionError> {
         let guard = self.operations.try_lock().map_err(SessionError::from)?;
         self.record_selection(&guard, model, None)
+    }
+
+    pub fn model_preference(&self) -> Result<Option<ModelRef>, SessionError> {
+        Ok(self
+            .store
+            .lock()
+            .map_err(|_| SessionError::Poisoned)?
+            .state
+            .last_model
+            .clone())
     }
 
     pub fn reasoning(&self) -> Result<Reasoning, SessionError> {
@@ -1876,16 +1925,36 @@ pub(crate) fn valid_user_message(message: &Message) -> bool {
         })
 }
 
-fn project(entries: &[SessionEntry]) -> Result<HistoryProjection, SessionError> {
+fn project_connection(connection: &Connection) -> Result<HistoryProjection, SessionError> {
+    // Reopen needs derived state, not an owned raw-history export. Validate one
+    // fact at a time so old child payloads can be released after projection.
+    let mut statement = connection.prepare("SELECT body FROM entries ORDER BY seq")?;
+    let rows = statement.query_map([], |row| row.get::<_, Vec<u8>>(0))?;
+    project(rows.map(|body| Ok(serde_json::from_slice::<SessionEntry>(&body?)?)))
+}
+
+fn project<E: Borrow<SessionEntry>>(
+    entries: impl IntoIterator<Item = Result<E, SessionError>>,
+) -> Result<HistoryProjection, SessionError> {
     let mut state = State::default();
     let mut settled = BTreeSet::new();
     let mut messages = Vec::new();
     let mut context_changes = Vec::new();
     let mut child_records = ChildRecordIndex::default();
+    let mut turns = 0usize;
+    let mut first_input = None;
     for entry in entries {
+        let entry = entry?;
+        let entry = entry.borrow();
         let mut new_settled = Vec::new();
         state.apply(entry, &mut messages, &settled, &mut new_settled)?;
         child_records.observe(state.sequence, entry);
+        if matches!(entry, SessionEntry::TurnStarted { .. }) {
+            turns = turns.checked_add(1).ok_or(SessionError::InvalidHistory)?;
+        }
+        if first_input.is_none() {
+            first_input = input_preview(entry);
+        }
         if let SessionEntry::ModelContextChanged { context, .. } = entry {
             context_changes.push(ModelContextChange {
                 after_message: messages.len(),
@@ -1895,12 +1964,41 @@ fn project(entries: &[SessionEntry]) -> Result<HistoryProjection, SessionError> 
         settled.extend(new_settled);
     }
     Ok(HistoryProjection {
+        turns,
+        first_input,
         state,
         settled,
         messages,
         context_changes,
         child_records,
     })
+}
+
+fn input_preview(entry: &SessionEntry) -> Option<SessionInputPreview> {
+    let label = |text: &str| {
+        text.lines()
+            .next()
+            .unwrap_or("")
+            .chars()
+            .take(120)
+            .collect()
+    };
+    match entry {
+        SessionEntry::TurnStarted { input, .. } => Some(SessionInputPreview::Prompt {
+            text: input.content.iter().find_map(|part| match part {
+                Content::Text(text) if !text.trim().is_empty() => Some(label(text)),
+                _ => None,
+            }),
+        }),
+        SessionEntry::UserShellAdmitted {
+            command,
+            exclude_from_context,
+        } => Some(SessionInputPreview::Shell {
+            command: label(command),
+            excluded: *exclude_from_context,
+        }),
+        _ => None,
+    }
 }
 
 fn read_entries(connection: &Connection) -> Result<Vec<SessionEntry>, SessionError> {
@@ -2430,6 +2528,72 @@ mod tests {
     }
 
     #[test]
+    fn passive_metadata_is_bounded_validated_and_does_not_recover_history() {
+        let (root, path) = fixture();
+        let session = Session::create(&path, &root).unwrap();
+        session.set_name(Some("Metadata")).unwrap();
+        session
+            .admit_user_shell(format!("{}\nSECOND_LINE", "🦀".repeat(130)), true)
+            .unwrap();
+        let model = ModelRef {
+            provider: "test".into(),
+            model: "test".into(),
+        };
+        session
+            .begin_turn("unfinished prompt".into(), model.clone())
+            .unwrap();
+        let before = session.view().unwrap().entries;
+        let metadata = Session::inspect_metadata(&path).unwrap();
+        assert_eq!(metadata.cwd, root.canonicalize().unwrap());
+        assert_eq!(metadata.name.as_deref(), Some("Metadata"));
+        assert_eq!(metadata.last_model, Some(model));
+        assert_eq!(metadata.turns, 1);
+        assert_eq!(
+            metadata.first_input,
+            Some(SessionInputPreview::Shell {
+                command: "🦀".repeat(120),
+                excluded: true,
+            })
+        );
+        assert_eq!(session.view().unwrap().entries, before);
+        drop(session);
+        let connection = Connection::open(&path).unwrap();
+        connection
+            .execute(
+                "INSERT INTO entries(body) VALUES (?1)",
+                params![b"invalid JSON".as_slice()],
+            )
+            .unwrap();
+        let damaged: Vec<(i64, Vec<u8>)> = connection
+            .prepare("SELECT seq,body FROM entries ORDER BY seq")
+            .unwrap()
+            .query_map([], |row| Ok((row.get(0)?, row.get(1)?)))
+            .unwrap()
+            .collect::<Result<_, _>>()
+            .unwrap();
+        for result in [
+            Session::open(&path).map(|_| ()),
+            Session::inspect_metadata(&path).map(|_| ()),
+            Session::inspect(&path).map(|_| ()),
+        ] {
+            assert!(matches!(result, Err(SessionError::Json(_))), "{result:?}");
+        }
+        let after: Vec<(i64, Vec<u8>)> = connection
+            .prepare("SELECT seq,body FROM entries ORDER BY seq")
+            .unwrap()
+            .query_map([], |row| Ok((row.get(0)?, row.get(1)?)))
+            .unwrap()
+            .collect::<Result<_, _>>()
+            .unwrap();
+        assert_eq!(
+            after, damaged,
+            "failed validation rewrote committed history"
+        );
+        drop(connection);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
     fn opening_invalid_database_does_not_initialize_session_schema() {
         let (root, path) = fixture();
         let connection = Connection::open(&path).unwrap();
@@ -2481,6 +2645,7 @@ mod tests {
             for result in [
                 Session::open(&path).map(|_| ()),
                 Session::inspect(&path).map(|_| ()),
+                Session::inspect_metadata(&path).map(|_| ()),
             ] {
                 if version == 6 {
                     assert!(matches!(result, Err(SessionError::UnsupportedFormat(6))));

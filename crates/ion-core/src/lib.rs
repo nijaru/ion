@@ -23,8 +23,8 @@ pub use agent::{
 pub use input::{AcceptedInput, InputBudget, InputReservation};
 pub use session::{
     ForkPoint, ModelContextSnapshot, Session as CodingSession, SessionEntry,
-    SessionError as CodingSessionError, SessionView, StoredToolActivity, TurnEndReason,
-    TurnSummary, UnobservedUserShell, UserShellOutcome,
+    SessionError as CodingSessionError, SessionInputPreview, SessionMetadata, SessionView,
+    StoredToolActivity, TurnEndReason, TurnSummary, UnobservedUserShell, UserShellOutcome,
 };
 pub use tool_set::{
     ToolActivity, ToolActivityKind, ToolCatalog, ToolDefinition, ToolExecutor, ToolExposure,

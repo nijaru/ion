@@ -576,7 +576,13 @@ original file snapshot. It rejects ambiguous or overlapping matches before
 writing, accepts ordinary LF or CRLF text, and preserves the file's BOM and
 unaffected line endings. A damaged Session file is skipped
 by `sessions` and `--continue`, while opening its exact path reports the
-error. Ion summarizes settled history when its request
+error. Reopen and catalogue/startup metadata validate facts one at a time without
+retaining all raw child output. Full inspection, detailed terminal history,
+clone and fork still materialize raw history; large records and retained model
+messages can require substantial memory. There is no aggregate Session memory
+quota.
+
+Ion summarizes settled history when its request
 nears a known model's context window or exceeds its transport bound, and can
 retry one model request after a provider reports context overflow. The raw
 conversation remains inspectable; `compact` and `/compact` also trigger this

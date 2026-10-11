@@ -231,15 +231,16 @@ impl SessionBinding {
             return self.reload_resources();
         }
         let session = Arc::new(CodingSession::open(path)?);
-        let view = session.view()?;
         ensure!(
-            view.cwd == self.session.cwd(),
+            session.cwd() == self.session.cwd(),
             "session belongs to another working directory"
         );
-        let selected =
-            self.host
-                .models()
-                .choose(None, None, view.last_model, self.host.credentials())?;
+        let selected = self.host.models().choose(
+            None,
+            None,
+            session.model_preference()?,
+            self.host.credentials(),
+        )?;
         let (resources, agent) = self.prepare(session.cwd(), &selected)?;
         agent.validate_reasoning(session.reasoning()?)?;
         self.publish(session, selected, agent, resources);
