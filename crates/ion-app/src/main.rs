@@ -510,30 +510,47 @@ async fn run_cli(cli: Cli) -> Result<()> {
             } else {
                 host.external_tools(session.cwd()).await
             };
-            let mut startup_diagnostics = startup
-                .diagnostics
-                .into_iter()
-                .map(|diagnostic| format!("[mcp: {diagnostic}]"))
-                .collect::<Vec<_>>();
             let external_mcp = startup.tools;
-            let external_tools: Option<Arc<dyn CodingToolSource>> = external_mcp
-                .as_ref()
-                .map(|tools| tools.clone() as Arc<dyn CodingToolSource>);
-            let binding =
-                SessionBinding::new(host, session, selected, external_tools, cli.reasoning)?;
-            for diagnostic in binding.resources().diagnostics() {
-                startup_diagnostics.push(format!(
-                    "[resource: {}: {}]",
-                    diagnostic.path.display(),
-                    diagnostic.message
-                ));
-            }
-            if cli.print.is_some() || !matches!(&action, Some(Action::Chat) | None) {
-                for diagnostic in &startup_diagnostics {
-                    eprintln!("{diagnostic}");
-                }
-            }
+            // Every fallible setup step after MCP startup belongs to the same
+            // exit scope as the client, so preflight errors still join cleanup.
             let result = async {
+                let mut startup_diagnostics = startup
+                    .diagnostics
+                    .into_iter()
+                    .map(|diagnostic| format!("[mcp: {diagnostic}]"))
+                    .collect::<Vec<_>>();
+                let external_tools: Option<Arc<dyn CodingToolSource>> = external_mcp
+                    .as_ref()
+                    .map(|tools| tools.clone() as Arc<dyn CodingToolSource>);
+                let binding = match SessionBinding::new(
+                    host,
+                    session,
+                    selected,
+                    external_tools,
+                    cli.reasoning,
+                ) {
+                    Ok(binding) => binding,
+                    Err(error) => {
+                        // Failed-server cleanup diagnostics must not disappear
+                        // just because independent binding preflight also fails.
+                        for diagnostic in &startup_diagnostics {
+                            eprintln!("{diagnostic}");
+                        }
+                        return Err(error);
+                    }
+                };
+                for diagnostic in binding.resources().diagnostics() {
+                    startup_diagnostics.push(format!(
+                        "[resource: {}: {}]",
+                        diagnostic.path.display(),
+                        diagnostic.message
+                    ));
+                }
+                if cli.print.is_some() || !matches!(&action, Some(Action::Chat) | None) {
+                    for diagnostic in &startup_diagnostics {
+                        eprintln!("{diagnostic}");
+                    }
+                }
                 match action {
                     Some(Action::Run { prompt }) => {
                         headless(
@@ -597,10 +614,17 @@ async fn run_cli(cli: Cli) -> Result<()> {
                 }
             }
             .await;
-            if let Some(tools) = external_mcp {
-                tools.shutdown().await;
+            let cleanup = match external_mcp {
+                Some(tools) => tools.shutdown().await,
+                None => Ok(()),
+            };
+            match (result, cleanup) {
+                (result, Ok(())) => result,
+                (Ok(()), Err(error)) => Err(error),
+                (Err(error), Err(cleanup)) => {
+                    Err(error.context(format!("MCP cleanup also failed: {cleanup:#}")))
+                }
             }
-            result
         }
     }
 }

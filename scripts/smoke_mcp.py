@@ -2,6 +2,7 @@
 
 import json
 import os
+import signal
 import subprocess
 import sys
 import tempfile
@@ -154,6 +155,31 @@ class Provider(BaseHTTPRequestHandler):
 
 class RemoteMcp(BaseHTTPRequestHandler):
     def do_POST(self):
+        if self.path == "/redirect":
+            self.rfile.read(int(self.headers["Content-Length"]))
+            self.send_response(307)
+            self.send_header("Location", "/redirect-target")
+            self.end_headers()
+            return
+        if self.path == "/redirect-target":
+            self.server.redirect_followed = True
+            self.send_response(500)
+            self.end_headers()
+            return
+        if self.path in ("/stalled-headers", "/stalled-sse"):
+            release = self.server.startup_release
+            self.rfile.read(int(self.headers["Content-Length"]))
+            self.server.startup_seen.set()
+            if self.path == "/stalled-sse":
+                self.send_response(200)
+                self.send_header("Content-Type", "text/event-stream")
+                self.end_headers()
+                self.wfile.flush()
+            # Ion must interrupt and join its own worker, not wait for this
+            # fixture to finish sending headers or an initial SSE event.
+            release.wait(20)
+            self.close_connection = True
+            return
         assert self.path == "/mcp", self.path
         assert self.headers.get("Authorization") == "Bearer test-token"
         request = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
@@ -316,6 +342,89 @@ for line in sys.stdin.buffer:
 '''
 
 
+owned_source = '''import json, os, sys, time
+from pathlib import Path
+Path('owned.pid').write_text(str(os.getpid()))
+mode = sys.argv[1]
+for line in sys.stdin:
+    request = json.loads(line)
+    if 'id' not in request: continue
+    method = request.get('method')
+    if method == 'initialize':
+        if mode == 'init-error':
+            print(json.dumps({'jsonrpc': '2.0', 'id': request['id'], 'error': {'code': -32603, 'message': 'owned init fault'}}), flush=True)
+            continue
+        result = {'protocolVersion': request['params']['protocolVersion'], 'capabilities': {'tools': {}}, 'serverInfo': {'name': 'owned', 'version': '1'}}
+    elif method == 'tools/list':
+        result = {'tools': 'invalid' if mode == 'list-error' else []}
+    else: continue
+    print(json.dumps({'jsonrpc': '2.0', 'id': request['id'], 'result': result}), flush=True)
+Path('owned.eof').touch()
+time.sleep(60)
+'''
+
+
+def check_owned_cleanup():
+    # Offline startup/exit only: no provider requests or live server routes.
+    with tempfile.TemporaryDirectory(prefix="ion-mcp-owned-") as temporary:
+        work = Path(temporary)
+        fixture = work / "owned-server.py"
+        fixture.write_text(owned_source)
+        env = {**os.environ, "XDG_CONFIG_HOME": str(work / "config"), "XDG_STATE_HOME": str(work / "state")}
+        subprocess.run([binary, "use", "offline", "model", "--endpoint", "http://127.0.0.1:1/v1/chat/completions", "--wire", "chat-completions"], env=env, check=True, capture_output=True)
+        cases = [
+            ("exit", "ready", ["rpc"], None),
+            ("preflight", "ready", ["--reasoning", "budget:128", "rpc"], "exact reasoning-token budgets"),
+            ("input-setup", "ready", ["run", "/probe 'unfinished"], "quote"),
+            ("init-fault", "init-error", ["rpc"], "initialization failed"),
+            ("listing-fault", "list-error", ["rpc"], "tool listing failed"),
+        ]
+        config_path = work / "config/ion/mcp.json"
+        for name, mode, args, error in cases:
+            workspace = work / name
+            workspace.mkdir()
+            prompts = workspace / ".ion/prompts"
+            prompts.mkdir(parents=True)
+            (prompts / "probe.md").write_text("Inspect $@")
+            configured = {"owned": {"command": sys.executable, "args": [str(fixture), mode]}}
+            if name == "preflight":
+                configured["broken"] = {"command": str(work / "missing-server")}
+            config_path.write_text(json.dumps({"servers": configured}))
+            pid = None
+            try:
+                # File-backed output separates CLI exit from inherited stderr
+                # still held by a leaked MCP root; inspect its PID separately.
+                with (workspace / "stdout").open("w+") as out, (workspace / "stderr").open("w+") as err:
+                    response = subprocess.run([binary, "--cwd", workspace, *args], input="", env=env, stdout=out, stderr=err, text=True, timeout=25)
+                    out.seek(0)
+                    err.seek(0)
+                    response.stdout = out.read()
+                    response.stderr = err.read()
+                pid = int((workspace / "owned.pid").read_text())
+                process = subprocess.run(["ps", "-p", str(pid), "-o", "pid="], capture_output=True, text=True)
+                assert not process.stderr, process
+                assert not process.stdout.strip(), f"{name}: owned root {pid} survived or was not reaped"
+                assert (workspace / "owned.eof").exists(), f"{name}: transport did not close stdin"
+                if error:
+                    assert error in response.stderr, response
+                if name == "preflight":
+                    assert "cannot start MCP server broken" in response.stderr, response
+                expected_failure = name in ("preflight", "input-setup")
+                assert (response.returncode != 0) == expected_failure, response
+            finally:
+                # On regression, clean up only the root still running this exact
+                # isolated fixture, never another process that reused its PID.
+                if pid is None and (workspace / "owned.pid").exists():
+                    pid = int((workspace / "owned.pid").read_text())
+                if pid is not None:
+                    command = subprocess.run(["ps", "-ww", "-p", str(pid), "-o", "command="], capture_output=True, text=True).stdout
+                    if str(fixture) in command:
+                        os.kill(pid, signal.SIGKILL)
+    print("Ion MCP owned roots on normal exit, preflight and startup faults: OK")
+
+
+check_owned_cleanup()
+
 with tempfile.TemporaryDirectory(prefix="ion-mcp-") as temporary:
     work = Path(temporary)
     workspace = work / "workspace"
@@ -338,6 +447,23 @@ with tempfile.TemporaryDirectory(prefix="ion-mcp-") as temporary:
     try:
         endpoint = f"http://127.0.0.1:{server.server_port}/v1/chat/completions"
         subprocess.run([binary, "use", "smoke", "mcp-model", "--endpoint", endpoint, "--wire", "chat-completions", "--images"], env=env, check=True, capture_output=True)
+        remote.redirect_followed = False
+        subprocess.run([binary, "mcp", "add-http", "redirected", f"http://127.0.0.1:{remote.server_port}/redirect", "--bearer-token-env", "REMOTE_MCP_TOKEN"], env=env, check=True, capture_output=True)
+        redirected = subprocess.run([binary, "--cwd", workspace, "rpc"], input="", env=env, check=True, capture_output=True, text=True, timeout=15)
+        assert "initialization failed" in redirected.stderr, redirected
+        assert not remote.redirect_followed, "HTTP startup replayed credentials to a redirect target"
+        subprocess.run([binary, "mcp", "remove", "redirected"], env=env, check=True, capture_output=True)
+        for stage in ("headers", "sse"):
+            remote.startup_release = threading.Event()
+            remote.startup_seen = threading.Event()
+            subprocess.run([binary, "mcp", "add-http", "stalled", f"http://127.0.0.1:{remote.server_port}/stalled-{stage}"], env=env, check=True, capture_output=True)
+            try:
+                stalled = subprocess.run([binary, "--cwd", workspace, "rpc"], input="", env=env, check=True, capture_output=True, text=True, timeout=15)
+                assert remote.startup_seen.is_set(), "HTTP bootstrap was not exercised"
+                assert "initialization timed out" in stalled.stderr, stalled
+            finally:
+                remote.startup_release.set()
+                subprocess.run([binary, "mcp", "remove", "stalled"], env=env, check=True, capture_output=True)
         subprocess.run([binary, "mcp", "add", "demo", sys.executable, str(server_script)], env=env, check=True, capture_output=True)
         subprocess.run([binary, "mcp", "add", "broken", str(work / "missing-server")], env=env, check=True, capture_output=True)
         subprocess.run([binary, "mcp", "add", "bad-listing", sys.executable, str(bad_script)], env=env, check=True, capture_output=True)

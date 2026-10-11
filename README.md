@@ -486,8 +486,16 @@ the user's environment and permissions and run in the Session's working
 directory. A repository file does not launch an MCP server merely because
 Ion opened that directory. A failing server is reported at startup while
 healthy servers and the coding client remain available; a failed
-tool call becomes an error result visible to the model. Current MCP support
-handles text, structured data and normalized image tool results; audio and
+tool call becomes an error result visible to the model. On controlled exit,
+including failed startup or client preflight, Ion joins MCP services and HTTP
+workers. It closes local server stdin, waits up to three seconds for the root
+process to exit, then kills and reaps that root if needed. Service join and
+local process cleanup errors are reported. The HTTP SDK still logs remote
+session-deletion failures rather than returning them. Cleanup does not guarantee
+termination of descendants or remote work, and abrupt process loss cannot
+guarantee joined cleanup. Rust embedders must await `McpTools::shutdown` before
+dropping their runtime. Current MCP support handles text, structured data and
+normalized image tool results; audio and
 embedded resource content report an explicit unsupported-content error.
 Large text or structured results include a bounded preview and a
 `full_output_path` to a private JSON file containing the complete result;

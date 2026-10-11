@@ -23,21 +23,23 @@ use ion_core::{
 use rmcp::{
     ClientHandler, RoleClient,
     model::{CallToolRequestParams, CallToolResult, ContentBlock},
-    service::{NotificationContext, RunningService, ServiceExt},
-    transport::{
-        StreamableHttpClientTransport, TokioChildProcess,
-        streamable_http_client::StreamableHttpClientTransportConfig,
-    },
+    service::{NotificationContext, RunningService},
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
-use tokio::process::Command;
 use tokio::sync::{Mutex, RwLock};
 use tokio_util::sync::CancellationToken;
 use url::Url;
 
 use crate::model_setup::write_json;
+
+mod connection;
+mod http;
+use connection::{Connection, combine_cleanup};
+
+#[cfg(test)]
+mod lifecycle_tests;
 
 #[derive(Clone, Serialize)]
 #[serde(untagged)]
@@ -202,7 +204,7 @@ type RegisteredTools = Vec<(ToolSpec, String)>;
 
 struct Server {
     name: String,
-    client: RwLock<Option<Client>>,
+    client: RwLock<Option<Connection>>,
     tools: SyncRwLock<RegisteredTools>,
     tool_list_version: Arc<AtomicU64>,
     refreshed_version: AtomicU64,
@@ -249,37 +251,8 @@ impl McpTools {
         validate_server(&definition)?;
         let changed = Arc::new(AtomicU64::new(0));
         let handler = ChangeHandler(changed.clone());
-        let mut client = match definition {
-            McpServer::Stdio(server) => {
-                let mut command = Command::new(&server.command);
-                command.args(&server.args).current_dir(cwd);
-                let transport = TokioChildProcess::new(command)
-                    .with_context(|| format!("cannot start MCP server {name}"))?;
-                tokio::time::timeout(Duration::from_secs(10), handler.serve(transport))
-                    .await
-                    .with_context(|| format!("MCP server {name} initialization timed out"))?
-                    .with_context(|| format!("MCP server {name} initialization failed"))?
-            }
-            McpServer::Http(server) => {
-                let mut transport = StreamableHttpClientTransportConfig::with_uri(server.url);
-                // A 404 can mean a lost MCP session. The SDK default retries
-                // ordinary POSTs after reinitialization, but a tool may have
-                // executed before the server returned that response.
-                transport.reinit_on_expired_session = false;
-                if let Some(env_name) = server.bearer_token_env {
-                    let token = std::env::var(&env_name)
-                        .with_context(|| format!("MCP server {name} needs {env_name}"))?;
-                    ensure!(!token.is_empty(), "MCP server {name} needs {env_name}");
-                    transport.auth_header = Some(token);
-                }
-                let transport = StreamableHttpClientTransport::from_config(transport);
-                tokio::time::timeout(Duration::from_secs(10), handler.serve(transport))
-                    .await
-                    .with_context(|| format!("MCP server {name} initialization timed out"))?
-                    .with_context(|| format!("MCP server {name} initialization failed"))?
-            }
-        };
-        let discovered = discover_tools(&name, &client).await;
+        let client = Connection::start(&name, definition, cwd, handler).await?;
+        let discovered = discover_tools(&name, &client.client).await;
         match discovered {
             Ok(tools) => Ok(Server {
                 name,
@@ -289,10 +262,7 @@ impl McpTools {
                 refreshed_version: AtomicU64::new(0),
                 refresh_gate: Mutex::new(()),
             }),
-            Err(error) => {
-                let _ = client.close_with_timeout(Duration::from_secs(3)).await;
-                Err(error)
-            }
+            Err(error) => combine_cleanup(Err(error), client.shutdown().await),
         }
     }
 
@@ -323,7 +293,7 @@ impl McpTools {
             };
             let updated = tokio::select! {
                 () = stop.cancelled() => break,
-                result = discover_tools(&server.name, client) => result,
+                result = discover_tools(&server.name, &client.client) => result,
             };
             match updated {
                 Ok(updated) => {
@@ -342,18 +312,33 @@ impl McpTools {
         diagnostics
     }
 
-    /// Close every child process before the client runtime exits.
-    pub async fn shutdown(&self) {
-        for server in &self.servers {
-            if let Some(mut client) = server.client.write().await.take() {
-                let _ = client.close_with_timeout(Duration::from_secs(3)).await;
-            }
+    /// Join services and reap owned root processes before the runtime exits.
+    /// Callers must await this on controlled exit, including failed setup.
+    pub async fn shutdown(&self) -> Result<()> {
+        let results = join_all(self.servers.iter().map(|server| async {
+            let result = match server.client.write().await.take() {
+                Some(client) => client.shutdown().await,
+                None => Ok(()),
+            };
             server
                 .tools
                 .write()
                 .unwrap_or_else(std::sync::PoisonError::into_inner)
                 .clear();
-        }
+            result.with_context(|| format!("MCP server {} shutdown failed", server.name))
+        }))
+        .await;
+        let errors: Vec<_> = results.into_iter().filter_map(Result::err).collect();
+        ensure!(
+            errors.is_empty(),
+            "{}",
+            errors
+                .iter()
+                .map(|error| format!("{error:#}"))
+                .collect::<Vec<_>>()
+                .join("; ")
+        );
+        Ok(())
     }
 }
 
@@ -481,7 +466,7 @@ impl ToolExecutor for McpExecutor {
                     .with_arguments(args.clone());
                 tokio::select! {
                     () = stop.cancelled() => return tool_error(format!("MCP tool {} cancelled; effects may be unknown",call.name)),
-                    result = client.call_tool(request) => result,
+                    result = client.client.call_tool(request) => result,
                 }
             };
             match result {
@@ -701,7 +686,7 @@ for line in sys.stdin:
             raw_arguments: None,
         };
         let observed = issued.execute(&call, CancellationToken::new()).await;
-        source.shutdown().await;
+        source.shutdown().await.unwrap();
         let closed = issued.execute(&call, CancellationToken::new()).await;
         fs::remove_dir_all(root).unwrap();
 
@@ -792,7 +777,7 @@ for line in sys.stdin:
             let saved: Value = serde_json::from_slice(&fs::read(path).unwrap()).unwrap();
             fs::remove_file(path).unwrap();
             assert!(effect.is_ok(), "server effect not observed");
-            assert!(closed.is_ok(), "conversion held the MCP connection");
+            closed.expect("conversion held the MCP connection").unwrap();
             assert!(pending && still_pending, "MCP result bypassed owned blocking dispatch");
             assert_eq!(effects, "ONCE\n");
             assert!(output.is_error, "original server error must survive cancellation");
