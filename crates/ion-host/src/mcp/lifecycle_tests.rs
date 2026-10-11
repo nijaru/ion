@@ -33,6 +33,8 @@ for line in sys.stdin:
     else:
         continue
     print(json.dumps({'jsonrpc': '2.0', 'id': request['id'], 'result': result}), flush=True)
+    if mode == 'blocked-send':
+        time.sleep(60)
 Path('eof').touch()
 time.sleep(60)
 "#;
@@ -119,6 +121,50 @@ async fn native_roots_are_reaped_after_shutdown_and_failed_startup() {
         }
     });
     join_all(checks).await;
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[tokio::test]
+async fn shutdown_reaps_root_while_protocol_send_is_backpressured() {
+    let root = std::env::temp_dir().join(format!("ion-mcp-blocked-send-{}", uuid::Uuid::now_v7()));
+    fs::create_dir(&root).unwrap();
+    let connection = Connection::start(
+        "blocked",
+        McpServer::Stdio(McpStdioServer {
+            command: "python3".into(),
+            args: vec!["-c".into(), SERVER.into(), "blocked-send".into()],
+        }),
+        &root,
+        ChangeHandler(Arc::new(AtomicU64::new(0))),
+    )
+    .await
+    .unwrap();
+    let arguments = serde_json::from_value(json!({"payload":"x".repeat(1024 * 1024)})).unwrap();
+    let call = connection
+        .client
+        .call_tool(CallToolRequestParams::new("blocked").with_arguments(arguments));
+    assert!(
+        tokio::time::timeout(Duration::from_millis(100), call)
+            .await
+            .is_err()
+    );
+    let closed = tokio::time::timeout(Duration::from_secs(5), connection.shutdown()).await;
+    // The fixture's kill_on_drop also signals the owned root on a failed check.
+    // A successful controlled shutdown must already have reaped it.
+    closed
+        .expect("protocol send prevented owned shutdown")
+        .unwrap();
+    let pid = fs::read_to_string(root.join("pid")).unwrap();
+    let process = Command::new("ps")
+        .args(["-p", &pid, "-o", "pid="])
+        .output()
+        .await
+        .unwrap();
+    assert!(process.stderr.is_empty(), "ps failed: {process:?}");
+    assert!(
+        process.stdout.is_empty(),
+        "backpressured root PID {pid} was not reaped"
+    );
     fs::remove_dir_all(root).unwrap();
 }
 

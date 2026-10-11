@@ -102,13 +102,17 @@ impl Connection {
     pub async fn shutdown(mut self) -> Result<()> {
         // rmcp's close_with_timeout consumes then drops the join handle at the
         // deadline. Join without that timeout; process escalation is ours.
-        let service = match self.client.close().await {
+        // A blocked SDK send can hold the stdio writer lock while service close
+        // waits for it. Escalate/reap the root concurrently so closing its pipes
+        // releases that send; neither cleanup future is detached.
+        let (service, cleanup) = tokio::join!(self.client.close(), self.owned.shutdown());
+        let service = match service {
             Ok(QuitReason::JoinError(error)) | Err(error) => {
                 Err(error).context("MCP service cleanup failed")
             }
             Ok(_) => Ok(()),
         };
-        combine_cleanup(service, self.owned.shutdown().await)
+        combine_cleanup(service, cleanup)
     }
 }
 
