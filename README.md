@@ -8,9 +8,10 @@ everyday coding reliability is not yet qualified.
 
 ## Start
 
-Build with the checked-in Rust 1.98.0 toolchain:
+Build with the latest stable Rust toolchain:
 
 ```sh
+rustup update stable
 cargo build --locked -p ion
 target/debug/ion models
 ```

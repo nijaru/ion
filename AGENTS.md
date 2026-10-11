@@ -71,7 +71,7 @@
 
 ## Verification
 
-Use the checked-in Rust 1.98.0 toolchain:
+Use the latest stable Rust toolchain selected by `rust-toolchain.toml`:
 
 ```sh
 cargo fmt --all -- --check

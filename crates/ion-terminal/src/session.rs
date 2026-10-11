@@ -268,7 +268,7 @@ impl Drop for TerminalSession {
 fn record_panic(generation: &AtomicU64) {
     // At exhaustion every newly acquired lease is invalid too; never wrap and
     // accidentally resurrect a prior lease.
-    let _ = generation.fetch_update(Ordering::SeqCst, Ordering::SeqCst, |value| {
+    let _ = generation.try_update(Ordering::SeqCst, Ordering::SeqCst, |value| {
         value.checked_add(1)
     });
 }
