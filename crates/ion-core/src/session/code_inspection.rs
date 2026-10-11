@@ -2,9 +2,10 @@
 use std::{
     collections::{BTreeMap, HashMap},
     ops::Bound::{Excluded, Unbounded},
+    path::PathBuf,
 };
 
-use rusqlite::{Connection, params};
+use rusqlite::{Connection, OpenFlags, params};
 use serde::Deserialize;
 use serde_json::{Value, json};
 
@@ -13,7 +14,7 @@ use crate::ToolOccurrence;
 
 #[derive(Default)]
 pub(super) struct ChildRecordIndex(HashMap<ToolOccurrence, BTreeMap<usize, ChildRecords>>);
-#[derive(Default)]
+#[derive(Clone, Copy, Default)]
 struct ChildRecords {
     intent: u64,
     outcome: Option<u64>,
@@ -73,8 +74,33 @@ fn page_limit() -> usize {
     4096
 }
 
+/// A bounded set of immutable, committed row coordinates. The gateway owns
+/// its read task; no Session lock or execution authority enters that task.
+pub(crate) struct CodeInspection {
+    path: PathBuf,
+    session_id: uuid::Uuid,
+    parent: ToolOccurrence,
+    selection: Selection,
+}
+enum Selection {
+    Children {
+        rows: Vec<(usize, ChildRecords)>,
+        next_after: Option<usize>,
+    },
+    Output {
+        child: usize,
+        records: ChildRecords,
+        pointer: String,
+        offset: usize,
+        limit: usize,
+    },
+}
+
 impl Session {
-    pub(crate) fn inspect_code(&self, query: &str) -> Result<Value, InspectionError> {
+    pub(crate) fn prepare_code_inspection(
+        &self,
+        query: &str,
+    ) -> Result<CodeInspection, InspectionError> {
         let query: Query = serde_json::from_str(query).map_err(|error| {
             InspectionError::Request(format!("invalid inspection query: {error}"))
         })?;
@@ -95,18 +121,17 @@ impl Session {
         let children = store.child_records.0.get(&parent).ok_or_else(|| {
             InspectionError::Request("parent has no saved Code Mode child calls".into())
         })?;
-        match query {
+        let selection = match query {
             Query::Children { after, .. } => {
                 let lower = after.map_or(Unbounded, Excluded);
-                let mut rows = children.range((lower, Unbounded));
-                let mut summaries = Vec::new();
-                for (child, records) in rows.by_ref().take(10) {
-                    summaries.push(summary(&store.connection, *child, records, true)?);
-                }
-                let next_after = rows
-                    .next()
-                    .and_then(|_| summaries.last().map(|s| s["child"].clone()));
-                Ok(json!({"parent":parent,"children":summaries,"next_after":next_after}))
+                let mut children = children.range((lower, Unbounded));
+                let rows = children
+                    .by_ref()
+                    .take(10)
+                    .map(|(&child, &records)| (child, records))
+                    .collect::<Vec<_>>();
+                let next_after = children.next().and_then(|_| rows.last().map(|row| row.0));
+                Selection::Children { rows, next_after }
             }
             Query::Output {
                 child,
@@ -122,10 +147,62 @@ impl Session {
                         "output limit must be 4..65536 bytes and pointer a JSON Pointer".into(),
                     ));
                 }
-                let records = children
+                let records = *children
                     .get(&child)
                     .ok_or_else(|| InspectionError::Request("unknown child ordinal".into()))?;
-                let mut result = summary(&store.connection, child, records, false)?;
+                Selection::Output {
+                    child,
+                    records,
+                    pointer,
+                    offset,
+                    limit,
+                }
+            }
+        };
+        Ok(CodeInspection {
+            path: self.path.clone(),
+            session_id: self.header.provider_session_id,
+            parent,
+            selection,
+        })
+    }
+
+    #[cfg(test)]
+    pub(crate) fn inspect_code(&self, query: &str) -> Result<Value, InspectionError> {
+        self.prepare_code_inspection(query)?.read()
+    }
+}
+
+impl CodeInspection {
+    pub(crate) fn read(self) -> Result<Value, InspectionError> {
+        // WAL readers do not hold the writer/state mutex through filesystem
+        // waits or maximum-record decoding. Pin one read snapshot and reject a
+        // replaced database rather than consulting another Session's rows.
+        let connection = Connection::open_with_flags(self.path, OpenFlags::SQLITE_OPEN_READ_ONLY)
+            .map_err(SessionError::from)?;
+        super::configure_connection(&connection)?;
+        let snapshot = connection
+            .unchecked_transaction()
+            .map_err(SessionError::from)?;
+        if super::read_header(&snapshot)?.provider_session_id != self.session_id {
+            return Err(SessionError::InvalidDatabase.into());
+        }
+        match self.selection {
+            Selection::Children { rows, next_after } => {
+                let summaries = rows
+                    .into_iter()
+                    .map(|(child, records)| summary(&snapshot, child, &records, true))
+                    .collect::<Result<Vec<_>, _>>()?;
+                Ok(json!({"parent":self.parent,"children":summaries,"next_after":next_after}))
+            }
+            Selection::Output {
+                child,
+                records,
+                pointer,
+                offset,
+                limit,
+            } => {
+                let mut result = summary(&snapshot, child, &records, false)?;
                 if result["state"] != "observed" {
                     return Ok(result);
                 }
@@ -133,7 +210,7 @@ impl Session {
                 // replay, direct-shell facts and arbitrary Session entries cannot
                 // cross this interface. Each lookup reads one indexed fact, not a
                 // whole history clone. The existing entry bound limits decoding.
-                let encoded: String = store.connection.query_row(
+                let encoded: String = snapshot.query_row(
                     "SELECT CAST(body AS TEXT) -> '$.data.outcome.output.value' FROM entries WHERE seq=?1",
                     [i64::try_from(records.outcome.ok_or(SessionError::InvalidHistory)?).map_err(|_| SessionError::InvalidHistory)?], |row| row.get(0)
                 ).map_err(SessionError::from)?;

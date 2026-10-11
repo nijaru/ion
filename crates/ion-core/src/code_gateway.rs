@@ -33,6 +33,12 @@ struct Admitted {
     reply: oneshot::Sender<CodeReply>,
 }
 
+struct Inspection {
+    reply: oneshot::Sender<CodeReply>,
+    result: oneshot::Receiver<Result<Option<Value>, InspectionError>>,
+    worker: std::thread::JoinHandle<()>,
+}
+
 struct Gate<'a, F> {
     session: &'a Session,
     catalog: &'a ToolCatalog,
@@ -43,6 +49,7 @@ struct Gate<'a, F> {
     limits: CodeLimits,
     stop: CancellationToken,
     waiting: VecDeque<Admitted>,
+    inspection: Option<Inspection>,
     calls: usize,
     failed: usize,
     skipped: usize,
@@ -130,8 +137,41 @@ impl<F: FnMut(AgentEvent)> Gate<'_, F> {
                         .reply
                         .send(Err("inspection query JSON byte limit exceeded".into()));
                 } else {
-                    match self.session.inspect_code(&query_json) {
-                        Ok(value) => self.reply(request.reply, &value),
+                    match self.session.prepare_code_inspection(&query_json) {
+                        Ok(inspection) => {
+                            let stop = self.stop.clone();
+                            let (sender, result) = oneshot::channel();
+                            // A guest can occupy the runtime's only blocking
+                            // thread while awaiting this reply. This bounded,
+                            // owned reader must have independent capacity.
+                            let worker = std::thread::Builder::new()
+                                .name("ion-code-inspection".into())
+                                .spawn(move || {
+                                    let outcome = if stop.is_cancelled() {
+                                        Ok(None)
+                                    } else {
+                                        inspection.read().map(Some)
+                                    };
+                                    let _ = sender.send(outcome);
+                                });
+                            match worker {
+                                Ok(worker) => {
+                                    self.inspection = Some(Inspection {
+                                        reply: request.reply,
+                                        result,
+                                        worker,
+                                    });
+                                }
+                                Err(error) => {
+                                    self.close(&format!(
+                                        "saved child inspection could not start: {error}"
+                                    ));
+                                    let _ = request
+                                        .reply
+                                        .send(Err("saved child inspection could not start".into()));
+                                }
+                            }
+                        }
                         Err(InspectionError::Request(error)) => {
                             let _ = request.reply.send(Err(error));
                         }
@@ -219,6 +259,40 @@ impl<F: FnMut(AgentEvent)> Gate<'_, F> {
                             .send(Err("child intent was not committed; not dispatched".into()));
                     }
                 }
+            }
+        }
+    }
+
+    fn complete_inspection(
+        &mut self,
+        inspection: Inspection,
+        result: Result<Result<Option<Value>, InspectionError>, oneshot::error::RecvError>,
+    ) {
+        // The completion channel follows all database/decoding cleanup. Only
+        // thread exit remains to join; no filesystem work follows the signal.
+        if inspection.worker.join().is_err() {
+            self.close("saved child inspection worker panicked");
+            let _ = inspection
+                .reply
+                .send(Err("saved child inspection worker panicked".into()));
+            return;
+        }
+        let reply = inspection.reply;
+        match result {
+            Ok(Ok(Some(value))) if !self.stop.is_cancelled() => self.reply(reply, &value),
+            Ok(Ok(_)) => {
+                let _ = reply.send(Err("guest stopped".into()));
+            }
+            Ok(Err(InspectionError::Request(error))) => {
+                let _ = reply.send(Err(error));
+            }
+            Ok(Err(InspectionError::Session(error))) => {
+                self.storage_fault(error);
+                let _ = reply.send(Err("saved child evidence could not be read".into()));
+            }
+            Err(error) => {
+                self.close(&format!("saved child inspection worker failed: {error}"));
+                let _ = reply.send(Err("saved child inspection worker failed".into()));
             }
         }
     }
@@ -357,6 +431,7 @@ pub(crate) async fn run<F: FnMut(AgentEvent) + Send>(
         limits,
         stop,
         waiting: VecDeque::new(),
+        inspection: None,
         calls: 0,
         failed: 0,
         skipped: 0,
@@ -402,7 +477,12 @@ pub(crate) async fn run<F: FnMut(AgentEvent) + Send>(
                 (admitted, outcome)
             }));
         }
-        if requests_closed && root.is_some() && started.is_empty() && gate.waiting.is_empty() {
+        if requests_closed
+            && root.is_some()
+            && started.is_empty()
+            && gate.waiting.is_empty()
+            && gate.inspection.is_none()
+        {
             break;
         }
         tokio::select! {
@@ -414,7 +494,13 @@ pub(crate) async fn run<F: FnMut(AgentEvent) + Send>(
                 if outcome.is_err() { gate.stop.cancel(); }
                 root = Some(outcome);
             }
-            request = requests.recv(), if !requests_closed => {
+            // One owned read at a time also bounds inspection admission. The
+            // guest may stop/return, but its read joins before parent settlement.
+            inspected = async { (&mut gate.inspection.as_mut().expect("active inspection").result).await }, if gate.inspection.is_some() => {
+                let inspection = gate.inspection.take().expect("completed inspection");
+                gate.complete_inspection(inspection, inspected);
+            }
+            request = requests.recv(), if !requests_closed && gate.inspection.is_none() => {
                 if let Some(request) = request { gate.accept(request); } else { requests_closed = true; }
             }
             completed = started.next(), if !started.is_empty() => {
@@ -458,3 +544,7 @@ pub(crate) async fn run<F: FnMut(AgentEvent) + Send>(
     counters.insert("skipped_calls".into(), json!(gate.skipped));
     Ok(output)
 }
+
+#[cfg(test)]
+#[path = "code_gateway_tests.rs"]
+mod tests;
