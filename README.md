@@ -260,6 +260,13 @@ also satisfy the active route's message-size and image-input limits before Ion
 acknowledges it. Accepted input keeps its reservation until Session acceptance
 or return to the editor/client, including while a follow-up waits to start.
 This is a queued-input bound, not a process-memory or context-fit guarantee.
+Output backpressure does not block input controls or owned operation settlement.
+Clients must keep reading stdout: final delivery can wait until the recipient
+reads or closes the pipe. Pending publication behind the current frame has an
+8 MiB high-water mark; an additional frame can cross it, then progress acquisition
+pauses. Settlement and pending-input recovery records are retained and published
+as the backlog drains. Further command replies that cannot enter that backlog
+fail the connection and cancel active work rather than accumulate unbounded output.
 Closing stdin cancels active work and returns uncommitted steering and
 follow-ups as `uncommitted_steering` and `uncommitted_follow_up` records.
 Returned typed inputs can include image payloads, so clients should handle them

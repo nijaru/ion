@@ -1,6 +1,8 @@
 """Exercise the built long-lived JSONL client against a local streaming route."""
 
+import array
 import base64
+import fcntl
 import json
 import os
 import select
@@ -9,6 +11,7 @@ import sqlite3
 import struct
 import subprocess
 import tempfile
+import termios
 import threading
 import time
 import zlib
@@ -518,7 +521,85 @@ with tempfile.TemporaryDirectory(prefix="ion-rpc-") as temporary:
                 except ProcessLookupError:
                     pass
             disconnected.stdin.close()
-        print("Ion RPC acceptance, compaction, inline images, steering, follow-ups, settlement, abort and session clone/control: OK")
+        # Fill physical stdout with a large state response, then request abort
+        # or EOF without reading it. Cancellation must settle the native process
+        # before publication resumes; later output must remain valid JSONL.
+        for abort in (False, True):
+            pressure_workspace = work / ("pressure-abort" if abort else "pressure-eof")
+            pressure_workspace.mkdir()
+            pressure = subprocess.Popen([binary, "--cwd", pressure_workspace, "rpc"], env=env, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, bufsize=0)
+            pressure_pid = None
+            try:
+                pressure_session = read(pressure)["session"]
+                seed = "PRESSURE_HISTORY_" + "x" * 200000
+                send(pressure, {"id": "seed", "type": "prompt", "message": seed})
+                assert until(pressure, lambda record: record["type"] == "turn_end")[-1]["status"] == "completed"
+                send(pressure, {"id": "shell", "type": "shell", "command": "printf '%s\\n' $$ > pressure.pid; touch pressure.ready; exec sleep 30"})
+                assert read(pressure)["success"]
+                deadline = time.monotonic() + 8
+                while not (pressure_workspace / "pressure.ready").exists() and time.monotonic() < deadline:
+                    time.sleep(0.01)
+                assert (pressure_workspace / "pressure.ready").exists(), "backpressure native call did not start"
+                pressure_pid = int((pressure_workspace / "pressure.pid").read_text())
+                send(pressure, {"id": "blocked-state", "type": "inspect"})
+                unread = array.array("i", [0])
+                deadline = time.monotonic() + 3
+                while time.monotonic() < deadline:
+                    fcntl.ioctl(pressure.stdout, termios.FIONREAD, unread, True)
+                    if unread[0] >= 4096:
+                        break
+                    time.sleep(0.01)
+                assert unread[0] >= 4096, "stdout did not acquire the large response"
+                # No reads here. The response is larger than the pipe capacity.
+                if abort:
+                    send(pressure, {"id": "pressure-abort", "type": "abort"})
+                else:
+                    pressure.stdin.close()
+                    pressure.stdin = None
+                deadline = time.monotonic() + 3
+                while time.monotonic() < deadline:
+                    try:
+                        os.kill(pressure_pid, 0)
+                    except ProcessLookupError:
+                        pressure_pid = None
+                        break
+                    time.sleep(0.01)
+                assert pressure_pid is None, "stdout backpressure prevented native cancellation/settlement"
+                if pressure.stdin is not None:
+                    pressure.stdin.close()
+                    pressure.stdin = None
+                output, errors = pressure.communicate(timeout=8)
+                assert pressure.returncode == 0, errors
+                records = [json.loads(line) for line in output.splitlines()]
+                states = [record for record in records if record.get("id") == "blocked-state"]
+                assert len(states) == 1, "partial JSON frame was duplicated"
+                inputs = [entry["data"]["input"]["content"][0]["Text"] for entry in states[0]["data"]["entries"] if entry["kind"] == "turn_started"]
+                assert inputs == [seed], "partial JSON frame was corrupted"
+                endings = [record for record in records if record["type"] == "shell_end"]
+                assert len(endings) == 1 and endings[0]["status"] == "cancelled", records
+                assert endings[0]["outcome"]["output"]["cancelled"] is True, endings
+                if abort:
+                    acknowledgements = [record for record in records if record.get("id") == "pressure-abort"]
+                    assert len(acknowledgements) == 1 and acknowledgements[0]["success"], records
+                view = json.loads(subprocess.run([binary, "--cwd", pressure_workspace, "--session", pressure_session, "inspect"], env=env, check=True, capture_output=True).stdout)
+                assert view["unfinished_turn"] is None, view
+            finally:
+                if pressure.stdout is not None:
+                    pressure.stdout.close()
+                if pressure.stdin is not None:
+                    pressure.stdin.close()
+                if pressure.poll() is None:
+                    try:
+                        pressure.wait(timeout=3)
+                    except subprocess.TimeoutExpired:
+                        pressure.kill()
+                        pressure.wait()
+                if pressure_pid is not None:
+                    try:
+                        os.kill(pressure_pid, 9)
+                    except ProcessLookupError:
+                        pass
+        print("Ion RPC acceptance, compaction, inline images, steering, follow-ups, settlement, backpressure, abort and session clone/control: OK")
     finally:
         if child and child.poll() is None:
             child.kill()

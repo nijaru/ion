@@ -1402,6 +1402,7 @@ dependencies = [
  "ion-terminal",
  "pulldown-cmark",
  "ratatui",
+ "rustix",
  "serde",
  "serde_json",
  "shlex",

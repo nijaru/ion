@@ -16,13 +16,13 @@ use tokio_util::sync::CancellationToken;
 
 use crate::{
     agent_events::event_record, expand_input, inspection::redact_image_payloads, preview_input,
-    write_json_record,
 };
 
 mod connection;
 mod input;
 mod preparation;
-use connection::connection;
+mod stdio;
+use connection::{Output, connection};
 use input::CommandReader;
 use preparation::PendingInput;
 
@@ -129,14 +129,16 @@ pub async fn run(binding: ion_host::SessionBinding) -> Result<()> {
         input_budget: InputBudget::default(),
         output,
     };
-    write_json_record(
-        &json!({"type":"ready","session":control.session_id(),"cwd":control.binding.session().cwd()}),
+    let (input, writer) = stdio::Stdio::open(std::io::stdin(), std::io::stdout())?;
+    let mut output = Output::new(writer);
+    output.enqueue(
+        json!({"type":"ready","session":control.session_id(),"cwd":control.binding.session().cwd()}),
     )?;
     connection(
         control,
-        CommandReader::new(BufReader::new(tokio::io::stdin())),
+        CommandReader::new(BufReader::new(input)),
         events,
-        std::io::stdout(),
+        output,
     )
     .await
 }
@@ -549,7 +551,11 @@ fn failure(id: Option<Value>, command: &str, error: &str) -> Value {
 
 #[cfg(test)]
 mod tests {
-    use std::io::Write;
+    use std::{
+        pin::Pin,
+        task::{Context, Poll},
+    };
+    use tokio::io::AsyncWrite;
 
     use super::*;
 
@@ -745,13 +751,26 @@ mod tests {
     async fn output_failure_stops_publication_but_awaits_owned_work() {
         use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
         struct FailedOutput(Arc<AtomicUsize>);
-        impl Write for FailedOutput {
-            fn write(&mut self, _bytes: &[u8]) -> std::io::Result<usize> {
+        impl AsyncWrite for FailedOutput {
+            fn poll_write(
+                self: Pin<&mut Self>,
+                _cx: &mut Context<'_>,
+                _bytes: &[u8],
+            ) -> Poll<std::io::Result<usize>> {
                 self.0.fetch_add(1, Ordering::SeqCst);
-                Err(std::io::Error::other("injected RPC output failure"))
+                Poll::Ready(Err(std::io::Error::other("injected RPC output failure")))
             }
-            fn flush(&mut self) -> std::io::Result<()> {
-                unreachable!("write failed")
+            fn poll_flush(
+                self: Pin<&mut Self>,
+                _cx: &mut Context<'_>,
+            ) -> Poll<std::io::Result<()>> {
+                Poll::Ready(Ok(()))
+            }
+            fn poll_shutdown(
+                self: Pin<&mut Self>,
+                cx: &mut Context<'_>,
+            ) -> Poll<std::io::Result<()>> {
+                self.poll_flush(cx)
             }
         }
         let (mut control, events, root) = fixture();
@@ -775,7 +794,7 @@ mod tests {
             control,
             CommandReader::new(BufReader::new(input)),
             events,
-            FailedOutput(calls.clone()),
+            Output::new(FailedOutput(calls.clone())),
         )
         .await
         .unwrap_err();
@@ -786,6 +805,151 @@ mod tests {
             1,
             "cleanup retried broken physical output"
         );
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn output_backpressure_preserves_controls_settlement_and_partial_frames() {
+        use std::time::Duration;
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        use tokio::sync::oneshot;
+
+        for abort in [false, true] {
+            let (mut control, events, root) = fixture();
+            let stop = CancellationToken::new();
+            let task_stop = stop.clone();
+            let (cancelled, observed) = oneshot::channel();
+            let (release, held) = oneshot::channel();
+            control.active = Some(Active {
+                stop,
+                operation: Operation::Compact { id: None },
+                task: tokio::spawn(async move {
+                    task_stop.cancelled().await;
+                    cancelled.send(()).unwrap();
+                    held.await.unwrap();
+                    vec![json!({"type":"settled_terminal"})]
+                }),
+            });
+            let (input, mut commands) = tokio::io::duplex(128);
+            let (writer, mut reader) = tokio::io::duplex(7);
+            let progress = json!({"type":"progress","text":"x".repeat(8192)});
+            let mut output = Output::new(writer);
+            output.enqueue(progress.clone()).unwrap();
+            let running = tokio::spawn(connection(
+                control,
+                CommandReader::new(BufReader::new(input)),
+                events,
+                output,
+            ));
+            let mut bytes = vec![0; 7];
+            reader.read_exact(&mut bytes).await.unwrap();
+            if abort {
+                commands
+                    .write_all(b"{\"type\":\"abort\",\"id\":\"abort\"}\n")
+                    .await
+                    .unwrap();
+            } else {
+                commands.shutdown().await.unwrap();
+            }
+            // No more output reads: the current JSON frame cannot finish, but
+            // input cancellation must still reach the owned operation.
+            tokio::time::timeout(Duration::from_secs(2), observed)
+                .await
+                .expect("backpressure prevented cancellation")
+                .unwrap();
+            release.send(()).unwrap();
+            if abort {
+                commands.shutdown().await.unwrap();
+            }
+            tokio::time::timeout(Duration::from_secs(2), reader.read_to_end(&mut bytes))
+                .await
+                .expect("publication did not finish after the reader resumed")
+                .unwrap();
+            running.await.unwrap().unwrap();
+            let records = bytes
+                .split(|byte| *byte == b'\n')
+                .filter(|line| !line.is_empty())
+                .map(|line| serde_json::from_slice::<Value>(line).unwrap())
+                .collect::<Vec<_>>();
+            assert_eq!(records[0], progress, "partial frame was lost or duplicated");
+            assert_eq!(records.last().unwrap()["type"], "settled_terminal");
+            assert_eq!(records.len(), if abort { 3 } else { 2 });
+            if abort {
+                assert_eq!(records[1]["id"], "abort");
+                assert_eq!(records[1]["success"], true);
+            }
+            std::fs::remove_dir_all(root).unwrap();
+        }
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn publication_high_water_preserves_settlement_and_pending_inputs() {
+        use std::time::Duration;
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let (mut control, events, root) = fixture();
+        let stop = CancellationToken::new();
+        let task_stop = stop.clone();
+        let steering = Arc::new(SteeringInbox::new(
+            control.binding.agent().limits(),
+            control.input_budget.clone(),
+        ));
+        steering
+            .push_message(Message::user_input("KEEP_STEERING".into(), []), ())
+            .unwrap();
+        let follow_up = control
+            .input_budget
+            .admit(
+                Message::user_input("KEEP_FOLLOW_UP".into(), []),
+                Some(json!("follow")),
+                control.binding.agent().limits(),
+            )
+            .unwrap();
+        control.follow_ups.push_back(follow_up);
+        control.active = Some(Active {
+            stop,
+            operation: Operation::Turn {
+                steering,
+                submission: empty_submission(),
+            },
+            task: tokio::spawn(async move {
+                task_stop.cancelled().await;
+                vec![json!({"type":"settled_terminal"})]
+            }),
+        });
+        let (input, mut commands) = tokio::io::duplex(64);
+        let (writer, mut reader) = tokio::io::duplex(4096);
+        let first = json!({"type":"progress","text":"a".repeat(8 * 1024 * 1024)});
+        let second = json!({"type":"progress","text":"b".repeat(8 * 1024 * 1024)});
+        let mut output = Output::new(writer);
+        output.enqueue(first.clone()).unwrap();
+        output.enqueue(second.clone()).unwrap();
+        let running = tokio::spawn(connection(
+            control,
+            CommandReader::new(BufReader::new(input)),
+            events,
+            output,
+        ));
+        let mut bytes = vec![0; 4096];
+        reader.read_exact(&mut bytes).await.unwrap();
+        commands.shutdown().await.unwrap();
+        tokio::time::timeout(Duration::from_secs(5), reader.read_to_end(&mut bytes))
+            .await
+            .unwrap()
+            .unwrap();
+        running.await.unwrap().unwrap();
+        let records = bytes
+            .split(|byte| *byte == b'\n')
+            .filter(|line| !line.is_empty())
+            .map(|line| serde_json::from_slice::<Value>(line).unwrap())
+            .collect::<Vec<_>>();
+        assert_eq!(records.len(), 5);
+        assert_eq!(records[0], first);
+        assert_eq!(records[1], second);
+        assert_eq!(records[2]["type"], "settled_terminal");
+        assert_eq!(records[3]["type"], "uncommitted_steering");
+        assert_eq!(records[3]["input"]["content"][0]["Text"], "KEEP_STEERING");
+        assert_eq!(records[4]["type"], "uncommitted_follow_up");
+        assert_eq!(records[4]["input"]["content"][0]["Text"], "KEEP_FOLLOW_UP");
         std::fs::remove_dir_all(root).unwrap();
     }
 
@@ -945,7 +1109,7 @@ mod tests {
             control,
             CommandReader::new(BufReader::new(FailedInput)),
             events,
-            &mut records,
+            Output::new(&mut records),
         )
         .await
         .unwrap_err();
@@ -983,13 +1147,26 @@ mod tests {
     async fn pending_input_keeps_controls_live_and_eof_joins_cancelled_success() {
         use tokio::io::AsyncWriteExt;
         struct SharedOutput(Arc<Mutex<Vec<u8>>>);
-        impl Write for SharedOutput {
-            fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+        impl AsyncWrite for SharedOutput {
+            fn poll_write(
+                self: Pin<&mut Self>,
+                _cx: &mut Context<'_>,
+                bytes: &[u8],
+            ) -> Poll<std::io::Result<usize>> {
                 self.0.lock().unwrap().extend_from_slice(bytes);
-                Ok(bytes.len())
+                Poll::Ready(Ok(bytes.len()))
             }
-            fn flush(&mut self) -> std::io::Result<()> {
-                Ok(())
+            fn poll_flush(
+                self: Pin<&mut Self>,
+                _cx: &mut Context<'_>,
+            ) -> Poll<std::io::Result<()>> {
+                Poll::Ready(Ok(()))
+            }
+            fn poll_shutdown(
+                self: Pin<&mut Self>,
+                cx: &mut Context<'_>,
+            ) -> Poll<std::io::Result<()>> {
+                self.poll_flush(cx)
             }
         }
         let (mut control, events, root) = fixture();
@@ -1015,7 +1192,7 @@ mod tests {
             control,
             CommandReader::new(BufReader::new(input)),
             events,
-            SharedOutput(output.clone()),
+            Output::new(SharedOutput(output.clone())),
         ));
         client.write_all(b"{\"type\":\"get_state\",\"id\":\"state\"}\n{\"type\":\"prompt\",\"id\":\"second\",\"message\":\"no\"}\n{\"type\":\"new_session\",\"id\":\"replace\"}\n{\"type\":\"abort\",\"id\":\"abort\"}\n").await.unwrap();
         tokio::time::timeout(std::time::Duration::from_secs(2), observed)
@@ -1120,7 +1297,7 @@ mod tests {
                 control,
                 CommandReader::new(BufReader::new(input)),
                 events,
-                &mut records,
+                Output::new(&mut records),
             ),
         )
         .await
