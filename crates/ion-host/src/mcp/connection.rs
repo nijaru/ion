@@ -1,12 +1,14 @@
 //! Owned protocol services, HTTP workers and local root processes.
 use std::{future::Future, path::Path, process::Stdio, time::Duration};
 
+use super::{ChangeHandler, Client, McpServer, http::OwnedHttpClient, send::Tracked};
 use anyhow::{Context, Result, ensure};
 use rmcp::{
     RoleClient,
     service::{QuitReason, RxJsonRpcMessage, ServiceExt, TxJsonRpcMessage},
     transport::{
         StreamableHttpClientTransport, Transport,
+        async_rw::AsyncRwTransport,
         streamable_http_client::{StreamableHttpClientTransportConfig, StreamableHttpError},
     },
 };
@@ -14,11 +16,8 @@ use tokio::{
     process::{Child, Command},
     sync::oneshot,
 };
-use tokio_util::sync::CancellationToken;
 
-use super::{ChangeHandler, Client, McpServer, http::StartupHttpClient};
-
-type HttpTransport = StreamableHttpClientTransport<StartupHttpClient>;
+type HttpTransport = StreamableHttpClientTransport<OwnedHttpClient>;
 
 pub(super) struct Connection {
     pub client: Client,
@@ -48,7 +47,11 @@ impl Connection {
                 // These handles are guaranteed by the piped configuration above.
                 let stdout = process.stdout.take().expect("MCP stdout is piped");
                 let stdin = process.stdin.take().expect("MCP stdin is piped");
-                let initialized = initialize(name, handler.serve((stdout, stdin))).await;
+                let initialized = initialize(
+                    name,
+                    handler.serve(Tracked(AsyncRwTransport::new_client(stdout, stdin))),
+                )
+                .await;
                 (initialized, OwnedTransport::Stdio(process))
             }
             McpServer::Http(server) => {
@@ -62,24 +65,24 @@ impl Connection {
                     ensure!(!token.is_empty(), "MCP server {name} needs {env_name}");
                     config.auth_header = Some(token);
                 }
-                let http_client = StartupHttpClient::new()
+                let http_client = OwnedHttpClient::new()
                     .with_context(|| format!("MCP server {name} HTTP setup failed"))?;
-                let stop = http_client.stop.clone();
-                let transport = StreamableHttpClientTransport::with_client(http_client, config);
+                let transport =
+                    StreamableHttpClientTransport::with_client(http_client.clone(), config);
                 let (returned, receiver) = oneshot::channel();
                 let initialized = initialize(
                     name,
-                    handler.serve(HttpLease {
+                    handler.serve(Tracked(HttpLease {
                         transport: Some(transport),
                         returned: Some(returned),
-                    }),
+                    })),
                 )
                 .await;
                 (
                     initialized,
                     OwnedTransport::Http {
                         returned: receiver,
-                        stop,
+                        client: http_client,
                     },
                 )
             }
@@ -91,8 +94,8 @@ impl Connection {
                 // Unlike rmcp's child transport, cleanup stays in this future.
                 // rmcp awaits the bootstrap HTTP request/body outside its
                 // worker cancellation loop. Interrupt it before joining.
-                if let OwnedTransport::Http { stop, .. } = &owned {
-                    stop.cancel();
+                if let OwnedTransport::Http { client, .. } = &owned {
+                    client.stop.cancel();
                 }
                 combine_cleanup(Err(error), owned.shutdown().await)
             }
@@ -100,6 +103,11 @@ impl Connection {
     }
 
     pub async fn shutdown(mut self) -> Result<()> {
+        // Retirement interrupts in-flight POSTs as well as failed startup.
+        // Waiting for a remote response is not a local cleanup requirement.
+        if let OwnedTransport::Http { client, .. } = &self.owned {
+            client.stop.cancel();
+        }
         // rmcp's close_with_timeout consumes then drops the join handle at the
         // deadline. Join without that timeout; process escalation is ours.
         // A blocked SDK send can hold the stdio writer lock while service close
@@ -130,7 +138,7 @@ enum OwnedTransport {
     Stdio(Child),
     Http {
         returned: oneshot::Receiver<HttpTransport>,
-        stop: CancellationToken,
+        client: OwnedHttpClient,
     },
 }
 
@@ -152,14 +160,16 @@ impl OwnedTransport {
                     }
                 }
             }
-            Self::Http { returned, .. } => {
-                let mut transport = returned
-                    .await
-                    .context("MCP HTTP transport was not returned")?;
-                transport
-                    .close()
-                    .await
-                    .context("MCP HTTP worker cleanup failed")?;
+            Self::Http { returned, client } => {
+                let cleanup = match returned.await {
+                    Ok(mut transport) => transport
+                        .close()
+                        .await
+                        .context("MCP HTTP worker cleanup failed"),
+                    Err(error) => Err(error).context("MCP HTTP transport was not returned"),
+                };
+                client.join_io().await;
+                cleanup?;
             }
         }
         Ok(())

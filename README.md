@@ -525,6 +525,14 @@ embedded resource content report an explicit unsupported-content error.
 Large text or structured results include a bounded preview and a
 `full_output_path` to a private JSON file containing the complete result;
 `read` can inspect it in ranges.
+Each invocation sends one `tools/call`; `input_required` continuations and task
+results report an unsupported-result error rather than issuing hidden follow-up
+calls or task polling. Cancellation notifies the original request and joins
+local issuance. If that cannot flush within three seconds, Ion retires the
+connection, joins its local work and removes its tools from later catalogs.
+Other pending calls on that connection fail rather than being rerun; restarting
+the client reconnects configured servers. Neither cancellation nor connection
+closure proves that remote effects have stopped.
 When a server announces a changed tool list, Ion refreshes that server before
 the next model request. A failed refresh reports a warning and keeps its last
 known list. Remote MCP OAuth login is not yet supported.

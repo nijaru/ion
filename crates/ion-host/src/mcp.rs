@@ -1,9 +1,7 @@
 //! Explicit MCP tool connections. Session facts remain in ion-core.
 use std::{
     collections::{BTreeMap, HashSet},
-    fs::{self, OpenOptions},
-    io::Write,
-    os::unix::fs::OpenOptionsExt,
+    fs,
     path::{Path, PathBuf},
     sync::{
         Arc, RwLock as SyncRwLock,
@@ -13,16 +11,14 @@ use std::{
 };
 
 use anyhow::{Context, Result, bail, ensure};
-use base64::{Engine, engine::general_purpose::STANDARD};
 use futures_util::future::join_all;
-use ion_ai::{BoxFuture, ImageMime, MAX_SOURCE_BYTES, ToolCall, ToolSpec, normalize_image};
+use ion_ai::{BoxFuture, ToolSpec};
 use ion_core::{
-    CodingToolOutput, CodingToolSource, ToolActivityKind, ToolDefinition, ToolExecutor,
-    ToolExposure, ToolPresentation, ToolRegistration,
+    CodingToolOutput, CodingToolSource, ToolActivityKind, ToolDefinition, ToolExposure,
+    ToolPresentation, ToolRegistration,
 };
 use rmcp::{
     ClientHandler, RoleClient,
-    model::{CallToolRequestParams, CallToolResult, ContentBlock},
     service::{NotificationContext, RunningService},
 };
 use serde::{Deserialize, Serialize};
@@ -36,8 +32,13 @@ use crate::model_setup::write_json;
 
 mod connection;
 mod http;
+mod invocation;
+mod send;
 use connection::{Connection, combine_cleanup};
+use invocation::McpExecutor;
 
+#[cfg(test)]
+mod invocation_tests;
 #[cfg(test)]
 mod lifecycle_tests;
 
@@ -209,6 +210,8 @@ struct Server {
     tool_list_version: Arc<AtomicU64>,
     refreshed_version: AtomicU64,
     refresh_gate: Mutex<()>,
+    retiring: CancellationToken,
+    retirement: Mutex<Option<std::result::Result<(), String>>>,
 }
 
 pub struct McpTools {
@@ -261,6 +264,8 @@ impl McpTools {
                 tool_list_version: changed,
                 refreshed_version: AtomicU64::new(0),
                 refresh_gate: Mutex::new(()),
+                retiring: CancellationToken::new(),
+                retirement: Mutex::new(None),
             }),
             Err(error) => combine_cleanup(Err(error), client.shutdown().await),
         }
@@ -292,6 +297,7 @@ impl McpTools {
                 continue;
             };
             let updated = tokio::select! {
+                () = server.retiring.cancelled() => break,
                 () = stop.cancelled() => break,
                 result = discover_tools(&server.name, &client.client) => result,
             };
@@ -315,19 +321,7 @@ impl McpTools {
     /// Join services and reap owned root processes before the runtime exits.
     /// Callers must await this on controlled exit, including failed setup.
     pub async fn shutdown(&self) -> Result<()> {
-        let results = join_all(self.servers.iter().map(|server| async {
-            let result = match server.client.write().await.take() {
-                Some(client) => client.shutdown().await,
-                None => Ok(()),
-            };
-            server
-                .tools
-                .write()
-                .unwrap_or_else(std::sync::PoisonError::into_inner)
-                .clear();
-            result.with_context(|| format!("MCP server {} shutdown failed", server.name))
-        }))
-        .await;
+        let results = join_all(self.servers.iter().map(|server| server.shutdown())).await;
         let errors: Vec<_> = results.into_iter().filter_map(Result::err).collect();
         ensure!(
             errors.is_empty(),
@@ -339,6 +333,36 @@ impl McpTools {
                 .join("; ")
         );
         Ok(())
+    }
+}
+
+impl Server {
+    async fn retire(&self) -> Result<()> {
+        self.retiring.cancel();
+        self.shutdown().await
+    }
+
+    async fn shutdown(&self) -> Result<()> {
+        // Concurrent callers join the same retirement, including a tool whose
+        // protocol cancellation could not flush. Taking the client alone is
+        // not evidence that another caller has finished closing it.
+        let mut retirement = self.retirement.lock().await;
+        if let Some(result) = retirement.as_ref() {
+            return result.clone().map_err(anyhow::Error::msg);
+        }
+        let result = match self.client.write().await.take() {
+            Some(client) => client.shutdown().await,
+            None => Ok(()),
+        };
+        self.tools
+            .write()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clear();
+        let result = result
+            .with_context(|| format!("MCP server {} shutdown failed", self.name))
+            .map_err(|error| format!("{error:#}"));
+        *retirement = Some(result.clone());
+        result.map_err(anyhow::Error::msg)
     }
 }
 
@@ -439,175 +463,6 @@ impl CodingToolSource for McpTools {
     }
 }
 
-/// Request-bound connection and original server name. No lookup in discovered
-/// tools is permitted here: another Session may refresh that source meanwhile.
-struct McpExecutor {
-    server: Arc<Server>,
-    original_name: String,
-}
-
-impl ToolExecutor for McpExecutor {
-    fn execute<'a>(
-        &'a self,
-        call: &'a ToolCall,
-        stop: CancellationToken,
-    ) -> BoxFuture<'a, CodingToolOutput> {
-        Box::pin(async move {
-            let server = &self.server;
-            let result = {
-                let client = server.client.read().await;
-                let Some(client) = client.as_ref() else {
-                    return tool_error(format!("MCP server {} is closed", server.name));
-                };
-                let Some(args) = call.arguments.as_object() else {
-                    return tool_error("MCP tool arguments must be an object".to_owned());
-                };
-                let request = CallToolRequestParams::new(self.original_name.clone())
-                    .with_arguments(args.clone());
-                tokio::select! {
-                    () = stop.cancelled() => return tool_error(format!("MCP tool {} cancelled; effects may be unknown",call.name)),
-                    result = client.client.call_tool(request) => result,
-                }
-            };
-            match result {
-                Ok(result) => {
-                    let name = call.name.clone();
-                    // Image normalization and artifact writes must not block
-                    // async polling. The server outcome is already observed:
-                    // retain and join conversion even if cancellation or
-                    // connection shutdown occurs while its worker is queued.
-                    tokio::task::spawn_blocking(move || convert_tool_result(&name, result))
-                        .await
-                        .unwrap_or_else(|failure| {
-                            if failure.is_panic() {
-                                std::panic::resume_unwind(failure.into_panic());
-                            }
-                            panic!("MCP result worker stopped without an observation: {failure}");
-                        })
-                }
-                Err(error) => tool_error(format!(
-                    "MCP server {} tool call failed: {error}",
-                    server.name
-                )),
-            }
-        })
-    }
-}
-
-fn convert_tool_result(name: &str, result: CallToolResult) -> CodingToolOutput {
-    let mut content = Vec::new();
-    let mut images = Vec::new();
-    for part in result.content {
-        match part {
-            ContentBlock::Text(text) => content.push(text.text),
-            ContentBlock::Image(image) => {
-                if image.data.len() > MAX_SOURCE_BYTES.div_ceil(3) * 4 {
-                    return tool_error(format!(
-                        "MCP tool {name} image exceeds 32 MiB source bound"
-                    ));
-                }
-                let bytes = match STANDARD.decode(&image.data) {
-                    Ok(bytes) => bytes,
-                    Err(_) => {
-                        return tool_error(format!(
-                            "MCP tool {name} returned invalid base64 image data"
-                        ));
-                    }
-                };
-                let Some(mime) = ImageMime::detect(&bytes) else {
-                    return tool_error(format!(
-                        "MCP tool {name} returned an unsupported image format"
-                    ));
-                };
-                if mime.as_str() != image.mime_type {
-                    return tool_error(format!(
-                        "MCP tool {name} image MIME type does not match its data"
-                    ));
-                }
-                let loaded = match normalize_image(&bytes) {
-                    Ok(image) => image,
-                    Err(error) => {
-                        return tool_error(format!(
-                            "MCP tool {name} returned an invalid image: {error}"
-                        ));
-                    }
-                };
-                content.push(format!("[image: {}]", loaded.content.mime_type().as_str()));
-                if let Some(note) = loaded.note {
-                    content.push(note);
-                }
-                images.push(loaded.content);
-            }
-            _ => {
-                return tool_error(format!(
-                    "MCP tool {name} returned unsupported non-image media or resource content"
-                ));
-            }
-        }
-    }
-    let is_error = result.is_error.unwrap_or(false);
-    let value =
-        json!({"content":content.join("\n"),"structured_content":result.structured_content});
-    let encoded = match serde_json::to_string(&value) {
-        Ok(encoded) => encoded,
-        Err(error) => {
-            return tool_error(format!("MCP tool {name} result cannot be encoded: {error}"));
-        }
-    };
-    let value = if encoded.len() <= 64 * 1024 {
-        value
-    } else {
-        let (full_output_path, full_output_error) = match save_full_mcp_output(encoded.as_bytes()) {
-            Ok(path) => (Some(path), None),
-            Err(error) => (None, Some(error.to_string())),
-        };
-        let prefix_end = floor_char_boundary(&encoded, 10 * 1024);
-        let suffix_start = floor_char_boundary(&encoded, encoded.len() - 10 * 1024);
-        json!({
-            "content": format!(
-                "MCP result truncated from {} bytes. Read full_output_path with read or exec when available.\n{}\n[... omitted middle ...]\n{}",
-                encoded.len(), &encoded[..prefix_end], &encoded[suffix_start..]
-            ),
-            "truncated": true,
-            "full_output_path": full_output_path,
-            "full_output_error": full_output_error,
-        })
-    };
-    CodingToolOutput {
-        value,
-        images,
-        is_error,
-    }
-}
-
-fn floor_char_boundary(text: &str, mut offset: usize) -> usize {
-    while !text.is_char_boundary(offset) {
-        offset -= 1;
-    }
-    offset
-}
-
-fn save_full_mcp_output(bytes: &[u8]) -> Result<PathBuf> {
-    let mut nonce = [0u8; 16];
-    getrandom::fill(&mut nonce)
-        .map_err(|error| anyhow::anyhow!("cannot name MCP output: {error}"))?;
-    let path = std::env::temp_dir().join(format!(
-        "ion-mcp-output-{}-{:032x}.json",
-        std::process::id(),
-        u128::from_ne_bytes(nonce)
-    ));
-    let mut file = OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .mode(0o600)
-        .open(&path)?;
-    if let Err(error) = file.write_all(bytes) {
-        let _ = fs::remove_file(path);
-        return Err(error.into());
-    }
-    Ok(path)
-}
-
 fn validate_name(name: &str) -> Result<()> {
     if name.is_empty()
         || !name
@@ -630,6 +485,9 @@ fn tool_error(message: String) -> CodingToolOutput {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use invocation::convert_tool_result;
+    use ion_ai::ToolCall;
+    use rmcp::model::{CallToolResult, ContentBlock};
     use std::os::unix::fs::PermissionsExt;
 
     #[tokio::test]

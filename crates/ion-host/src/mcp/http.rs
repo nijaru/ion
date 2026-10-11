@@ -1,4 +1,4 @@
-//! Interrupt only failed HTTP startup, including an idle bootstrap SSE body.
+//! Own HTTP work through startup, invocation retirement and SSE disposal.
 use std::{collections::HashMap, future::Future, sync::Arc};
 
 use anyhow::{Context, Result};
@@ -13,17 +13,19 @@ use rmcp::{
         },
     },
 };
+use tokio::sync::{OwnedRwLockReadGuard, RwLock};
 use tokio_util::sync::CancellationToken;
 
 type HttpResult<T> = std::result::Result<T, StreamableHttpError<reqwest::Error>>;
 
 #[derive(Clone)]
-pub(super) struct StartupHttpClient {
+pub(super) struct OwnedHttpClient {
     inner: reqwest::Client,
     pub stop: CancellationToken,
+    io: Arc<RwLock<()>>,
 }
 
-impl StartupHttpClient {
+impl OwnedHttpClient {
     pub fn new() -> Result<Self> {
         // Match rmcp's reqwest defaults. Redirects must not replay supplied
         // credentials/custom headers to another destination.
@@ -35,6 +37,7 @@ impl StartupHttpClient {
         Ok(Self {
             inner,
             stop: CancellationToken::new(),
+            io: Arc::new(RwLock::new(())),
         })
     }
 
@@ -46,21 +49,50 @@ impl StartupHttpClient {
         }
     }
 
+    async fn lease(&self) -> HttpResult<OwnedRwLockReadGuard<()>> {
+        tokio::select! {
+            biased;
+            () = self.stop.cancelled() => Err(StreamableHttpError::TransportChannelClosed),
+            lease = self.io.clone().read_owned() => Ok(lease),
+        }
+    }
+
+    pub async fn join_io(&self) {
+        // No new I/O can start after stop. Unlike the SDK's abort_all without
+        // join_next, this waits for started requests and SSE bodies to drop.
+        let _joined = self.io.write().await;
+    }
+
+    fn interrupt_stream(
+        &self,
+        stream: BoxedSseResponse,
+        lease: OwnedRwLockReadGuard<()>,
+    ) -> BoxedSseResponse {
+        Box::pin(
+            stream
+                .take_until(self.stop.clone().cancelled_owned())
+                .map(move |event| {
+                    let _keep_owned = &lease;
+                    event
+                }),
+        )
+    }
+
     fn interrupt_response(
         &self,
         response: StreamableHttpPostResponse,
+        lease: OwnedRwLockReadGuard<()>,
     ) -> StreamableHttpPostResponse {
         match response {
-            StreamableHttpPostResponse::Sse(stream, session) => StreamableHttpPostResponse::Sse(
-                Box::pin(stream.take_until(self.stop.clone().cancelled_owned())),
-                session,
-            ),
+            StreamableHttpPostResponse::Sse(stream, session) => {
+                StreamableHttpPostResponse::Sse(self.interrupt_stream(stream, lease), session)
+            }
             response => response,
         }
     }
 }
 
-impl StreamableHttpClient for StartupHttpClient {
+impl StreamableHttpClient for OwnedHttpClient {
     type Error = reqwest::Error;
 
     async fn post_message(
@@ -71,6 +103,7 @@ impl StreamableHttpClient for StartupHttpClient {
         auth_header: Option<String>,
         custom_headers: HashMap<HeaderName, HeaderValue>,
     ) -> HttpResult<StreamableHttpPostResponse> {
+        let lease = self.lease().await?;
         let response = self
             .interrupt(self.inner.post_message(
                 uri,
@@ -80,7 +113,7 @@ impl StreamableHttpClient for StartupHttpClient {
                 custom_headers,
             ))
             .await?;
-        Ok(self.interrupt_response(response))
+        Ok(self.interrupt_response(response, lease))
     }
 
     async fn post_message_with_max_sse_event_size(
@@ -92,6 +125,7 @@ impl StreamableHttpClient for StartupHttpClient {
         custom_headers: HashMap<HeaderName, HeaderValue>,
         max_sse_event_size: usize,
     ) -> HttpResult<StreamableHttpPostResponse> {
+        let lease = self.lease().await?;
         let response = self
             .interrupt(self.inner.post_message_with_max_sse_event_size(
                 uri,
@@ -102,7 +136,7 @@ impl StreamableHttpClient for StartupHttpClient {
                 max_sse_event_size,
             ))
             .await?;
-        Ok(self.interrupt_response(response))
+        Ok(self.interrupt_response(response, lease))
     }
 
     async fn delete_session(
@@ -112,11 +146,15 @@ impl StreamableHttpClient for StartupHttpClient {
         auth_header: Option<String>,
         custom_headers: HashMap<HeaderName, HeaderValue>,
     ) -> HttpResult<()> {
-        // GET and DELETE are outside bootstrap; retain SDK cancellation and
-        // session cleanup semantics rather than stopping them with startup.
-        self.inner
-            .delete_session(uri, session_id, auth_header, custom_headers)
-            .await
+        // Best-effort remote cleanup remains separate from stopping local I/O.
+        // An uncooperative DELETE must not hold local retirement indefinitely.
+        tokio::time::timeout(
+            std::time::Duration::from_secs(3),
+            self.inner
+                .delete_session(uri, session_id, auth_header, custom_headers),
+        )
+        .await
+        .map_err(|_| StreamableHttpError::TransportChannelClosed)?
     }
 
     async fn get_stream(
@@ -127,9 +165,17 @@ impl StreamableHttpClient for StartupHttpClient {
         auth_header: Option<String>,
         custom_headers: HashMap<HeaderName, HeaderValue>,
     ) -> HttpResult<BoxedSseResponse> {
-        self.inner
-            .get_stream(uri, session_id, last_event_id, auth_header, custom_headers)
-            .await
+        let lease = self.lease().await?;
+        let stream = self
+            .interrupt(self.inner.get_stream(
+                uri,
+                session_id,
+                last_event_id,
+                auth_header,
+                custom_headers,
+            ))
+            .await?;
+        Ok(self.interrupt_stream(stream, lease))
     }
 
     async fn get_stream_with_max_sse_event_size(
@@ -141,15 +187,17 @@ impl StreamableHttpClient for StartupHttpClient {
         custom_headers: HashMap<HeaderName, HeaderValue>,
         max_sse_event_size: usize,
     ) -> HttpResult<BoxedSseResponse> {
-        self.inner
-            .get_stream_with_max_sse_event_size(
+        let lease = self.lease().await?;
+        let stream = self
+            .interrupt(self.inner.get_stream_with_max_sse_event_size(
                 uri,
                 session_id,
                 last_event_id,
                 auth_header,
                 custom_headers,
                 max_sse_event_size,
-            )
-            .await
+            ))
+            .await?;
+        Ok(self.interrupt_stream(stream, lease))
     }
 }
