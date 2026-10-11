@@ -25,7 +25,9 @@ use tokio::sync::{Mutex as AsyncMutex, MutexGuard as AsyncMutexGuard};
 use tokio_util::sync::CancellationToken;
 
 pub(crate) mod code_inspection;
+mod context;
 use code_inspection::ChildRecordIndex;
+use context::{ProjectedMessage, context_projection};
 
 const FORMAT_VERSION: u32 = 10;
 // An 8 MiB raw prompt or streamed response can grow up to sixfold when JSON
@@ -322,7 +324,7 @@ impl State {
     fn apply(
         &mut self,
         entry: &SessionEntry,
-        messages: &mut Vec<Message>,
+        messages: &mut Vec<ProjectedMessage>,
         settled: &BTreeSet<u64>,
         new_settled: &mut Vec<u64>,
     ) -> Result<(), SessionError> {
@@ -382,7 +384,10 @@ impl State {
                     return Err(SessionError::InvalidHistory);
                 }
                 if !exclude_from_context {
-                    messages.push(shell_message(command, &UserShellOutcome::Unknown, false));
+                    messages.push(ProjectedMessage::new(
+                        self.sequence + 1,
+                        shell_message(command, &UserShellOutcome::Unknown, false),
+                    ));
                 }
                 self.pending_shell = Some(PendingShell {
                     admission_entry: self.sequence + 1,
@@ -403,8 +408,10 @@ impl State {
                 }
                 if !shell.exclude_from_context {
                     // No intervening message is legal while a shell is pending.
-                    *messages.last_mut().ok_or(SessionError::InvalidHistory)? =
-                        shell_message(&shell.command, outcome, false);
+                    messages
+                        .last_mut()
+                        .ok_or(SessionError::InvalidHistory)?
+                        .message = shell_message(&shell.command, outcome, false);
                 }
                 self.pending_shell = None;
                 new_settled.push(self.sequence + 1);
@@ -449,7 +456,7 @@ impl State {
                 self.assistant_seen_in_turn = false;
                 self.last_id = *turn;
                 self.select_model(model);
-                messages.push(input.clone());
+                messages.push(ProjectedMessage::new(self.sequence + 1, input.clone()));
             }
             SessionEntry::Steering { turn, input } => {
                 if self.active != Some(*turn)
@@ -458,7 +465,7 @@ impl State {
                 {
                     return Err(SessionError::InvalidHistory);
                 }
-                messages.push(input.clone());
+                messages.push(ProjectedMessage::new(self.sequence + 1, input.clone()));
             }
             SessionEntry::Assistant {
                 turn,
@@ -528,7 +535,10 @@ impl State {
                 if activity_index != tool_activities.len() {
                     return Err(SessionError::InvalidHistory);
                 }
-                messages.push(model_message(message));
+                messages.push(ProjectedMessage::new(
+                    self.sequence + 1,
+                    model_message(message),
+                ));
                 self.assistant_seen_in_turn = true;
                 self.last_execution = Some(execution.clone());
                 self.last_usage = Some(*usage);
@@ -552,7 +562,10 @@ impl State {
                     return Err(SessionError::InvalidHistory);
                 }
                 self.pending.remove(position);
-                messages.push(result.message(false));
+                messages.push(ProjectedMessage::new(
+                    self.sequence + 1,
+                    result.message(false),
+                ));
                 if self.pending.is_empty() {
                     new_settled.push(self.sequence + 1);
                 }
@@ -612,7 +625,7 @@ impl State {
 struct HistoryProjection {
     state: State,
     settled: BTreeSet<u64>,
-    messages: Vec<Message>,
+    messages: Vec<ProjectedMessage>,
     context_changes: Vec<ModelContextChange>,
     child_records: ChildRecordIndex,
 }
@@ -621,7 +634,7 @@ struct Store {
     connection: Connection,
     state: State,
     settled: BTreeSet<u64>,
-    messages: Vec<Message>,
+    messages: Vec<ProjectedMessage>,
     // Sparse, rebuildable projection of committed context boundaries. It does
     // not retain or reproject historical tool payloads on each model request.
     context_changes: Vec<ModelContextChange>,
@@ -833,7 +846,7 @@ impl Session {
             cwd: header.cwd,
             name: header.name,
             entries,
-            messages,
+            messages: messages.into_iter().map(|record| record.message).collect(),
             unfinished_turn: state.active,
             unfinished_user_shell: state.pending_shell.map(|shell| UnobservedUserShell {
                 admission_entry: shell.admission_entry,
@@ -868,7 +881,9 @@ impl Session {
             .lock()
             .map_err(|_| SessionError::Poisoned)?
             .messages
-            .clone())
+            .iter()
+            .map(|record| record.message.clone())
+            .collect())
     }
 
     /// Durably freeze one direct command and its sharing choice before granting
@@ -925,7 +940,7 @@ impl Session {
             (Some(logical), Some(effective)) if logical == effective => Some(effective),
             _ => None,
         };
-        context_projection(&store, direct)
+        Ok(context_projection(&store, direct))
     }
 
     pub fn model_context(&self) -> Result<Option<ModelContextSnapshot>, SessionError> {
@@ -983,7 +998,7 @@ impl Session {
         model: &ModelRef,
     ) -> Result<Vec<Message>, SessionError> {
         let store = self.store.lock().map_err(|_| SessionError::Poisoned)?;
-        context_projection(&store, Some(model))
+        Ok(context_projection(&store, Some(model)))
     }
 
     /// Admit one prepared coding request atomically before provider issuance.
@@ -1024,135 +1039,6 @@ impl Session {
     pub(crate) fn rebase_provider_replay(&self, turn: u64) -> Result<(), SessionError> {
         let mut store = self.store.lock().map_err(|_| SessionError::Poisoned)?;
         append(&mut store, &[SessionEntry::ProviderReplayRebased { turn }])
-    }
-
-    /// Find the earliest settled cut that fits a useful recent suffix.
-    /// The returned prefix includes the previous summary, if any.
-    pub(crate) fn compaction_plan(
-        &self,
-        keep_bytes: usize,
-        max_summary_bytes: usize,
-        summary_images: bool,
-        max_through_entry: u64,
-    ) -> Result<Option<CompactionPlan>, SessionError> {
-        let store = self.store.lock().map_err(|_| SessionError::Poisoned)?;
-        let entries = read_entries(&store.connection)?;
-        let projected = projected_entry_messages(&entries, false);
-        let previous = store
-            .state
-            .compaction
-            .as_ref()
-            .map_or(0, |(through, _)| *through);
-        let summary_bytes = store
-            .state
-            .compaction
-            .as_ref()
-            .map(|(_, summary)| crate::json_size::encoded_len(&summary_message(summary)))
-            .transpose()?
-            .map_or(0, |bytes| bytes + 1);
-        let suffix_budget = keep_bytes.saturating_sub(summary_bytes);
-        let mut prefix_bytes = match &store.state.compaction {
-            Some((_, summary)) => {
-                crate::summary::content_bytes(&summary_message(summary), summary_images)?
-                    .saturating_add(1)
-            }
-            None => 1,
-        };
-        let mut prefix_fits = Vec::new();
-        for boundary in (previous + 1)..=entries.len() as u64 {
-            if let Some(message) = &projected[boundary as usize - 1] {
-                prefix_bytes = prefix_bytes
-                    .saturating_add(crate::summary::content_bytes(message, summary_images)?);
-            }
-            if boundary <= max_through_entry
-                && prefix_bytes <= max_summary_bytes
-                && store.settled.contains(&boundary)
-            {
-                prefix_fits.push(boundary);
-            }
-        }
-        let mut suffix_bytes = 2usize;
-        let mut through = None;
-        for boundary in ((previous + 1)..=entries.len() as u64).rev() {
-            if store.settled.contains(&boundary) && suffix_bytes <= suffix_budget {
-                through = Some(boundary);
-            }
-            if let Some(message) = &projected[boundary as usize - 1] {
-                suffix_bytes = suffix_bytes
-                    .saturating_add(crate::json_size::encoded_len(message)?)
-                    .saturating_add(1);
-            }
-        }
-        let through =
-            through.or_else(|| store.settled.range((previous + 1)..).next_back().copied());
-        // A large final tool result can make the empty suffix after it look
-        // like the only fitting tail. Prefer retaining that call/result batch
-        // exactly when older settled history is available to summarize.
-        let through = if keep_bytes > 0 {
-            let recent_entry = entries.iter().rposition(|entry| match entry {
-                SessionEntry::UserShellAdmitted {
-                    exclude_from_context,
-                    ..
-                } => !exclude_from_context,
-                SessionEntry::TurnStarted { .. }
-                | SessionEntry::Steering { .. }
-                | SessionEntry::Assistant { .. }
-                | SessionEntry::ToolResult { .. } => true,
-                SessionEntry::ModelSelected { .. }
-                | SessionEntry::ReasoningSelected { .. }
-                | SessionEntry::EffectiveModelChanged { .. }
-                | SessionEntry::ProviderReplayRebased { .. }
-                | SessionEntry::ModelContextChanged { .. }
-                | SessionEntry::CacheWarm { .. }
-                | SessionEntry::Compacted { .. }
-                | SessionEntry::ChildToolAdmitted { .. }
-                | SessionEntry::ChildToolResult { .. }
-                | SessionEntry::UserShellSettled { .. }
-                | SessionEntry::TurnEnded { .. } => false,
-            });
-            let earlier_cut = recent_entry
-                .filter(|&index| matches!(entries[index], SessionEntry::ToolResult { .. }))
-                .and_then(|index| {
-                    entries[..index].iter().rposition(|entry| {
-                        matches!(entry, SessionEntry::Assistant { message, .. }
-                            if message.content.iter().any(|part| matches!(part, Content::ToolCall(_))))
-                    })
-                })
-                .and_then(|index| {
-                    store
-                        .settled
-                        .range((previous + 1)..=index as u64)
-                        .next_back()
-                        .copied()
-                        .filter(|&cut| through.is_some_and(|current| current > cut))
-                });
-            earlier_cut.or(through)
-        } else {
-            through
-        };
-        let Some((suffix_target, prefix_fit)) = through.zip(prefix_fits.last().copied()) else {
-            return Ok(None);
-        };
-        let through_entry = suffix_target.min(prefix_fit);
-        // On capacity rejection halve actual settled candidates, not bytes.
-        // This bounds retries without jumping below the earliest valid cut.
-        let smaller_count = prefix_fits.partition_point(|&cut| cut < through_entry);
-        let smaller_through_entry = smaller_count
-            .checked_sub(1)
-            .map(|last| prefix_fits[last / 2]);
-        let mut messages = Vec::new();
-        if let Some((_, summary)) = &store.state.compaction {
-            messages.push(summary_message(summary));
-        }
-        messages.extend(messages_from_entries(
-            &entries[previous as usize..through_entry as usize],
-        ));
-        Ok(Some(CompactionPlan {
-            through_entry,
-            messages,
-            chunked: through_entry < suffix_target,
-            smaller_through_entry,
-        }))
     }
 
     pub(crate) fn record_cache_warm(
@@ -1198,7 +1084,11 @@ impl Session {
             cwd: header.cwd,
             name: header.name,
             entries,
-            messages: store.messages.clone(),
+            messages: store
+                .messages
+                .iter()
+                .map(|record| record.message.clone())
+                .collect(),
             unfinished_turn: store.state.active,
             unfinished_user_shell: store.state.pending_shell.as_ref().map(|shell| {
                 UnobservedUserShell {
@@ -1717,7 +1607,12 @@ fn append(store: &mut Store, entries: &[SessionEntry]) -> Result<(), SessionErro
         .pending_shell
         .as_ref()
         .filter(|shell| !shell.exclude_from_context)
-        .map(|shell| shell_message(&shell.command, &UserShellOutcome::Unknown, false));
+        .map(|shell| {
+            ProjectedMessage::new(
+                shell.admission_entry,
+                shell_message(&shell.command, &UserShellOutcome::Unknown, false),
+            )
+        });
     let replace_pending_message = pending_message.is_some();
     let mut new_messages: Vec<_> = pending_message.into_iter().collect();
     let message_start = store.messages.len() - usize::from(replace_pending_message);
@@ -1768,58 +1663,6 @@ fn summary_message(summary: &str) -> Message {
         ))],
         provider_replay: None,
     }
-}
-
-fn context_projection(
-    store: &Store,
-    model: Option<&ModelRef>,
-) -> Result<Vec<Message>, SessionError> {
-    let through = store
-        .state
-        .compaction
-        .as_ref()
-        .map_or(0, |(through, _)| *through);
-    if store.state.replay_epoch_start <= through
-        && model == store.state.last_effective_model.as_ref()
-    {
-        return match &store.state.compaction {
-            Some((through, summary)) => {
-                let entries = read_entries_after(&store.connection, *through)?;
-                let mut messages = vec![summary_message(summary)];
-                messages.extend(messages_from_entries(&entries));
-                Ok(messages)
-            }
-            None => Ok(store.messages.clone()),
-        };
-    }
-    let mut messages = store
-        .state
-        .compaction
-        .as_ref()
-        .map(|(_, summary)| vec![summary_message(summary)])
-        .unwrap_or_default();
-    let clear_all = model != store.state.last_effective_model.as_ref();
-    let entries = read_entries_after(&store.connection, through)?;
-    for (index, message) in projected_entry_messages(&entries, false)
-        .into_iter()
-        .enumerate()
-    {
-        if let Some(mut message) = message {
-            let sequence = through
-                .checked_add(
-                    u64::try_from(index)
-                        .map_err(|_| SessionError::InvalidHistory)?
-                        .checked_add(1)
-                        .ok_or(SessionError::InvalidHistory)?,
-                )
-                .ok_or(SessionError::InvalidHistory)?;
-            if clear_all || sequence < store.state.replay_epoch_start {
-                message.provider_replay = None;
-            }
-            messages.push(message);
-        }
-    }
-    Ok(messages)
 }
 
 #[cfg(test)]
@@ -1875,16 +1718,6 @@ fn valid_model_context(context: &ModelContextSnapshot) -> bool {
         .all(|tool| !tool.name.trim().is_empty() && names.insert(tool.name.as_str()))
 }
 
-fn messages_from_entries(entries: &[SessionEntry]) -> Vec<Message> {
-    projected_entry_messages(entries, false)
-        .into_iter()
-        .flatten()
-        .collect()
-}
-
-// History validation makes shell admission and settlement adjacent: no other
-// entry is legal while a shell is pending. Settled compaction/fork cuts preserve
-// the pair, so projections do not need a second occurrence index.
 fn shell_outcome_at(entries: &[SessionEntry], settlement_index: usize) -> &UserShellOutcome {
     match entries.get(settlement_index) {
         Some(SessionEntry::UserShellSettled { outcome, .. }) => outcome,
@@ -2066,21 +1899,6 @@ fn project(entries: &[SessionEntry]) -> Result<HistoryProjection, SessionError> 
 fn read_entries(connection: &Connection) -> Result<Vec<SessionEntry>, SessionError> {
     let mut statement = connection.prepare("SELECT body FROM entries ORDER BY seq")?;
     let rows = statement.query_map([], |row| row.get::<_, Vec<u8>>(0))?;
-    let mut entries = Vec::new();
-    for body in rows {
-        entries.push(serde_json::from_slice(&body?)?);
-    }
-    Ok(entries)
-}
-
-fn read_entries_after(
-    connection: &Connection,
-    through: u64,
-) -> Result<Vec<SessionEntry>, SessionError> {
-    let through = i64::try_from(through).map_err(|_| SessionError::InvalidHistory)?;
-    let mut statement =
-        connection.prepare("SELECT body FROM entries WHERE seq > ?1 ORDER BY seq")?;
-    let rows = statement.query_map(params![through], |row| row.get::<_, Vec<u8>>(0))?;
     let mut entries = Vec::new();
     for body in rows {
         entries.push(serde_json::from_slice(&body?)?);
@@ -4153,6 +3971,81 @@ mod tests {
             4
         );
         drop(session);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn repeated_compaction_after_cancelled_tool_batch_has_no_new_prefix() {
+        let (root, path) = fixture();
+        let session = Session::create(&path, &root).unwrap();
+        let model = ModelRef {
+            provider: "test".into(),
+            model: "test".into(),
+        };
+        let (turn, _) = session.begin_turn("inspect".into(), model).unwrap();
+        session
+            .record_assistant(
+                turn,
+                Message {
+                    role: Role::Assistant,
+                    content: vec![Content::ToolCall(ToolCall {
+                        id: "call".into(),
+                        name: "read".into(),
+                        arguments: serde_json::json!({"path":"file"}),
+                        raw_arguments: None,
+                    })],
+                    provider_replay: None,
+                },
+                Usage::unknown(),
+                false,
+            )
+            .unwrap();
+        session
+            .record_tool_result(
+                turn,
+                ToolResult {
+                    call_id: "call".into(),
+                    name: "read".into(),
+                    result: serde_json::json!({"content":"observed"}),
+                    images: Vec::new(),
+                    is_error: false,
+                },
+            )
+            .unwrap();
+        session
+            .end_turn(turn, TurnEndReason::Cancelled, &BTreeSet::new())
+            .unwrap();
+        let plan = session
+            .compaction_plan(1, usize::MAX, false, u64::MAX)
+            .unwrap()
+            .unwrap();
+        assert_eq!(plan.messages.len(), 3);
+        session
+            .record_compaction(
+                plan.through_entry,
+                "saved observation".into(),
+                test_execution(),
+                Usage::unknown(),
+            )
+            .unwrap();
+        assert!(
+            session
+                .compaction_plan(1, usize::MAX, false, u64::MAX)
+                .unwrap()
+                .is_none()
+        );
+        let context = session.context_messages().unwrap();
+        assert_eq!(context.len(), 1);
+        drop(session);
+        let reopened = Session::open(&path).unwrap();
+        assert_eq!(reopened.context_messages().unwrap(), context);
+        assert!(
+            reopened
+                .compaction_plan(1, usize::MAX, false, u64::MAX)
+                .unwrap()
+                .is_none()
+        );
+        drop(reopened);
         fs::remove_dir_all(root).unwrap();
     }
 
