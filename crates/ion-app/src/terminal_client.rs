@@ -28,12 +28,12 @@ use ion_terminal::{
 use ratatui::text::Line;
 use tokio::time::{Duration, interval};
 use tokio_util::sync::CancellationToken;
-use unicode_segmentation::UnicodeSegmentation;
-
 mod composer;
+mod editing;
 mod input_preparation;
 mod picker;
 use composer::input_window;
+use editing::{Edit, vertical_cursor};
 use input_preparation::*;
 use picker::{Picker, PickerItem, PickerValue, Pickers};
 
@@ -1719,6 +1719,19 @@ impl Frontend {
                 return Action::None;
             }
         }
+        if let Some(edit) = editing::key(&self.draft, self.cursor, key) {
+            match edit {
+                Edit::Move(cursor) => self.cursor = cursor,
+                Edit::Delete(range) => {
+                    self.browsing = None;
+                    self.cursor = range.start;
+                    self.draft.replace_range(range, "");
+                }
+            }
+            self.completion
+                .refresh(&self.draft, self.cursor, resources, false);
+            return Action::None;
+        }
         let action = match key {
             KeyEvent {
                 code: KeyCode::Char('c'),
@@ -1858,39 +1871,6 @@ impl Frontend {
                 }
             }
             KeyEvent {
-                code: KeyCode::Backspace,
-                ..
-            } => {
-                self.browsing = None;
-                let start = previous_grapheme(&self.draft, self.cursor);
-                self.draft.replace_range(start..self.cursor, "");
-                self.cursor = start;
-                Action::None
-            }
-            KeyEvent {
-                code: KeyCode::Delete,
-                ..
-            } => {
-                self.browsing = None;
-                let end = next_grapheme(&self.draft, self.cursor);
-                self.draft.replace_range(self.cursor..end, "");
-                Action::None
-            }
-            KeyEvent {
-                code: KeyCode::Left,
-                ..
-            } => {
-                self.cursor = previous_grapheme(&self.draft, self.cursor);
-                Action::None
-            }
-            KeyEvent {
-                code: KeyCode::Right,
-                ..
-            } => {
-                self.cursor = next_grapheme(&self.draft, self.cursor);
-                Action::None
-            }
-            KeyEvent {
                 code: KeyCode::Up,
                 modifiers,
             } if modifiers.contains(Modifiers::ALT) => {
@@ -1916,21 +1896,6 @@ impl Frontend {
                 } else {
                     self.history_next();
                 }
-                Action::None
-            }
-            KeyEvent {
-                code: KeyCode::Home,
-                ..
-            } => {
-                self.cursor = self.draft[..self.cursor].rfind('\n').map_or(0, |at| at + 1);
-                Action::None
-            }
-            KeyEvent {
-                code: KeyCode::End, ..
-            } => {
-                self.cursor = self.draft[self.cursor..]
-                    .find('\n')
-                    .map_or(self.draft.len(), |at| self.cursor + at);
                 Action::None
             }
             KeyEvent {
@@ -2142,32 +2107,6 @@ impl Frontend {
             self.browsing = None;
             self.status = format!("{} follow-up(s) remain queued", self.pending.len());
         }
-    }
-}
-
-fn vertical_cursor(draft: &str, cursor: usize, down: bool) -> Option<usize> {
-    let line_start = draft[..cursor].rfind('\n').map_or(0, |at| at + 1);
-    let column = draft[line_start..cursor].graphemes(true).count();
-    if down {
-        let next_start = draft[cursor..].find('\n').map(|at| cursor + at + 1)?;
-        let next_end = draft[next_start..]
-            .find('\n')
-            .map_or(draft.len(), |at| next_start + at);
-        Some(
-            draft[next_start..next_end]
-                .grapheme_indices(true)
-                .nth(column)
-                .map_or(next_end, |(at, _)| next_start + at),
-        )
-    } else {
-        let previous_end = line_start.checked_sub(1)?;
-        let previous_start = draft[..previous_end].rfind('\n').map_or(0, |at| at + 1);
-        Some(
-            draft[previous_start..previous_end]
-                .grapheme_indices(true)
-                .nth(column)
-                .map_or(previous_end, |(at, _)| previous_start + at),
-        )
     }
 }
 
@@ -2566,24 +2505,74 @@ fn modal_rows(
     (rows, cursor)
 }
 
-fn previous_grapheme(text: &str, cursor: usize) -> usize {
-    text[..cursor]
-        .grapheme_indices(true)
-        .next_back()
-        .map_or(0, |(at, _)| at)
-}
-fn next_grapheme(text: &str, cursor: usize) -> usize {
-    text[cursor..]
-        .graphemes(true)
-        .next()
-        .map_or(cursor, |g| cursor + g.len())
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use ion_host::Selection;
     use unicode_width::UnicodeWidthStr;
+
+    #[test]
+    fn editor_line_shortcuts_keep_other_lines_and_graphemes_intact() {
+        for (draft, cursor, code, expected, expected_cursor) in [
+            (
+                "first\ncafé 👩‍💻 tail",
+                "first\ncafé 👩‍💻".len(),
+                'u',
+                "first\n tail",
+                6,
+            ),
+            (
+                "first\ncafé 👩‍💻 tail",
+                "first\ncafé".len(),
+                'k',
+                "first\ncafé",
+                "first\ncafé".len(),
+            ),
+            ("first\nsecond", 6, 'u', "firstsecond", 5),
+            ("first\nsecond", 5, 'k', "firstsecond", 5),
+            ("café 👩‍💻", "café 👩‍💻".len(), 'w', "café ", "café ".len()),
+            ("first\nsecond", 8, 'a', "first\nsecond", 6),
+            ("first\nsecond", 2, 'e', "first\nsecond", 5),
+        ] {
+            let mut ui = Frontend {
+                draft: draft.into(),
+                cursor,
+                ..Frontend::default()
+            };
+            assert!(matches!(
+                ui.key(KeyEvent::new(KeyCode::Char(code), Modifiers::CONTROL), None),
+                Action::None
+            ));
+            assert_eq!(
+                (ui.draft.as_str(), ui.cursor),
+                (expected, expected_cursor),
+                "Ctrl-{code}"
+            );
+        }
+    }
+
+    #[test]
+    fn busy_editor_clearing_neither_cancels_nor_admits_input() {
+        let mut ui = Frontend {
+            draft: "discard café 界 👩‍💻".into(),
+            cursor: "discard café 界 👩‍💻".len(),
+            ..Frontend::default()
+        };
+        let stop = CancellationToken::new();
+        let steering = SteeringInbox::new(AgentLimits::default(), ui.input_budget.clone());
+        busy_key(
+            &mut ui,
+            KeyEvent::new(KeyCode::Char('u'), Modifiers::CONTROL),
+            &stop,
+            Some(&steering),
+            None,
+            AgentLimits::default(),
+        );
+        assert!(ui.draft.is_empty());
+        assert_eq!(ui.cursor, 0);
+        assert!(!stop.is_cancelled());
+        assert!(steering.take_uncommitted().is_empty());
+    }
 
     #[test]
     fn resume_history_tail_keeps_the_last_six_turns() {

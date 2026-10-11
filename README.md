@@ -338,6 +338,13 @@ Secrets must be valid single-line UTF-8 of at most 4096 bytes. Rejected or cance
 unfinished pastes remain discarded through their closing marker. Bracketed
 paste is limited to 64 KiB of valid UTF-8. Malformed, oversized or unfinished
 paste is discarded without submitting a prefix or replacing the current draft.
+Home/End or Ctrl-A/E move within the current logical line; Ctrl-B/F move by
+grapheme. Ctrl/Alt-Left/Right or Alt-B/F move by Unicode word boundaries.
+Ctrl-U/K delete to the line start/end, joining adjacent lines when already at
+the boundary. Ctrl-W or Alt-Backspace deletes the preceding word; Alt-D/Delete
+deletes the next word. Ctrl-D deletes forward in a nonempty draft and exits when
+the draft is empty. These editing keys remain available during work without
+cancelling it; Ctrl-C still cancels the active operation.
 Up and Down browse earlier prompts when the cursor reaches the first or last
 editor line. Returning from history restores the unsent draft and its cursor,
 even if a running Turn refreshed history. Type
@@ -728,6 +735,14 @@ completed two automatic compactions during a Turn, preserved a prior
 non-idempotent effect, repaired the code and passed native tests without repeating
 that effect. This budget is a fixture limit, not Ion's production limit. Final
 files, protected files and native checks were verified independently.
+
+A bounded live inline tmux task repaired a Python CSV utility, accepted edited
+steering during diagnosis and completed a separately queued follow-up. Native
+tests and file/stdin JSON checks passed; an unsent Unicode draft remained outside
+model context. Its first shutdown fixture used an unsupported editing shortcut
+and failed. Separate passive terminal reopen and cooked-input checks passed,
+with unchanged saved facts and no model dispatch. This does not qualify
+Ghostty-native reflow, emulator stability or human visual usability.
 
 This is coding-loop evidence, not a native Ion subscription implementation,
 client parity or sustained-workflow qualification. The bridge retained replay in

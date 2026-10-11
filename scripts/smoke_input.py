@@ -264,6 +264,34 @@ with tempfile.TemporaryDirectory(prefix="ion-input-") as temporary:
                 release.set()
                 terminal.close()
 
+            cwd = work / (mode + "-editing")
+            cwd.mkdir()
+            terminal = Terminal(cwd, env, mode)
+            try:
+                terminal.wait(lambda: "›" in terminal.text())
+                before = len(requests)
+                release.clear()
+                terminal.send("WAIT_HISTORY\r")
+                terminal.wait(lambda: len(requests) == before + 1)
+                # Edit during generation without using Ctrl-C (which cancels).
+                terminal.send("discard café 👩‍💻\x15kept e\u0301 👩‍💻 tail\x17\x17界")
+                terminal.send("\x01PREFIX_\x05\x1b[1;5D\x1bd🦀")
+                terminal.wait(lambda: "PREFIX_kept e\u0301 🦀" in terminal.text())
+                assert len(requests) == before + 1, "editing shortcuts admitted input"
+                release.set()
+                terminal.wait(lambda: "DONE_WAIT_HISTORY" in terminal.text())
+                terminal.paint()
+                terminal.send("\r")
+                terminal.wait(lambda: len(requests) == before + 2)
+                assert user_text(requests[-1]) == "PREFIX_kept e\u0301 🦀", user_text(requests[-1])
+                terminal.wait(lambda: "DONE_PREFIX_kept" in terminal.text())
+                terminal.paint()
+                terminal.finish()
+                print(f"Ion {mode} busy Unicode line/word editing: OK")
+            finally:
+                release.set()
+                terminal.close()
+
             cwd = work / (mode + "-history")
             cwd.mkdir()
             terminal = Terminal(cwd, env, mode)
