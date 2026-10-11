@@ -34,7 +34,7 @@ pub(super) async fn connection<R: AsyncBufRead + Unpin, W: AsyncWrite + Unpin>(
                 Some(record) = events.recv(), if busy && output.can_acquire() => {
                     output.enqueue(record)?;
                 }
-                joined = async { (&mut control.active.as_mut().expect("active operation").task).await }, if busy => {
+                joined = async { (&mut control.active.as_mut().expect("active operation").completion).await }, if busy => {
                     let completion = control.finish_operation(joined);
                     operation_error = completion.error;
                     while let Ok(record) = events.try_recv() { output.defer([record]); }
@@ -77,7 +77,7 @@ pub(super) async fn connection<R: AsyncBufRead + Unpin, W: AsyncWrite + Unpin>(
     let mut records = Vec::new();
     if let Some(active) = control.active.as_mut() {
         active.stop.cancel();
-        let joined = (&mut active.task).await;
+        let joined = (&mut active.completion).await;
         let completion = control.finish_operation(joined);
         settlement = combine_errors(
             settlement,

@@ -112,7 +112,8 @@ conversation; it does not resume an external action automatically.
 
 Direct shell commits the command and context-sharing choice before granting
 host authority, then holds Session exclusivity through observed-result commit.
-The permit owns that identity and metadata; hosts cannot resupply them at commit.
+The owned operation retains that identity and metadata; hosts cannot resupply
+them at commit.
 Keep observed output raw, including errors and cancellation. A missing result is
 an unknown external effect in passive inspection, not observed termination.
 The next explicit coding or shell admission closes an interrupted shell and
@@ -281,6 +282,24 @@ correlate acceptance, progress and settlement without pretending command IDs are
 an exactly-once protocol. A connection owns and joins its active task; EOF or
 I/O failure cancels and waits, and follow-ups start only after settlement.
 Broken output cannot promise delivery; durable inspection remains available.
+
+An embedded caller owns a stop-and-join handle, not the execution future or
+abort authority. Session retains the one active continuation, captured services
+and writer lease through started-work settlement. Reserve exclusivity before
+scheduling; reservation is not durable acceptance. Dropped handles, timed-out owning
+waits and aborted caller tasks request stop without releasing execution custody.
+Reject concurrent starts rather than accumulating waiting tasks. Keep unread
+failures observable through join and shutdown; do not replace their custody with
+a new operation. Normal cancellation is not an unread settlement failure.
+Owned observers must not block; observer failure requests stop but cannot unwind
+through started work. Replacing the active Session retains reversible idle
+authority through synchronous preparation and publication.
+
+Shutdown closes new execution admission before requesting stop and joining.
+Cancelling its wait leaves closure and task custody intact. Embedded hosts must
+complete shutdown before destroying their Tokio runtime; a destructor cannot
+promise async joining. A genuine operation-task panic blocks reuse of that live
+owner and reports unknown effects, not quiescence or permission to replay.
 
 Skills/templates, tool sources, executable hooks and optional UI contributions
 are distinct powers. Additional extension registrations need explicit scope

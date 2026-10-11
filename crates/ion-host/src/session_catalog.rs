@@ -237,7 +237,7 @@ mod tests {
         let first = catalog.new_path().unwrap();
         let second = catalog.new_path().unwrap();
         assert_ne!(first, second);
-        let session = CodingSession::create(&first, &workspace).unwrap();
+        let session = Arc::new(CodingSession::create(&first, &workspace).unwrap());
         session.set_name(Some("First task")).unwrap();
         let model = ModelRef {
             provider: "script".into(),
@@ -261,7 +261,7 @@ mod tests {
         );
         agent
             .submit(
-                &session,
+                session.clone(),
                 "first prompt".into(),
                 String::new(),
                 CancellationToken::new(),
@@ -270,7 +270,7 @@ mod tests {
             .await
             .unwrap();
         drop(session);
-        let session = CodingSession::create(&second, &workspace).unwrap();
+        let session = Arc::new(CodingSession::create(&second, &workspace).unwrap());
         session.set_name(Some("Second task")).unwrap();
         drop(session);
         let listed = catalog.list().unwrap();

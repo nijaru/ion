@@ -151,14 +151,14 @@ impl ToolExecutor for CatalogTools {
 
 async fn fill(
     agent: &CodingAgent,
-    session: &CodingSession,
+    session: &Arc<CodingSession>,
     turns: usize,
     label: &str,
 ) -> Result<()> {
     for index in 0..turns {
         agent
             .submit(
-                session,
+                session.clone(),
                 format!(
                     "{label} request {index}: inspect the implementation state and preserve the exact constraints needed for continued coding work."
                 ),
@@ -214,7 +214,7 @@ async fn run(workspace: &std::path::Path, state: &std::path::Path) -> Result<()>
         (0..SHORT_TURNS).map(|index| completion(format!("short response {index}"))),
     ));
     let short_agent = CodingAgent::new(short_service, Arc::new(NoTools), model());
-    let short = CodingSession::create(catalog.new_path()?, workspace)?;
+    let short = Arc::new(CodingSession::create(catalog.new_path()?, workspace)?);
     fill(&short_agent, &short, SHORT_TURNS, "short").await?;
 
     let discovery_service = Arc::new(ScriptedModelService::new(
@@ -222,10 +222,10 @@ async fn run(workspace: &std::path::Path, state: &std::path::Path) -> Result<()>
     ));
     let discovery_agent = CodingAgent::new(discovery_service, Arc::new(NoTools), model());
     for index in 0..DISCOVERY_SESSIONS {
-        let session = CodingSession::create(catalog.new_path()?, workspace)?;
+        let session = Arc::new(CodingSession::create(catalog.new_path()?, workspace)?);
         discovery_agent
             .submit(
-                &session,
+                session.clone(),
                 format!("discovery session {index}"),
                 "Measure Session discovery.".into(),
                 CancellationToken::new(),
@@ -243,7 +243,7 @@ async fn run(workspace: &std::path::Path, state: &std::path::Path) -> Result<()>
         .chain((0..16).map(|index| completion(format!("summary chunk {index}"))));
     let long_service = Arc::new(ScriptedModelService::new(long_scripts));
     let long_agent = CodingAgent::new(long_service, Arc::new(NoTools), model());
-    let long = CodingSession::create(catalog.new_path()?, workspace)?;
+    let long = Arc::new(CodingSession::create(catalog.new_path()?, workspace)?);
     fill(&long_agent, &long, LONG_PREFILL_TURNS, "long").await?;
 
     let mut turn_samples = Vec::with_capacity(MEASURED_TURNS);
@@ -251,7 +251,7 @@ async fn run(workspace: &std::path::Path, state: &std::path::Path) -> Result<()>
         let started = Instant::now();
         long_agent
             .submit(
-                &long,
+                long.clone(),
                 format!("measured continuation {index} with representative coding-session context"),
                 "Measure the runtime without changing the workspace.".into(),
                 CancellationToken::new(),
@@ -358,7 +358,7 @@ async fn run(workspace: &std::path::Path, state: &std::path::Path) -> Result<()>
 
     let compaction_started = Instant::now();
     let compacted = long_agent
-        .compact(&long, CancellationToken::new(), |_| {})
+        .compact(long.clone(), CancellationToken::new(), |_| {})
         .await?;
     println!(
         "compaction_long: changed={} elapsed_us={} entries_after={}",

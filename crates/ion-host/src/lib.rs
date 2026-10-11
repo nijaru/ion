@@ -291,7 +291,7 @@ mod tests {
                 ..route
             })
             .unwrap();
-        let session = CodingSession::create(root.join("session.sqlite"), &root).unwrap();
+        let session = Arc::new(CodingSession::create(root.join("session.sqlite"), &root).unwrap());
         session
             .select_model(ModelRef {
                 provider: "previous".into(),
@@ -304,7 +304,7 @@ mod tests {
         assert_eq!(
             agent
                 .submit(
-                    &session,
+                    session.clone(),
                     "hello".into(),
                     String::new(),
                     CancellationToken::new(),

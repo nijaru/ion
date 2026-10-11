@@ -878,7 +878,7 @@ async fn run_compaction(
     let mut input_ended = false;
     let mut output_error = None;
     let result = {
-        let compact = agent.compact(session, stop.clone(), |_| {});
+        let compact = agent.compact(session.clone(), stop.clone(), |_| {});
         tokio::pin!(compact);
         let mut tick = interval(Duration::from_millis(50));
         loop {
@@ -1153,7 +1153,7 @@ async fn run_user_shell(
     let mut output_error = None;
     ui.status.clear();
     let output = {
-        let running = runtime.run_user_shell(&command, stop.clone(), exclude_from_context);
+        let running = runtime.run_user_shell(&command, stop.clone(), exclude_from_context)?;
         tokio::pin!(running);
         loop {
             if output_error.is_none()
@@ -1262,23 +1262,31 @@ async fn run_turn(
         Message::user_input(incoming.prompt.clone(), incoming.images.iter().cloned());
     // Core's admission event transfers custody. A later history read cannot
     // decide whether the original input (and its reservation) still belongs here.
-    let mut unaccepted = Some(incoming);
+    let unaccepted = Arc::new(Mutex::new(Some(incoming)));
+    let observer_input = unaccepted.clone();
     let progress = Arc::new(Mutex::new(LiveTranscript::with_user_input(&user_message)));
     let observer = progress.clone();
     let stop = CancellationToken::new();
-    let steering = SteeringInbox::new(runtime.agent().limits(), ui.input_budget.clone());
+    let steering = Arc::new(SteeringInbox::new(
+        runtime.agent().limits(),
+        ui.input_budget.clone(),
+    ));
     let mut input_ended = false;
     let mut output_error = None;
     let result = {
         let turn = runtime.agent().submit_message_with_steering(
-            session,
+            session.clone(),
             user_message,
             runtime.instructions().to_owned(),
             stop.clone(),
-            &steering,
-            |event| {
+            steering.clone(),
+            move |event| {
                 if matches!(&event, ion_core::CodingAgentEvent::TurnAccepted { .. }) {
-                    drop(unaccepted.take());
+                    let accepted = observer_input
+                        .lock()
+                        .unwrap_or_else(std::sync::PoisonError::into_inner)
+                        .take();
+                    drop(accepted);
                 }
                 observer
                     .lock()
@@ -1351,6 +1359,10 @@ async fn run_turn(
     for input in steering.take_uncommitted() {
         ui.pending.push_back(TurnInput::from_accepted(input));
     }
+    let unaccepted = unaccepted
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .take();
     if let Some(incoming) = unaccepted {
         ui.pending.push_front(incoming);
         return_pending_to_editor(ui);

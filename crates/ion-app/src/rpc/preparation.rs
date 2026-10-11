@@ -2,6 +2,7 @@
 use ion_host::image_input::ImageSource;
 
 use super::*;
+use tokio::task::JoinHandle;
 
 pub(super) enum InputKind {
     Prompt,

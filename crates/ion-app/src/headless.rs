@@ -1,5 +1,8 @@
 //! One Core operation, with independently pollable publication and cancellation.
-use std::{io, sync::Arc};
+use std::{
+    io,
+    sync::{Arc, Mutex},
+};
 
 use anyhow::{Context, Result, anyhow};
 use ion_ai::Message;
@@ -47,15 +50,25 @@ pub(super) async fn run(
     }
     let stop = CancellationToken::new();
     let (sender, mut events) = mpsc::channel(128);
-    let mut observer_error = None;
+    let observer_error = Arc::new(Mutex::new(None));
+    let observer_fault = observer_error.clone();
+    let observer_stop = stop.clone();
+    // Install the signal handler before scheduling the owned Core task.
+    let mut signal = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::interrupt())?;
     let mut publication_error = None;
     let result = {
         let operation = agent.submit_message(
-            &session,
+            session.clone(),
             Message::user_input(prompt, images),
             instructions,
             stop.clone(),
-            |event| {
+            move |event| {
+                let mut observer_error = observer_fault
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner);
+                if observer_error.is_some() {
+                    return;
+                }
                 let record = if json_output {
                     Some(Record::Json(agent_events::event_record(event)))
                 } else {
@@ -65,14 +78,12 @@ pub(super) async fn run(
                     && let Some(record) = record
                     && let Err(error) = sender.try_send(record)
                 {
-                    observer_error = Some(anyhow!("headless progress is unavailable: {error}"));
-                    stop.cancel();
+                    *observer_error = Some(anyhow!("headless progress is unavailable: {error}"));
+                    observer_stop.cancel();
                 }
             },
         );
         tokio::pin!(operation);
-        let signal = tokio::signal::ctrl_c();
-        tokio::pin!(signal);
         let mut listening = true;
         loop {
             if output.is_healthy()
@@ -85,11 +96,8 @@ pub(super) async fn run(
                 // Register the signal handler before polling Core. Once stop is
                 // requested, keep polling Core until all owned work settles.
                 biased;
-                signalled = &mut signal, if listening => {
+                _ = signal.recv(), if listening => {
                     listening = false;
-                    if let Err(error) = signalled {
-                        publication_error.get_or_insert(error.into());
-                    }
                     stop.cancel();
                 }
                 Some(record) = events.recv(), if publication_error.is_none() && output.can_acquire() => {
@@ -127,7 +135,16 @@ pub(super) async fn run(
         }
     }
     let finish = output.finish().await;
-    if let Some(error) = publication_error.or(observer_error) {
+    let observer_error = observer_error
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .take();
+    if let Some(mut error) = publication_error.or(observer_error) {
+        if let Err(settlement) = &result
+            && !matches!(settlement, CodingAgentError::Cancelled)
+        {
+            error = error.context(format!("Core operation also failed: {settlement}"));
+        }
         return match finish {
             Ok(()) => Err(error),
             Err(second) => Err(error.context(format!("output settlement also failed: {second:#}"))),

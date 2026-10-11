@@ -6,12 +6,15 @@ mod composition;
 mod generation;
 mod input;
 mod json_size;
+mod operation;
 mod request;
 mod session;
 mod summary;
 mod tool_result;
 mod tool_set;
 mod transcript;
+
+pub use operation::{IdleSession, Operation, OperationError};
 
 pub use agent::{
     Agent as CodingAgent, AgentError as CodingAgentError, AgentEvent as CodingAgentEvent,
@@ -21,7 +24,7 @@ pub use input::{AcceptedInput, InputBudget, InputReservation};
 pub use session::{
     ForkPoint, ModelContextSnapshot, Session as CodingSession, SessionEntry,
     SessionError as CodingSessionError, SessionView, StoredToolActivity, TurnEndReason,
-    TurnSummary, UnobservedUserShell, UserShellOutcome, UserShellPermit,
+    TurnSummary, UnobservedUserShell, UserShellOutcome,
 };
 pub use tool_set::{
     ToolActivity, ToolActivityKind, ToolCatalog, ToolDefinition, ToolExecutor, ToolExposure,

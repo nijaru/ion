@@ -5,10 +5,11 @@ use std::{
     fs::{self, File, OpenOptions},
     os::unix::fs::{MetadataExt, OpenOptionsExt},
     path::{Path, PathBuf},
-    sync::Mutex,
+    sync::{Arc, Mutex},
     time::Duration,
 };
 
+use crate::operation::{IdleSession, Operation, OperationError, OperationFailure, OperationOwner};
 use crate::tool_set::ToolActivity;
 #[cfg(test)]
 use ion_ai::ToolResult;
@@ -21,7 +22,6 @@ use rusqlite::{Connection, OpenFlags, OptionalExtension, params};
 use rustix::fs::{FlockOperation, flock};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
-use tokio::sync::{Mutex as AsyncMutex, MutexGuard as AsyncMutexGuard};
 use tokio_util::sync::CancellationToken;
 
 pub(crate) mod code_inspection;
@@ -635,45 +635,15 @@ struct Store {
     child_records: ChildRecordIndex,
 }
 
-/// A writable Session holds a cross-process lock. `submit_gate` also keeps
-/// coding Turns and direct shells exclusive through async effects and commit.
+/// A writable Session holds a cross-process lock and retains its exclusive
+/// operation through started effects, observed-result commit and task joining.
 pub struct Session {
     // Field order closes SQLite before releasing the writer lock.
     store: Mutex<Store>,
     _lock: SessionLock,
     header: Header,
     path: PathBuf,
-    pub(crate) submit_gate: AsyncMutex<()>,
-}
-
-pub struct UserShellPermit<'a> {
-    session: &'a Session,
-    admission_entry: u64,
-    command: String,
-    _gate: AsyncMutexGuard<'a, ()>,
-}
-
-impl UserShellPermit<'_> {
-    pub fn command(&self) -> &str {
-        &self.command
-    }
-
-    /// Consume authority only after the started host work has settled. A failed
-    /// commit leaves the admitted command unknown, not retryable observation.
-    pub fn record(self, output: serde_json::Value, is_error: bool) -> Result<(), SessionError> {
-        let mut store = self
-            .session
-            .store
-            .lock()
-            .map_err(|_| SessionError::Poisoned)?;
-        append(
-            &mut store,
-            &[SessionEntry::UserShellSettled {
-                admission_entry: self.admission_entry,
-                outcome: UserShellOutcome::Observed { output, is_error },
-            }],
-        )
-    }
+    pub(crate) operations: Arc<OperationOwner>,
 }
 
 struct SessionLock(File);
@@ -727,7 +697,7 @@ impl Session {
             _lock: lock,
             header,
             path,
-            submit_gate: AsyncMutex::new(()),
+            operations: Arc::new(OperationOwner::default()),
         })
     }
 
@@ -757,7 +727,7 @@ impl Session {
             _lock: lock,
             header,
             path,
-            submit_gate: AsyncMutex::new(()),
+            operations: Arc::new(OperationOwner::default()),
         })
     }
 
@@ -880,35 +850,81 @@ impl Session {
             .collect())
     }
 
-    /// Durably freeze one direct command and its sharing choice before granting
-    /// host authority. Recovery and admission are a single transaction; the
-    /// permit holds exclusivity until observed-result publication or abandonment.
-    pub async fn begin_user_shell(
-        &self,
+    /// Run one admitted direct shell through retained, Session-owned custody.
+    /// The host must preflight its executor before calling this entry point.
+    /// Its owned callback respects stop before new effects and joins all work
+    /// already started before returning the observed output.
+    pub fn run_user_shell<F, W>(
+        self: &Arc<Self>,
         command: String,
         exclude_from_context: bool,
         stop: CancellationToken,
-    ) -> Result<UserShellPermit<'_>, SessionError> {
-        let gate = tokio::select! {
-            gate = self.submit_gate.lock() => gate,
-            () = stop.cancelled() => return Err(SessionError::UserShellCancelled),
-        };
-        if stop.is_cancelled() {
-            return Err(SessionError::UserShellCancelled);
-        }
+        execute: F,
+    ) -> Operation<crate::CodingToolOutput, SessionError>
+    where
+        F: FnOnce(String, CancellationToken) -> W + Send + 'static,
+        W: std::future::Future<Output = crate::CodingToolOutput> + Send + 'static,
+    {
+        let session = self.clone();
+        self.operations.start(stop.clone(), async move {
+            if stop.is_cancelled() {
+                return Err(SessionError::UserShellCancelled);
+            }
+            let entry = session.admit_user_shell(command.clone(), exclude_from_context)?;
+            let output = execute(command, stop).await;
+            session.record_user_shell(entry, output.value.clone(), output.is_error)?;
+            Ok(output)
+        })
+    }
+
+    fn admit_user_shell(
+        &self,
+        command: String,
+        exclude_from_context: bool,
+    ) -> Result<u64, SessionError> {
         let mut store = self.store.lock().map_err(|_| SessionError::Poisoned)?;
         let mut entries = interrupted_operation_entries(&store.state);
         entries.push(SessionEntry::UserShellAdmitted {
-            command: command.clone(),
+            command,
             exclude_from_context,
         });
         append(&mut store, &entries)?;
-        Ok(UserShellPermit {
-            session: self,
-            admission_entry: store.state.sequence,
-            command,
-            _gate: gate,
-        })
+        Ok(store.state.sequence)
+    }
+
+    fn record_user_shell(
+        &self,
+        admission_entry: u64,
+        output: serde_json::Value,
+        is_error: bool,
+    ) -> Result<(), SessionError> {
+        let mut store = self.store.lock().map_err(|_| SessionError::Poisoned)?;
+        append(
+            &mut store,
+            &[SessionEntry::UserShellSettled {
+                admission_entry,
+                outcome: UserShellOutcome::Observed { output, is_error },
+            }],
+        )
+    }
+
+    /// Check current idleness without reserving it for a later action.
+    pub fn ensure_idle(&self) -> Result<(), SessionError> {
+        self.reserve_idle().map(drop)
+    }
+
+    /// Hold reversible idle authority through synchronous binding preparation
+    /// and publication. Failed preparation releases it without closing execution.
+    pub fn reserve_idle(&self) -> Result<IdleSession<'_>, SessionError> {
+        self.operations.try_lock().map_err(SessionError::from)
+    }
+
+    /// Close execution admission, request stop and join retained work. A timed-out
+    /// wait leaves admission closed. This also reports unread operation failures
+    /// without consuming a retained handle's result. Complete shutdown before
+    /// destroying the Tokio runtime; a genuine task panic cannot prove quiescence.
+    pub async fn shutdown(&self) -> Result<(), SessionError> {
+        self.operations.shutdown().await.map_err(SessionError::from)
     }
 
     pub fn entry_count(&self) -> Result<u64, SessionError> {
@@ -1119,10 +1135,7 @@ impl Session {
     /// Persist an idle Session's identity without route validation. Use
     /// `CodingAgent::select_model` to preflight the retained generation preference.
     pub fn select_model(&self, model: ModelRef) -> Result<(), SessionError> {
-        let guard = self
-            .submit_gate
-            .try_lock()
-            .map_err(|_| SessionError::OperationActive)?;
+        let guard = self.operations.try_lock().map_err(SessionError::from)?;
         self.record_selection(&guard, model, None)
     }
 
@@ -1140,7 +1153,7 @@ impl Session {
     /// not leave a preference incompatible with the model restored on reopen.
     pub(crate) fn record_selection(
         &self,
-        _guard: &AsyncMutexGuard<'_, ()>,
+        _guard: &IdleSession<'_>,
         model: ModelRef,
         reasoning: Option<Reasoning>,
     ) -> Result<(), SessionError> {
@@ -1161,7 +1174,7 @@ impl Session {
     }
 
     /// Close any interrupted Turn and accept the next input in one transaction.
-    /// Caller holds `submit_gate` for the entire resulting Turn.
+    /// Caller owns this Session's operation custody for the entire resulting Turn.
     #[cfg(test)]
     pub(crate) fn begin_turn(
         &self,
@@ -1984,6 +1997,8 @@ pub enum SessionError {
     NotFound,
     #[error("session has an active operation")]
     OperationActive,
+    #[error(transparent)]
+    Operation(OperationError),
     #[error("session is already open for writing")]
     AlreadyOpen,
     #[error("hard-linked session databases are unsupported; use Session clone or fork")]
@@ -2022,6 +2037,21 @@ pub enum SessionError {
     Json(#[from] serde_json::Error),
 }
 
+impl OperationFailure for SessionError {
+    fn expected_cancellation(&self) -> bool {
+        matches!(self, Self::UserShellCancelled)
+    }
+}
+
+impl From<OperationError> for SessionError {
+    fn from(error: OperationError) -> Self {
+        match error {
+            OperationError::Active => Self::OperationActive,
+            other => Self::Operation(other),
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2041,30 +2071,46 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn user_shell_permit_waits_for_turn_gate_and_commits_before_release() {
+    async fn user_shell_operation_rejects_overlap_and_commits_before_release() {
         let (root, path) = fixture();
-        let session = Session::create(&path, &root).unwrap();
-        {
-            let guard = session.submit_gate.lock().await;
-            let permit =
-                session.begin_user_shell("echo done".into(), false, CancellationToken::new());
-            tokio::pin!(permit);
-            assert!(
-                tokio::time::timeout(Duration::from_millis(30), permit.as_mut())
-                    .await
-                    .is_err()
-            );
-            drop(guard);
-            let permit = permit.await.unwrap();
-            assert!(session.submit_gate.try_lock().is_err());
-            assert!(
-                matches!(session.view().unwrap().entries.last(), Some(SessionEntry::UserShellAdmitted { command, exclude_from_context: false }) if command == "echo done")
-            );
-            permit
-                .record(serde_json::json!({"stdout":"done","exit_code":0}), false)
-                .unwrap();
-        }
-        assert!(session.submit_gate.try_lock().is_ok());
+        let session = Arc::new(Session::create(&path, &root).unwrap());
+        let (admitted, admission) = tokio::sync::oneshot::channel();
+        let (release, released) = tokio::sync::oneshot::channel();
+        let operation = session.run_user_shell(
+            "echo done".into(),
+            false,
+            CancellationToken::new(),
+            move |command, _| async move {
+                assert_eq!(command, "echo done");
+                admitted.send(()).unwrap();
+                released.await.unwrap();
+                crate::CodingToolOutput {
+                    value: serde_json::json!({"stdout":"done","exit_code":0}),
+                    images: Vec::new(),
+                    is_error: false,
+                }
+            },
+        );
+        admission.await.unwrap();
+        let rejected = session.run_user_shell(
+            "must not run".into(),
+            false,
+            CancellationToken::new(),
+            |_, _| async { panic!("occupied owner dispatched a shell") },
+        );
+        assert!(matches!(rejected.await, Err(SessionError::OperationActive)));
+        assert_eq!(session.view().unwrap().entries.len(), 1);
+        assert!(session.operations.try_lock().is_err());
+        assert!(matches!(
+            session.select_model(test_execution().route.logical),
+            Err(SessionError::OperationActive)
+        ));
+        assert!(
+            matches!(session.view().unwrap().entries.last(), Some(SessionEntry::UserShellAdmitted { command, exclude_from_context: false }) if command == "echo done")
+        );
+        release.send(()).unwrap();
+        assert_eq!(operation.await.unwrap().value["stdout"], "done");
+        assert!(session.operations.try_lock().is_ok());
         assert!(matches!(
             session.view().unwrap().entries.last(),
             Some(SessionEntry::UserShellSettled {
@@ -2076,8 +2122,8 @@ mod tests {
         fs::remove_dir_all(root).unwrap();
     }
 
-    #[tokio::test]
-    async fn interrupted_shell_permit_recovers_before_authority_and_rejects_failed_recovery() {
+    #[test]
+    fn shell_admission_recovers_before_authority_and_rejects_failed_recovery() {
         let (root, path) = fixture();
         let session = Session::create(&path, &root).unwrap();
         let (turn, _) = session
@@ -2108,9 +2154,7 @@ mod tests {
             "CREATE TRIGGER reject_recovery BEFORE INSERT ON entries BEGIN SELECT RAISE(ABORT, 'recovery unavailable'); END;"
         ).unwrap();
         assert!(matches!(
-            session
-                .begin_user_shell("printf new".into(), false, CancellationToken::new())
-                .await,
+            session.admit_user_shell("printf new".into(), false),
             Err(SessionError::Sqlite(_))
         ));
         assert_eq!(session.view().unwrap().entries, before.entries);
@@ -2122,9 +2166,8 @@ mod tests {
             .execute_batch("DROP TRIGGER reject_recovery;")
             .unwrap();
 
-        let permit = session
-            .begin_user_shell("printf new".into(), false, CancellationToken::new())
-            .await
+        let admission = session
+            .admit_user_shell("printf new".into(), false)
             .unwrap();
         let recovered = session.view().unwrap();
         assert_eq!(
@@ -2155,8 +2198,12 @@ mod tests {
             serde_json::to_value(&recovered.entries[recovered.entries.len() - 3]).unwrap();
         assert_eq!(encoded["data"]["result"]["outcome"]["state"], "unknown");
         assert!(encoded["data"]["result"]["outcome"].get("output").is_none());
-        permit
-            .record(serde_json::json!({"stdout":"new","exit_code":0}), false)
+        session
+            .record_user_shell(
+                admission,
+                serde_json::json!({"stdout":"new","exit_code":0}),
+                false,
+            )
             .unwrap();
         drop(session);
         let reopened = Session::open(&path).unwrap();
@@ -2184,17 +2231,15 @@ mod tests {
         fs::remove_dir_all(root).unwrap();
     }
 
-    #[tokio::test]
-    async fn shell_admission_and_result_faults_leave_only_committed_authority() {
+    #[test]
+    fn shell_admission_and_result_faults_leave_only_committed_authority() {
         let (root, path) = fixture();
         let session = Session::create(&path, &root).unwrap();
         session.store.lock().unwrap().connection.execute_batch(
             "CREATE TRIGGER reject_shell BEFORE INSERT ON entries BEGIN SELECT RAISE(ABORT, 'storage unavailable'); END;"
         ).unwrap();
         assert!(matches!(
-            session
-                .begin_user_shell("touch effect".into(), false, CancellationToken::new())
-                .await,
+            session.admit_user_shell("touch effect".into(), false),
             Err(SessionError::Sqlite(_))
         ));
         assert!(session.view().unwrap().entries.is_empty());
@@ -2205,11 +2250,13 @@ mod tests {
             .connection
             .execute_batch("DROP TRIGGER reject_shell;")
             .unwrap();
-        let permit = session
-            .begin_user_shell("touch effect".into(), false, CancellationToken::new())
-            .await
+        let admission = session
+            .admit_user_shell("touch effect".into(), false)
             .unwrap();
-        assert_eq!(permit.command(), "touch effect");
+        assert!(matches!(
+            session.view().unwrap().entries.last(),
+            Some(SessionEntry::UserShellAdmitted { command, .. }) if command == "touch effect"
+        ));
         assert_eq!(
             session.view().unwrap().unfinished_user_shell,
             Some(UnobservedUserShell { admission_entry: 1 })
@@ -2220,7 +2267,8 @@ mod tests {
             "CREATE TRIGGER reject_result BEFORE INSERT ON entries BEGIN SELECT RAISE(ABORT, 'result unavailable'); END;"
         ).unwrap();
         assert!(matches!(
-            permit.record(
+            session.record_user_shell(
+                admission,
                 serde_json::json!({"stdout":"observed", "exit_code":0}),
                 false
             ),
@@ -2249,20 +2297,14 @@ mod tests {
         fs::remove_dir_all(root).unwrap();
     }
 
-    #[tokio::test]
-    async fn interrupted_shell_recovery_is_atomic_private_and_never_replayed() {
+    #[test]
+    fn interrupted_shell_recovery_is_atomic_private_and_never_replayed() {
         for excluded in [false, true] {
             let (root, path) = fixture();
             let session = Session::create(&path, &root).unwrap();
-            let permit = session
-                .begin_user_shell(
-                    "interrupted-command".into(),
-                    excluded,
-                    CancellationToken::new(),
-                )
-                .await
+            session
+                .admit_user_shell("interrupted-command".into(), excluded)
                 .unwrap();
-            drop(permit);
             drop(session);
             let session = Session::open(&path).unwrap();
             let before = session.view().unwrap();
@@ -2289,8 +2331,7 @@ mod tests {
             ).unwrap();
             assert!(
                 session
-                    .begin_user_shell("new-command".into(), false, CancellationToken::new())
-                    .await
+                    .admit_user_shell("new-command".into(), false)
                     .is_err()
             );
             assert!(
@@ -2308,11 +2349,11 @@ mod tests {
                 .unwrap();
             // Exercise both explicit recovery entry points without synthetic Turns.
             if excluded {
+                let admission = session
+                    .admit_user_shell("new-command".into(), false)
+                    .unwrap();
                 session
-                    .begin_user_shell("new-command".into(), false, CancellationToken::new())
-                    .await
-                    .unwrap()
-                    .record(serde_json::json!({"stdout":"new"}), false)
+                    .record_user_shell(admission, serde_json::json!({"stdout":"new"}), false)
                     .unwrap();
             } else {
                 let (turn, _) = session
@@ -2458,21 +2499,17 @@ mod tests {
         fs::remove_dir_all(root).unwrap();
     }
 
-    #[tokio::test]
-    async fn user_shell_context_choice_survives_reopen_and_compaction() {
+    #[test]
+    fn user_shell_context_choice_survives_reopen_and_compaction() {
         let (root, path) = fixture();
         let session = Session::create(&path, &root).unwrap();
+        let admission = session.admit_user_shell("pwd".into(), false).unwrap();
         session
-            .begin_user_shell("pwd".into(), false, CancellationToken::new())
-            .await
-            .unwrap()
-            .record(serde_json::json!({"stdout":"visible"}), false)
+            .record_user_shell(admission, serde_json::json!({"stdout":"visible"}), false)
             .unwrap();
+        let admission = session.admit_user_shell("secret".into(), true).unwrap();
         session
-            .begin_user_shell("secret".into(), true, CancellationToken::new())
-            .await
-            .unwrap()
-            .record(serde_json::json!({"stdout":"private"}), false)
+            .record_user_shell(admission, serde_json::json!({"stdout":"private"}), false)
             .unwrap();
         let view = session.view().unwrap();
         assert_eq!(view.display_messages().len(), 2);
@@ -2488,9 +2525,7 @@ mod tests {
                 .contains("private")
         );
         assert!(matches!(
-            session
-                .begin_user_shell("\0".into(), false, CancellationToken::new())
-                .await,
+            session.admit_user_shell("\0".into(), false),
             Err(SessionError::InvalidHistory)
         ));
         assert_eq!(session.view().unwrap().entries.len(), 4);
@@ -2519,11 +2554,15 @@ mod tests {
         );
         // A shell result after a compacted prefix still resolves by absolute
         // admission sequence, not its position in the retained suffix.
+        let admission = reopened
+            .admit_user_shell("after-summary".into(), false)
+            .unwrap();
         reopened
-            .begin_user_shell("after-summary".into(), false, CancellationToken::new())
-            .await
-            .unwrap()
-            .record(serde_json::json!({"stdout":"suffix-observation"}), false)
+            .record_user_shell(
+                admission,
+                serde_json::json!({"stdout":"suffix-observation"}),
+                false,
+            )
             .unwrap();
         let context = serde_json::to_string(&reopened.context_messages().unwrap()).unwrap();
         assert!(context.contains("suffix-observation"));
@@ -3058,10 +3097,7 @@ mod tests {
         let path = root.join("session.sqlite");
         let session = Session::create(&path, &root).unwrap();
         let choose = |session: &Session, reasoning| -> Result<(), SessionError> {
-            let guard = session
-                .submit_gate
-                .try_lock()
-                .map_err(|_| SessionError::OperationActive)?;
+            let guard = session.operations.try_lock().map_err(SessionError::from)?;
             session.record_selection(&guard, test_execution().route.logical, Some(reasoning))
         };
         choose(&session, Reasoning::High).unwrap();
@@ -3071,7 +3107,7 @@ mod tests {
         assert!(choose(&session, Reasoning::BudgetTokens(0)).is_err());
         assert_eq!(session.view().unwrap().entries, before);
         {
-            let _operation = session.submit_gate.try_lock().unwrap();
+            let _operation = session.operations.try_lock().unwrap();
             assert!(matches!(
                 choose(&session, Reasoning::Off),
                 Err(SessionError::OperationActive)
@@ -3081,7 +3117,7 @@ mod tests {
                 Err(SessionError::OperationActive)
             ));
         }
-        let operation = session.submit_gate.try_lock().unwrap();
+        let operation = session.operations.try_lock().unwrap();
         let (turn, _) = session
             .begin_turn("first".into(), test_execution().route.logical)
             .unwrap();
@@ -3109,7 +3145,7 @@ mod tests {
         let before = session.view().unwrap().entries;
         session.store.lock().unwrap().connection.execute_batch("CREATE TRIGGER refuse_setting BEFORE INSERT ON entries WHEN json_extract(CAST(NEW.body AS TEXT), '$.kind') = 'reasoning_selected' BEGIN SELECT RAISE(FAIL, 'injected preference failure'); END").unwrap();
         {
-            let guard = session.submit_gate.try_lock().unwrap();
+            let guard = session.operations.try_lock().unwrap();
             assert!(
                 session
                     .record_selection(
@@ -3141,7 +3177,7 @@ mod tests {
         let (root, path) = fixture();
         let session = Session::create(&path, &root).unwrap();
         let original = test_execution().route.logical;
-        let operation = session.submit_gate.try_lock().unwrap();
+        let operation = session.operations.try_lock().unwrap();
         session
             .record_selection(&operation, original.clone(), Some(Reasoning::High))
             .unwrap();
@@ -3156,7 +3192,7 @@ mod tests {
             model: "replacement".into(),
             ..original.clone()
         };
-        let operation = session.submit_gate.try_lock().unwrap();
+        let operation = session.operations.try_lock().unwrap();
         session
             .record_selection(&operation, replacement.clone(), Some(Reasoning::Off))
             .unwrap();
@@ -3174,7 +3210,7 @@ mod tests {
             Some(replacement.clone())
         );
         assert_eq!(session.reasoning().unwrap(), Reasoning::Off);
-        let operation = session.submit_gate.try_lock().unwrap();
+        let operation = session.operations.try_lock().unwrap();
         let (new_turn, _) = session
             .begin_turn("new input".into(), replacement.clone())
             .unwrap();
@@ -4337,8 +4373,8 @@ mod tests {
         fs::remove_dir_all(root).unwrap();
     }
 
-    #[tokio::test]
-    async fn context_timeline_tracks_committed_message_boundaries() {
+    #[test]
+    fn context_timeline_tracks_committed_message_boundaries() {
         let (root, path) = fixture();
         let session = Session::create(&path, &root).unwrap();
         let model = ModelRef {
@@ -4414,11 +4450,12 @@ mod tests {
             )
             .unwrap();
         for excluded in [false, true] {
+            let admission = session
+                .admit_user_shell("echo observed".into(), excluded)
+                .unwrap();
             session
-                .begin_user_shell("echo observed".into(), excluded, CancellationToken::new())
-                .await
-                .unwrap()
-                .record(
+                .record_user_shell(
+                    admission,
                     serde_json::json!({"stdout":"observed","exit_code":0}),
                     false,
                 )

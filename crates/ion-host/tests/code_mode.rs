@@ -24,8 +24,8 @@ impl Workspace {
         fs::create_dir(&path).unwrap();
         Self(path)
     }
-    fn session(&self) -> CodingSession {
-        CodingSession::create(self.0.join("session.sqlite"), &self.0).unwrap()
+    fn session(&self) -> Arc<CodingSession> {
+        Arc::new(CodingSession::create(self.0.join("session.sqlite"), &self.0).unwrap())
     }
 }
 impl Drop for Workspace {
@@ -83,6 +83,53 @@ async fn wait_file(path: &Path) {
 }
 
 #[tokio::test]
+async fn observer_panic_stops_and_joins_other_started_vm_children() {
+    let root = Workspace::new();
+    let session = root.session();
+    let (agent, model) = make_agent(
+        &root.0,
+        [response(vec![code(
+            "parent",
+            r#"
+        const slow=tools.call('exec',{command:'printf "%s" "$$" > slow.pid; exec sleep 30',timeout_ms:120000});
+        const fast=tools.call('exec',{command:'while [ ! -f slow.pid ]; do sleep 0.01; done; printf FAST_DONE',timeout_ms:120000});
+        await Promise.all([slow,fast]); return true;
+    "#,
+        )])],
+        CodeLimits::default(),
+    );
+    let observed = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let flag = observed.clone();
+    let result=tokio::time::timeout(Duration::from_secs(5),agent.submit(session.clone(),"run".into(),String::new(),CancellationToken::new(),move |event| {
+        if matches!(event,ion_core::CodingAgentEvent::ChildToolFinished { outcome:ChildOutcome::Observed { output },.. } if output.value["stdout"]=="FAST_DONE") {
+            flag.store(true,std::sync::atomic::Ordering::SeqCst);
+            panic!("controlled observer failure while another child is running");
+        }
+    })).await.unwrap();
+    let view = session.view().unwrap();
+    let pid = fs::read_to_string(root.0.join("slow.pid")).unwrap();
+    let alive = std::process::Command::new("kill")
+        .args(["-0", &pid])
+        .output()
+        .unwrap()
+        .status
+        .success();
+    assert!(
+        matches!(result, Err(CodingAgentError::ObserverPanicked)),
+        "{result:?}"
+    );
+    assert!(observed.load(std::sync::atomic::Ordering::SeqCst));
+    assert!(!alive, "owned slow child survived joined observer failure");
+    assert_eq!(model.requests().len(), 1);
+    assert!(view.entries.iter().any(|entry|matches!(entry,SessionEntry::ChildToolResult { outcome:ChildOutcome::Observed { output },.. } if output.value["cancelled"]==true)));
+    assert_eq!(
+        view.turns()[0].end,
+        Some(ion_core::TurnEndReason::Cancelled)
+    );
+    session.ensure_idle().unwrap();
+}
+
+#[tokio::test]
 async fn native_fanout_selects_context_and_preserves_occurrences_inspection_and_forks() {
     let root = Workspace::new();
     let session = root.session();
@@ -111,27 +158,34 @@ async fn native_fanout_selects_context_and_preserves_occurrences_inspection_and_
         ],
         CodeLimits::default(),
     );
-    let mut live = LiveTranscript::with_user_input(&Message::user_input("run".into(), []));
-    let mut saw_running_child = false;
+    let observed = Arc::new(std::sync::Mutex::new((
+        LiveTranscript::with_user_input(&Message::user_input("run".into(), [])),
+        false,
+    )));
+    let observer = observed.clone();
     let result = agent
         .submit(
-            &session,
+            session.clone(),
             "run".into(),
             String::new(),
             CancellationToken::new(),
-            |event| {
+            move |event| {
                 let started = matches!(&event, ion_core::CodingAgentEvent::ChildToolStarted { .. });
+                let mut state = observer.lock().unwrap();
+                let (live, saw_running_child) = &mut *state;
                 live.observe(event);
                 if started {
-                    saw_running_child = true;
+                    *saw_running_child = true;
                     assert!(live.projection().items.iter().any(|item| matches!(item, TranscriptItem::ActivityGroup(group) if group.activities.iter().any(|parent| parent.state == ion_core::ActivityState::Running && parent.children.iter().any(|child| child.state == ion_core::ActivityState::Running)))));
                 }
             },
         )
         .await
         .unwrap();
+    let observed = observed.lock().unwrap();
+    let (live, saw_running_child) = &*observed;
     assert_eq!(result, "DONE");
-    assert!(saw_running_child);
+    assert!(*saw_running_child);
     assert_eq!(
         fs::read_to_string(root.0.join("changed")).unwrap(),
         "changed"
@@ -200,7 +254,7 @@ async fn native_fanout_selects_context_and_preserves_occurrences_inspection_and_
         );
     }
     drop(session);
-    let reopened = CodingSession::open(root.0.join("session.sqlite")).unwrap();
+    let reopened = Arc::new(CodingSession::open(root.0.join("session.sqlite")).unwrap());
     assert_eq!(
         TranscriptProjection::from_session(&reopened.view().unwrap()),
         saved
@@ -229,7 +283,7 @@ async fn returned_guest_does_not_cancel_unawaited_host_work_at_its_deadline() {
     );
     agent
         .submit(
-            &session,
+            session.clone(),
             "run".into(),
             String::new(),
             CancellationToken::new(),
@@ -250,7 +304,7 @@ async fn returned_guest_does_not_cancel_unawaited_host_work_at_its_deadline() {
 #[tokio::test]
 async fn cancellation_settles_native_children_before_return() {
     let root = Workspace::new();
-    let session = Arc::new(root.session());
+    let session = root.session();
     let (agent, model) = make_agent(
         &root.0,
         [response(vec![code(
@@ -265,7 +319,7 @@ async fn cancellation_settles_native_children_before_return() {
     let task = tokio::spawn(async move {
         agent
             .submit(
-                &task_session,
+                task_session.clone(),
                 "run".into(),
                 String::new(),
                 task_stop,
@@ -325,7 +379,7 @@ async fn child_commit_failure_blocks_consumption_drains_started_work_and_reopens
     let result = tokio::time::timeout(
         Duration::from_secs(5),
         agent.submit(
-            &session,
+            session.clone(),
             "run".into(),
             String::new(),
             CancellationToken::new(),
@@ -349,14 +403,14 @@ async fn child_commit_failure_blocks_consumption_drains_started_work_and_reopens
         .unwrap();
     drop(connection);
     drop(session);
-    let reopened = CodingSession::open(root.0.join("session.sqlite")).unwrap();
+    let reopened = Arc::new(CodingSession::open(root.0.join("session.sqlite")).unwrap());
     let (next, next_model) = make_agent(
         &root.0,
         [response(vec![Content::Text("RECOVERED".into())])],
         CodeLimits::default(),
     );
     next.submit(
-        &reopened,
+        reopened.clone(),
         "continue without replay".into(),
         String::new(),
         CancellationToken::new(),
@@ -406,7 +460,7 @@ async fn child_intent_fault_prevents_native_dispatch() {
     );
     let result = agent
         .submit(
-            &session,
+            session.clone(),
             "run".into(),
             String::new(),
             CancellationToken::new(),
@@ -432,14 +486,14 @@ async fn child_intent_fault_prevents_native_dispatch() {
         .unwrap();
     drop(connection);
     drop(session);
-    let reopened = CodingSession::open(root.0.join("session.sqlite")).unwrap();
+    let reopened = Arc::new(CodingSession::open(root.0.join("session.sqlite")).unwrap());
     let (next, _) = make_agent(
         &root.0,
         [response(vec![Content::Text("RECOVERED".into())])],
         CodeLimits::default(),
     );
     next.submit(
-        &reopened,
+        reopened.clone(),
         "continue".into(),
         String::new(),
         CancellationToken::new(),
@@ -469,7 +523,7 @@ async fn failed_guest_evidence_is_selected_after_reopen_without_reexecuting_chil
     );
     agent
         .submit(
-            &session,
+            session.clone(),
             "run".into(),
             String::new(),
             CancellationToken::new(),
@@ -500,7 +554,7 @@ async fn failed_guest_evidence_is_selected_after_reopen_without_reexecuting_chil
     );
     fs::remove_file(root.0.join("report")).unwrap();
     drop(session);
-    let reopened = CodingSession::open(root.0.join("session.sqlite")).unwrap();
+    let reopened = Arc::new(CodingSession::open(root.0.join("session.sqlite")).unwrap());
     let script = format!("const parent={parent};
         const meta=await tools.inspect({{kind:'children',parent}});
         let offset=0, text='';
@@ -517,7 +571,7 @@ async fn failed_guest_evidence_is_selected_after_reopen_without_reexecuting_chil
         CodeLimits::default(),
     );
     next.submit(
-        &reopened,
+        reopened.clone(),
         "recover saved evidence".into(),
         String::new(),
         CancellationToken::new(),
@@ -588,7 +642,7 @@ async fn guest_failure_retains_prior_mutation_and_deadline_settles_native_captur
         tokio::time::timeout(
             Duration::from_secs(5),
             agent.submit(
-                &session,
+                session.clone(),
                 "run".into(),
                 String::new(),
                 CancellationToken::new(),
@@ -630,7 +684,7 @@ async fn child_images_stay_inspectable_and_reply_limit_is_cumulative() {
     );
     agent
         .submit(
-            &session,
+            session.clone(),
             "run".into(),
             String::new(),
             CancellationToken::new(),
@@ -698,7 +752,7 @@ async fn reply_and_audit_budgets_preserve_observations_and_stop_dependents() {
         );
         agent
             .submit(
-                &session,
+                session.clone(),
                 "run".into(),
                 String::new(),
                 CancellationToken::new(),

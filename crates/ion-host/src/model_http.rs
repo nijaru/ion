@@ -2743,13 +2743,15 @@ mod tests {
             });
             let root = std::env::temp_dir().join(format!("ion-partial-wire-{}", uuid::Uuid::now_v7()));
             std::fs::create_dir(&root).unwrap();
-            let session = CodingSession::create(root.join("session.sqlite"), &root).unwrap();
+            let session = Arc::new(CodingSession::create(root.join("session.sqlite"), &root).unwrap());
             let model = Arc::new(HttpModelService::new(&endpoint, wire, Arc::new(|| None)).unwrap());
             let agent = CodingAgent::with_tool_set(model, Arc::new(ToolSet::new([])), request().route.effective);
-            let mut events = Vec::new();
-            let result = agent.submit(&session, "work".into(), "test".into(), CancellationToken::new(), |event| events.push(event)).await;
+            let events = Arc::new(std::sync::Mutex::new(Vec::new()));
+            let observed = events.clone();
+            let result = agent.submit(session.clone(), "work".into(), "test".into(), CancellationToken::new(), move |event| observed.lock().unwrap().push(event)).await;
             server.abort();
             assert!(server.await.unwrap_err().is_cancelled());
+            let events = events.lock().unwrap();
             assert!(result.is_err(), "{wire:?}");
             assert_eq!(requests.load(Ordering::SeqCst), 1, "{wire:?}");
             assert!(events.iter().any(|event| matches!(event, CodingAgentEvent::ModelOutputObserved)), "{wire:?}");

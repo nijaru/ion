@@ -576,7 +576,7 @@ async fn run_cli(cli: Cli) -> Result<()> {
                         });
                         let result = binding
                             .agent()
-                            .compact(binding.session(), stop, |_| {})
+                            .compact(binding.session().clone(), stop, |_| {})
                             .await;
                         signal.abort();
                         if result? {

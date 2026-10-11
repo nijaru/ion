@@ -87,18 +87,14 @@ impl SessionBinding {
         command: &str,
         stop: CancellationToken,
         exclude_from_context: bool,
-    ) -> impl std::future::Future<Output = Result<CodingToolOutput>> + Send + use<> {
-        let session = self.session.clone();
-        let command = command.to_owned();
-        async move {
-            let tools = LocalTools::new(session.cwd())?;
-            let permit = session
-                .begin_user_shell(command, exclude_from_context, stop.clone())
-                .await?;
-            let output = tools.run_user_shell(permit.command(), stop).await;
-            permit.record(output.value.clone(), output.is_error)?;
-            Ok(output)
-        }
+    ) -> Result<ion_core::Operation<CodingToolOutput, ion_core::CodingSessionError>> {
+        let tools = LocalTools::new(self.session.cwd())?;
+        Ok(self.session.run_user_shell(
+            command.to_owned(),
+            exclude_from_context,
+            stop,
+            move |command, stop| async move { tools.run_user_shell(&command, stop).await },
+        ))
     }
 
     /// Capture image sources against this binding, without borrowing it while
@@ -165,6 +161,8 @@ impl SessionBinding {
     }
 
     pub fn new_session(&mut self) -> Result<()> {
+        let previous = self.session.clone();
+        let _idle = previous.reserve_idle()?;
         let selected = self
             .host
             .models()
@@ -178,6 +176,8 @@ impl SessionBinding {
     }
 
     pub fn clone_session(&mut self) -> Result<String> {
+        let previous = self.session.clone();
+        let _idle = previous.reserve_idle()?;
         let (resources, agent) = self.prepare(self.session.cwd(), &self.selected)?;
         agent.validate_reasoning(self.session.reasoning()?)?;
         let path = self.catalog.new_path()?;
@@ -192,6 +192,8 @@ impl SessionBinding {
     }
 
     pub fn fork_session(&mut self, point: ForkPoint) -> Result<String> {
+        let previous = self.session.clone();
+        let _idle = previous.reserve_idle()?;
         let turn = match point {
             ForkPoint::BeforeTurn(turn) | ForkPoint::AfterTurn(turn) => turn,
         };
@@ -222,6 +224,8 @@ impl SessionBinding {
     }
 
     pub fn switch_session(&mut self, path: PathBuf) -> Result<()> {
+        let previous = self.session.clone();
+        let _idle = previous.reserve_idle()?;
         let path = self.catalog.resolve_explicit(path)?;
         if fs::canonicalize(self.session.path())? == fs::canonicalize(&path)? {
             return self.reload_resources();
@@ -283,30 +287,42 @@ mod tests {
         let selected = host.models().save_default(&route("one")).unwrap();
         let path = host.sessions(cwd.clone()).new_path().unwrap();
         let session = Arc::new(CodingSession::create(&path, &cwd).unwrap());
+        let interrupted = session
+            .run_user_shell(
+                "old command".into(),
+                false,
+                CancellationToken::new(),
+                |_, _| async { panic!("fixture interruption before any native execution") },
+            )
+            .await;
+        assert!(matches!(
+            interrupted,
+            Err(ion_core::CodingSessionError::Operation(
+                ion_core::OperationError::TaskFailed(_)
+            ))
+        ));
+        drop(session);
+        let session = Arc::new(CodingSession::open(&path).unwrap());
         let mut binding = SessionBinding::new(host, session.clone(), selected, None, None).unwrap();
-        drop(
-            session
-                .begin_user_shell("old command".into(), false, CancellationToken::new())
-                .await
-                .unwrap(),
-        );
         let before = session.view().unwrap();
         fs::rename(&cwd, root.join("moved-work")).unwrap();
         assert!(
             binding
                 .run_user_shell("touch must-not-dispatch", CancellationToken::new(), false)
-                .await
                 .is_err()
         );
         assert_eq!(session.view().unwrap().entries, before.entries);
         assert!(!root.join("moved-work/must-not-dispatch").exists());
 
         fs::rename(root.join("moved-work"), &cwd).unwrap();
-        let running = binding.run_user_shell("printf captured", CancellationToken::new(), false);
-        binding.new_session().unwrap();
-        // Preparation is inert, and a later binding change cannot redirect it.
+        let running = binding
+            .run_user_shell("printf captured", CancellationToken::new(), false)
+            .unwrap();
+        // Start reserves the original Session immediately, before task polling.
+        assert!(binding.new_session().is_err());
         assert_eq!(session.view().unwrap().entries, before.entries);
         assert!(!running.await.unwrap().is_error);
+        binding.new_session().unwrap();
         let original = session.view().unwrap();
         assert!(
             matches!(original.entries.last(), Some(ion_core::SessionEntry::UserShellSettled { outcome: ion_core::UserShellOutcome::Observed { output, .. }, .. }) if output["stdout"] == "captured")

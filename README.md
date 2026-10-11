@@ -799,6 +799,29 @@ Custom `ModelService` implementations must implement pure `validate_controls`
 to accept explicit reasoning; the default refuses it. HTTP preflight and encoding
 use the same compiler, before credential lookup or transport.
 
+Submission and compaction take an `Arc<CodingSession>` and return an owned
+`Operation`. Starting reserves the Session immediately; durable acceptance still
+arrives through `TurnAccepted`. Concurrent starts are rejected, not queued.
+Observers and steering inboxes are owned (`Send + 'static`); observers must not
+block or borrow terminal state. Observer panics request stop and surface after
+started work joins, including any settlement failure.
+
+Retain and await the operation, using `&mut operation` in repeated selects.
+`request_stop()` is not completion. Dropping the handle, timing out an owning
+wait or aborting its caller requests stop; Session keeps already-started work
+alive through settlement. A timed-out borrow of `&mut operation` only stops
+waiting; request stop explicitly if wanted, then keep joining. `SessionBinding::run_user_shell` preflights synchronously and
+returns `Result<Operation<…>>` with the same custody. Failed, unread completions
+remain reportable and prevent silent replacement; await the original handle, or
+inspect the error from shutdown before reopening. A genuine execution-task panic
+blocks reuse of that live Session and does not prove that effects stopped.
+
+Await `CodingSession::shutdown()` before destroying the Tokio runtime. Shutdown
+closes execution admission, stops and joins retained work without consuming a
+retained operation's result, and reports unread failures. Timing out shutdown
+leaves it closed and joinable; noninterruptible work can keep it pending. This
+does not replace the separate `McpTools::shutdown()` obligation.
+
 ## License
 
 [MIT](LICENSE)

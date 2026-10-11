@@ -1253,16 +1253,18 @@ mod tests {
             let trigger = stop.clone();
             let running_session = session.clone();
             let task = tokio::spawn(async move {
-                let mut events = Vec::new();
+                let events = Arc::new(std::sync::Mutex::new(Vec::new()));
+                let observed = events.clone();
                 let result = agent
                     .submit(
-                        &running_session,
+                        running_session.clone(),
                         "run".into(),
                         String::new(),
                         stop,
-                        |event| events.push(event),
+                        move |event| observed.lock().unwrap().push(event),
                     )
                     .await;
+                let events = std::mem::take(&mut *events.lock().unwrap());
                 (result, events)
             });
             let ready = tokio::time::timeout(Duration::from_secs(4), async {
@@ -1313,7 +1315,7 @@ mod tests {
                 "no dependent request or warming after cancellation"
             );
             drop(session);
-            let reopened = CodingSession::open(&path).unwrap();
+            let reopened = Arc::new(CodingSession::open(&path).unwrap());
             assert_eq!(reopened.view().unwrap().entries, view.entries);
             drop(reopened);
             fs::remove_dir_all(root).unwrap();
