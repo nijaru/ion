@@ -501,10 +501,12 @@ Add local MCP tool servers explicitly with `ion mcp add NAME COMMAND [ARGS...]`.
 Use `ion mcp add-http NAME URL` for a Streamable HTTP server; add
 `--bearer-token-env VARIABLE` when it requires a bearer token already set in
 the environment. `ion mcp list` and `ion mcp remove NAME` manage the saved
-user configuration.
+user configuration; concurrent mutations serialize across Ion processes.
 Ion starts configured servers when a coding client starts, discovers their
-tools, and exposes each as `mcp__NAME__TOOL` alongside read, edit, write and
-exec. MCP tool names that need normalization or shortening receive a stable
+tools, and exposes each as `mcp__LENGTH_NAME__TOOL` alongside read, edit, write and
+exec. `LENGTH` is the ASCII server-name length: `demo` uses `mcp__4_demo__TOOL`.
+This delimiter keeps server/tool pairs distinct even when names contain `__`.
+MCP tool names that need normalization or shortening receive a stable
 hash suffix in the model-facing name; Ion calls the server with its original
 tool name. Headless, TUI and RPC use the same tool set. Local server processes inherit
 the user's environment and permissions and run in the Session's working

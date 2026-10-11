@@ -23,16 +23,16 @@ class Provider(BaseHTTPRequestHandler):
         requests.append(body)
         if len(requests) == 1:
             names = {tool["function"]["name"] for tool in body["tools"]}
-            greet = next(name for name in names if name.startswith("mcp__demo__greet_user_"))
-            assert {"read", "edit", "write", "exec", "mcp__demo__greet_user", "mcp__demo__picture"} <= names, names
-            assert any(name.startswith("mcp__demo__query") and len(name) <= 64 for name in names), names
+            greet = next(name for name in names if name.startswith("mcp__4_demo__greet_user_"))
+            assert {"read", "edit", "write", "exec", "mcp__4_demo__greet_user", "mcp__4_demo__picture"} <= names, names
+            assert any(name.startswith("mcp__4_demo__query") and len(name) <= 64 for name in names), names
             changes = [
                 {"id": "mcp", "choices": [{"index": 0, "delta": {"tool_calls": [{"index": 0, "id": "call-mcp", "type": "function", "function": {"name": greet, "arguments": '{"name":"Ion"}'}}]}, "finish_reason": None}]},
                 {"id": "mcp", "choices": [{"index": 0, "delta": {}, "finish_reason": "tool_calls"}]},
             ]
         elif len(requests) == 3:
             changes = [
-                {"id": "mcp", "choices": [{"index": 0, "delta": {"tool_calls": [{"index": 0, "id": "call-picture", "type": "function", "function": {"name": "mcp__demo__picture", "arguments": "{}"}}]}, "finish_reason": None}]},
+                {"id": "mcp", "choices": [{"index": 0, "delta": {"tool_calls": [{"index": 0, "id": "call-picture", "type": "function", "function": {"name": "mcp__4_demo__picture", "arguments": "{}"}}]}, "finish_reason": None}]},
                 {"id": "mcp", "choices": [{"index": 0, "delta": {}, "finish_reason": "tool_calls"}]},
             ]
         elif len(requests) == 4:
@@ -44,9 +44,9 @@ class Provider(BaseHTTPRequestHandler):
             ]
         elif len(requests) == 5:
             names = {tool["function"]["name"] for tool in body["tools"]}
-            assert "mcp__remote__uppercase" in names, names
+            assert "mcp__6_remote__uppercase" in names, names
             changes = [
-                {"id": "mcp", "choices": [{"index": 0, "delta": {"tool_calls": [{"index": 0, "id": "call-remote", "type": "function", "function": {"name": "mcp__remote__uppercase", "arguments": '{"text":"ion"}'}}]}, "finish_reason": None}]},
+                {"id": "mcp", "choices": [{"index": 0, "delta": {"tool_calls": [{"index": 0, "id": "call-remote", "type": "function", "function": {"name": "mcp__6_remote__uppercase", "arguments": '{"text":"ion"}'}}]}, "finish_reason": None}]},
                 {"id": "mcp", "choices": [{"index": 0, "delta": {}, "finish_reason": "tool_calls"}]},
             ]
         elif len(requests) == 6:
@@ -57,7 +57,7 @@ class Provider(BaseHTTPRequestHandler):
             ]
         elif len(requests) == 7:
             changes = [
-                {"id": "mcp", "choices": [{"index": 0, "delta": {"tool_calls": [{"index": 0, "id": "call-unknown", "type": "function", "function": {"name": "mcp__remote__uppercase", "arguments": '{"text":"retry-check"}'}}]}, "finish_reason": None}]},
+                {"id": "mcp", "choices": [{"index": 0, "delta": {"tool_calls": [{"index": 0, "id": "call-unknown", "type": "function", "function": {"name": "mcp__6_remote__uppercase", "arguments": '{"text":"retry-check"}'}}]}, "finish_reason": None}]},
                 {"id": "mcp", "choices": [{"index": 0, "delta": {}, "finish_reason": "tool_calls"}]},
             ]
         elif len(requests) == 8:
@@ -68,28 +68,28 @@ class Provider(BaseHTTPRequestHandler):
             ]
         elif len(requests) == 9:
             names = {tool["function"]["name"] for tool in body["tools"]}
-            assert "mcp__changing__first" in names and "mcp__changing__second" not in names, names
+            assert "mcp__8_changing__first" in names and "mcp__8_changing__second" not in names, names
             changes = [
-                {"id": "mcp", "choices": [{"index": 0, "delta": {"tool_calls": [{"index": 0, "id": "call-first", "type": "function", "function": {"name": "mcp__changing__first", "arguments": "{}"}}]}, "finish_reason": None}]},
+                {"id": "mcp", "choices": [{"index": 0, "delta": {"tool_calls": [{"index": 0, "id": "call-first", "type": "function", "function": {"name": "mcp__8_changing__first", "arguments": "{}"}}]}, "finish_reason": None}]},
                 {"id": "mcp", "choices": [{"index": 0, "delta": {}, "finish_reason": "tool_calls"}]},
             ]
         elif len(requests) == 10:
             names = {tool["function"]["name"] for tool in body["tools"]}
-            assert "mcp__changing__first" not in names and "mcp__changing__second" in names, names
+            assert "mcp__8_changing__first" not in names and "mcp__8_changing__second" in names, names
             assert body["messages"][-1]["role"] == "tool" and "FIRST" in body["messages"][-1]["content"], body
             changes = [
-                {"id": "mcp", "choices": [{"index": 0, "delta": {"tool_calls": [{"index": 0, "id": "call-withdrawn", "type": "function", "function": {"name": "mcp__changing__first", "arguments": "{}"}}]}, "finish_reason": None}]},
+                {"id": "mcp", "choices": [{"index": 0, "delta": {"tool_calls": [{"index": 0, "id": "call-withdrawn", "type": "function", "function": {"name": "mcp__8_changing__first", "arguments": "{}"}}]}, "finish_reason": None}]},
                 {"id": "mcp", "choices": [{"index": 0, "delta": {}, "finish_reason": "tool_calls"}]},
             ]
         elif len(requests) == 11:
             assert body["messages"][-1]["role"] == "tool" and "tool was not declared for this request" in body["messages"][-1]["content"], body
             changes = [
-                {"id": "mcp", "choices": [{"index": 0, "delta": {"tool_calls": [{"index": 0, "id": "call-second", "type": "function", "function": {"name": "mcp__changing__second", "arguments": "{}"}}]}, "finish_reason": None}]},
+                {"id": "mcp", "choices": [{"index": 0, "delta": {"tool_calls": [{"index": 0, "id": "call-second", "type": "function", "function": {"name": "mcp__8_changing__second", "arguments": "{}"}}]}, "finish_reason": None}]},
                 {"id": "mcp", "choices": [{"index": 0, "delta": {}, "finish_reason": "tool_calls"}]},
             ]
         elif len(requests) == 12:
             names = {tool["function"]["name"] for tool in body["tools"]}
-            assert "mcp__changing__second" in names and "mcp__changing__first" not in names, names
+            assert "mcp__8_changing__second" in names and "mcp__8_changing__first" not in names, names
             assert body["messages"][-1]["role"] == "tool" and "SECOND" in body["messages"][-1]["content"], body
             changes = [
                 {"id": "mcp", "choices": [{"index": 0, "delta": {"content": "MCP_REFRESH_OK"}, "finish_reason": None}]},
@@ -97,17 +97,17 @@ class Provider(BaseHTTPRequestHandler):
             ]
         elif len(requests) == 13:
             names = {tool["function"]["name"] for tool in body["tools"]}
-            assert "mcp__remote__uppercase" in names and "mcp__remote__lowercase" not in names, names
+            assert "mcp__6_remote__uppercase" in names and "mcp__6_remote__lowercase" not in names, names
             changes = [
-                {"id": "mcp", "choices": [{"index": 0, "delta": {"tool_calls": [{"index": 0, "id": "call-http-shift", "type": "function", "function": {"name": "mcp__remote__uppercase", "arguments": '{"text":"shift"}'}}]}, "finish_reason": None}]},
+                {"id": "mcp", "choices": [{"index": 0, "delta": {"tool_calls": [{"index": 0, "id": "call-http-shift", "type": "function", "function": {"name": "mcp__6_remote__uppercase", "arguments": '{"text":"shift"}'}}]}, "finish_reason": None}]},
                 {"id": "mcp", "choices": [{"index": 0, "delta": {}, "finish_reason": "tool_calls"}]},
             ]
         elif len(requests) == 14:
             names = {tool["function"]["name"] for tool in body["tools"]}
-            assert "mcp__remote__uppercase" not in names and "mcp__remote__lowercase" in names, names
+            assert "mcp__6_remote__uppercase" not in names and "mcp__6_remote__lowercase" in names, names
             assert body["messages"][-1]["role"] == "tool" and "SHIFT" in body["messages"][-1]["content"], body
             changes = [
-                {"id": "mcp", "choices": [{"index": 0, "delta": {"tool_calls": [{"index": 0, "id": "call-http-new", "type": "function", "function": {"name": "mcp__remote__lowercase", "arguments": '{"text":"ION"}'}}]}, "finish_reason": None}]},
+                {"id": "mcp", "choices": [{"index": 0, "delta": {"tool_calls": [{"index": 0, "id": "call-http-new", "type": "function", "function": {"name": "mcp__6_remote__lowercase", "arguments": '{"text":"ION"}'}}]}, "finish_reason": None}]},
                 {"id": "mcp", "choices": [{"index": 0, "delta": {}, "finish_reason": "tool_calls"}]},
             ]
         elif len(requests) == 15:
@@ -118,9 +118,9 @@ class Provider(BaseHTTPRequestHandler):
             ]
         elif len(requests) == 16:
             names = {tool["function"]["name"] for tool in body["tools"]}
-            assert "mcp__demo__large_report" in names, names
+            assert "mcp__4_demo__large_report" in names, names
             changes = [
-                {"id": "mcp", "choices": [{"index": 0, "delta": {"tool_calls": [{"index": 0, "id": "call-large", "type": "function", "function": {"name": "mcp__demo__large_report", "arguments": "{}"}}]}, "finish_reason": None}]},
+                {"id": "mcp", "choices": [{"index": 0, "delta": {"tool_calls": [{"index": 0, "id": "call-large", "type": "function", "function": {"name": "mcp__4_demo__large_report", "arguments": "{}"}}]}, "finish_reason": None}]},
                 {"id": "mcp", "choices": [{"index": 0, "delta": {}, "finish_reason": "tool_calls"}]},
             ]
         elif len(requests) == 17:

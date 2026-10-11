@@ -1,8 +1,7 @@
 //! Explicit MCP tool connections. Session facts remain in ion-core.
 use std::{
     collections::{BTreeMap, HashSet},
-    fs,
-    path::{Path, PathBuf},
+    path::Path,
     sync::{
         Arc, RwLock as SyncRwLock,
         atomic::{AtomicU64, Ordering},
@@ -10,7 +9,7 @@ use std::{
     time::Duration,
 };
 
-use anyhow::{Context, Result, bail, ensure};
+use anyhow::{Context, Result, ensure};
 use futures_util::future::join_all;
 use ion_ai::{BoxFuture, ToolSpec};
 use ion_core::{
@@ -21,15 +20,14 @@ use rmcp::{
     ClientHandler, RoleClient,
     service::{NotificationContext, RunningService},
 };
-use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
+#[cfg(test)]
+use std::fs;
 use tokio::sync::{Mutex, RwLock};
 use tokio_util::sync::CancellationToken;
-use url::Url;
 
-use crate::model_setup::write_json;
-
+mod config;
 mod connection;
 mod http;
 mod invocation;
@@ -41,155 +39,11 @@ use invocation::McpExecutor;
 mod invocation_tests;
 #[cfg(test)]
 mod lifecycle_tests;
+#[cfg(test)]
+mod metadata_tests;
 
-#[derive(Clone, Serialize)]
-#[serde(untagged)]
-pub enum McpServer {
-    Stdio(McpStdioServer),
-    Http(McpHttpServer),
-}
-
-#[derive(Clone, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct McpStdioServer {
-    pub command: String,
-    #[serde(default)]
-    pub args: Vec<String>,
-}
-
-#[derive(Clone, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct McpHttpServer {
-    pub url: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub bearer_token_env: Option<String>,
-}
-
-#[derive(Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-struct RawServers {
-    servers: BTreeMap<String, Value>,
-}
-
-pub struct McpListing {
-    pub servers: BTreeMap<String, McpServer>,
-    pub diagnostics: Vec<String>,
-}
-
-pub struct McpConfig {
-    path: PathBuf,
-}
-
-impl McpConfig {
-    pub fn new(config_root: &Path) -> Self {
-        Self {
-            path: config_root.join("mcp.json"),
-        }
-    }
-
-    pub fn list(&self) -> Result<McpListing> {
-        let mut servers = BTreeMap::new();
-        let mut diagnostics = Vec::new();
-        for (name, value) in self.read_raw()? {
-            match parse_server(&name, value) {
-                Ok(server) => {
-                    servers.insert(name, server);
-                }
-                Err(error) => diagnostics.push(format!("{error:#}")),
-            }
-        }
-        Ok(McpListing {
-            servers,
-            diagnostics,
-        })
-    }
-
-    fn load_startup(&self) -> Result<(BTreeMap<String, McpServer>, Vec<String>)> {
-        let listing = self.list()?;
-        Ok((listing.servers, listing.diagnostics))
-    }
-
-    fn read_raw(&self) -> Result<BTreeMap<String, Value>> {
-        match fs::read(&self.path) {
-            Ok(bytes) => Ok(serde_json::from_slice::<RawServers>(&bytes)
-                .with_context(|| format!("invalid MCP config {}", self.path.display()))?
-                .servers),
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(BTreeMap::new()),
-            Err(error) => Err(error).context("cannot read MCP config"),
-        }
-    }
-
-    pub fn add(&self, name: &str, server: McpServer) -> Result<()> {
-        validate_name(name)?;
-        validate_server(&server)?;
-        let mut servers = self.read_raw()?;
-        ensure!(
-            !servers.contains_key(name),
-            "MCP server {name} already exists"
-        );
-        servers.insert(name.to_owned(), serde_json::to_value(server)?);
-        write_json(&self.path, &RawServers { servers })
-    }
-
-    pub fn remove(&self, name: &str) -> Result<()> {
-        let mut servers = self.read_raw()?;
-        ensure!(
-            servers.remove(name).is_some(),
-            "MCP server {name} was not found"
-        );
-        write_json(&self.path, &RawServers { servers })
-    }
-}
-
-fn parse_server(name: &str, value: Value) -> Result<McpServer> {
-    (|| -> Result<McpServer> {
-        validate_name(name)?;
-        let object = value.as_object().context("MCP server must be an object")?;
-        let server = match (object.contains_key("command"), object.contains_key("url")) {
-            (true, false) => McpServer::Stdio(serde_json::from_value(value)?),
-            (false, true) => McpServer::Http(serde_json::from_value(value)?),
-            (true, true) => bail!("MCP server cannot combine command and URL"),
-            (false, false) => bail!("MCP server requires command or URL"),
-        };
-        validate_server(&server)?;
-        Ok(server)
-    })()
-    .with_context(|| format!("invalid MCP server {name:?}"))
-}
-
-fn validate_server(server: &McpServer) -> Result<()> {
-    match server {
-        McpServer::Stdio(server) => {
-            ensure!(!server.command.trim().is_empty(), "MCP command is empty")
-        }
-        McpServer::Http(server) => {
-            let url = Url::parse(&server.url).context("invalid MCP server URL")?;
-            ensure!(
-                matches!(url.scheme(), "http" | "https"),
-                "MCP server URL must use HTTP or HTTPS"
-            );
-            ensure!(
-                url.username().is_empty() && url.password().is_none() && url.fragment().is_none(),
-                "MCP server URL cannot contain userinfo or fragment"
-            );
-            if let Some(name) = &server.bearer_token_env {
-                ensure!(
-                    valid_env_name(name),
-                    "invalid MCP bearer token environment variable name"
-                );
-            }
-        }
-    }
-    Ok(())
-}
-
-fn valid_env_name(name: &str) -> bool {
-    let mut bytes = name.bytes();
-    bytes
-        .next()
-        .is_some_and(|first| first.is_ascii_alphabetic() || first == b'_')
-        && bytes.all(|byte| byte.is_ascii_alphanumeric() || byte == b'_')
-}
+pub use config::{McpConfig, McpHttpServer, McpListing, McpServer, McpStdioServer};
+use config::{validate_name, validate_server};
 
 #[derive(Clone)]
 struct ChangeHandler(Arc<AtomicU64>);
@@ -202,20 +56,22 @@ impl ClientHandler for ChangeHandler {
 
 type Client = RunningService<RoleClient, ChangeHandler>;
 type RegisteredTools = Vec<(ToolSpec, String)>;
+type Catalog = BTreeMap<String, RegisteredTools>;
 
 struct Server {
     name: String,
     client: RwLock<Option<Connection>>,
-    tools: SyncRwLock<RegisteredTools>,
+    catalog: Arc<SyncRwLock<Catalog>>,
     tool_list_version: Arc<AtomicU64>,
     refreshed_version: AtomicU64,
-    refresh_gate: Mutex<()>,
     retiring: CancellationToken,
     retirement: Mutex<Option<std::result::Result<(), String>>>,
 }
 
 pub struct McpTools {
     servers: Vec<Arc<Server>>,
+    catalog: Arc<SyncRwLock<Catalog>>,
+    refresh_gate: Mutex<()>,
 }
 
 #[derive(Default)]
@@ -235,21 +91,42 @@ impl McpTools {
                 };
             }
         };
+        let catalog = Arc::new(SyncRwLock::new(Catalog::new()));
         let mut servers = Vec::new();
         let attempts = saved
             .into_iter()
-            .map(|(name, definition)| Self::connect_server(name, definition, cwd));
+            .map(|(name, definition)| Self::connect_server(name, definition, cwd, catalog.clone()));
         for attempt in join_all(attempts).await {
             match attempt {
-                Ok(server) => servers.push(Arc::new(server)),
+                Ok((server, discovered)) => {
+                    let published = publish_tools(&catalog, &server.name, discovered);
+                    match published {
+                        Ok(()) => servers.push(Arc::new(server)),
+                        Err(error) => {
+                            let closed = combine_cleanup::<()>(Err(error), server.shutdown().await);
+                            diagnostics.push(format!("{:#}", closed.unwrap_err()));
+                        }
+                    }
+                }
                 Err(error) => diagnostics.push(format!("{error:#}")),
             }
         }
-        let tools = (!servers.is_empty()).then(|| Arc::new(Self { servers }));
+        let tools = (!servers.is_empty()).then(|| {
+            Arc::new(Self {
+                servers,
+                catalog,
+                refresh_gate: Mutex::new(()),
+            })
+        });
         McpStartup { tools, diagnostics }
     }
 
-    async fn connect_server(name: String, definition: McpServer, cwd: &Path) -> Result<Server> {
+    async fn connect_server(
+        name: String,
+        definition: McpServer,
+        cwd: &Path,
+        catalog: Arc<SyncRwLock<Catalog>>,
+    ) -> Result<(Server, RegisteredTools)> {
         validate_name(&name)?;
         validate_server(&definition)?;
         let changed = Arc::new(AtomicU64::new(0));
@@ -257,32 +134,29 @@ impl McpTools {
         let client = Connection::start(&name, definition, cwd, handler).await?;
         let discovered = discover_tools(&name, &client.client).await;
         match discovered {
-            Ok(tools) => Ok(Server {
-                name,
-                client: RwLock::new(Some(client)),
-                tools: SyncRwLock::new(tools),
-                tool_list_version: changed,
-                refreshed_version: AtomicU64::new(0),
-                refresh_gate: Mutex::new(()),
-                retiring: CancellationToken::new(),
-                retirement: Mutex::new(None),
-            }),
+            Ok(tools) => Ok((
+                Server {
+                    name,
+                    client: RwLock::new(Some(client)),
+                    catalog,
+                    tool_list_version: changed,
+                    refreshed_version: AtomicU64::new(0),
+                    retiring: CancellationToken::new(),
+                    retirement: Mutex::new(None),
+                },
+                tools,
+            )),
             Err(error) => combine_cleanup(Err(error), client.shutdown().await),
         }
     }
 
     async fn refresh_changed(&self, stop: CancellationToken) -> Vec<String> {
         let mut diagnostics = Vec::new();
+        let _gate = tokio::select! {
+            () = stop.cancelled() => return diagnostics,
+            guard = self.refresh_gate.lock() => guard,
+        };
         for server in &self.servers {
-            if server.tool_list_version.load(Ordering::Acquire)
-                == server.refreshed_version.load(Ordering::Acquire)
-            {
-                continue;
-            }
-            let _gate = tokio::select! {
-                guard = server.refresh_gate.lock() => guard,
-                () = stop.cancelled() => break,
-            };
             let version = server.tool_list_version.load(Ordering::Acquire);
             if version == server.refreshed_version.load(Ordering::Acquire) {
                 continue;
@@ -299,15 +173,11 @@ impl McpTools {
             let updated = tokio::select! {
                 () = server.retiring.cancelled() => break,
                 () = stop.cancelled() => break,
-                result = discover_tools(&server.name, &client.client) => result,
+                result = discover_tools(&server.name, &client.client) =>
+                    result.and_then(|updated| publish_tools(&self.catalog, &server.name, updated)),
             };
             match updated {
-                Ok(updated) => {
-                    *server
-                        .tools
-                        .write()
-                        .unwrap_or_else(std::sync::PoisonError::into_inner) = updated;
-                }
+                Ok(()) => {}
                 Err(error) => diagnostics.push(format!("{error:#}")),
             }
             // A failed listing keeps the previous snapshot and warns once.
@@ -354,10 +224,10 @@ impl Server {
             Some(client) => client.shutdown().await,
             None => Ok(()),
         };
-        self.tools
+        self.catalog
             .write()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .clear();
+            .remove(&self.name);
         let result = result
             .with_context(|| format!("MCP server {} shutdown failed", self.name))
             .map_err(|error| format!("{error:#}"));
@@ -366,13 +236,36 @@ impl Server {
     }
 }
 
+fn publish_tools(
+    catalog: &SyncRwLock<Catalog>,
+    server: &str,
+    tools: RegisteredTools,
+) -> Result<()> {
+    let mut catalog = catalog
+        .write()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let mut names: HashSet<_> = catalog
+        .iter()
+        .filter(|(name, _)| name.as_str() != server)
+        .flat_map(|(_, tools)| tools.iter().map(|(spec, _)| spec.name.as_str()))
+        .collect();
+    for (spec, original) in &tools {
+        ensure!(
+            names.insert(&spec.name),
+            "MCP server {server} has colliding tool name {original:?} (alias {}) in the complete MCP source",
+            spec.name
+        );
+    }
+    catalog.insert(server.to_owned(), tools);
+    Ok(())
+}
+
 async fn discover_tools(name: &str, client: &Client) -> Result<RegisteredTools> {
     let tools = tokio::time::timeout(Duration::from_secs(10), client.list_all_tools())
         .await
         .with_context(|| format!("MCP server {name} tool listing timed out"))?
         .with_context(|| format!("MCP server {name} tool listing failed"))?;
     let mut registered = Vec::new();
-    let mut exposed_names = HashSet::new();
     for tool in tools {
         let tool_name = tool.name.to_string();
         ensure!(
@@ -380,10 +273,6 @@ async fn discover_tools(name: &str, client: &Client) -> Result<RegisteredTools> 
             "MCP server {name} listed an empty tool name"
         );
         let exposed = exposed_tool_name(name, &tool_name);
-        ensure!(
-            exposed_names.insert(exposed.clone()),
-            "MCP server {name} has duplicate or colliding tool name {tool_name:?} (alias {exposed})"
-        );
         let description = tool.description.map_or_else(
             || format!("Tool {tool_name} from MCP server {name}"),
             |description| description.into_owned(),
@@ -403,7 +292,8 @@ async fn discover_tools(name: &str, client: &Client) -> Result<RegisteredTools> 
 fn exposed_tool_name(server: &str, original: &str) -> String {
     const MAX_NAME_BYTES: usize = 64;
     const HASH_HEX_BYTES: usize = 16;
-    let mut exposed = format!("mcp__{server}__");
+    // A length-delimited server component cannot consume a tool's separator.
+    let mut exposed = format!("mcp__{}_{server}__", server.len());
     exposed.extend(original.chars().map(|character| {
         if character.is_ascii_alphanumeric() || character == '_' || character == '-' {
             character
@@ -433,12 +323,17 @@ fn exposed_tool_name(server: &str, original: &str) -> String {
 impl CodingToolSource for McpTools {
     fn registrations(self: Arc<Self>) -> Vec<ToolRegistration> {
         let mut registrations = Vec::new();
+        // Snapshot the complete source under one guard, not independently
+        // changing server projections. The same guard protects publication.
+        let catalog = self
+            .catalog
+            .read()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         for server in &self.servers {
-            let tools = server
-                .tools
-                .read()
-                .unwrap_or_else(std::sync::PoisonError::into_inner);
-            for (spec, original) in tools.iter() {
+            let Some(tools) = catalog.get(&server.name) else {
+                continue;
+            };
+            for (spec, original) in tools {
                 registrations.push(ToolRegistration::new(
                     ToolDefinition {
                         spec: spec.clone(),
@@ -461,17 +356,6 @@ impl CodingToolSource for McpTools {
     fn refresh<'a>(&'a self, stop: CancellationToken) -> BoxFuture<'a, Vec<String>> {
         Box::pin(self.refresh_changed(stop))
     }
-}
-
-fn validate_name(name: &str) -> Result<()> {
-    if name.is_empty()
-        || !name
-            .bytes()
-            .all(|byte| byte.is_ascii_alphanumeric() || byte == b'_' || byte == b'-')
-    {
-        bail!("MCP name {name:?} must use only ASCII letters, numbers, '_' or '-'");
-    }
-    Ok(())
 }
 
 fn tool_error(message: String) -> CodingToolOutput {
@@ -539,7 +423,7 @@ for line in sys.stdin:
         let refreshed = tools.snapshot();
         let call = ToolCall {
             id: "issued".into(),
-            name: "mcp__bound__probe".into(),
+            name: "mcp__5_bound__probe".into(),
             arguments: json!({}),
             raw_arguments: None,
         };
@@ -607,7 +491,7 @@ for line in sys.stdin:
             let task_stop = stop.clone();
             let mut work = tokio::spawn(async move {
                 issued.execute(&ToolCall {
-                    id: "observed".into(), name: "mcp__settlement__probe".into(),
+                    id: "observed".into(), name: "mcp__10_settlement__probe".into(),
                     arguments: json!({}), raw_arguments: None,
                 }, task_stop).await
             });
@@ -650,8 +534,8 @@ for line in sys.stdin:
         let dotted = exposed_tool_name("demo", "admin.tools.list");
         let long = exposed_tool_name("demo", &"query".repeat(30));
         let other_server = exposed_tool_name("other", "admin.tools.list");
-        assert_eq!(plain, "mcp__demo__admin_tools_list");
-        assert!(dotted.starts_with("mcp__demo__admin_tools_list_"));
+        assert_eq!(plain, "mcp__4_demo__admin_tools_list");
+        assert!(dotted.starts_with("mcp__4_demo__admin_tools_list_"));
         assert_ne!(dotted, plain);
         assert_ne!(dotted, other_server);
         assert!(long.len() <= 64);
@@ -661,89 +545,6 @@ for line in sys.stdin:
                 .bytes()
                 .all(|byte| byte.is_ascii_alphanumeric() || byte == b'_' || byte == b'-')
         );
-    }
-
-    #[test]
-    fn remote_config_requires_http_url_and_named_ambient_token() {
-        let root = std::env::temp_dir().join(format!("ion-mcp-{}", uuid::Uuid::now_v7()));
-        fs::create_dir(&root).unwrap();
-        let config = McpConfig::new(&root);
-        let remote = |url: &str, bearer_token_env: Option<&str>| {
-            McpServer::Http(McpHttpServer {
-                url: url.into(),
-                bearer_token_env: bearer_token_env.map(str::to_owned),
-            })
-        };
-        assert!(
-            config
-                .add("bad-scheme", remote("file:///tmp/mcp", None))
-                .is_err()
-        );
-        assert!(
-            config
-                .add("bad-env", remote("https://example.com/mcp", Some("1KEY")))
-                .is_err()
-        );
-        config
-            .add("remote", remote("https://example.com/mcp", Some("MCP_KEY")))
-            .unwrap();
-        assert!(
-            matches!(&config.list().unwrap().servers["remote"], McpServer::Http(server) if server.bearer_token_env.as_deref() == Some("MCP_KEY"))
-        );
-        assert!(
-            fs::read_to_string(&config.path)
-                .unwrap()
-                .contains("MCP_KEY")
-        );
-        config.remove("remote").unwrap();
-        fs::remove_dir_all(root).unwrap();
-    }
-
-    #[test]
-    fn invalid_server_entry_does_not_hide_valid_startup_servers_or_get_discarded() {
-        let root = std::env::temp_dir().join(format!("ion-mcp-{}", uuid::Uuid::now_v7()));
-        fs::create_dir(&root).unwrap();
-        let config = McpConfig::new(&root);
-        fs::write(
-            &config.path,
-            br#"{"servers":{"good":{"command":"echo","args":["ready"]},"bad":{"command":7}}}"#,
-        )
-        .unwrap();
-
-        let (servers, diagnostics) = config.load_startup().unwrap();
-        assert_eq!(servers.len(), 1);
-        assert!(matches!(&servers["good"], McpServer::Stdio(server) if server.command == "echo"));
-        assert_eq!(diagnostics.len(), 1);
-        assert!(diagnostics[0].contains("invalid MCP server \"bad\""));
-        assert!(diagnostics[0].contains("expected a string"));
-        let listing = config.list().unwrap();
-        assert_eq!(listing.servers.len(), 1);
-        assert!(listing.servers.contains_key("good"));
-        assert_eq!(listing.diagnostics.len(), 1);
-
-        config.remove("good").unwrap();
-        config
-            .add(
-                "new",
-                McpServer::Stdio(McpStdioServer {
-                    command: "echo".into(),
-                    args: Vec::new(),
-                }),
-            )
-            .unwrap();
-        let saved = fs::read_to_string(&config.path).unwrap();
-        assert!(saved.contains("\"bad\""));
-        assert!(saved.contains("\"new\""));
-        assert!(!saved.contains("\"good\""));
-
-        // Invalid entries are still addressable by name, so the user can
-        // repair the file without hand-editing unrelated JSON.
-        config.remove("bad").unwrap();
-        let listing = config.list().unwrap();
-        assert_eq!(listing.servers.len(), 1);
-        assert!(listing.servers.contains_key("new"));
-        assert!(listing.diagnostics.is_empty());
-        fs::remove_dir_all(root).unwrap();
     }
 
     #[tokio::test]

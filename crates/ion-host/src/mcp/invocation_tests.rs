@@ -1,5 +1,6 @@
 use super::*;
 use ion_ai::ToolCall;
+use std::path::PathBuf;
 
 const SERVER: &str = r#"
 import json, os, sys, time

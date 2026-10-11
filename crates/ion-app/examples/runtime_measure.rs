@@ -102,7 +102,7 @@ impl CodingToolSource for CatalogTools {
             (0..self.count)
             .map(|index| {
                 let definition = ToolDefinition::external(ToolSpec {
-                    name: format!("mcp__research__search_{index:03}"),
+                    name: format!("mcp__8_research__search_{index:03}"),
                     description: format!(
                         "Search indexed project and documentation sources for topic {index}; returns bounded structured matches with paths, snippets, ranking metadata and continuation hints."
                     ),
