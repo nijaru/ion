@@ -517,8 +517,11 @@ reports omitted bytes when capture completes and marks a capture incomplete
 if an inherited pipe remains open after output goes idle; an incomplete
 capture has no full-output path.
 Commands use Bash when available, then fall back to POSIX sh. Commands have
-no default timeout; pass
-`timeout_ms` when a deadline is needed. `read` uses byte offsets and returns a
+no default timeout; pass `timeout_ms` when a deadline is needed. The deadline
+covers output capture even after the direct shell exits. On timeout, Ion requests
+process-group stop and stops acquiring output, then awaits started capture I/O.
+This is not a hard wall-clock or all-descendant termination guarantee.
+`read` uses byte offsets and returns a
 UTF-8-safe `next_offset`. For files within its 8 MiB text-edit bound,
 `read.base_digest` covers the full file and can guard a later `edit`;
 `edit` takes an `edits` array of `{old_text, new_text}` replacements against one

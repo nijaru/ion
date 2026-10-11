@@ -432,23 +432,37 @@ impl LocalTools {
         // Timeout already requested process stop too: neither stream may
         // follow an endlessly writing descendant during the final drain.
         let already_stopped = cancelled || timed_out;
+        let drain_stop = CancellationToken::new();
         let captures = async {
             tokio::join!(
-                stdout.finish(&stop, already_stopped),
-                stderr.finish(&stop, already_stopped),
+                stdout.finish(&drain_stop, already_stopped),
+                stderr.finish(&drain_stop, already_stopped),
             )
         };
         tokio::pin!(captures);
-        let ((stdout, stdout_cancelled), (stderr, stderr_cancelled)) = tokio::select! {
+        let (stdout, stderr) = tokio::select! {
             result = &mut captures => result,
             () = stop.cancelled(), if !cancelled => {
+                cancelled = true;
                 if let Some(pid) = pid {
                     let _ = kill_process_group(pid, Signal::TERM);
                 }
+                drain_stop.cancel();
+                captures.await
+            }
+            // The deadline belongs to the entire command observation, not only
+            // the direct child. Descendants can keep inherited pipes active
+            // after that child exits. Stop acquisition, but join spool I/O.
+            () = &mut deadline, if !already_stopped => {
+                timed_out = true;
+                if let Some(pid) = pid {
+                    let _ = kill_process_group(pid, Signal::TERM);
+                }
+                drain_stop.cancel();
                 captures.await
             }
         };
-        cancelled |= stdout_cancelled || stderr_cancelled || stop.is_cancelled();
+        cancelled |= stop.is_cancelled();
         let (exit_code, signal, wait_error, succeeded) = match status {
             Ok(status) => (status.code(), status.signal(), None, status.success()),
             Err(error) => (
@@ -855,7 +869,7 @@ impl OutputCapture {
         }
     }
 
-    async fn finish(mut self, stop: &CancellationToken, already_stopped: bool) -> (Captured, bool) {
+    async fn finish(mut self, stop: &CancellationToken, already_stopped: bool) -> Captured {
         self.exited.cancel();
         // Only cancellation/timeout imposes a bounded drain regardless of
         // activity. Normal direct exit has no total post-exit cutoff.
@@ -866,12 +880,10 @@ impl OutputCapture {
                 stop.cancelled().await;
             }
         };
-        let mut cancelled = false;
         let result = tokio::select! {
             biased;
             result = &mut self.task => result,
             () = stop_reading => {
-                cancelled = !already_stopped;
                 self.stop_acquisition.cancel();
                 // Do not abort: this task may be writing or flushing, even
                 // after EOF. It will stop at its next acquisition boundary.
@@ -888,16 +900,13 @@ impl OutputCapture {
         let bytes: Vec<u8> = std::mem::take(&mut state.bytes).into();
         let complete = state.complete;
         let omitted_bytes = complete.then(|| state.total.saturating_sub(bytes.len() as u64));
-        (
-            Captured {
-                bytes,
-                complete,
-                omitted_bytes,
-                full_path: state.full_path.take(),
-                full_error: state.full_error.take(),
-            },
-            cancelled,
-        )
+        Captured {
+            bytes,
+            complete,
+            omitted_bytes,
+            full_path: state.full_path.take(),
+            full_error: state.full_error.take(),
+        }
     }
 }
 async fn stop_child(
@@ -1420,7 +1429,7 @@ mod tests {
                 tokio::time::sleep(POST_EXIT_OUTPUT_IDLE * 3).await;
                 let finished_before_io = finishing.is_finished();
                 drop(release);
-                let (captured, cancelled) = tokio::time::timeout(Duration::from_secs(2), finishing)
+                let captured = tokio::time::timeout(Duration::from_secs(2), finishing)
                     .await
                     .unwrap()
                     .unwrap();
@@ -1428,7 +1437,6 @@ mod tests {
                     !finished_before_io,
                     "capture returned before spool I/O settled: {stall_at}, {cancel}"
                 );
-                assert_eq!(cancelled, cancel);
                 let complete = !cancel || at_eof;
                 assert_eq!(captured.complete, complete);
                 assert_eq!(captured.full_error, None);
@@ -1485,14 +1493,13 @@ mod tests {
         let prefix = b"x\n".repeat(35000);
         let tail = b"END_MARKER\n";
         for kind in [ErrorKind::Interrupted, ErrorKind::Other] {
-            let (captured, cancelled) = OutputCapture::start(FaultThenTail {
+            let captured = OutputCapture::start(FaultThenTail {
                 prefix: std::io::Cursor::new(prefix.clone()),
                 fault: Some(kind),
                 tail: std::io::Cursor::new(tail.to_vec()),
             })
             .finish(&CancellationToken::new(), false)
             .await;
-            assert!(!cancelled);
             if kind == ErrorKind::Interrupted {
                 let saved = captured
                     .full_path
@@ -1665,13 +1672,12 @@ mod tests {
             next: Box::pin(tokio::time::sleep(POST_EXIT_OUTPUT_IDLE / 4)),
             count: 0,
         };
-        let (output, cancelled) = tokio::time::timeout(
+        let output = tokio::time::timeout(
             Duration::from_secs(3),
             OutputCapture::start(reader).finish(&CancellationToken::new(), false),
         )
         .await
         .expect("active output failed to settle");
-        assert!(!cancelled);
         assert_eq!(output.bytes, (b'a'..=b'x').collect::<Vec<_>>());
         assert!(output.complete);
         assert_eq!(output.omitted_bytes, Some(0));
@@ -1706,13 +1712,12 @@ mod tests {
             stop: stop.clone(),
             read: false,
         };
-        let (output, cancelled) = tokio::time::timeout(
+        let output = tokio::time::timeout(
             Duration::from_secs(2),
             OutputCapture::start(reader).finish(&stop, false),
         )
         .await
         .expect("post-exit capture ignored cancellation");
-        assert!(cancelled);
         assert!(!output.complete);
         assert_eq!(output.omitted_bytes, None);
         assert_eq!(output.bytes, b"x");
@@ -1740,23 +1745,19 @@ mod tests {
         .await;
         writer_task.abort();
         let _ = writer_task.await;
-        let (captured, _) = output.expect("cancelled capture followed endless output");
+        let captured = output.expect("cancelled capture followed endless output");
         assert!(!captured.complete);
         assert!(!captured.bytes.is_empty());
     }
 
     #[tokio::test]
     async fn stopped_capture_bounds_continuously_ready_output() {
-        let (captured, cancelled) = tokio::time::timeout(
+        let captured = tokio::time::timeout(
             Duration::from_secs(2),
             OutputCapture::start(tokio::io::repeat(b'x')).finish(&CancellationToken::new(), true),
         )
         .await
         .expect("stopped capture followed continuously ready output");
-        assert!(
-            !cancelled,
-            "timeout-style drain must not invent cancellation"
-        );
         assert!(!captured.complete);
         assert_eq!(captured.bytes, vec![b'x'; MAX_OUTPUT_BYTES]);
         assert_eq!(captured.omitted_bytes, None);
@@ -1764,30 +1765,46 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn shell_timeout_bounds_output_from_a_surviving_descendant() {
-        let root = std::env::temp_dir().join(format!("ion-timeout-drain-{}", uuid::Uuid::now_v7()));
-        fs::create_dir(&root).unwrap();
-        let tools = LocalTools::new(&root).unwrap();
-        let output = tokio::time::timeout(
-            Duration::from_secs(3),
-            tools.exec(
-                &json!({
-                    "command": "(trap '' TERM; printf ready > ready; while :; do printf x || exit; sleep 0.01; done) & exec sleep 30",
-                    "timeout_ms": 500,
-                }),
-                CancellationToken::new(),
-            ),
-        )
-        .await
-        .expect("timed-out command followed descendant output");
-        assert!(root.join("ready").exists());
-        assert!(output.is_error);
-        assert_eq!(output.value["timed_out"], true);
-        assert_eq!(output.value["cancelled"], false);
-        assert!(!output.value["stdout"].as_str().unwrap().is_empty());
-        assert_eq!(output.value["stdout_truncated"], true);
-        assert_eq!(output.value["stdout_omitted_bytes"], Value::Null);
-        fs::remove_dir_all(root).unwrap();
+    async fn shell_deadline_bounds_output_before_and_after_direct_exit() {
+        for direct_exits in [false, true] {
+            let root =
+                std::env::temp_dir().join(format!("ion-timeout-drain-{}", uuid::Uuid::now_v7()));
+            fs::create_dir(&root).unwrap();
+            let tools = LocalTools::new(&root).unwrap();
+            let command = format!(
+                "(trap '' TERM; printf ready > ready; while :; do printf x || exit; sleep 0.01; done) & {}",
+                if direct_exits {
+                    "while [ ! -e ready ]; do sleep 0.01; done; exit 0"
+                } else {
+                    "exec sleep 30"
+                }
+            );
+            let output = tokio::time::timeout(
+                Duration::from_secs(3),
+                tools.exec(
+                    &json!({"command": command, "timeout_ms": 500}),
+                    CancellationToken::new(),
+                ),
+            )
+            .await
+            .expect("timed-out command followed descendant output");
+            assert!(root.join("ready").exists());
+            assert!(output.is_error);
+            assert_eq!(output.value["timed_out"], true);
+            assert_eq!(output.value["cancelled"], false);
+            if direct_exits {
+                assert_eq!(output.value["exit_code"], 0);
+                assert_eq!(output.value["signal"], Value::Null);
+            } else {
+                assert_eq!(output.value["exit_code"], Value::Null);
+                assert_eq!(output.value["signal"], 15);
+            }
+            assert_eq!(output.value["wait_error"], Value::Null);
+            assert!(!output.value["stdout"].as_str().unwrap().is_empty());
+            assert_eq!(output.value["stdout_truncated"], true);
+            assert_eq!(output.value["stdout_omitted_bytes"], Value::Null);
+            fs::remove_dir_all(root).unwrap();
+        }
     }
 
     #[tokio::test]
