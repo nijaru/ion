@@ -135,7 +135,7 @@ with tempfile.TemporaryDirectory(prefix="ion-fork-") as temporary:
                     output.extend(data)
                     if b"\x1b[6n" in data:
                         os.write(master, b"\x1b[2;1R")
-                if b"\xe2\x80\xba " in output and not sent:
+                if b"\xe2\x80\xba" in output and not sent:
                     assert b"\x1b[?1049h" not in output, "fork smoke entered alternate screen at inline startup"
                     os.write(master, b"/fork 2\r")
                     sent = True
@@ -185,7 +185,7 @@ with tempfile.TemporaryDirectory(prefix="ion-fork-") as temporary:
                         output.extend(data)
                         if b"\x1b[6n" in data:
                             os.write(master, b"\x1b[2;1R")
-                    if b"\xe2\x80\xba " in output and not fork_sent:
+                    if b"\xe2\x80\xba" in output and not fork_sent:
                         os.write(master, b"/fork 1\r")
                         fork_sent = True
                     if fork_sent and b"Forked as" in output and not submit_sent:

@@ -82,7 +82,7 @@ def terminal_failure_settles_operation(workspace, env, mode, coding, fault):
     try:
         output = bytearray()
         deadline = time.monotonic() + 8
-        while "› ".encode() not in output:
+        while "›".encode() not in output:
             assert time.monotonic() < deadline, "terminal did not show its composer"
             if select.select([output_master], [], [], 0.05)[0]:
                 data = os.read(output_master, 65536)
@@ -235,7 +235,7 @@ for mode in ("inline", "fullscreen"):
                     if b"\x1b[6n" in data:
                         os.write(master, b"\x1b[2;1R")
                 segment = output[segment_start:]
-                if step == 0 and "› ".encode() in output:
+                if step == 0 and "›".encode() in output:
                     assert (b"\x1b[?1049h" in output) == (mode == "fullscreen")
                     os.write(master, b"original draft\x07")
                     step = 1

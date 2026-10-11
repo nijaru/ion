@@ -178,7 +178,7 @@ with tempfile.TemporaryDirectory(prefix="ion-input-") as temporary:
             cwd.mkdir()
             terminal = Terminal(cwd, env, mode)
             try:
-                terminal.wait(lambda: "› " in terminal.text())
+                terminal.wait(lambda: "›" in terminal.text())
                 before = len(requests)
                 print(f"Intake {mode}: malformed paste", flush=True)
                 terminal.send(b"BASE\x1b[H\x1b[200")
@@ -240,7 +240,7 @@ with tempfile.TemporaryDirectory(prefix="ion-input-") as temporary:
             cwd.mkdir()
             terminal = Terminal(cwd, env, mode)
             try:
-                terminal.wait(lambda: "› " in terminal.text())
+                terminal.wait(lambda: "›" in terminal.text())
                 before = len(requests)
                 release.clear()
                 terminal.send("WAIT_HISTORY\r")
@@ -268,7 +268,7 @@ with tempfile.TemporaryDirectory(prefix="ion-input-") as temporary:
             cwd.mkdir()
             terminal = Terminal(cwd, env, mode)
             try:
-                terminal.wait(lambda: "› " in terminal.text())
+                terminal.wait(lambda: "›" in terminal.text())
                 before = len(requests)
                 terminal.send("EARLIER\r")
                 terminal.wait(lambda: "DONE_EARLIER" in terminal.text())
@@ -300,7 +300,7 @@ with tempfile.TemporaryDirectory(prefix="ion-input-") as temporary:
             previous = set((work / "state").rglob("*.sqlite"))
             terminal = Terminal(cwd, env, mode)
             try:
-                terminal.wait(lambda: "› " in terminal.text())
+                terminal.wait(lambda: "›" in terminal.text())
                 database, = set((work / "state").rglob("*.sqlite")) - previous
                 connection = sqlite3.connect(database)
                 try:
@@ -333,7 +333,7 @@ with tempfile.TemporaryDirectory(prefix="ion-input-") as temporary:
             previous = set((work / "state").rglob("*.sqlite"))
             terminal = Terminal(cwd, env, mode)
             try:
-                terminal.wait(lambda: "› " in terminal.text())
+                terminal.wait(lambda: "›" in terminal.text())
                 database, = set((work / "state").rglob("*.sqlite")) - previous
                 before = len(requests)
                 release.clear()

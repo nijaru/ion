@@ -270,7 +270,7 @@ with tempfile.TemporaryDirectory(prefix="ion-code-mode-") as temporary:
                         output.extend(data)
                         if b"\x1b[6n" in data:
                             os.write(master, b"\x1b[2;1R")
-                    if not submitted and b"\xe2\x80\xba " in output:
+                    if not submitted and b"\xe2\x80\xba" in output:
                         output.clear()
                         os.write(master, b"ACTIVE\r")
                         submitted = True

@@ -120,7 +120,7 @@ with tempfile.TemporaryDirectory(prefix="ion-resources-") as temporary:
                         if b"\x1b[6n" in data:
                             os.write(master, b"\x1b[2;1R")
                     current = output[checkpoint:]
-                    if phase == 0 and b"\xe2\x80\xba " in output:
+                    if phase == 0 and b"\xe2\x80\xba" in output:
                         checkpoint = len(output)
                         os.write(master, b"/che")
                         phase = 1
@@ -197,7 +197,7 @@ with tempfile.TemporaryDirectory(prefix="ion-resources-") as temporary:
                             output.extend(data)
                             if b"\x1b[6n" in data:
                                 os.write(master, b"\x1b[2;1R")
-                        if phase == 0 and b"\xe2\x80\xba " in output:
+                        if phase == 0 and b"\xe2\x80\xba" in output:
                             os.write(master, b"RESOURCE_WAIT\r")
                             output.clear()
                             phase = 1

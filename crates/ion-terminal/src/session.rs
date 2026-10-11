@@ -10,9 +10,9 @@ use crossterm::{SynchronizedUpdate, terminal};
 use tokio::sync::Notify;
 
 use crate::CapabilitySupport;
+use crate::Screen;
 use crate::input::{InputEvent, InputStream};
 use crate::requirements::TerminalRequirements;
-use crate::{Frame, Screen};
 
 #[path = "modes.rs"]
 mod modes;
@@ -216,9 +216,10 @@ impl TerminalSession {
         terminal::size()
     }
 
-    /// Query the restored primary, with a stable geometry snapshot. A resize
-    /// during the query is a custody failure, not permission to guess an anchor.
-    pub async fn primary_geometry(&mut self) -> io::Result<((u16, u16), (u16, u16))> {
+    /// Observe the restored primary cursor alongside unchanged kernel geometry.
+    /// Native reflow can lead the kernel; callers validate bounds/ownership only
+    /// after resize settling. A change during the query defers the snapshot.
+    pub async fn primary_geometry(&mut self) -> io::Result<Option<((u16, u16), (u16, u16))>> {
         if self.is_alt_screen()? {
             return Err(io::Error::other(
                 "primary geometry queried on alternate screen",
@@ -226,24 +227,25 @@ impl TerminalSession {
         }
         self.input.take_resize_notifications();
         let size = self.size()?;
-        let cursor = self.cursor_position().await?;
-        if self.size()? != size {
-            return Err(io::Error::other(
-                "terminal resized during primary cursor query",
-            ));
+        self.output()?.write_all(b"\x1b[6n")?;
+        self.output()?.flush()?;
+        let cursor = self.input.cursor_position().await?;
+        self.check_active()?;
+        let current = self.size()?;
+        if current != size || self.input.take_resize_notifications() {
+            return Ok(None);
         }
-        if cursor.0 >= size.0 || cursor.1 >= size.1 {
-            return Err(io::Error::other(
-                "primary cursor reply is outside terminal geometry",
-            ));
-        }
-        Ok((size, cursor))
+        // Movement alone cannot authorize cancellation of active coding work.
+        let Some(cursor) = cursor else {
+            return Ok(None);
+        };
+        Ok(Some((size, cursor)))
     }
 
     /// Resolve native reflow before any inline publication, growth or paint.
     /// Neither the terminal output lease nor a frontend progress guard may be
     /// retained while waiting for CPR.
-    pub async fn prepare_inline(&mut self, screen: &mut Screen) -> io::Result<(u16, u16)> {
+    pub async fn prepare_inline(&mut self, screen: &mut Screen) -> io::Result<Option<(u16, u16)>> {
         if self.is_alt_screen()? {
             return Err(io::Error::other(
                 "inline preparation requires restored primary screen",
@@ -254,37 +256,49 @@ impl TerminalSession {
         }
         let size = self.size()?;
         if screen.needs_reconciliation(size) {
-            let (size, cursor) = self.primary_geometry().await?;
-            screen.reconcile_inline(&mut self.output()?, size.0, size.1, cursor)?;
-            return Ok(size);
+            if !screen.reconciliation_ready() {
+                return Ok(None);
+            }
+            let Some((size, cursor)) = self.primary_geometry().await? else {
+                screen.note_resize();
+                return Ok(None);
+            };
+            if !screen.reconcile_inline(&mut self.output()?, size.0, size.1, cursor)? {
+                return Ok(None);
+            }
+            return Ok(Some(size));
         }
-        Ok(size)
+        Ok(Some(size))
     }
 
-    pub async fn cursor_position(&mut self) -> io::Result<(u16, u16)> {
-        self.output()?.write_all(b"\x1b[6n")?;
-        self.output()?.flush()?;
-        let position = self.input.cursor_position().await?;
-        self.check_active()?;
-        Ok(position)
-    }
-
-    pub fn render(&mut self, screen: &mut Screen, frame: &Frame<'_>) -> io::Result<()> {
-        let mut state = self.lock();
-        state.usable()?;
-        let result = if state.requirements.synchronized_output {
-            state
-                .output
-                .sync_update(|output| screen.draw(output, frame))
-                .and_then(|result| result)
+    /// Stage one inline publication/paint without physical effects. Check the
+    /// geometry after layout, then publish the bytes under one output lease.
+    /// This narrows, but cannot eliminate, a native resize during physical I/O.
+    pub fn paint_inline(
+        &mut self,
+        screen: &mut Screen,
+        paint: impl FnOnce(&mut Screen, &mut Vec<u8>) -> io::Result<()>,
+    ) -> io::Result<bool> {
+        let expected = screen.primary_size();
+        let mut staged = screen.staged();
+        let mut bytes = Vec::new();
+        let synchronized = self.lock().requirements.synchronized_output;
+        if synchronized {
+            bytes.sync_update(|out| paint(&mut staged, out))??;
         } else {
-            screen.draw(&mut state.output, frame)
-        };
-        let result = result.and_then(|()| state.usable());
-        if result.is_err() {
-            state.fail();
+            paint(&mut staged, &mut bytes)?;
         }
-        result
+        if self.size()? != expected {
+            screen.note_resize();
+            return Ok(false);
+        }
+        {
+            let mut output = self.output()?;
+            output.write_all(&bytes)?;
+            output.flush()?;
+        }
+        *screen = staged;
+        Ok(true)
     }
 
     pub fn suspend(&mut self) -> io::Result<()> {

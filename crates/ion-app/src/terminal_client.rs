@@ -245,7 +245,9 @@ pub async fn chat(init: ChatInit) -> Result<()> {
         if std::env::var_os("ION_SMOKE_PANIC_AFTER_FIRST_DRAW").is_some() {
             panic!("ION smoke panic after first terminal draw");
         }
+        let retry_inline = screen.reconciliation_pending() && !terminal.is_alt_screen()?;
         let event = tokio::select! {
+            _ = tokio::time::sleep(Duration::from_millis(50)), if retry_inline => continue,
             event = terminal.next_input() => event,
             joined = async { (&mut ui.image_job.as_mut().expect("pending image").task).await }, if ui.image_job.is_some() => {
                 finish_image_preparation(&mut ui, joined);
@@ -469,8 +471,9 @@ pub async fn chat(init: ChatInit) -> Result<()> {
         terminal.leave_alt_screen()?;
         screen.invalidate();
     }
-    terminal.prepare_inline(&mut screen).await?;
-    screen.finish(&mut terminal.output()?)?;
+    if terminal.prepare_inline(&mut screen).await?.is_some() {
+        screen.finish(&mut terminal.output()?)?;
+    }
     terminal.restore()?;
     Ok(())
     }.await;
@@ -498,11 +501,20 @@ async fn new_inline_screen(terminal: &mut TerminalSession) -> Result<Screen> {
     if terminal.is_alt_screen()? {
         terminal.leave_alt_screen()?;
     }
-    let ((width, height), (_, cursor_row)) = terminal
-        .primary_geometry()
-        .await
-        .context("read primary terminal geometry")?;
-    Ok(Screen::with_live_height(width, cursor_row, height, 1))
+    loop {
+        if let Some(((width, height), (cursor_column, cursor_row))) = terminal
+            .primary_geometry()
+            .await
+            .context("read primary terminal geometry")?
+        {
+            anyhow::ensure!(
+                cursor_column < width && cursor_row < height,
+                "primary cursor reply is outside terminal geometry"
+            );
+            return Ok(Screen::with_live_height(width, cursor_row, height, 1));
+        }
+        tokio::task::yield_now().await;
+    }
 }
 
 async fn login_in_terminal(
@@ -2163,12 +2175,12 @@ async fn prepare_draw(
     terminal: &mut TerminalSession,
     screen: &mut Screen,
     ui: &Frontend,
-) -> Result<(u16, u16, bool)> {
+) -> Result<Option<(u16, u16, bool)>> {
     if ui.details.is_some() || ui.pickers.active().is_some() || ui.mode == TuiMode::Fullscreen {
         terminal.enter_alt_screen()?;
         let (width, height) = terminal.size()?;
         screen.resize_fullscreen(width, height);
-        return Ok((width, height, false));
+        return Ok(Some((width, height, false)));
     }
     let surface_reset = terminal.is_alt_screen()?;
     if surface_reset {
@@ -2177,8 +2189,10 @@ async fn prepare_draw(
         terminal.leave_alt_screen()?;
         screen.invalidate();
     }
-    let (width, height) = terminal.prepare_inline(screen).await?;
-    Ok((width, height, surface_reset))
+    let Some((width, height)) = terminal.prepare_inline(screen).await? else {
+        return Ok(None);
+    };
+    Ok(Some((width, height, surface_reset)))
 }
 
 async fn draw(
@@ -2188,7 +2202,9 @@ async fn draw(
     progress: Option<&LiveTranscript>,
     operation: Option<ActiveOperation<'_>>,
 ) -> Result<()> {
-    let geometry = prepare_draw(terminal, screen, ui).await?;
+    let Some(geometry) = prepare_draw(terminal, screen, ui).await? else {
+        return Ok(());
+    };
     draw_prepared(terminal, screen, ui, progress, operation, geometry)
 }
 
@@ -2199,7 +2215,9 @@ async fn draw_progress(
     progress: &Mutex<LiveTranscript>,
     operation: ActiveOperation<'_>,
 ) -> Result<()> {
-    let geometry = prepare_draw(terminal, screen, ui).await?;
+    let Some(geometry) = prepare_draw(terminal, screen, ui).await? else {
+        return Ok(());
+    };
     let preview = progress
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner);
@@ -2230,13 +2248,6 @@ fn draw_prepared(
 
     let commit_rows = ui.pending_history_rows(width.max(1) as usize);
     let history_committed = !commit_rows.is_empty();
-    if history_committed {
-        screen.commit_lines(&mut terminal.output()?, &commit_rows)?;
-    }
-    if !ui.pending_history_items.is_empty() || ui.pending_history_banner.is_some() {
-        ui.finish_history_commit();
-    }
-
     let width = width.max(1) as usize;
     let row_budget = LIVE_REGION_MAX_ROWS.min(height.max(1) as usize);
     let mut chrome = Vec::new();
@@ -2303,34 +2314,34 @@ fn draw_prepared(
     for line in &composer.lines {
         live_rows.push(Line::raw(line.as_str()));
     }
-    let mut cursor_row = Some(composer_offset + composer.cursor_row);
+    let cursor_row = composer_offset + composer.cursor_row;
 
     let desired_live_height = live_rows.len().clamp(1, row_budget);
-    if desired_live_height > screen.live_height() {
-        screen.ensure_live_height(&mut terminal.output()?, desired_live_height)?;
-    } else if desired_live_height < screen.live_height() && (history_committed || surface_reset) {
-        // The settled-history commit or fullscreen exit erased/replaced the
-        // mutable surface, so shrinking cannot leak stale rows into scrollback.
-        screen.set_live_height(desired_live_height);
+    let cursor = Some((
+        cursor_row,
+        composer.cursor_col.min(width.saturating_sub(1)) as u16,
+    ));
+    let painted = terminal.paint_inline(screen, |screen, out| {
+        if history_committed {
+            screen.commit_lines(out, &commit_rows)?;
+        }
+        if desired_live_height > screen.live_height() {
+            screen.ensure_live_height(out, desired_live_height)?;
+        } else if desired_live_height < screen.live_height() && (history_committed || surface_reset)
+        {
+            screen.set_live_height(desired_live_height);
+        }
+        screen.draw(
+            out,
+            &Frame {
+                live: &live_rows,
+                cursor,
+            },
+        )
+    })?;
+    if painted && (!ui.pending_history_items.is_empty() || ui.pending_history_banner.is_some()) {
+        ui.finish_history_commit();
     }
-    let live_height = screen.live_height();
-    if live_rows.len() > live_height {
-        let drop = live_rows.len() - live_height;
-        live_rows.drain(..drop);
-        cursor_row = cursor_row.and_then(|row| row.checked_sub(drop));
-    }
-
-    let live = live_rows;
-    let cursor = cursor_row
-        .filter(|row| *row < live.len())
-        .map(|row| (row, composer.cursor_col.min(width.saturating_sub(1)) as u16));
-    terminal.render(
-        screen,
-        &Frame {
-            live: &live,
-            cursor,
-        },
-    )?;
     Ok(())
 }
 

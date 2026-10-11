@@ -156,7 +156,7 @@ def exercise(mode, supported=True, panic=False, editor_fault=None):
                 assert child.wait() != 0
                 assert b"ION smoke panic" in output
             else:
-                until(lambda: "› ".encode() in output)
+                until(lambda: "›".encode() in output)
                 expected = 1 if supported else (8 if mode == "fullscreen" else 4)
                 assert terminal.stacks[terminal.alternate][-1] == expected, "composer lacks its own keyboard mode"
                 if supported:

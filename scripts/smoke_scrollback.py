@@ -4,6 +4,7 @@ import json
 import os
 import shlex
 import shutil
+import signal
 import subprocess
 import tempfile
 import threading
@@ -87,6 +88,7 @@ with tempfile.TemporaryDirectory(prefix="ion-scrollback-") as temporary:
     def tmux(*args):
         return subprocess.check_output(["tmux", "-S", socket, *args], env=env).decode()
 
+    native_pid = None
     try:
         subprocess.run(
             [binary, "use", "smoke", "smoke-model", "--endpoint",
@@ -141,6 +143,63 @@ with tempfile.TemporaryDirectory(prefix="ion-scrollback-") as temporary:
             while expected not in tmux("capture-pane", "-p", "-t", "ion"):
                 assert time.monotonic() < deadline, f"command did not complete: {text}"
                 time.sleep(0.02)
+
+        def resize_unsent_draft(sizes):
+            draft = "UNSENT_RESIZE café 界 👩‍💻"
+            tmux("send-keys", "-t", "ion", "-l", draft)
+            while draft not in tmux("capture-pane", "-p", "-t", "ion"):
+                assert time.monotonic() < deadline, "Unicode draft did not paint"
+                time.sleep(0.02)
+            def cursor_on_line(column, text):
+                pane = tmux("capture-pane", "-p", "-t", "ion").splitlines()
+                x, y, visible = tmux("display-message", "-p", "-t", "ion", "#{cursor_x} #{cursor_y} #{cursor_flag}").split()
+                return visible == "1" and int(x) == column and int(y) < len(pane) and pane[int(y)].rstrip() == text
+
+            for columns, rows in sizes:
+                tmux("resize-window", "-t", "ion", "-x", str(columns), "-y", str(rows))
+            # Wait for Ion's indented continuation/caret, not merely tmux reflow.
+            while not cursor_on_line(4, "  👩‍💻"):
+                assert time.monotonic() < deadline, "narrow composer did not reconcile its cursor"
+                time.sleep(0.02)
+            resized = tmux("capture-pane", "-p", "-t", "ion", "-S", "-")
+            assert resized.count("UNSENT_RESIZE") == 1, f"resize duplicated or lost unsent input:\n{resized}"
+            tmux("resize-window", "-t", "ion", "-x", "100", "-y", "30")
+            while not cursor_on_line(26, "› " + draft):
+                assert time.monotonic() < deadline, "restored composer did not reconcile its cursor"
+                time.sleep(0.02)
+            restored = tmux("capture-pane", "-p", "-t", "ion", "-S", "-")
+            assert restored.count(draft) == 1, f"resize changed or duplicated the literal draft:\n{restored}"
+            check_history()
+
+        # Idle resize must schedule its own redraw rather than wait for a key.
+        command("!exit 7", "Shell finished with an error")
+        resize_unsent_draft([(24, 7)])
+        tmux("send-keys", "-t", "ion", "C-c")
+
+        # tmux reflows immediately but throttles queued PTY sizes by 250 ms.
+        # This must not turn transient geometry into cancellation of native work.
+        command("!printf 'once\\n' >> resize-once; echo $$ > resize.pid; exec sleep 30", "Running shell")
+        while not (workspace / "resize.pid").exists():
+            assert time.monotonic() < deadline, "native resize probe did not start"
+            time.sleep(0.02)
+        native_pid = int((workspace / "resize.pid").read_text())
+        resize_unsent_draft([(60, 20), (24, 7), (50, 10), (24, 7)])
+        os.kill(native_pid, 0)
+        tmux("send-keys", "-t", "ion", "C-c")
+        while "Shell finished" not in tmux("capture-pane", "-p", "-t", "ion"):
+            assert time.monotonic() < deadline, "native cancellation did not settle"
+            time.sleep(0.02)
+        try:
+            os.kill(native_pid, 0)
+        except ProcessLookupError:
+            pass
+        else:
+            raise AssertionError("cancelled native root remains alive")
+        assert (workspace / "resize-once").read_text() == "once\n"
+        native_pid = None
+        tmux("send-keys", "-t", "ion", "C-c")  # Clear the preserved draft.
+        time.sleep(0.05)
+        assert len(requests) == 2, "resize admitted unsent input"
 
         assert "FIRST_HIDDEN" not in tmux("capture-pane", "-p", "-t", "ion", "-S", "-")
         command("/settings expanded", "Tool output: expanded")
@@ -232,6 +291,11 @@ with tempfile.TemporaryDirectory(prefix="ion-scrollback-") as temporary:
         assert any(event["type"] == "final" and event["text"] == "JSONL_ANSWER" for event in events), "thinking changed the final answer"
         assert "SIGNATURE_PRIVATE" not in output and "ENCRYPTED_PRIVATE" not in output, "JSONL exposed opaque replay"
     finally:
+        if native_pid is not None:
+            try:
+                os.kill(native_pid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
         subprocess.run(["tmux", "-S", socket, "kill-server"], env=env,
                        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         server.shutdown()

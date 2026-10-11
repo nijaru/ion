@@ -364,8 +364,10 @@ impl InputStream {
 
     pub(crate) async fn keyboard_support(&mut self) -> io::Result<Option<bool>> {
         self.replies.keyboard = None;
-        self.await_reply(|replies| replies.keyboard.take(), false)
-            .await
+        let (support, _) = self
+            .await_reply(|replies| replies.keyboard.take(), false)
+            .await?;
+        Ok(support)
     }
 
     /// Already pending SIGWINCH is represented by the next size snapshot.
@@ -380,30 +382,32 @@ impl InputStream {
         )
     }
 
-    pub(crate) async fn cursor_position(&mut self) -> io::Result<(u16, u16)> {
+    pub(crate) async fn cursor_position(&mut self) -> io::Result<Option<(u16, u16)>> {
         self.replies.cursor = None;
-        let result = self
+        let (result, resized) = self
             .await_reply(|replies| replies.cursor.take(), true)
-            .await;
-        result?.ok_or_else(|| {
+            .await?;
+        let cursor = result.ok_or_else(|| {
             io::Error::new(io::ErrorKind::TimedOut, "terminal cursor query timed out")
-        })
+        })?;
+        Ok((!resized).then_some(cursor))
     }
 
     async fn await_reply<T>(
         &mut self,
         reply: impl Fn(&mut TerminalReplyFilter) -> Option<T>,
         cursor_query: bool,
-    ) -> io::Result<Option<T>> {
+    ) -> io::Result<(Option<T>, bool)> {
         let deadline = tokio::time::Instant::now() + Duration::from_millis(500);
+        let mut resized = false;
         loop {
             let now = tokio::time::Instant::now();
             if now >= deadline {
                 self.parse(&[], false);
-                return Ok(None);
+                return Ok((None, resized));
             }
             if let Some(value) = reply(&mut self.replies) {
-                return Ok(Some(value));
+                return Ok((Some(value), resized));
             }
             if self.escape_deadline.is_some_and(|escape| now >= escape) {
                 self.parse_for_query(&[], false, cursor_query);
@@ -413,7 +417,11 @@ impl InputStream {
             let chunk = tokio::select! {
                 biased;
                 _ = self.resize.recv(), if cursor_query => {
-                    return Err(io::Error::new(io::ErrorKind::Interrupted, "terminal resized during cursor query"));
+                    // Retain the in-flight query until its one reply arrives.
+                    // Starting another query now could consume the old reply
+                    // as evidence for the newer geometry.
+                    resized = true;
+                    continue;
                 },
                 chunk = self.chunks.recv() => chunk,
                 () = tokio::time::sleep_until(deadline) => continue,
@@ -426,7 +434,7 @@ impl InputStream {
                         // through ordinary intake, never as an accepted query reply.
                         self.parse(&bytes, true);
                         self.parse(&[], false);
-                        return Ok(None);
+                        return Ok((None, resized));
                     }
                     self.parse_for_query(&bytes, true, cursor_query);
                 }
@@ -717,7 +725,7 @@ mod tests {
         sender.send(Ok(b"early\x1b[?1u".to_vec())).await.unwrap();
         assert_eq!(input.keyboard_support().await.unwrap(), Some(true));
         sender.send(Ok(b"later\x1b[2;3R".to_vec())).await.unwrap();
-        assert_eq!(input.cursor_position().await.unwrap(), (2, 1));
+        assert_eq!(input.cursor_position().await.unwrap(), Some((2, 1)));
         assert_eq!(input.pending.len(), "earlylater".len());
         input.pending.clear();
         assert!(
@@ -734,7 +742,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn resize_during_cursor_query_fails_without_losing_typeahead() {
+    async fn resized_cursor_query_joins_its_reply_and_preserves_typeahead() {
         use std::future::Future;
         use std::task::{Context, Waker};
 
@@ -757,12 +765,16 @@ mod tests {
                 .unwrap()
                 .success()
         );
-        let error = tokio::time::timeout(Duration::from_secs(1), &mut query)
-            .await
-            .unwrap()
-            .unwrap_err();
-        assert_eq!(error.kind(), io::ErrorKind::Interrupted);
-        drop(query);
+        assert!(
+            tokio::time::timeout(Duration::from_millis(10), &mut query)
+                .await
+                .is_err()
+        );
+        sender.send(Ok(b"\x1b[2;3R".to_vec())).await.unwrap();
+        assert_eq!(query.await.unwrap(), None);
+        // The consumed reply cannot satisfy a subsequent geometry query.
+        sender.send(Ok(b"\x1b[3;4R".to_vec())).await.unwrap();
+        assert_eq!(input.cursor_position().await.unwrap(), Some((3, 2)));
         assert_eq!(input.pending.len(), 5);
         assert_eq!(
             input.next().await.unwrap().unwrap(),

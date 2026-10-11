@@ -73,7 +73,7 @@ def qualify(case, excluded=False):
         child = launch()
         shell_pid = None
         try:
-            wait_until(lambda: "› ".encode() in output)
+            wait_until(lambda: "›".encode() in output)
             if case != "crash":
                 kind = "user_shell_admitted" if case == "admission" else "user_shell_settled"
                 with sqlite3.connect(session) as connection:
@@ -122,7 +122,7 @@ def qualify(case, excluded=False):
             output.clear()
             if case == "crash":
                 child = launch()
-                wait_until(lambda: "› ".encode() in output and b"external effect unknown" in output)
+                wait_until(lambda: "›".encode() in output and b"external effect unknown" in output)
             # Explicit NEW shell admission closes the interruption, not replays it.
             # Result-write faults recover in the same UI; crash cases reopen.
             # Split the marker in the command so its presence proves output

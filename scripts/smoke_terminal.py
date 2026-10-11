@@ -17,6 +17,42 @@ import time
 from pathlib import Path
 
 
+class CursorReplies:
+    """Track positioned CPR reference points, not a rendered screen/reflow model."""
+    def __init__(self):
+        self.position = (2, 1)  # The fixture's initial shell cursor, one-based.
+        self.saved = self.position
+        self.pending = b""
+
+    def resize(self, rows, columns):
+        row, column = self.position
+        self.position = (min(row, rows), min(column, columns))
+
+    def feed(self, data):
+        data = self.pending + data
+        replies = []
+        end = 0
+        for token in re.finditer(rb"\x1b\[([0-9;?]*)([@-~])", data):
+            parameters, final = token.groups()
+            if final == b"H":
+                coordinates = parameters.split(b";")
+                self.position = (int(coordinates[0] or b"1"), int(coordinates[1] or b"1") if len(coordinates) > 1 else 1)
+            elif parameters == b"?1049":
+                if final == b"h":
+                    self.saved = self.position
+                    self.position = (1, 1)
+                elif final == b"l":
+                    self.position = self.saved
+            elif final == b"n" and parameters == b"6":
+                row, column = self.position
+                replies.append(f"\x1b[{row};{column}R".encode())
+            end = token.end()
+        tail = data[end:]
+        escape = tail.rfind(b"\x1b")
+        self.pending = tail[escape:] if escape >= 0 else b""
+        return replies
+
+
 def drain_terminal(fd, output):
     """Collect queued restoration bytes after process exit, through PTY closure."""
     deadline = time.monotonic() + 2
@@ -59,6 +95,7 @@ def exercise_file_discovery():
             child = subprocess.Popen([binary, "--cwd", workspace, "--tui-mode", mode, "chat"], env=env, stdin=slave, stdout=slave, stderr=slave, preexec_fn=attach)
             os.close(slave)
             output = bytearray()
+            cursor = CursorReplies()
             writer = None
 
             def pump():
@@ -70,8 +107,8 @@ def exercise_file_discovery():
                             raise
                         data = b""
                     output.extend(data)
-                    if b"\x1b[6n" in data:
-                        os.write(master, b"\x1b[2;1R")
+                    for reply in cursor.feed(data):
+                        os.write(master, reply)
 
             def wait(predicate):
                 end = time.monotonic() + 5
@@ -94,7 +131,7 @@ def exercise_file_discovery():
                         pump()
 
             try:
-                wait(lambda: "› ".encode() in output)
+                wait(lambda: cursor.position[1] == 3 and "›".encode() in output)
                 # Create it only after host startup resource discovery settles.
                 os.mkfifo(workspace / ".ignore")
                 for busy in (False, True):
@@ -117,7 +154,7 @@ def exercise_file_discovery():
                     if not busy:
                         output.clear()
                         os.write(master, b"\x03")  # Explicitly clear the draft.
-                        wait(lambda: "›           ".encode() in output)
+                        wait(lambda: cursor.position[1] == 3 and "›".encode() in output)
                     else:
                         output.clear()
                         os.write(master, b"\t")  # Reopen the current mention.
@@ -138,7 +175,7 @@ def exercise_file_discovery():
                         assert b"Choose file" not in output, "dismissed discovery reopened its modal"
                         output.clear()
                         os.write(master, b"\x03")
-                        wait(lambda: "›           ".encode() in output)
+                        wait(lambda: cursor.position[1] == 3 and "›".encode() in output)
                 os.write(master, b"\x03")
                 end = time.monotonic() + 5
                 while child.poll() is None:
@@ -192,6 +229,7 @@ with tempfile.TemporaryDirectory(prefix="ion-terminal-") as temporary:
         child = subprocess.Popen([binary, "--cwd", workspace, "chat"], env=env, stdin=slave, stdout=slave, stderr=slave, preexec_fn=attach_controlling_terminal)
         os.close(slave)
         output = bytearray()
+        cursor = CursorReplies()
         file_query_sent = False
         sent_file_start = selected_file = sent_first = sent_steering = sent_second = resized = sent_tool = closed_tool = sent_compact = sent_clone = sent_controls = sent_login = sent_key = sent_logout = sent_copy = sent_quit = False
         saw_inline_start = False
@@ -211,8 +249,8 @@ with tempfile.TemporaryDirectory(prefix="ion-terminal-") as temporary:
                             raise
                         data = b""
                     output.extend(data)
-                    if b"\x1b[6n" in data:
-                        os.write(master, b"\x1b[2;1R")
+                    for reply in cursor.feed(data):
+                        os.write(master, reply)
                 if b"\xe2\x80\xba " in output and not sent_file_start:
                     assert b"\x1b[?1049h" not in output, "chat entered alternate screen before showing the inline composer"
                     saw_inline_start = True
@@ -247,9 +285,11 @@ with tempfile.TemporaryDirectory(prefix="ion-terminal-") as temporary:
                     sent_second = True
                 if sent_second and b"RESUMED" in output and not resized:
                     fcntl.ioctl(master, termios.TIOCSWINSZ, struct.pack("HHHH", 7, 24, 0, 0))
+                    cursor.resize(7, 24)
                     os.kill(child.pid, signal.SIGWINCH)
                     time.sleep(0.1)
                     fcntl.ioctl(master, termios.TIOCSWINSZ, struct.pack("HHHH", 30, 100, 0, 0))
+                    cursor.resize(30, 100)
                     os.kill(child.pid, signal.SIGWINCH)
                     resized = True
                 if resized and not sent_tool:
@@ -372,6 +412,7 @@ with tempfile.TemporaryDirectory(prefix="ion-terminal-") as temporary:
             )
             os.close(fullscreen_slave)
             fullscreen_output = bytearray()
+            fullscreen_cursor = CursorReplies()
             sent_inline_mode = sent_fullscreen_mode = sent_fullscreen_quit = False
             fullscreen_deadline = time.monotonic() + 8
             try:
@@ -385,11 +426,11 @@ with tempfile.TemporaryDirectory(prefix="ion-terminal-") as temporary:
                                 raise
                             data = b""
                         fullscreen_output.extend(data)
-                        if b"\x1b[6n" in data:
-                            os.write(fullscreen_master, b"\x1b[2;1R")
+                        for reply in fullscreen_cursor.feed(data):
+                            os.write(fullscreen_master, reply)
                     if (
                         b"\x1b[?1049h" in fullscreen_output
-                        and b"\xe2\x80\xba " in fullscreen_output
+                        and b"\xe2\x80\xba" in fullscreen_output
                         and not sent_inline_mode
                     ):
                         os.write(fullscreen_master, b"/tui inline\r")
@@ -449,6 +490,7 @@ with tempfile.TemporaryDirectory(prefix="ion-terminal-") as temporary:
             )
             os.close(panic_slave)
             panic_output = bytearray()
+            panic_cursor = CursorReplies()
             panic_deadline = time.monotonic() + 8
             try:
                 while time.monotonic() < panic_deadline:
@@ -461,8 +503,8 @@ with tempfile.TemporaryDirectory(prefix="ion-terminal-") as temporary:
                                 raise
                             data = b""
                         panic_output.extend(data)
-                        if b"\x1b[6n" in data:
-                            os.write(panic_master, b"\x1b[2;1R")
+                        for reply in panic_cursor.feed(data):
+                            os.write(panic_master, reply)
                     if panic.poll() is not None:
                         break
                 status = panic.wait(timeout=2)
@@ -522,6 +564,7 @@ def exercise_active_band():
             child = subprocess.Popen([binary, "--cwd", work, "chat"], env=env, stdin=slave, stdout=slave, stderr=slave, preexec_fn=attach)
             os.close(slave)
             output = bytearray()
+            cursor = CursorReplies()
             sent = repainted = checked = quit_sent = False
             repaint_time = 0
             while time.monotonic() < end:
@@ -534,8 +577,8 @@ def exercise_active_band():
                             raise
                         break
                     output.extend(data)
-                    if b"\x1b[6n" in data:
-                        os.write(master, b"\x1b[2;1R")
+                    for reply in cursor.feed(data):
+                        os.write(master, reply)
                 if not sent and "› ".encode() in output:
                     os.write(master, b"Exercise the busy activity band.\r")
                     sent = True
@@ -544,9 +587,10 @@ def exercise_active_band():
                     # Discard earlier output; force the CURRENT inline region to
                     # repaint, without opening an inspector or completing work.
                     while select.select([master], [], [], 0)[0]:
-                        os.read(master, 65536)
+                        for reply in cursor.feed(os.read(master, 65536)):
+                            os.write(master, reply)
                     output.clear()
-                    fcntl.ioctl(master, termios.TIOCSWINSZ, struct.pack("HHHH", 30, 99, 0, 0))
+                    fcntl.ioctl(master, termios.TIOCSWINSZ, struct.pack("HHHH", 30, 100, 0, 0))
                     os.kill(child.pid, signal.SIGWINCH)
                     repaint_time = time.monotonic()
                     repainted = True

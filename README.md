@@ -98,6 +98,10 @@ six turns into scrollback and labels omitted earlier history as retained; the
 complete Session remains available through inspect/export and tool detail.
 Publication uses available terminal rows before scrolling. Ordinary redraw and
 resize do not publish live rows; terminal-native reflow remains emulator-owned.
+Inline paint waits 300 ms after resize notifications while input and coding work
+remain live, then measures the restored primary cursor before reclaiming mutable
+rows. It cannot remove live text the emulator has already moved into native history;
+ambiguous cursor evidence stops the client rather than authorizing guessed erasure.
 The active operation and cancellation status remain visible alongside steering,
 queue and detail-close notices when there is room beyond the editable cursor line. On terminal input or rendering failure during a
 Turn, shell or compaction, Ion cancels and awaits started work, then exits without
@@ -325,7 +329,9 @@ not every wrapped row of the recovered input.
 Both the model message and retained editor metadata count against the shared
 pending-input allowance. Clipboard preparation finishes before input admission.
 Terminal queries share the key reader and use a 500 ms response deadline;
-type-ahead survives startup and external-editor return. Login deliberately
+type-ahead survives startup and external-editor return. A resize during a cursor
+query consumes the outstanding reply, defers painting and returns to client
+controls before retrying; it does not by itself cancel coding work. Login deliberately
 discards queued input before and after secret entry. CLI and chat login keep echo
 disabled before showing the prompt; Ctrl-C cancels without saving a partial key.
 Secrets must be valid single-line UTF-8 of at most 4096 bytes. Rejected or cancelled
