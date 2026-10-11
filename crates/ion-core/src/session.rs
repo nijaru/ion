@@ -733,7 +733,7 @@ impl Session {
             context_changes,
             child_records,
             ..
-        } = project_connection(&connection)?;
+        } = project_connection(&connection, ProjectionMode::Full)?;
         prepare_writer(&connection)?;
         Ok(Self {
             store: Mutex::new(Store {
@@ -817,7 +817,7 @@ impl Session {
         Ok(clone)
     }
 
-    /// Validate committed history without retaining raw child outputs. Labels
+    /// Validate committed history without accumulating historical payloads. Labels
     /// contain at most 120 characters from the first input's first line.
     pub fn inspect_metadata(path: impl AsRef<Path>) -> Result<SessionMetadata, SessionError> {
         let path = database_path(path.as_ref())?;
@@ -825,7 +825,7 @@ impl Session {
         configure_connection(&connection)?;
         let snapshot = connection.unchecked_transaction()?;
         let header = read_header(&snapshot)?;
-        let projection = project_connection(&snapshot)?;
+        let projection = project_connection(&snapshot, ProjectionMode::Metadata)?;
 
         Ok(SessionMetadata {
             cwd: header.cwd,
@@ -844,7 +844,7 @@ impl Session {
         let entries = read_entries(&connection)?;
         let HistoryProjection {
             state, messages, ..
-        } = project(entries.iter().map(Ok))?;
+        } = project(entries.iter().map(Ok), ProjectionMode::Full)?;
         Ok(SessionView {
             cwd: header.cwd,
             name: header.name,
@@ -1925,16 +1925,29 @@ pub(crate) fn valid_user_message(message: &Message) -> bool {
         })
 }
 
-fn project_connection(connection: &Connection) -> Result<HistoryProjection, SessionError> {
-    // Reopen needs derived state, not an owned raw-history export. Validate one
-    // fact at a time so old child payloads can be released after projection.
+#[derive(Clone, Copy)]
+enum ProjectionMode {
+    Full,
+    Metadata,
+}
+
+fn project_connection(
+    connection: &Connection,
+    mode: ProjectionMode,
+) -> Result<HistoryProjection, SessionError> {
+    // Validate one fact at a time without an owned raw-history export. The
+    // projection mode determines which derived values must remain resident.
     let mut statement = connection.prepare("SELECT body FROM entries ORDER BY seq")?;
     let rows = statement.query_map([], |row| row.get::<_, Vec<u8>>(0))?;
-    project(rows.map(|body| Ok(serde_json::from_slice::<SessionEntry>(&body?)?)))
+    project(
+        rows.map(|body| Ok(serde_json::from_slice::<SessionEntry>(&body?)?)),
+        mode,
+    )
 }
 
 fn project<E: Borrow<SessionEntry>>(
     entries: impl IntoIterator<Item = Result<E, SessionError>>,
+    mode: ProjectionMode,
 ) -> Result<HistoryProjection, SessionError> {
     let mut state = State::default();
     let mut settled = BTreeSet::new();
@@ -1948,18 +1961,36 @@ fn project<E: Borrow<SessionEntry>>(
         let entry = entry.borrow();
         let mut new_settled = Vec::new();
         state.apply(entry, &mut messages, &settled, &mut new_settled)?;
-        child_records.observe(state.sequence, entry);
+        if matches!(mode, ProjectionMode::Full) {
+            child_records.observe(state.sequence, entry);
+        }
         if matches!(entry, SessionEntry::TurnStarted { .. }) {
             turns = turns.checked_add(1).ok_or(SessionError::InvalidHistory)?;
         }
         if first_input.is_none() {
             first_input = input_preview(entry);
         }
-        if let SessionEntry::ModelContextChanged { context, .. } = entry {
-            context_changes.push(ModelContextChange {
-                after_message: messages.len(),
-                context: model_context_state(context),
-            });
+        match mode {
+            ProjectionMode::Full => {
+                if let SessionEntry::ModelContextChanged { context, .. } = entry {
+                    context_changes.push(ModelContextChange {
+                        after_message: messages.len(),
+                        context: model_context_state(context),
+                    });
+                }
+            }
+            ProjectionMode::Metadata => {
+                // apply needs only the final shared-shell slot for settlement.
+                // No intervening message is legal while that shell is pending;
+                // keep its slot until settlement and release all other payloads.
+                if !state
+                    .pending_shell
+                    .as_ref()
+                    .is_some_and(|shell| !shell.exclude_from_context)
+                {
+                    messages.clear();
+                }
+            }
         }
         settled.extend(new_settled);
     }
@@ -2590,6 +2621,53 @@ mod tests {
             "failed validation rewrote committed history"
         );
         drop(connection);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn metadata_projection_retains_only_pending_shared_shell_slot() {
+        let (root, path) = fixture();
+        let session = Session::create(&path, &root).unwrap();
+        let admission = session.admit_user_shell("shared".into(), false).unwrap();
+        let model = ModelRef {
+            provider: "test".into(),
+            model: "selected".into(),
+        };
+        let mut entries = session.view().unwrap().entries;
+        // Preferences may intervene without releasing the slot that settlement
+        // must replace. Metadata must neither reject this prefix nor recover it.
+        entries.push(SessionEntry::ModelSelected {
+            model: model.clone(),
+        });
+        let pending = project(entries.iter().map(Ok), ProjectionMode::Metadata).unwrap();
+        assert_eq!(pending.messages.len(), 1);
+        assert_eq!(pending.state.last_model, Some(model));
+        assert!(pending.state.pending_shell.is_some());
+        session
+            .record_user_shell(
+                admission,
+                serde_json::json!({"stdout": "x".repeat(65536)}),
+                false,
+            )
+            .unwrap();
+        let settlement = session.view().unwrap().entries.pop().unwrap();
+        entries.push(settlement);
+        let settled = project(entries.iter().map(Ok), ProjectionMode::Metadata).unwrap();
+        assert!(settled.messages.is_empty());
+        assert!(settled.state.pending_shell.is_none());
+        assert_eq!(
+            settled.first_input,
+            Session::inspect_metadata(&path).unwrap().first_input
+        );
+        // Discarding messages must not admit a second settlement.
+        entries.push(entries.last().unwrap().clone());
+        for mode in [ProjectionMode::Full, ProjectionMode::Metadata] {
+            assert!(matches!(
+                project(entries.iter().map(Ok), mode),
+                Err(SessionError::InvalidHistory)
+            ));
+        }
+        drop(session);
         fs::remove_dir_all(root).unwrap();
     }
 
