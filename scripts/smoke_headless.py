@@ -141,11 +141,16 @@ with tempfile.TemporaryDirectory(prefix="ion-headless-") as temporary:
                         previous = count
                         unchanged_since = time.monotonic()
                     blocked = writer_probe is None or not select.select([], [writer_probe], [], 0)[1]
-                    if count > 0 and blocked and time.monotonic() - unchanged_since >= 0.2:
+                    # Plaintext stderr can fill with call-admission activity
+                    # before either command starts. This case promises native
+                    # cancellation, so establish the host effect and running
+                    # second command before sending SIGINT, not just pipe load.
+                    native_started = json_output or (workspace / "native.ready").exists()
+                    if count > 0 and blocked and native_started and time.monotonic() - unchanged_since >= 0.2:
                         break
                     time.sleep(0.01)
                 else:
-                    raise AssertionError(f"fixture output did not stall: json={json_output}, available={previous}")
+                    raise AssertionError(f"fixture did not establish output pressure and required native work: json={json_output}, available={previous}, native_ready={(workspace / 'native.ready').exists()}")
                 databases = list((work / "state").rglob("*.sqlite"))
                 database = max(databases, key=lambda path: path.stat().st_mtime_ns)
                 child.send_signal(signal.SIGINT)
