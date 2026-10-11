@@ -7,6 +7,7 @@ import os
 import pty
 import select
 import signal
+import sqlite3
 import struct
 import subprocess
 import tempfile
@@ -21,6 +22,17 @@ root = Path(__file__).resolve().parent.parent
 binary = Path(os.environ.get("ION_SMOKE_BIN", root / "target/debug/ion"))
 requests = []
 release = threading.Event()
+
+
+def completed_turns(state, previous):
+    paths = set(state.rglob("*.sqlite")) - previous
+    if len(paths) != 1:
+        return 0
+    db = sqlite3.connect(f"file:{next(iter(paths))}?mode=ro", uri=True)
+    try:
+        return db.execute("SELECT count(*) FROM entries WHERE json_extract(body,'$.kind')='turn_ended' AND json_extract(body,'$.data.reason')='completed'").fetchone()[0]
+    finally:
+        db.close()
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -99,6 +111,7 @@ with tempfile.TemporaryDirectory(prefix="ion-resources-") as temporary:
                 fcntl.ioctl(slave, termios.TIOCSCTTY, 0)
 
             terminal_env = {**env, "TERM": "xterm-256color"}
+            previous_sessions = set((work / "state").rglob("*.sqlite"))
             child = subprocess.Popen([binary, "--cwd", workspace, "--tui-mode", mode, "chat"], env=terminal_env, stdin=slave, stdout=slave, stderr=slave, preexec_fn=attach_terminal)
             os.close(slave)
             output = bytearray()
@@ -156,8 +169,18 @@ with tempfile.TemporaryDirectory(prefix="ion-resources-") as temporary:
                         os.write(master, b"\t\r")
                         phase = 5
                     elif phase == 5 and len(requests) == before + 2 and b"RESOURCE_OK" in current:
+                        # Streamed text does not establish settlement. Observe
+                        # this process's committed Turns before requesting quit.
+                        if completed_turns(work / "state", previous_sessions) == 2:
+                            os.write(master, b"\x03")
+                            quit_at = time.monotonic()
+                            phase = 6
+                    elif phase == 6 and time.monotonic() - quit_at >= 0.1:
+                        # Keep draining the PTY. A first Ctrl-C can reach the
+                        # still-busy client before it harvests Core completion;
+                        # after committed settlement another quits the idle UI.
                         os.write(master, b"\x03")
-                        phase = 6
+                        quit_at = time.monotonic()
                     if child.poll() is not None:
                         break
                 assert phase == 6, f"{mode} command completion stopped in phase {phase}: {output[-1000:]!r}"
@@ -176,6 +199,7 @@ with tempfile.TemporaryDirectory(prefix="ion-resources-") as temporary:
             for steer in (False, True):
                 master, slave = pty.openpty()
                 fcntl.ioctl(slave, termios.TIOCSWINSZ, struct.pack("HHHH", 30, 100, 0, 0))
+                previous_sessions = set((work / "state").rglob("*.sqlite"))
                 child = subprocess.Popen([binary, "--cwd", workspace, "--tui-mode", mode, "chat"], env={**env, "TERM": "xterm-256color"}, stdin=slave, stdout=slave, stderr=slave, preexec_fn=attach_terminal)
                 os.close(slave)
                 output = bytearray()
@@ -218,8 +242,13 @@ with tempfile.TemporaryDirectory(prefix="ion-resources-") as temporary:
                         elif phase == 4 and len(requests) > before + 1 and b"RESOURCE_OK" in output:
                             assert len(requests) == before + 2
                             assert requests[-1]["messages"][-1]["content"] == "PREFIX_" + literal, (mode, steer, "resource recovery lost literal arguments/cursor", requests[-1]["messages"][-1]["content"])
+                            if completed_turns(work / "state", previous_sessions) == 1:
+                                os.write(master, b"\x03")
+                                quit_at = time.monotonic()
+                                phase = 5
+                        elif phase == 5 and time.monotonic() - quit_at >= 0.1:
                             os.write(master, b"\x03")
-                            phase = 5
+                            quit_at = time.monotonic()
                         if child.poll() is not None:
                             break
                     assert phase == 5, (mode, steer, phase, output[-1200:])
