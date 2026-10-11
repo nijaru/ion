@@ -5,10 +5,12 @@
 - `ARCHITECTURE.md` owns the coding-agent contracts; `README.md` describes
   implemented behavior and qualification limits. Neither a plan checkbox nor
   a passing test establishes that the implementation meets those contracts.
-- Build Pi-level common-workflow functionality through one cohesive, idiomatic
-  Rust coding loop for terminal, headless, RPC and embedded clients. Pi is the
-  primary mature open-source reference for workflows and harness/provider
-  semantics; fx is the scoped reference for polished, restrained presentation.
+- The first completion target is a dependable Pi-level daily driver through one
+  cohesive, idiomatic Rust coding loop for terminal, headless, RPC and embedded
+  clients. Broader agent capabilities follow separately accepted scopes, not a
+  union of reference feature inventories. Pi is the primary mature open-source
+  reference for workflows and harness/provider semantics; fx is the scoped
+  reference for polished, restrained presentation.
   Other agents and research are optional sources of specific insights, not equal
   authorities, requirements or templates. Weigh their evidence, maturity and
   stability/simplicity trade-offs; Pi's experiments do not inherit its established
@@ -32,10 +34,16 @@
 
 ## Delivery and navigation
 
+- For product-completion work, establish Core/Host dependability, then sustained
+  real-repository coding and shared-client parity, then inline usability and
+  terminal integration, before daily-driver acceptance. Keep one milestone
+  active; close or explicitly defer its risks before advancing. A narrow repair
+  needed for that milestone does not make its subsystem the new priority.
 - Finish coherent coding-workflow slices, including affected callers, cleanup and
   built-client verification. A model's final answer, a feature's presence or a
-  passing helper test is not task completion. Reassess design at meaningful
-  workflow/ownership changes; do not restart a blanket audit after each repair.
+  passing helper test is not task completion. A requested comprehensive design
+  audit is a bounded input to the milestone, not a recurring gate after every
+  repair. Reassess affected owners when requirements or evidence change.
 - Start inline interaction work in `crates/ion-app/src/terminal_client.rs` and
   its submodules; semantic activity comes from `crates/ion-core/src/transcript.rs`,
   rendering from App's `transcript_render.rs` / `tool_output.rs`, semantic styles
@@ -81,8 +89,9 @@ cargo build --locked -p ion
 ```
 
 Exercise the built user entry point for changed behavior. `scripts/smoke.sh`
-covers offline headless submit/reopen. Relevant feature smokes live in
-`scripts/smoke_{terminal,rpc,mcp,fork,resources,images}.py`; CI owns the required
+covers offline headless submit/reopen; `scripts/smoke_headless.py` covers
+streaming, publication pressure and cancellation. Relevant feature smokes live
+in `scripts/smoke_{terminal,rpc,mcp,fork,resources,images}.py`; CI owns the required
 set in `.github/workflows/ci.yml`. Add focused faults for changed storage,
 provider, framing or cancellation boundaries. Investigate failed checks before
 changing expectations; distinguish product defects, model behavior and harness

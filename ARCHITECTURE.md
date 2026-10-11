@@ -13,10 +13,10 @@ continues the conversation after relaunch. Terminal, headless, RPC and embedded
 hosts use the same coding semantics. Native tools inherit host permissions;
 there is no implicit sandbox, private workspace importer or rollback promise.
 
-Current Pi's established coding product is the primary reference for mature
-workflows and harness semantics; its experimental work is a separate source of
-ideas, not equally proven behavior. fx is the scoped reference for terminal
-presentation. Other agents, articles and research are optional references for
+For the initial coding product, current Pi's established product is the primary
+reference for mature workflows and harness semantics; its experimental work is
+a separate source of ideas, not equally proven behavior. fx is the scoped
+reference for terminal presentation. Other agents, articles and research are optional references for
 specific questions, not equal authorities or product requirements. Their
 engineering maturity and stability/simplicity trade-offs vary; distinguish
 observed behavior and inspected source from proposals and vendor claims.
@@ -331,8 +331,9 @@ Keep guest heap/stack/time, call count/concurrency, argument/reply data, raw aud
 host capture/artifacts and final model delivery independently owned. Guest
 limits do not cap native process resources or full-capture disk usage. The first
 path bounds guest data and audit admission; native capture remains tool-owned,
-without an aggregate artifact quota. Artifact quotas and typed advisory RESULT
-contracts remain open work, not claims about the current runtime.
+without an aggregate artifact quota or guaranteed capture retention. These limits
+must remain explicit rather than implying that guest isolation bounds host disk
+use.
 
 ## Qualification
 
