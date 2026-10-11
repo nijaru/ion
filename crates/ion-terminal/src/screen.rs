@@ -83,9 +83,15 @@ pub struct Screen {
     origin: u16,
     screen_height: u16,
     current: Option<Window>,
+    /// Invalidating cell comparisons must not discard primary ownership evidence.
+    repaint: bool,
+    resize_pending: bool,
+    /// Last primary cursor, including when hidden. Alternate output never changes it.
+    physical_cursor: (u16, u16),
+    fullscreen_size: (u16, u16),
     /// Last emitted hardware-cursor state; avoids redundant hide/show
     /// sequences between frames (perceived flicker while typing).
-    cursor_shown: bool,
+    cursor_shown: Option<bool>,
     cursor_at: Option<(u16, u16)>,
     /// Reserved mutable band height. Shorter frames are bottom-aligned;
     /// growing the reservation clears live cells before making physical room.
@@ -108,7 +114,11 @@ impl Screen {
             origin,
             screen_height,
             current: None,
-            cursor_shown: false,
+            repaint: true,
+            resize_pending: false,
+            physical_cursor: (origin, 0),
+            fullscreen_size: (width.max(1), screen_height),
+            cursor_shown: None,
             cursor_at: None,
             live_height: None,
             fullscreen: None,
@@ -162,9 +172,13 @@ impl Screen {
         }
 
         self.live_height = Some(rows);
-        self.current = None;
+        if available < rows {
+            self.current = None;
+            self.physical_cursor = (self.screen_height - 1, 0);
+        }
+        self.repaint = true;
         self.fullscreen = None;
-        self.cursor_shown = false;
+        self.cursor_shown = None;
         self.cursor_at = None;
         Ok(())
     }
@@ -175,21 +189,103 @@ impl Screen {
         self.screen_height.saturating_sub(self.origin).max(1)
     }
 
-    /// Repaint at the new dimensions without advancing terminal history.
-    /// Native reflow remains owned by the terminal, not this cell cache.
-    pub fn resize(&mut self, width: u16, height: u16) {
+    #[must_use]
+    pub fn primary_size(&self) -> (u16, u16) {
+        (self.width, self.screen_height)
+    }
+
+    /// A notification also matters when several native resizes return to the
+    /// old geometry before intake. Keep custody until a primary CPR reconciles.
+    pub fn note_resize(&mut self) {
+        self.resize_pending = true;
+    }
+
+    pub(crate) fn needs_reconciliation(&self, size: (u16, u16)) -> bool {
+        self.resize_pending || size != self.primary_size()
+    }
+
+    /// Alternate geometry is independent of the retained primary footprint.
+    pub fn resize_fullscreen(&mut self, width: u16, height: u16) {
+        let size = (width.max(1), height.max(1));
+        if size != self.fullscreen_size {
+            self.fullscreen_size = size;
+            self.fullscreen = None;
+        }
+    }
+
+    /// Reconcile only the previous mutable footprint against the terminal's
+    /// reflowed active cursor. Each emitted primary row is a hard line (EL
+    /// before painting), and its extent excludes unpainted default padding.
+    /// No committed cells are cached or replayed here.
+    ///
+    /// A negative anchor means native reflow already placed mutable cells in
+    /// history. CPR cannot recover those cells; fail without clearing guessed
+    /// rows or claiming that repaint can undo the emulator's effects.
+    pub fn reconcile_inline(
+        &mut self,
+        out: &mut impl Write,
+        width: u16,
+        height: u16,
+        cursor: (u16, u16),
+    ) -> io::Result<()> {
         let width = width.max(1);
         let height = height.max(1);
-        if width == self.width && height == self.screen_height {
-            return;
+        if cursor.0 >= width || cursor.1 >= height {
+            return Err(io::Error::other(
+                "resize cursor is outside terminal geometry",
+            ));
         }
+        let offset = self
+            .physical_cursor
+            .0
+            .checked_sub(self.origin)
+            .ok_or_else(|| {
+                io::Error::other("primary cursor is outside the owned inline footprint")
+            })?;
+        let (cursor_row, cursor_col) = match &self.current {
+            Some(window) => reflow_cursor(
+                &window.surface.buffer,
+                offset,
+                self.physical_cursor.1,
+                width,
+            )?,
+            None if offset == 0 => (0, 0),
+            None => {
+                return Err(io::Error::other(
+                    "resize has no retained inline cursor evidence",
+                ));
+            }
+        };
+        if cursor.0 != cursor_col {
+            return Err(io::Error::other(
+                "terminal reflow disagrees with the emitted inline cursor",
+            ));
+        }
+        let origin = usize::from(cursor.1)
+            .checked_sub(cursor_row)
+            .ok_or_else(|| {
+                io::Error::other(
+                    "native resize moved mutable inline cells into inaccessible history",
+                )
+            })? as u16;
+        // There can be no committed content below the primary live anchor.
+        // Erase rows, never ED: even ED at row one can archive provisional cells.
+        write!(out, "\x1b[0m")?;
+        for row in origin..height {
+            write!(out, "\x1b[{};1H\x1b[2K", row + 1)?;
+        }
+        out.flush()?;
         self.width = width;
         self.screen_height = height;
-        if self.origin >= height.saturating_sub(1) {
-            self.origin = height.saturating_sub(2);
-        }
+        self.origin = origin;
+        self.resize_pending = false;
         self.live_height = self.live_height.map(|rows| rows.min(self.avail() as usize));
+        self.current = None;
+        // Subsequent publication/growth/paint is synchronous; no query uses
+        // this cleared intermediate surface as reflow evidence.
+        self.physical_cursor = (height - 1, 0);
         self.invalidate();
+        Ok(())
     }
 
     /// Change the reservation without publishing or scrolling live rows.
@@ -203,9 +299,9 @@ impl Screen {
     /// Used after suspend/resume: the host terminal's visible surface
     /// is no longer what this Screen believes it is.
     pub fn invalidate(&mut self) {
-        self.current = None;
+        self.repaint = true;
         self.fullscreen = None;
-        self.cursor_shown = false;
+        self.cursor_shown = None;
         self.cursor_at = None;
     }
 
@@ -233,6 +329,8 @@ impl Screen {
         }
         out.flush()?;
         self.origin = origin;
+        self.current = None;
+        self.physical_cursor = (origin, 0);
         self.live_height = Some(self.live_height().min(self.avail() as usize));
         self.invalidate();
         Ok(())
@@ -252,7 +350,7 @@ impl Screen {
     /// Repaint only the mutable band. Reservation growth and publication are
     /// explicit operations; resizing or replacing a frame cannot scroll it.
     pub fn draw(&mut self, out: &mut impl Write, frame: &Frame) -> io::Result<()> {
-        let previous = self.current.take();
+        let previous = self.current.as_ref();
         let height = self.avail();
         let band = self
             .live_height
@@ -261,23 +359,6 @@ impl Screen {
         self.live_height = Some(band);
         let dropped = frame.live.len().saturating_sub(band);
         let padding = band.saturating_sub(frame.live.len());
-        let mut next = Surface::new(self.width, height);
-        for (index, line) in frame.live.iter().skip(dropped).enumerate() {
-            next.render_line(line.clone(), (padding + index) as u16);
-        }
-        let mut painted = false;
-        for row in 0..height {
-            if previous
-                .as_ref()
-                .is_none_or(|prev| row_differs(&next.buffer, row, &prev.surface.buffer, row))
-            {
-                emit_buffer_row(out, &next.buffer, row, self.origin)?;
-                painted = true;
-            }
-        }
-        if painted {
-            write!(out, "\x1b[0m")?;
-        }
         let cursor = frame
             .cursor
             .filter(|(row, col)| *row < frame.live.len() && *col < self.width)
@@ -285,19 +366,57 @@ impl Screen {
                 let row = row.checked_sub(dropped)? + padding;
                 (row < band).then_some((self.origin + row as u16, col))
             });
+        let mut next = Surface::new(self.width, band as u16);
+        for (index, line) in frame.live.iter().skip(dropped).enumerate() {
+            next.render_line(line.clone(), (padding + index) as u16);
+        }
+        let mut painted = false;
+        for row in 0..band as u16 {
+            let cursor_column = cursor.filter(|at| at.0 == self.origin + row).map(|at| at.1);
+            // Include the cell under the cursor in the emitted extent. CPR
+            // then denotes a real cell, not emulator-specific trailing-blank
+            // or pending-wrap cursor policy.
+            if self.repaint
+                || previous.is_none_or(|prev| {
+                    row >= prev.surface.buffer.area.height
+                        || row_differs(&next.buffer, row, &prev.surface.buffer, row)
+                })
+                || cursor_column.is_some_and(|col| self.cursor_at != Some((self.origin + row, col)))
+                || self
+                    .cursor_at
+                    .is_some_and(|at| at.0 == self.origin + row && cursor != Some(at))
+            {
+                emit_buffer_row(out, &next.buffer, row, self.origin, cursor_column)?;
+                painted = true;
+            }
+        }
+        if let Some(previous) = previous {
+            for row in band as u16..previous.surface.buffer.area.height {
+                write!(out, "\x1b[0m\x1b[{};1H\x1b[2K", self.origin + row + 1)?;
+                painted = true;
+            }
+        }
+        if painted {
+            write!(out, "\x1b[0m")?;
+        }
         if let Some(at) = cursor {
-            if painted || !self.cursor_shown || self.cursor_at != Some(at) {
+            if painted || self.cursor_shown != Some(true) || self.cursor_at != Some(at) {
                 write!(out, "\x1b[{};{}H", at.0 + 1, at.1 + 1)?;
-                if !self.cursor_shown {
+                if self.cursor_shown != Some(true) {
                     write!(out, "\x1b[?25h")?;
                 }
             }
-        } else if self.cursor_shown {
-            write!(out, "\x1b[?25l")?;
+        } else {
+            write!(out, "\x1b[{};1H", self.origin + band as u16)?;
+            if self.cursor_shown != Some(false) {
+                write!(out, "\x1b[?25l")?;
+            }
         }
         out.flush()?;
-        self.cursor_shown = cursor.is_some();
+        self.repaint = false;
+        self.cursor_shown = Some(cursor.is_some());
         self.cursor_at = cursor;
+        self.physical_cursor = cursor.unwrap_or((self.origin + band as u16 - 1, 0));
         self.current = Some(Window {
             surface: next,
             finish_row: self
@@ -322,9 +441,9 @@ impl Screen {
         cursor: Option<(usize, u16)>,
     ) -> io::Result<()> {
         let previous = self.fullscreen.take();
-        let h = self.screen_height as usize;
-        let w = self.width;
-        let mut next = Surface::new(w, self.screen_height);
+        let (w, height) = self.fullscreen_size;
+        let h = height as usize;
+        let mut next = Surface::new(w, height);
         for (row, line) in rows.iter().take(h).enumerate() {
             next.render_line(line.clone(), row as u16);
         }
@@ -341,7 +460,7 @@ impl Screen {
                     r,
                 )
             {
-                emit_buffer_row(out, &next.buffer, r, 0)?;
+                emit_buffer_row(out, &next.buffer, r, 0, None)?;
                 painted = true;
             }
         }
@@ -349,13 +468,12 @@ impl Screen {
         // it. The cursor position is a viewport row (0-based, physical),
         // not a scrollback-absolute row.
         if let Some((row, col)) = cursor
-            && (row as u16) < self.screen_height
+            && row < h
         {
             write!(out, "\x1b[{};{}H\x1b[?25h", row + 1, col + 1)?;
-        } else if self.cursor_shown {
+        } else {
             write!(out, "\x1b[?25l")?;
         }
-        self.cursor_shown = cursor.is_some();
         if painted {
             write!(out, "\x1b[0m")?;
         }
@@ -385,12 +503,80 @@ fn row_differs(next: &Buffer, r: u16, prev: &Buffer, prev_r: u16) -> bool {
     false
 }
 
+/// The extent actually painted, including styled blanks and wide continuations.
+fn row_extent(buf: &Buffer, row: u16) -> u16 {
+    let default = ratatui::buffer::Cell::default();
+    let mut extent = 0;
+    let mut column = 0;
+    while column < buf.area.width {
+        let cell = &buf[(column, row)];
+        let end = (column + cell.cell_width().max(1)).min(buf.area.width);
+        if !cells_equal(cell, &default) {
+            extent = end;
+        }
+        column = end;
+    }
+    extent
+}
+
+/// Map the emitted hard rows, not App's new layout or full-width padding.
+/// Only the prefix through the old active cursor is necessary to locate the
+/// anchor: all cells below it also belong to the live surface, never history.
+fn reflow_cursor(buf: &Buffer, row: u16, column: u16, width: u16) -> io::Result<(usize, u16)> {
+    if row >= buf.area.height || column >= buf.area.width {
+        return Err(io::Error::other(
+            "cursor is outside the retained inline cells",
+        ));
+    }
+    // Leading reservation blanks contain no emitted cells. They can move
+    // into native history without losing mutable content, and need not be
+    // reclaimed. The first painted row (or an empty cursor row) is the
+    // physical ownership boundary used for erasure and the next reservation.
+    let first = (0..=row)
+        .find(|old_row| *old_row == row || row_extent(buf, *old_row) > 0)
+        .expect("cursor row is in range");
+    let mut mapped_row = 0usize;
+    for old_row in first..=row {
+        let extent = row_extent(buf, old_row).max(if old_row == row { column + 1 } else { 0 });
+        let mut old_col = 0;
+        let mut new_col = 0;
+        while old_col < extent {
+            let span = buf[(old_col, old_row)].cell_width().max(1);
+            if span > width {
+                return Err(io::Error::other(
+                    "terminal width cannot retain an emitted wide glyph",
+                ));
+            }
+            if span > width - new_col {
+                mapped_row += 1;
+                new_col = 0;
+            }
+            if old_row == row && column < old_col + span {
+                return Ok((mapped_row, new_col + column - old_col));
+            }
+            old_col += span;
+            new_col += span;
+        }
+        mapped_row += 1;
+    }
+    Err(io::Error::other(
+        "retained inline cursor has no emitted cell",
+    ))
+}
+
 /// Rewrite one full row from the freshly rendered buffer. Row-level
 /// granularity keeps wide characters consistent: both compared sides
 /// come from complete renders, so continuation cells can never join
 /// across a partial edit.
-fn emit_buffer_row(out: &mut impl Write, buf: &Buffer, r: u16, origin: u16) -> io::Result<()> {
-    let w = buf.area.width;
+fn emit_buffer_row(
+    out: &mut impl Write,
+    buf: &Buffer,
+    r: u16,
+    origin: u16,
+    cursor_column: Option<u16>,
+) -> io::Result<()> {
+    write!(out, "\x1b[0m\x1b[{};1H\x1b[2K", origin + r + 1)?;
+    let w = row_extent(buf, r).max(cursor_column.map_or(0, |col| col + 1));
     let mut x = 0u16;
     while x < w {
         let cell = buf[(x, r)].clone();
@@ -406,8 +592,8 @@ fn emit_buffer_row(out: &mut impl Write, buf: &Buffer, r: u16, origin: u16) -> i
             // those reset cells again shifts text and can wrap the bottom row.
             x += c.cell_width().max(1);
         }
-        // Blank runs are written too: they erase whatever the previous
-        // frame left in that row (shrink, lag rebuild).
+        // Internal and styled blanks are content; unpainted default padding
+        // is erased by EL, not emitted as physical full-width text.
         write!(out, "\x1b[{};{}H", origin + r + 1, start + 1)?;
         emit_style(out, cell.style())?;
         write!(out, "{text}")?;
@@ -533,39 +719,50 @@ mod tests {
     }
 
     #[test]
-    fn passive_resize_does_not_publish_blank_history() {
-        let mut screen = Screen::with_live_height(30, 0, 20, 12);
-        let mut terminal = vt100::Parser::new(20, 30, 32);
-        let live = [line("PROVISIONAL"), line("prompt")];
+    fn reconcile_resize_clears_the_old_reflowed_band_before_growth() {
+        let mut screen = Screen::with_live_height(100, 26, 30, 2);
         let mut out = Vec::new();
         screen
             .draw(
                 &mut out,
                 &Frame {
-                    live: &live,
-                    cursor: Some((1, 0)),
+                    live: &[
+                        line("Shell finished with an error"),
+                        line("› Preserve this draft: café 界 👩‍💻"),
+                    ],
+                    cursor: Some((1, 33)),
                 },
             )
             .unwrap();
-        terminal.process(&out);
-        screen.resize(30, 7);
-        terminal.screen_mut().set_size(7, 30);
+        // Independently supplied native-reflow outcome, not vt100::set_size
+        // (which does not model tmux/Ghostty reflow).
+        let mut terminal = vt100::Parser::new(7, 24, 32);
+        terminal.process("HISTORY\x1b[3;1HShell finished with an e\x1b[4;1Hrror\x1b[5;1H› Preserve this draft: c\x1b[6;1Hafé 界 👩‍💻".as_bytes());
         out.clear();
+        screen.reconcile_inline(&mut out, 24, 7, (9, 5)).unwrap();
+        assert_eq!(screen.origin, 2);
+        assert!(!out.windows(2).any(|bytes| bytes == b"\r\n"));
+        terminal.process(&out);
+        out.clear();
+        screen.ensure_live_height(&mut out, 4).unwrap();
         screen
             .draw(
                 &mut out,
                 &Frame {
-                    live: &live,
-                    cursor: Some((1, 0)),
+                    live: &[
+                        line("Shell finished with an e"),
+                        line("rror"),
+                        line("› Preserve this draft: c"),
+                        line("  afé 界 👩‍💻"),
+                    ],
+                    cursor: Some((3, 11)),
                 },
             )
             .unwrap();
-        assert!(
-            !out.windows(2).any(|bytes| bytes == b"\r\n"),
-            "resize must not emit history advancement"
-        );
         terminal.process(&out);
-        assert!(terminal.screen().contents().contains("PROVISIONAL"));
+        assert_eq!(terminal.screen().rows(0, 24).next().unwrap(), "HISTORY");
+        assert_eq!(terminal.screen().contents().matches("Preserve").count(), 1);
+        assert_eq!(terminal.screen().cursor_position(), (5, 11));
     }
 
     #[test]
@@ -766,24 +963,6 @@ mod tests {
                 .unwrap();
             terminal.process(&out);
             assert!(!terminal.screen().contents().contains("PROVISIONAL"));
-            for (height, width) in [(7, 20), (12, 30)] {
-                screen.resize(width, height);
-                terminal.screen_mut().set_size(height, width);
-                out.clear();
-                screen
-                    .draw(
-                        &mut out,
-                        &Frame {
-                            live: &[line("ready")],
-                            cursor: Some((0, 0)),
-                        },
-                    )
-                    .unwrap();
-                assert!(!out.windows(2).any(|bytes| bytes == b"\r\n"));
-                assert!(!String::from_utf8_lossy(&out).contains("settled-"));
-                terminal.process(&out);
-                assert!(terminal.screen().contents().contains("ready"));
-            }
             let text = String::from_utf8(emitted).unwrap();
             for row in &settled {
                 assert_eq!(text.matches(row.to_string().as_str()).count(), 1);
@@ -864,7 +1043,10 @@ mod tests {
                 },
             )
             .unwrap();
-        assert!(!String::from_utf8(out).unwrap().contains("\x1b[?25h"));
+        assert!(!String::from_utf8_lossy(&out).contains("\x1b[?25h"));
+        let mut terminal = vt100::Parser::new(6, 20, 0);
+        terminal.process(&out);
+        assert!(terminal.screen().hide_cursor());
     }
 
     #[test]
@@ -886,25 +1068,122 @@ mod tests {
     }
 
     #[test]
-    fn resize_repaints_every_row() {
-        let mut out = Vec::new();
-        let mut screen = Screen::new(40, 0, 6);
-        for height in [6, 4] {
-            screen.resize(40, height);
-            screen
-                .draw(
-                    &mut out,
-                    &Frame {
-                        live: &[line("progress"), line("prompt")],
-                        cursor: None,
-                    },
-                )
-                .unwrap();
+    fn reflow_maps_actual_cells_and_hard_row_boundaries() {
+        for (text, column, width, expected) in [
+            ("123界ab", 6, 4, (1, 3)),
+            ("123界ab", 7, 4, (2, 0)),
+            ("a\u{301}b", 2, 2, (1, 0)),
+            ("👩‍💻x", 2, 2, (1, 0)),
+            ("long", 1, 8, (0, 1)),
+        ] {
+            let mut surface = Surface::new(20, 2);
+            surface.render_line(line("12345"), 0);
+            surface.render_line(line(text), 1);
+            let prefix = 5usize.div_ceil(width as usize);
+            assert_eq!(
+                reflow_cursor(&surface.buffer, 1, column, width).unwrap(),
+                (prefix + expected.0, expected.1),
+                "{text}"
+            );
         }
-        assert_eq!(
-            String::from_utf8(out).unwrap().matches("progress").count(),
-            2
+    }
+
+    #[test]
+    fn resize_does_not_reclaim_empty_reservation_rows_from_history() {
+        let mut screen = Screen::with_live_height(100, 3, 30, 12);
+        let mut out = Vec::new();
+        screen
+            .draw(
+                &mut out,
+                &Frame {
+                    live: &[line("draft")],
+                    cursor: Some((0, 5)),
+                },
+            )
+            .unwrap();
+        out.clear();
+        screen.reconcile_inline(&mut out, 24, 7, (5, 3)).unwrap();
+        assert_eq!(screen.origin, 3);
+        assert!(!String::from_utf8_lossy(&out).contains("\x1b[1;1H"));
+        assert!(!out.windows(2).any(|bytes| bytes == b"\r\n"));
+    }
+
+    #[test]
+    fn uncertain_reflow_never_erases_guessed_rows_or_discards_evidence() {
+        let mut screen = Screen::with_live_height(100, 26, 30, 2);
+        let mut out = Vec::new();
+        screen
+            .draw(
+                &mut out,
+                &Frame {
+                    live: &[line("1234567890123456789012345678"), line("draft")],
+                    cursor: Some((1, 5)),
+                },
+            )
+            .unwrap();
+        screen.note_resize();
+        screen.resize_fullscreen(24, 7);
+        screen
+            .draw_fullscreen(&mut out, &[line("modal")], Some((0, 3)))
+            .unwrap();
+        screen.invalidate(); // Modal return retains primary cells and cursor.
+        for cursor in [(5, 1), (4, 5)] {
+            out.clear();
+            assert!(screen.reconcile_inline(&mut out, 24, 7, cursor).is_err());
+            assert!(out.is_empty());
+            assert_eq!(screen.primary_size(), (100, 30));
+            assert_eq!(screen.origin, 26);
+            assert!(screen.needs_reconciliation((100, 30)));
+            assert!(screen.current.is_some());
+        }
+        // A reply from the restored primary, not the modal cursor, locates
+        // the footprint using the retained 100-column rows.
+        screen.reconcile_inline(&mut out, 24, 7, (5, 5)).unwrap();
+        assert_eq!(screen.origin, 3);
+        assert!(!screen.needs_reconciliation((24, 7)));
+    }
+
+    #[test]
+    fn inline_output_trims_padding_but_preserves_styled_blanks_and_cursor_cell() {
+        let mut screen = Screen::with_live_height(100, 3, 30, 2);
+        let mut out = Vec::new();
+        let styled = Line::from(vec![
+            Span::raw("x"),
+            Span::styled("  ", Style::default().bg(Color::Blue)),
+        ]);
+        screen
+            .draw(
+                &mut out,
+                &Frame {
+                    live: &[styled, line("draft")],
+                    cursor: Some((1, 8)),
+                },
+            )
+            .unwrap();
+        let text = String::from_utf8(out).unwrap();
+        assert!(text.contains("\x1b[44m  "));
+        assert!(!text.contains("          "));
+        assert!(
+            !text.contains("\x1b[6;1H"),
+            "unreserved rows are not emitted"
         );
+        assert!(!text.contains("\x1b[2J"));
+        assert_eq!(
+            reflow_cursor(&screen.current.as_ref().unwrap().surface.buffer, 1, 8, 4).unwrap(),
+            (3, 0)
+        );
+        // Moving a cursor backwards must remove its old emitted blank extent.
+        out = Vec::new();
+        screen
+            .draw(
+                &mut out,
+                &Frame {
+                    live: &[line("x"), line("draft")],
+                    cursor: Some((1, 2)),
+                },
+            )
+            .unwrap();
+        assert!(String::from_utf8(out).unwrap().contains("draft"));
     }
 
     #[test]
@@ -940,7 +1219,7 @@ mod tests {
         screen
             .draw_fullscreen(&mut out, &[line("old")], None)
             .unwrap();
-        screen.resize(8, 3);
+        screen.resize_fullscreen(8, 3);
         out.clear();
         screen
             .draw_fullscreen(&mut out, &[line("new")], None)

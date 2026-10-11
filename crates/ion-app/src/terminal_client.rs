@@ -240,7 +240,7 @@ pub async fn chat(init: ChatInit) -> Result<()> {
             run_turn(&mut terminal, &mut screen, &mut ui, &runtime, incoming).await?;
             continue;
         }
-        draw(&mut terminal, &mut screen, &mut ui, None, None)?;
+        draw(&mut terminal, &mut screen, &mut ui, None, None).await?;
         #[cfg(debug_assertions)]
         if std::env::var_os("ION_SMOKE_PANIC_AFTER_FIRST_DRAW").is_some() {
             panic!("ION smoke panic after first terminal draw");
@@ -457,7 +457,7 @@ pub async fn chat(init: ChatInit) -> Result<()> {
             }
             InputEvent::Paste(text) => ui.insert(&text),
             InputEvent::Rejected(error) => ui.status = error.to_string(),
-            InputEvent::Resize(size) => screen.resize(size.columns, size.rows),
+            InputEvent::Resize(_) => screen.note_resize(),
             InputEvent::Mouse(mouse) => match mouse.kind() {
                 MouseKind::ScrollUp => ui.scroll = ui.scroll.saturating_add(3),
                 MouseKind::ScrollDown => ui.scroll = ui.scroll.saturating_sub(3),
@@ -469,6 +469,7 @@ pub async fn chat(init: ChatInit) -> Result<()> {
         terminal.leave_alt_screen()?;
         screen.invalidate();
     }
+    terminal.prepare_inline(&mut screen).await?;
     screen.finish(&mut terminal.output()?)?;
     terminal.restore()?;
     Ok(())
@@ -497,17 +498,11 @@ async fn new_inline_screen(terminal: &mut TerminalSession) -> Result<Screen> {
     if terminal.is_alt_screen()? {
         terminal.leave_alt_screen()?;
     }
-    let (width, height) = terminal.size().context("read terminal size")?;
-    let (_, cursor_row) = terminal
-        .cursor_position()
+    let ((width, height), (_, cursor_row)) = terminal
+        .primary_geometry()
         .await
-        .context("read terminal cursor position")?;
-    Ok(Screen::with_live_height(
-        width,
-        cursor_row.min(height.saturating_sub(1)),
-        height,
-        1,
-    ))
+        .context("read primary terminal geometry")?;
+    Ok(Screen::with_live_height(width, cursor_row, height, 1))
 }
 
 async fn login_in_terminal(
@@ -890,7 +885,7 @@ async fn run_compaction(
                 notice = ui.pickers.complete(), if ui.pickers.has_job() => {
                     if let Some(notice) = notice { ui.note(notice); }
                     if output_error.is_none()
-                        && let Err(error) = draw(terminal, screen, ui, None, Some(ActiveOperation::Compaction(&stop)))
+                        && let Err(error) = draw(terminal, screen, ui, None, Some(ActiveOperation::Compaction(&stop))).await
                     {
                         output_error = Some(error);
                         input_ended = true;
@@ -912,7 +907,7 @@ async fn run_compaction(
                     Some(Ok(InputEvent::Key(key))) => busy_key(ui, key, &stop, None, Some(runtime.resources()), runtime.agent().limits()),
                     Some(Ok(InputEvent::Paste(text))) => ui.insert(&text),
                     Some(Ok(InputEvent::Rejected(error))) => ui.status = error.to_string(),
-                    Some(Ok(InputEvent::Resize(size))) => screen.resize(size.columns, size.rows),
+                    Some(Ok(InputEvent::Resize(_))) => screen.note_resize(),
                     Some(Ok(InputEvent::Mouse(mouse))) => match mouse.kind() {
                         MouseKind::ScrollUp => ui.scroll = ui.scroll.saturating_add(3),
                         MouseKind::ScrollDown => ui.scroll = ui.scroll.saturating_sub(3),
@@ -924,7 +919,7 @@ async fn run_compaction(
                 },
                 _ = tick.tick(), if output_error.is_none() => {
                     finish_ready_clipboard_paste(ui).await;
-                    if let Err(error) = draw(terminal, screen, ui, None, Some(ActiveOperation::Compaction(&stop))) {
+                    if let Err(error) = draw(terminal, screen, ui, None, Some(ActiveOperation::Compaction(&stop))).await {
                         output_error = Some(error);
                         input_ended = true;
                         stop.cancel();
@@ -1164,7 +1159,7 @@ async fn run_user_shell(
                 notice = ui.pickers.complete(), if ui.pickers.has_job() => {
                     if let Some(notice) = notice { ui.note(notice); }
                     if output_error.is_none()
-                        && let Err(error) = draw(terminal, screen, ui, None, Some(ActiveOperation::Shell(&stop)))
+                        && let Err(error) = draw(terminal, screen, ui, None, Some(ActiveOperation::Shell(&stop))).await
                     {
                         output_error = Some(error);
                         input_ended = true;
@@ -1188,7 +1183,7 @@ async fn run_user_shell(
                     Some(Ok(InputEvent::Key(key))) => busy_key(ui, key, &stop, None, Some(runtime.resources()), runtime.agent().limits()),
                     Some(Ok(InputEvent::Paste(text))) => ui.insert(&text),
                     Some(Ok(InputEvent::Rejected(error))) => ui.status = error.to_string(),
-                    Some(Ok(InputEvent::Resize(size))) => screen.resize(size.columns, size.rows),
+                    Some(Ok(InputEvent::Resize(_))) => screen.note_resize(),
                     Some(Ok(InputEvent::Mouse(mouse))) => match mouse.kind() {
                         MouseKind::ScrollUp => ui.scroll = ui.scroll.saturating_add(3),
                         MouseKind::ScrollDown => ui.scroll = ui.scroll.saturating_sub(3),
@@ -1204,7 +1199,7 @@ async fn run_user_shell(
                 },
                 _ = tick.tick(), if output_error.is_none() => {
                     finish_ready_clipboard_paste(ui).await;
-                    if let Err(error) = draw(terminal, screen, ui, None, Some(ActiveOperation::Shell(&stop))) {
+                    if let Err(error) = draw(terminal, screen, ui, None, Some(ActiveOperation::Shell(&stop))).await {
                         output_error = Some(error);
                         input_ended = true;
                         stop.cancel();
@@ -1296,9 +1291,8 @@ async fn run_turn(
                 result = &mut turn => break result,
                 notice = ui.pickers.complete(), if ui.pickers.has_job() => {
                     if let Some(notice) = notice { ui.note(notice); }
-                    let preview = progress.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
                     if output_error.is_none()
-                        && let Err(error) = draw(terminal, screen, ui, Some(&preview), Some(ActiveOperation::Coding(&stop)))
+                        && let Err(error) = draw_progress(terminal, screen, ui, &progress, ActiveOperation::Coding(&stop)).await
                     {
                         output_error = Some(error);
                         input_ended = true;
@@ -1320,7 +1314,7 @@ async fn run_turn(
                     Some(Ok(InputEvent::Key(key))) => busy_key(ui, key, &stop, Some(&steering), Some(runtime.resources()), runtime.agent().limits()),
                     Some(Ok(InputEvent::Paste(text))) => ui.insert(&text),
                     Some(Ok(InputEvent::Rejected(error))) => ui.status = error.to_string(),
-                    Some(Ok(InputEvent::Resize(size))) => screen.resize(size.columns, size.rows),
+                    Some(Ok(InputEvent::Resize(_))) => screen.note_resize(),
                     Some(Ok(InputEvent::Mouse(mouse))) => match mouse.kind() {
                         MouseKind::ScrollUp => ui.scroll = ui.scroll.saturating_add(3),
                         MouseKind::ScrollDown => ui.scroll = ui.scroll.saturating_sub(3),
@@ -1332,8 +1326,7 @@ async fn run_turn(
                 },
                 _ = tick.tick(), if output_error.is_none() => {
                     finish_ready_clipboard_paste(ui).await;
-                    let preview = progress.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
-                    if let Err(error) = draw(terminal, screen, ui, Some(&preview), Some(ActiveOperation::Coding(&stop))) {
+                    if let Err(error) = draw_progress(terminal, screen, ui, &progress, ActiveOperation::Coding(&stop)).await {
                         output_error = Some(error);
                         input_ended = true;
                         stop.cancel();
@@ -2166,30 +2159,73 @@ fn vertical_cursor(draft: &str, cursor: usize, down: bool) -> Option<usize> {
     }
 }
 
-fn draw(
+async fn prepare_draw(
+    terminal: &mut TerminalSession,
+    screen: &mut Screen,
+    ui: &Frontend,
+) -> Result<(u16, u16, bool)> {
+    if ui.details.is_some() || ui.pickers.active().is_some() || ui.mode == TuiMode::Fullscreen {
+        terminal.enter_alt_screen()?;
+        let (width, height) = terminal.size()?;
+        screen.resize_fullscreen(width, height);
+        return Ok((width, height, false));
+    }
+    let surface_reset = terminal.is_alt_screen()?;
+    if surface_reset {
+        // Restore first: the alternate cursor is not evidence about primary
+        // ownership. Keep the previous primary cells through reconciliation.
+        terminal.leave_alt_screen()?;
+        screen.invalidate();
+    }
+    let (width, height) = terminal.prepare_inline(screen).await?;
+    Ok((width, height, surface_reset))
+}
+
+async fn draw(
     terminal: &mut TerminalSession,
     screen: &mut Screen,
     ui: &mut Frontend,
     progress: Option<&LiveTranscript>,
     operation: Option<ActiveOperation<'_>>,
 ) -> Result<()> {
-    let (width, height) = terminal.size()?;
-    screen.resize(width, height);
+    let geometry = prepare_draw(terminal, screen, ui).await?;
+    draw_prepared(terminal, screen, ui, progress, operation, geometry)
+}
 
+async fn draw_progress(
+    terminal: &mut TerminalSession,
+    screen: &mut Screen,
+    ui: &mut Frontend,
+    progress: &Mutex<LiveTranscript>,
+    operation: ActiveOperation<'_>,
+) -> Result<()> {
+    let geometry = prepare_draw(terminal, screen, ui).await?;
+    let preview = progress
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    draw_prepared(
+        terminal,
+        screen,
+        ui,
+        Some(&preview),
+        Some(operation),
+        geometry,
+    )
+}
+
+fn draw_prepared(
+    terminal: &mut TerminalSession,
+    screen: &mut Screen,
+    ui: &mut Frontend,
+    progress: Option<&LiveTranscript>,
+    operation: Option<ActiveOperation<'_>>,
+    (width, height, surface_reset): (u16, u16, bool),
+) -> Result<()> {
     if ui.details.is_some() || ui.pickers.active().is_some() {
-        terminal.enter_alt_screen()?;
         return draw_modal_fullscreen(terminal, screen, ui, progress, operation, width, height);
     }
     if ui.mode == TuiMode::Fullscreen {
-        terminal.enter_alt_screen()?;
         return draw_chat_fullscreen(terminal, screen, ui, progress, operation, width, height);
-    }
-
-    let mut surface_reset = false;
-    if terminal.is_alt_screen()? {
-        terminal.leave_alt_screen()?;
-        screen.invalidate();
-        surface_reset = true;
     }
 
     let commit_rows = ui.pending_history_rows(width.max(1) as usize);

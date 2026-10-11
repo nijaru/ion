@@ -368,6 +368,18 @@ impl InputStream {
             .await
     }
 
+    /// Already pending SIGWINCH is represented by the next size snapshot.
+    /// Notifications after that snapshot invalidate a primary CPR query.
+    pub(crate) fn take_resize_notifications(&mut self) -> bool {
+        let mut context = std::task::Context::from_waker(std::task::Waker::noop());
+        // Tokio coalesces pending notifications. Take one snapshot rather
+        // than draining a signal storm before the bounded query can begin.
+        matches!(
+            self.resize.poll_recv(&mut context),
+            std::task::Poll::Ready(Some(()))
+        )
+    }
+
     pub(crate) async fn cursor_position(&mut self) -> io::Result<(u16, u16)> {
         self.replies.cursor = None;
         let result = self
@@ -399,6 +411,10 @@ impl InputStream {
             }
             let escape_deadline = self.escape_deadline;
             let chunk = tokio::select! {
+                biased;
+                _ = self.resize.recv(), if cursor_query => {
+                    return Err(io::Error::new(io::ErrorKind::Interrupted, "terminal resized during cursor query"));
+                },
                 chunk = self.chunks.recv() => chunk,
                 () = tokio::time::sleep_until(deadline) => continue,
                 () = wait_escape(escape_deadline) => continue,
@@ -715,6 +731,43 @@ mod tests {
             InputEvent::Key(KeyEvent::new(KeyCode::F(3), Modifiers::SHIFT))
         );
         assert_eq!(input.keyboard_support().await.unwrap(), None);
+    }
+
+    #[tokio::test]
+    async fn resize_during_cursor_query_fails_without_losing_typeahead() {
+        use std::future::Future;
+        use std::task::{Context, Waker};
+
+        let (sender, chunks) = mpsc::channel(4);
+        let mut input = stream(chunks);
+        // A dedicated signal isolates this query from parallel SIGWINCH tests.
+        input.resize = signal(SignalKind::user_defined1()).unwrap();
+        sender.send(Ok(b"typed".to_vec())).await.unwrap();
+        let mut query = Box::pin(input.cursor_position());
+        assert!(
+            query
+                .as_mut()
+                .poll(&mut Context::from_waker(Waker::noop()))
+                .is_pending()
+        );
+        assert!(
+            std::process::Command::new("kill")
+                .args(["-USR1", &std::process::id().to_string()])
+                .status()
+                .unwrap()
+                .success()
+        );
+        let error = tokio::time::timeout(Duration::from_secs(1), &mut query)
+            .await
+            .unwrap()
+            .unwrap_err();
+        assert_eq!(error.kind(), io::ErrorKind::Interrupted);
+        drop(query);
+        assert_eq!(input.pending.len(), 5);
+        assert_eq!(
+            input.next().await.unwrap().unwrap(),
+            InputEvent::Key(KeyEvent::new(KeyCode::Char('t'), Modifiers::NONE))
+        );
     }
 
     #[tokio::test]

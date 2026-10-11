@@ -216,6 +216,51 @@ impl TerminalSession {
         terminal::size()
     }
 
+    /// Query the restored primary, with a stable geometry snapshot. A resize
+    /// during the query is a custody failure, not permission to guess an anchor.
+    pub async fn primary_geometry(&mut self) -> io::Result<((u16, u16), (u16, u16))> {
+        if self.is_alt_screen()? {
+            return Err(io::Error::other(
+                "primary geometry queried on alternate screen",
+            ));
+        }
+        self.input.take_resize_notifications();
+        let size = self.size()?;
+        let cursor = self.cursor_position().await?;
+        if self.size()? != size {
+            return Err(io::Error::other(
+                "terminal resized during primary cursor query",
+            ));
+        }
+        if cursor.0 >= size.0 || cursor.1 >= size.1 {
+            return Err(io::Error::other(
+                "primary cursor reply is outside terminal geometry",
+            ));
+        }
+        Ok((size, cursor))
+    }
+
+    /// Resolve native reflow before any inline publication, growth or paint.
+    /// Neither the terminal output lease nor a frontend progress guard may be
+    /// retained while waiting for CPR.
+    pub async fn prepare_inline(&mut self, screen: &mut Screen) -> io::Result<(u16, u16)> {
+        if self.is_alt_screen()? {
+            return Err(io::Error::other(
+                "inline preparation requires restored primary screen",
+            ));
+        }
+        if self.input.take_resize_notifications() {
+            screen.note_resize();
+        }
+        let size = self.size()?;
+        if screen.needs_reconciliation(size) {
+            let (size, cursor) = self.primary_geometry().await?;
+            screen.reconcile_inline(&mut self.output()?, size.0, size.1, cursor)?;
+            return Ok(size);
+        }
+        Ok(size)
+    }
+
     pub async fn cursor_position(&mut self) -> io::Result<(u16, u16)> {
         self.output()?.write_all(b"\x1b[6n")?;
         self.output()?.flush()?;
