@@ -5,6 +5,7 @@ import os
 import shlex
 import shutil
 import signal
+import sqlite3
 import subprocess
 import tempfile
 import threading
@@ -88,6 +89,21 @@ with tempfile.TemporaryDirectory(prefix="ion-scrollback-") as temporary:
     def tmux(*args):
         return subprocess.check_output(["tmux", "-S", socket, *args], env=env).decode()
 
+    def wait_completed_turns(count):
+        # Provisional answer text can paint before Core settlement and native
+        # publication. Require committed completion and the emulator's idle
+        # surface before asserting exact-once scrollback content.
+        while True:
+            sessions = list((work / "state/ion/sessions").rglob("*.sqlite"))
+            assert len(sessions) == 1, "expected one owned main Session"
+            with sqlite3.connect(f"file:{sessions[0]}?mode=ro", uri=True) as db:
+                completed = db.execute("SELECT count(*) FROM entries WHERE json_extract(body,'$.kind')='turn_ended' AND json_extract(body,'$.data.reason')='completed'").fetchone()[0]
+            pane = tmux("capture-pane", "-p", "-t", "ion")
+            if completed == count and "Working" not in pane:
+                return
+            assert time.monotonic() < deadline, f"inline Turn/publication did not settle:\n{pane}"
+            time.sleep(0.02)
+
     native_pid = None
     try:
         subprocess.run(
@@ -114,7 +130,7 @@ with tempfile.TemporaryDirectory(prefix="ion-scrollback-") as temporary:
             assert time.monotonic() < deadline, "inline Turn did not finish"
             time.sleep(0.02)
 
-        time.sleep(0.1)
+        wait_completed_turns(1)
 
         def check_history():
             history = tmux("capture-pane", "-p", "-t", "ion", "-S", "-")
@@ -222,7 +238,7 @@ with tempfile.TemporaryDirectory(prefix="ion-scrollback-") as temporary:
         command("/settings expanded", "Tool output: expanded")
         command("/settings thinking show", "Thinking: Shown")
         command("NEXT_INPUT: run a follow-up command", "FUTURE_DONE")
-        time.sleep(0.1)
+        wait_completed_turns(2)
         history = tmux("capture-pane", "-p", "-t", "ion", "-S", "-")
         assert history.count("FUTURE_FIRST") == 1, "expanded future publication omitted or duplicated recorded output"
         assert history.count("THINK_3") == 1 and history.count("THINK_4") == 1, "future thinking publication was lost or duplicated"
