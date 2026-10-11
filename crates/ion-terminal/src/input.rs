@@ -632,9 +632,13 @@ fn send_chunk(
 }
 
 fn decode_code(code: term_input::KeyCode) -> KeyCode {
+    // Termwiz emits Char for CSI-u ASCII controls, but named keys for legacy
+    // encodings. Both represent the same editing/navigation keys.
     match code {
-        term_input::KeyCode::Backspace => KeyCode::Backspace,
-        term_input::KeyCode::Enter => KeyCode::Enter,
+        term_input::KeyCode::Backspace | term_input::KeyCode::Char('\x08' | '\x7f') => {
+            KeyCode::Backspace
+        }
+        term_input::KeyCode::Enter | term_input::KeyCode::Char('\r' | '\n') => KeyCode::Enter,
         term_input::KeyCode::LeftArrow => KeyCode::Left,
         term_input::KeyCode::RightArrow => KeyCode::Right,
         term_input::KeyCode::UpArrow => KeyCode::Up,
@@ -643,14 +647,12 @@ fn decode_code(code: term_input::KeyCode) -> KeyCode {
         term_input::KeyCode::End => KeyCode::End,
         term_input::KeyCode::PageUp => KeyCode::PageUp,
         term_input::KeyCode::PageDown => KeyCode::PageDown,
-        term_input::KeyCode::Tab => KeyCode::Tab,
+        term_input::KeyCode::Tab | term_input::KeyCode::Char('\t') => KeyCode::Tab,
         term_input::KeyCode::Delete => KeyCode::Delete,
         term_input::KeyCode::Insert => KeyCode::Insert,
         term_input::KeyCode::Function(number) => KeyCode::F(number),
-        term_input::KeyCode::Char('\r' | '\n') => KeyCode::Enter,
-        term_input::KeyCode::Char('\t') => KeyCode::Tab,
+        term_input::KeyCode::Escape | term_input::KeyCode::Char('\x1b') => KeyCode::Esc,
         term_input::KeyCode::Char(ch) => KeyCode::Char(ch),
-        term_input::KeyCode::Escape => KeyCode::Esc,
         _ => KeyCode::Other,
     }
 }
@@ -951,6 +953,24 @@ mod tests {
                 Modifiers::ALT
             )))
         );
+    }
+
+    #[test]
+    fn csi_u_controls_are_named_keys_with_original_modifiers() {
+        for (bytes, code, modifiers) in [
+            (b"\x1b[27u".as_slice(), KeyCode::Esc, Modifiers::NONE),
+            (b"\x1b[27;2u", KeyCode::Esc, Modifiers::SHIFT),
+            (b"\x1b[127u", KeyCode::Backspace, Modifiers::NONE),
+            (b"\x1b[8u", KeyCode::Backspace, Modifiers::NONE),
+            (b"\x1b[127;3u", KeyCode::Backspace, Modifiers::ALT),
+        ] {
+            let events = InputParser::new().parse_as_vec(bytes, false);
+            assert_eq!(events.len(), 1);
+            assert_eq!(
+                InputStream::decode(events[0].clone()),
+                Some(InputEvent::Key(KeyEvent::new(code, modifiers)))
+            );
+        }
     }
 
     #[test]

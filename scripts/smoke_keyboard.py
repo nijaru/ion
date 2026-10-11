@@ -160,7 +160,8 @@ def exercise(mode, supported=True, panic=False, editor_fault=None):
                 expected = 1 if supported else (8 if mode == "fullscreen" else 4)
                 assert terminal.stacks[terminal.alternate][-1] == expected, "composer lacks its own keyboard mode"
                 if supported:
-                    os.write(master, b"first\x1b[13;2usecond")
+                    # CSI-u Backspace must edit, not insert a control byte.
+                    os.write(master, b"firstX\x1b[127u\x1b[13;2usecondX\x1b[8u")
                     drain(0.25)
                     assert not requests, "Shift-Enter admitted a Turn instead of a draft newline"
                     os.write(master, b"\r")
@@ -190,7 +191,7 @@ def exercise(mode, supported=True, panic=False, editor_fault=None):
                     until(lambda: terminal.alternate)
                     drain()
                     assert terminal.stacks[1][-1] == (1 if supported else 8)
-                    os.write(master, b"\x0f")
+                    os.write(master, b"\x1b[27u" if supported else b"\x1b")
                     until(lambda: not terminal.alternate)
                 os.write(master, b"\x03")
                 until(lambda: child.poll() is not None)
