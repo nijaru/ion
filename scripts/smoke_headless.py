@@ -121,9 +121,13 @@ with tempfile.TemporaryDirectory(prefix="ion-headless-") as temporary:
             native_pid = None
             try:
                 pipe = child.stdout if json_output else child.stderr
+                minimum = 4096
                 if hasattr(fcntl, "F_SETPIPE_SZ"):
                     # Change only this owned fixture pipe, not production limits.
-                    fcntl.fcntl(pipe.fileno(), fcntl.F_SETPIPE_SZ, 4096)
+                    capacity = fcntl.fcntl(pipe.fileno(), fcntl.F_SETPIPE_SZ, 4096)
+                    # Small Linux writes are atomic: a full pipe can retain less
+                    # than its capacity when the next whole frame will not fit.
+                    minimum = capacity - 256
                 deadline = time.monotonic() + 8
                 previous = -1
                 unchanged_since = time.monotonic()
@@ -133,11 +137,11 @@ with tempfile.TemporaryDirectory(prefix="ion-headless-") as temporary:
                     if count != previous:
                         previous = count
                         unchanged_since = time.monotonic()
-                    if count >= 4096 and time.monotonic() - unchanged_since >= 0.2:
+                    if count >= minimum and time.monotonic() - unchanged_since >= 0.2:
                         break
                     time.sleep(0.01)
                 else:
-                    raise AssertionError("fixture did not fill its output pipe")
+                    raise AssertionError(f"fixture output did not stall near capacity: available={previous}, minimum={minimum}")
                 databases = list((work / "state").rglob("*.sqlite"))
                 database = max(databases, key=lambda path: path.stat().st_mtime_ns)
                 child.send_signal(signal.SIGINT)
