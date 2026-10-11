@@ -716,8 +716,8 @@ continuation, cross-process resume and durable reasoning resets after
 compaction and project instructions changed. Chat-compatible tool messages encode
 `{"is_error": bool, "result": original_payload}` as their text content; Session
 inspection retains the original payload and status separately. Saved OpenRouter
-structured reasoning from the earlier tool-message encoding is explicitly
-incompatible: compact the Session or start a new one before continuing. Ion does
+structured reasoning from earlier tool-message or withheld-output encodings is
+explicitly incompatible: compact the Session or start a new one before continuing. Ion does
 not silently rewrite a potentially signed prefix or discard its reasoning.
 The native route still needs a live Anthropic credential and account
 qualification; thinking on custom llama.cpp routes remains unsupported. Context pressure uses an approximate

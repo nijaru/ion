@@ -44,9 +44,10 @@ const MAX_RESPONSE: usize = 8 * 1024 * 1024;
 const PROVIDER_IDLE_TIMEOUT: Duration = Duration::from_secs(300);
 const CHAT_REASONING_CONTENT_REPLAY: &str = "chat_reasoning_content";
 const OPENROUTER_PLAIN_REASONING_REPLAY: &str = "openrouter_plain_reasoning";
-// Scope structured/signed replay to this tool-message encoding. Reject prior
-// records rather than silently rewriting a prefix that may carry signatures.
-const OPENROUTER_DETAILS_REPLAY: &str = "openrouter_reasoning_details_tool_status";
+// Scope structured/signed replay to the tool-status envelope and withholding
+// projection. Reject prior records rather than rewriting a possibly signed
+// prefix when Core reconstructs model-visible tool messages after reopen.
+const OPENROUTER_DETAILS_REPLAY: &str = "openrouter_reasoning_details_observed_tool_status";
 const ANTHROPIC_CONTENT_REPLAY: &str = "anthropic_content_blocks";
 const ANTHROPIC_BINDING_BETA: &str = "thinking-binding-controls-2026-08-01";
 const ANTHROPIC_INLINE_TOOLS_BETA: &str = "inline-tools-2026-09-15";
@@ -2292,18 +2293,23 @@ mod tests {
         assert_eq!(body["messages"][2]["tool_calls"][0]["id"], "provider-call");
         assert_eq!(body["messages"][3]["tool_call_id"], "provider-call");
 
-        let mut prior_encoding = request.clone();
-        prior_encoding.messages[1]
-            .provider_replay
-            .as_mut()
-            .unwrap()
-            .kind = "openrouter_reasoning_details".into();
-        assert_eq!(
-            chat_body(&prior_encoding, HttpWire::OpenRouterChat)
-                .unwrap_err()
-                .kind,
-            ProviderErrorKind::Unsupported
-        );
+        for kind in [
+            "openrouter_reasoning_details",
+            "openrouter_reasoning_details_tool_status",
+        ] {
+            let mut prior_encoding = request.clone();
+            prior_encoding.messages[1]
+                .provider_replay
+                .as_mut()
+                .unwrap()
+                .kind = kind.into();
+            assert_eq!(
+                chat_body(&prior_encoding, HttpWire::OpenRouterChat)
+                    .unwrap_err()
+                    .kind,
+                ProviderErrorKind::Unsupported
+            );
+        }
         let mut wrong_provider = request.clone();
         wrong_provider.route.effective.provider = "other".into();
         assert_eq!(
