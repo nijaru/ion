@@ -247,6 +247,9 @@ answer. `final` is the committed answer. Other commands are `steer`,
 `follow_up`, `clear_queue`, `abort`, `get_state`, `inspect`, `list_sessions`, `list_turns`, `list_models`,
 `list_resources`, `reload_resources`, `shell`, `compact`, `set_model`, `new_session`,
 `clone_session`, `fork`, `switch_session`, `set_reasoning` and `set_name`.
+`set_name.name` must be a string; null or omission clears it. `fork.after` must
+be a boolean when present and defaults to false when omitted. Wrong field types
+are rejected before mutation.
 `get_state.reasoning` reports the active Session's generation preference.
 `prompt`, `steer` and `follow_up` accept `images` as an array of local paths (relative to the
 Session's working directory) or inline `{ "mime_type": "image/png", "data": "BASE64" }`

@@ -176,6 +176,30 @@ with tempfile.TemporaryDirectory(prefix="ion-rpc-") as temporary:
         assert "RPC_SHELL_SHARED" in str(requests[0]["messages"]), requests[0]["messages"]
         assert "RPC_SHELL_PRIVATE" not in str(requests[0]["messages"]), requests[0]["messages"]
 
+        send(child, {"id": "metadata-name", "type": "set_name", "name": "RPC_METADATA"})
+        assert read(child)["success"]
+        send(child, {"id": "metadata-before", "type": "inspect"})
+        metadata_before = read(child)["data"]
+        for field in (42, False, [], {}):
+            send(child, {"id": "invalid-name", "type": "set_name", "name": field})
+            refused = read(child)
+            assert not refused["success"], refused
+        first_turn = accepted[0]["data"]["turn"]
+        for field in ("true", 1, None, [], {}):
+            send(child, {"id": "invalid-fork", "type": "fork", "turn": first_turn, "after": field})
+            refused = read(child)
+            assert not refused["success"], refused
+        send(child, {"id": "metadata-after", "type": "inspect"})
+        metadata_after = read(child)["data"]
+        assert metadata_after["name"] == "RPC_METADATA"
+        assert metadata_after["entries"] == metadata_before["entries"], (metadata_before, metadata_after)
+        send(child, {"id": "metadata-state", "type": "get_state"})
+        assert read(child)["data"]["session"] == session, "malformed fork switched Session"
+        for clear in ({"name": None}, {}):
+            send(child, {"id": "clear-name", "type": "set_name", **clear})
+            cleared = read(child)
+            assert cleared["success"] and cleared["data"]["name"] is None, cleared
+
         send(child, {"id": "fragment-parent", "type": "prompt", "message": "SLOW"})
         until(child, lambda r: r.get("id") == "fragment-parent")
         fragmented = json.dumps({"id": "fragment-state", "type": "get_state"}).encode()

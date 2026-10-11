@@ -296,7 +296,9 @@ impl Control {
                 "fork" => {
                     self.idle()?;
                     let turn = value.get("turn").and_then(Value::as_u64).context("turn must be an unsigned integer")?;
-                    let after = value.get("after").and_then(Value::as_bool).unwrap_or(false);
+                    let after = value.get("after").map(|value| {
+                        value.as_bool().context("after must be a boolean")
+                    }).transpose()?.unwrap_or(false);
                     self.binding.fork_session(if after { ForkPoint::AfterTurn(turn) } else { ForkPoint::BeforeTurn(turn) })?;
                     Ok(json!({"session":self.session_id(),"model":self.binding.selected().identity()}))
                 }
@@ -307,7 +309,10 @@ impl Control {
                 }
                 "set_name" => {
                     self.idle()?;
-                    let name = value.get("name").and_then(Value::as_str);
+                    let name = match value.get("name") {
+                        None | Some(Value::Null) => None,
+                        Some(value) => Some(value.as_str().context("name must be a string or null")?),
+                    };
                     self.binding.session().set_name(name)?;
                     Ok(json!({"name":name}))
                 }
