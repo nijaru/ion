@@ -329,21 +329,15 @@ impl State {
         new_settled: &mut Vec<u64>,
     ) -> Result<(), SessionError> {
         match entry {
+            // Selection owns only future-request preferences. The operation gate
+            // excludes live execution; unfinished history can await recovery.
             SessionEntry::ReasoningSelected { reasoning } => {
-                if self.active.is_some() || self.pending_shell.is_some() {
-                    return Err(SessionError::InvalidHistory);
-                }
                 reasoning
                     .validate()
                     .map_err(|_| SessionError::InvalidHistory)?;
                 self.reasoning = *reasoning;
             }
-            SessionEntry::ModelSelected { model } => {
-                if self.active.is_some() || self.pending_shell.is_some() {
-                    return Err(SessionError::InvalidHistory);
-                }
-                self.select_model(model);
-            }
+            SessionEntry::ModelSelected { model } => self.select_model(model),
             SessionEntry::EffectiveModelChanged { turn, model } => {
                 if self.active != Some(*turn)
                     || !self.pending.is_empty()
@@ -3087,13 +3081,18 @@ mod tests {
                 Err(SessionError::OperationActive)
             ));
         }
+        let operation = session.submit_gate.try_lock().unwrap();
         let (turn, _) = session
             .begin_turn("first".into(), test_execution().route.logical)
             .unwrap();
-        assert!(choose(&session, Reasoning::Off).is_err());
+        assert!(matches!(
+            choose(&session, Reasoning::Off),
+            Err(SessionError::OperationActive)
+        ));
         session
             .end_turn(turn, TurnEndReason::Cancelled, &BTreeSet::new())
             .unwrap();
+        drop(operation);
         choose(&session, Reasoning::Off).unwrap();
         for (name, point) in [
             ("before", ForkPoint::BeforeTurn(turn)),
@@ -3135,6 +3134,62 @@ mod tests {
         );
         drop(reopened);
         std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn idle_preferences_do_not_rewrite_or_recover_an_unfinished_turn() {
+        let (root, path) = fixture();
+        let session = Session::create(&path, &root).unwrap();
+        let original = test_execution().route.logical;
+        let operation = session.submit_gate.try_lock().unwrap();
+        session
+            .record_selection(&operation, original.clone(), Some(Reasoning::High))
+            .unwrap();
+        let (old_turn, _) = session
+            .begin_turn("interrupted".into(), original.clone())
+            .unwrap();
+        drop(operation);
+        drop(session);
+
+        let session = Session::open(&path).unwrap();
+        let replacement = ModelRef {
+            model: "replacement".into(),
+            ..original.clone()
+        };
+        let operation = session.submit_gate.try_lock().unwrap();
+        session
+            .record_selection(&operation, replacement.clone(), Some(Reasoning::Off))
+            .unwrap();
+        drop(operation);
+        let selected = session.view().unwrap();
+        assert_eq!(selected.unfinished_turn, Some(old_turn));
+        assert_eq!(selected.turns()[0].model, original);
+        assert_eq!(selected.turns()[0].reasoning, Reasoning::High);
+        assert!(selected.turns()[0].end.is_none());
+        drop(session);
+
+        let session = Session::open(&path).unwrap();
+        assert_eq!(
+            session.view().unwrap().last_model,
+            Some(replacement.clone())
+        );
+        assert_eq!(session.reasoning().unwrap(), Reasoning::Off);
+        let operation = session.submit_gate.try_lock().unwrap();
+        let (new_turn, _) = session
+            .begin_turn("new input".into(), replacement.clone())
+            .unwrap();
+        let turns = session.view().unwrap().turns();
+        assert_eq!(turns[0].end, Some(TurnEndReason::Interrupted));
+        assert_eq!(turns[0].model, original);
+        assert_eq!(turns[0].reasoning, Reasoning::High);
+        assert_eq!(turns[1].model, replacement);
+        assert_eq!(turns[1].reasoning, Reasoning::Off);
+        session
+            .end_turn(new_turn, TurnEndReason::Cancelled, &BTreeSet::new())
+            .unwrap();
+        drop(operation);
+        drop(session);
+        fs::remove_dir_all(root).unwrap();
     }
 
     #[test]

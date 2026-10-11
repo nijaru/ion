@@ -3498,6 +3498,132 @@ mod tests {
         std::fs::remove_dir_all(root).unwrap();
     }
 
+    struct ReasoningScripts(Arc<ScriptedModelService>);
+    impl ModelService for ReasoningScripts {
+        fn validate_controls(
+            &self,
+            _: &ModelRef,
+            controls: &GenerationControls,
+        ) -> Result<(), ProviderError> {
+            controls.validate()?;
+            if controls.reasoning == Reasoning::Medium && controls.tool_choice == ToolChoice::None {
+                return Err(ProviderError {
+                    kind: ProviderErrorKind::Unsupported,
+                    message: "fixture summary cannot use medium effort".into(),
+                    retry_after_ms: None,
+                });
+            }
+            Ok(())
+        }
+        fn stream<'a>(
+            &'a self,
+            request: ModelRequest,
+        ) -> BoxFuture<'a, Result<ion_ai::ModelStream, ProviderError>> {
+            self.0.stream(request)
+        }
+    }
+
+    #[tokio::test]
+    async fn idle_preferences_survive_unfinished_shell_without_recovering_it() {
+        let root =
+            std::env::temp_dir().join(format!("ion-idle-preferences-{}", uuid::Uuid::now_v7()));
+        std::fs::create_dir(&root).unwrap();
+        let path = root.join("session.sqlite");
+        let session = CodingSession::create(&path, &root).unwrap();
+        let scripts = Arc::new(ScriptedModelService::new([response(vec![Content::Text(
+            "continued".into(),
+        )])]));
+        let tools = Arc::new(TestTools::new(&root));
+        let service = Arc::new(ReasoningScripts(scripts.clone()));
+        let first = Agent::new(service.clone(), tools.clone(), model());
+        first.select_model(&session).unwrap();
+        let permit = session
+            .begin_user_shell(
+                "touch should-not-execute".into(),
+                false,
+                CancellationToken::new(),
+            )
+            .await
+            .unwrap();
+        let replacement_model = ModelRef {
+            model: "replacement".into(),
+            ..model()
+        };
+        let replacement = Agent::new(service, tools, replacement_model.clone());
+        assert!(matches!(
+            replacement.select_model(&session),
+            Err(AgentError::Session(SessionError::OperationActive))
+        ));
+        assert!(matches!(
+            replacement.select_reasoning(&session, Reasoning::High),
+            Err(AgentError::Session(SessionError::OperationActive))
+        ));
+        drop(permit);
+        drop(session);
+
+        let session = CodingSession::open(&path).unwrap();
+        let before = session.view().unwrap();
+        replacement.select_model(&session).unwrap();
+        let before_invalid = session.view().unwrap().entries;
+        assert!(
+            replacement
+                .select_reasoning(&session, Reasoning::Medium)
+                .is_err()
+        );
+        assert_eq!(session.view().unwrap().entries, before_invalid);
+        replacement
+            .select_reasoning(&session, Reasoning::High)
+            .unwrap();
+        let selected = session.view().unwrap();
+        assert_eq!(selected.last_model, Some(replacement_model.clone()));
+        assert_eq!(selected.reasoning, Reasoning::High);
+        assert_eq!(selected.unfinished_user_shell, before.unfinished_user_shell);
+        assert!(
+            !selected.entries.iter().any(|entry| matches!(
+                entry,
+                crate::session::SessionEntry::UserShellSettled { .. }
+            ))
+        );
+        assert!(scripts.requests().is_empty());
+        drop(session);
+
+        let session = CodingSession::open(&path).unwrap();
+        assert_eq!(
+            session.view().unwrap().last_model,
+            Some(replacement_model.clone())
+        );
+        assert_eq!(session.reasoning().unwrap(), Reasoning::High);
+        assert_eq!(
+            session.view().unwrap().unfinished_user_shell,
+            before.unfinished_user_shell
+        );
+        replacement
+            .submit(
+                &session,
+                "continue".into(),
+                "test".into(),
+                CancellationToken::new(),
+                |_| {},
+            )
+            .await
+            .unwrap();
+        let after = session.view().unwrap();
+        assert!(after.unfinished_user_shell.is_none());
+        assert!(matches!(
+            after.entries[selected.entries.len()],
+            crate::session::SessionEntry::UserShellSettled {
+                outcome: crate::session::UserShellOutcome::Unknown,
+                ..
+            }
+        ));
+        assert_eq!(after.turns()[0].model, replacement_model);
+        assert_eq!(after.turns()[0].reasoning, Reasoning::High);
+        assert_eq!(scripts.requests().len(), 1);
+        assert!(!root.join("should-not-execute").exists());
+        drop(session);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
     #[tokio::test]
     async fn manual_compaction_uses_no_tools_and_keeps_raw_history() {
         let root = std::env::temp_dir().join(format!("ion-compact-{}", uuid::Uuid::now_v7()));
@@ -3509,32 +3635,6 @@ mod tests {
             response(vec![Content::Text("First task is complete.".into())]),
             response(vec![Content::Text("continued".into())]),
         ]));
-        struct ReasoningScripts(Arc<ScriptedModelService>);
-        impl ModelService for ReasoningScripts {
-            fn validate_controls(
-                &self,
-                _: &ModelRef,
-                controls: &GenerationControls,
-            ) -> Result<(), ProviderError> {
-                controls.validate()?;
-                if controls.reasoning == Reasoning::Medium
-                    && controls.tool_choice == ToolChoice::None
-                {
-                    return Err(ProviderError {
-                        kind: ProviderErrorKind::Unsupported,
-                        message: "fixture summary cannot use medium effort".into(),
-                        retry_after_ms: None,
-                    });
-                }
-                Ok(())
-            }
-            fn stream<'a>(
-                &'a self,
-                request: ModelRequest,
-            ) -> BoxFuture<'a, Result<ion_ai::ModelStream, ProviderError>> {
-                self.0.stream(request)
-            }
-        }
         let agent = Agent::new(
             Arc::new(ReasoningScripts(scripts.clone())),
             Arc::new(TestTools::new(&root)),
