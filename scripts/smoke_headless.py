@@ -4,6 +4,7 @@ import array
 import fcntl
 import json
 import os
+import select
 import signal
 import sqlite3
 import subprocess
@@ -119,15 +120,17 @@ with tempfile.TemporaryDirectory(prefix="ion-headless-") as temporary:
                 command.append("--json")
             child = subprocess.Popen(command + ["run", "JSON_PRESSURE" if json_output else "TEXT_PRESSURE"], env=env, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
             native_pid = None
+            writer_probe = None
             try:
                 pipe = child.stdout if json_output else child.stderr
-                minimum = 4096
                 if hasattr(fcntl, "F_SETPIPE_SZ"):
                     # Change only this owned fixture pipe, not production limits.
-                    capacity = fcntl.fcntl(pipe.fileno(), fcntl.F_SETPIPE_SZ, 4096)
-                    # Small Linux writes are atomic: a full pipe can retain less
-                    # than its capacity when the next whole frame will not fit.
-                    minimum = capacity - 256
+                    fcntl.fcntl(pipe.fileno(), fcntl.F_SETPIPE_SZ, 4096)
+                    # Linux pipe page/atomic-write rules can stall a writer well
+                    # below byte capacity. Probe kernel writability, without
+                    # writing data or consuming the recipient's buffered output.
+                    descriptor = 1 if json_output else 2
+                    writer_probe = os.open(f"/proc/{child.pid}/fd/{descriptor}", os.O_WRONLY | os.O_NONBLOCK | os.O_CLOEXEC)
                 deadline = time.monotonic() + 8
                 previous = -1
                 unchanged_since = time.monotonic()
@@ -137,11 +140,12 @@ with tempfile.TemporaryDirectory(prefix="ion-headless-") as temporary:
                     if count != previous:
                         previous = count
                         unchanged_since = time.monotonic()
-                    if count >= minimum and time.monotonic() - unchanged_since >= 0.2:
+                    blocked = writer_probe is None or not select.select([], [writer_probe], [], 0)[1]
+                    if count > 0 and blocked and time.monotonic() - unchanged_since >= 0.2:
                         break
                     time.sleep(0.01)
                 else:
-                    raise AssertionError(f"fixture output did not stall near capacity: available={previous}, minimum={minimum}")
+                    raise AssertionError(f"fixture output did not stall: json={json_output}, available={previous}")
                 databases = list((work / "state").rglob("*.sqlite"))
                 database = max(databases, key=lambda path: path.stat().st_mtime_ns)
                 child.send_signal(signal.SIGINT)
@@ -156,6 +160,9 @@ with tempfile.TemporaryDirectory(prefix="ion-headless-") as temporary:
                 if (workspace / "native.pid").exists():
                     native_pid = int((workspace / "native.pid").read_text())
                     assert not alive(native_pid), "headless settled before reaping owned native work"
+                if writer_probe is not None:
+                    os.close(writer_probe)
+                    writer_probe = None
                 stdout, stderr = child.communicate(timeout=8)
                 assert child.returncode != 0, (stdout, stderr)
                 if json_output:
@@ -170,6 +177,8 @@ with tempfile.TemporaryDirectory(prefix="ion-headless-") as temporary:
                     outcomes = [fact["data"]["result"]["outcome"]["state"] for fact in facts if fact["kind"] == "tool_result"]
                     assert outcomes[0] == "observed" and outcomes[-1] == "not_dispatched", outcomes
             finally:
+                if writer_probe is not None:
+                    os.close(writer_probe)
                 cleanup(child, workspace)
         for json_output in (True, False):
             workspace = work / ("broken-json" if json_output else "broken-text")
