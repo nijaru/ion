@@ -183,7 +183,10 @@ with tempfile.TemporaryDirectory(prefix="ion-images-") as temporary:
         assert observed["image_mime_types"] == ["image/png"]
         assert len(requests) == 8
         projected = next(message for message in requests[7]["messages"] if message["role"] == "tool")
-        assert "does not support image tool results" in projected["content"], projected
+        projected_output = json.loads(projected["content"])
+        assert projected_output["is_error"] is False, projected_output
+        assert projected_output["result"]["output_withheld"] == "images_unsupported", projected_output
+        assert projected_output["result"]["notice"] and "error" not in projected_output["result"], projected_output
         assert not any(
             part.get("type") == "image_url"
             for message in requests[7]["messages"]

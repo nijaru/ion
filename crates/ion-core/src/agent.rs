@@ -2334,6 +2334,16 @@ mod tests {
                 images: vec![tiny_image()],
                 is_error: false,
             },
+            ToolOutput {
+                value: serde_json::json!({"report":"x".repeat(32_768)}),
+                images: Vec::new(),
+                is_error: true,
+            },
+            ToolOutput {
+                value: serde_json::json!({"path":"picture.png"}),
+                images: vec![tiny_image()],
+                is_error: true,
+            },
         ] {
             let bytes = serde_json::to_vec(&(&output.value, &output.images))
                 .unwrap()
@@ -2396,9 +2406,14 @@ mod tests {
             let Content::ToolResult(model_result) = &requests[1].messages[2].content[0] else {
                 panic!("missing projected result")
             };
-            assert!(model_result.is_error);
+            assert_eq!(model_result.is_error, output.is_error);
             assert!(model_result.images.is_empty());
-            assert!(model_result.result.get("error").is_some());
+            assert_eq!(
+                model_result.result["output_withheld"],
+                serde_json::to_value(output.model_projection(false, 4_096).unwrap()).unwrap()
+            );
+            assert!(model_result.result.get("notice").is_some());
+            assert!(model_result.result.get("error").is_none());
             let view = session.view().unwrap();
             let observed = view
                 .entries
@@ -2419,10 +2434,7 @@ mod tests {
                 "model rejection replaced the observed result"
             );
             assert_eq!(observed.images, output.images);
-            assert!(
-                !observed.is_error,
-                "a model-context limit is not a failed external effect"
-            );
+            assert_eq!(observed.is_error, output.is_error);
             let saved = crate::TranscriptProjection::from_session(&view);
             let activity = saved
                 .items
@@ -2432,7 +2444,14 @@ mod tests {
                     _ => None,
                 })
                 .unwrap();
-            assert_eq!(activity.state, crate::ActivityState::Completed);
+            assert_eq!(
+                activity.state,
+                if output.is_error {
+                    crate::ActivityState::Failed
+                } else {
+                    crate::ActivityState::Completed
+                }
+            );
             assert_eq!(activity.result.as_ref().unwrap().value, output.value);
             assert!(
                 activity
@@ -2493,8 +2512,22 @@ mod tests {
                     .await
                     .unwrap()
             );
-            let summary_request = serde_json::to_string(&scripts.requests()[2]).unwrap();
-            assert!(summary_request.contains(model_result.result["error"].as_str().unwrap()));
+            let summary_request = &scripts.requests()[2];
+            let summary_result = summary_request.messages[0]
+                .content
+                .iter()
+                .find_map(|part| {
+                    let Content::Text(text) = part else {
+                        return None;
+                    };
+                    let record: serde_json::Value =
+                        serde_json::from_str(text.split_once('\n').unwrap().1).unwrap();
+                    (record["role"] == "Tool").then(|| record["content"][0]["ToolResult"].clone())
+                })
+                .unwrap();
+            assert_eq!(summary_result["is_error"], output.is_error);
+            assert_eq!(summary_result["result"], model_result.result);
+            let summary_request = serde_json::to_string(summary_request).unwrap();
             if let Some(report) = output.value["report"].as_str() {
                 assert!(!summary_request.contains(report));
             }

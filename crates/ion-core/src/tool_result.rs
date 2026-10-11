@@ -76,18 +76,17 @@ impl ToolSettlement {
     }
 
     pub(crate) fn message(&self, display: bool) -> Message {
-        let error = self
-            .outcome
-            .projection()
-            .filter(|_| !display)
-            .and_then(ToolResultProjection::model_error);
-        let output = match error {
-            Some(error) => ToolOutput {
-                value: serde_json::json!({"error":error}),
+        let output = if let ToolOutcome::Observed { output, projection } = &self.outcome
+            && !display
+            && let Some(notice) = projection.model_notice()
+        {
+            ToolOutput {
+                value: serde_json::json!({"output_withheld":projection,"notice":notice}),
                 images: Vec::new(),
-                is_error: true,
-            },
-            None => self.outcome.inspection_output().into_owned(),
+                is_error: output.is_error,
+            }
+        } else {
+            self.outcome.inspection_output().into_owned()
         };
         let result = ToolResult {
             call_id: self.call_id.clone(),
@@ -145,14 +144,14 @@ impl ToolResultProjection {
         }
     }
 
-    fn model_error(self) -> Option<&'static str> {
+    fn model_notice(self) -> Option<&'static str> {
         match self {
             Self::Observed => None,
             Self::ImagesUnsupported => Some(
-                "Selected model route does not support image tool results. The observed result is retained for inspection; choose an image-capable model and read the file again.",
+                "The observed tool output includes images unsupported by this route and was withheld. Its outcome is retained for inspection. Withholding does not undo effects or authorize rerunning the tool.",
             ),
             Self::RequestLimitExceeded => Some(
-                "The tool result exceeds this route's request bound and was not shared with the model. Inspect the stored tool result; the tool may already have affected the workspace.",
+                "The observed tool output exceeds this route's request bound and was withheld. Its outcome is retained for inspection. Withholding does not undo effects or authorize rerunning the tool.",
             ),
         }
     }
