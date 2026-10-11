@@ -30,22 +30,27 @@ impl Drop for NonblockingFd {
         // Duplicated descriptors share status flags with their caller. Restore
         // those flags before releasing our descriptor, including on faults.
         if let Err(error) = fcntl_setfl(&self.fd, self.original_flags) {
-            eprintln!("RPC stdio flag restoration failed: {error}");
+            eprintln!("stdio flag restoration failed: {error}");
         }
     }
 }
 
 impl Stdio {
-    pub(super) fn open(input: impl AsFd, output: impl AsFd) -> io::Result<(Self, Self)> {
-        // stdin/stdout may alias one open file description (e.g. a socketpair).
+    pub(super) fn open(
+        input: (impl AsFd, Interest),
+        output: (impl AsFd, Interest),
+    ) -> io::Result<(Self, Self)> {
+        // Standard streams may alias one open file description (e.g. a socketpair).
         // Capture both original flags before making either nonblocking.
+        let (input, input_interest) = input;
+        let (output, output_interest) = output;
         let input = rustix::io::fcntl_dupfd_cloexec(input, 0)?;
         let output = rustix::io::fcntl_dupfd_cloexec(output, 0)?;
         let input_flags = fcntl_getfl(&input)?;
         let output_flags = fcntl_getfl(&output)?;
         Ok((
-            Self::new(input, input_flags, Interest::READABLE)?,
-            Self::new(output, output_flags, Interest::WRITABLE)?,
+            Self::new(input, input_flags, input_interest)?,
+            Self::new(output, output_flags, output_interest)?,
         ))
     }
 
@@ -146,7 +151,8 @@ mod tests {
     async fn aliased_stdio_restores_flags_and_cancelled_reads_preserve_input() {
         let (socket, mut peer) = UnixStream::pair().unwrap();
         let original = fcntl_getfl(&socket).unwrap();
-        let (mut input, mut output) = Stdio::open(&socket, &socket).unwrap();
+        let (mut input, mut output) =
+            Stdio::open((&socket, Interest::READABLE), (&socket, Interest::WRITABLE)).unwrap();
         assert!(fcntl_getfl(&socket).unwrap().contains(OFlags::NONBLOCK));
         let mut byte = [0];
         assert!(

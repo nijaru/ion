@@ -21,8 +21,8 @@ use crate::{
 mod connection;
 mod input;
 mod preparation;
-mod stdio;
-use connection::{Output, connection};
+use crate::{publication::Output, stdio};
+use connection::connection;
 use input::CommandReader;
 use preparation::PendingInput;
 
@@ -129,7 +129,10 @@ pub async fn run(binding: ion_host::SessionBinding) -> Result<()> {
         input_budget: InputBudget::default(),
         output,
     };
-    let (input, writer) = stdio::Stdio::open(std::io::stdin(), std::io::stdout())?;
+    let (input, writer) = stdio::Stdio::open(
+        (std::io::stdin(), tokio::io::Interest::READABLE),
+        (std::io::stdout(), tokio::io::Interest::WRITABLE),
+    )?;
     let mut output = Output::new(writer);
     output.enqueue(
         json!({"type":"ready","session":control.session_id(),"cwd":control.binding.session().cwd()}),

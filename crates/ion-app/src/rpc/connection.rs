@@ -1,138 +1,15 @@
-//! Framed publication and connection-owned cancellation/settlement.
-use std::{collections::VecDeque, io};
-
-use anyhow::{Result, ensure};
-use serde_json::Value;
-use tokio::{
-    io::{AsyncBufRead, AsyncWrite, AsyncWriteExt},
-    sync::mpsc,
-};
-
+//! Connection-owned cancellation and settlement.
 use super::{
     Control, failure,
     input::{CommandReader, Input},
 };
-
-const MAX_PENDING_BYTES: usize = 8 * 1024 * 1024;
-
-struct Frame {
-    bytes: Vec<u8>,
-    written: usize,
-}
-
-/// One in-flight frame plus a bounded backlog. A single large inspection frame
-/// is allowed; it stops further progress acquisition until publication catches
-/// up. No writer task is detached, and partial frames survive select cancellation.
-pub(super) struct Output<W> {
-    writer: W,
-    frame: Option<Frame>,
-    pending: VecDeque<Vec<u8>>,
-    pending_bytes: usize,
-    deferred: VecDeque<Value>,
-    healthy: bool,
-}
-
-impl<W: AsyncWrite + Unpin> Output<W> {
-    pub(super) fn new(writer: W) -> Self {
-        Self {
-            writer,
-            frame: None,
-            pending: VecDeque::new(),
-            pending_bytes: 0,
-            deferred: VecDeque::new(),
-            healthy: true,
-        }
-    }
-
-    pub(super) fn enqueue(&mut self, record: Value) -> Result<()> {
-        ensure!(self.healthy, "RPC output is unavailable");
-        ensure!(
-            self.pending_bytes < MAX_PENDING_BYTES,
-            "RPC publication backlog exceeds 8 MiB"
-        );
-        if self.deferred.is_empty() {
-            self.encode(record)
-        } else {
-            // Replies cannot overtake the previous operation's settlement.
-            self.deferred.push_back(record);
-            Ok(())
-        }
-    }
-
-    fn encode(&mut self, record: Value) -> Result<()> {
-        let mut bytes = serde_json::to_vec(&record)?;
-        bytes.push(b'\n');
-        if self.frame.is_none() {
-            self.frame = Some(Frame { bytes, written: 0 });
-        } else {
-            self.pending_bytes += bytes.len();
-            self.pending.push_back(bytes);
-        }
-        Ok(())
-    }
-
-    fn defer(&mut self, records: impl IntoIterator<Item = Value>) {
-        // These records are already owned by the bounded progress/input paths.
-        // Settlement is not fresh admission: retain it until the pipe drains.
-        self.deferred.extend(records);
-    }
-
-    fn acquire_deferred(&mut self) -> Result<()> {
-        while self.pending_bytes < MAX_PENDING_BYTES {
-            let Some(record) = self.deferred.pop_front() else {
-                break;
-            };
-            self.encode(record)?;
-        }
-        Ok(())
-    }
-
-    async fn advance(&mut self) -> Result<()> {
-        let frame = self.frame.as_mut().expect("pending publication");
-        let result = if frame.written < frame.bytes.len() {
-            // AsyncWrite::write is cancellation safe. Commit each completed
-            // write before yielding, so controls cannot duplicate frame bytes.
-            match self.writer.write(&frame.bytes[frame.written..]).await {
-                Ok(0) => Err(io::Error::new(
-                    io::ErrorKind::WriteZero,
-                    "RPC output stopped accepting bytes",
-                )),
-                Ok(count) => {
-                    frame.written += count;
-                    Ok(())
-                }
-                Err(error) => Err(error),
-            }
-        } else {
-            match self.writer.flush().await {
-                Ok(()) => {
-                    self.frame = self.pending.pop_front().map(|bytes| {
-                        self.pending_bytes -= bytes.len();
-                        Frame { bytes, written: 0 }
-                    });
-                    Ok(())
-                }
-                Err(error) => Err(error),
-            }
-        };
-        if result.is_err() {
-            self.healthy = false;
-        }
-        result.map_err(Into::into)
-    }
-
-    async fn finish(&mut self) -> Result<()> {
-        if self.healthy {
-            while self.frame.is_some() || !self.deferred.is_empty() {
-                self.acquire_deferred()?;
-                self.advance().await?;
-            }
-        }
-        // Regular-file publication may have already started native file I/O.
-        // Join it even when admission/publication has failed.
-        self.writer.flush().await.map_err(Into::into)
-    }
-}
+use crate::publication::Output;
+use anyhow::Result;
+use serde_json::Value;
+use tokio::{
+    io::{AsyncBufRead, AsyncWrite},
+    sync::mpsc,
+};
 
 /// Controls and owned settlement remain pollable while publication is stalled.
 /// EOF closes admission and joins work before draining final output. As with any
@@ -151,10 +28,10 @@ pub(super) async fn connection<R: AsyncBufRead + Unpin, W: AsyncWrite + Unpin>(
             let busy = control.active.is_some();
             let preparing = control.pending_input.is_some();
             tokio::select! {
-                published = output.advance(), if output.frame.is_some() => {
+                published = output.advance(), if output.has_pending() => {
                     published?;
                 }
-                Some(record) = events.recv(), if busy && output.deferred.is_empty() && output.pending_bytes < MAX_PENDING_BYTES => {
+                Some(record) = events.recv(), if busy && output.can_acquire() => {
                     output.enqueue(record)?;
                 }
                 joined = async { (&mut control.active.as_mut().expect("active operation").task).await }, if busy => {
@@ -220,7 +97,7 @@ pub(super) async fn connection<R: AsyncBufRead + Unpin, W: AsyncWrite + Unpin>(
         records.extend(completion.records);
     }
     let result = combine_errors(result, settlement, "settlement also failed");
-    if output.healthy {
+    if output.is_healthy() {
         while let Ok(record) = events.try_recv() {
             output.defer([record]);
         }

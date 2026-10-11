@@ -9,13 +9,11 @@ use std::{
 use anyhow::{Context, Result, bail, ensure};
 use clap::{Parser, Subcommand};
 use ion_ai::{Content, Message};
-use ion_core::{CodingAgent, CodingAgentError, CodingSession, CodingToolSource, ForkPoint};
-use ion_host::image_input::LoadedImage;
+use ion_core::{CodingSession, CodingToolSource, ForkPoint};
 use ion_host::{
     CredentialStatus, Host, McpHttpServer, McpServer, McpStdioServer, Resources, SavedSelection,
     SessionBinding, Wire,
 };
-use serde_json::json;
 use tokio_util::sync::CancellationToken;
 
 mod agent_events;
@@ -24,10 +22,13 @@ mod clipboard_reader;
 mod display_text;
 mod edit_diff;
 mod external_editor;
+mod headless;
 mod inspection;
 mod markdown;
 mod presentation_style;
+mod publication;
 mod rpc;
+mod stdio;
 mod terminal_client;
 mod terminal_commands;
 mod tool_output;
@@ -158,7 +159,9 @@ enum McpAction {
 #[tokio::main]
 async fn main() {
     if let Err(error) = run_cli(Cli::parse()).await {
-        eprintln!("ion: {error:#}");
+        // Reporting to a broken stderr must not replace the original failure
+        // with a printing panic after controlled cleanup has completed.
+        let _ = writeln!(io::stderr().lock(), "ion: {error:#}");
         std::process::exit(1);
     }
 }
@@ -553,7 +556,7 @@ async fn run_cli(cli: Cli) -> Result<()> {
                 }
                 match action {
                     Some(Action::Run { prompt }) => {
-                        headless(
+                        headless::run(
                             binding.session().clone(),
                             binding.agent().clone(),
                             binding.instructions().to_owned(),
@@ -597,7 +600,7 @@ async fn run_cli(cli: Cli) -> Result<()> {
                         .await
                     }
                     None => {
-                        headless(
+                        headless::run(
                             binding.session().clone(),
                             binding.agent().clone(),
                             binding.instructions().to_owned(),
@@ -660,90 +663,6 @@ fn status_label(status: CredentialStatus) -> &'static str {
         CredentialStatus::Saved => "saved login",
         CredentialStatus::Missing => "no credential",
     }
-}
-
-async fn headless(
-    session: Arc<CodingSession>,
-    agent: Arc<CodingAgent>,
-    instructions: String,
-    prompt: String,
-    images: Vec<LoadedImage>,
-    json_output: bool,
-) -> Result<()> {
-    let id = session
-        .path()
-        .file_stem()
-        .context("session has no ID")?
-        .to_string_lossy();
-    if json_output {
-        write_json_record(&json!({"type":"session","id":id,"cwd":session.cwd()}))?;
-    } else {
-        writeln!(io::stderr().lock(), "[session: {id}]")?;
-    }
-    let stop = CancellationToken::new();
-    let output_stop = stop.clone();
-    let signal_stop = stop.clone();
-    let signal = tokio::spawn(async move {
-        if tokio::signal::ctrl_c().await.is_ok() {
-            signal_stop.cancel();
-        }
-    });
-    let mut output_error = None;
-    let input = Message::user_input(prompt, images);
-    let result = agent
-        .submit_message(&session, input, instructions, stop, |event| {
-            if json_output {
-                let record = agent_events::event_record(event);
-                if output_error.is_none()
-                    && let Err(error) = write_json_record(&record)
-                {
-                    output_error = Some(error);
-                    output_stop.cancel();
-                }
-                return;
-            }
-            if output_error.is_none()
-                && let Some(diagnostic) = agent_events::diagnostic(event)
-                && let Err(error) = writeln!(io::stderr().lock(), "{diagnostic}")
-            {
-                output_error = Some(error);
-                output_stop.cancel();
-            }
-        })
-        .await;
-    signal.abort();
-    if let Some(error) = output_error {
-        return Err(error.into());
-    }
-    if json_output {
-        match &result {
-            Ok(_) => write_json_record(&json!({"type":"run_end","status":"completed"}))?,
-            Err(CodingAgentError::Cancelled) => write_json_record(
-                &json!({"type":"run_end","status":"cancelled","error":"turn was cancelled"}),
-            )?,
-            Err(error) => write_json_record(
-                &json!({"type":"run_end","status":"failed","error":error.to_string()}),
-            )?,
-        }
-        result?;
-        return Ok(());
-    }
-    let answer = result?;
-    let mut stdout = io::stdout().lock();
-    writeln!(stdout, "{answer}")?;
-    stdout.flush()?;
-    Ok(())
-}
-
-fn write_json_record(value: &serde_json::Value) -> io::Result<()> {
-    write_json_record_to(&mut io::stdout().lock(), value)
-}
-
-fn write_json_record_to(output: &mut impl Write, value: &serde_json::Value) -> io::Result<()> {
-    let mut bytes = serde_json::to_vec(value).map_err(io::Error::other)?;
-    bytes.push(b'\n');
-    output.write_all(&bytes)?;
-    output.flush()
 }
 
 fn with_piped_input(prompt: String) -> Result<String> {

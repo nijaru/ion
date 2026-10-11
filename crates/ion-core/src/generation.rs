@@ -143,6 +143,10 @@ where
             Some(Err(error)) => return (Err(AgentError::Provider(error)), observed),
             None => return (Err(AgentError::IncompleteModelResponse), observed),
         }
+        // A buffered provider stream can otherwise emit an entire SSE batch in
+        // one poll. Let clients publish progress and process controls between
+        // events instead of exhausting their bounded callback queues.
+        tokio::task::yield_now().await;
     }
 }
 

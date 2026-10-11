@@ -192,6 +192,11 @@ large input even when it fits that raw input limit.
 Plain text mode writes the committed final answer to stdout after a successful
 turn. Tool progress and errors go to stderr; a failed turn does not print a
 provisional answer as if it had completed.
+Headless publication is asynchronous and bounded: a stalled stdout or stderr
+pipe does not prevent SIGINT from cancelling and settling the coding operation.
+A broken output stops further work and waits for settlement; durable Session
+inspection remains available. Final delivery to an open pipe still requires its
+recipient to read or close it.
 In JSONL mode, stdout contains one JSON object per line: a `session` record with the ID and
 directory, ordered `text_delta`, tool lifecycle, recovery and final records,
 then a `run_end` record with `completed`, `cancelled` or `failed` status.
