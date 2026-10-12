@@ -314,6 +314,19 @@ Session and catalogue authority remain in the coding operation. QuickJS is
 an execution service, not a second coding loop or durable JavaScript runtime.
 No comparative performance benefit is established.
 
+Pi's established Code Mode is the preferred **model-facing authoring reference**
+for this optional capability. Scripts should call discoverable capabilities with
+named, idiomatic functions and useful input/result descriptions, inspect and
+select structured results, emit text and supported image output explicitly, and
+receive actionable failures. Keep deterministic orchestration within the guest;
+tools execute only through the frozen Core-bound catalogue. A Rust-native VM,
+provider-compatible tool input encoding, limits, committed child evidence and
+joined host-effect settlement are legitimate implementation differences, not
+reasons to invent a less usable scripting API. Do not copy Pi's executable
+extension system or add its optional model helpers, session script store or
+deterministic replay without a concrete Ion consumer. The current implementation
+may be narrower; the README describes its supported API.
+
 Identify a parent by committed assistant-entry sequence and call ordinal, not a
 reusable provider ID. Commit child intent with frozen definition/activity before
 dispatch, then observed output before guest consumption. Raw child facts remain
