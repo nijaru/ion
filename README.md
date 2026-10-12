@@ -53,6 +53,14 @@ ion --continue fork 2 --after # new session after settled Turn 2
 ion --continue compact     # summarize old context; retain the raw Session
 ```
 
+Plain CLI metadata (`sessions`, `models`, `use`, resources and MCP listings)
+replaces C0/C1/DEL control characters within fields with spaces, preserving
+column delimiters and ordinary Unicode. These display fields are not exact
+identities: use RPC `list_sessions` for exact Session IDs and `inspect` for raw
+model references and conversation facts.
+Storage, configuration and machine-readable data remain unchanged; coding
+answers, tool observations and inspect/export are not filtered by this policy.
+
 `--cwd PATH` chooses a working directory. By default, a run starts a new
 session; `--continue` reopens the most recently active one in that directory.
 `--session ID` selects a listed session, and `--session PATH` can create or

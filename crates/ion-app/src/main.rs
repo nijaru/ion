@@ -210,9 +210,9 @@ async fn run_cli(cli: Cli) -> Result<()> {
                 }
                 println!(
                     "{}/{}\t{}\t{}",
-                    model.provider,
-                    model.model,
-                    choice.label,
+                    metadata_field(&model.provider),
+                    metadata_field(&model.model),
+                    metadata_field(choice.label),
                     status_label(choice.credential)
                 );
             }
@@ -235,7 +235,11 @@ async fn run_cli(cli: Cli) -> Result<()> {
                 image_input: images,
             };
             let resolved = models.save_default(&saved)?;
-            println!("Selected {}/{}", resolved.provider, resolved.model);
+            println!(
+                "Selected {}/{}",
+                metadata_field(&resolved.provider),
+                metadata_field(&resolved.model)
+            );
             Ok(())
         }
         Some(Action::Login { provider }) => {
@@ -250,17 +254,22 @@ async fn run_cli(cli: Cli) -> Result<()> {
                 },
             )
             .await?;
+            // Keep input validation intact: unsafe provider text is rejected
+            // by the secret reader, not transformed into a different prompt.
             let key = terminal
                 .read_secret(&format!("{provider} API key: "))
                 .await?;
             terminal.restore()?;
             credentials.save_api_key(&provider, &key)?;
-            println!("Saved {provider} credential.");
+            println!("Saved {} credential.", metadata_field(&provider));
             Ok(())
         }
         Some(Action::Logout { provider }) => {
             credentials.remove(&provider)?;
-            println!("Removed saved {provider} credential. Any environment key remains active.");
+            println!(
+                "Removed saved {} credential. Any environment key remains active.",
+                metadata_field(&provider)
+            );
             Ok(())
         }
         Some(Action::Auth) => {
@@ -268,7 +277,11 @@ async fn run_cli(cli: Cli) -> Result<()> {
             for choice in models.choices(credentials)? {
                 let model = choice.selected;
                 if seen.insert(model.provider.clone()) {
-                    println!("{}: {}", model.provider, status_label(choice.credential));
+                    println!(
+                        "{}: {}",
+                        metadata_field(&model.provider),
+                        status_label(choice.credential)
+                    );
                 }
             }
             Ok(())
@@ -279,17 +292,18 @@ async fn run_cli(cli: Cli) -> Result<()> {
             for session in catalog.list()? {
                 println!(
                     "{}\t{}\t{} turn(s)\t{}\t{}",
-                    session.id,
-                    session.name.as_deref().unwrap_or(""),
+                    metadata_field(&session.id),
+                    metadata_field(session.name.as_deref().unwrap_or("")),
                     session.turns,
                     session
                         .model
                         .as_ref()
                         .map_or_else(String::new, |model| format!(
                             "{}/{}",
-                            model.provider, model.model
+                            metadata_field(&model.provider),
+                            metadata_field(&model.model)
                         )),
-                    session.preview.as_deref().unwrap_or("")
+                    metadata_field(session.preview.as_deref().unwrap_or(""))
                 );
             }
             Ok(())
@@ -300,24 +314,24 @@ async fn run_cli(cli: Cli) -> Result<()> {
             for skill in resources.skills() {
                 println!(
                     "skill\t{}\t{}\t{}",
-                    skill.name,
-                    skill.description,
-                    skill.path.display()
+                    metadata_field(&skill.name),
+                    metadata_field(&skill.description),
+                    metadata_field(&skill.path.to_string_lossy())
                 );
             }
             for template in resources.templates() {
                 println!(
                     "prompt\t{}\t{}\t{}",
-                    template.name,
-                    template.description,
-                    template.path.display()
+                    metadata_field(&template.name),
+                    metadata_field(&template.description),
+                    metadata_field(&template.path.to_string_lossy())
                 );
             }
             for diagnostic in resources.diagnostics() {
                 eprintln!(
                     "[resource: {}: {}]",
-                    diagnostic.path.display(),
-                    diagnostic.message
+                    metadata_field(&diagnostic.path.to_string_lossy()),
+                    metadata_field(&diagnostic.message)
                 );
             }
             Ok(())
@@ -328,15 +342,24 @@ async fn run_cli(cli: Cli) -> Result<()> {
                 McpAction::List => {
                     let listing = config.list()?;
                     for diagnostic in listing.diagnostics {
-                        eprintln!("[mcp config: {diagnostic}]");
+                        eprintln!("[mcp config: {}]", metadata_field(&diagnostic));
                     }
                     for (name, server) in listing.servers {
                         match server {
                             McpServer::Stdio(server) => {
-                                println!("{name}\t{} {}", server.command, server.args.join(" "));
+                                println!(
+                                    "{}\t{} {}",
+                                    metadata_field(&name),
+                                    metadata_field(&server.command),
+                                    metadata_field(&server.args.join(" "))
+                                );
                             }
                             McpServer::Http(server) => {
-                                println!("{name}\t{}", server.url);
+                                println!(
+                                    "{}\t{}",
+                                    metadata_field(&name),
+                                    metadata_field(&server.url)
+                                );
                             }
                         }
                     }
@@ -347,7 +370,7 @@ async fn run_cli(cli: Cli) -> Result<()> {
                     args,
                 } => {
                     config.add(&name, McpServer::Stdio(McpStdioServer { command, args }))?;
-                    println!("Added MCP server {name}");
+                    println!("Added MCP server {}", metadata_field(&name));
                 }
                 McpAction::AddHttp {
                     name,
@@ -361,11 +384,11 @@ async fn run_cli(cli: Cli) -> Result<()> {
                             bearer_token_env,
                         }),
                     )?;
-                    println!("Added MCP server {name}");
+                    println!("Added MCP server {}", metadata_field(&name));
                 }
                 McpAction::Remove { name } => {
                     config.remove(&name)?;
-                    println!("Removed MCP server {name}");
+                    println!("Removed MCP server {}", metadata_field(&name));
                 }
             }
             Ok(())
@@ -456,7 +479,10 @@ async fn run_cli(cli: Cli) -> Result<()> {
                     .path()
                     .file_stem()
                     .context("cloned session has no ID")?;
-                println!("Cloned session as {}", id.to_string_lossy());
+                println!(
+                    "Cloned session as {}",
+                    metadata_field(&id.to_string_lossy())
+                );
                 return Ok(());
             }
             if let Some(Action::Fork { turn, after }) = &action {
@@ -475,7 +501,10 @@ async fn run_cli(cli: Cli) -> Result<()> {
                     .path()
                     .file_stem()
                     .context("forked session has no ID")?;
-                println!("Forked session as {}", id.to_string_lossy());
+                println!(
+                    "Forked session as {}",
+                    metadata_field(&id.to_string_lossy())
+                );
                 return Ok(());
             }
             if matches!(action, Some(Action::Compact)) {
@@ -523,7 +552,7 @@ async fn run_cli(cli: Cli) -> Result<()> {
                 let mut startup_diagnostics = startup
                     .diagnostics
                     .into_iter()
-                    .map(|diagnostic| format!("[mcp: {diagnostic}]"))
+                    .map(|diagnostic| format!("[mcp: {}]", metadata_field(&diagnostic)))
                     .collect::<Vec<_>>();
                 let external_tools: Option<Arc<dyn CodingToolSource>> = external_mcp
                     .as_ref()
@@ -548,8 +577,8 @@ async fn run_cli(cli: Cli) -> Result<()> {
                 for diagnostic in binding.resources().diagnostics() {
                     startup_diagnostics.push(format!(
                         "[resource: {}: {}]",
-                        diagnostic.path.display(),
-                        diagnostic.message
+                        metadata_field(&diagnostic.path.to_string_lossy()),
+                        metadata_field(&diagnostic.message)
                     ));
                 }
                 if cli.print.is_some() || !matches!(&action, Some(Action::Chat) | None) {
@@ -656,8 +685,18 @@ fn preview_input(input: &Message) -> String {
         .unwrap_or("")
         .chars()
         .take(120)
-        .map(|ch| if ch.is_control() { ' ' } else { ch })
+        .map(metadata_character)
         .collect()
+}
+
+// Plain one-line metadata only: keep formatter delimiters outside these fields.
+// Identities and machine-readable/durable data remain exact.
+fn metadata_field(text: &str) -> String {
+    text.chars().map(metadata_character).collect()
+}
+
+fn metadata_character(ch: char) -> char {
+    if ch.is_control() { ' ' } else { ch }
 }
 
 fn status_label(status: CredentialStatus) -> &'static str {

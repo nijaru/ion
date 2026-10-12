@@ -3,6 +3,7 @@
 import array
 import base64
 import fcntl
+import hashlib
 import json
 import os
 import select
@@ -114,6 +115,58 @@ with tempfile.TemporaryDirectory(prefix="ion-rpc-") as temporary:
         subprocess.run([binary, "use", "rpc-smoke", "rpc-model", "--endpoint", endpoint, "--wire", "chat-completions", "--images"], env=env, check=True, capture_output=True)
         subprocess.run([binary, "use", "rpc-alt", "alt-model", "--endpoint", endpoint, "--wire", "chat-completions", "--images"], env=env, check=True, capture_output=True)
         subprocess.run([binary, "use", "rpc-smoke", "rpc-model"], env=env, check=True, capture_output=True)
+        # A settled, owned Session: never detach a live SQLite file from its WAL.
+        controls = "\t\n\x1b\x07\x85\x9b\x7f"
+        locator = "LOCATOR" + controls + "雪"
+        model_id = "MODEL" + controls + "雪"
+        selected = subprocess.run([binary, "use", "rpc-text", model_id, "--endpoint", endpoint, "--wire", "chat-completions"], env=env, check=True, capture_output=True).stdout.decode()
+        directory = work / "state/ion/sessions" / hashlib.sha256(os.fsencode(workspace.resolve())).hexdigest()
+        directory.mkdir(parents=True)
+        fixture = directory / (locator + ".sqlite")
+        subprocess.run([binary, "--cwd", workspace, "--session", fixture, "run", "TEXT_PREVIEW"], env=env, check=True, capture_output=True)
+        exact = json.loads(subprocess.run([binary, "--cwd", workspace, "--session", fixture, "inspect"], env=env, check=True, capture_output=True).stdout)
+        assert exact["last_model"]["model"] == model_id, exact
+        config = json.loads((work / "config/ion/models.json").read_text())
+        assert config["default"]["model"] == model_id, config
+        assert next(route for route in config["custom"] if route["provider"] == "rpc-text")["model"] == model_id, config
+        probe = subprocess.Popen([binary, "--cwd", workspace, "--session", fixture, "rpc"], env=env, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, bufsize=0)
+        try:
+            assert read(probe)["type"] == "ready"
+            send(probe, {"id": "text-list", "type": "list_sessions"})
+            entries = read(probe)["data"]
+            entry = next(item for item in entries if item["id"] == locator)
+            assert entry["model"]["model"] == model_id, entry
+            send(probe, {"id": "text-inspect", "type": "inspect"})
+            assert read(probe)["data"] == exact
+        finally:
+            probe.stdin.close()
+            assert probe.wait(timeout=8) == 0, probe.stderr.read()
+        rows = subprocess.run([binary, "--cwd", workspace, "sessions"], env=env, check=True, capture_output=True).stdout.decode()
+        expected = "LOCATOR       雪\t\t1 turn(s)\trpc-text/MODEL       雪\tTEXT_PREVIEW\n"
+        assert rows == expected, f"plain sessions row integrity fault: {rows!r}"
+        by_locator = json.loads(subprocess.run([binary, "--cwd", workspace, "--session", locator, "inspect"], env=env, check=True, capture_output=True).stdout)
+        assert by_locator == exact
+        assert selected == "Selected rpc-text/MODEL       雪\n", repr(selected)
+        listing = subprocess.run([binary, "models"], env=env, check=True, capture_output=True).stdout.decode()
+        assert "rpc-text/MODEL       雪\t" in listing, repr(listing)
+        assert not any(ord(ch) < 32 and ch not in "\t\n" or 127 <= ord(ch) <= 159 for ch in listing), repr(listing)
+        subprocess.run([binary, "use", "rpc-smoke", "rpc-model"], env=env, check=True, capture_output=True)
+        requests.clear()
+        resource_workspace = work / ("RESOURCE" + controls + "雪")
+        resource_prompts = resource_workspace / ".ion/prompts"
+        resource_prompts.mkdir(parents=True)
+        (resource_prompts / "plain.md").write_text("Ordinary Unicode 雪\n")
+        resource_rows = subprocess.run([binary, "--cwd", resource_workspace, "resources"], env=env, check=True, capture_output=True).stdout.decode()
+        expected_path = str((resource_prompts / "plain.md").resolve()).replace(controls, "       ")
+        assert resource_rows == f"prompt\tplain\tOrdinary Unicode 雪\t{expected_path}\n", repr(resource_rows)
+        command = "COMMAND" + controls + "雪"
+        argument = "ARG" + controls + "雪"
+        subprocess.run([binary, "mcp", "add", "text-smoke", command, argument], env=env, check=True, capture_output=True)
+        mcp_config = (work / "config/ion/mcp.json").read_text()
+        assert json.loads(mcp_config)["servers"]["text-smoke"] == {"command": command, "args": [argument]}, mcp_config
+        mcp_rows = subprocess.run([binary, "mcp", "list"], env=env, check=True, capture_output=True).stdout.decode()
+        assert mcp_rows == "text-smoke\tCOMMAND       雪 ARG       雪\n", repr(mcp_rows)
+        subprocess.run([binary, "mcp", "remove", "text-smoke"], env=env, check=True, capture_output=True)
         child = subprocess.Popen([binary, "--cwd", workspace, "rpc"], env=env, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, bufsize=0)
         ready = read(child)
         assert ready["type"] == "ready" and ready["cwd"] == str(workspace.resolve()), ready

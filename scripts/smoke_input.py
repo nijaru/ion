@@ -142,6 +142,21 @@ with tempfile.TemporaryDirectory(prefix="ion-input-") as temporary:
     thread.start()
     try:
         subprocess.run([binary, "use", "smoke", "smoke-model", "--endpoint", f"http://127.0.0.1:{server.server_port}/v1/chat/completions", "--wire", "chat-completions"], env=env, check=True, capture_output=True)
+        # Display sanitation must not bypass the secret reader's input guard.
+        terminal = Terminal(work, env, "inline", ["login", "unsafe\x1b[31mprovider"])
+        try:
+            deadline = time.monotonic() + 3
+            while terminal.child.poll() is None:
+                assert time.monotonic() < deadline, "control-bearing provider entered secret input"
+                terminal.pump()
+            terminal.paint()
+            assert terminal.child.returncode == 1, terminal.text()
+            assert "secret prompt contains control characters" in terminal.text(), terminal.text()
+            assert "API key:" not in terminal.text(), "transformed provider label solicited a secret"
+            assert not (work / "config/ion/credentials").exists(), "rejected prompt changed credentials"
+        finally:
+            terminal.close()
+
         # A long prompt blocks its writer before rpassword could disable echo.
         # Inspect the real kernel state at the visible prefix, not a timing race.
         terminal = Terminal(work, env, "inline", ["login", "smoke API key: " + "x" * 65536])
