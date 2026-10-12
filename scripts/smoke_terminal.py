@@ -8,6 +8,7 @@ import pty
 import re
 import select
 import signal
+import sqlite3
 import struct
 import subprocess
 import sys
@@ -640,7 +641,8 @@ def exercise_active_band():
             output = bytearray()
             cursor = CursorReplies()
             sent = repainted = checked = quit_sent = False
-            repaint_time = 0
+            repaint_time = quit_time = 0
+            completed = 0
             while time.monotonic() < end:
                 readable, _, _ = select.select([master], [], [], 0.03)
                 if readable:
@@ -674,12 +676,28 @@ def exercise_active_band():
                     assert b"SALIENCE_DONE" not in output and b"\x1b[?1049h" not in output
                     checked = True
                 if checked and b"SALIENCE_DONE" in output and not quit_sent:
+                    # Provisional text can arrive before Core completion. Quit
+                    # only after the owned Turn has actually committed success.
+                    sessions = list((work / "state/ion/sessions").rglob("*.sqlite"))
+                    assert len(sessions) == 1, sessions
+                    with sqlite3.connect(f"file:{sessions[0]}?mode=ro", uri=True) as db:
+                        completed = db.execute("SELECT count(*) FROM entries WHERE json_extract(body,'$.kind')='turn_ended' AND json_extract(body,'$.data.reason')='completed'").fetchone()[0]
+                    if completed == 1:
+                        os.write(master, b"\x03")
+                        quit_sent = True
+                        quit_time = time.monotonic()
+                elif quit_sent and time.monotonic() - quit_time >= 0.1:
+                    # The UI can harvest the joined result after its first key.
+                    # Keep draining and finish the bounded idle-quit request.
                     os.write(master, b"\x03")
-                    quit_sent = True
+                    quit_time = time.monotonic()
                 if child.poll() is not None:
                     break
-            status = child.wait(timeout=2)
-            assert checked and status == 0, ("active-band child ended before qualification", status, output[-2000:])
+            try:
+                status = child.wait(timeout=2)
+            except subprocess.TimeoutExpired as error:
+                raise AssertionError(("active-band child did not exit", checked, quit_sent, completed, output[-2000:])) from error
+            assert checked and quit_sent and completed == 1 and status == 0, ("active-band child ended before qualification", status, output[-2000:])
             print("Ion active tree distinguishes running and queued calls and retains mutation/exception facts: OK")
         finally:
             if child is not None and child.poll() is None:

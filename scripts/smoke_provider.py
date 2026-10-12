@@ -112,7 +112,16 @@ class Handler(BaseHTTPRequestHandler):
             self.send_header("Content-Type", "text/event-stream")
             self.send_header("Content-Length", str(len(payload)))
             self.end_headers()
-            self.wfile.write(payload)
+            if salience and finish == "stop":
+                # Final text is provisional until stop/DONE is consumed.
+                # Keep the active-band fixture honest about that boundary.
+                prefix = b"data: " + json.dumps(events[0]).encode() + b"\n\n"
+                self.wfile.write(prefix)
+                self.wfile.flush()
+                time.sleep(0.5)
+                self.wfile.write(payload[len(prefix):])
+            else:
+                self.wfile.write(payload)
         except Exception as error:
             print(f"mock provider request {count} failed: {error!r}", file=sys.stderr, flush=True)
             self.send_error(500, str(error))
