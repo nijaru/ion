@@ -941,7 +941,7 @@ async fn run_compaction(
         }
     };
     finish_ready_clipboard_paste(ui).await;
-    if result.is_err() {
+    if stop.is_cancelled() || result.is_err() {
         return_pending_to_editor(ui);
     }
     ui.status = match result {
@@ -1231,7 +1231,7 @@ async fn run_user_shell(
             "terminal input ended during the shell operation"
         ));
     }
-    Ok((|| {
+    let result = (|| {
         let view = runtime.session().view()?;
         ui.load_history(runtime.session(), &view);
         ui.scroll = 0;
@@ -1243,7 +1243,13 @@ async fn run_user_shell(
         }
         .into();
         Ok(())
-    })())
+    })();
+    // A stop withdraws queued dispatch even if the observed shell result is Ok.
+    // An ordinary nonzero exit does not withdraw an intentional follow-up.
+    if stop.is_cancelled() || result.is_err() {
+        return_pending_to_editor(ui);
+    }
+    Ok(result)
 }
 
 async fn run_turn(
@@ -1366,7 +1372,7 @@ async fn run_turn(
     if let Some(incoming) = unaccepted {
         ui.pending.push_front(incoming);
         return_pending_to_editor(ui);
-    } else if result.is_err() {
+    } else if stop.is_cancelled() || result.is_err() {
         return_pending_to_editor(ui);
     }
     ui.status = match result {
@@ -3215,7 +3221,11 @@ mod tests {
                     .prompt
                     .contains("RELOADED_MARKER")
             );
-            ui.dequeue();
+            if steer {
+                return_pending_to_editor(&mut ui);
+            } else {
+                ui.dequeue();
+            }
             assert_eq!(ui.draft, literal);
             assert_eq!(ui.cursor, cursor);
             assert_eq!(ui.images.len(), 1);

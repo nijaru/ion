@@ -24,6 +24,7 @@ pub(super) struct PendingInput {
     pub kind: InputKind,
     pub id: Option<Value>,
     pub stop: CancellationToken,
+    pub withdraw_follow_ups: bool,
     pub task: JoinHandle<Result<Message>>,
 }
 
@@ -44,10 +45,17 @@ impl Control {
                 InputKind::Prompt
             }
             "steer" | "follow_up" => {
-                let steering = self
+                let active = self
                     .active
                     .as_ref()
-                    .and_then(|active| active.operation.steering())
+                    .context("no active Turn; use prompt instead")?;
+                ensure!(
+                    !active.stop.is_cancelled(),
+                    "operation is stopping; use prompt after settlement"
+                );
+                let steering = active
+                    .operation
+                    .steering()
                     .context("no active Turn; use prompt instead")?;
                 if command == "steer" {
                     InputKind::Steer(steering.clone())
@@ -93,6 +101,7 @@ impl Control {
             kind,
             id,
             stop,
+            withdraw_follow_ups: false,
             task,
         });
         Ok(None)
@@ -138,6 +147,7 @@ impl Control {
     ) -> Completion {
         let pending = self.pending_input.take().expect("joined input preparation");
         let command = pending.kind.command();
+        let return_follow_ups = pending.withdraw_follow_ups && self.active.is_none();
         let (input, error) = match joined {
             Ok(input) => (input, None),
             Err(error) => {
@@ -153,14 +163,18 @@ impl Control {
             Ok(record) => record,
             Err(failure_error) => Some(failure(pending.id, command, &format!("{failure_error:#}"))),
         };
-        Completion {
-            records: record.into_iter().collect(),
-            error,
+        let mut records = record.into_iter().collect::<Vec<_>>();
+        // Abort may target preparation after the preceding Turn already joined.
+        // It still withdraws dispatch of input waiting behind that preparation.
+        if return_follow_ups {
+            records.extend(self.take_uncommitted_follow_ups());
         }
+        Completion { records, error }
     }
 
-    pub(super) fn cancel_preparation(&self) {
-        if let Some(pending) = &self.pending_input {
+    pub(super) fn cancel_preparation(&mut self) {
+        if let Some(pending) = &mut self.pending_input {
+            pending.withdraw_follow_ups = true;
             pending.stop.cancel();
         }
     }

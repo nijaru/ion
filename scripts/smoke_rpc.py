@@ -251,17 +251,33 @@ with tempfile.TemporaryDirectory(prefix="ion-rpc-") as temporary:
         latest = [message for message in requests[-1]["messages"] if message["role"] == "user"][-1]["content"]
         assert latest[0] == {"type": "text", "text": "AFTER"} and latest[1]["type"] == "image_url", latest
 
+        before_parent = len(requests)
         send(child, {"id": "cancel-parent", "type": "prompt", "message": "SLOW"})
         until(child, lambda r: r.get("id") == "cancel-parent")
-        send(child, {"id": "after-abort", "type": "follow_up", "message": "AFTER_ABORT"})
+        deadline = time.monotonic() + 8
+        while len(requests) == before_parent:
+            assert time.monotonic() < deadline, "cancel-parent request did not reach the fixture"
+            time.sleep(0.01)
+        assert len(requests) == before_parent + 1
+        before_abort = len(requests)
+        send(child, {"id": "after-abort", "type": "follow_up", "message": "AFTER_ABORT", "images": [inline]})
         assert until(child, lambda r: r.get("id") == "after-abort")[-1]["success"]
         send(child, {"id": "cancel-parent-now", "type": "abort"})
         parent_records = until(child, lambda r: r["type"] == "turn_end")
         assert any(r.get("id") == "cancel-parent-now" and r["success"] for r in parent_records)
         assert parent_records[-1]["status"] == "cancelled", parent_records
-        follow_records = until(child, lambda r: r["type"] == "turn_end")
-        assert any(r["type"] == "follow_up_started" and r["id"] == "after-abort" for r in follow_records)
-        assert follow_records[-1]["status"] == "completed", follow_records
+        returned = until(child, lambda r: r["type"] == "uncommitted_follow_up")[-1]
+        assert returned["id"] == "after-abort", returned
+        content = returned["input"]["content"]
+        assert content[0]["Text"] == "AFTER_ABORT" and content[1]["Image"]["data"] == inline["data"], returned
+        send(child, {"id": "after-abort-state", "type": "get_state"})
+        state_records = until(child, lambda r: r.get("id") == "after-abort-state")
+        assert not any(r["type"] == "follow_up_started" for r in state_records), state_records
+        assert not state_records[-1]["data"]["busy"] and state_records[-1]["data"]["follow_ups"] == 0, state_records
+        assert len(requests) == before_abort, "abort dispatched returned input"
+        send(child, {"id": "resubmit-after-abort", "type": "prompt", "message": "AFTER_ABORT", "images": [inline]})
+        assert until(child, lambda r: r["type"] == "turn_end")[-1]["status"] == "completed"
+        assert len(requests) == before_abort + 1, "explicit resubmission did not dispatch exactly once"
 
         send(child, {"id": "vision-turn", "type": "prompt", "message": "SLOW"})
         until(child, lambda r: r.get("id") == "vision-turn")

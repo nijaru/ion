@@ -236,6 +236,78 @@ with tempfile.TemporaryDirectory(prefix="ion-input-") as temporary:
             finally:
                 terminal.close()
 
+            # Stopping an observed shell withdraws automatic queued dispatch;
+            # a normal exit 7 does not. Neither changes the saved native outcome.
+            for cancelled in (True, False):
+                cwd = work / f"{mode}-shell-queue-{cancelled}"
+                cwd.mkdir()
+                previous = set((work / "state").rglob("*.sqlite"))
+                terminal = Terminal(cwd, env, mode)
+                pid = None
+                try:
+                    terminal.wait(lambda: "›" in terminal.text())
+                    database, = set((work / "state").rglob("*.sqlite")) - previous
+                    before = len(requests)
+                    command = "printf '%s\\n' $$ > native.pid; printf 'OBSERVED_QUEUE\\n'; touch native.ready; " + (
+                        "exec sleep 30" if cancelled else
+                        "while ! test -f native.release; do sleep 0.02; done; exit 7"
+                    )
+                    terminal.send("!" + command + "\r")
+                    terminal.wait(lambda: (cwd / "native.ready").exists())
+                    pid = int((cwd / "native.pid").read_text())
+                    terminal.output.clear()
+                    terminal.send("QUEUED🦀\x01\r")
+                    terminal.wait(lambda: "1 follow-up(s) queued" in terminal.text())
+                    terminal.send("unsent")
+                    if cancelled:
+                        terminal.send(b"\x03")
+                    else:
+                        (cwd / "native.release").touch()
+
+                    def shell_facts():
+                        with sqlite3.connect(f"file:{database}?mode=ro", uri=True) as connection:
+                            return [json.loads(body) for body, in connection.execute("SELECT body FROM entries ORDER BY seq")]
+
+                    terminal.wait(lambda: any(entry["kind"] == "user_shell_settled" for entry in shell_facts()))
+                    terminal.paint()
+                    facts = shell_facts()
+                    outcome = next(entry["data"]["outcome"] for entry in facts if entry["kind"] == "user_shell_settled")
+                    assert outcome["kind"] == "observed" and outcome["is_error"], outcome
+                    assert outcome["output"]["stdout"] == "OBSERVED_QUEUE\n", outcome
+                    assert outcome["output"]["cancelled"] == cancelled, outcome
+                    try:
+                        os.kill(pid, 0)
+                    except ProcessLookupError:
+                        pid = None
+                    else:
+                        raise AssertionError("shell process survived settlement")
+                    if cancelled:
+                        assert len(requests) == before, "shell stop dispatched an unaccepted queued prompt"
+                        assert not any(entry["kind"] == "turn_started" for entry in facts), facts
+                        # Cursor, queued literal and subsequently typed draft all survive.
+                        terminal.send("PREFIX_\r")
+                        terminal.wait(lambda: len(requests) == before + 1)
+                        assert user_text(requests[-1]) == "PREFIX_QUEUED🦀\n\nunsent", user_text(requests[-1])
+                        terminal.wait(lambda: "DONE_PREFIX_QUEUED" in terminal.text())
+                    else:
+                        assert outcome["output"]["exit_code"] == 7, outcome
+                        terminal.wait(lambda: len(requests) == before + 1)
+                        assert user_text(requests[-1]) == "QUEUED🦀", user_text(requests[-1])
+                        terminal.wait(lambda: "DONE_QUEUED" in terminal.text())
+                    terminal.paint()
+                    terminal.send(b"\x15")
+                    terminal.paint()
+                    terminal.finish()
+                    assert termios.tcgetattr(terminal.master) == terminal.original_modes, "shell queue exit did not restore terminal"
+                finally:
+                    terminal.close()
+                    if pid is not None:
+                        try:
+                            os.kill(pid, signal.SIGKILL)
+                        except ProcessLookupError:
+                            pass
+            print(f"Ion {mode} shell stop restores queued input; nonzero exit retains follow-up intent: OK", flush=True)
+
             cwd = work / (mode + "-shell-refusal")
             cwd.mkdir()
             terminal = Terminal(cwd, env, mode)

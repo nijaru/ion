@@ -265,9 +265,13 @@ original Turn ends; follow-up preparation can finish and queue after that Turn.
 `steer` queues typed input for the active Turn. `follow_up` queues a separate
 Turn while one is active; its acknowledgement means only that Ion holds the
 prepared input. A later `follow_up_started` record gives its committed Turn ID.
-`clear_queue` returns uncommitted steering and follow-ups; `abort` alone leaves
-follow-ups queued. Steering and follow-ups share a process-local 32 MiB
-allowance for encoded messages and retained correlation IDs. Each input must
+`clear_queue` returns uncommitted steering and follow-ups. `abort` requests stop;
+after owned settlement, unaccepted follow-ups are returned as
+`uncommitted_follow_up` records rather than starting another Turn. A stop racing
+successful completion still withdraws queued dispatch without changing the
+observed outcome. Failed operations also return unaccepted follow-ups. Steering
+and follow-ups share a process-local 32 MiB allowance for encoded messages and
+retained correlation IDs. Each input must
 also satisfy the active route's message-size and image-input limits before Ion
 acknowledges it. Accepted input keeps its reservation until Session acceptance
 or return to the editor/client, including while a follow-up waits to start.
@@ -319,9 +323,11 @@ Uncommitted steering is returned as a typed `input` message if a Turn ends
 before the Session accepts it.
 While a turn runs, the editor remains available: Enter steers the next model
 step, Alt-Enter queues a separate follow-up turn, Alt-Up returns the most
-recent queued follow-up to the editor, and Ctrl-C cancels. The terminal uses the
-same shared queued-input allowance and route checks as RPC. Rejected input
-remains in the editor with its attachments; recovered steering retains image
+recent queued follow-up to the editor, and Ctrl-C cancels. After a stopped Turn,
+shell or compaction settles, unaccepted queued input returns to the editor rather
+than starting model work. An ordinary nonzero shell exit does not withdraw an
+intentional follow-up. The terminal uses the same shared queued-input allowance
+and route checks as RPC. Rejected input remains in the editor with its attachments; recovered steering retains image
 notes with their corresponding images. Queued resource commands expand before
 admission, so later resource changes do not rewrite an accepted follow-up.
 The prepared prompt stays separate from the literal command, arguments and

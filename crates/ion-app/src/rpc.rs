@@ -28,7 +28,13 @@ use connection::connection;
 use input::CommandReader;
 use preparation::PendingInput;
 
-type CompletionFuture = Pin<Box<dyn Future<Output = Result<Vec<Value>>> + Send>>;
+struct OperationResult {
+    records: Vec<Value>,
+    // A successful native observation can still contain a nonzero exit.
+    failed: bool,
+}
+
+type CompletionFuture = Pin<Box<dyn Future<Output = Result<OperationResult>> + Send>>;
 
 struct Active {
     stop: CancellationToken,
@@ -151,11 +157,13 @@ pub async fn run(binding: ion_host::SessionBinding) -> Result<()> {
 }
 
 impl Control {
-    fn finish_operation(&mut self, joined: Result<Vec<Value>>) -> Completion {
+    fn finish_operation(&mut self, joined: Result<OperationResult>) -> Completion {
         // The connection joins the occupied slot, then consumes it here.
         let active = self.active.take().expect("joined active operation");
+        let return_inputs =
+            active.stop.is_cancelled() || joined.as_ref().map_or(true, |result| result.failed);
         let (mut records, error) = match joined {
-            Ok(records) => (records, None),
+            Ok(result) => (result.records, None),
             Err(error) => {
                 let error =
                     error.context("RPC operation task failed; unfinished effects remain unknown");
@@ -175,16 +183,20 @@ impl Control {
             }
         };
         if let Operation::Turn { steering, .. } = active.operation {
-            if self
-                .pending_input
-                .as_ref()
-                .is_some_and(|pending| matches!(pending.kind, preparation::InputKind::Steer(_)))
+            if let Some(pending) = self.pending_input.as_ref()
+                && matches!(pending.kind, preparation::InputKind::Steer(_))
             {
-                self.cancel_preparation();
+                // This input's target ended; invalidation alone is not a user
+                // withdrawal of the separate follow-up queue.
+                pending.stop.cancel();
             }
             records.extend(steering.take_uncommitted().into_iter().map(
                 |pending| json!({"type":"uncommitted_steering","input":pending.into_message()}),
             ));
+        }
+        if return_inputs {
+            self.cancel_preparation();
+            records.extend(self.take_uncommitted_follow_ups());
         }
         Completion { records, error }
     }
@@ -364,6 +376,7 @@ impl Control {
             {
                 return Err(result.unwrap_err().into());
             }
+            let failed = result.is_err();
             let record = match result {
                 Ok(output) => {
                     let status = if output.value["cancelled"] == true {
@@ -385,7 +398,10 @@ impl Control {
                     json!({"type":"shell_end","id":task_id,"status":"failed","error":format!("{error:#}")})
                 }
             };
-            Ok(vec![record])
+            Ok(OperationResult {
+                records: vec![record],
+                failed,
+            })
         });
         self.active = Some(Active {
             stop,
@@ -418,6 +434,7 @@ impl Control {
         let task: CompletionFuture = Box::pin(async move {
             let result = running.await;
             fail_on_unknown_agent_task(&result)?;
+            let failed = result.is_err();
             let status = match &result {
                 Ok(_) => "completed",
                 Err(ion_core::CodingAgentError::Cancelled) => "cancelled",
@@ -436,7 +453,10 @@ impl Control {
             {
                 record["output_error"] = json!(fault);
             }
-            Ok(vec![record])
+            Ok(OperationResult {
+                records: vec![record],
+                failed,
+            })
         });
         self.active = Some(Active {
             stop,
@@ -521,6 +541,7 @@ impl Control {
         let task: CompletionFuture = Box::pin(async move {
             let result = running.await;
             fail_on_unknown_agent_task(&result)?;
+            let failed = result.is_err();
             let terminal = if let Some(turn) = task_submission.turn() {
                 let status = match &result {
                     Ok(_) => "completed",
@@ -548,7 +569,10 @@ impl Control {
                     .recover(&error)
                     .unwrap_or_else(|| failure(task_submission.id.clone(), "prompt", &error))
             };
-            Ok(vec![terminal])
+            Ok(OperationResult {
+                records: vec![terminal],
+                failed,
+            })
         });
         self.active = Some(Active {
             stop,
@@ -609,7 +633,12 @@ mod tests {
     use super::*;
 
     fn mock_completion(task: tokio::task::JoinHandle<Vec<Value>>) -> CompletionFuture {
-        Box::pin(async move { task.await.map_err(anyhow::Error::from) })
+        Box::pin(async move {
+            Ok(OperationResult {
+                records: task.await?,
+                failed: false,
+            })
+        })
     }
 
     fn fixture() -> (Control, mpsc::Receiver<Value>, PathBuf) {
@@ -690,6 +719,80 @@ mod tests {
         assert_eq!(terminal[1]["input"]["content"][0]["Text"], "retain me");
         drop(control);
         std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn stopped_or_failed_settlement_returns_follow_ups_even_after_success_race() {
+        for (stopped, failed) in [(false, false), (true, false), (false, true)] {
+            let (mut control, _events, root) = fixture();
+            let message = Message::user_input("retain queued input".into(), []);
+            let id = Some(json!("queued"));
+            control.input_budget =
+                InputBudget::new(serde_json::to_vec(&(&message, &id)).unwrap().len());
+            control.follow_ups.push_back(
+                control
+                    .input_budget
+                    .admit(message.clone(), id, control.binding.agent().limits())
+                    .unwrap(),
+            );
+            let steering = Arc::new(SteeringInbox::new(
+                control.binding.agent().limits(),
+                control.input_budget.clone(),
+            ));
+            control.active = Some(Active {
+                stop: CancellationToken::new(),
+                operation: Operation::Turn {
+                    steering,
+                    submission: empty_submission(),
+                },
+                completion: Box::pin(async move {
+                    Ok(OperationResult {
+                        records: Vec::new(),
+                        failed,
+                    })
+                }),
+            });
+            let joined = (&mut control.active.as_mut().unwrap().completion).await;
+            // A result already succeeded, but the client has not delivered/joined
+            // it yet. Explicit abort still withdraws subsequent queued dispatch.
+            if stopped {
+                assert!(
+                    control.command(br#"{"type":"abort"}"#).unwrap()["success"]
+                        .as_bool()
+                        .unwrap()
+                );
+                let refused = control
+                    .command(br#"{"type":"follow_up","message":"too late"}"#)
+                    .unwrap();
+                assert_eq!(refused["success"], false);
+                assert!(refused["error"].as_str().unwrap().contains("stopping"));
+            }
+            let completion = control.finish_operation(joined);
+            assert!(completion.error.is_none());
+            if stopped || failed {
+                assert_eq!(completion.records.len(), 1);
+                assert_eq!(completion.records[0]["type"], "uncommitted_follow_up");
+                assert_eq!(completion.records[0]["id"], "queued");
+                assert_eq!(
+                    completion.records[0]["input"],
+                    serde_json::to_value(&message).unwrap()
+                );
+                control.start_next_follow_up().unwrap();
+                assert!(control.active.is_none());
+                assert!(control.binding.session().view().unwrap().turns().is_empty());
+                assert!(
+                    control
+                        .input_budget
+                        .admit(message, &(), control.binding.agent().limits())
+                        .is_ok()
+                );
+            } else {
+                assert!(completion.records.is_empty());
+                assert_eq!(control.follow_ups.len(), 1);
+            }
+            drop(control);
+            std::fs::remove_dir_all(root).unwrap();
+        }
     }
 
     #[tokio::test(flavor = "current_thread")]
@@ -1085,7 +1188,7 @@ mod tests {
         active.stop.cancel();
 
         let terminal = control.active.take().unwrap().completion.await.unwrap();
-        let cancelled = &terminal[0];
+        let cancelled = &terminal.records[0];
         assert_eq!(cancelled["type"], "compact_end");
         assert_eq!(cancelled["id"], "cancelled");
         assert_eq!(cancelled["status"], "cancelled");
@@ -1095,7 +1198,7 @@ mod tests {
             json!({"disposition":"started"})
         );
         let terminal = control.active.take().unwrap().completion.await.unwrap();
-        let completed = &terminal[0];
+        let completed = &terminal.records[0];
         assert_eq!(completed["type"], "compact_end");
         assert_eq!(completed["id"], "noop");
         assert_eq!(completed["status"], "completed");
@@ -1138,6 +1241,7 @@ mod tests {
             kind: preparation::InputKind::FollowUp,
             id: Some(json!("preparation-fault")),
             stop: preparation_stop,
+            withdraw_follow_ups: false,
             task: tokio::spawn(async move {
                 task_preparation_stop.cancelled().await;
                 task_preparation_settled.store(true, Ordering::SeqCst);
@@ -1249,6 +1353,7 @@ mod tests {
             kind: preparation::InputKind::Prompt,
             id: Some(json!("original")),
             stop,
+            withdraw_follow_ups: false,
             task: tokio::spawn(async move {
                 task_stop.cancelled().await;
                 cancelled.send(()).unwrap();
@@ -1302,8 +1407,8 @@ mod tests {
     }
 
     #[tokio::test(flavor = "current_thread")]
-    async fn turn_settlement_refuses_pending_steering_but_preserves_follow_up() {
-        for follow_up in [false, true] {
+    async fn turn_settlement_preserves_follow_up_preparation_only_on_success() {
+        for (follow_up, stopped) in [(false, false), (true, false), (false, true), (true, true)] {
             let (mut control, _events, root) = fixture();
             let steering = Arc::new(SteeringInbox::new(
                 control.binding.agent().limits(),
@@ -1326,13 +1431,28 @@ mod tests {
                 },
                 id: Some(json!("prepared")),
                 stop: CancellationToken::new(),
+                withdraw_follow_ups: false,
                 task: tokio::spawn(async {
                     held.await.unwrap();
                     Ok(Message::user_input("next".into(), []))
                 }),
             });
+            control.follow_ups.push_back(
+                control
+                    .input_budget
+                    .admit(
+                        Message::user_input("already queued".into(), []),
+                        Some(json!("queued")),
+                        control.binding.agent().limits(),
+                    )
+                    .unwrap(),
+            );
             let joined = (&mut control.active.as_mut().unwrap().completion).await;
-            control.finish_operation(joined);
+            if stopped {
+                control.active.as_ref().unwrap().stop.cancel();
+            }
+            let completion = control.finish_operation(joined);
+            assert_eq!(completion.records.len(), usize::from(stopped));
             control.start_next_follow_up().unwrap();
             assert!(control.active.is_none());
             assert!(control.idle().is_err());
@@ -1341,9 +1461,101 @@ mod tests {
             let completion = control.finish_preparation(joined);
             assert!(completion.error.is_none());
             assert_eq!(completion.records[0]["id"], "prepared");
-            assert_eq!(completion.records[0]["success"], follow_up);
-            assert_eq!(control.follow_ups.len(), usize::from(follow_up));
+            assert_eq!(completion.records[0]["success"], follow_up && !stopped);
+            assert_eq!(
+                control.follow_ups.len(),
+                if stopped {
+                    0
+                } else {
+                    1 + usize::from(follow_up)
+                }
+            );
             assert!(steering.take_uncommitted().is_empty());
+            drop(control);
+            std::fs::remove_dir_all(root).unwrap();
+        }
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn aborted_preparation_returns_follow_ups_only_after_active_work_joins() {
+        for active in [false, true] {
+            let (mut control, _events, root) = fixture();
+            let queued = control
+                .input_budget
+                .admit(
+                    Message::user_input("retain behind preparation".into(), []),
+                    Some(json!("queued")),
+                    control.binding.agent().limits(),
+                )
+                .unwrap();
+            control.follow_ups.push_back(queued);
+            let (settle, operation_held) = tokio::sync::oneshot::channel();
+            if active {
+                control.active = Some(Active {
+                    stop: CancellationToken::new(),
+                    operation: Operation::Turn {
+                        steering: Arc::new(SteeringInbox::new(
+                            control.binding.agent().limits(),
+                            control.input_budget.clone(),
+                        )),
+                        submission: empty_submission(),
+                    },
+                    completion: Box::pin(async {
+                        operation_held.await.unwrap();
+                        Ok(OperationResult {
+                            records: Vec::new(),
+                            failed: false,
+                        })
+                    }),
+                });
+            }
+            let (release, held) = tokio::sync::oneshot::channel();
+            control.pending_input = Some(PendingInput {
+                kind: preparation::InputKind::FollowUp,
+                id: Some(json!("prepared")),
+                stop: CancellationToken::new(),
+                withdraw_follow_ups: false,
+                task: tokio::spawn(async {
+                    held.await.unwrap();
+                    Ok(Message::user_input("not admitted".into(), []))
+                }),
+            });
+            assert_eq!(
+                control.command(br#"{"type":"abort"}"#).unwrap()["success"],
+                true
+            );
+            assert!(control.idle().is_err());
+            assert_eq!(control.follow_ups.len(), 1, "stop is not yet settlement");
+            release.send(()).unwrap();
+            let joined = (&mut control.pending_input.as_mut().unwrap().task).await;
+            let completion = control.finish_preparation(joined);
+            assert!(completion.error.is_none());
+            assert_eq!(completion.records[0]["id"], "prepared");
+            assert_eq!(completion.records[0]["success"], false);
+            let records = if active {
+                assert_eq!(
+                    completion.records.len(),
+                    1,
+                    "preparation cannot return inputs before active effects settle"
+                );
+                assert_eq!(control.follow_ups.len(), 1);
+                control.start_next_follow_up().unwrap();
+                assert!(control.active.is_some());
+                settle.send(()).unwrap();
+                let joined = (&mut control.active.as_mut().unwrap().completion).await;
+                control.finish_operation(joined).records
+            } else {
+                completion.records.into_iter().skip(1).collect()
+            };
+            assert_eq!(records.len(), 1);
+            assert_eq!(records[0]["type"], "uncommitted_follow_up");
+            assert_eq!(records[0]["id"], "queued");
+            assert_eq!(
+                records[0]["input"]["content"][0]["Text"],
+                "retain behind preparation"
+            );
+            control.start_next_follow_up().unwrap();
+            assert!(control.active.is_none());
             drop(control);
             std::fs::remove_dir_all(root).unwrap();
         }
