@@ -60,9 +60,10 @@ identities: use RPC `list_sessions` for exact Session IDs and `inspect` for raw
 model references and conversation facts.
 Storage, configuration and machine-readable data remain unchanged; coding
 answers, tool observations and inspect/export are not filtered by this policy.
-CLI publication failures exit 1 after owned cleanup rather than panic. Effects
-already applied before a failed confirmation—such as a saved model selection,
-transcript or Session copy—are not rolled back or automatically retried.
+Write failures for command results or startup diagnostics exit 1 after owned
+cleanup rather than panic. Effects already applied before a failed confirmation—
+such as a saved model selection, transcript or Session copy—are not rolled back
+or automatically retried.
 
 `--cwd PATH` chooses a working directory. By default, a run starts a new
 session; `--continue` reopens the most recently active one in that directory.
