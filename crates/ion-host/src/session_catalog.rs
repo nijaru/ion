@@ -100,15 +100,17 @@ impl SessionCatalog {
             return None;
         }
         let updated = modified(&path).ok()?;
-        let preview = view.first_input.map(|input| match input {
-            SessionInputPreview::Prompt { text } => text
-                .unwrap_or_else(|| "[image]".into())
+        let preview = view.first_input.map(|input| {
+            let label = match input {
+                SessionInputPreview::Prompt { text } => text.unwrap_or_else(|| "[image]".into()),
+                SessionInputPreview::Shell { command, excluded } => {
+                    format!("{}{command}", if excluded { "!!" } else { "!" })
+                }
+            };
+            label
                 .chars()
                 .map(|ch| if ch.is_control() { ' ' } else { ch })
-                .collect(),
-            SessionInputPreview::Shell { command, excluded } => {
-                format!("{}{command}", if excluded { "!!" } else { "!" })
-            }
+                .collect()
         });
         preview.as_ref()?;
         let id = path.file_stem()?.to_string_lossy().into_owned();
@@ -223,6 +225,19 @@ mod tests {
         })
     }
 
+    fn assert_passive_preview(catalog: &SessionCatalog, path: &Path, preview: &str, turns: usize) {
+        let before = CodingSession::inspect(path).unwrap().entries;
+        for reopen in [false, true] {
+            let reopened = reopen.then(|| CodingSession::open(path).unwrap());
+            let listed = catalog.list().unwrap();
+            let summary = listed.iter().find(|summary| summary.path == path).unwrap();
+            assert_eq!(summary.preview.as_deref(), Some(preview));
+            assert_eq!(summary.turns, turns);
+            assert_eq!(CodingSession::inspect(path).unwrap().entries, before);
+            drop(reopened);
+        }
+    }
+
     #[tokio::test]
     async fn empty_sessions_do_not_displace_recent_work() {
         let (root, catalog) = fixture();
@@ -305,19 +320,64 @@ mod tests {
                 )
                 .await
                 .unwrap();
-            let before = CodingSession::inspect(&path).unwrap().entries;
-            let listed = catalog.list().unwrap();
-            let summary = listed.iter().find(|summary| summary.path == path).unwrap();
-            assert_eq!(summary.preview.as_deref(), Some(preview.as_str()));
-            assert_eq!(summary.turns, 2);
-            assert_eq!(CodingSession::inspect(&path).unwrap().entries, before);
+            session.shutdown().await.unwrap();
             drop(session);
-            let reopened = CodingSession::open(&path).unwrap();
-            let listed = catalog.list().unwrap();
-            let summary = listed.iter().find(|summary| summary.path == path).unwrap();
-            assert_eq!(summary.preview.as_deref(), Some(preview.as_str()));
-            assert_eq!(CodingSession::inspect(&path).unwrap().entries, before);
-            drop(reopened);
+            assert_passive_preview(&catalog, &path, &preview, 2);
+        }
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[tokio::test]
+    async fn shell_previews_sanitize_controls_without_rewriting_native_evidence() {
+        let (root, catalog) = fixture();
+        let controls = "\u{1b}\u{85}\u{7f}";
+        let command = format!(
+            "printf '%s' '{controls}' #\t{}Z\n# SECOND_LINE",
+            "🦀é界".repeat(40)
+        );
+        let label = format!(
+            "printf '%s' '   ' # {}",
+            "🦀é界".repeat(40).chars().take(100).collect::<String>()
+        );
+        for excluded in [false, true] {
+            let path = catalog.new_path().unwrap();
+            let session = Arc::new(CodingSession::create(&path, &catalog.cwd).unwrap());
+            let tools = LocalTools::new(&catalog.cwd).unwrap();
+            let output = session
+                .run_user_shell(
+                    command.clone(),
+                    excluded,
+                    CancellationToken::new(),
+                    move |command, stop| async move { tools.run_user_shell(&command, stop).await },
+                )
+                .await
+                .unwrap();
+            assert!(!output.is_error, "{output:?}");
+            assert_eq!(output.value["stdout"], controls);
+            let entries = session.view().unwrap().entries;
+            assert!(entries.iter().any(|entry| matches!(entry,
+                ion_core::SessionEntry::UserShellAdmitted { command: raw, exclude_from_context }
+                    if raw == &command && *exclude_from_context == excluded
+            )));
+            assert!(entries.iter().any(|entry| matches!(entry,
+                ion_core::SessionEntry::UserShellSettled {
+                    outcome: ion_core::UserShellOutcome::Observed { output: raw, is_error: false }, ..
+                } if raw == &output.value
+            )));
+            agent(&catalog, 1)
+                .submit(
+                    session.clone(),
+                    "latest prompt".into(),
+                    String::new(),
+                    CancellationToken::new(),
+                    |_| {},
+                )
+                .await
+                .unwrap();
+            session.shutdown().await.unwrap();
+            drop(session);
+            let preview = format!("{}{label}", if excluded { "!!" } else { "!" });
+            assert_passive_preview(&catalog, &path, &preview, 1);
         }
         fs::remove_dir_all(root).unwrap();
     }
