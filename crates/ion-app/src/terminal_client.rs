@@ -497,6 +497,15 @@ pub async fn chat(init: ChatInit) -> Result<()> {
     outcome
 }
 
+// Session IDs can be arbitrary UTF-8 filename stems. Shorten only the label.
+fn short_session_id(id: &str) -> &str {
+    let end = id
+        .char_indices()
+        .nth(12)
+        .map_or(id.len(), |(index, _)| index);
+    &id[..end]
+}
+
 async fn new_inline_screen(terminal: &mut TerminalSession) -> Result<Screen> {
     if terminal.is_alt_screen()? {
         terminal.leave_alt_screen()?;
@@ -606,12 +615,12 @@ fn apply_fork(
     ui.status = if let Some(error) = restore_error {
         format!(
             "Forked as {}; {error}; draft retained; inspect source to copy selected input",
-            &id[..id.len().min(12)]
+            short_session_id(&id)
         )
     } else {
         format!(
             "Forked as {}; both sessions use the same working directory",
-            &id[..id.len().min(12)]
+            short_session_id(&id)
         )
     };
     Ok(())
@@ -766,7 +775,7 @@ fn handle_command(
                     .map(|session| PickerItem {
                         label: format!(
                             "{}  {}  {}",
-                            &session.id[..session.id.len().min(12)],
+                            short_session_id(&session.id),
                             session.name.as_deref().unwrap_or(""),
                             session.preview.as_deref().unwrap_or("")
                         ),
@@ -2525,6 +2534,20 @@ fn modal_rows(
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn short_session_labels_preserve_ascii_and_utf8() {
+        for (id, label) in [
+            ("", ""),
+            ("short", "short"),
+            ("0123456789abcdef", "0123456789ab"),
+            ("01234567890🦀", "01234567890🦀"),
+            ("01234567890🦀tail", "01234567890🦀"),
+            ("🦀é", "🦀é"),
+        ] {
+            assert_eq!(super::short_session_id(id), label);
+        }
+    }
+
     use super::*;
     use ion_host::Selection;
     use unicode_width::UnicodeWidthStr;

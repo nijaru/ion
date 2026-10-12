@@ -72,6 +72,65 @@ def drain_terminal(fd, output):
     raise AssertionError("terminal PTY stayed open after process exit")
 
 
+def exercise_unicode_resume(workspace, env, target, mode):
+    """Discover and select a UTF-8 filename through the actual /resume picker."""
+    master, slave = pty.openpty()
+    fcntl.ioctl(slave, termios.TIOCSWINSZ, struct.pack("HHHH", 30, 240, 0, 0))
+
+    def attach():
+        os.setsid()
+        fcntl.ioctl(slave, termios.TIOCSCTTY, 0)
+
+    child = subprocess.Popen([binary, "--cwd", workspace, "--tui-mode", mode, "chat"], env=env, stdin=slave, stdout=slave, stderr=slave, preexec_fn=attach)
+    os.close(slave)
+    output = bytearray()
+    cursor = CursorReplies()
+
+    def collect():
+        if select.select([master], [], [], 0.05)[0]:
+            try:
+                data = os.read(master, 65536)
+            except OSError as error:
+                if error.errno != errno.EIO:
+                    raise
+                return
+            output.extend(data)
+            for reply in cursor.feed(data):
+                os.write(master, reply)
+
+    def wait(predicate):
+        end = time.monotonic() + 8
+        while not predicate():
+            assert child.poll() is None and time.monotonic() < end, (mode, child.poll(), output[-2500:])
+            collect()
+
+    try:
+        wait(lambda: "›".encode() in output)
+        output.clear()
+        os.write(master, b"/resume\r")
+        wait(lambda: b"Resume session" in output and b"01234567890" in output)
+        os.write(master, b"01234567890")
+        wait(lambda: b"1 match(es)" in output)
+        output.clear()
+        os.write(master, b"\r")
+        wait(lambda: b"Ready" in output and "›".encode() in output)
+        output.clear()
+        os.write(master, b"/session\r")
+        wait(lambda: str(target).encode() in output)
+        os.write(master, b"\x03")
+        end = time.monotonic() + 5
+        while child.poll() is None:
+            assert time.monotonic() < end, (mode, "exit timed out", output[-2500:])
+            collect()
+        drain_terminal(master, output)
+        assert child.returncode == 0, output[-2500:]
+    finally:
+        if child.poll() is None:
+            child.kill()
+        child.wait(timeout=5)
+        os.close(master)
+
+
 def exercise_file_discovery():
     """Hold a real traversal read; input and settlement must not wait for it."""
     with tempfile.TemporaryDirectory(prefix="ion-file-discovery-") as temporary:
@@ -394,6 +453,21 @@ with tempfile.TemporaryDirectory(prefix="ion-terminal-") as temporary:
             assert len(turns) == 2 and turns[1] == "What did we finish previously?", turns
             assert json.loads(inspected.stdout)["last_model"] == {"provider": "smoke", "model": "smoke-model"}
             assert not (work / "config" / "ion" / "credentials" / "smoke.key").exists()
+
+            # The terminal has exited and all inspect/export processes have
+            # settled: rename the owned completed Session, never copy a live
+            # SQLite main file away from its WAL.
+            saved = next((work / "state").rglob(f"{session_id}.sqlite"))
+            renamed = saved.with_name("01234567890🦀.sqlite")
+            saved.rename(renamed)
+            unicode_listing = subprocess.run([binary, "--cwd", workspace, "sessions"], env=env, check=True, capture_output=True, text=True).stdout
+            assert "01234567890🦀\t" in unicode_listing, unicode_listing
+            reopened = subprocess.run([binary, "--cwd", workspace, "--session", renamed, "inspect"], env=env, check=True, capture_output=True)
+            assert json.loads(reopened.stdout) == json.loads(inspected.stdout), "filename rename changed Session facts"
+            for mode in ("inline", "fullscreen"):
+                exercise_unicode_resume(workspace, env, renamed, mode)
+            after_resume = subprocess.run([binary, "--cwd", workspace, "--session", renamed, "inspect"], env=env, check=True, capture_output=True)
+            assert json.loads(after_resume.stdout) == json.loads(inspected.stdout), "picker resume changed passive Session facts"
 
             fullscreen_master, fullscreen_slave = pty.openpty()
             fcntl.ioctl(fullscreen_slave, termios.TIOCSWINSZ, struct.pack("HHHH", 30, 100, 0, 0))
