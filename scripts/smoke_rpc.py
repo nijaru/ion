@@ -63,6 +63,15 @@ class Handler(BaseHTTPRequestHandler):
         pass
 
 
+def closed_stdout(args, env):
+    reader, writer = os.pipe()
+    os.close(reader)
+    try:
+        return subprocess.run([binary, *args], env=env, stdout=writer, stderr=subprocess.PIPE, timeout=8)
+    finally:
+        os.close(writer)
+
+
 def send(child, command):
     child.stdin.write(json.dumps(command).encode() + b"\n")
     child.stdin.flush()
@@ -114,6 +123,15 @@ with tempfile.TemporaryDirectory(prefix="ion-rpc-") as temporary:
         endpoint = f"http://127.0.0.1:{server.server_port}/v1/chat/completions"
         subprocess.run([binary, "use", "rpc-smoke", "rpc-model", "--endpoint", endpoint, "--wire", "chat-completions", "--images"], env=env, check=True, capture_output=True)
         subprocess.run([binary, "use", "rpc-alt", "alt-model", "--endpoint", endpoint, "--wire", "chat-completions", "--images"], env=env, check=True, capture_output=True)
+        subprocess.run([binary, "use", "rpc-smoke", "rpc-model"], env=env, check=True, capture_output=True)
+        # Publication fails normally; a committed selection is not rolled back.
+        listing_failure = closed_stdout(["models"], env)
+        confirmation_failure = closed_stdout(["use", "rpc-alt", "alt-model"], env)
+        applied = json.loads((work / "config/ion/models.json").read_text())
+        assert applied["default"] == {"provider": "rpc-alt", "model": "alt-model"}, applied
+        for failure in (listing_failure, confirmation_failure):
+            assert failure.returncode == 1 and b"panicked" not in failure.stderr, failure
+            assert failure.stderr, "CLI did not report its publication failure"
         subprocess.run([binary, "use", "rpc-smoke", "rpc-model"], env=env, check=True, capture_output=True)
         # A settled, owned Session: never detach a live SQLite file from its WAL.
         controls = "\t\n\x1b\x07\x85\x9b\x7f"

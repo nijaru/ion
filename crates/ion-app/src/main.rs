@@ -208,13 +208,13 @@ async fn run_cli(cli: Cli) -> Result<()> {
                 {
                     continue;
                 }
-                println!(
+                print_stdout(format_args!(
                     "{}/{}\t{}\t{}",
                     metadata_field(&model.provider),
                     metadata_field(&model.model),
                     metadata_field(choice.label),
                     status_label(choice.credential)
-                );
+                ))?;
             }
             Ok(())
         }
@@ -235,11 +235,11 @@ async fn run_cli(cli: Cli) -> Result<()> {
                 image_input: images,
             };
             let resolved = models.save_default(&saved)?;
-            println!(
+            print_stdout(format_args!(
                 "Selected {}/{}",
                 metadata_field(&resolved.provider),
                 metadata_field(&resolved.model)
-            );
+            ))?;
             Ok(())
         }
         Some(Action::Login { provider }) => {
@@ -261,15 +261,18 @@ async fn run_cli(cli: Cli) -> Result<()> {
                 .await?;
             terminal.restore()?;
             credentials.save_api_key(&provider, &key)?;
-            println!("Saved {} credential.", metadata_field(&provider));
+            print_stdout(format_args!(
+                "Saved {} credential.",
+                metadata_field(&provider)
+            ))?;
             Ok(())
         }
         Some(Action::Logout { provider }) => {
             credentials.remove(&provider)?;
-            println!(
+            print_stdout(format_args!(
                 "Removed saved {} credential. Any environment key remains active.",
                 metadata_field(&provider)
-            );
+            ))?;
             Ok(())
         }
         Some(Action::Auth) => {
@@ -277,11 +280,11 @@ async fn run_cli(cli: Cli) -> Result<()> {
             for choice in models.choices(credentials)? {
                 let model = choice.selected;
                 if seen.insert(model.provider.clone()) {
-                    println!(
+                    print_stdout(format_args!(
                         "{}: {}",
                         metadata_field(&model.provider),
                         status_label(choice.credential)
-                    );
+                    ))?;
                 }
             }
             Ok(())
@@ -290,7 +293,7 @@ async fn run_cli(cli: Cli) -> Result<()> {
             let cwd = cli.cwd.unwrap_or(std::env::current_dir()?).canonicalize()?;
             let catalog = host.sessions(cwd);
             for session in catalog.list()? {
-                println!(
+                print_stdout(format_args!(
                     "{}\t{}\t{} turn(s)\t{}\t{}",
                     metadata_field(&session.id),
                     metadata_field(session.name.as_deref().unwrap_or("")),
@@ -304,7 +307,7 @@ async fn run_cli(cli: Cli) -> Result<()> {
                             metadata_field(&model.model)
                         )),
                     metadata_field(session.preview.as_deref().unwrap_or(""))
-                );
+                ))?;
             }
             Ok(())
         }
@@ -312,27 +315,27 @@ async fn run_cli(cli: Cli) -> Result<()> {
             let cwd = cli.cwd.unwrap_or(std::env::current_dir()?).canonicalize()?;
             let resources = host.resources(&cwd)?;
             for skill in resources.skills() {
-                println!(
+                print_stdout(format_args!(
                     "skill\t{}\t{}\t{}",
                     metadata_field(&skill.name),
                     metadata_field(&skill.description),
                     metadata_field(&skill.path.to_string_lossy())
-                );
+                ))?;
             }
             for template in resources.templates() {
-                println!(
+                print_stdout(format_args!(
                     "prompt\t{}\t{}\t{}",
                     metadata_field(&template.name),
                     metadata_field(&template.description),
                     metadata_field(&template.path.to_string_lossy())
-                );
+                ))?;
             }
             for diagnostic in resources.diagnostics() {
-                eprintln!(
+                print_stderr(format_args!(
                     "[resource: {}: {}]",
                     metadata_field(&diagnostic.path.to_string_lossy()),
                     metadata_field(&diagnostic.message)
-                );
+                ))?;
             }
             Ok(())
         }
@@ -342,24 +345,27 @@ async fn run_cli(cli: Cli) -> Result<()> {
                 McpAction::List => {
                     let listing = config.list()?;
                     for diagnostic in listing.diagnostics {
-                        eprintln!("[mcp config: {}]", metadata_field(&diagnostic));
+                        print_stderr(format_args!(
+                            "[mcp config: {}]",
+                            metadata_field(&diagnostic)
+                        ))?;
                     }
                     for (name, server) in listing.servers {
                         match server {
                             McpServer::Stdio(server) => {
-                                println!(
+                                print_stdout(format_args!(
                                     "{}\t{} {}",
                                     metadata_field(&name),
                                     metadata_field(&server.command),
                                     metadata_field(&server.args.join(" "))
-                                );
+                                ))?;
                             }
                             McpServer::Http(server) => {
-                                println!(
+                                print_stdout(format_args!(
                                     "{}\t{}",
                                     metadata_field(&name),
                                     metadata_field(&server.url)
-                                );
+                                ))?;
                             }
                         }
                     }
@@ -370,7 +376,7 @@ async fn run_cli(cli: Cli) -> Result<()> {
                     args,
                 } => {
                     config.add(&name, McpServer::Stdio(McpStdioServer { command, args }))?;
-                    println!("Added MCP server {}", metadata_field(&name));
+                    print_stdout(format_args!("Added MCP server {}", metadata_field(&name)))?;
                 }
                 McpAction::AddHttp {
                     name,
@@ -384,11 +390,11 @@ async fn run_cli(cli: Cli) -> Result<()> {
                             bearer_token_env,
                         }),
                     )?;
-                    println!("Added MCP server {}", metadata_field(&name));
+                    print_stdout(format_args!("Added MCP server {}", metadata_field(&name)))?;
                 }
                 McpAction::Remove { name } => {
                     config.remove(&name)?;
-                    println!("Removed MCP server {}", metadata_field(&name));
+                    print_stdout(format_args!("Removed MCP server {}", metadata_field(&name)))?;
                 }
             }
             Ok(())
@@ -447,7 +453,7 @@ async fn run_cli(cli: Cli) -> Result<()> {
                     transcript::save_new(&view, &target).with_context(|| {
                         format!("cannot save transcript to {}", target.display())
                     })?;
-                    println!("{}", target.display());
+                    print_stdout(format_args!("{}", target.display()))?;
                 } else {
                     io::stdout().write_all(transcript::render(&view).as_bytes())?;
                 }
@@ -457,7 +463,7 @@ async fn run_cli(cli: Cli) -> Result<()> {
                 ensure!(existing.is_some(), "session does not exist");
                 let view = CodingSession::inspect(&path)?;
                 for turn in view.turns() {
-                    println!(
+                    print_stdout(format_args!(
                         "{}\t{}\t{}",
                         turn.turn,
                         if turn.end.is_some() {
@@ -466,7 +472,7 @@ async fn run_cli(cli: Cli) -> Result<()> {
                             "active"
                         },
                         preview_input(&turn.input)
-                    );
+                    ))?;
                 }
                 return Ok(());
             }
@@ -479,10 +485,10 @@ async fn run_cli(cli: Cli) -> Result<()> {
                     .path()
                     .file_stem()
                     .context("cloned session has no ID")?;
-                println!(
+                print_stdout(format_args!(
                     "Cloned session as {}",
                     metadata_field(&id.to_string_lossy())
-                );
+                ))?;
                 return Ok(());
             }
             if let Some(Action::Fork { turn, after }) = &action {
@@ -501,10 +507,10 @@ async fn run_cli(cli: Cli) -> Result<()> {
                     .path()
                     .file_stem()
                     .context("forked session has no ID")?;
-                println!(
+                print_stdout(format_args!(
                     "Forked session as {}",
                     metadata_field(&id.to_string_lossy())
-                );
+                ))?;
                 return Ok(());
             }
             if matches!(action, Some(Action::Compact)) {
@@ -569,7 +575,11 @@ async fn run_cli(cli: Cli) -> Result<()> {
                         // Failed-server cleanup diagnostics must not disappear
                         // just because independent binding preflight also fails.
                         for diagnostic in &startup_diagnostics {
-                            eprintln!("{diagnostic}");
+                            if let Err(delivery) = print_stderr(format_args!("{diagnostic}")) {
+                                return Err(error.context(format!(
+                                    "startup diagnostic delivery also failed: {delivery:#}"
+                                )));
+                            }
                         }
                         return Err(error);
                     }
@@ -583,7 +593,7 @@ async fn run_cli(cli: Cli) -> Result<()> {
                 }
                 if cli.print.is_some() || !matches!(&action, Some(Action::Chat) | None) {
                     for diagnostic in &startup_diagnostics {
-                        eprintln!("{diagnostic}");
+                        print_stderr(format_args!("{diagnostic}"))?;
                     }
                 }
                 match action {
@@ -612,9 +622,11 @@ async fn run_cli(cli: Cli) -> Result<()> {
                             .await;
                         signal.abort();
                         if result? {
-                            println!("Context summarized; raw Session history retained");
+                            print_stdout(format_args!(
+                                "Context summarized; raw Session history retained"
+                            ))?;
                         } else {
-                            println!("No settled history to summarize");
+                            print_stdout(format_args!("No settled history to summarize"))?;
                         }
                         Ok(())
                     }
@@ -662,6 +674,16 @@ async fn run_cli(cli: Cli) -> Result<()> {
             }
         }
     }
+}
+
+// Keep each lock inside synchronous publication, never across client awaits.
+// A failed confirmation does not roll back an already-applied host effect.
+fn print_stdout(arguments: std::fmt::Arguments<'_>) -> Result<()> {
+    writeln!(io::stdout().lock(), "{arguments}").context("cannot write CLI stdout")
+}
+
+fn print_stderr(arguments: std::fmt::Arguments<'_>) -> Result<()> {
+    writeln!(io::stderr().lock(), "{arguments}").context("cannot write CLI stderr")
 }
 
 fn expand_input(resources: &Resources, prompt: String) -> Result<String> {

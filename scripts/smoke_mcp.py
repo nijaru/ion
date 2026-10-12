@@ -378,6 +378,8 @@ def check_owned_cleanup():
             ("input-setup", "ready", ["run", "/probe 'unfinished"], "quote"),
             ("init-fault", "init-error", ["rpc"], "initialization failed"),
             ("listing-fault", "list-error", ["rpc"], "tool listing failed"),
+            ("diagnostic-io", "ready", ["rpc"], None),
+            ("preflight-io", "ready", ["--reasoning", "budget:128", "rpc"], None),
         ]
         config_path = work / "config/ion/mcp.json"
         for name, mode, args, error in cases:
@@ -387,7 +389,7 @@ def check_owned_cleanup():
             prompts.mkdir(parents=True)
             (prompts / "probe.md").write_text("Inspect $@")
             configured = {"owned": {"command": sys.executable, "args": [str(fixture), mode]}}
-            if name == "preflight":
+            if name in ("preflight", "diagnostic-io", "preflight-io"):
                 configured["broken"] = {"command": str(work / "missing-server")}
             config_path.write_text(json.dumps({"servers": configured}))
             pid = None
@@ -395,7 +397,17 @@ def check_owned_cleanup():
                 # File-backed output separates CLI exit from inherited stderr
                 # still held by a leaked MCP root; inspect its PID separately.
                 with (workspace / "stdout").open("w+") as out, (workspace / "stderr").open("w+") as err:
-                    response = subprocess.run([binary, "--cwd", workspace, *args], input="", env=env, stdout=out, stderr=err, text=True, timeout=25)
+                    if name.endswith("-io"):
+                        reader, writer = os.pipe()
+                        os.close(reader)
+                        try:
+                            response = subprocess.run([binary, "--cwd", workspace, *args], input="", env=env, stdout=out, stderr=writer, text=True, timeout=25)
+                        finally:
+                            os.close(writer)
+                        assert response.returncode == 1, f"{name}: CLI diagnostic delivery panicked: {response.returncode}"
+                        assert out.tell() == 0, f"{name}: RPC started despite failed startup diagnostics"
+                    else:
+                        response = subprocess.run([binary, "--cwd", workspace, *args], input="", env=env, stdout=out, stderr=err, text=True, timeout=25)
                     out.seek(0)
                     err.seek(0)
                     response.stdout = out.read()
@@ -409,7 +421,7 @@ def check_owned_cleanup():
                     assert error in response.stderr, response
                 if name == "preflight":
                     assert "cannot start MCP server broken" in response.stderr, response
-                expected_failure = name in ("preflight", "input-setup")
+                expected_failure = name in ("preflight", "input-setup", "diagnostic-io", "preflight-io")
                 assert (response.returncode != 0) == expected_failure, response
             finally:
                 # On regression, clean up only the root still running this exact
