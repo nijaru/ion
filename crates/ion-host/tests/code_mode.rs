@@ -82,6 +82,169 @@ async fn wait_file(path: &Path) {
     .unwrap();
 }
 
+#[derive(Default)]
+struct DiscoverySource {
+    pending: std::sync::atomic::AtomicBool,
+    published: std::sync::atomic::AtomicBool,
+}
+impl CodingToolSource for DiscoverySource {
+    fn registrations(self: Arc<Self>) -> Vec<ion_core::ToolRegistration> {
+        let refreshed = self.published.load(std::sync::atomic::Ordering::SeqCst);
+        (0..13)
+            .map(|index| {
+                ion_core::ToolRegistration::new(
+                    ion_core::ToolDefinition::external(ion_ai::ToolSpec {
+                        name: if index == 12 { "CANDIDATE_11".into() } else { format!("candidate_{index:02}") },
+                        description: if refreshed { "changed" } else { "Similar discovery candidate_11" }.into(),
+                        input_schema: json!({"type":"object","properties":{"index":{"const":index}}}),
+                    })
+                    .deferred(),
+                    self.clone(),
+                )
+            })
+            .collect()
+    }
+    fn refresh<'a>(&'a self, _: CancellationToken) -> ion_ai::BoxFuture<'a, Vec<String>> {
+        Box::pin(async move {
+            if self.pending.load(std::sync::atomic::Ordering::SeqCst) {
+                self.published
+                    .store(true, std::sync::atomic::Ordering::SeqCst);
+            }
+            Vec::new()
+        })
+    }
+}
+impl ion_core::ToolExecutor for DiscoverySource {
+    fn execute<'a>(
+        &'a self,
+        _: &'a ToolCall,
+        _: CancellationToken,
+    ) -> ion_ai::BoxFuture<'a, ion_core::CodingToolOutput> {
+        Box::pin(async move {
+            // Publish a changed source while the issued guest retains its catalogue.
+            self.pending
+                .store(true, std::sync::atomic::Ordering::SeqCst);
+            self.refresh(CancellationToken::new()).await;
+            ion_core::CodingToolOutput {
+                value: json!("executed"),
+                images: Vec::new(),
+                is_error: false,
+            }
+        })
+    }
+}
+
+#[tokio::test]
+async fn discovery_is_exact_read_only_deferred_and_request_frozen() {
+    let root = Workspace::new();
+    let session = root.session();
+    let model = Arc::new(ScriptedModelService::new([
+        response(vec![code(
+            "discover",
+            r#"
+            const page = await searchTools('SIMILAR');
+            const exact = await describeTool('candidate_11');
+            const bounded = await searchTools('SIMILAR', {limit: 2});
+            const emptyOptions = await searchTools('SIMILAR', {});
+            const priority = await searchTools('CaNdIdAtE_11', {limit: 3});
+            const one = await searchTools('CaNdIdAtE_11', {limit: 1});
+            const missing = await Promise.all(['candidate_11x','Candidate_11','Similar discovery candidate_11','tool_search','code_mode'].map(describeTool));
+            const exclusions = await Promise.all(['tool_search','code_mode'].map(query => searchTools(query)));
+            await tools.call(exact.name, {});
+            const frozen = await describeTool(exact.name);
+            return {page, bounded, emptyOptions, priority, one, exact, missing, exclusions, frozen};
+        "#,
+        )]),
+        response(vec![code(
+            "next",
+            "return await describeTool('candidate_11');",
+        )]),
+        response(vec![Content::Text("DONE".into())]),
+    ]));
+    let source = Arc::new(DiscoverySource::default());
+    let tools = ToolSet::new([source as Arc<dyn CodingToolSource>])
+        .with_code_mode(Arc::new(QuickJs), CodeLimits::default());
+    let agent = CodingAgent::with_tool_set(model.clone(), Arc::new(tools), identity());
+    agent
+        .submit(
+            session.clone(),
+            "run".into(),
+            String::new(),
+            CancellationToken::new(),
+            |_| {},
+        )
+        .await
+        .unwrap();
+    let view = session.view().unwrap();
+    let outputs = view
+        .entries
+        .iter()
+        .filter_map(|entry| match entry {
+            SessionEntry::ToolResult { result, .. } => match &result.outcome {
+                ion_core::ToolOutcome::Observed { output, .. } => Some(output),
+                _ => None,
+            },
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    let result = &outputs[0].value["result"];
+    assert!(!outputs[0].is_error, "{outputs:?}");
+    assert_eq!(result["page"].as_array().unwrap().len(), 10);
+    assert!(
+        result["page"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|item| item["name"] != "candidate_11" && item.as_object().unwrap().len() == 2)
+    );
+    assert_eq!(
+        result["exact"],
+        json!({"name":"candidate_11","description":"Similar discovery candidate_11","input_schema":{"type":"object","properties":{"index":{"const":11}}}})
+    );
+    assert_eq!(
+        result["bounded"],
+        json!([result["page"][0], result["page"][1]])
+    );
+    assert_eq!(result["emptyOptions"], result["page"]);
+    assert_eq!(
+        result["priority"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|item| item["name"].as_str().unwrap())
+            .collect::<Vec<_>>(),
+        ["candidate_11", "CANDIDATE_11", "candidate_00"]
+    );
+    assert_eq!(result["one"], json!([result["priority"][0]]));
+    assert_eq!(result["frozen"], result["exact"]);
+    assert_eq!(result["missing"], json!([null, null, null, null, null]));
+    assert_eq!(result["exclusions"], json!([[], []]));
+    assert_eq!(outputs[0].value["calls"], 1);
+    assert_eq!(outputs[1].value["calls"], 0);
+    assert_eq!(outputs[1].value["result"]["description"], "changed");
+    let intents = view
+        .entries
+        .iter()
+        .filter_map(|entry| match entry {
+            SessionEntry::ChildToolAdmitted { intent, .. } => Some(intent),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(intents.len(), 1);
+    assert_eq!(
+        serde_json::to_value(&intents[0].definition).unwrap(),
+        result["exact"]
+    );
+    for request in model.requests() {
+        assert!(
+            !request
+                .tools
+                .iter()
+                .any(|tool| tool.name.starts_with("candidate_"))
+        );
+    }
+}
+
 #[tokio::test]
 async fn observer_panic_stops_and_joins_other_started_vm_children() {
     let root = Workspace::new();
@@ -135,8 +298,8 @@ async fn native_fanout_selects_context_and_preserves_occurrences_inspection_and_
     let session = root.session();
     fs::write(root.0.join("one"), "PRIVATE_INTERMEDIATE_ONE").unwrap();
     fs::write(root.0.join("two"), "PRIVATE_INTERMEDIATE_TWO").unwrap();
-    let first = "const defs = await tools.describe('read');
-        const values = await Promise.all(['one','two'].map(path => tools.call(defs[0].name,{path})));
+    let first = "const def = await describeTool('read');
+        const values = await Promise.all(['one','two'].map(path => tools.call(def.name,{path})));
         await tools.call('write',{path:'changed',content:'changed'});
         const missing = await tools.call('read',{path:'missing'});
         return {lengths:values.map(r => r.value.content.length), missing:missing.is_error};";

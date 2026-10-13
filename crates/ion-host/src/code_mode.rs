@@ -114,7 +114,9 @@ fn enqueue<'js>(
     bridge: &Bridge,
     kind: CodeRequestKind,
 ) -> rquickjs::Result<Promise<'js>> {
-    if let CodeRequestKind::Call { name, .. } | CodeRequestKind::Describe { name } = &kind
+    if let CodeRequestKind::Call { name, .. }
+    | CodeRequestKind::DescribeTool { name }
+    | CodeRequestKind::SearchTools { query: name, .. } = &kind
         && name.len() > bridge.limits.max_json_bytes
     {
         return Err(Exception::throw_range(ctx, "bridge name byte limit"));
@@ -233,7 +235,7 @@ fn start_guest<'js>(
     )?;
     let descriptions = bridge.clone();
     let describe = Function::new(ctx.clone(), move |ctx: Ctx<'js>, name: String| {
-        enqueue(&ctx, &descriptions, CodeRequestKind::Describe { name })
+        enqueue(&ctx, &descriptions, CodeRequestKind::DescribeTool { name })
     })?;
     let inspections = bridge.clone();
     let inspect = Function::new(ctx.clone(), move |ctx: Ctx<'js>, query: Value<'js>| {
@@ -242,7 +244,46 @@ fn start_guest<'js>(
     })?;
     let tools = Object::new(ctx.clone())?;
     tools.set("call", call)?;
-    tools.set("describe", describe)?;
+    ctx.globals().set("describeTool", describe)?;
+    let searches = bridge.clone();
+    let search = Function::new(
+        ctx.clone(),
+        move |ctx: Ctx<'js>, query: String, limit: usize| {
+            enqueue(
+                &ctx,
+                &searches,
+                CodeRequestKind::SearchTools { query, limit },
+            )
+        },
+    )?;
+    // Capture validation builtins before guest code can replace globals. Read
+    // options before enqueue: getters may reenter, but cannot reserve admission.
+    let search_wrapper: Function = ctx.eval(
+        r#"(bridge => {
+        const names = Object.getOwnPropertyNames, symbols = Object.getOwnPropertySymbols;
+        const array = Array.isArray, integer = Number.isInteger;
+        const TypeError = globalThis.TypeError;
+        return function(query, options) {
+            let limit = 10;
+            if (arguments.length > 1) {
+                if (options === null || typeof options !== 'object' || array(options))
+                    throw new TypeError('searchTools options must be an object');
+                const keys = names(options);
+                if (symbols(options).length)
+                    throw new TypeError('unknown searchTools option');
+                for (let i = 0; i < keys.length; i++) {
+                    if (keys[i] !== 'limit') throw new TypeError('unknown searchTools option');
+                }
+                if (keys.length) limit = options.limit;
+                if (!integer(limit) || limit < 1 || limit > 10)
+                    throw new TypeError('searchTools limit must be an integer 1..10');
+            }
+            return bridge(query, limit);
+        };
+    })"#,
+    )?;
+    let search: Function = search_wrapper.call((search,))?;
+    ctx.globals().set("searchTools", search)?;
     tools.set("inspect", inspect)?;
     let input: Function = ctx.eval(format!("(async (tools) => {{\n{code}\n}})"))?;
     let root: Promise = input.call((tools,))?;
@@ -553,9 +594,9 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn awaited_json_calls_describe_and_inspect() {
+    async fn awaited_json_calls_discovery_and_inspect() {
         let (mut task, stop) = start(
-            "const a = await tools.call('echo', {n: 1}); const b = await tools.describe('ec'); const c = await tools.inspect({kind:'children',parent:{assistant_entry:12,ordinal:0}}); return {a, b, c};",
+            "const a = await tools.call('echo', {n: 1}); const b = await describeTool('ec'); const c = await tools.inspect({kind:'children',parent:{assistant_entry:12,ordinal:0}}); return {a, b, c};",
             limits(),
         );
         let call = request(&mut task).await;
@@ -567,8 +608,14 @@ mod tests {
             .send(Ok("{\"value\":2,\"is_error\":false}".into()))
             .unwrap();
         let describe = request(&mut task).await;
-        assert!(matches!(describe.kind, CodeRequestKind::Describe { name } if name == "ec"));
-        describe.reply.send(Ok("[\"echo\"]".into())).unwrap();
+        assert!(matches!(describe.kind, CodeRequestKind::DescribeTool { name } if name == "ec"));
+        describe
+            .reply
+            .send(Ok(
+                json!({"name":"ec","description":"Echo","input_schema":{"type":"object"}})
+                    .to_string(),
+            ))
+            .unwrap();
         let inspect = request(&mut task).await;
         assert!(
             matches!(inspect.kind, CodeRequestKind::Inspect { query_json }
@@ -577,10 +624,96 @@ mod tests {
         inspect.reply.send(Ok("{\"children\":[]}".into())).unwrap();
         assert_eq!(
             serde_json::from_str::<serde_json::Value>(&finish(&mut task).await.unwrap()).unwrap(),
-            json!({"a": {"value": 2, "is_error": false}, "b": ["echo"], "c":{"children":[]}}),
+            json!({"a": {"value": 2, "is_error": false}, "b": {"name":"ec","description":"Echo","input_schema":{"type":"object"}}, "c":{"children":[]}}),
         );
         assert!(!stop.is_cancelled());
         assert!(task.requests.recv().await.is_none());
+    }
+
+    #[tokio::test]
+    async fn discovery_types_and_shared_limits_reject_without_dispatch() {
+        for helper in ["describeTool", "searchTools"] {
+            for arg in [
+                "undefined",
+                "null",
+                "12",
+                "{}",
+                "[]",
+                "true",
+                "'x'.repeat(5000)",
+            ] {
+                let (mut task, stop) = start(&format!("return await {helper}({arg});"), limits());
+                assert!(finish(&mut task).await.is_err(), "{helper}({arg})");
+                assert!(stop.is_cancelled());
+                assert!(task.requests.recv().await.is_none());
+            }
+        }
+        let (mut task, stop) = start(
+            "await searchTools('candidate'); await describeTool('candidate'); await tools.call('must not dispatch', {});",
+            CodeLimits {
+                max_calls: 2,
+                max_concurrency: 1,
+                ..limits()
+            },
+        );
+        for reply in ["[]", "null"] {
+            request(&mut task)
+                .await
+                .reply
+                .send(Ok(reply.into()))
+                .unwrap();
+        }
+        assert!(finish(&mut task).await.is_err());
+        assert!(stop.is_cancelled());
+        assert!(task.requests.recv().await.is_none());
+    }
+
+    #[tokio::test]
+    async fn search_options_validate_before_admission_and_preserve_defaults() {
+        let (mut task, stop) = start(
+            r#"
+            const invalid = [undefined, null, false, 2, 'x', [], () => {},
+                {extra:1}, {limit:null}, {limit:undefined}, {limit:'1'}, {limit:true},
+                {limit:0}, {limit:11}, {limit:-1}, {limit:1.5}, {limit:NaN}, {limit:Infinity},
+                {[Symbol('extra')]:1}, Object.defineProperty({}, 'extra', {value:1})];
+            for (const options of invalid) {
+                let rejected = false;
+                try { await searchTools('target', options); } catch (_) { rejected = true; }
+                if (!rejected) throw new Error('invalid options admitted');
+            }
+            Object.getOwnPropertyNames = () => [];
+            Number.isInteger = () => true;
+            try { await searchTools('target', {limit:null}); throw new Error('coerced'); }
+            catch (e) { if (e.message === 'coerced') throw e; }
+            return await searchTools('target', {limit:1});
+        "#,
+            CodeLimits {
+                max_calls: 1,
+                max_concurrency: 1,
+                ..limits()
+            },
+        );
+        let query = request(&mut task).await;
+        assert!(
+            matches!(query.kind, CodeRequestKind::SearchTools { query, limit:1 } if query == "target")
+        );
+        query.reply.send(Ok("[]".into())).unwrap();
+        assert_eq!(finish(&mut task).await, Ok("[]".into()));
+        assert!(!stop.is_cancelled());
+        assert!(task.requests.recv().await.is_none());
+        for options in ["", ", {}", ", {limit:10}"] {
+            let (mut task, _) = start(
+                &format!("return await searchTools('target'{options});"),
+                limits(),
+            );
+            let query = request(&mut task).await;
+            assert!(matches!(
+                query.kind,
+                CodeRequestKind::SearchTools { limit: 10, .. }
+            ));
+            query.reply.send(Ok("[]".into())).unwrap();
+            assert_eq!(finish(&mut task).await, Ok("[]".into()));
+        }
     }
 
     #[tokio::test]
@@ -624,6 +757,8 @@ mod tests {
     async fn reply_guest_code_and_idle_promises_resume_budget_accounting() {
         for code in [
             "await tools.call('host', {}); while(true) {}",
+            "await describeTool('host'); while(true) {}",
+            "await searchTools('host'); while(true) {}",
             "await tools.call('host', {}); await new Promise(() => {});",
             "Object.defineProperty(Object.prototype, 'then', {get() {while(true) {}}}); return await tools.call('host', {});",
             "await tools.call('host', {}); return {toJSON() {while(true) {}}};",
@@ -792,7 +927,7 @@ mod tests {
         );
         assert_eq!(
             finish(&mut task).await.unwrap(),
-            "{\"absent\":true,\"bridge\":[\"call\",\"describe\",\"inspect\"]}"
+            "{\"absent\":true,\"bridge\":[\"call\",\"inspect\"]}"
         );
         assert!(!stop.is_cancelled());
     }
@@ -816,7 +951,7 @@ mod tests {
         let (mut task, stop) = start(
             "let fired = false;
              Object.defineProperty(Object.prototype, 'then', {configurable: true, get() {
-                 if (!fired) { fired = true; void tools.describe('nested'); } return undefined;
+                 if (!fired) { fired = true; void searchTools('nested'); } return undefined;
              }});
              const a = await tools.call('first', {}); delete Object.prototype.then; return a;",
             limits(),
@@ -825,7 +960,9 @@ mod tests {
         call.reply.send(Ok("{\"n\":1}".into())).unwrap();
         assert_eq!(finish(&mut task).await, Ok("{\"n\":1}".into()));
         let nested = request(&mut task).await;
-        assert!(matches!(nested.kind, CodeRequestKind::Describe { name } if name == "nested"));
+        assert!(
+            matches!(nested.kind, CodeRequestKind::SearchTools { query, limit: 10 } if query == "nested")
+        );
         assert!(task.requests.recv().await.is_none());
         assert!(!stop.is_cancelled());
     }

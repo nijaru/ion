@@ -662,9 +662,20 @@ return results.map(r => ({characters: r.value.content.length, failed: r.is_error
 ```
 
 `tools.call(name, arguments)` returns `{value, is_error, image_mime_types}`.
-`tools.describe(query)` returns up to ten matching frozen definitions, including
-callable deferred tools. Input schemas are included; typed result schemas are
-not yet exposed. Images stay in saved inspection; the guest receives MIME
+Global `searchTools(query, {limit})` returns bounded `{name, description}`
+candidates. Options and `limit` may be omitted (default ten); a supplied limit
+must be an integer 1..10. Null/nonobject options, unknown keys and invalid limits
+reject before admission, without coercion or clamping. Matching uses
+ASCII-insensitive name/description substrings, with exact ASCII-insensitive
+names first and frozen catalogue order within each rank, without duplicates.
+Global `describeTool(name)` looks up an exact, case-sensitive name in Core's
+frozen catalogue and returns its full provider-neutral
+`{name, description, input_schema}` ToolSpec, or explicit `null` if missing.
+Both include callable deferred tools and exclude intrinsic `tool_search` and
+`code_mode`. Discovery is read-only: it neither activates tools nor records child
+effects, and shares existing bridge, JSON, reply, cancellation and guest budgets.
+This is not full Pi API parity; typed result schemas are not yet exposed.
+Images stay in saved inspection; the guest receives MIME
 metadata, not image bytes. The selected JSON return value, call count and
 failure/skip counts reach the model. Raw child arguments and observations remain
 in the Session, export and nested Ctrl-O/tool detail, without automatic addition

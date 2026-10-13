@@ -33,6 +33,43 @@ struct Admitted {
     reply: oneshot::Sender<CodeReply>,
 }
 
+// Validate even requests from runtimes other than Host's JS bridge. Two
+// disjoint ranks preserve frozen order and need no sorting or duplicate set.
+fn search_tools(
+    catalog: &ToolCatalog,
+    query: &str,
+    limit: usize,
+) -> Result<Vec<Value>, &'static str> {
+    if !(1..=10).contains(&limit) {
+        return Err("searchTools limit must be an integer 1..10");
+    }
+    let query = query.to_ascii_lowercase();
+    let query = query.as_str();
+    Ok([true, false]
+        .into_iter()
+        .flat_map(|exact| {
+            catalog.definitions().filter(move |definition| {
+                let spec = &definition.spec;
+                if catalog.is_intrinsic(&spec.name) {
+                    return false;
+                }
+                let matches_name = spec.name.eq_ignore_ascii_case(query);
+                if exact {
+                    matches_name
+                } else {
+                    !matches_name
+                        && (spec.name.to_ascii_lowercase().contains(query)
+                            || spec.description.to_ascii_lowercase().contains(query))
+                }
+            })
+        })
+        .take(limit)
+        .map(|definition| {
+            json!({"name": definition.spec.name, "description": definition.spec.description})
+        })
+        .collect())
+}
+
 struct Inspection {
     reply: oneshot::Sender<CodeReply>,
     result: oneshot::Receiver<Result<Option<Value>, InspectionError>>,
@@ -106,28 +143,29 @@ impl<F: FnMut(AgentEvent)> Gate<'_, F> {
 
     fn accept(&mut self, request: CodeRequest) {
         match request.kind {
-            CodeRequestKind::Describe { name } => {
+            CodeRequestKind::DescribeTool { name } => {
                 if self.stop.is_cancelled() {
                     let _ = request.reply.send(Err("guest stopped".into()));
                     return;
                 }
-                let query = name.to_ascii_lowercase();
-                let specs = self
+                let spec = self
                     .catalog
-                    .definitions()
-                    .filter(|definition| !self.catalog.is_intrinsic(&definition.spec.name))
-                    .filter(|definition| {
-                        definition.spec.name.to_ascii_lowercase().contains(&query)
-                            || definition
-                                .spec
-                                .description
-                                .to_ascii_lowercase()
-                                .contains(&query)
-                    })
-                    .map(|definition| &definition.spec)
-                    .take(10)
-                    .collect::<Vec<_>>();
-                self.reply(request.reply, &specs);
+                    .definition(&name)
+                    .filter(|_| !self.catalog.is_intrinsic(&name))
+                    .map(|definition| &definition.spec);
+                self.reply(request.reply, &spec);
+            }
+            CodeRequestKind::SearchTools { query, limit } => {
+                if self.stop.is_cancelled() {
+                    let _ = request.reply.send(Err("guest stopped".into()));
+                    return;
+                }
+                match search_tools(self.catalog, &query, limit) {
+                    Ok(specs) => self.reply(request.reply, &specs),
+                    Err(error) => {
+                        let _ = request.reply.send(Err(error.into()));
+                    }
+                }
             }
             CodeRequestKind::Inspect { query_json } => {
                 if self.stop.is_cancelled() {
@@ -543,3 +581,25 @@ pub(crate) async fn run<F: FnMut(AgentEvent) + Send>(
 #[cfg(test)]
 #[path = "code_gateway_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+mod discovery_tests {
+    use super::*;
+
+    #[test]
+    fn untrusted_search_limits_reject_in_core() {
+        let catalog = crate::ToolSet::new([]).snapshot();
+        for limit in [0, 11, usize::MAX] {
+            assert_eq!(
+                search_tools(&catalog, "", limit),
+                Err("searchTools limit must be an integer 1..10")
+            );
+        }
+        for limit in 1..=10 {
+            assert_eq!(
+                search_tools(&catalog, "", limit).unwrap(),
+                Vec::<Value>::new()
+            );
+        }
+    }
+}

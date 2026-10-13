@@ -49,7 +49,7 @@ def program(prompt):
     if prompt == "ACTIVE":
         return "await Promise.all(['a','b'].map(x=>tools.call('exec',{command:`touch ${x}.ready; sleep 1.5; printf done`}))); return true;"
     if prompt == "MCP":
-        return "const [d]=await tools.describe('Lookup an item'); const rs=await Promise.all([1,2].map(index=>tools.call(d.name,{index}))); return {total:rs.reduce((n,r)=>n+r.value.structured_content.count,0)};"
+        return "const candidates=await searchTools('Lookup an item'); const bounded=await searchTools('Lookup an item',{limit:1}); if(bounded.length!==1 || bounded[0].name!==candidates[0].name) throw new Error('bounded discovery'); let rejected=false; try { await searchTools('Lookup an item',{limit:null}); } catch (_) { rejected=true; } if(!rejected) throw new Error('invalid limit admitted'); const [candidate]=bounded; const d=await describeTool(candidate.name); if(d.input_schema.required[0]!=='index' || await describeTool('code_mode')!==null || await describeTool('missing')!==null) throw new Error('discovery contract'); const rs=await Promise.all([1,2].map(index=>tools.call(d.name,{index}))); return {total:rs.reduce((n,r)=>n+r.value.structured_content.count,0)};"
     if prompt in ("IO", "STDERR"):
         first = "sleep 0.5; printf FIRST_DONE" if prompt == "STDERR" else "exec sleep 30"
         return "await Promise.all([" + ",".join(
