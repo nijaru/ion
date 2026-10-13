@@ -1,8 +1,8 @@
 //! Direct coding tools with the caller's host permissions.
 use std::{
     collections::VecDeque,
-    fs::{self, File, OpenOptions},
-    io::{Read, Seek, SeekFrom, Write},
+    fs::{self, OpenOptions},
+    io::{Read, Seek, SeekFrom},
     os::unix::{fs::OpenOptionsExt, fs::PermissionsExt, process::ExitStatusExt},
     path::{Path, PathBuf},
     process::Stdio,
@@ -85,6 +85,7 @@ impl ToolSource for LocalTools {
     }
 }
 
+#[derive(Clone, Copy)]
 enum LocalOperation {
     Read,
     Edit,
@@ -107,12 +108,10 @@ impl ToolExecutor for LocalExecutor {
             if stop.is_cancelled() {
                 return error("cancelled before tool start");
             }
-            let execute: fn(&LocalTools, &Value) -> ToolOutput = match self.operation {
-                LocalOperation::Read => LocalTools::read,
-                LocalOperation::Edit => LocalTools::edit,
-                LocalOperation::Write => LocalTools::write,
-                LocalOperation::Exec => return self.tools.exec(&call.arguments, stop).await,
-            };
+            if matches!(self.operation, LocalOperation::Exec) {
+                return self.tools.exec(&call.arguments, stop).await;
+            }
+            let operation = self.operation;
             let tools = self.tools.clone();
             let arguments = call.arguments.clone();
             // Filesystem calls, hashing and image normalization must not block
@@ -122,7 +121,12 @@ impl ToolExecutor for LocalExecutor {
                 if stop.is_cancelled() {
                     error("cancelled before tool start")
                 } else {
-                    execute(&tools, &arguments)
+                    match operation {
+                        LocalOperation::Read => tools.read(&arguments),
+                        LocalOperation::Edit => tools.edit(&arguments, &stop),
+                        LocalOperation::Write => tools.write(&arguments, &stop),
+                        LocalOperation::Exec => unreachable!("shell uses async execution"),
+                    }
                 }
             })
             .await
@@ -304,7 +308,7 @@ impl LocalTools {
         )
     }
 
-    fn edit(&self, args: &Value) -> ToolOutput {
+    fn edit(&self, args: &Value, stop: &CancellationToken) -> ToolOutput {
         let input: EditInput = match serde_json::from_value(args.clone()) {
             Ok(value) => value,
             Err(e) => return error(format!("invalid edit arguments: {e}")),
@@ -316,11 +320,15 @@ impl LocalTools {
             Ok(path) => path,
             Err(e) => return error(e),
         };
-        let bytes = match crate::file_io::read_bounded(&path, MAX_FILE_BYTES) {
+        let mutation = match crate::file_io::FileMutation::open(&path, false, stop) {
+            Ok(mutation) => mutation,
+            Err(e) => return error(format!("edit {}: {e}", input.path)),
+        };
+        let bytes = match crate::file_io::read_bounded(mutation.path(), MAX_FILE_BYTES) {
             Ok(bytes) => bytes,
             Err(e) => return error(format!("edit {}: {e}", input.path)),
         };
-        if let Err(e) = ensure_writable(&path) {
+        if let Err(e) = mutation.ensure_writable() {
             return error(format!("edit {}: {e}", input.path));
         }
         let actual = hex_digest(&bytes);
@@ -342,12 +350,12 @@ impl LocalTools {
         if replacement.len() > MAX_FILE_BYTES {
             return error("edited file exceeds 8 MiB");
         }
-        let permissions = match fs::metadata(&path) {
+        let permissions = match fs::metadata(mutation.path()) {
             Ok(meta) => meta.permissions(),
             Err(e) => return error(e.to_string()),
         };
         let diff = crate::edit_diff::capture(&input.path, &text, &replacement);
-        match replace_file(&path, replacement.as_bytes(), Some(permissions)) {
+        match mutation.replace(replacement.as_bytes(), Some(permissions)) {
             Ok(()) => success(
                 json!({"path": input.path, "replacements": input.edits.len(), "base_digest": actual, "new_digest": hex_digest(replacement.as_bytes()), "diff": diff}),
             ),
@@ -355,7 +363,7 @@ impl LocalTools {
         }
     }
 
-    fn write(&self, args: &Value) -> ToolOutput {
+    fn write(&self, args: &Value, stop: &CancellationToken) -> ToolOutput {
         let input: WriteInput = match serde_json::from_value(args.clone()) {
             Ok(value) => value,
             Err(e) => return error(format!("invalid write arguments: {e}")),
@@ -367,24 +375,23 @@ impl LocalTools {
             Ok(path) => path,
             Err(e) => return error(e),
         };
-        let previous = match fs::metadata(&path) {
+        let mutation = match crate::file_io::FileMutation::open(&path, true, stop) {
+            Ok(mutation) => mutation,
+            Err(e) => return error(format!("write {}: {e}", input.path)),
+        };
+        let previous = match fs::metadata(mutation.path()) {
             Ok(meta) if meta.is_file() => Some(meta.permissions()),
             Ok(_) => return error("write target is not a regular file"),
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => None,
             Err(e) => return error(e.to_string()),
         };
         if previous.is_some()
-            && let Err(e) = ensure_writable(&path)
+            && let Err(e) = mutation.ensure_writable()
         {
             return error(format!("write {}: {e}", input.path));
         }
         let created = previous.is_none();
-        if let Some(parent) = path.parent()
-            && let Err(e) = fs::create_dir_all(parent)
-        {
-            return error(format!("create parent: {e}"));
-        }
-        match replace_file(&path, input.content.as_bytes(), previous) {
+        match mutation.replace(input.content.as_bytes(), previous) {
             Ok(()) => success(
                 json!({"path": input.path, "created": created, "bytes": input.content.len()}),
             ),
@@ -643,59 +650,6 @@ fn replace_text_preserving_format(source: &str, edits: &[TextEdit]) -> Result<St
     }
     Ok(result)
 }
-fn ensure_writable(path: &Path) -> std::io::Result<()> {
-    // Atomic rename would otherwise bypass the target file's write permission.
-    // Opening without truncate checks the current host user's effective access.
-    let file = File::from(rustix::fs::open(
-        path,
-        rustix::fs::OFlags::WRONLY | rustix::fs::OFlags::NONBLOCK | rustix::fs::OFlags::CLOEXEC,
-        rustix::fs::Mode::empty(),
-    )?);
-    if !file.metadata()?.is_file() {
-        return Err(std::io::Error::other("not a regular file"));
-    }
-    Ok(())
-}
-fn replace_file(
-    path: &Path,
-    content: &[u8],
-    permissions: Option<fs::Permissions>,
-) -> std::io::Result<()> {
-    // Reading an existing symlink follows it. Keep the same target when an
-    // edit or replacement is committed instead of replacing the link itself.
-    let target = match fs::symlink_metadata(path) {
-        Ok(meta) if meta.file_type().is_symlink() => fs::canonicalize(path)?,
-        Ok(_) => path.to_path_buf(),
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => path.to_path_buf(),
-        Err(error) => return Err(error),
-    };
-    let parent = target
-        .parent()
-        .ok_or_else(|| std::io::Error::other("no parent"))?;
-    let temporary = parent.join(format!(
-        ".ion-{}-{}.tmp",
-        std::process::id(),
-        uuid::Uuid::now_v7()
-    ));
-    let result = (|| {
-        let mut file = OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .open(&temporary)?;
-        if let Some(permissions) = permissions {
-            file.set_permissions(permissions)?;
-        }
-        file.write_all(content)?;
-        file.sync_all()?;
-        fs::rename(&temporary, &target)?;
-        File::open(parent)?.sync_all()?;
-        Ok(())
-    })();
-    if result.is_err() {
-        let _ = fs::remove_file(temporary);
-    }
-    result
-}
 struct Captured {
     bytes: Vec<u8>,
     complete: bool,
@@ -953,6 +907,7 @@ fn specs() -> Vec<ToolSpec> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::fs::File;
 
     #[tokio::test]
     async fn optional_native_inputs_reject_null_before_effects() {
@@ -1007,6 +962,119 @@ mod tests {
         }
         fs::remove_dir_all(root).unwrap();
         assert!(failures.is_empty(), "{}", failures.join("\n"));
+    }
+
+    #[tokio::test]
+    async fn concurrent_native_edits_preserve_guards_and_disjoint_changes() {
+        let root = std::env::temp_dir().join(format!("ion-edit-race-{}", uuid::Uuid::now_v7()));
+        fs::create_dir(&root).unwrap();
+        fs::create_dir(root.join("aliases")).unwrap();
+        std::os::unix::fs::symlink("../file", root.join("aliases/link")).unwrap();
+        let source = format!("LEFT:\n{}RIGHT:\n", "payload0123456789\n".repeat(200_000));
+        let catalogs = [0, 1].map(|_| {
+            ion_core::ToolSet::new([
+                Arc::new(LocalTools::new(&root).unwrap()) as Arc<dyn ToolSource>
+            ])
+            .snapshot()
+        });
+        let mut failures = Vec::new();
+        for guarded in [true, false] {
+            fs::write(root.join("file"), &source).unwrap();
+            let calls = [("file", "LEFT", "1"), ("aliases/link", "RIGHT", "2")].map(|(path, anchor, value)| {
+                let mut arguments = json!({"path":path,"edits":[{"old_text":format!("{anchor}:"),"new_text":format!("{anchor}:{value}")}]});
+                if guarded { arguments["base_digest"] = json!(hex_digest(source.as_bytes())); }
+                ToolCall { id: anchor.into(), name: "edit".into(), arguments, raw_arguments: None }
+            });
+            let outputs = tokio::join!(
+                catalogs[0].execute(&calls[0], CancellationToken::new()),
+                catalogs[1].execute(&calls[1], CancellationToken::new()),
+            );
+            let final_bytes = fs::read(root.join("file")).unwrap();
+            let final_text = std::str::from_utf8(&final_bytes).unwrap();
+            let left = final_text.starts_with("LEFT:1\n");
+            let right = final_text.ends_with("RIGHT:2\n");
+            let successful = [&outputs.0, &outputs.1]
+                .iter()
+                .filter(|output| !output.is_error)
+                .count();
+            let correct = if guarded {
+                successful == 1
+                    && (left ^ right)
+                    && [&outputs.0, &outputs.1].iter().all(|output| {
+                        if output.is_error {
+                            output.value["error"] == "file changed since supplied base_digest"
+                        } else {
+                            output.value["new_digest"] == hex_digest(&final_bytes)
+                        }
+                    })
+            } else {
+                successful == 2 && left && right
+            };
+            if !correct {
+                failures.push(format!(
+                    "guarded={guarded} successful={successful} left={left} right={right}"
+                ));
+            }
+        }
+        fs::remove_dir_all(root).unwrap();
+        assert!(failures.is_empty(), "{}", failures.join("\n"));
+    }
+
+    #[tokio::test]
+    async fn stopped_native_mutations_leave_an_externally_locked_target_unchanged() {
+        let root = std::env::temp_dir().join(format!("ion-mutation-stop-{}", uuid::Uuid::now_v7()));
+        fs::create_dir(&root).unwrap();
+        fs::write(root.join("file"), "old").unwrap();
+        let holder = File::open(&root).unwrap();
+        holder.lock().unwrap();
+        let catalog = ion_core::ToolSet::new([
+            Arc::new(LocalTools::new(&root).unwrap()) as Arc<dyn ToolSource>
+        ])
+        .snapshot();
+        for (name, arguments) in [
+            (
+                "edit",
+                json!({"path":"file","edits":[{"old_text":"old","new_text":"edited"}]}),
+            ),
+            ("write", json!({"path":"file","content":"written"})),
+        ] {
+            let call = ToolCall {
+                id: name.into(),
+                name: name.into(),
+                arguments,
+                raw_arguments: None,
+            };
+            let stop = CancellationToken::new();
+            let pending = catalog.execute(&call, stop.clone());
+            tokio::pin!(pending);
+            assert!(
+                tokio::time::timeout(Duration::from_millis(20), &mut pending)
+                    .await
+                    .is_err()
+            );
+            stop.cancel();
+            let output = tokio::time::timeout(Duration::from_secs(2), pending)
+                .await
+                .unwrap();
+            assert!(
+                output.is_error
+                    && output.value["error"]
+                        .as_str()
+                        .unwrap()
+                        .contains("cancelled"),
+                "{}",
+                output.value
+            );
+            assert_eq!(fs::read(root.join("file")).unwrap(), b"old");
+        }
+        drop(holder);
+        let output = LocalTools::new(&root).unwrap().write(
+            &json!({"path":"file","content":"released"}),
+            &CancellationToken::new(),
+        );
+        assert!(!output.is_error, "{}", output.value);
+        assert_eq!(fs::read(root.join("file")).unwrap(), b"released");
+        fs::remove_dir_all(root).unwrap();
     }
 
     #[test]
@@ -1075,7 +1143,10 @@ mod tests {
         fs::write(&target, "old").unwrap();
         std::os::unix::fs::symlink("target.txt", root.join("link.txt")).unwrap();
         let tools = LocalTools::new(&root).unwrap();
-        let output = tools.write(&json!({"path":"link.txt","content":"new"}));
+        let output = tools.write(
+            &json!({"path":"link.txt","content":"new"}),
+            &CancellationToken::new(),
+        );
         assert!(!output.is_error, "{}", output.value);
         assert_eq!(fs::read_to_string(&target).unwrap(), "new");
         assert!(
@@ -1095,10 +1166,15 @@ mod tests {
         fs::write(&path, "old").unwrap();
         fs::set_permissions(&path, fs::Permissions::from_mode(0o444)).unwrap();
         let tools = LocalTools::new(&root).unwrap();
-        let edit =
-            tools.edit(&json!({"path":"file.txt","edits":[{"old_text":"old","new_text":"new"}]}));
+        let edit = tools.edit(
+            &json!({"path":"file.txt","edits":[{"old_text":"old","new_text":"new"}]}),
+            &CancellationToken::new(),
+        );
         assert!(edit.is_error, "{}", edit.value);
-        let write = tools.write(&json!({"path":"file.txt","content":"new"}));
+        let write = tools.write(
+            &json!({"path":"file.txt","content":"new"}),
+            &CancellationToken::new(),
+        );
         assert!(write.is_error, "{}", write.value);
         assert_eq!(fs::read_to_string(&path).unwrap(), "old");
         fs::set_permissions(&path, fs::Permissions::from_mode(0o644)).unwrap();
@@ -1113,11 +1189,14 @@ mod tests {
         let original = "\u{feff}one\r\ntwo\r\nthree\r\n";
         fs::write(&path, original).unwrap();
         let tools = LocalTools::new(&root).unwrap();
-        let output = tools.edit(&json!({
-            "path":"file.txt",
-            "edits":[{"old_text":"two\nthree","new_text":"TWO\nthree"}],
-            "base_digest": hex_digest(original.as_bytes()),
-        }));
+        let output = tools.edit(
+            &json!({
+                "path":"file.txt",
+                "edits":[{"old_text":"two\nthree","new_text":"TWO\nthree"}],
+                "base_digest": hex_digest(original.as_bytes()),
+            }),
+            &CancellationToken::new(),
+        );
         assert!(!output.is_error, "{}", output.value);
         assert_eq!(
             fs::read_to_string(path).unwrap(),
@@ -1140,11 +1219,14 @@ mod tests {
         assert!(!read.is_error, "{}", read.value);
         let digest = read.value["base_digest"].as_str().unwrap();
         assert_eq!(digest, hex_digest(&fs::read(&path).unwrap()));
-        let edit = tools.edit(&json!({
-            "path":"file.txt",
-            "edits":[{"old_text":"beta","new_text":"BETA"}],
-            "base_digest":digest,
-        }));
+        let edit = tools.edit(
+            &json!({
+                "path":"file.txt",
+                "edits":[{"old_text":"beta","new_text":"BETA"}],
+                "base_digest":digest,
+            }),
+            &CancellationToken::new(),
+        );
         assert!(!edit.is_error, "{}", edit.value);
         fs::remove_dir_all(root).unwrap();
     }
@@ -1180,14 +1262,17 @@ mod tests {
         let tools = LocalTools::new(&root).unwrap();
         let original = "\u{feff}α\r\nfirst\nsecond\r\n";
         fs::write(&path, original).unwrap();
-        let output = tools.edit(&json!({
-            "path":"file.txt",
-            "edits":[
-                {"old_text":"second","new_text":"SECOND"},
-                {"old_text":"α","new_text":"β"}
-            ],
-            "base_digest":hex_digest(original.as_bytes()),
-        }));
+        let output = tools.edit(
+            &json!({
+                "path":"file.txt",
+                "edits":[
+                    {"old_text":"second","new_text":"SECOND"},
+                    {"old_text":"α","new_text":"β"}
+                ],
+                "base_digest":hex_digest(original.as_bytes()),
+            }),
+            &CancellationToken::new(),
+        );
         assert!(!output.is_error, "{}", output.value);
         assert_eq!(output.value["replacements"], 2);
         assert_eq!(
@@ -1207,7 +1292,10 @@ mod tests {
             ),
         ] {
             fs::write(&path, source).unwrap();
-            let output = tools.edit(&json!({"path":"file.txt","edits":edits}));
+            let output = tools.edit(
+                &json!({"path":"file.txt","edits":edits}),
+                &CancellationToken::new(),
+            );
             assert!(output.is_error, "{}", output.value);
             assert_eq!(fs::read_to_string(&path).unwrap(), source);
         }

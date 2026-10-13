@@ -594,8 +594,14 @@ UTF-8-safe `next_offset`. For files within its 8 MiB text-edit bound,
 `edit` takes an `edits` array of `{old_text, new_text}` replacements against one
 original file snapshot. It rejects ambiguous or overlapping matches before
 writing, accepts ordinary LF or CRLF text, and preserves the file's BOM and
-unaffected line endings. A damaged Session file is skipped
-by `sessions` and `--continue`, while opening its exact path reports the
+unaffected line endings. Native `edit` and `write` coordinate through an advisory
+parent-directory lock across Ion instances/processes, keeping digest checks and
+replacement together. Sibling-file mutations also serialize; waiting for the
+lock is cancellable. Locking errors are reported without an unlocked fallback.
+External editors and `exec` writes do not participate; this is not a filesystem
+transaction.
+
+A damaged Session file is skipped by `sessions` and `--continue`, while opening its exact path reports the
 error. Reopen and catalogue/startup metadata validate facts one at a time without
 retaining all raw child output. Metadata inspection also releases historical model
 messages instead of retaining the full conversation. Writable Sessions still retain
