@@ -172,20 +172,20 @@ with tempfile.TemporaryDirectory(prefix="ion-resources-") as temporary:
                         # Streamed text does not establish settlement. Observe
                         # this process's committed Turns before requesting quit.
                         if completed_turns(work / "state", previous_sessions) == 2:
-                            os.write(master, b"\x03")
+                            os.write(master, b"\x04")
                             quit_at = time.monotonic()
                             phase = 6
                     elif phase == 6 and time.monotonic() - quit_at >= 0.1:
-                        # Keep draining the PTY. A first Ctrl-C can reach the
-                        # still-busy client before it harvests Core completion;
-                        # after committed settlement another quits the idle UI.
-                        os.write(master, b"\x03")
+                        # Retry the empty-composer quit while draining. Ctrl-D
+                        # is also harmless EOF after terminal restoration;
+                        # repeated Ctrl-C can instead kill joined cleanup.
+                        os.write(master, b"\x04")
                         quit_at = time.monotonic()
                     if child.poll() is not None:
                         break
                 assert phase == 6, f"{mode} command completion stopped in phase {phase}: {output[-1000:]!r}"
                 child.wait(timeout=5)
-                assert child.returncode == 0, output[-1000:]
+                assert child.returncode == 0, (mode, child.returncode, output[-1000:])
                 assert len(requests) == before + 2, "completion duplicated submission"
                 assert requests[before]["messages"][-1]["content"].strip() == "Check TUI; scope all."
                 assert requests[before + 1]["messages"][-1]["content"].strip() == "A later prompt."
@@ -243,17 +243,17 @@ with tempfile.TemporaryDirectory(prefix="ion-resources-") as temporary:
                             assert len(requests) == before + 2
                             assert requests[-1]["messages"][-1]["content"] == "PREFIX_" + literal, (mode, steer, "resource recovery lost literal arguments/cursor", requests[-1]["messages"][-1]["content"])
                             if completed_turns(work / "state", previous_sessions) == 1:
-                                os.write(master, b"\x03")
+                                os.write(master, b"\x04")
                                 quit_at = time.monotonic()
                                 phase = 5
                         elif phase == 5 and time.monotonic() - quit_at >= 0.1:
-                            os.write(master, b"\x03")
+                            os.write(master, b"\x04")
                             quit_at = time.monotonic()
                         if child.poll() is not None:
                             break
                     assert phase == 5, (mode, steer, phase, output[-1200:])
                     child.wait(timeout=5)
-                    assert child.returncode == 0, output[-1200:]
+                    assert child.returncode == 0, (mode, steer, child.returncode, output[-1200:])
                 finally:
                     release.set()
                     if child.poll() is None:
