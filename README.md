@@ -728,6 +728,10 @@ bridge replies are excluded; guest computation, promise jobs, serialization and
 reply resolution still consume the budget. Unresolved promises without pending
 host work also consume it. There is no default whole-script wall timeout: tools
 retain their own deadlines, and user cancellation still stops and joins work.
+Guest failure diagnostics include thrown primitive strings and native Error own
+string data messages (including parser errors), capped at 256 UTF-8 bytes.
+Reporting does not run guest getters, coercion or Proxy traps; unsafe exceptions
+retain a generic diagnostic. Cancellation and budget exhaustion take precedence.
 
 These limits are not an OS sandbox or a process-RSS/disk quota. Native and MCP
 calls retain host permissions and their own capture/timeout contracts. Full

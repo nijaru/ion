@@ -142,11 +142,66 @@ fn enqueue<'js>(
     Ok(promise)
 }
 
-fn js_error(ctx: &Ctx<'_>, error: rquickjs::Error) -> String {
+// Private captured builtins: never published, and only used on strings or
+// native Error values, not Proxy wrappers. Descriptor inspection runs no getters.
+fn diagnostic_helper(ctx: &Ctx<'_>) -> rquickjs::Result<Persistent<Function<'static>>> {
+    let helper: Function = ctx.eval(
+        r#"(() => {
+        const own = Object.getOwnPropertyDescriptor;
+        const slice = Function.prototype.call.bind(String.prototype.slice);
+        const unit = Function.prototype.call.bind(String.prototype.charCodeAt);
+        return value => {
+            if (typeof value !== 'string') {
+                const message = own(value, 'message');
+                if (!message) return undefined;
+                const data = own(message, 'value');
+                if (!data || typeof data.value !== 'string') return undefined;
+                value = data.value;
+            }
+            const text = slice(value, 0, 256);
+            const last = unit(text, text.length - 1);
+            // A UTF-16 slice can split a supplementary character. Remove the
+            // partial surrogate before Rust's UTF-8 conversion.
+            return last >= 0xd800 && last <= 0xdbff ? slice(text, 0, -1) : text;
+        };
+    })()"#,
+    )?;
+    Ok(Persistent::save(ctx, helper))
+}
+
+fn js_error(
+    ctx: &Ctx<'_>,
+    error: rquickjs::Error,
+    helper: Option<&Persistent<Function<'static>>>,
+) -> String {
     if error.is_exception() {
-        // Even an Error's message/stack can be a hostile getter. Do not read
-        // properties or coerce guest values while reporting a failure.
-        drop(ctx.catch());
+        let value = ctx.catch();
+        if (value.is_string() || value.is_error())
+            && let Some(helper) = helper
+        {
+            let message = helper
+                .clone()
+                .restore(ctx)
+                .and_then(|helper| helper.call::<_, Value>((value,)));
+            if let Ok(message) = message {
+                if let Some(message) = message.as_string()
+                    && let Ok(mut text) = message.to_string()
+                {
+                    // Slice first: conversion copies at most 256 UTF-16 units,
+                    // never an arbitrarily large guest message.
+                    let mut end = text.len().min(256);
+                    while !text.is_char_boundary(end) {
+                        end -= 1;
+                    }
+                    text.truncate(end);
+                    if !text.is_empty() {
+                        return text;
+                    }
+                }
+            } else {
+                drop(ctx.catch());
+            }
+        }
         "JavaScript exception".into()
     } else {
         // Library errors contain no guest object coercion; still bound text.
@@ -312,9 +367,12 @@ fn execute(
         limits,
     });
     let outcome = catch_unwind(AssertUnwindSafe(|| {
+        let helper = context
+            .with(|ctx| diagnostic_helper(&ctx))
+            .map_err(|e| context.with(|ctx| js_error(&ctx, e, None)))?;
         let root = context
             .with(|ctx| start_guest(ctx, &code, &bridge))
-            .map_err(|e| context.with(|ctx| js_error(&ctx, e)))?;
+            .map_err(|e| context.with(|ctx| js_error(&ctx, e, Some(&helper))))?;
         loop {
             if stop.is_cancelled() {
                 return Err("JavaScript cancelled".into());
@@ -334,7 +392,7 @@ fn execute(
                     poll_replies(&ctx, &bridge)?;
                     Ok(None)
                 })
-                .map_err(|e| context.with(|ctx| js_error(&ctx, e)))?;
+                .map_err(|e| context.with(|ctx| js_error(&ctx, e, Some(&helper))))?;
             if let Some(json) = result {
                 return Ok(json);
             }
@@ -346,7 +404,9 @@ fn execute(
                     budget.wait_for_work(host_pending)?;
                 }
                 Err(job) => {
-                    return Err(job.0.with(|ctx| js_error(&ctx, rquickjs::Error::Exception)));
+                    return Err(job
+                        .0
+                        .with(|ctx| js_error(&ctx, rquickjs::Error::Exception, Some(&helper))));
                 }
             }
         }
@@ -403,6 +463,93 @@ mod tests {
             .await
             .expect("bridge must not block")
             .expect("request expected")
+    }
+
+    #[tokio::test]
+    async fn useful_exception_messages_are_bounded() {
+        for code in [
+            "throw 'verification failed: expected exit 0';",
+            "throw new Error('verification failed: expected exit 0');",
+        ] {
+            let (mut task, stop) = start(code, limits());
+            assert_eq!(
+                finish(&mut task).await,
+                Err("verification failed: expected exit 0".into())
+            );
+            assert!(stop.is_cancelled());
+            assert!(task.requests.recv().await.is_none());
+        }
+        for code in [
+            "throw 'é🙂'.repeat(100000);",
+            "throw new Error('é🙂'.repeat(100000));",
+        ] {
+            let (mut task, _) = start(code, limits());
+            assert_eq!(
+                finish(&mut task).await,
+                Err(format!("{}é", "é🙂".repeat(42)))
+            );
+            assert!(task.requests.recv().await.is_none());
+        }
+        for (code, expected) in [
+            ("throw new Error('a'.repeat(255)+'🦀');", "a".repeat(255)),
+            ("throw '';", "JavaScript exception".into()),
+        ] {
+            let (mut task, stop) = start(code, limits());
+            assert_eq!(finish(&mut task).await, Err(expected));
+            assert!(stop.is_cancelled());
+            assert!(task.requests.recv().await.is_none());
+        }
+        let (mut task, _) = start("return (;", limits());
+        let error = finish(&mut task).await.unwrap_err();
+        assert_ne!(error, "JavaScript exception");
+        assert!(error.len() <= 256);
+        assert!(task.requests.recv().await.is_none());
+    }
+
+    #[test]
+    fn diagnostics_reject_proxies_without_traps() {
+        // Proxy is not installed in the production VM. Exercise the native
+        // class gate in a context that does provide it, without widening it.
+        for expression in [
+            "new Proxy(new Error('hidden'), {get: hook, getOwnPropertyDescriptor: hook, getPrototypeOf: hook})",
+            "(() => {const p = Proxy.revocable(new Error('hidden'), {}); p.revoke(); return p.proxy;})()",
+        ] {
+            let runtime = Runtime::new().unwrap();
+            let context = Context::custom::<(intrinsic::Eval, intrinsic::Proxy)>(&runtime).unwrap();
+            context.with(|ctx| {
+                let helper = diagnostic_helper(&ctx).unwrap();
+                let error = ctx.eval::<Value, _>(format!("let touched = false; const hook = () => {{touched = true;}}; throw {expression};")).unwrap_err();
+                assert_eq!(js_error(&ctx, error, Some(&helper)), "JavaScript exception");
+                assert!(!ctx.eval::<bool, _>("touched").unwrap());
+            });
+        }
+    }
+
+    #[tokio::test]
+    async fn diagnostics_do_not_execute_guest_hooks_or_mutated_globals() {
+        for expression in [
+            "Object.defineProperty(new Error(), 'message', {get: hook})",
+            "Object.defineProperty(new Error(), 'message', {value: {toString: hook, [Symbol.toPrimitive]: hook}})",
+            "({get message() {hook()}, toString: hook, [Symbol.toPrimitive]: hook})",
+        ] {
+            let code = format!(
+                "const hook = () => {{void tools.call('forbidden', {{}}); return 'unsafe';}}; throw {expression};"
+            );
+            let (mut task, stop) = start(&code, limits());
+            assert_eq!(
+                finish(&mut task).await,
+                Err("JavaScript exception".into()),
+                "{expression}"
+            );
+            assert!(stop.is_cancelled());
+            assert!(task.requests.recv().await.is_none(), "{expression}");
+        }
+        let (mut task, _) = start(
+            "const e = new Error('safe'); const hook = () => {void tools.call('forbidden', {}); return 'unsafe';}; Object.getOwnPropertyDescriptor = hook; String.prototype.slice = hook; Function.prototype.call = hook; Function.prototype.bind = hook; Object.defineProperty(e, 'stack', {get: hook}); Object.defineProperty(globalThis, 'String', {get: hook}); Object.defineProperty(globalThis, 'Object', {get: hook}); throw e;",
+            limits(),
+        );
+        assert_eq!(finish(&mut task).await, Err("safe".into()));
+        assert!(task.requests.recv().await.is_none());
     }
 
     #[tokio::test]
