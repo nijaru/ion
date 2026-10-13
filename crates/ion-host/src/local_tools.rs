@@ -180,6 +180,8 @@ struct TextEdit {
 struct WriteInput {
     path: String,
     content: String,
+    #[serde(default, deserialize_with = "present_input")]
+    base_digest: Option<String>,
 }
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -375,16 +377,29 @@ impl LocalTools {
             Ok(path) => path,
             Err(e) => return error(e),
         };
-        let mutation = match crate::file_io::FileMutation::open(&path, true, stop) {
-            Ok(mutation) => mutation,
-            Err(e) => return error(format!("write {}: {e}", input.path)),
-        };
+        let mutation =
+            match crate::file_io::FileMutation::open(&path, input.base_digest.is_none(), stop) {
+                Ok(mutation) => mutation,
+                Err(e) => return error(format!("write {}: {e}", input.path)),
+            };
         let previous = match fs::metadata(mutation.path()) {
             Ok(meta) if meta.is_file() => Some(meta.permissions()),
             Ok(_) => return error("write target is not a regular file"),
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => None,
             Err(e) => return error(e.to_string()),
         };
+        if let Some(expected) = &input.base_digest {
+            if previous.is_none() {
+                return error("guarded write requires an existing file");
+            }
+            let bytes = match crate::file_io::read_bounded(mutation.path(), MAX_FILE_BYTES) {
+                Ok(bytes) => bytes,
+                Err(e) => return error(format!("read guarded write target: {e}")),
+            };
+            if expected != &hex_digest(&bytes) {
+                return error("file changed since supplied base_digest");
+            }
+        }
         if previous.is_some()
             && let Err(e) = mutation.ensure_writable()
         {
@@ -393,7 +408,7 @@ impl LocalTools {
         let created = previous.is_none();
         match mutation.replace(input.content.as_bytes(), previous) {
             Ok(()) => success(
-                json!({"path": input.path, "created": created, "bytes": input.content.len()}),
+                json!({"path": input.path, "created": created, "bytes": input.content.len(), "new_digest": hex_digest(input.content.as_bytes())}),
             ),
             Err(e) => error(format!("write failed: {e}")),
         }
@@ -897,9 +912,9 @@ async fn stop_child(
 }
 fn specs() -> Vec<ToolSpec> {
     vec![
-        ToolSpec { name: "read".into(), description: "Read UTF-8 text or a supported image (JPEG, PNG, GIF, WebP) from the live working directory. Images are attached to the result. Paths may be relative or absolute. Large text files can be read in byte ranges; use returned next_offset to continue at a UTF-8 boundary. A complete text-file digest is provided when available.".into(), input_schema: json!({"type":"object","additionalProperties":false,"required":["path"],"properties":{"path":{"type":"string"},"offset":{"type":"integer","minimum":0},"limit":{"type":"integer","minimum":1,"maximum":65536}}}) },
+        ToolSpec { name: "read".into(), description: "Read UTF-8 text or a supported image (JPEG, PNG, GIF, WebP) from the live working directory. Images are attached to the result. Paths may be relative or absolute. Text reads default to a 16384-byte window (maximum 65536); check has_more and use next_offset to continue at a UTF-8 boundary. base_digest covers the complete file when available, not just returned content. Do not recreate an existing file from an incomplete read; prefer exact edits or read all pages before full replacement.".into(), input_schema: json!({"type":"object","additionalProperties":false,"required":["path"],"properties":{"path":{"type":"string"},"offset":{"type":"integer","minimum":0},"limit":{"type":"integer","minimum":1,"maximum":65536}}}) },
         ToolSpec { name: "edit".into(), description: "Apply one or more disjoint exact text replacements to a UTF-8 file in one write. Each old_text must occur exactly once in the original file; overlapping edits are rejected. Optionally reject changes since base_digest. Operates with the host user's permissions.".into(), input_schema: json!({"type":"object","additionalProperties":false,"required":["path","edits"],"properties":{"path":{"type":"string"},"edits":{"type":"array","minItems":1,"items":{"type":"object","additionalProperties":false,"required":["old_text","new_text"],"properties":{"old_text":{"type":"string","minLength":1},"new_text":{"type":"string"}}}},"base_digest":{"type":"string"}}}) },
-        ToolSpec { name: "write".into(), description: "Create or replace a UTF-8 file in the live working directory. Missing parent directories are created.".into(), input_schema: json!({"type":"object","additionalProperties":false,"required":["path","content"],"properties":{"path":{"type":"string"},"content":{"type":"string"}}}) },
+        ToolSpec { name: "write".into(), description: "Create or replace a UTF-8 file in the live working directory. Omitted base_digest permits unconditional replacement and creation of missing parents. A supplied string must match the entire existing regular file under the native mutation lock; stale, missing or unreadable targets reject without replacement or parent creation. Use exact edit or complete-source guarded replacement, not an incomplete read window. Success returns path, created, bytes and new_digest (SHA256 of published content), not a lease against later changes.".into(), input_schema: json!({"type":"object","additionalProperties":false,"required":["path","content"],"properties":{"path":{"type":"string"},"content":{"type":"string"},"base_digest":{"type":"string"}}}) },
         ToolSpec { name: "exec".into(), description: "Run a Bash command (or POSIX sh when Bash is unavailable) in the live working directory with the host user's permissions; this is not sandboxed. Timeout is optional. Returns direct command exit and the final 64 KiB of each output stream, with omitted byte counts when truncated. For complete truncated captures, stdout_full_path and stderr_full_path name private temporary files containing the full observed streams; inspect them instead of rerunning a command. Cancellation is best effort.".into(), input_schema: json!({"type":"object","additionalProperties":false,"required":["command"],"properties":{"command":{"type":"string"},"timeout_ms":{"type":"integer","minimum":1}}}) },
     ]
 }
@@ -962,6 +977,115 @@ mod tests {
         }
         fs::remove_dir_all(root).unwrap();
         assert!(failures.is_empty(), "{}", failures.join("\n"));
+    }
+
+    #[test]
+    fn guarded_write_checks_whole_file_without_creating_missing_targets() {
+        let root = std::env::temp_dir().join(format!("ion-write-guard-{}", uuid::Uuid::now_v7()));
+        fs::create_dir(&root).unwrap();
+        let tools = LocalTools::new(&root).unwrap();
+        let stop = CancellationToken::new();
+        let source = "αβ🦀\n".repeat(4000);
+        fs::write(root.join("file"), &source).unwrap();
+        let read = tools.read(&json!({"path":"file","limit":8}));
+        assert_eq!(read.value["has_more"], true);
+        assert_eq!(read.value["base_digest"], hex_digest(source.as_bytes()));
+        let written = tools.write(
+            &json!({"path":"file","content":"first","base_digest":read.value["base_digest"]}),
+            &stop,
+        );
+        assert!(!written.is_error, "{}", written.value);
+        assert_eq!(written.value["created"], false);
+        assert_eq!(written.value["new_digest"], hex_digest(b"first"));
+        let stale = tools.write(
+            &json!({"path":"file","content":"lost","base_digest":read.value["base_digest"]}),
+            &stop,
+        );
+        assert!(stale.is_error);
+        assert_eq!(
+            stale.value["error"],
+            "file changed since supplied base_digest"
+        );
+        assert_eq!(fs::read(root.join("file")).unwrap(), b"first");
+        for guard in [Value::Null, json!(42), json!(hex_digest(b""))] {
+            let rejected = tools.write(
+                &json!({"path":"missing/parents/file","content":"lost","base_digest":guard}),
+                &stop,
+            );
+            assert!(rejected.is_error, "{}", rejected.value);
+            assert!(!root.join("missing").exists());
+        }
+        let missing = tools.write(
+            &json!({"path":"absent","content":"lost","base_digest":hex_digest(b"")}),
+            &stop,
+        );
+        assert!(missing.is_error && !root.join("absent").exists());
+        let oversized = vec![b'x'; MAX_FILE_BYTES + 1];
+        fs::write(root.join("large"), &oversized).unwrap();
+        assert!(
+            tools
+                .write(
+                    &json!({"path":"large","content":"lost","base_digest":hex_digest(&oversized)}),
+                    &stop,
+                )
+                .is_error
+        );
+        assert_eq!(fs::read(root.join("large")).unwrap(), oversized);
+        let unconditional = tools.write(&json!({"path":"large","content":"second"}), &stop);
+        assert!(!unconditional.is_error);
+        assert_eq!(unconditional.value["new_digest"], hex_digest(b"second"));
+        let created = tools.write(
+            &json!({"path":"new/parents/file","content":"created"}),
+            &stop,
+        );
+        assert!(!created.is_error && created.value["created"] == true);
+        assert_eq!(created.value["new_digest"], hex_digest(b"created"));
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[tokio::test]
+    async fn concurrent_guarded_writes_admit_one_current_digest() {
+        let root = std::env::temp_dir().join(format!("ion-write-race-{}", uuid::Uuid::now_v7()));
+        fs::create_dir(&root).unwrap();
+        fs::write(root.join("file"), "seed").unwrap();
+        std::os::unix::fs::symlink("file", root.join("alias")).unwrap();
+        let catalogs = [0, 1].map(|_| {
+            ion_core::ToolSet::new([
+                Arc::new(LocalTools::new(&root).unwrap()) as Arc<dyn ToolSource>
+            ])
+            .snapshot()
+        });
+        let calls = [("file", "first"), ("alias", "second")].map(|(path, content)| ToolCall {
+            id: content.into(),
+            name: "write".into(),
+            raw_arguments: None,
+            arguments: json!({"path":path,"content":content,"base_digest":hex_digest(b"seed")}),
+        });
+        let (first, second) = tokio::join!(
+            catalogs[0].execute(&calls[0], CancellationToken::new()),
+            catalogs[1].execute(&calls[1], CancellationToken::new()),
+        );
+        assert_ne!(first.is_error, second.is_error, "{first:?} {second:?}");
+        let (winner, loser) = if first.is_error {
+            (&second, &first)
+        } else {
+            (&first, &second)
+        };
+        assert_eq!(
+            loser.value["error"],
+            "file changed since supplied base_digest"
+        );
+        let bytes = fs::read(root.join("file")).unwrap();
+        assert_eq!(winner.value["new_digest"], hex_digest(&bytes));
+        assert_eq!(
+            bytes,
+            if first.is_error {
+                b"second".as_slice()
+            } else {
+                b"first".as_slice()
+            }
+        );
+        fs::remove_dir_all(root).unwrap();
     }
 
     #[tokio::test]

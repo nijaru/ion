@@ -588,9 +588,17 @@ process-group stop and stops acquiring output, then awaits started capture I/O.
 This is not a hard wall-clock or all-descendant termination guarantee.
 Omit optional native input fields to use their defaults; explicit JSON `null`
 is not a valid integer or string option. Output metadata may still contain `null`.
-`read` uses byte offsets and returns a
-UTF-8-safe `next_offset`. For files within its 8 MiB text-edit bound,
-`read.base_digest` covers the full file and can guard a later `edit`;
+`read` uses byte offsets, defaults to a 16 KiB window (maximum 64 KiB), and
+returns `has_more` and a UTF-8-safe `next_offset`. Continue reading when a
+complete file is needed; a partial window is not safe full-file replacement
+content. For files within its 8 MiB text-edit bound, `read.base_digest` covers
+the full file, not that window, and can guard a later `edit` or `write`.
+`write.base_digest` requires an existing regular file whose complete digest
+still matches under the native mutation lock. Missing parents are not created
+for guarded writes. Omit the guard for intentional unconditional replacement
+or creation. A successful write returns `new_digest`, SHA256 of the content it
+published; that observation does not lease the file against later changes.
+
 `edit` takes an `edits` array of `{old_text, new_text}` replacements against one
 original file snapshot. It rejects ambiguous or overlapping matches before
 writing, accepts ordinary LF or CRLF text, and preserves the file's BOM and
