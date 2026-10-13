@@ -302,7 +302,9 @@ async fn native_fanout_selects_context_and_preserves_occurrences_inspection_and_
         const values = await Promise.all(['one','two'].map(path => tools.call(def.name,{path})));
         await tools.call('write',{path:'changed',content:'changed'});
         const missing = await tools.call('read',{path:'missing'});
-        return {lengths:values.map(r => r.value.content.length), missing:missing.is_error};";
+        let rejected = false;
+        try { await tools.call('unknown_capability',{}); } catch { rejected = true; }
+        return {lengths:values.map(r => r.value.content.length), missing:missing.is_error, rejected};";
     let (agent, model) = make_agent(
         &root.0,
         [
@@ -366,7 +368,23 @@ async fn native_fanout_selects_context_and_preserves_occurrences_inspection_and_
             _ => None,
         })
         .collect::<Vec<_>>();
+    // Unknown capability rejection admits no child; observed native failure does.
     assert_eq!(intents.len(), 6);
+    let selected = view
+        .entries
+        .iter()
+        .find_map(|entry| match entry {
+            SessionEntry::ToolResult { result, .. } if result.call_id == "reused" => {
+                match &result.outcome {
+                    ion_core::ToolOutcome::Observed { output, .. } => Some(&output.value["result"]),
+                    _ => None,
+                }
+            }
+            _ => None,
+        })
+        .unwrap();
+    assert_eq!(selected["missing"], true);
+    assert_eq!(selected["rejected"], true);
     assert_eq!(intents[0].parent, intents[3].parent);
     assert_eq!(
         intents[4].parent.assistant_entry,

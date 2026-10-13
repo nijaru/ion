@@ -669,7 +669,11 @@ const results = await Promise.all(
 return results.map(r => ({characters: r.value.content.length, failed: r.is_error}));
 ```
 
-`tools.call(name, arguments)` returns `{value, is_error, image_mime_types}`.
+`tools.call(name, arguments)` returns `{value, is_error, image_mime_types}` for
+observed tool outcomes, including native failures with `is_error: true`.
+Invalid bridge requests, unknown/non-guest capabilities and gateway faults
+reject instead of returning an envelope. Catching a rejection does not undo
+prior effects or establish that unknown work is safe to retry.
 Global `searchTools(query, {limit})` returns bounded `{name, description}`
 candidates. Options and `limit` may be omitted (default ten); a supplied limit
 must be an integer 1..10. Null/nonobject options, unknown keys and invalid limits
