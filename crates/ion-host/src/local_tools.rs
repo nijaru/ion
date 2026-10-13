@@ -138,11 +138,23 @@ impl ToolExecutor for LocalExecutor {
     }
 }
 
+// Omission selects defaults; a present field must have its declared type.
+// Option's usual null-as-None decoding would silently discard invalid inputs.
+fn present_input<'de, D, T>(deserializer: D) -> Result<Option<T>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+    T: Deserialize<'de>,
+{
+    T::deserialize(deserializer).map(Some)
+}
+
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct ReadInput {
     path: String,
+    #[serde(default, deserialize_with = "present_input")]
     offset: Option<u64>,
+    #[serde(default, deserialize_with = "present_input")]
     limit: Option<usize>,
 }
 #[derive(Deserialize)]
@@ -150,6 +162,7 @@ struct ReadInput {
 struct EditInput {
     path: String,
     edits: Vec<TextEdit>,
+    #[serde(default, deserialize_with = "present_input")]
     base_digest: Option<String>,
 }
 #[derive(Deserialize)]
@@ -168,6 +181,7 @@ struct WriteInput {
 #[serde(deny_unknown_fields)]
 struct ExecInput {
     command: String,
+    #[serde(default, deserialize_with = "present_input")]
     timeout_ms: Option<u64>,
 }
 
@@ -940,6 +954,61 @@ fn specs() -> Vec<ToolSpec> {
 mod tests {
     use super::*;
 
+    #[tokio::test]
+    async fn optional_native_inputs_reject_null_before_effects() {
+        let root =
+            std::env::temp_dir().join(format!("ion-input-boundary-{}", uuid::Uuid::now_v7()));
+        fs::create_dir(&root).unwrap();
+        fs::write(root.join("file.txt"), "old").unwrap();
+        let catalog = ion_core::ToolSet::new([
+            Arc::new(LocalTools::new(&root).unwrap()) as Arc<dyn ToolSource>
+        ])
+        .snapshot();
+        let mut failures = Vec::new();
+        for (name, field, mut arguments) in [
+            ("read", "offset", json!({"path":"file.txt"})),
+            ("read", "limit", json!({"path":"file.txt"})),
+            (
+                "edit",
+                "base_digest",
+                json!({"path":"file.txt","edits":[{"old_text":"old","new_text":"new"}]}),
+            ),
+            (
+                "exec",
+                "timeout_ms",
+                json!({"command":"printf effect > marker"}),
+            ),
+        ] {
+            arguments[field] = Value::Null;
+            let output = catalog
+                .execute(
+                    &ToolCall {
+                        id: "boundary".into(),
+                        name: name.into(),
+                        arguments,
+                        raw_arguments: None,
+                    },
+                    CancellationToken::new(),
+                )
+                .await;
+            let unchanged = fs::read(root.join("file.txt")).unwrap() == b"old";
+            let no_marker = !root.join("marker").exists();
+            if !output.is_error || !unchanged || !no_marker {
+                failures.push(format!(
+                    "{name}.{field}: {} unchanged={unchanged} no_marker={no_marker}",
+                    output.value
+                ));
+            }
+            // Isolate every probe even on the original, effectful defect.
+            fs::write(root.join("file.txt"), "old").unwrap();
+            if !no_marker {
+                fs::remove_file(root.join("marker")).unwrap();
+            }
+        }
+        fs::remove_dir_all(root).unwrap();
+        assert!(failures.is_empty(), "{}", failures.join("\n"));
+    }
+
     #[test]
     fn queued_file_work_keeps_async_polling_live_and_cancels_before_effects() {
         let runtime = tokio::runtime::Builder::new_current_thread()
@@ -1151,7 +1220,7 @@ mod tests {
         fs::create_dir(&root).unwrap();
         fs::write(root.join("file.txt"), "aéZ").unwrap();
         let tools = LocalTools::new(&root).unwrap();
-        let first = tools.read(&json!({"path":"file.txt","offset":null,"limit":2}));
+        let first = tools.read(&json!({"path":"file.txt","limit":2}));
         assert!(!first.is_error, "{}", first.value);
         assert_eq!(first.value["content"], "a");
         assert_eq!(first.value["next_offset"], 1);

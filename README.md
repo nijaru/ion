@@ -586,6 +586,8 @@ no default timeout; pass `timeout_ms` when a deadline is needed. The deadline
 covers output capture even after the direct shell exits. On timeout, Ion requests
 process-group stop and stops acquiring output, then awaits started capture I/O.
 This is not a hard wall-clock or all-descendant termination guarantee.
+Omit optional native input fields to use their defaults; explicit JSON `null`
+is not a valid integer or string option. Output metadata may still contain `null`.
 `read` uses byte offsets and returns a
 UTF-8-safe `next_offset`. For files within its 8 MiB text-edit bound,
 `read.base_digest` covers the full file and can guard a later `edit`;
