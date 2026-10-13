@@ -1,12 +1,14 @@
 """Exercise opt-in composition through headless, MCP, RPC, and terminal hosts."""
 import errno
 import fcntl
+import hashlib
 import json
 import os
 import pty
 import select
 import shlex
 import signal
+import sqlite3
 import struct
 import subprocess
 import sys
@@ -46,6 +48,8 @@ def program(prompt):
         producer = "import secrets; print(secrets.token_hex(24)); print('X'*100000)"
         command = f"printf ONCE >> effects; {shlex.quote(sys.executable)} -c {shlex.quote(producer)}; exit 7"
         return "await tools.call('exec'," + json.dumps({"command": command}) + "); throw new Error('after effect');"
+    if prompt == "GUARD":
+        return "const before=await tools.call('read',{path:'guarded',limit:8}); if(!before.value.has_more) throw new Error('expected paged source'); const first=await tools.call('write',{path:'guarded',content:'FIRST',base_digest:before.value.base_digest}); if(first.is_error) throw new Error('first guarded write'); const second=await tools.call('write',{path:'guarded',content:'SECOND',base_digest:first.value.new_digest}); if(second.is_error) throw new Error('second guarded write'); const stale=await tools.call('write',{path:'guarded',content:'LOST',base_digest:before.value.base_digest}); const after=await tools.call('read',{path:'guarded'}); return {first:first.value.new_digest,second:second.value.new_digest,stale:stale.is_error,final:after.value.content};"
     if prompt == "ACTIVE":
         return "await Promise.all(['a','b'].map(x=>tools.call('exec',{command:`touch ${x}.ready; sleep 1.5; printf done`}))); return true;"
     if prompt == "MCP":
@@ -78,7 +82,7 @@ class Provider(BaseHTTPRequestHandler):
                 code = discovery + "const exit=await tools.inspect({kind:'output',parent,child:0,pointer:'/exit_code'}); return {exit:JSON.parse(exit.json), original_failed:exit.is_error};"
             delta = {"tool_calls": [{"index": 0, "id": "inspect", "type": "function", "function": {"name": "code_mode", "arguments": json.dumps({"code": code})}}]}
             reason = "tool_calls"
-        elif enabled and prompt in ("FANOUT", "MCP", "IO", "STDERR", "ACTIVE", "RECOVER_FAIL") and fresh:
+        elif enabled and prompt in ("FANOUT", "GUARD", "MCP", "IO", "STDERR", "ACTIVE", "RECOVER_FAIL") and fresh:
             delta = {"tool_calls": [{"index": 0, "id": "parent", "type": "function", "function": {"name": "code_mode", "arguments": json.dumps({"code": program(prompt)})}}]}
             reason = "tool_calls"
         else:
@@ -89,7 +93,15 @@ class Provider(BaseHTTPRequestHandler):
         self.send_header("Content-Type", "text/event-stream")
         self.send_header("Content-Length", str(len(payload)))
         self.end_headers()
-        self.wfile.write(payload)
+        if prompt == "ACTIVE" and not fresh:
+            # Provisional final text is not committed Turn completion.
+            first, rest = payload.split(b"\n\n", 1)
+            self.wfile.write(first + b"\n\n")
+            self.wfile.flush()
+            time.sleep(0.5)
+            self.wfile.write(rest)
+        else:
+            self.wfile.write(payload)
 
     def log_message(self, *_args):
         pass
@@ -143,6 +155,12 @@ with tempfile.TemporaryDirectory(prefix="ion-code-mode-") as temporary:
         assert (workspace / "changed").read_text() == "done"
         assert run(env, workspace, "--session", session_id, "export").stdout.count("PRIVATE_") == 200
         assert run(env, workspace, "--session", session_id, "run", "RESUME").stdout.strip() == "DIRECT_OK"
+        (workspace / "guarded").write_text("PRIVATE_GUARD_" * 4000)
+        guarded = [json.loads(line) for line in run(env, workspace, "--code-mode", "--json", "run", "GUARD").stdout.splitlines()]
+        parent = next(record for record in guarded if record["type"] == "tool_finished")
+        assert parent["output"]["result"] == {"first": hashlib.sha256(b"FIRST").hexdigest(), "second": hashlib.sha256(b"SECOND").hexdigest(), "stale": True, "final": "SECOND"}, parent
+        assert parent["output"]["calls"] == 5 and parent["output"]["failed_calls"] == 1
+        assert (workspace / "guarded").read_text() == "SECOND"
         config = work / "config/ion/mcp.json"
         config.write_text(json.dumps({"servers": {"demo": {"command": sys.executable, "args": [str(Path(__file__).resolve()), "mcp"]}}}))
         records = [json.loads(line) for line in run(env, workspace, "--code-mode", "--json", "run", "MCP").stdout.splitlines()]
@@ -253,10 +271,12 @@ with tempfile.TemporaryDirectory(prefix="ion-code-mode-") as temporary:
             def attach_active():
                 os.setsid()
                 fcntl.ioctl(slave, termios.TIOCSCTTY, 0)
+            existing_sessions = set((work / "state/ion/sessions").rglob("*.sqlite"))
             child = subprocess.Popen([binary, "--cwd", active_work, "--code-mode", "--tui-mode", mode, "chat"], env=env, stdin=slave, stdout=slave, stderr=slave, preexec_fn=attach_active)
             os.close(slave)
             output = bytearray()
             submitted = running = finished = False
+            last_quit = 0
             deadline = time.monotonic() + 12
             try:
                 while time.monotonic() < deadline:
@@ -280,8 +300,16 @@ with tempfile.TemporaryDirectory(prefix="ion-code-mode-") as temporary:
                     if submitted and not finished and b"CODE_OK" in output:
                         assert running, (mode, output[-3000:])
                         assert all((active_work / f"{x}.ready").exists() for x in ("a", "b"))
-                        os.write(master, b"\x03")
-                        finished = True
+                        sessions = set((work / "state/ion/sessions").rglob("*.sqlite")) - existing_sessions
+                        assert len(sessions) == 1, sessions
+                        with sqlite3.connect(f"file:{next(iter(sessions))}?mode=ro", uri=True) as db:
+                            completed = db.execute("SELECT count(*) FROM entries WHERE json_extract(body,'$.kind')='turn_ended' AND json_extract(body,'$.data.reason')='completed'").fetchone()[0]
+                        finished = completed == 1
+                    # Completion publication can lag its commit. Empty-composer
+                    # EOF remains safe if delivery occurs during terminal restore.
+                    if finished and time.monotonic() - last_quit > 0.25:
+                        os.write(master, b"\x04")
+                        last_quit = time.monotonic()
                     if child.poll() is not None:
                         break
                 assert finished, (mode, output[-3000:])
