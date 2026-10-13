@@ -710,12 +710,16 @@ recorded as unknown before their parent is recovered. Reopening never reruns
 the script. `Promise.all` does not roll back writes or external calls.
 
 QuickJS runs on a separate blocking worker without ambient filesystem, network,
-module or timer APIs. Default limits are a 30-second guest deadline (including
-host waits), 64 bridge requests, four concurrent calls, a 64 MiB JS heap,
+module or timer APIs. Default limits are a cumulative 30-second runnable guest
+budget, 64 bridge requests, four concurrent calls, a 64 MiB JS heap,
 512 KiB stack, 64 KiB source and 1 MiB per JSON value. Cumulative guest replies
 are limited to 8 MiB. A 32 MiB child-audit admission threshold stops further
 dispatch; already-started outcomes still commit, so it can overshoot. Successful
-guest return ends its deadline, not host settlement.
+guest return ends its budget, not host settlement. Idle waits for pending Core
+bridge replies are excluded; guest computation, promise jobs, serialization and
+reply resolution still consume the budget. Unresolved promises without pending
+host work also consume it. There is no default whole-script wall timeout: tools
+retain their own deadlines, and user cancellation still stops and joins work.
 
 These limits are not an OS sandbox or a process-RSS/disk quota. Native and MCP
 calls retain host permissions and their own capture/timeout contracts. Full

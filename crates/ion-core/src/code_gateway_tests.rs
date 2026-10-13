@@ -150,7 +150,7 @@ fn inspection_has_capacity_independent_of_the_waiting_guest() {
         let output = run(
             &guest,
             CodeLimits {
-                deadline: Duration::from_secs(1),
+                execution_budget: Duration::from_secs(1),
                 ..CodeLimits::default()
             },
             &session,

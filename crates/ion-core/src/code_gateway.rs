@@ -405,9 +405,9 @@ pub(crate) async fn run<F: FnMut(AgentEvent) + Send>(
         || limits.max_host_bytes == 0
         || limits.max_json_bytes == 0
         || limits.audit_admission_bytes == 0
-        || limits.deadline.is_zero()
+        || limits.execution_budget.is_zero()
         || tokio::time::Instant::now()
-            .checked_add(limits.deadline)
+            .checked_add(limits.execution_budget)
             .is_none()
     {
         return Ok(failure("invalid code_mode admission limits"));
@@ -443,9 +443,6 @@ pub(crate) async fn run<F: FnMut(AgentEvent) + Send>(
     let mut started = FuturesUnordered::<BoxFuture<'_, (Admitted, ChildOutcome)>>::new();
     let mut root = None;
     let mut requests_closed = false;
-    let deadline = tokio::time::sleep(limits.deadline);
-    tokio::pin!(deadline);
-    let mut expired = false;
     loop {
         while started.len() < limits.max_concurrency {
             let Some(admitted) = gate.waiting.pop_front() else {
@@ -486,8 +483,9 @@ pub(crate) async fn run<F: FnMut(AgentEvent) + Send>(
             break;
         }
         tokio::select! {
-            // A joined guest outranks an expired host timer. The deadline
-            // governs guest execution, not post-return effect settlement.
+            // Observe joined guest failure before admitting more queued work.
+            // The runtime owns runnable-guest time; host waits and settlement
+            // retain their tool contracts, cancellation and owned joins.
             biased;
             joined = &mut result, if root.is_none() => {
                 let outcome = joined.unwrap_or_else(|error| Err(format!("code_mode worker failed: {error}")));
@@ -506,9 +504,6 @@ pub(crate) async fn run<F: FnMut(AgentEvent) + Send>(
             completed = started.next(), if !started.is_empty() => {
                 let (admitted, outcome) = completed.expect("nonempty started set");
                 gate.complete(admitted, outcome);
-            }
-            () = &mut deadline, if !expired && root.is_none() => {
-                expired = true; gate.close("code_mode guest deadline exceeded");
             }
         }
     }

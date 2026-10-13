@@ -4,10 +4,6 @@ use std::{
     cell::{Cell, RefCell},
     panic::{AssertUnwindSafe, catch_unwind},
     rc::Rc,
-    sync::{
-        Arc,
-        atomic::{AtomicBool, Ordering},
-    },
     thread,
     time::{Duration, Instant},
 };
@@ -33,14 +29,14 @@ impl CodeRuntime for QuickJs {
         stop: CancellationToken,
     ) -> Result<CodeTask, String> {
         let setup = (|| {
-            let deadline = validate(&code, limits)?;
+            validate(&code, limits)?;
             let handle = tokio::runtime::Handle::try_current()
                 .map_err(|_| "QuickJS requires a Tokio runtime")?;
             let (sender, requests) = mpsc::channel(limits.max_calls);
             let worker_stop = stop.clone();
             let result = handle.spawn_blocking(move || {
                 let result = catch_unwind(AssertUnwindSafe(|| {
-                    execute(code, limits, deadline, sender, &worker_stop)
+                    execute(code, limits, sender, &worker_stop)
                 }))
                 .unwrap_or_else(|_| Err("QuickJS worker panicked".into()));
                 if result.is_err() {
@@ -57,7 +53,7 @@ impl CodeRuntime for QuickJs {
     }
 }
 
-fn validate(code: &str, limits: CodeLimits) -> Result<Instant, String> {
+fn validate(code: &str, limits: CodeLimits) -> Result<(), String> {
     if [
         limits.heap_bytes,
         limits.stack_bytes,
@@ -72,7 +68,7 @@ fn validate(code: &str, limits: CodeLimits) -> Result<Instant, String> {
         || limits.heap_bytes == usize::MAX
         // rquickjs disables stack checking above this ceiling.
         || limits.stack_bytes > 16 * 1024 * 1024
-        || limits.deadline.is_zero()
+        || limits.execution_budget.is_zero()
         || limits.max_concurrency > limits.max_calls
         || limits.max_calls > tokio::sync::Semaphore::MAX_PERMITS
     {
@@ -82,8 +78,9 @@ fn validate(code: &str, limits: CodeLimits) -> Result<Instant, String> {
         return Err("JavaScript code byte limit".into());
     }
     Instant::now()
-        .checked_add(limits.deadline)
-        .ok_or_else(|| "QuickJS deadline overflow".into())
+        .checked_add(limits.execution_budget)
+        .map(|_| ())
+        .ok_or_else(|| "QuickJS execution budget overflow".into())
 }
 
 struct Pending {
@@ -239,32 +236,70 @@ fn poll_replies(ctx: &Ctx<'_>, bridge: &Bridge) -> rquickjs::Result<()> {
     Ok(())
 }
 
+/// One worker-local clock shared with the VM interrupt. Only idle sleeps with
+/// pending bridge replies earn time back; evaluation, reply resolution, getters,
+/// serialization and jobs remain charged, even while a host call is pending.
+struct GuestBudget {
+    deadline: Cell<Instant>,
+    exhausted: Cell<bool>,
+}
+
+impl GuestBudget {
+    fn new(duration: Duration) -> Result<Self, String> {
+        Ok(Self {
+            deadline: Cell::new(
+                Instant::now()
+                    .checked_add(duration)
+                    .ok_or("QuickJS execution budget overflow")?,
+            ),
+            exhausted: Cell::new(false),
+        })
+    }
+
+    fn exhausted(&self) -> bool {
+        if Instant::now() >= self.deadline.get() {
+            self.exhausted.set(true);
+        }
+        self.exhausted.get()
+    }
+
+    fn wait_for_work(&self, host_pending: bool) -> Result<(), String> {
+        if self.exhausted() {
+            return Err("JavaScript execution budget exceeded".into());
+        }
+        let began = Instant::now();
+        thread::sleep(Duration::from_millis(1));
+        if host_pending {
+            self.deadline.set(
+                self.deadline
+                    .get()
+                    .checked_add(began.elapsed())
+                    .ok_or("QuickJS execution budget overflow")?,
+            );
+        }
+        Ok(())
+    }
+}
+
 fn execute(
     code: String,
     limits: CodeLimits,
-    deadline: Instant,
     sender: mpsc::Sender<CodeRequest>,
     stop: &CancellationToken,
 ) -> CodeReply {
-    // Blocking-pool admission may itself outlast the guest budget.
     if stop.is_cancelled() {
         return Err("JavaScript cancelled".into());
     }
-    if Instant::now() >= deadline {
-        return Err("JavaScript deadline exceeded".into());
-    }
+    // Blocking-pool queue time is not guest execution. The clock starts only
+    // once this worker begins; cancellation still precedes VM construction.
+    let budget = Rc::new(GuestBudget::new(limits.execution_budget)?);
     let runtime = Runtime::new().map_err(|e| e.to_string())?;
     runtime.set_memory_limit(limits.heap_bytes);
     runtime.set_max_stack_size(limits.stack_bytes);
-    let interrupted = Arc::new(AtomicBool::new(false));
-    let signal = interrupted.clone();
+    let interrupt_budget = budget.clone();
     let interrupt_stop = stop.clone();
     runtime.set_interrupt_handler(Some(Box::new(move || {
-        let expired = Instant::now() >= deadline || interrupt_stop.is_cancelled();
-        if expired {
-            signal.store(true, Ordering::Relaxed);
-        }
-        expired
+        interrupt_budget.exhausted() || interrupt_stop.is_cancelled()
     })));
     // Eval is needed to compile the body; no host APIs or module loader exist.
     let context =
@@ -284,8 +319,8 @@ fn execute(
             if stop.is_cancelled() {
                 return Err("JavaScript cancelled".into());
             }
-            if Instant::now() >= deadline || interrupted.load(Ordering::Relaxed) {
-                return Err("JavaScript deadline exceeded".into());
+            if budget.exhausted() {
+                return Err("JavaScript execution budget exceeded".into());
             }
             let result = context
                 .with(|ctx| {
@@ -306,7 +341,10 @@ fn execute(
             // Outside Context::with: this API acquires the same runtime lock.
             match runtime.execute_pending_job() {
                 Ok(true) => (),
-                Ok(false) => thread::sleep(Duration::from_millis(1)),
+                Ok(false) => {
+                    let host_pending = !bridge.pending.borrow().is_empty();
+                    budget.wait_for_work(host_pending)?;
+                }
                 Err(job) => {
                     return Err(job.0.with(|ctx| js_error(&ctx, rquickjs::Error::Exception)));
                 }
@@ -316,8 +354,8 @@ fn execute(
     .unwrap_or_else(|_| Err("QuickJS worker panicked".into()));
     let outcome = if stop.is_cancelled() {
         Err("JavaScript cancelled".into())
-    } else if interrupted.load(Ordering::Relaxed) || Instant::now() >= deadline {
-        Err("JavaScript deadline exceeded".into())
+    } else if budget.exhausted() {
+        Err("JavaScript execution budget exceeded".into())
     } else {
         outcome
     };
@@ -341,7 +379,7 @@ mod tests {
         CodeLimits {
             heap_bytes: 8 * 1024 * 1024,
             stack_bytes: 256 * 1024,
-            deadline: Duration::from_secs(2),
+            execution_budget: Duration::from_secs(2),
             max_json_bytes: 4096,
             ..CodeLimits::default()
         }
@@ -413,8 +451,102 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn deadlines_bound_cpu_idle_promises_and_jobs() {
+    async fn awaited_host_latency_does_not_exhaust_guest_budget() {
+        for reply in [
+            json!({"value": 7, "is_error": false}),
+            json!({"value": {"exit_code": 7}, "is_error": true}),
+        ] {
+            let (mut task, stop) = start(
+                "return await tools.call('host', {});",
+                CodeLimits {
+                    execution_budget: Duration::from_millis(100),
+                    ..limits()
+                },
+            );
+            let call = request(&mut task).await;
+            tokio::time::sleep(Duration::from_millis(250)).await;
+            let delivered = call.reply.send(Ok(reply.to_string())).is_ok();
+            assert_eq!(finish(&mut task).await, Ok(reply.to_string()));
+            assert!(delivered);
+            assert!(!stop.is_cancelled());
+            assert!(task.requests.recv().await.is_none());
+        }
+    }
+
+    #[tokio::test]
+    async fn reply_guest_code_and_idle_promises_resume_budget_accounting() {
         for code in [
+            "await tools.call('host', {}); while(true) {}",
+            "await tools.call('host', {}); await new Promise(() => {});",
+            "Object.defineProperty(Object.prototype, 'then', {get() {while(true) {}}}); return await tools.call('host', {});",
+            "await tools.call('host', {}); return {toJSON() {while(true) {}}};",
+        ] {
+            let (mut task, stop) = start(
+                code,
+                CodeLimits {
+                    execution_budget: Duration::from_millis(100),
+                    ..limits()
+                },
+            );
+            let call = request(&mut task).await;
+            tokio::time::sleep(Duration::from_millis(250)).await;
+            let delivered = call.reply.send(Ok("{}".into())).is_ok();
+            assert_eq!(
+                finish(&mut task).await,
+                Err("JavaScript execution budget exceeded".into()),
+                "{code}"
+            );
+            assert!(delivered, "host wait consumed the budget: {code}");
+            assert!(stop.is_cancelled());
+            assert!(task.requests.recv().await.is_none());
+        }
+    }
+
+    #[tokio::test]
+    async fn host_replies_do_not_reset_accumulated_execution_budget() {
+        let (mut task, stop) = start(
+            "for(let i=0;i<512;i++) { for(let j=0;j<1000000;j++) {} await tools.call('checkpoint', {}); } return 'budget reset';",
+            CodeLimits {
+                execution_budget: Duration::from_millis(100),
+                max_calls: 1024,
+                ..limits()
+            },
+        );
+        let mut calls = 0;
+        let result = tokio::time::timeout(Duration::from_secs(3), async {
+            loop {
+                tokio::select! {
+                    biased;
+                    result = &mut task.result => break result.unwrap(),
+                    call = task.requests.recv() => {
+                        let Some(call) = call else { break (&mut task.result).await.unwrap(); };
+                        if calls < 2 {
+                            tokio::time::sleep(Duration::from_millis(150)).await;
+                        }
+                        calls += 1;
+                        let _ = call.reply.send(Ok("null".into()));
+                    }
+                }
+            }
+        })
+        .await;
+        if result.is_err() {
+            stop.cancel();
+            let _ = finish(&mut task).await;
+        }
+        assert_eq!(
+            result.unwrap(),
+            Err("JavaScript execution budget exceeded".into())
+        );
+        assert!(stop.is_cancelled());
+        assert!(task.requests.recv().await.is_none());
+    }
+
+    #[tokio::test]
+    async fn execution_budget_bounds_cpu_idle_promises_and_jobs() {
+        for code in [
+            "void tools.call('waiting', {}); while (true) {}",
+            "void tools.call('waiting', {}); const again = () => Promise.resolve().then(again); again(); await new Promise(() => {});",
             "while (true) {}",
             "await Promise.resolve(); while (true) {}",
             "await new Promise(() => {});",
@@ -423,18 +555,24 @@ mod tests {
             let (mut task, stop) = start(
                 code,
                 CodeLimits {
-                    deadline: Duration::from_millis(30),
+                    execution_budget: Duration::from_millis(30),
                     ..limits()
                 },
             );
             let began = Instant::now();
             assert_eq!(
                 finish(&mut task).await,
-                Err("JavaScript deadline exceeded".into()),
+                Err("JavaScript execution budget exceeded".into()),
                 "{code}"
             );
             assert!(began.elapsed() < Duration::from_secs(1), "{code}");
             assert!(stop.is_cancelled());
+            if code.contains("tools.call") {
+                let call = request(&mut task).await;
+                assert!(
+                    matches!(call.kind, CodeRequestKind::Call { name, .. } if name == "waiting")
+                );
+            }
             assert!(task.requests.recv().await.is_none());
         }
     }
@@ -622,11 +760,11 @@ mod tests {
                 ..base
             },
             CodeLimits {
-                deadline: Duration::ZERO,
+                execution_budget: Duration::ZERO,
                 ..base
             },
             CodeLimits {
-                deadline: Duration::MAX,
+                execution_budget: Duration::MAX,
                 ..base
             },
             CodeLimits {

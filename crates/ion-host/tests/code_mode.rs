@@ -262,43 +262,53 @@ async fn native_fanout_selects_context_and_preserves_occurrences_inspection_and_
 }
 
 #[tokio::test]
-async fn returned_guest_does_not_cancel_unawaited_host_work_at_its_deadline() {
-    let root = Workspace::new();
-    let session = root.session();
-    let (agent, model) = make_agent(
-        &root.0,
-        [
-            response(vec![code(
-                "parent",
-                "for (let i=0;i<4;i++) void tools.call('exec',{command:`sleep 0.4; printf done > settled-${i}`}); return 7;",
-            )]),
-            response(vec![Content::Text("DONE".into())]),
-        ],
-        CodeLimits {
-            deadline: Duration::from_millis(200),
-            max_concurrency: 2,
-            max_json_bytes: 4096,
-            ..CodeLimits::default()
-        },
-    );
-    agent
-        .submit(
-            session.clone(),
-            "run".into(),
-            String::new(),
-            CancellationToken::new(),
-            |_| {},
-        )
-        .await
-        .unwrap();
-    for i in 0..4 {
-        assert_eq!(
-            fs::read_to_string(root.0.join(format!("settled-{i}"))).unwrap(),
-            "done"
+async fn guest_budget_excludes_awaited_host_work_and_post_return_settlement() {
+    for awaited in [false, true] {
+        let root = Workspace::new();
+        let session = root.session();
+        let (agent, model) = make_agent(
+            &root.0,
+            [
+                response(vec![code(
+                    "parent",
+                    &format!(
+                        "const pending = [0,1,2,3].map(i => tools.call('exec',{{command:`sleep 0.4; printf done > settled-${{i}}`}})); {} return 7;",
+                        if awaited {
+                            "await Promise.all(pending);"
+                        } else {
+                            ""
+                        }
+                    ),
+                )]),
+                response(vec![Content::Text("DONE".into())]),
+            ],
+            CodeLimits {
+                execution_budget: Duration::from_millis(200),
+                max_concurrency: 2,
+                max_json_bytes: 4096,
+                ..CodeLimits::default()
+            },
         );
+        agent
+            .submit(
+                session.clone(),
+                "run".into(),
+                String::new(),
+                CancellationToken::new(),
+                |_| {},
+            )
+            .await
+            .unwrap();
+        for i in 0..4 {
+            assert_eq!(
+                fs::read_to_string(root.0.join(format!("settled-{i}"))).unwrap(),
+                "done"
+            );
+        }
+        assert_eq!(session.view().unwrap().entries.iter().filter(|entry| matches!(entry, SessionEntry::ChildToolResult { outcome: ChildOutcome::Observed { output }, .. } if !output.is_error)).count(), 4);
+        assert!(session.view().unwrap().entries.iter().any(|entry| matches!(entry, SessionEntry::ToolResult { result, .. } if result.call_id == "parent" && matches!(&result.outcome, ion_core::ToolOutcome::Observed { output, .. } if !output.is_error && output.value["result"] == 7))));
+        assert_eq!(model.requests().len(), 2);
     }
-    assert_eq!(session.view().unwrap().entries.iter().filter(|entry| matches!(entry, SessionEntry::ChildToolResult { outcome: ChildOutcome::Observed { output }, .. } if !output.is_error)).count(), 4);
-    assert_eq!(model.requests().len(), 2);
 }
 
 #[tokio::test]
@@ -642,12 +652,12 @@ async fn failed_guest_evidence_is_rediscovered_after_cut_and_reopen_without_reex
 }
 
 #[tokio::test]
-async fn guest_failure_retains_prior_mutation_and_deadline_settles_native_capture() {
-    for timeout in [false, true] {
+async fn guest_failure_retains_prior_mutation_and_budget_exhaustion_settles_native_capture() {
+    for exhaust_budget in [false, true] {
         let root = Workspace::new();
         let session = root.session();
-        let script = if timeout {
-            "await tools.call('exec',{command:'printf kept > effect; printf BEFORE_DEADLINE; exec sleep 30',timeout_ms:120000}); return true;"
+        let script = if exhaust_budget {
+            "await tools.call('write',{path:'effect',content:'kept'}); void tools.call('exec',{command:'printf BEFORE_BUDGET; exec sleep 30',timeout_ms:120000}); while(true) {}"
         } else {
             "await tools.call('write',{path:'effect',content:'kept'}); throw new Error('after mutation');"
         };
@@ -658,7 +668,7 @@ async fn guest_failure_retains_prior_mutation_and_deadline_settles_native_captur
                 response(vec![Content::Text("FAULT_REPORTED".into())]),
             ],
             CodeLimits {
-                deadline: Duration::from_millis(500),
+                execution_budget: Duration::from_millis(500),
                 ..CodeLimits::default()
             },
         );
@@ -678,7 +688,29 @@ async fn guest_failure_retains_prior_mutation_and_deadline_settles_native_captur
         assert_eq!(fs::read_to_string(root.0.join("effect")).unwrap(), "kept");
         let view = session.view().unwrap();
         assert!(view.entries.iter().any(|entry| matches!(entry, SessionEntry::ToolResult { result, .. } if result.name == "code_mode" && matches!(&result.outcome, ion_core::ToolOutcome::Observed { output, .. } if output.is_error))));
-        assert!(view.entries.iter().any(|entry| matches!(entry, SessionEntry::ChildToolResult { outcome: ChildOutcome::Observed { output }, .. } if if timeout { output.value["cancelled"] == true && output.value["stdout"].as_str().unwrap().contains("BEFORE_DEADLINE") } else { !output.is_error })));
+        let child = view
+            .entries
+            .iter()
+            .rev()
+            .find_map(|entry| match entry {
+                SessionEntry::ChildToolResult {
+                    outcome: ChildOutcome::Observed { output },
+                    ..
+                } => Some(output),
+                _ => None,
+            })
+            .expect("started child has a committed observation");
+        if exhaust_budget {
+            assert_eq!(child.value["cancelled"], true);
+            assert!(
+                child.value["stdout"]
+                    .as_str()
+                    .unwrap()
+                    .contains("BEFORE_BUDGET")
+            );
+        } else {
+            assert!(!child.is_error);
+        }
         assert_eq!(model.requests().len(), 2);
     }
 }

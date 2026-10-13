@@ -29,7 +29,9 @@ pub struct ToolOccurrence {
 pub struct CodeLimits {
     pub heap_bytes: usize,
     pub stack_bytes: usize,
-    pub deadline: Duration,
+    /// Cumulative runnable guest wall time, enforced by the runtime. Excludes
+    /// idle waits for bridge replies, not guest code running alongside them.
+    pub execution_budget: Duration,
     pub max_code_bytes: usize,
     pub max_json_bytes: usize,
     pub max_calls: usize,
@@ -45,7 +47,7 @@ impl Default for CodeLimits {
         Self {
             heap_bytes: 64 * 1024 * 1024,
             stack_bytes: 512 * 1024,
-            deadline: Duration::from_secs(30),
+            execution_budget: Duration::from_secs(30),
             max_code_bytes: 64 * 1024,
             max_json_bytes: 1024 * 1024,
             max_calls: 64,
@@ -74,6 +76,10 @@ pub struct CodeTask {
     pub requests: mpsc::Receiver<CodeRequest>,
     pub result: JoinHandle<CodeReply>,
 }
+/// Owns guest budget enforcement and cancellation responsiveness. Charge all
+/// runnable guest work cumulatively, including reply resolution/serialization;
+/// only idle bridge waits may be excluded. Signal failure before closing the
+/// sender, and do not cancel transferred effects on successful guest return.
 pub trait CodeRuntime: Send + Sync {
     fn start(
         &self,
@@ -126,8 +132,8 @@ pub(crate) fn definition(limits: CodeLimits) -> ToolDefinition {
         spec: ToolSpec {
             name: CODE_MODE_NAME.into(),
             description: format!(
-                "Run an async JavaScript function body without ambient filesystem, network, modules or timers. Await tools.call(name,args) for {{value,is_error,image_mime_types}}; tools.describe(query) returns up to 10 frozen capability definitions. Return JSON selected for the model; raw child outputs stay inspectable and are not automatically added to model context. tools.inspect({{kind:'parents'}}) discovers up to 10 settled parents with saved children, newest first; pass next_before as before for older locators, including after compaction/reopen. tools.inspect({{kind:'children',parent}}) pages saved child metadata; pass next_after as after for more. tools.inspect({{kind:'output',parent,child,pointer:'/stdout_full_path'}}) returns UTF-8 chunks of encoded saved output.value as json with next_offset and total_bytes; pointer defaults to the whole value, offset to 0, limit to 4096 (4..65536 bytes). parent is a Session-scoped locator from the prior envelope or parents page; pointer is a JSON Pointer. Inspection is read-only, excludes image bytes and general history, and preserves observed/not_dispatched/unknown states. Return only selected evidence. Invalid inspection queries reject; tools.call errors are envelopes, not exceptions. Transferred requests settle even if unawaited. Failure/cancellation stops new dispatch and awaits started effects; no rollback or script replay. Limits: {}ms guest deadline, {} bridge requests, {} concurrent tools, {} byte JS heap, {} byte JSON value, {} cumulative host reply bytes. Direct tools remain available.",
-                limits.deadline.as_millis(),
+                "Run an async JavaScript function body without ambient filesystem, network, modules or timers. Await tools.call(name,args) for {{value,is_error,image_mime_types}}; tools.describe(query) returns up to 10 frozen capability definitions. Return JSON selected for the model; raw child outputs stay inspectable and are not automatically added to model context. tools.inspect({{kind:'parents'}}) discovers up to 10 settled parents with saved children, newest first; pass next_before as before for older locators, including after compaction/reopen. tools.inspect({{kind:'children',parent}}) pages saved child metadata; pass next_after as after for more. tools.inspect({{kind:'output',parent,child,pointer:'/stdout_full_path'}}) returns UTF-8 chunks of encoded saved output.value as json with next_offset and total_bytes; pointer defaults to the whole value, offset to 0, limit to 4096 (4..65536 bytes). parent is a Session-scoped locator from the prior envelope or parents page; pointer is a JSON Pointer. Inspection is read-only, excludes image bytes and general history, and preserves observed/not_dispatched/unknown states. Return only selected evidence. Invalid inspection queries reject; tools.call errors are envelopes, not exceptions. Transferred requests settle even if unawaited. Failure/cancellation stops new dispatch and awaits started effects; no rollback or script replay. Limits: {}ms cumulative runnable guest budget (idle bridge waits excluded), {} bridge requests, {} concurrent tools, {} byte JS heap, {} byte JSON value, {} cumulative host reply bytes. Direct tools remain available.",
+                limits.execution_budget.as_millis(),
                 limits.max_calls,
                 limits.max_concurrency,
                 limits.heap_bytes,
