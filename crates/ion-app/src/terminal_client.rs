@@ -26,11 +26,12 @@ use ion_terminal::{
     Frame, InputEvent, KeyCode, KeyEvent, Modifiers, MouseKind, Screen, TerminalSession,
 };
 use ratatui::text::Line;
-use tokio::time::{Duration, interval};
+use tokio::time::Duration;
 use tokio_util::sync::CancellationToken;
 mod composer;
 mod editing;
 mod input_preparation;
+mod operation;
 mod picker;
 use composer::input_window;
 use editing::{Edit, vertical_cursor};
@@ -884,75 +885,19 @@ async fn run_compaction(
         .context("terminal lifecycle failed before compaction")?;
     let session = runtime.session();
     let agent = runtime.agent();
-    let selected = runtime.selected();
     ui.status.clear();
     let stop = CancellationToken::new();
-    let mut input_ended = false;
-    let mut output_error = None;
-    let result = {
-        let compact = agent.compact(session.clone(), stop.clone(), |_| {});
-        tokio::pin!(compact);
-        let mut tick = interval(Duration::from_millis(50));
-        loop {
-            if output_error.is_none()
-                && let Err(error) = terminal.check_active()
-            {
-                output_error = Some(error.into());
-                input_ended = true;
-                stop.cancel();
-            }
-            if input_ended {
-                ui.pickers.close();
-            }
-            tokio::select! {
-                result = &mut compact => break result,
-                notice = ui.pickers.complete(), if ui.pickers.has_job() => {
-                    if let Some(notice) = notice { ui.note(notice); }
-                    if output_error.is_none()
-                        && let Err(error) = draw(terminal, screen, ui, None, Some(ActiveOperation::Compaction(&stop))).await
-                    {
-                        output_error = Some(error);
-                        input_ended = true;
-                        stop.cancel();
-                    }
-                },
-                event = terminal.next_input(), if !input_ended => {
-                    if let Err(error) = terminal.check_active() {
-                        output_error = Some(error.into());
-                        input_ended = true;
-                        stop.cancel();
-                        continue;
-                    }
-                    match event {
-                    Some(Ok(InputEvent::Key(KeyEvent { code: KeyCode::Char('c'), modifiers }))) if modifiers.contains(Modifiers::CONTROL) => stop.cancel(),
-                    Some(Ok(InputEvent::Key(key))) if is_clipboard_shortcut(key) && ui.pickers.active().is_none() && ui.details.is_none() => {
-                        start_clipboard_paste(ui, selected);
-                    },
-                    Some(Ok(InputEvent::Key(key))) => busy_key(ui, key, &stop, None, Some(runtime.resources()), runtime.agent().limits()),
-                    Some(Ok(InputEvent::Paste(text))) => ui.insert(&text),
-                    Some(Ok(InputEvent::Rejected(error))) => ui.status = error.to_string(),
-                    Some(Ok(InputEvent::Resize(_))) => screen.note_resize(),
-                    Some(Ok(InputEvent::Mouse(mouse))) => match mouse.kind() {
-                        MouseKind::ScrollUp => ui.scroll = ui.scroll.saturating_add(3),
-                        MouseKind::ScrollDown => ui.scroll = ui.scroll.saturating_sub(3),
-                        _ => {},
-                    },
-                    Some(Err(error)) => { stop.cancel(); input_ended = true; ui.status = format!("Input failed: {error}"); },
-                    None => { stop.cancel(); input_ended = true; },
-                    }
-                },
-                _ = tick.tick(), if output_error.is_none() => {
-                    finish_ready_clipboard_paste(ui).await;
-                    if let Err(error) = draw(terminal, screen, ui, None, Some(ActiveOperation::Compaction(&stop))).await {
-                        output_error = Some(error);
-                        input_ended = true;
-                        stop.cancel();
-                    }
-                },
-            }
-        }
-    };
-    finish_ready_clipboard_paste(ui).await;
+    let compact = agent.compact(session.clone(), stop.clone(), |_| {});
+    let (result, terminal_result) = operation::pump(
+        terminal,
+        screen,
+        ui,
+        runtime,
+        &stop,
+        operation::Activity::Compaction,
+        compact,
+    )
+    .await;
     if stop.is_cancelled() || result.is_err() {
         return_pending_to_editor(ui);
     }
@@ -961,13 +906,7 @@ async fn run_compaction(
         Ok(false) => "No settled history to summarize".into(),
         Err(error) => format!("Compaction ended: {error}"),
     };
-    if let Some(error) = output_error {
-        return Err(error.context("terminal output failed after operation settlement"));
-    }
-    if input_ended {
-        return Err(anyhow::anyhow!("terminal input ended during compaction"));
-    }
-    Ok(())
+    terminal_result
 }
 
 fn expand_resource_input(
@@ -1148,7 +1087,6 @@ fn context_label(view: &ion_core::SessionView, window: Option<u32>) -> String {
     label
 }
 
-#[allow(clippy::too_many_arguments)]
 async fn run_user_shell(
     terminal: &mut TerminalSession,
     screen: &mut Screen,
@@ -1161,94 +1099,36 @@ async fn run_user_shell(
         .check_active()
         .context("terminal lifecycle failed before shell admission")?;
     let stop = CancellationToken::new();
-    let mut tick = interval(Duration::from_millis(50));
-    let mut input_ended = false;
-    let mut output_error = None;
     ui.status.clear();
-    let output = {
-        let running = runtime.run_user_shell(&command, stop.clone(), exclude_from_context)?;
-        tokio::pin!(running);
-        loop {
-            if output_error.is_none()
-                && let Err(error) = terminal.check_active()
-            {
-                output_error = Some(error.into());
-                input_ended = true;
-                stop.cancel();
-            }
-            if input_ended {
-                ui.pickers.close();
-            }
-            tokio::select! {
-                result = &mut running => break result,
-                notice = ui.pickers.complete(), if ui.pickers.has_job() => {
-                    if let Some(notice) = notice { ui.note(notice); }
-                    if output_error.is_none()
-                        && let Err(error) = draw(terminal, screen, ui, None, Some(ActiveOperation::Shell(&stop))).await
-                    {
-                        output_error = Some(error);
-                        input_ended = true;
-                        stop.cancel();
-                    }
-                },
-                event = terminal.next_input(), if !input_ended => {
-                    if let Err(error) = terminal.check_active() {
-                        output_error = Some(error.into());
-                        input_ended = true;
-                        stop.cancel();
-                        continue;
-                    }
-                    match event {
-                    Some(Ok(InputEvent::Key(KeyEvent { code: KeyCode::Char('c'), modifiers }))) if modifiers.contains(Modifiers::CONTROL) => {
-                        stop.cancel();
-                    }
-                    Some(Ok(InputEvent::Key(key))) if is_clipboard_shortcut(key) && ui.pickers.active().is_none() && ui.details.is_none() => {
-                        start_clipboard_paste(ui, runtime.selected());
-                    },
-                    Some(Ok(InputEvent::Key(key))) => busy_key(ui, key, &stop, None, Some(runtime.resources()), runtime.agent().limits()),
-                    Some(Ok(InputEvent::Paste(text))) => ui.insert(&text),
-                    Some(Ok(InputEvent::Rejected(error))) => ui.status = error.to_string(),
-                    Some(Ok(InputEvent::Resize(_))) => screen.note_resize(),
-                    Some(Ok(InputEvent::Mouse(mouse))) => match mouse.kind() {
-                        MouseKind::ScrollUp => ui.scroll = ui.scroll.saturating_add(3),
-                        MouseKind::ScrollDown => ui.scroll = ui.scroll.saturating_sub(3),
-                        _ => {},
-                    },
-                    Some(Err(error)) => {
-                        stop.cancel();
-                        input_ended = true;
-                        ui.status = format!("Input failed: {error}");
-                    }
-                    None => { stop.cancel(); input_ended = true; },
-                    }
-                },
-                _ = tick.tick(), if output_error.is_none() => {
-                    finish_ready_clipboard_paste(ui).await;
-                    if let Err(error) = draw(terminal, screen, ui, None, Some(ActiveOperation::Shell(&stop))).await {
-                        output_error = Some(error);
-                        input_ended = true;
-                        stop.cancel();
-                    }
-                },
-            }
-        }
-    };
-    finish_ready_clipboard_paste(ui).await;
-    // Terminal failure is fatal even when Session inspection or shell settlement
-    // also failed. The operation has settled; queued input has no new authority.
-    if let Some(error) = output_error {
-        return Err(error.context("terminal output failed after operation settlement"));
-    }
-    if input_ended {
-        return Err(anyhow::anyhow!(
-            "terminal input ended during the shell operation"
-        ));
+    let running = runtime.run_user_shell(&command, stop.clone(), exclude_from_context)?;
+    let (output, terminal_result) = operation::pump(
+        terminal,
+        screen,
+        ui,
+        runtime,
+        &stop,
+        operation::Activity::Shell,
+        running,
+    )
+    .await;
+    // Terminal failure is fatal even when shell settlement also failed. Stop
+    // withdraws queued dispatch even if the observed shell result was Ok.
+    if let Err(error) = terminal_result {
+        return_pending_to_editor(ui);
+        return Err(error);
     }
     let result = (|| {
-        let view = runtime.session().view()?;
-        ui.load_history(runtime.session(), &view);
-        ui.scroll = 0;
-        let output = output?;
+        let refresh = runtime.session().view().map(|view| {
+            ui.load_history(runtime.session(), &view);
+            ui.scroll = 0;
+        });
+        let output = output.map_err(|error| match &refresh {
+            Ok(()) => error,
+            Err(refresh) => {
+                error.context(format!("Session history refresh also failed: {refresh:#}"))
+            }
+        })?;
+        refresh?;
         ui.status = if output.is_error {
             "Shell finished with an error"
         } else {
@@ -1276,7 +1156,6 @@ async fn run_turn(
         .check_active()
         .context("terminal lifecycle failed before turn admission")?;
     let session = runtime.session();
-    let selected = runtime.selected();
     let user_message =
         Message::user_input(incoming.prompt.clone(), incoming.images.iter().cloned());
     // Core's admission event transfers custody. A later history read cannot
@@ -1290,91 +1169,39 @@ async fn run_turn(
         runtime.agent().limits(),
         ui.input_budget.clone(),
     ));
-    let mut input_ended = false;
-    let mut output_error = None;
-    let result = {
-        let turn = runtime.agent().submit_message_with_steering(
-            session.clone(),
-            user_message,
-            runtime.instructions().to_owned(),
-            stop.clone(),
-            steering.clone(),
-            move |event| {
-                if matches!(&event, ion_core::CodingAgentEvent::TurnAccepted { .. }) {
-                    let accepted = observer_input
-                        .lock()
-                        .unwrap_or_else(std::sync::PoisonError::into_inner)
-                        .take();
-                    drop(accepted);
-                }
-                observer
+    let turn = runtime.agent().submit_message_with_steering(
+        session.clone(),
+        user_message,
+        runtime.instructions().to_owned(),
+        stop.clone(),
+        steering.clone(),
+        move |event| {
+            if matches!(&event, ion_core::CodingAgentEvent::TurnAccepted { .. }) {
+                let accepted = observer_input
                     .lock()
                     .unwrap_or_else(std::sync::PoisonError::into_inner)
-                    .observe(event);
-            },
-        );
-        tokio::pin!(turn);
-        let mut tick = interval(Duration::from_millis(50));
-        loop {
-            if output_error.is_none()
-                && let Err(error) = terminal.check_active()
-            {
-                output_error = Some(error.into());
-                input_ended = true;
-                stop.cancel();
+                    .take();
+                drop(accepted);
             }
-            if input_ended {
-                ui.pickers.close();
-            }
-            tokio::select! {
-                result = &mut turn => break result,
-                notice = ui.pickers.complete(), if ui.pickers.has_job() => {
-                    if let Some(notice) = notice { ui.note(notice); }
-                    if output_error.is_none()
-                        && let Err(error) = draw_progress(terminal, screen, ui, &progress, ActiveOperation::Coding(&stop)).await
-                    {
-                        output_error = Some(error);
-                        input_ended = true;
-                        stop.cancel();
-                    }
-                },
-                event = terminal.next_input(), if !input_ended => {
-                    if let Err(error) = terminal.check_active() {
-                        output_error = Some(error.into());
-                        input_ended = true;
-                        stop.cancel();
-                        continue;
-                    }
-                    match event {
-                    Some(Ok(InputEvent::Key(KeyEvent { code: KeyCode::Char('c'), modifiers }))) if modifiers.contains(Modifiers::CONTROL) => stop.cancel(),
-                    Some(Ok(InputEvent::Key(key))) if is_clipboard_shortcut(key) && ui.pickers.active().is_none() && ui.details.is_none() => {
-                        start_clipboard_paste(ui, selected);
-                    },
-                    Some(Ok(InputEvent::Key(key))) => busy_key(ui, key, &stop, Some(&steering), Some(runtime.resources()), runtime.agent().limits()),
-                    Some(Ok(InputEvent::Paste(text))) => ui.insert(&text),
-                    Some(Ok(InputEvent::Rejected(error))) => ui.status = error.to_string(),
-                    Some(Ok(InputEvent::Resize(_))) => screen.note_resize(),
-                    Some(Ok(InputEvent::Mouse(mouse))) => match mouse.kind() {
-                        MouseKind::ScrollUp => ui.scroll = ui.scroll.saturating_add(3),
-                        MouseKind::ScrollDown => ui.scroll = ui.scroll.saturating_sub(3),
-                        _ => {},
-                    },
-                    Some(Err(error)) => { stop.cancel(); input_ended = true; ui.status = format!("Input failed: {error}"); },
-                    None => { stop.cancel(); input_ended = true; },
-                    }
-                },
-                _ = tick.tick(), if output_error.is_none() => {
-                    finish_ready_clipboard_paste(ui).await;
-                    if let Err(error) = draw_progress(terminal, screen, ui, &progress, ActiveOperation::Coding(&stop)).await {
-                        output_error = Some(error);
-                        input_ended = true;
-                        stop.cancel();
-                    }
-                }
-            }
-        }
-    };
-    finish_ready_clipboard_paste(ui).await;
+            observer
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .observe(event);
+        },
+    );
+    let (result, terminal_result) = operation::pump(
+        terminal,
+        screen,
+        ui,
+        runtime,
+        &stop,
+        operation::Activity::Coding {
+            progress: &progress,
+            steering: &steering,
+        },
+        turn,
+    )
+    .await;
     for input in steering.take_uncommitted() {
         ui.pending.push_back(TurnInput::from_accepted(input));
     }
@@ -1403,13 +1230,7 @@ async fn run_turn(
         }
     }
     ui.scroll = 0;
-    if let Some(error) = output_error {
-        return Err(error.context("terminal output failed after operation settlement"));
-    }
-    if input_ended {
-        return Err(anyhow::anyhow!("terminal input ended during the turn"));
-    }
-    Ok(())
+    terminal_result
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
