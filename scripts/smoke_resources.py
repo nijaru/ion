@@ -36,6 +36,24 @@ def completed_turns(state, previous):
         db.close()
 
 
+def admitted_turns(state):
+    count = 0
+    for path in state.rglob("*.sqlite"):
+        db = sqlite3.connect(f"file:{path}?mode=ro", uri=True)
+        try:
+            count += db.execute("SELECT count(*) FROM entries WHERE json_extract(body,'$.kind')='turn_started'").fetchone()[0]
+        finally:
+            db.close()
+    return count
+
+
+def rpc_record(child):
+    assert select.select([child.stdout], [], [], 10)[0], "resource RPC timed out"
+    line = child.stdout.readline()
+    assert line, "resource RPC closed unexpectedly"
+    return json.loads(line)
+
+
 class Handler(BaseHTTPRequestHandler):
     def do_POST(self):
         body = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
@@ -139,6 +157,59 @@ with tempfile.TemporaryDirectory(prefix="ion-resources-") as temporary:
         assert requests[baseline]["messages"][-1]["content"].strip() == "Check Rust; scope all."
         assert "AUDIT_BODY_MARKER" in requests[baseline + 1]["messages"][-1]["content"]
         assert "User request: src/lib.rs" in requests[baseline + 1]["messages"][-1]["content"]
+
+        # Over-expansion is refused before a provider request or a new Turn.
+        # The template file stays small (~8 KiB) while a bounded argument
+        # repeats into an expansion larger than the host raw-text cap. No giant
+        # payload is written to disk or passed on the command line.
+        (prompts / "amplify.md").write_text("$1 " * 4000)
+        before_refusal = len(requests)
+        before_turns = admitted_turns(work / "state")
+        refusal = subprocess.run(
+            [binary, "--cwd", workspace, "run", "/amplify " + "x" * 4000],
+            env=env, capture_output=True, text=True,
+        )
+        assert refusal.returncode != 0, refusal
+        assert "byte limit" in refusal.stderr, refusal.stderr
+        assert len(requests) == before_refusal, "over-expansion reached the provider"
+        assert admitted_turns(work / "state") == before_turns, "refusal admitted a Turn"
+        # RPC must refuse before admission too, then remain usable in the same
+        # process. Core still owns admission of the recovered ordinary prompt.
+        child = subprocess.Popen([binary, "--cwd", workspace, "rpc"], env=env, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, bufsize=0)
+        try:
+            assert rpc_record(child)["type"] == "ready"
+            child.stdin.write((json.dumps({"type": "prompt", "id": "oversized", "message": "/amplify " + "x" * 4000}) + "\n").encode())
+            denied = rpc_record(child)
+            assert denied["type"] == "response" and denied["id"] == "oversized" and not denied["success"], denied
+            assert "byte limit" in denied["error"], denied
+            assert len(requests) == before_refusal and admitted_turns(work / "state") == before_turns
+            child.stdin.write((json.dumps({"type": "prompt", "id": "recovery", "message": "/check RPC_recovery"}) + "\n").encode())
+            while True:
+                record = rpc_record(child)
+                if record["type"] == "turn_end":
+                    assert record["status"] == "completed", record
+                    break
+            assert requests[-1]["messages"][-1]["content"].strip() == "Check RPC_recovery; scope all."
+            assert len(requests) == before_refusal + 1 and admitted_turns(work / "state") == before_turns + 1
+            child.stdin.close()
+            child.wait(timeout=10)
+            assert child.returncode == 0, child.stderr.read()
+        finally:
+            if child.poll() is None:
+                child.kill()
+                child.wait(timeout=10)
+            child.stdout.close()
+            child.stderr.close()
+            if not child.stdin.closed:
+                child.stdin.close()
+        before_refusal = len(requests)
+        # A valid resource input still works after the refusal, with its own
+        # provider request and no extra Turn replay.
+        recovery = subprocess.run([binary, "--cwd", workspace, "run", "/check Recovery"], env=env, check=True, capture_output=True, text=True)
+        assert recovery.stdout.strip() == "RESOURCE_OK", recovery
+        assert len(requests) == before_refusal + 1, requests[before_refusal:]
+        assert requests[-1]["messages"][-1]["content"].strip() == "Check Recovery; scope all."
+        (prompts / "amplify.md").unlink()
         for mode in ("inline", "fullscreen"):
             master, slave = pty.openpty()
             fcntl.ioctl(slave, termios.TIOCSWINSZ, struct.pack("HHHH", 30, 100, 0, 0))

@@ -5,7 +5,7 @@ use std::{
     path::{Path, PathBuf},
 };
 
-use anyhow::{Context, Result, anyhow};
+use anyhow::{Context, Result, anyhow, bail};
 use ignore::WalkBuilder;
 use serde::{Deserialize, de::DeserializeOwned};
 
@@ -119,37 +119,24 @@ impl Resources {
     }
 
     /// Expand an explicit skill or template invocation before a Turn is
-    /// accepted. Unknown slash input is left to the client.
-    pub fn expand_command(&self, input: &str) -> Option<Result<String>> {
-        let (name, raw_args) = input
-            .trim()
+    /// accepted. Unknown slash input is left to the client. `max_output_bytes`
+    /// caps the complete expanded UTF-8 text, including skill provenance, body
+    /// and user suffix; it is a host raw-text guard, not the encoded-message
+    /// admission Core still performs.
+    pub fn expand_command(&self, input: &str, max_output_bytes: usize) -> Option<Result<String>> {
+        let trimmed = input.trim();
+        let (name, raw_args) = trimmed
             .split_once(char::is_whitespace)
-            .unwrap_or((input.trim(), ""));
+            .unwrap_or((trimmed, ""));
         if let Some(name) = name.strip_prefix("/skill:") {
-            return self.skills.get(name).map(|skill| {
-                let source = read_resource(&skill.path)?;
-                let (metadata, body): (SkillFrontmatter, _) = frontmatter(&source)?;
-                if metadata.name != skill.name {
-                    return Err(anyhow!(
-                        "skill name changed since discovery; reload resources"
-                    ));
-                }
-                let request = raw_args.trim();
-                let path =
-                    serde_json::to_string(&skill.path).context("cannot encode skill path")?;
-                Ok(if request.is_empty() {
-                    format!("Skill {} from {path}:\n{}", skill.name, body)
-                } else {
-                    format!(
-                        "Skill {} from {path}:\n{}\n\nUser request: {request}",
-                        skill.name, body
-                    )
-                })
-            });
+            return self
+                .skills
+                .get(name)
+                .map(|skill| expand_skill(skill, raw_args, max_output_bytes));
         }
         self.templates
             .get(name.strip_prefix('/')?)
-            .map(|template| template.expand(raw_args))
+            .map(|template| template.expand(raw_args, max_output_bytes))
     }
 
     fn load_skills(&mut self, root: &Path) {
@@ -259,6 +246,55 @@ impl Resources {
     }
 }
 
+fn expand_skill(skill: &Skill, raw_args: &str, max_output_bytes: usize) -> Result<String> {
+    if raw_args.len() > max_output_bytes {
+        bail!(
+            "request for /skill:{} exceeds the {} byte expansion limit; shorten the invocation",
+            skill.name,
+            max_output_bytes
+        );
+    }
+    let source = read_resource(&skill.path)?;
+    let (metadata, body): (SkillFrontmatter, _) = frontmatter(&source)?;
+    if metadata.name != skill.name {
+        return Err(anyhow!(
+            "skill name changed since discovery; reload resources"
+        ));
+    }
+    let request = raw_args.trim();
+    let path = serde_json::to_string(&skill.path).context("cannot encode skill path")?;
+    let header = format!("Skill {} from {path}:\n", skill.name);
+    const USER_REQUEST: &str = "\n\nUser request: ";
+    let suffix_bytes = if request.is_empty() {
+        0
+    } else {
+        USER_REQUEST
+            .len()
+            .checked_add(request.len())
+            .context("skill expansion size overflow")?
+    };
+    let bytes = header
+        .len()
+        .checked_add(body.len())
+        .and_then(|bytes| bytes.checked_add(suffix_bytes))
+        .context("skill expansion size overflow")?;
+    if bytes > max_output_bytes {
+        bail!(
+            "skill /skill:{} expands to more than the {} byte limit; shorten the skill or request",
+            skill.name,
+            max_output_bytes
+        );
+    }
+    let mut output = String::with_capacity(bytes);
+    output.push_str(&header);
+    output.push_str(body);
+    if !request.is_empty() {
+        output.push_str(USER_REQUEST);
+        output.push_str(request);
+    }
+    Ok(output)
+}
+
 fn project_directories(cwd: &Path) -> Vec<PathBuf> {
     let root = cwd
         .ancestors()
@@ -351,6 +387,66 @@ pub(super) fn valid_name(name: &str) -> bool {
 mod tests {
     use super::*;
 
+    // Representative of a caller-derived cap, not a product constant.
+    fn cap() -> usize {
+        ion_core::AgentLimits::default().max_request_bytes
+    }
+
+    #[test]
+    fn skill_provenance_and_arguments_share_the_single_raw_text_budget() {
+        let root = std::env::temp_dir().join(format!("ion-budget-{}", uuid::Uuid::now_v7()));
+        let project = root.join("project");
+        let skill = project.join(".agents/skills/bounded");
+        fs::create_dir_all(project.join(".git")).unwrap();
+        fs::create_dir_all(&skill).unwrap();
+        fs::write(
+            skill.join("SKILL.md"),
+            "---\nname: bounded\ndescription: A bounded skill.\n---\nSKILL_BODY\n",
+        )
+        .unwrap();
+        let resources = Resources::load_with_home(&project, &root.join("config"), None).unwrap();
+        assert!(resources.expand_command("/missing args", 0).is_none());
+        assert!(resources.expand_command("plain text", 0).is_none());
+        let full = resources
+            .expand_command("/skill:bounded request", cap())
+            .unwrap()
+            .unwrap();
+        // The cap covers provenance, body and user suffix together.
+        let exact = full.len();
+        assert_eq!(
+            resources
+                .expand_command("/skill:bounded request", exact)
+                .unwrap()
+                .unwrap(),
+            full
+        );
+        assert!(
+            resources
+                .expand_command("/skill:bounded request", exact - 1)
+                .unwrap()
+                .is_err()
+        );
+        // A no-request invocation is still bounded by provenance plus body.
+        let without_request = resources
+            .expand_command("/skill:bounded", cap())
+            .unwrap()
+            .unwrap();
+        assert!(
+            resources
+                .expand_command("/skill:bounded", without_request.len() - 1)
+                .unwrap()
+                .is_err()
+        );
+        // Recognized arguments are bounded before parsing or copying them.
+        assert!(
+            resources
+                .expand_command(&format!("/skill:bounded {}", "x".repeat(64)), 32)
+                .unwrap()
+                .is_err()
+        );
+        fs::remove_dir_all(root).unwrap();
+    }
+
     #[test]
     fn discovers_skills_and_templates_with_precedence_and_explicit_loading() {
         let root = std::env::temp_dir().join(format!("ion-resources-{}", uuid::Uuid::now_v7()));
@@ -378,14 +474,14 @@ mod tests {
         assert_eq!(resources.diagnostics().len(), 1);
         assert!(
             resources
-                .expand_command("/skill:review current diff")
+                .expand_command("/skill:review current diff", cap())
                 .unwrap()
                 .unwrap()
                 .contains("User request: current diff")
         );
         assert_eq!(
             resources
-                .expand_command("/check 'Rust API'")
+                .expand_command("/check 'Rust API'", cap())
                 .unwrap()
                 .unwrap()
                 .trim(),
@@ -449,7 +545,7 @@ mod tests {
             1
         );
         let expansion = resources
-            .expand_command("/skill:audit src/lib.rs")
+            .expand_command("/skill:audit src/lib.rs", cap())
             .unwrap()
             .unwrap();
         let header = expansion
@@ -515,12 +611,12 @@ mod tests {
         assert!(resources.instructions().contains("- good: "));
         assert!(
             resources
-                .expand_command("/skill:good")
+                .expand_command("/skill:good", cap())
                 .unwrap()
                 .unwrap()
                 .ends_with("good_BODY\n")
         );
-        assert!(resources.expand_command("/skill:hidden").is_none());
+        assert!(resources.expand_command("/skill:hidden", cap()).is_none());
         assert_eq!(resources.diagnostics().len(), 1);
         assert_eq!(resources.diagnostics()[0].path, hidden);
         fs::remove_dir_all(root).unwrap();
@@ -551,12 +647,15 @@ mod tests {
                 .join(".agents/skills/bad/SKILL.md")
         );
         assert_eq!(
-            resources.expand_command("/use '$@'").unwrap().unwrap(),
+            resources
+                .expand_command("/use '$@'", cap())
+                .unwrap()
+                .unwrap(),
             "Argument: $@"
         );
         assert!(
             resources
-                .expand_command("/use 'unfinished")
+                .expand_command("/use 'unfinished", cap())
                 .unwrap()
                 .is_err()
         );
@@ -571,7 +670,7 @@ mod tests {
         fs::create_dir_all(&nested).unwrap();
         fs::write(root.join(".ion/prompts/parent.md"), "Parent template").unwrap();
         let resources = Resources::load_with_home(&nested, &root.join("config"), None).unwrap();
-        assert!(resources.expand_command("/parent").is_none());
+        assert!(resources.expand_command("/parent", cap()).is_none());
         fs::remove_dir_all(root).unwrap();
     }
 }

@@ -861,7 +861,10 @@ fn handle_command(
         }
         Some(kind) => anyhow::bail!("use {}", kind.usage()),
         None => {
-            if let Some(prompt) = runtime.resources().expand_command(command) {
+            if let Some(prompt) = runtime
+                .resources()
+                .expand_command(command, runtime.agent().limits().max_request_bytes)
+            {
                 return prompt.map(Some);
             }
             ui.status = format!("Unknown command: {name}. Type /help");
@@ -970,8 +973,9 @@ async fn run_compaction(
 fn expand_resource_input(
     resources: &Resources,
     prompt: String,
+    limits: AgentLimits,
 ) -> std::result::Result<String, (String, anyhow::Error)> {
-    match resources.expand_command(prompt.trim()) {
+    match resources.expand_command(prompt.trim(), limits.max_request_bytes) {
         Some(Ok(expanded)) => Ok(expanded),
         Some(Err(error)) => Err((prompt, error)),
         None => Ok(prompt),
@@ -1054,7 +1058,7 @@ fn busy_key(
             if builtin.is_some() {
                 ui.status = "Commands are available after this operation".into();
             } else if let (Some(steering), Some(resources)) = (steering, resources)
-                && let Some(expanded) = resources.expand_command(&command)
+                && let Some(expanded) = resources.expand_command(&command, limits.max_request_bytes)
             {
                 match expanded {
                     Ok(prompt) => {
@@ -2090,7 +2094,7 @@ impl Frontend {
             return;
         }
         let prompt = match resources {
-            Some(resources) => match expand_resource_input(resources, original.clone()) {
+            Some(resources) => match expand_resource_input(resources, original.clone(), limits) {
                 Ok(prompt) => prompt,
                 Err((_, error)) => {
                     self.draft = source.literal;
@@ -2551,6 +2555,11 @@ mod tests {
     use super::*;
     use ion_host::Selection;
     use unicode_width::UnicodeWidthStr;
+
+    // Caller-derived raw-text cap for resource expansion in this file's tests.
+    fn cap() -> usize {
+        AgentLimits::default().max_request_bytes
+    }
 
     #[test]
     fn editor_line_shortcuts_keep_other_lines_and_graphemes_intact() {
@@ -3232,7 +3241,7 @@ mod tests {
             let reloaded = Resources::load(&root, &root.join("config")).unwrap();
             assert!(
                 reloaded
-                    .expand_command(literal.trim())
+                    .expand_command(literal.trim(), cap())
                     .unwrap()
                     .unwrap()
                     .contains("RELOADED_MARKER")
@@ -3253,6 +3262,72 @@ mod tests {
             assert_eq!(ui.cursor, cursor);
             assert_eq!(ui.images.len(), 1);
             assert_eq!(ui.images[0].note.as_deref(), Some("Coordinate note"));
+        }
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn over_budget_resource_refusal_preserves_literal_custody_without_enqueue() {
+        let root = std::env::temp_dir().join(format!(
+            "ion-terminal-budget-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let prompts = root.join(".ion/prompts");
+        fs::create_dir_all(root.join(".git")).unwrap();
+        fs::create_dir_all(&prompts).unwrap();
+        // Raw arguments fit, but repeated substitution exceeds the host cap.
+        fs::write(prompts.join("amplify.md"), "$1 ".repeat(20)).unwrap();
+        let resources = Resources::load(&root, &root.join("config")).unwrap();
+        // Attachments would also fail encoded admission; the status below
+        // distinguishes the earlier host refusal and checks cap propagation.
+        let limits = AgentLimits {
+            max_request_bytes: 64,
+            image_input: true,
+            ..AgentLimits::default()
+        };
+        let literal = "  /amplify café 🦀 name 👩‍💻\n";
+        for steer in [false, true] {
+            let mut ui = Frontend::default();
+            let mut image = ion_ai::normalize_rgba(1, 1, vec![255, 0, 0, 255]).unwrap();
+            image.note = Some("Coordinate note".into());
+            ui.images.push(image);
+            ui.insert(literal);
+            let cursor = "  /amplify café".len();
+            ui.cursor = cursor;
+            let steering = SteeringInbox::new(limits, ui.input_budget.clone());
+            busy_key(
+                &mut ui,
+                KeyEvent::new(
+                    KeyCode::Enter,
+                    if steer {
+                        Modifiers::NONE
+                    } else {
+                        Modifiers::ALT
+                    },
+                ),
+                &CancellationToken::new(),
+                steer.then_some(&steering),
+                Some(&resources),
+                limits,
+            );
+            // Refusal keeps literal text, cursor and attachments and enqueues
+            // nothing: no steering acceptance, no queued follow-up.
+            assert_eq!(ui.draft, literal);
+            assert_eq!(ui.cursor, cursor);
+            assert_eq!(ui.images.len(), 1);
+            assert_eq!(ui.images[0].note.as_deref(), Some("Coordinate note"));
+            assert!(ui.pending.is_empty());
+            assert!(steering.take_uncommitted().is_empty());
+            assert!(
+                ui.status
+                    .contains("expanded prompt exceeds the 64 byte limit"),
+                "{}",
+                ui.status
+            );
         }
         fs::remove_dir_all(root).unwrap();
     }

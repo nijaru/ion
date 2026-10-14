@@ -514,7 +514,11 @@ cloning, forking or switching a
 Session refreshes resources; `/reload` refreshes the current Session. Personal
 resources take precedence over same-named project resources; nearer project
 directories take precedence over ancestors. Invalid resources are skipped with
-a diagnostic. Project resources are treated as lower-trust repository text
+a diagnostic. Recognized resource arguments and expanded text must fit the
+current request byte limit; expansion refuses oversize input instead of truncating
+it. The terminal retains the literal draft and attachments; headless/RPC clients
+receive an error before a Turn is accepted. Core still checks the complete
+encoded message and attachments separately. Project resources are lower-trust repository text
 under the same live-directory tool permissions as `AGENTS.md`; review
 unfamiliar resources before using them.
 

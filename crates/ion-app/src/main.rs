@@ -602,7 +602,11 @@ async fn run_cli(cli: Cli) -> Result<()> {
                             binding.session().clone(),
                             binding.agent().clone(),
                             binding.instructions().to_owned(),
-                            with_piped_input(expand_input(binding.resources(), prompt)?)?,
+                            with_piped_input(expand_input(
+                                binding.resources(),
+                                prompt,
+                                binding.agent().limits().max_request_bytes,
+                            )?)?,
                             images,
                             cli.json,
                         )
@@ -651,6 +655,7 @@ async fn run_cli(cli: Cli) -> Result<()> {
                             with_piped_input(expand_input(
                                 binding.resources(),
                                 cli.print.expect("matched Some"),
+                                binding.agent().limits().max_request_bytes,
                             )?)?,
                             images,
                             cli.json,
@@ -686,9 +691,9 @@ fn print_stderr(arguments: std::fmt::Arguments<'_>) -> Result<()> {
     writeln!(io::stderr().lock(), "{arguments}").context("cannot write CLI stderr")
 }
 
-fn expand_input(resources: &Resources, prompt: String) -> Result<String> {
+fn expand_input(resources: &Resources, prompt: String, max_output_bytes: usize) -> Result<String> {
     resources
-        .expand_command(&prompt)
+        .expand_command(&prompt, max_output_bytes)
         .transpose()
         .map(|expanded| expanded.unwrap_or(prompt))
 }

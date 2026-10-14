@@ -68,6 +68,7 @@ impl Control {
         let prompt = expand_input(
             self.binding.resources(),
             required_string(value, "message")?.to_owned(),
+            self.binding.agent().limits().max_request_bytes,
         )?;
         let sources = value.get("images").map_or(Ok(Vec::new()), |images| {
             images
