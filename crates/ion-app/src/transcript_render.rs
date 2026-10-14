@@ -1225,7 +1225,7 @@ mod tests {
             "data.txt",
             ActivityState::Completed,
             Some(
-                serde_json::json!({"content":"**literal**\nsecond\nthird\nFOURTH_READ", "offset":64, "next_offset":100, "file_bytes":256, "has_more":true}),
+                serde_json::json!({"content":"**literal**\nsecond\nthird\nFOURTH_READ", "start_line":64, "next_line":68, "file_bytes":256, "has_more":true}),
             ),
         );
         read.result.as_mut().unwrap().projection =
@@ -1236,7 +1236,7 @@ mod tests {
             "other.txt",
             ActivityState::Completed,
             Some(
-                serde_json::json!({"content":"SECOND_READ", "offset":4, "next_offset":15, "file_bytes":15, "has_more":false}),
+                serde_json::json!({"content":"SECOND_READ", "start_line":4, "next_line":5, "file_bytes":15, "has_more":false}),
             ),
         );
         let command = activity(
@@ -1280,7 +1280,7 @@ mod tests {
             "{compact}"
         );
         assert!(compact.contains("file continues beyond this recorded range"));
-        assert!(compact.contains("bytes 64..100 of 256") && compact.contains("earlier file bytes"));
+        assert!(compact.contains("lines 64–67") && compact.contains("earlier file lines"));
         assert!(compact.contains("LAST_STDOUT") && !compact.contains("FIRST_STDOUT"));
         assert!(
             compact.contains("stderr")
@@ -1314,8 +1314,8 @@ mod tests {
         assert!(!folded.contains("SECOND_READ"));
         assert!(folded.contains("2 read outputs folded"));
         assert!(
-            folded.contains("other.txt: content · bytes 4..15 of 15")
-                && folded.contains("earlier bytes not recorded")
+            folded.contains("other.txt: content · lines 4–4")
+                && folded.contains("earlier lines not recorded")
         );
         for width in [1, 8, 24, 120] {
             let expanded = rows(

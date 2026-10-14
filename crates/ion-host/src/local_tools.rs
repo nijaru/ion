@@ -26,8 +26,9 @@ use ion_core::{
     ToolDefinition, ToolExecutor, ToolExposure, ToolPresentation, ToolRegistration,
 };
 
+mod text_read;
+
 const MAX_FILE_BYTES: usize = 8 * 1024 * 1024;
-const MAX_READ_BYTES: usize = 64 * 1024;
 const MAX_OUTPUT_BYTES: usize = 64 * 1024;
 const POST_EXIT_OUTPUT_IDLE: Duration = Duration::from_millis(100);
 
@@ -122,7 +123,7 @@ impl ToolExecutor for LocalExecutor {
                     error("cancelled before tool start")
                 } else {
                     match operation {
-                        LocalOperation::Read => tools.read(&arguments),
+                        LocalOperation::Read => tools.read(&arguments, &stop),
                         LocalOperation::Edit => tools.edit(&arguments, &stop),
                         LocalOperation::Write => tools.write(&arguments, &stop),
                         LocalOperation::Exec => unreachable!("shell uses async execution"),
@@ -192,15 +193,18 @@ struct ExecInput {
 }
 
 impl LocalTools {
-    fn read(&self, args: &Value) -> ToolOutput {
+    fn read(&self, args: &Value, stop: &CancellationToken) -> ToolOutput {
         let input: ReadInput = match serde_json::from_value(args.clone()) {
             Ok(value) => value,
             Err(e) => return error(format!("invalid read arguments: {e}")),
         };
-        let limit = input.limit.unwrap_or(16 * 1024);
-        let offset = input.offset.unwrap_or(0);
-        if !(1..=MAX_READ_BYTES).contains(&limit) {
-            return error("read limit must be between 1 and 65536 bytes");
+        let limit = input.limit.unwrap_or(text_read::MAX_LINES);
+        let offset = input.offset.unwrap_or(1);
+        if offset == 0 {
+            return error("read offset must be a one-based line number");
+        }
+        if !(1..=text_read::MAX_LINES).contains(&limit) {
+            return error("read limit must be between 1 and 2000 lines");
         }
         let path = match self.path(&input.path) {
             Ok(path) => path,
@@ -256,58 +260,10 @@ impl LocalTools {
                 is_error: false,
             };
         }
-        if offset > size {
-            return error(format!(
-                "offset {offset} is beyond end of file ({size} bytes)"
-            ));
+        match text_read::read(file, size, &input.path, offset, limit, stop) {
+            Ok(value) => success(value),
+            Err(message) => error(message),
         }
-        let (bytes, digest, file_bytes) = if size <= MAX_FILE_BYTES as u64 {
-            if let Err(e) = file.seek(SeekFrom::Start(0)) {
-                return error(e.to_string());
-            }
-            let mut all = Vec::new();
-            if let Err(e) = Read::by_ref(&mut file)
-                .take(MAX_FILE_BYTES as u64 + 1)
-                .read_to_end(&mut all)
-            {
-                return error(e.to_string());
-            }
-            if all.len() > MAX_FILE_BYTES {
-                return error("text file grew beyond the 8 MiB digest bound during read");
-            }
-            let file_bytes = all.len() as u64;
-            if offset > file_bytes {
-                return error(format!(
-                    "offset {offset} is beyond end of file ({file_bytes} bytes)"
-                ));
-            }
-            let start = offset as usize;
-            let end = start.saturating_add(limit).min(all.len());
-            (all[start..end].to_vec(), Some(hex_digest(&all)), file_bytes)
-        } else {
-            if let Err(e) = file.seek(SeekFrom::Start(offset)) {
-                return error(e.to_string());
-            }
-            let mut bytes = Vec::new();
-            if let Err(e) = file.take(limit as u64).read_to_end(&mut bytes) {
-                return error(e.to_string());
-            }
-            (bytes, None, size)
-        };
-        let content = match std::str::from_utf8(&bytes) {
-            Ok(content) => content,
-            Err(utf8_error) if utf8_error.error_len().is_none() && utf8_error.valid_up_to() > 0 => {
-                std::str::from_utf8(&bytes[..utf8_error.valid_up_to()]).expect("validated prefix")
-            }
-            Err(utf8_error) if utf8_error.error_len().is_none() => {
-                return error("read limit ends before the next UTF-8 character; increase limit");
-            }
-            Err(_) => return error("read range is not UTF-8; use exec for binary data"),
-        };
-        let next_offset = offset.saturating_add(content.len() as u64);
-        success(
-            json!({"path": input.path, "offset": offset, "next_offset": next_offset, "content": content, "file_bytes": file_bytes, "has_more": next_offset < file_bytes, "base_digest": digest}),
-        )
     }
 
     fn edit(&self, args: &Value, stop: &CancellationToken) -> ToolOutput {
@@ -912,7 +868,7 @@ async fn stop_child(
 }
 fn specs() -> Vec<ToolSpec> {
     vec![
-        ToolSpec { name: "read".into(), description: "Read UTF-8 text or a supported image (JPEG, PNG, GIF, WebP) from the live working directory. Images are attached to the result. Paths may be relative or absolute. Text reads default to a 16384-byte window (maximum 65536); check has_more and use next_offset to continue at a UTF-8 boundary. base_digest covers the complete file when available, not just returned content. Do not recreate an existing file from an incomplete read; prefer exact edits or read all pages before full replacement.".into(), input_schema: json!({"type":"object","additionalProperties":false,"required":["path"],"properties":{"path":{"type":"string"},"offset":{"type":"integer","minimum":0,"description":"Zero-based UTF-8 byte position, not a line number. Defaults to 0; use the prior result's next_offset to continue. Omit for images."},"limit":{"type":"integer","minimum":1,"maximum":65536,"description":"Maximum bytes to read, not a line count. Defaults to 16384, maximum 65536; returned text may be shorter to avoid splitting a UTF-8 character. Omit for images."}}}) },
+        ToolSpec { name: "read".into(), description: "Read UTF-8 text or a supported image (JPEG, PNG, GIF, WebP) from the live working directory. Images are attached to the result. Paths may be relative or absolute. Text reads use one-based line ranges (default 2000 lines), bounded to 65536 bytes of complete lines. Check has_more and pass next_line as offset to continue. An oversized first line requires an explicitly bounded exec read. base_digest covers the complete file when available, not just returned content. Do not recreate an existing file from an incomplete read; prefer exact edits or read all pages before full replacement.".into(), input_schema: json!({"type":"object","additionalProperties":false,"required":["path"],"properties":{"path":{"type":"string"},"offset":{"type":"integer","minimum":1,"description":"One-based starting line (default 1). Pass the prior result's next_line to continue. Omit for images."},"limit":{"type":"integer","minimum":1,"maximum":2000,"description":"Maximum complete lines to return (default and maximum 2000); the 65536-byte output bound may stop earlier. Omit for images."}}}) },
         ToolSpec { name: "edit".into(), description: "Apply one or more disjoint exact text replacements to a UTF-8 file in one write. Each old_text must occur exactly once in the original file; overlapping edits are rejected. Optionally reject changes since base_digest. Operates with the host user's permissions.".into(), input_schema: json!({"type":"object","additionalProperties":false,"required":["path","edits"],"properties":{"path":{"type":"string"},"edits":{"type":"array","minItems":1,"items":{"type":"object","additionalProperties":false,"required":["old_text","new_text"],"properties":{"old_text":{"type":"string","minLength":1},"new_text":{"type":"string"}}}},"base_digest":{"type":"string"}}}) },
         ToolSpec { name: "write".into(), description: "Create or replace a UTF-8 file in the live working directory. Omitted base_digest permits unconditional replacement and creation of missing parents. A supplied string must match the entire existing regular file under the native mutation lock; stale, missing or unreadable targets reject without replacement or parent creation. Use exact edit or complete-source guarded replacement, not an incomplete read window. Success returns path, created, bytes and new_digest (SHA256 of published content), not a lease against later changes.".into(), input_schema: json!({"type":"object","additionalProperties":false,"required":["path","content"],"properties":{"path":{"type":"string"},"content":{"type":"string"},"base_digest":{"type":"string"}}}) },
         ToolSpec { name: "exec".into(), description: "Run a Bash command (or POSIX sh when Bash is unavailable) in the live working directory with the host user's permissions; this is not sandboxed. Timeout is optional. Returns direct command exit and the final 64 KiB of each output stream, with omitted byte counts when truncated. For complete truncated captures, stdout_full_path and stderr_full_path name private temporary files containing the full observed streams; inspect them instead of rerunning a command. Cancellation is best effort.".into(), input_schema: json!({"type":"object","additionalProperties":false,"required":["command"],"properties":{"command":{"type":"string"},"timeout_ms":{"type":"integer","minimum":1}}}) },
@@ -987,7 +943,7 @@ mod tests {
         let stop = CancellationToken::new();
         let source = "αβ🦀\n".repeat(4000);
         fs::write(root.join("file"), &source).unwrap();
-        let read = tools.read(&json!({"path":"file","limit":8}));
+        let read = tools.read(&json!({"path":"file","limit":1}), &CancellationToken::new());
         assert_eq!(read.value["has_more"], true);
         assert_eq!(read.value["base_digest"], hex_digest(source.as_bytes()));
         let written = tools.write(
@@ -1339,7 +1295,11 @@ mod tests {
         let path = root.join("file.txt");
         fs::write(&path, "alpha\nbeta\ngamma\n").unwrap();
         let tools = LocalTools::new(&root).unwrap();
-        let read = tools.read(&json!({"path":"file.txt"}));
+        let read = tools.read(
+            &json!({"path":"file.txt","offset":2,"limit":1}),
+            &CancellationToken::new(),
+        );
+        assert_eq!(read.value["content"], "beta\n");
         assert!(!read.is_error, "{}", read.value);
         let digest = read.value["base_digest"].as_str().unwrap();
         assert_eq!(digest, hex_digest(&fs::read(&path).unwrap()));
@@ -1427,24 +1387,36 @@ mod tests {
     }
 
     #[test]
-    fn read_continuation_stays_on_utf8_boundaries() {
-        let root = std::env::temp_dir().join(format!("ion-read-utf8-{}", uuid::Uuid::now_v7()));
+    fn large_text_reads_skip_bounded_prefixes_and_honor_cancellation() {
+        let root = std::env::temp_dir().join(format!("ion-read-large-{}", uuid::Uuid::now_v7()));
         fs::create_dir(&root).unwrap();
-        fs::write(root.join("file.txt"), "aéZ").unwrap();
+        let mut text = vec![b'x'; MAX_FILE_BYTES + 1];
+        text.extend_from_slice(b"\nTAIL\n");
+        fs::write(root.join("file.txt"), &text).unwrap();
         let tools = LocalTools::new(&root).unwrap();
-        let first = tools.read(&json!({"path":"file.txt","limit":2}));
-        assert!(!first.is_error, "{}", first.value);
-        assert_eq!(first.value["content"], "a");
-        assert_eq!(first.value["next_offset"], 1);
-        assert_eq!(first.value["has_more"], true);
-        let second = tools.read(&json!({"path":"file.txt","offset":1,"limit":2}));
-        assert_eq!(second.value["content"], "é");
-        assert_eq!(second.value["next_offset"], 3);
-        let third = tools.read(&json!({"path":"file.txt","offset":3,"limit":2}));
-        assert_eq!(third.value["content"], "Z");
-        assert_eq!(third.value["has_more"], false);
-        let beyond = tools.read(&json!({"path":"file.txt","offset":5}));
-        assert!(beyond.is_error);
+        let output = tools.read(
+            &json!({"path":"file.txt","offset":2}),
+            &CancellationToken::new(),
+        );
+        assert!(!output.is_error, "{}", output.value);
+        assert_eq!(output.value["content"], "TAIL\n");
+        assert_eq!(output.value["next_line"], 3);
+        assert_eq!(output.value["base_digest"], Value::Null);
+        assert_eq!(output.value["has_more"], false);
+        let stop = CancellationToken::new();
+        stop.cancel();
+        assert!(
+            tools
+                .read(&json!({"path":"file.txt","offset":2}), &stop)
+                .is_error
+        );
+        for args in [
+            json!({"path":"file.txt","offset":0}),
+            json!({"path":"file.txt","limit":0}),
+            json!({"path":"file.txt","limit":2001}),
+        ] {
+            assert!(tools.read(&args, &CancellationToken::new()).is_error);
+        }
         fs::remove_dir_all(root).unwrap();
     }
 
@@ -1460,14 +1432,17 @@ mod tests {
         ];
         fs::write(root.join("picture.png"), bytes).unwrap();
         let tools = LocalTools::new(&root).unwrap();
-        let output = tools.read(&json!({"path":"picture.png"}));
+        let output = tools.read(&json!({"path":"picture.png"}), &CancellationToken::new());
         assert!(!output.is_error, "{}", output.value);
         assert_eq!(output.images.len(), 1);
         assert_eq!(output.images[0].mime_type().as_str(), "image/png");
         assert_eq!(output.value["path"], "picture.png");
         assert!(
             tools
-                .read(&json!({"path":"picture.png","offset":1}))
+                .read(
+                    &json!({"path":"picture.png","offset":1}),
+                    &CancellationToken::new()
+                )
                 .is_error
         );
         fs::remove_dir_all(root).unwrap();

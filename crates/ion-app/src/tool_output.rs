@@ -58,14 +58,14 @@ pub(crate) fn render_activity(
                     detail,
                     Preview::Head(3),
                 );
-                if result.value["offset"]
+                if result.value["start_line"]
                     .as_u64()
-                    .is_some_and(|offset| offset > 0)
+                    .is_some_and(|line| line > 1)
                 {
                     note(
                         rows,
                         prefix,
-                        "… earlier file bytes are outside this recorded range",
+                        "… earlier file lines are outside this recorded range",
                         width,
                     );
                 }
@@ -96,13 +96,12 @@ pub(crate) fn render_activity(
 }
 
 fn read_label(value: &Value) -> String {
-    match (
-        value["offset"].as_u64(),
-        value["next_offset"].as_u64(),
-        value["file_bytes"].as_u64(),
-    ) {
-        (Some(start), Some(end), Some(total)) => {
-            format!("content · bytes {start}..{end} of {total}")
+    match (value["start_line"].as_u64(), value["next_line"].as_u64()) {
+        (Some(start), Some(next)) if start > 0 && next > start => {
+            format!("content · lines {start}–{}", next - 1)
+        }
+        (Some(start), Some(next)) if start > 0 && next == start => {
+            format!("content · EOF at line {start}")
         }
         _ => "content".into(),
     }
@@ -133,9 +132,9 @@ pub(crate) fn render_folded_reads(
         let Some(result) = &activity.result else {
             continue;
         };
-        let preceding = result.value["offset"]
+        let preceding = result.value["start_line"]
             .as_u64()
-            .is_some_and(|start| start > 0);
+            .is_some_and(|start| start > 1);
         let following = result.value["has_more"].as_bool() == Some(true);
         if preceding || following {
             let subject = activity
@@ -150,7 +149,7 @@ pub(crate) fn render_folded_reads(
                     "{subject}: {} · {}{}",
                     read_label(&result.value),
                     if preceding {
-                        "earlier bytes not recorded"
+                        "earlier lines not recorded"
                     } else {
                         ""
                     },
@@ -270,4 +269,29 @@ fn note(rows: &mut Vec<Line<'static>>, prefix: &str, text: &str, width: usize) {
         Line::styled(text.to_owned(), style(Role::Secondary)),
         width,
     );
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn read_labels_do_not_reinterpret_byte_or_unstructured_results_as_lines() {
+        assert_eq!(
+            read_label(&json!({"start_line":2,"next_line":4})),
+            "content · lines 2–3"
+        );
+        assert_eq!(
+            read_label(&json!({"start_line":4,"next_line":4})),
+            "content · EOF at line 4"
+        );
+        for value in [
+            json!({"offset":64,"next_offset":100}),
+            json!({"content":"image"}),
+            json!({"start_line":0,"next_line":2}),
+        ] {
+            assert_eq!(read_label(&value), "content");
+        }
+    }
 }

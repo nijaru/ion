@@ -49,7 +49,7 @@ def program(prompt):
         command = f"printf ONCE >> effects; {shlex.quote(sys.executable)} -c {shlex.quote(producer)}; exit 7"
         return "await tools.call('exec'," + json.dumps({"command": command}) + "); throw new Error('after effect');"
     if prompt == "GUARD":
-        return "const before=await tools.call('read',{path:'guarded',limit:8}); if(!before.value.has_more) throw new Error('expected paged source'); const first=await tools.call('write',{path:'guarded',content:'FIRST',base_digest:before.value.base_digest}); if(first.is_error) throw new Error('first guarded write'); const second=await tools.call('write',{path:'guarded',content:'SECOND',base_digest:first.value.new_digest}); if(second.is_error) throw new Error('second guarded write'); const stale=await tools.call('write',{path:'guarded',content:'LOST',base_digest:before.value.base_digest}); const after=await tools.call('read',{path:'guarded'}); return {first:first.value.new_digest,second:second.value.new_digest,stale:stale.is_error,final:after.value.content};"
+        return "const before=await tools.call('read',{path:'guarded',limit:1}); if(!before.value.has_more) throw new Error('expected paged source'); const first=await tools.call('write',{path:'guarded',content:'FIRST',base_digest:before.value.base_digest}); if(first.is_error) throw new Error('first guarded write'); const second=await tools.call('write',{path:'guarded',content:'SECOND',base_digest:first.value.new_digest}); if(second.is_error) throw new Error('second guarded write'); const stale=await tools.call('write',{path:'guarded',content:'LOST',base_digest:before.value.base_digest}); const after=await tools.call('read',{path:'guarded'}); return {first:first.value.new_digest,second:second.value.new_digest,stale:stale.is_error,final:after.value.content};"
     if prompt == "ACTIVE":
         return "await Promise.all(['a','b'].map(x=>tools.call('exec',{command:`touch ${x}.ready; sleep 1.5; printf done`}))); return true;"
     if prompt == "MCP":
@@ -155,7 +155,8 @@ with tempfile.TemporaryDirectory(prefix="ion-code-mode-") as temporary:
         assert (workspace / "changed").read_text() == "done"
         assert run(env, workspace, "--session", session_id, "export").stdout.count("PRIVATE_") == 200
         assert run(env, workspace, "--session", session_id, "run", "RESUME").stdout.strip() == "DIRECT_OK"
-        (workspace / "guarded").write_text("PRIVATE_GUARD_" * 4000)
+        # The guard must cover unread lines, not just this first-line page.
+        (workspace / "guarded").write_text("PRIVATE_GUARD_\n" * 4000)
         guarded = [json.loads(line) for line in run(env, workspace, "--code-mode", "--json", "run", "GUARD").stdout.splitlines()]
         parent = next(record for record in guarded if record["type"] == "tool_finished")
         assert parent["output"]["result"] == {"first": hashlib.sha256(b"FIRST").hexdigest(), "second": hashlib.sha256(b"SECOND").hexdigest(), "stale": True, "final": "SECOND"}, parent

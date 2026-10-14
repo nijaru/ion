@@ -588,10 +588,14 @@ process-group stop and stops acquiring output, then awaits started capture I/O.
 This is not a hard wall-clock or all-descendant termination guarantee.
 Omit optional native input fields to use their defaults; explicit JSON `null`
 is not a valid integer or string option. Output metadata may still contain `null`.
-`read` uses byte offsets, defaults to a 16 KiB window (maximum 64 KiB), and
-returns `has_more` and a UTF-8-safe `next_offset`. Continue reading when a
-complete file is needed; a partial window is not safe full-file replacement
-content. For files within its 8 MiB text-edit bound, `read.base_digest` covers
+`read` uses one-based line `offset` and a line-count `limit` (default and
+maximum 2000), returning complete original lines within a 64 KiB text bound.
+`start_line` and `next_line` identify the recorded range; when `has_more` is true,
+pass `next_line` as `offset` to continue. An oversized first line requires an
+explicitly bounded `exec` read; it is never silently clipped or skipped. Empty
+files and exactly one line past EOF return an empty page; larger offsets reject.
+Continue reading when a complete file is needed; a partial window is not safe
+full-file replacement content. For files within its 8 MiB text-edit bound, `read.base_digest` covers
 the full file, not that window, and can guard a later `edit` or `write`.
 `write.base_digest` requires an existing regular file whose complete digest
 still matches under the native mutation lock. Missing parents are not created
