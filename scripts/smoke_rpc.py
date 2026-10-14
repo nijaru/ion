@@ -564,8 +564,8 @@ with tempfile.TemporaryDirectory(prefix="ion-rpc-") as temporary:
                 except ProcessLookupError:
                     pass
 
-        # A short command can expand beyond the route's message limit. It must
-        # be refused before queue acknowledgement, not poison the active Turn.
+        # Expansion must stop at the Host's caller-derived request cap before
+        # encoded admission/queue acknowledgement, without poisoning the Turn.
         (prompts / "oversize.md").write_text("$1 $1\n")
         disconnected = subprocess.Popen([binary, "--cwd", workspace, "rpc"], env=env, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, bufsize=0)
         pid = None
@@ -583,7 +583,7 @@ with tempfile.TemporaryDirectory(prefix="ion-rpc-") as temporary:
             for kind in ("steer", "follow_up"):
                 send(disconnected, {"id": "oversized-" + kind, "type": kind, "message": too_large})
                 refused = until(disconnected, lambda record: record.get("id") == "oversized-" + kind)[-1]
-                assert refused["success"] is False and "message limit" in refused["error"], "oversized expanded input was acknowledged as queued"
+                assert refused["success"] is False and "expanded prompt exceeds the 8388608 byte limit" in refused["error"], refused
             send(disconnected, {"id": "valid-steer", "type": "steer", "message": "KEPT_AFTER_REJECTION"})
             assert until(disconnected, lambda record: record.get("id") == "valid-steer")[-1]["success"]
             send(disconnected, {"id": "valid-follow", "type": "follow_up", "message": "KEPT_FOLLOW_UP"})
