@@ -16,9 +16,7 @@ use serde_json::{Value, json};
 use tokio::{io::BufReader, sync::mpsc};
 use tokio_util::sync::CancellationToken;
 
-use crate::{
-    agent_events::event_record, expand_input, inspection::redact_image_payloads, preview_input,
-};
+use crate::{agent_events::event_record, expand_input, inspection, preview_input};
 
 mod connection;
 mod input;
@@ -261,9 +259,7 @@ impl Control {
                     Ok(json!({"session":self.session_id(),"cwd":view.cwd,"name":view.name,"model":self.binding.selected().identity(),"reasoning":view.reasoning.to_string(),"busy":self.active.is_some() || self.pending_input.is_some(),"operation":operation,"preparing_input":self.pending_input.is_some(),"entries":view.entries.len(),"follow_ups":self.follow_ups.len()}))
                 }
                 "inspect" => {
-                    let mut view = serde_json::to_value(self.binding.session().view()?)?;
-                    redact_image_payloads(&mut view);
-                    Ok(view)
+                    inspection::to_value(&self.binding.session().view()?)
                 }
                 "list_sessions" => Ok(json!(self.binding.catalog().list()?.iter().map(|item| json!({"id":item.id,"name":item.name,"preview":item.preview,"turns":item.turns,"model":item.model})).collect::<Vec<_>>())),
                 "list_turns" => Ok(json!(self.binding.session().view()?.turns().iter().map(|item| json!({"turn":item.turn,"preview":preview_input(&item.input),"ended":item.end.is_some()})).collect::<Vec<_>>())),

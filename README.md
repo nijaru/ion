@@ -488,13 +488,16 @@ image orientation and resizes large images before accepting the Turn. Source
 files are limited to 32 MiB, and each inline image to 5 MiB within the
 current 8 MiB request bound. A resize note gives the model the sent dimensions.
 Image bytes are stored in the Session so follow-up requests can still see
-them after the source file changes; `ion inspect` shows an image marker
-instead of printing base64. A custom endpoint needs `ion use ... --images`
-to declare that its model accepts image input.
+them after the source file changes. CLI and RPC `inspect` replace typed image
+payloads with omission markers. Arbitrary JSON in tool arguments/results, schemas
+and provider metadata stays intact, even when its keys resemble image fields;
+inspection is not a general-purpose secret scrubber. A custom endpoint needs
+`ion use ... --images` to declare that its model accepts image input.
 The model's `read` tool can also open a workspace image and return it as a
 typed attachment. It uses the same normalization and size bounds as a user
-attachment. Tool images remain in Session history for replay; text-only model
-routes receive an explicit tool error instead of an unseen image.
+attachment. Tool images remain in Session history for replay. Text-only routes
+receive an explicit withholding notice; that does not change the saved tool's
+observed success or discard its attachments.
 
 Ion also discovers Agent Skills from `~/.agents/skills/`,
 `~/.config/ion/skills/` (or `$XDG_CONFIG_HOME/ion/skills/`) and project

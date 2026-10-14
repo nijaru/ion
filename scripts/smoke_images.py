@@ -23,6 +23,7 @@ requests = []
 long_image_path = "long-subject-" + "x" * 96 + "/red.png"
 rpc_request_entered = threading.Event()
 release_rpc_request = threading.Event()
+raw_inspection_json = {"mime_type": "image/png", "data": "RAW_JSON_VALUE", "nested": {"Image": {"mime_type": "image/jpeg", "data": "NESTED_JSON_VALUE"}}, "images": [{"mime_type": "image/png", "data": "NOT_AN_ATTACHMENT"}]}
 
 
 def chunk(kind, payload):
@@ -42,12 +43,19 @@ class Handler(BaseHTTPRequestHandler):
     def do_POST(self):
         body = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
         requests.append(body)
-        latest_user = next(message for message in reversed(body["messages"]) if message["role"] == "user")
+        latest_user_index = max(index for index, message in enumerate(body["messages"]) if message["role"] == "user")
+        latest_user = body["messages"][latest_user_index]
         held_rpc_request = isinstance(latest_user["content"], list) and latest_user["content"][0].get("text") == "RPC_IMAGE_HOLD"
         if held_rpc_request:
             rpc_request_entered.set()
             assert release_rpc_request.wait(15), "RPC image request was never released"
-        if any(message.get("content") in ("Read workspace picture.", "Read unshared picture.") for message in body["messages"]) and not any(message["role"] == "tool" for message in body["messages"]):
+        if isinstance(latest_user["content"], list) and latest_user["content"][0].get("text") == "INSPECTION_JSON" and not any(message["role"] == "tool" for message in body["messages"][latest_user_index + 1:]):
+            code = "return " + json.dumps(raw_inspection_json) + ";"
+            events = [
+                {"id": "raw-json", "choices": [{"index": 0, "delta": {"tool_calls": [{"index": 0, "id": "raw-json", "type": "function", "function": {"name": "code_mode", "arguments": json.dumps({"code": code})}}]}, "finish_reason": None}]},
+                {"id": "raw-json", "choices": [{"index": 0, "delta": {}, "finish_reason": "tool_calls"}]},
+            ]
+        elif any(message.get("content") in ("Read workspace picture.", "Read unshared picture.") for message in body["messages"]) and not any(message["role"] == "tool" for message in body["messages"]):
             image_path = long_image_path if any(message.get("content") == "Read unshared picture." for message in body["messages"]) else "red.png"
             events = [
                 {"id": "images", "choices": [{"index": 0, "delta": {"tool_calls": [{"index": 0, "id": "read-picture", "type": "function", "function": {"name": "read", "arguments": json.dumps({"path": image_path})}}]}, "finish_reason": None}]},
@@ -352,7 +360,42 @@ with tempfile.TemporaryDirectory(prefix="ion-images-") as temporary:
         assert replay_users[1]["content"][0] == {"type": "text", "text": "RPC_IMAGE_RECOVERY"}, replay_users
         assert replay_users[1]["content"][1]["type"] == "image_url", replay_users
         assert not any(marker in json.dumps(requests[-1]) for marker in ("REJECTED_PICTURE", "RETURNED_STEERING_PICTURE", "RETURNED_FOLLOW_UP_PICTURE"))
-        print("Ion image input, replay, terminal, RPC custody/cancel/reopen, withheld-result truth and typed summary images: OK")
+        # Real attachments and image-shaped raw values coexist in one Session.
+        # CLI/RPC inspection must omit only the former, including after reopen.
+        raw_work = work / "raw-inspection"
+        raw_work.mkdir()
+        (raw_work / "red.png").write_bytes(tiny_png())
+        raw_run = subprocess.run([binary, "--cwd", raw_work, "--code-mode", "--image", "red.png", "--json", "run", "INSPECTION_JSON"], env=env, check=True, capture_output=True, text=True)
+        raw_records = [json.loads(line) for line in raw_run.stdout.splitlines()]
+        observed = next(record for record in raw_records if record["type"] == "tool_finished" and record["name"] == "code_mode")
+        assert observed["is_error"] is False and observed["output"]["result"] == raw_inspection_json, observed
+        raw_session = next(record["id"] for record in raw_records if record["type"] == "session")
+        cli_inspection = json.loads(subprocess.run([binary, "--cwd", raw_work, "--session", raw_session, "inspect"], env=env, check=True, capture_output=True, text=True).stdout)
+        result = next(entry["data"]["result"] for entry in cli_inspection["entries"] if entry["kind"] == "tool_result")
+        assert result["outcome"]["output"]["value"]["result"] == raw_inspection_json, result
+        tool_message = next(message for message in cli_inspection["messages"] if message["role"] == "Tool")
+        assert tool_message["content"][0]["ToolResult"]["result"]["result"] == raw_inspection_json, tool_message
+        typed_image = next(entry["data"]["input"]["content"][1]["Image"] for entry in cli_inspection["entries"] if entry["kind"] == "turn_started")
+        assert typed_image["mime_type"] == "image/png" and typed_image["data"].startswith("[base64 image data omitted:"), typed_image
+        assert "iVBORw0KGgo" not in json.dumps(cli_inspection)
+        rpc = subprocess.Popen([binary, "--cwd", raw_work, "--session", raw_session, "rpc"], env=env, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, bufsize=0)
+        try:
+            assert rpc_read()["type"] == "ready"
+            rpc_send({"type": "inspect", "id": "raw-inspection"})
+            reply = rpc_until(lambda record: record.get("id") == "raw-inspection")
+            assert reply["success"] and reply["data"] == cli_inspection, reply
+            rpc.stdin.close()
+            rpc.wait(timeout=8)
+            assert rpc.returncode == 0, rpc.stderr.read()
+        finally:
+            if rpc.poll() is None:
+                rpc.kill()
+                rpc.wait(timeout=8)
+            if not rpc.stdin.closed:
+                rpc.stdin.close()
+            rpc.stdout.close()
+            rpc.stderr.close()
+        print("Ion images, RPC custody/cancel/reopen, raw-JSON inspection fidelity and typed summary images: OK")
     finally:
         server.shutdown()
         server.server_close()
