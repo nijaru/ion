@@ -7,7 +7,7 @@ use std::{
 use serde_json::{Value, json};
 use tokio_util::sync::CancellationToken;
 
-use super::{MAX_FILE_BYTES, hex_digest};
+use super::files::{MAX_FILE_BYTES, hex_digest};
 
 pub(super) const MAX_LINES: usize = 2000;
 const MAX_BYTES: usize = 64 * 1024;

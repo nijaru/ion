@@ -1,15 +1,12 @@
 //! Direct coding tools with the caller's host permissions.
 use std::{
-    fs,
-    io::{Read, Seek, SeekFrom},
     path::{Path, PathBuf},
     sync::Arc,
 };
 
-use ion_ai::{BoxFuture, ImageMime, MAX_SOURCE_BYTES, ToolCall, ToolSpec, normalize_image};
+use ion_ai::{BoxFuture, ToolCall, ToolSpec};
 use serde::Deserialize;
 use serde_json::{Value, json};
-use sha2::{Digest, Sha256};
 use tokio_util::sync::CancellationToken;
 
 use ion_core::{
@@ -18,9 +15,8 @@ use ion_core::{
 };
 
 mod command;
+mod files;
 mod text_read;
-
-const MAX_FILE_BYTES: usize = 8 * 1024 * 1024;
 
 pub struct LocalTools {
     cwd: PathBuf,
@@ -35,13 +31,6 @@ impl LocalTools {
         }
         Ok(Self { cwd })
     }
-    fn path(&self, raw: &str) -> Result<PathBuf, String> {
-        if raw.is_empty() || raw.contains('\0') {
-            return Err("invalid path".into());
-        }
-        Ok(self.cwd.join(raw))
-    }
-
     /// Run a user's direct command through the native shell execution path.
     pub async fn run_user_shell(&self, command: &str, stop: CancellationToken) -> ToolOutput {
         command::run(&self.cwd, &json!({"command": command}), stop).await
@@ -113,9 +102,9 @@ impl ToolExecutor for LocalExecutor {
                     error("cancelled before tool start")
                 } else {
                     match operation {
-                        LocalOperation::Read => tools.read(&arguments, &stop),
-                        LocalOperation::Edit => tools.edit(&arguments, &stop),
-                        LocalOperation::Write => tools.write(&arguments, &stop),
+                        LocalOperation::Read => files::read(&tools.cwd, &arguments, &stop),
+                        LocalOperation::Edit => files::edit(&tools.cwd, &arguments, &stop),
+                        LocalOperation::Write => files::write(&tools.cwd, &arguments, &stop),
                         LocalOperation::Exec => unreachable!("shell uses async execution"),
                     }
                 }
@@ -143,217 +132,6 @@ where
     T::deserialize(deserializer).map(Some)
 }
 
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
-struct ReadInput {
-    path: String,
-    #[serde(default, deserialize_with = "present_input")]
-    offset: Option<u64>,
-    #[serde(default, deserialize_with = "present_input")]
-    limit: Option<usize>,
-}
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
-struct EditInput {
-    path: String,
-    edits: Vec<TextEdit>,
-    #[serde(default, deserialize_with = "present_input")]
-    base_digest: Option<String>,
-}
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
-struct TextEdit {
-    old_text: String,
-    new_text: String,
-}
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
-struct WriteInput {
-    path: String,
-    content: String,
-    #[serde(default, deserialize_with = "present_input")]
-    base_digest: Option<String>,
-}
-
-impl LocalTools {
-    fn read(&self, args: &Value, stop: &CancellationToken) -> ToolOutput {
-        let input: ReadInput = match serde_json::from_value(args.clone()) {
-            Ok(value) => value,
-            Err(e) => return error(format!("invalid read arguments: {e}")),
-        };
-        let limit = input.limit.unwrap_or(text_read::MAX_LINES);
-        let offset = input.offset.unwrap_or(1);
-        if offset == 0 {
-            return error("read offset must be a one-based line number");
-        }
-        if !(1..=text_read::MAX_LINES).contains(&limit) {
-            return error("read limit must be between 1 and 2000 lines");
-        }
-        let path = match self.path(&input.path) {
-            Ok(path) => path,
-            Err(e) => return error(e),
-        };
-        let mut file = match crate::file_io::open_regular(&path) {
-            Ok(file) => file,
-            Err(e) => return error(format!("read {}: {e}", input.path)),
-        };
-        let size = match file.metadata() {
-            Ok(meta) if meta.is_file() => meta.len(),
-            Ok(_) => return error("read target is not a regular file"),
-            Err(e) => return error(e.to_string()),
-        };
-        let mut header = [0u8; 16];
-        let header_len = match file.read(&mut header) {
-            Ok(len) => len,
-            Err(e) => return error(format!("read {}: {e}", input.path)),
-        };
-        let image_extension = path
-            .extension()
-            .and_then(|part| part.to_str())
-            .is_some_and(|part| {
-                matches!(
-                    part.to_ascii_lowercase().as_str(),
-                    "png" | "jpg" | "jpeg" | "gif" | "webp"
-                )
-            });
-        if image_extension || ImageMime::detect(&header[..header_len]).is_some() {
-            if input.offset.is_some() || input.limit.is_some() {
-                return error("image read does not accept offset or limit");
-            }
-            if size > MAX_SOURCE_BYTES as u64 {
-                return error("image exceeds 32 MiB source bound");
-            }
-            if let Err(e) = file.seek(SeekFrom::Start(0)) {
-                return error(e.to_string());
-            }
-            let mut bytes = Vec::new();
-            if let Err(e) = file
-                .take(MAX_SOURCE_BYTES as u64 + 1)
-                .read_to_end(&mut bytes)
-            {
-                return error(format!("read {}: {e}", input.path));
-            }
-            let image = match normalize_image(&bytes) {
-                Ok(image) => image,
-                Err(e) => return error(format!("read image {}: {e}", input.path)),
-            };
-            return ToolOutput {
-                value: json!({"path":input.path,"content":format!("Read image file [{}]", image.content.mime_type().as_str()),"note":image.note}),
-                images: vec![image.content],
-                is_error: false,
-            };
-        }
-        match text_read::read(file, size, &input.path, offset, limit, stop) {
-            Ok(value) => success(value),
-            Err(message) => error(message),
-        }
-    }
-
-    fn edit(&self, args: &Value, stop: &CancellationToken) -> ToolOutput {
-        let input: EditInput = match serde_json::from_value(args.clone()) {
-            Ok(value) => value,
-            Err(e) => return error(format!("invalid edit arguments: {e}")),
-        };
-        if input.edits.is_empty() {
-            return error("edits must contain at least one replacement");
-        }
-        let path = match self.path(&input.path) {
-            Ok(path) => path,
-            Err(e) => return error(e),
-        };
-        let mutation = match crate::file_io::FileMutation::open(&path, false, stop) {
-            Ok(mutation) => mutation,
-            Err(e) => return error(format!("edit {}: {e}", input.path)),
-        };
-        let bytes = match crate::file_io::read_bounded(mutation.path(), MAX_FILE_BYTES) {
-            Ok(bytes) => bytes,
-            Err(e) => return error(format!("edit {}: {e}", input.path)),
-        };
-        if let Err(e) = mutation.ensure_writable() {
-            return error(format!("edit {}: {e}", input.path));
-        }
-        let actual = hex_digest(&bytes);
-        if input
-            .base_digest
-            .as_ref()
-            .is_some_and(|digest| digest != &actual)
-        {
-            return error("file changed since supplied base_digest");
-        }
-        let text = match String::from_utf8(bytes) {
-            Ok(text) => text,
-            Err(_) => return error("edit target is not UTF-8"),
-        };
-        let replacement = match replace_text_preserving_format(&text, &input.edits) {
-            Ok(replacement) => replacement,
-            Err(message) => return error(message),
-        };
-        if replacement.len() > MAX_FILE_BYTES {
-            return error("edited file exceeds 8 MiB");
-        }
-        let permissions = match fs::metadata(mutation.path()) {
-            Ok(meta) => meta.permissions(),
-            Err(e) => return error(e.to_string()),
-        };
-        let diff = crate::edit_diff::capture(&input.path, &text, &replacement);
-        match mutation.replace(replacement.as_bytes(), Some(permissions)) {
-            Ok(()) => success(
-                json!({"path": input.path, "replacements": input.edits.len(), "base_digest": actual, "new_digest": hex_digest(replacement.as_bytes()), "diff": diff}),
-            ),
-            Err(e) => error(format!("edit write failed: {e}")),
-        }
-    }
-
-    fn write(&self, args: &Value, stop: &CancellationToken) -> ToolOutput {
-        let input: WriteInput = match serde_json::from_value(args.clone()) {
-            Ok(value) => value,
-            Err(e) => return error(format!("invalid write arguments: {e}")),
-        };
-        if input.content.len() > MAX_FILE_BYTES {
-            return error("content exceeds 8 MiB");
-        }
-        let path = match self.path(&input.path) {
-            Ok(path) => path,
-            Err(e) => return error(e),
-        };
-        let mutation =
-            match crate::file_io::FileMutation::open(&path, input.base_digest.is_none(), stop) {
-                Ok(mutation) => mutation,
-                Err(e) => return error(format!("write {}: {e}", input.path)),
-            };
-        let previous = match fs::metadata(mutation.path()) {
-            Ok(meta) if meta.is_file() => Some(meta.permissions()),
-            Ok(_) => return error("write target is not a regular file"),
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => None,
-            Err(e) => return error(e.to_string()),
-        };
-        if let Some(expected) = &input.base_digest {
-            if previous.is_none() {
-                return error("guarded write requires an existing file");
-            }
-            let bytes = match crate::file_io::read_bounded(mutation.path(), MAX_FILE_BYTES) {
-                Ok(bytes) => bytes,
-                Err(e) => return error(format!("read guarded write target: {e}")),
-            };
-            if expected != &hex_digest(&bytes) {
-                return error("file changed since supplied base_digest");
-            }
-        }
-        if previous.is_some()
-            && let Err(e) = mutation.ensure_writable()
-        {
-            return error(format!("write {}: {e}", input.path));
-        }
-        let created = previous.is_none();
-        match mutation.replace(input.content.as_bytes(), previous) {
-            Ok(()) => success(
-                json!({"path": input.path, "created": created, "bytes": input.content.len(), "new_digest": hex_digest(input.content.as_bytes())}),
-            ),
-            Err(e) => error(format!("write failed: {e}")),
-        }
-    }
-}
-
 fn success(value: Value) -> ToolOutput {
     ToolOutput {
         value,
@@ -368,117 +146,6 @@ fn error(message: impl Into<String>) -> ToolOutput {
         is_error: true,
     }
 }
-fn hex_digest(bytes: &[u8]) -> String {
-    format!("{:x}", Sha256::digest(bytes))
-}
-
-fn normalize_newlines(text: &str) -> String {
-    text.replace("\r\n", "\n").replace('\r', "\n")
-}
-
-fn advance_raw_offset(bytes: &[u8], raw: &mut usize, normalized: &mut usize, target: usize) {
-    while *normalized < target {
-        if bytes[*raw] == b'\r' && bytes.get(*raw + 1) == Some(&b'\n') {
-            *raw += 2;
-        } else {
-            *raw += 1;
-        }
-        *normalized += 1;
-    }
-}
-
-fn line_ending(text: &str) -> &'static str {
-    let bytes = text.as_bytes();
-    for (index, byte) in bytes.iter().enumerate() {
-        if *byte == b'\r' {
-            return if bytes.get(index + 1) == Some(&b'\n') {
-                "\r\n"
-            } else {
-                "\r"
-            };
-        }
-        if *byte == b'\n' {
-            return "\n";
-        }
-    }
-    "\n"
-}
-
-fn replace_text_preserving_format(source: &str, edits: &[TextEdit]) -> Result<String, String> {
-    struct Matched<'a> {
-        start: usize,
-        end: usize,
-        replacement: &'a str,
-        index: usize,
-    }
-    let bom_bytes = if source.starts_with('\u{feff}') { 3 } else { 0 };
-    let body = &source[bom_bytes..];
-    let normalized = normalize_newlines(body);
-    let mut matched = Vec::with_capacity(edits.len());
-    for (index, edit) in edits.iter().enumerate() {
-        let old = normalize_newlines(&edit.old_text);
-        if old.is_empty() {
-            return Err(format!("edits[{index}].old_text must not be empty"));
-        }
-        let Some(start) = normalized.find(&old) else {
-            return Err(format!("edits[{index}].old_text was not found"));
-        };
-        // Search after the first character, not after the whole match, so
-        // overlapping occurrences are ambiguous too ("aa" in "aaa").
-        let next = start
-            + normalized[start..]
-                .chars()
-                .next()
-                .expect("match is nonempty")
-                .len_utf8();
-        if normalized[next..].contains(&old) {
-            return Err(format!("edits[{index}].old_text is ambiguous"));
-        }
-        matched.push(Matched {
-            start,
-            end: start + old.len(),
-            replacement: &edit.new_text,
-            index,
-        });
-    }
-    matched.sort_unstable_by_key(|item| item.start);
-    for pair in matched.windows(2) {
-        if pair[0].end > pair[1].start {
-            return Err(format!(
-                "edits[{}] and edits[{}] overlap; merge them into one replacement",
-                pair[0].index, pair[1].index
-            ));
-        }
-    }
-    let mut result = String::with_capacity(source.len());
-    let mut raw = 0;
-    let mut normalized_offset = 0;
-    let mut copied_through = 0;
-    for item in matched {
-        advance_raw_offset(
-            body.as_bytes(),
-            &mut raw,
-            &mut normalized_offset,
-            item.start,
-        );
-        let raw_start = bom_bytes + raw;
-        advance_raw_offset(body.as_bytes(), &mut raw, &mut normalized_offset, item.end);
-        let raw_end = bom_bytes + raw;
-        result.push_str(&source[copied_through..raw_start]);
-        let style = if source[raw_start..raw_end].contains(['\r', '\n']) {
-            line_ending(&source[raw_start..raw_end])
-        } else {
-            line_ending(body)
-        };
-        result.push_str(&normalize_newlines(item.replacement).replace('\n', style));
-        copied_through = raw_end;
-    }
-    result.push_str(&source[copied_through..]);
-    if result == source {
-        return Err("edit made no changes".into());
-    }
-    Ok(result)
-}
 fn specs() -> Vec<ToolSpec> {
     vec![
         ToolSpec { name: "read".into(), description: "Read UTF-8 text or a supported image (JPEG, PNG, GIF, WebP) from the live working directory. Images are attached to the result. Paths may be relative or absolute. Text reads use one-based line ranges (default 2000 lines), bounded to 65536 bytes of complete lines. Check has_more and pass next_line as offset to continue. An oversized first line requires an explicitly bounded exec read. base_digest covers the complete file when available, not just returned content. Do not recreate an existing file from an incomplete read; prefer exact edits or read all pages before full replacement.".into(), input_schema: json!({"type":"object","additionalProperties":false,"required":["path"],"properties":{"path":{"type":"string"},"offset":{"type":"integer","minimum":1,"description":"One-based starting line (default 1). Pass the prior result's next_line to continue. Omit for images."},"limit":{"type":"integer","minimum":1,"maximum":2000,"description":"Maximum complete lines to return (default and maximum 2000); the 65536-byte output bound may stop earlier. Omit for images."}}}) },
@@ -490,8 +157,12 @@ fn specs() -> Vec<ToolSpec> {
 
 #[cfg(test)]
 mod tests {
+    use super::files::hex_digest;
     use super::*;
-    use std::{fs::File, os::unix::fs::PermissionsExt, time::Duration};
+    use std::{
+        fs::{self, File},
+        time::Duration,
+    };
 
     #[tokio::test]
     async fn optional_native_inputs_reject_null_before_effects() {
@@ -576,70 +247,6 @@ mod tests {
             exec.input_schema["properties"]["timeout_ms"].get("maximum"),
             None
         );
-    }
-
-    #[test]
-    fn guarded_write_checks_whole_file_without_creating_missing_targets() {
-        let root = std::env::temp_dir().join(format!("ion-write-guard-{}", uuid::Uuid::now_v7()));
-        fs::create_dir(&root).unwrap();
-        let tools = LocalTools::new(&root).unwrap();
-        let stop = CancellationToken::new();
-        let source = "αβ🦀\n".repeat(4000);
-        fs::write(root.join("file"), &source).unwrap();
-        let read = tools.read(&json!({"path":"file","limit":1}), &CancellationToken::new());
-        assert_eq!(read.value["has_more"], true);
-        assert_eq!(read.value["base_digest"], hex_digest(source.as_bytes()));
-        let written = tools.write(
-            &json!({"path":"file","content":"first","base_digest":read.value["base_digest"]}),
-            &stop,
-        );
-        assert!(!written.is_error, "{}", written.value);
-        assert_eq!(written.value["created"], false);
-        assert_eq!(written.value["new_digest"], hex_digest(b"first"));
-        let stale = tools.write(
-            &json!({"path":"file","content":"lost","base_digest":read.value["base_digest"]}),
-            &stop,
-        );
-        assert!(stale.is_error);
-        assert_eq!(
-            stale.value["error"],
-            "file changed since supplied base_digest"
-        );
-        assert_eq!(fs::read(root.join("file")).unwrap(), b"first");
-        for guard in [Value::Null, json!(42), json!(hex_digest(b""))] {
-            let rejected = tools.write(
-                &json!({"path":"missing/parents/file","content":"lost","base_digest":guard}),
-                &stop,
-            );
-            assert!(rejected.is_error, "{}", rejected.value);
-            assert!(!root.join("missing").exists());
-        }
-        let missing = tools.write(
-            &json!({"path":"absent","content":"lost","base_digest":hex_digest(b"")}),
-            &stop,
-        );
-        assert!(missing.is_error && !root.join("absent").exists());
-        let oversized = vec![b'x'; MAX_FILE_BYTES + 1];
-        fs::write(root.join("large"), &oversized).unwrap();
-        assert!(
-            tools
-                .write(
-                    &json!({"path":"large","content":"lost","base_digest":hex_digest(&oversized)}),
-                    &stop,
-                )
-                .is_error
-        );
-        assert_eq!(fs::read(root.join("large")).unwrap(), oversized);
-        let unconditional = tools.write(&json!({"path":"large","content":"second"}), &stop);
-        assert!(!unconditional.is_error);
-        assert_eq!(unconditional.value["new_digest"], hex_digest(b"second"));
-        let created = tools.write(
-            &json!({"path":"new/parents/file","content":"created"}),
-            &stop,
-        );
-        assert!(!created.is_error && created.value["created"] == true);
-        assert_eq!(created.value["new_digest"], hex_digest(b"created"));
-        fs::remove_dir_all(root).unwrap();
     }
 
     #[tokio::test]
@@ -791,7 +398,8 @@ mod tests {
             assert_eq!(fs::read(root.join("file")).unwrap(), b"old");
         }
         drop(holder);
-        let output = LocalTools::new(&root).unwrap().write(
+        let output = files::write(
+            &root,
             &json!({"path":"file","content":"released"}),
             &CancellationToken::new(),
         );
@@ -856,239 +464,6 @@ mod tests {
             }
             fs::remove_dir_all(root).unwrap();
         });
-    }
-
-    #[test]
-    fn write_preserves_existing_symlink() {
-        let root = std::env::temp_dir().join(format!("ion-tools-{}", uuid::Uuid::now_v7()));
-        fs::create_dir(&root).unwrap();
-        let target = root.join("target.txt");
-        fs::write(&target, "old").unwrap();
-        std::os::unix::fs::symlink("target.txt", root.join("link.txt")).unwrap();
-        let tools = LocalTools::new(&root).unwrap();
-        let output = tools.write(
-            &json!({"path":"link.txt","content":"new"}),
-            &CancellationToken::new(),
-        );
-        assert!(!output.is_error, "{}", output.value);
-        assert_eq!(fs::read_to_string(&target).unwrap(), "new");
-        assert!(
-            fs::symlink_metadata(root.join("link.txt"))
-                .unwrap()
-                .file_type()
-                .is_symlink()
-        );
-        fs::remove_dir_all(root).unwrap();
-    }
-
-    #[test]
-    fn edit_and_write_do_not_replace_read_only_files() {
-        let root = std::env::temp_dir().join(format!("ion-readonly-{}", uuid::Uuid::now_v7()));
-        fs::create_dir(&root).unwrap();
-        let path = root.join("file.txt");
-        fs::write(&path, "old").unwrap();
-        fs::set_permissions(&path, fs::Permissions::from_mode(0o444)).unwrap();
-        let tools = LocalTools::new(&root).unwrap();
-        let edit = tools.edit(
-            &json!({"path":"file.txt","edits":[{"old_text":"old","new_text":"new"}]}),
-            &CancellationToken::new(),
-        );
-        assert!(edit.is_error, "{}", edit.value);
-        let write = tools.write(
-            &json!({"path":"file.txt","content":"new"}),
-            &CancellationToken::new(),
-        );
-        assert!(write.is_error, "{}", write.value);
-        assert_eq!(fs::read_to_string(&path).unwrap(), "old");
-        fs::set_permissions(&path, fs::Permissions::from_mode(0o644)).unwrap();
-        fs::remove_dir_all(root).unwrap();
-    }
-
-    #[test]
-    fn edit_matches_lf_text_in_crlf_file_and_preserves_bom() {
-        let root = std::env::temp_dir().join(format!("ion-edit-crlf-{}", uuid::Uuid::now_v7()));
-        fs::create_dir(&root).unwrap();
-        let path = root.join("file.txt");
-        let original = "\u{feff}one\r\ntwo\r\nthree\r\n";
-        fs::write(&path, original).unwrap();
-        let tools = LocalTools::new(&root).unwrap();
-        let output = tools.edit(
-            &json!({
-                "path":"file.txt",
-                "edits":[{"old_text":"two\nthree","new_text":"TWO\nthree"}],
-                "base_digest": hex_digest(original.as_bytes()),
-            }),
-            &CancellationToken::new(),
-        );
-        assert!(!output.is_error, "{}", output.value);
-        assert_eq!(
-            fs::read_to_string(path).unwrap(),
-            "\u{feff}one\r\nTWO\r\nthree\r\n"
-        );
-        let patch = output.value["diff"]["text"].as_str().unwrap();
-        assert!(patch.contains("-two\r\n+TWO\r\n"), "{patch:?}");
-        assert_eq!(output.value["diff"]["truncated"], false);
-        fs::remove_dir_all(root).unwrap();
-    }
-
-    #[test]
-    fn read_digest_covers_the_whole_file_and_can_guard_edit() {
-        let root = std::env::temp_dir().join(format!("ion-read-digest-{}", uuid::Uuid::now_v7()));
-        fs::create_dir(&root).unwrap();
-        let path = root.join("file.txt");
-        fs::write(&path, "alpha\nbeta\ngamma\n").unwrap();
-        let tools = LocalTools::new(&root).unwrap();
-        let read = tools.read(
-            &json!({"path":"file.txt","offset":2,"limit":1}),
-            &CancellationToken::new(),
-        );
-        assert_eq!(read.value["content"], "beta\n");
-        assert!(!read.is_error, "{}", read.value);
-        let digest = read.value["base_digest"].as_str().unwrap();
-        assert_eq!(digest, hex_digest(&fs::read(&path).unwrap()));
-        let edit = tools.edit(
-            &json!({
-                "path":"file.txt",
-                "edits":[{"old_text":"beta","new_text":"BETA"}],
-                "base_digest":digest,
-            }),
-            &CancellationToken::new(),
-        );
-        assert!(!edit.is_error, "{}", edit.value);
-        fs::remove_dir_all(root).unwrap();
-    }
-
-    #[test]
-    fn edit_preserves_unmatched_mixed_line_endings_and_rejects_ambiguity() {
-        let result = replace_text_preserving_format(
-            "first\r\nsecond\nthird\r\n",
-            &[TextEdit {
-                old_text: "second\nthird".into(),
-                new_text: "SECOND\nthird".into(),
-            }],
-        )
-        .unwrap();
-        assert_eq!(result, "first\r\nSECOND\nthird\r\n");
-        assert!(
-            replace_text_preserving_format(
-                "same\r\nsame\n",
-                &[TextEdit {
-                    old_text: "same".into(),
-                    new_text: "new".into()
-                }]
-            )
-            .is_err()
-        );
-    }
-
-    #[test]
-    fn multi_edit_matches_one_original_snapshot_and_rejects_partial_changes() {
-        let root = std::env::temp_dir().join(format!("ion-multi-edit-{}", uuid::Uuid::now_v7()));
-        fs::create_dir(&root).unwrap();
-        let path = root.join("file.txt");
-        let tools = LocalTools::new(&root).unwrap();
-        let original = "\u{feff}α\r\nfirst\nsecond\r\n";
-        fs::write(&path, original).unwrap();
-        let output = tools.edit(
-            &json!({
-                "path":"file.txt",
-                "edits":[
-                    {"old_text":"second","new_text":"SECOND"},
-                    {"old_text":"α","new_text":"β"}
-                ],
-                "base_digest":hex_digest(original.as_bytes()),
-            }),
-            &CancellationToken::new(),
-        );
-        assert!(!output.is_error, "{}", output.value);
-        assert_eq!(output.value["replacements"], 2);
-        assert_eq!(
-            fs::read_to_string(&path).unwrap(),
-            "\u{feff}β\r\nfirst\nSECOND\r\n"
-        );
-
-        for (source, edits) in [
-            (
-                "abcdef",
-                json!([{"old_text":"bcd","new_text":"B"},{"old_text":"cde","new_text":"C"}]),
-            ),
-            ("aaa", json!([{"old_text":"aa","new_text":"A"}])),
-            (
-                "abcdef",
-                json!([{"old_text":"abc","new_text":"ABC"},{"old_text":"missing","new_text":"M"}]),
-            ),
-        ] {
-            fs::write(&path, source).unwrap();
-            let output = tools.edit(
-                &json!({"path":"file.txt","edits":edits}),
-                &CancellationToken::new(),
-            );
-            assert!(output.is_error, "{}", output.value);
-            assert_eq!(fs::read_to_string(&path).unwrap(), source);
-        }
-        fs::remove_dir_all(root).unwrap();
-    }
-
-    #[test]
-    fn large_text_reads_skip_bounded_prefixes_and_honor_cancellation() {
-        let root = std::env::temp_dir().join(format!("ion-read-large-{}", uuid::Uuid::now_v7()));
-        fs::create_dir(&root).unwrap();
-        let mut text = vec![b'x'; MAX_FILE_BYTES + 1];
-        text.extend_from_slice(b"\nTAIL\n");
-        fs::write(root.join("file.txt"), &text).unwrap();
-        let tools = LocalTools::new(&root).unwrap();
-        let output = tools.read(
-            &json!({"path":"file.txt","offset":2}),
-            &CancellationToken::new(),
-        );
-        assert!(!output.is_error, "{}", output.value);
-        assert_eq!(output.value["content"], "TAIL\n");
-        assert_eq!(output.value["next_line"], 3);
-        assert_eq!(output.value["base_digest"], Value::Null);
-        assert_eq!(output.value["has_more"], false);
-        let stop = CancellationToken::new();
-        stop.cancel();
-        assert!(
-            tools
-                .read(&json!({"path":"file.txt","offset":2}), &stop)
-                .is_error
-        );
-        for args in [
-            json!({"path":"file.txt","offset":0}),
-            json!({"path":"file.txt","limit":0}),
-            json!({"path":"file.txt","limit":2001}),
-        ] {
-            assert!(tools.read(&args, &CancellationToken::new()).is_error);
-        }
-        fs::remove_dir_all(root).unwrap();
-    }
-
-    #[test]
-    fn read_image_returns_normalized_typed_content() {
-        let root = std::env::temp_dir().join(format!("ion-read-image-{}", uuid::Uuid::now_v7()));
-        fs::create_dir(&root).unwrap();
-        let bytes = [
-            137, 80, 78, 71, 13, 10, 26, 10, 0, 0, 0, 13, 73, 72, 68, 82, 0, 0, 0, 1, 0, 0, 0, 1,
-            8, 6, 0, 0, 0, 31, 21, 196, 137, 0, 0, 0, 13, 73, 68, 65, 84, 120, 156, 99, 248, 207,
-            192, 240, 31, 0, 5, 0, 1, 255, 137, 153, 61, 29, 0, 0, 0, 0, 73, 69, 78, 68, 174, 66,
-            96, 130,
-        ];
-        fs::write(root.join("picture.png"), bytes).unwrap();
-        let tools = LocalTools::new(&root).unwrap();
-        let output = tools.read(&json!({"path":"picture.png"}), &CancellationToken::new());
-        assert!(!output.is_error, "{}", output.value);
-        assert_eq!(output.images.len(), 1);
-        assert_eq!(output.images[0].mime_type().as_str(), "image/png");
-        assert_eq!(output.value["path"], "picture.png");
-        assert!(
-            tools
-                .read(
-                    &json!({"path":"picture.png","offset":1}),
-                    &CancellationToken::new()
-                )
-                .is_error
-        );
-        fs::remove_dir_all(root).unwrap();
     }
 
     #[tokio::test]
