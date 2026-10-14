@@ -26,8 +26,10 @@ jobs:
       - run: cargo fmt --check
       - run: cargo clippy --locked --workspace --all-targets --all-features -- -D warnings
       - run: cargo test --locked --workspace
-      - name: Build terminal smoke binary
-        run: cargo build --locked -p ion
+      - name: Build client smoke binaries
+        run: cargo build --locked -p ion --bins --example embedded
+      - name: Embedded SDK custody smoke
+        run: python3 scripts/smoke_embedded.py
       - name: Install native-scrollback test terminal
         run: sudo apt-get update && sudo apt-get install -y tmux
       - name: Headless coding and recovery smoke

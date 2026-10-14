@@ -867,6 +867,24 @@ token estimate; custom routes without a known context window use only the
 encoded request bound. See [ARCHITECTURE.md](ARCHITECTURE.md) for the design
 contract and [AGENTS.md](AGENTS.md) for repository checks.
 
+The runnable [embedded example](crates/ion-app/examples/embedded.rs) submits one
+prompt through the shared Host binding:
+
+```sh
+cargo run --locked -p ion --example embedded -- --help
+cargo run --locked -p ion --example embedded -- \
+  --cwd . --session /tmp/ion-embedded.sqlite \
+  --provider xiaomi --model mimo-v2.6-flash 'Explain this repository'
+```
+
+Choose an available route with matching credentials in the normal Ion config
+or environment; provider usage may be billed. Reuse the same Session path and
+working directory to continue. Ctrl-C requests stop and joins the operation;
+all post-Session errors pass through shutdown before the runtime exits. The
+example prints only the committed answer using fallible output, restores the
+saved reasoning preference, and connects no MCP servers. It is an SDK lifecycle
+sample, not a replacement for the terminal or RPC client.
+
 For Rust embedding, `ion-host::Host` composes the same model catalog,
 credentials, project instructions and Session discovery used by the CLI.
 `ion-core::CodingAgent` and `CodingSession` own the coding loop and committed
