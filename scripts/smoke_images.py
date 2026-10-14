@@ -1,5 +1,6 @@
 """Exercise image acceptance, wire replay, inspection and terminal attachment."""
 
+import base64
 import fcntl
 import json
 import os
@@ -20,6 +21,8 @@ root = Path(__file__).resolve().parent.parent
 binary = Path(os.environ.get("ION_SMOKE_BIN", root / "target/debug/ion"))
 requests = []
 long_image_path = "long-subject-" + "x" * 96 + "/red.png"
+rpc_request_entered = threading.Event()
+release_rpc_request = threading.Event()
 
 
 def chunk(kind, payload):
@@ -39,6 +42,11 @@ class Handler(BaseHTTPRequestHandler):
     def do_POST(self):
         body = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
         requests.append(body)
+        latest_user = next(message for message in reversed(body["messages"]) if message["role"] == "user")
+        held_rpc_request = isinstance(latest_user["content"], list) and latest_user["content"][0].get("text") == "RPC_IMAGE_HOLD"
+        if held_rpc_request:
+            rpc_request_entered.set()
+            assert release_rpc_request.wait(15), "RPC image request was never released"
         if any(message.get("content") in ("Read workspace picture.", "Read unshared picture.") for message in body["messages"]) and not any(message["role"] == "tool" for message in body["messages"]):
             image_path = long_image_path if any(message.get("content") == "Read unshared picture." for message in body["messages"]) else "red.png"
             events = [
@@ -55,7 +63,12 @@ class Handler(BaseHTTPRequestHandler):
         self.send_header("Content-Type", "text/event-stream")
         self.send_header("Content-Length", str(len(payload)))
         self.end_headers()
-        self.wfile.write(payload)
+        try:
+            self.wfile.write(payload)
+        except (BrokenPipeError, ConnectionResetError):
+            # The owned RPC cancellation case deliberately drops its request.
+            if not held_rpc_request:
+                raise
 
     def log_message(self, *_args):
         pass
@@ -261,7 +274,85 @@ with tempfile.TemporaryDirectory(prefix="ion-images-") as temporary:
         subprocess.run([binary, "--cwd", summary_work, "--continue", "run", "Continue after the visual summary."], env=env, check=True, capture_output=True)
         assert len(requests) == start + 3
         assert not any("iVBORw0KGgo" in json.dumps(message.get("content")) for message in requests[-1]["messages"])
-        print("Ion image input, resume, inspection, terminal attachment, withheld-result truth and typed summary images: OK")
+        # Unit preparation tests inject ready messages/tasks. Exercise actual
+        # normalization and image custody through the built RPC connection too.
+        rpc_work = work / "rpc-workspace"
+        rpc_work.mkdir()
+        (rpc_work / "red.png").write_bytes(tiny_png())
+        rpc = subprocess.Popen([binary, "--cwd", rpc_work, "rpc"], env=env, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, bufsize=0)
+
+        def rpc_read():
+            assert select.select([rpc.stdout], [], [], 10)[0], "image RPC output timed out"
+            line = rpc.stdout.readline()
+            assert line, f"image RPC closed: {rpc.poll()}"
+            return json.loads(line)
+
+        def rpc_send(value):
+            rpc.stdin.write((json.dumps(value) + "\n").encode())
+
+        def rpc_until(predicate):
+            while True:
+                record = rpc_read()
+                if predicate(record):
+                    return record
+
+        def image_parts(message, text):
+            assert message["content"][0] == {"Text": text}, message
+            image = message["content"][1]["Image"]
+            assert image["mime_type"] == "image/png", image
+            assert base64.b64decode(image["data"]) == tiny_png(), image
+
+        try:
+            rpc_session = rpc_read()["session"]
+            before_rpc = len(requests)
+            rpc_send({"id": "picture", "type": "prompt", "message": "RPC_IMAGE_HOLD", "images": ["red.png"]})
+            assert rpc_until(lambda record: record.get("id") == "picture")["success"]
+            assert rpc_request_entered.wait(8), "RPC image never reached the captured route"
+            assert len(requests) == before_rpc + 1
+            user_image_request(requests[-1], "RPC_IMAGE_HOLD")
+            inline = {"mime_type": "image/png", "data": base64.b64encode(tiny_png()).decode()}
+            rpc_send({"id": "bad-picture", "type": "steer", "message": "REJECTED_PICTURE", "images": [inline, {**inline, "mime_type": "image/jpeg"}]})
+            rejected = rpc_until(lambda record: record.get("id") == "bad-picture")
+            assert not rejected["success"] and "MIME type" in rejected["error"], rejected
+            for command, text, source in (("steer", "RETURNED_STEERING_PICTURE", inline), ("follow_up", "RETURNED_FOLLOW_UP_PICTURE", "red.png")):
+                rpc_send({"id": command, "type": command, "message": text, "images": [source]})
+                assert rpc_until(lambda record: record.get("id") == command)["success"]
+            rpc_send({"id": "clear", "type": "clear_queue"})
+            cleared = rpc_until(lambda record: record.get("id") == "clear")["data"]
+            assert len(cleared["steering"]) == len(cleared["follow_up"]) == 1, cleared
+            image_parts(cleared["steering"][0], "RETURNED_STEERING_PICTURE")
+            assert cleared["follow_up"][0]["id"] == "follow_up", cleared
+            image_parts(cleared["follow_up"][0]["input"], "RETURNED_FOLLOW_UP_PICTURE")
+            rpc_send({"id": "stop-picture", "type": "abort"})
+            assert rpc_until(lambda record: record.get("id") == "stop-picture")["success"]
+            assert rpc_until(lambda record: record["type"] == "turn_end")["status"] == "cancelled"
+            release_rpc_request.set()
+            rpc_send({"id": "recover-picture", "type": "prompt", "message": "RPC_IMAGE_RECOVERY", "images": ["red.png"]})
+            assert rpc_until(lambda record: record.get("id") == "recover-picture")["success"]
+            assert rpc_until(lambda record: record["type"] == "turn_end")["status"] == "completed"
+            assert len(requests) == before_rpc + 2
+            rpc.stdin.close()
+            rpc.wait(timeout=8)
+            assert rpc.returncode == 0, rpc.stderr.read()
+        finally:
+            release_rpc_request.set()
+            if rpc.poll() is None:
+                rpc.kill()
+                rpc.wait(timeout=8)
+            if not rpc.stdin.closed:
+                rpc.stdin.close()
+            rpc.stdout.close()
+            rpc.stderr.close()
+        rpc_view = json.loads(subprocess.run([binary, "--cwd", rpc_work, "--session", rpc_session, "inspect"], env=env, check=True, capture_output=True, text=True).stdout)
+        assert rpc_view["unfinished_turn"] is None, rpc_view
+        assert [entry["data"]["reason"] for entry in rpc_view["entries"] if entry["kind"] == "turn_ended"] == ["cancelled", "completed"], rpc_view
+        # Reopen must retain accepted images, not resurrect withdrawn queues.
+        subprocess.run([binary, "--cwd", rpc_work, "--session", rpc_session, "run", "RPC_IMAGE_REOPEN"], env=env, check=True, capture_output=True)
+        replay_users = user_image_request(requests[-1], "RPC_IMAGE_HOLD")
+        assert replay_users[1]["content"][0] == {"type": "text", "text": "RPC_IMAGE_RECOVERY"}, replay_users
+        assert replay_users[1]["content"][1]["type"] == "image_url", replay_users
+        assert not any(marker in json.dumps(requests[-1]) for marker in ("REJECTED_PICTURE", "RETURNED_STEERING_PICTURE", "RETURNED_FOLLOW_UP_PICTURE"))
+        print("Ion image input, replay, terminal, RPC custody/cancel/reopen, withheld-result truth and typed summary images: OK")
     finally:
         server.shutdown()
         server.server_close()
