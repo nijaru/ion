@@ -551,15 +551,29 @@ impl Agent {
         };
         let GeneratedResponse { response, route } =
             generate_with_retry(&self.service, &request, stop, &mut |_| {}).await?;
-        if !matches!(response.termination, ResponseTermination::Completed)
-            || response.message.role != Role::Assistant
-            || response
-                .message
-                .content
-                .iter()
-                .any(|part| !matches!(part, Content::Text(_) | Content::Thinking(_)))
+        if let ResponseTermination::Incomplete(reason) = &response.termination {
+            let reason = match reason {
+                IncompleteReason::MaxOutputTokens => "model output limit reached",
+                IncompleteReason::ContextLength => "model context limit reached",
+                IncompleteReason::ContentFilter => "provider content filter interrupted response",
+                IncompleteReason::Other(_) => "provider ended response before completion",
+            };
+            return Err(AgentError::InvalidSummary(reason));
+        }
+        if response.message.role != Role::Assistant {
+            return Err(AgentError::InvalidSummary(
+                "response is not an assistant message",
+            ));
+        }
+        if response
+            .message
+            .content
+            .iter()
+            .any(|part| !matches!(part, Content::Text(_) | Content::Thinking(_)))
         {
-            return Err(AgentError::InvalidSummary);
+            return Err(AgentError::InvalidSummary(
+                "response contains non-text content",
+            ));
         }
         let summary = response
             .message
@@ -572,7 +586,9 @@ impl Agent {
             .collect::<Vec<_>>()
             .join("\n");
         if summary.trim().is_empty() {
-            return Err(AgentError::InvalidSummary);
+            return Err(AgentError::InvalidSummary(
+                "response contains no summary text",
+            ));
         }
         if stop.is_cancelled() {
             return Err(AgentError::Cancelled);
@@ -1251,8 +1267,8 @@ pub enum AgentError {
         "model input exceeds the context or request-size limit after available compaction; shorten the current input or, for a context-window limit, select a larger-context model"
     )]
     ContextTooLarge,
-    #[error("model returned an invalid context summary")]
-    InvalidSummary,
+    #[error("model returned an invalid context summary: {0}")]
+    InvalidSummary(&'static str),
     #[error("model did not return a complete, nonempty assistant response")]
     IncompleteModelResponse,
     #[error("model returned continuation material for another provider")]
@@ -1287,7 +1303,9 @@ impl AgentError {
             Self::Cancelled => TurnEndReason::Cancelled,
             Self::Provider(error) => TurnEndReason::Failed(format!("provider: {:?}", error.kind)),
             Self::ContextTooLarge => TurnEndReason::Failed("context_too_large".into()),
-            Self::InvalidSummary => TurnEndReason::Failed("invalid_summary".into()),
+            Self::InvalidSummary(reason) => {
+                TurnEndReason::Failed(format!("invalid_summary: {reason}"))
+            }
             Self::IncompleteModelResponse => {
                 TurnEndReason::Failed("incomplete_model_response".into())
             }
@@ -4694,6 +4712,117 @@ mod tests {
         assert_eq!(session.view().unwrap().compacted_through, None);
         drop(session);
         std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[tokio::test]
+    async fn invalid_summary_reports_cause_without_changing_committed_context() {
+        let cases = [
+            (
+                ResponseTermination::Incomplete(IncompleteReason::MaxOutputTokens),
+                Role::Assistant,
+                vec![Content::Text("partial".into())],
+                "model output limit reached",
+            ),
+            (
+                ResponseTermination::Incomplete(IncompleteReason::ContextLength),
+                Role::Assistant,
+                vec![Content::Text("partial".into())],
+                "model context limit reached",
+            ),
+            (
+                ResponseTermination::Incomplete(IncompleteReason::ContentFilter),
+                Role::Assistant,
+                vec![Content::Text("partial".into())],
+                "provider content filter interrupted response",
+            ),
+            (
+                ResponseTermination::Incomplete(IncompleteReason::Other(
+                    "untrusted\u{001b}provider detail".into(),
+                )),
+                Role::Assistant,
+                vec![Content::Text("partial".into())],
+                "provider ended response before completion",
+            ),
+            (
+                ResponseTermination::Completed,
+                Role::User,
+                vec![Content::Text("not an assistant".into())],
+                "response is not an assistant message",
+            ),
+            (
+                ResponseTermination::Completed,
+                Role::Assistant,
+                vec![Content::ToolCall(ToolCall {
+                    id: "invalid-summary-call".into(),
+                    name: "write".into(),
+                    arguments: serde_json::json!({"path":"unexpected","content":"effect"}),
+                    raw_arguments: None,
+                })],
+                "response contains non-text content",
+            ),
+            (
+                ResponseTermination::Completed,
+                Role::Assistant,
+                vec![
+                    Content::Thinking("not summary text".into()),
+                    Content::Text(" \n".into()),
+                ],
+                "response contains no summary text",
+            ),
+        ];
+        for (termination, role, content, reason) in cases {
+            let root =
+                std::env::temp_dir().join(format!("ion-summary-invalid-{}", uuid::Uuid::now_v7()));
+            std::fs::create_dir(&root).unwrap();
+            let session =
+                Arc::new(CodingSession::create(root.join("session.sqlite"), &root).unwrap());
+            let (turn, _) = session.begin_turn("task".into(), model()).unwrap();
+            session
+                .record_assistant(
+                    turn,
+                    Message {
+                        role: Role::Assistant,
+                        content: vec![Content::Text("done".into())],
+                        provider_replay: None,
+                    },
+                    Usage::unknown(),
+                    false,
+                )
+                .unwrap();
+            let before = session.view().unwrap();
+            let context = session.context_messages().unwrap();
+            let scripts = Arc::new(ScriptedModelService::new([Script::Stream(vec![
+                ModelStreamEvent::Completed(ModelResponse {
+                    message: Message {
+                        role,
+                        content,
+                        provider_replay: None,
+                    },
+                    usage: Usage::unknown(),
+                    termination,
+                    returned_model: None,
+                }),
+            ])]));
+            let agent = Agent::new(scripts, Arc::new(TestTools::new(&root)), model());
+            let error = agent
+                .compact(session.clone(), CancellationToken::new(), |_| {})
+                .await
+                .unwrap_err();
+            assert!(matches!(error, AgentError::InvalidSummary(actual) if actual == reason));
+            assert_eq!(
+                error.to_string(),
+                format!("model returned an invalid context summary: {reason}")
+            );
+            assert_eq!(
+                error.end_reason(),
+                TurnEndReason::Failed(format!("invalid_summary: {reason}"))
+            );
+            assert_eq!(session.context_messages().unwrap(), context);
+            assert_eq!(session.view().unwrap().entries, before.entries);
+            session.shutdown().await.unwrap();
+            drop(session);
+            std::fs::remove_dir_all(root).unwrap();
+        }
     }
 
     #[tokio::test]
