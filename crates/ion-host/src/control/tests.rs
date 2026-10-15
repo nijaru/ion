@@ -10,6 +10,8 @@ use tokio::sync::{Notify, Semaphore};
 
 #[path = "preparation_tests.rs"]
 mod preparation;
+#[path = "snapshot_tests.rs"]
+mod snapshots;
 
 // Deliberately neither Clone, Deserialize, nor Sync: UI/protocol metadata is
 // moved, never cloned into executors or model content.
@@ -305,7 +307,7 @@ async fn acceptance_custody_precedes_progress_and_steering_uses_fifo_ids() {
         let custody = lock(&fixture.control.custody);
         for id in [root, first, second] {
             let input = &custody.inputs[&id];
-            assert!(input.accepted);
+            assert!(input.acceptance.is_some());
             assert!(input.original.is_none());
             assert!(input.inflight.is_none());
         }

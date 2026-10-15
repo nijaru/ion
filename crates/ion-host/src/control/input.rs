@@ -12,7 +12,11 @@ impl<M: Serialize + Send + 'static> SessionControl<M> {
             preparing.request_stop();
         }
         let mut custody = lock(&self.custody);
-        for input in custody.inputs.values_mut().filter(|input| !input.accepted) {
+        for input in custody
+            .inputs
+            .values_mut()
+            .filter(|input| input.acceptance.is_none())
+        {
             input.withdrawn = Some(ReturnReason::Stopped);
         }
         drop(custody);
@@ -25,7 +29,10 @@ impl<M: Serialize + Send + 'static> SessionControl<M> {
         let mut custody = lock(&self.custody);
         let active_root = self.active.as_ref().and_then(|active| active.root);
         for (&id, input) in &mut custody.inputs {
-            if !input.accepted && input.delivery != Delivery::Start && active_root != Some(id) {
+            if input.acceptance.is_none()
+                && input.delivery != Delivery::Start
+                && active_root != Some(id)
+            {
                 input.withdrawn = Some(ReturnReason::Cleared);
             }
         }
@@ -50,7 +57,7 @@ impl<M: Serialize + Send + 'static> SessionControl<M> {
             let mut custody = lock(&self.custody);
             let (&id, input) = custody.inputs.iter_mut().rev().find(|(id, input)| {
                 input.delivery == Delivery::FollowUp
-                    && !input.accepted
+                    && input.acceptance.is_none()
                     && input.withdrawn.is_none()
                     && active_root != Some(**id)
             })?;
@@ -92,7 +99,7 @@ impl<M: Serialize + Send + 'static> SessionControl<M> {
             .inputs
             .iter()
             .filter_map(|(&id, input)| {
-                (!input.accepted
+                (input.acceptance.is_none()
                     && input.withdrawn.is_some()
                     && !custody.steering_order.contains(&id)
                     && self
@@ -124,7 +131,7 @@ impl<M: Serialize + Send + 'static> SessionControl<M> {
             .iter()
             .filter_map(|(&id, input)| match input.delivery {
                 Delivery::Steer(target)
-                    if !input.accepted
+                    if input.acceptance.is_none()
                         && self.current_operation() != Some(target)
                         && self
                             .preparing
@@ -143,7 +150,7 @@ impl<M: Serialize + Send + 'static> SessionControl<M> {
         // Preparation overlaps Core execution and never occupies Core's slot.
         if self.preparing.is_none()
             && let Some((&id, input)) = custody.inputs.iter().find(|(_, input)| {
-                !input.accepted
+                input.acceptance.is_none()
                     && input.prepared.is_none()
                     && input.expanded.is_some()
                     && input.withdrawn.is_none()
@@ -192,7 +199,7 @@ impl<M: Serialize + Send + 'static> SessionControl<M> {
                 .iter()
                 .filter_map(|(&id, input)| {
                     (input.delivery == Delivery::Steer(active.id)
-                        && !input.accepted
+                        && input.acceptance.is_none()
                         && !custody.steering_order.contains(&id))
                     .then_some(id)
                 })
@@ -254,6 +261,7 @@ impl<M: Serialize + Send + 'static> SessionControl<M> {
                 self.starting = None;
                 self.active = Some(Active {
                     id: operation,
+                    turn: None,
                     root: Some(root),
                     work: Work::Turn(work),
                     inbox,

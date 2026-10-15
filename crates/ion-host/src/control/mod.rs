@@ -21,6 +21,8 @@ use crate::{SessionSetup, image_input::ImageSource};
 
 mod admission;
 mod input;
+mod snapshot;
+pub use snapshot::*;
 #[cfg(test)]
 mod tests;
 mod types;
@@ -44,7 +46,7 @@ struct Input<M> {
     inflight: Option<InputReservation>,
     instructions: String,
     expanded: Option<String>,
-    accepted: bool,
+    acceptance: Option<InputAcceptance>,
     withdrawn: Option<ReturnReason>,
 }
 struct Custody<M> {
@@ -69,7 +71,7 @@ impl<M> Custody<M> {
             .inputs
             .get_mut(&id)
             .expect("accepted input retains Host custody");
-        input.accepted = true;
+        input.acceptance = Some(InputAcceptance { operation, turn });
         input.withdrawn = None;
         // Crucially before any fallible/provisional publication. Metadata remains
         // separately budgeted until reliable settlement delivery.
@@ -89,7 +91,7 @@ impl<M> Custody<M> {
             .inputs
             .remove(&id)
             .expect("returned input retains Host custody");
-        debug_assert!(!input.accepted);
+        debug_assert!(input.acceptance.is_none());
         self.updates
             .push_back(ControlUpdate::Returned(ReturnedInput {
                 id,
@@ -138,6 +140,7 @@ fn turn_observer<M: Send + 'static>(
 
 struct Active<M> {
     id: OperationId,
+    turn: Option<u64>,
     root: Option<InputId>,
     work: Work,
     inbox: Arc<SteeringInbox<InputId>>,
@@ -165,7 +168,7 @@ impl Work {
     }
 }
 
-/// One owner per client. All asynchronous waits borrow retained handles; dropping
+/// One controlling owner, independent of passive clients. All asynchronous waits borrow retained handles; dropping
 /// a next/shutdown future cannot discard a transition, error, or recoverable input.
 pub struct SessionControl<M = ()> {
     pub(crate) setup: SessionSetup,
@@ -179,8 +182,10 @@ pub struct SessionControl<M = ()> {
     observer: ControlObserver,
     stop_requested: bool,
     closed: bool,
-    shutdown_updates: Vec<ControlUpdate<M>>,
     cleanup_errors: Vec<CodingSessionError>,
+    owner: uuid::Uuid,
+    snapshot_sequence: u64,
+    shutdown_complete: bool,
 }
 fn lock<M>(custody: &Mutex<Custody<M>>) -> MutexGuard<'_, Custody<M>> {
     custody
@@ -206,8 +211,10 @@ impl<M: Serialize + Send + 'static> SessionControl<M> {
             },
             stop_requested: false,
             closed: false,
-            shutdown_updates: Vec::new(),
             cleanup_errors: Vec::new(),
+            owner: uuid::Uuid::now_v7(),
+            snapshot_sequence: 0,
+            shutdown_complete: false,
         }
     }
 
@@ -230,11 +237,14 @@ impl<M: Serialize + Send + 'static> SessionControl<M> {
     /// Derive client status from this owner rather than parallel frontend flags.
     pub fn state(&self) -> ControlState {
         let custody = lock(&self.custody);
+        self.state_with(&custody)
+    }
+    fn state_with(&self, custody: &Custody<M>) -> ControlState {
         let active_root = self.active.as_ref().and_then(|active| active.root);
         let mut pending_steering = 0;
         let mut pending_follow_ups = 0;
         for (&id, input) in &custody.inputs {
-            if input.accepted || input.withdrawn.is_some() || active_root == Some(id) {
+            if input.acceptance.is_some() || input.withdrawn.is_some() || active_root == Some(id) {
                 continue;
             }
             match input.delivery {
@@ -244,14 +254,25 @@ impl<M: Serialize + Send + 'static> SessionControl<M> {
             }
         }
         ControlState {
-            operation: self.active.as_ref().map(|active| OperationState {
-                id: active.id,
-                kind: match active.work {
-                    Work::Turn(_) => OperationKind::Turn,
-                    Work::Compact(_) => OperationKind::Compact,
-                    Work::Shell(_) => OperationKind::Shell,
-                },
-            }),
+            operation: self
+                .active
+                .as_ref()
+                .map(|active| OperationState {
+                    id: active.id,
+                    turn: self.active_turn(active, custody),
+                    kind: match active.work {
+                        Work::Turn(_) => OperationKind::Turn,
+                        Work::Compact(_) => OperationKind::Compact,
+                        Work::Shell(_) => OperationKind::Shell,
+                    },
+                })
+                .or_else(|| {
+                    self.starting.map(|(_, id)| OperationState {
+                        id,
+                        turn: None,
+                        kind: OperationKind::Turn,
+                    })
+                }),
             busy: self.active.is_some()
                 || self.starting.is_some()
                 || self.preparing.is_some()
@@ -261,7 +282,16 @@ impl<M: Serialize + Send + 'static> SessionControl<M> {
             pending_follow_ups,
             stop_requested: self.stop_requested,
             closed: self.closed,
+            shutdown_complete: self.shutdown_complete,
         }
+    }
+    fn active_turn(&self, active: &Active<M>, custody: &Custody<M>) -> Option<u64> {
+        active.turn.or_else(|| {
+            active
+                .root
+                .and_then(|id| custody.inputs.get(&id))
+                .and_then(|input| input.acceptance.map(|accepted| accepted.turn))
+        })
     }
     pub(crate) fn ensure_replaceable(&self) -> Result<()> {
         ensure!(!self.closed, "session control is closed");
@@ -339,6 +369,7 @@ impl<M: Serialize + Send + 'static> SessionControl<M> {
         }
         let returned = active.inbox.take_uncommitted();
         let mut custody = lock(&self.custody);
+        let turn = self.active_turn(&active, &custody);
         for input in returned {
             let (_, id, reservation) = input.into_parts();
             drop(reservation);
@@ -355,7 +386,7 @@ impl<M: Serialize + Send + 'static> SessionControl<M> {
         let accepted_ids: Vec<_> = custody
             .inputs
             .iter()
-            .filter_map(|(&id, input)| input.accepted.then_some(id))
+            .filter_map(|(&id, input)| input.acceptance.is_some().then_some(id))
             .collect();
         let mut accepted = Vec::new();
         for id in accepted_ids {
@@ -363,6 +394,9 @@ impl<M: Serialize + Send + 'static> SessionControl<M> {
             accepted.push(AcceptedMetadata {
                 id,
                 metadata: input.metadata,
+                acceptance: input
+                    .acceptance
+                    .expect("accepted metadata retains its Turn"),
                 reservation: Some(input.reservation),
             });
         }
@@ -379,7 +413,11 @@ impl<M: Serialize + Send + 'static> SessionControl<M> {
             );
         }
         if outcome.failed() {
-            for input in custody.inputs.values_mut().filter(|input| !input.accepted) {
+            for input in custody
+                .inputs
+                .values_mut()
+                .filter(|input| input.acceptance.is_none())
+            {
                 input.withdrawn = Some(ReturnReason::Stopped);
             }
             if let Some((_, preparation)) = &self.preparing {
@@ -394,6 +432,7 @@ impl<M: Serialize + Send + 'static> SessionControl<M> {
             .updates
             .push_back(ControlUpdate::Settled(Settlement {
                 operation: active.id,
+                turn,
                 outcome,
                 stop_requested: self.stop_requested,
                 accepted,
@@ -407,7 +446,7 @@ impl<M: Serialize + Send + 'static> SessionControl<M> {
     pub async fn next(&mut self) -> ControlUpdate<M> {
         loop {
             self.advance();
-            if let Some(update) = lock(&self.custody).pop() {
+            if let Some(update) = self.take_update() {
                 return update;
             }
             if !self.is_busy() {
@@ -421,28 +460,39 @@ impl<M: Serialize + Send + 'static> SessionControl<M> {
         }
     }
 
-    pub async fn shutdown(&mut self) -> ShutdownReport<M> {
+    /// Close admission and request stop without waiting or consuming results.
+    pub fn request_shutdown(&mut self) {
         self.closed = true;
         self.request_stop();
-        loop {
+    }
+
+    /// Join shutdown without consuming recovery results or cleanup failures.
+    /// Cancelling this wait retains closure, handles and all lifecycle custody.
+    pub async fn join_shutdown(&mut self) {
+        self.request_shutdown();
+        while self.is_busy() {
             self.advance();
-            while let Some(update) = lock(&self.custody).pop() {
-                self.shutdown_updates.push(update);
-            }
-            if !self.is_busy() {
-                break;
-            }
-            if let Some(observation) = self.drive().await {
-                // Progress is optional during shutdown; reliable lifecycle updates
-                // remain in custody and the committed Session is the resync source.
-                drop(observation);
+            if self.is_busy() {
+                drop(self.drive().await);
             }
         }
-        if let Err(error) = self.setup.session.shutdown().await {
-            self.cleanup_errors.push(error);
+        if !self.shutdown_complete {
+            if let Err(error) = self.setup.session.shutdown().await {
+                self.cleanup_errors.push(error);
+            }
+            self.shutdown_complete = true;
+        }
+    }
+
+    /// Join, then explicitly transfer all remaining recovery results to the caller.
+    pub async fn shutdown(&mut self) -> ShutdownReport<M> {
+        self.join_shutdown().await;
+        let mut updates = Vec::new();
+        while let Some(update) = self.take_update() {
+            updates.push(update);
         }
         ShutdownReport {
-            updates: std::mem::take(&mut self.shutdown_updates),
+            updates,
             cleanup_errors: std::mem::take(&mut self.cleanup_errors),
         }
     }

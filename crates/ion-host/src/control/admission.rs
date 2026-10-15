@@ -45,7 +45,7 @@ impl<M: Serialize + Send + 'static> SessionControl<M> {
                         inflight: None,
                         instructions: self.setup.resources.instructions().to_owned(),
                         expanded,
-                        accepted: false,
+                        acceptance: None,
                         withdrawn: None,
                     },
                 );
@@ -122,7 +122,7 @@ impl<M: Serialize + Send + 'static> SessionControl<M> {
                 inflight: Some(inflight),
                 instructions: instructions.clone(),
                 expanded: None,
-                accepted: false,
+                acceptance: None,
                 withdrawn: None,
             },
         );
@@ -155,6 +155,7 @@ impl<M: Serialize + Send + 'static> SessionControl<M> {
                 self.stop_requested = false;
                 self.active = Some(Active {
                     id: operation,
+                    turn: Some(receipt.turn),
                     root: Some(id),
                     work: Work::Turn(work),
                     inbox,
@@ -234,6 +235,7 @@ impl<M: Serialize + Send + 'static> SessionControl<M> {
         self.stop_requested = false;
         self.active = Some(Active {
             id: operation,
+            turn: Some(point.turn),
             root: None,
             work: Work::Turn(work),
             inbox,
@@ -427,6 +429,7 @@ impl<M: Serialize + Send + 'static> SessionControl<M> {
         self.stop_requested = false;
         self.active = Some(Active {
             id,
+            turn: None,
             root: None,
             work,
             inbox: Arc::new(SteeringInbox::new(

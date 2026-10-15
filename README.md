@@ -803,7 +803,7 @@ contracts are not all implemented:
 | Application setup | Caller-owned model/tool/instruction configuration, workspace-free Sessions and explicit shell/local-image authority. Opt-in continuation checks a saved authority reference and declarations. | Changed-authority reconciliation. Applications must reconstruct and attest live bindings on reopen; the reference is not a credential or sandbox. |
 | Durability | SQLite conversation/effect history, conservative recovery, restart-safe direct admission and explicit same-Turn continuation through the Rust SDK. | Durable pending queues, wire-protocol delivery IDs and automatic restart/continuation. Coding CLI/TUI/RPC submissions do not opt in to continuation. |
 | Delegation | Independent Sessions, conversation forks and Code Mode nested tool calls. | Managed child-agent relationships and foreground/background supervision. Forks share the live workspace. |
-| Remote use | Foreground stdio RPC and passive, lossy progress observation. | An authenticated network service or complete attachable state API. A bridge must retain the owner independently; RPC EOF stops/joins work. |
+| Remote use | Foreground stdio RPC, lossy progress and complete pull snapshots through shared control. A service embedding retains/drives the owner independently of connections. | No built-in authenticated network server, reliable activity replay or durable queue/metadata recovery. RPC EOF still stops/joins work. |
 
 Common coding workflows are implemented, but Pi-level daily-driver reliability
 and terminal usability are not yet qualified. Selected live coding tasks have
@@ -966,9 +966,55 @@ Drain returned inputs and settlements before replacing a Session or model.
 and reconcile committed Session facts, rather than joining a surviving suffix to
 old deltas. Reader detachment does not cancel execution; a service can retain
 control while clients detach. This is a progress stream, not a complete
-snapshot/cursor-based remote state API. Foreground clients explicitly stop/join
-on I/O loss.
+snapshot API by itself. Foreground clients explicitly stop/join on I/O loss.
 MCP connection cleanup remains a separate `McpTools::shutdown()` obligation.
+
+For a service, retain `SessionControl` outside connection scope and drive
+`maintain()` while busy. It advances the same preparation, joining and follow-ups
+as `next()`, but keeps reliable updates and their capacity reservations in Host
+custody. Passive readers cannot acknowledge or evict results. `take_update()` (or
+`next()`) explicitly transfers originals/metadata and settlements to the controlling
+application and releases capacity; it is not a transport acknowledgement. If that
+application promises later recovery, it must retain or persist the transfer.
+Full custody refuses new admission, not stop/join. There is no receipt ring that
+silently expires returned originals, nor unlimited/cross-restart metadata retention.
+
+After authorizing inspection, call `attach(project_metadata)` for a complete
+`ControlSnapshot` and a passive observer, registered before the read. `snapshot()`
+refreshes the view without consuming results. It includes committed Session facts,
+retained operation/preparation/queue state, pending withdrawal/acknowledgement,
+reliable returns/settlements and cleanup failures. Projection borrows metadata;
+`M` needs neither Clone, Sync nor Deserialize. These privileged views include raw
+images, opaque replay and private shell context: **do not serialize them blindly
+to a network**. Authorize the full Session/queue scope and select disclosure.
+
+`SnapshotCursor` identifies the live owner and Session, orders replacement reads
+and records their committed fact count. A new owner has a new epoch, even after
+reopening the same Session. Custody is sampled before committed facts: all Host
+acknowledgements are covered, but facts may be ahead of callback/join processing.
+An in-flight input is not proof of absent admission; a retained task is not proof
+it is physically running. This is a causal view, not an atomic Core/Host transaction.
+Replace the entire snapshot; its cursor does not order activity deltas. Lag,
+reconnect or an owner/Session change requires a fresh view, never suffix-splicing.
+Bound concurrent full-view requests: history/materialization has no aggregate
+memory quota. Keep transport writes out of the owner driver.
+
+`request_shutdown()` closes admission and requests stop synchronously.
+`join_shutdown()` finishes cleanup but retains results/failures for inspection;
+`state().shutdown_complete` marks completion of that protocol, not error-free
+cleanup or remote quiescence. Cancelling its wait retains custody. `shutdown()`
+also transfers the remaining updates/errors to its caller.
+
+The credential-free [service example](crates/ion-app/examples/service.rs) exercises
+late join, permission denial, slow/dropped readers, gaps, reconnect, explicit result
+retention, stop and joined shutdown through bounded in-process transport requests:
+
+```sh
+cargo run --locked -p ion --example service -- "$(mktemp -d)"
+```
+
+It is synthetic SDK qualification, not a network authentication implementation,
+a mandatory daemon or evidence of service scale or live-model adherence.
 
 For lower-level integration, `ion-core::CodingAgent` and `CodingSession` expose
 retained `Operation` handles and abstract model/tool contracts;

@@ -257,6 +257,12 @@ async fn worker(root: &Path, mode: &str) {
             let resumed = control
                 .resume_turn(saved.point, "continuation".into())
                 .unwrap();
+            let snapshot = control.snapshot(String::clone).unwrap();
+            assert_eq!(
+                snapshot.operation_metadata,
+                Some((resumed.operation, "continuation".into()))
+            );
+            assert_eq!(snapshot.state.operation.unwrap().turn, Some(1));
             assert_eq!(resumed.point.turn, 1);
             assert!(resumed.point.checkpoint > saved.point.checkpoint);
             assert!(

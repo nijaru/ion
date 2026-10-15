@@ -27,11 +27,13 @@ jobs:
       - run: cargo clippy --locked --workspace --all-targets --all-features -- -D warnings
       - run: cargo test --locked --workspace
       - name: Build client smoke binaries
-        run: cargo build --locked -p ion --bins --example embedded --example restricted
+        run: cargo build --locked -p ion --bins --example embedded --example restricted --example service
       - name: Restricted application smoke
         run: target/debug/examples/restricted "$(mktemp -d)"
       - name: Explicit Turn recovery SDK smoke
         run: python3 scripts/smoke_recovery.py
+      - name: Retained service attachment SDK smoke
+        run: target/debug/examples/service "$(mktemp -d)"
       - name: Embedded SDK custody smoke
         run: python3 scripts/smoke_embedded.py
       - name: Install native-scrollback test terminal

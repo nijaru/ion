@@ -24,18 +24,20 @@ pub enum Delivery {
 }
 
 /// Local control activity, not a durable execution-start or acceptance fact.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
 pub enum OperationKind {
     Turn,
     Compact,
     Shell,
 }
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
 pub struct OperationState {
     pub id: OperationId,
+    /// Acknowledged logical Turn; None is not proof of absent admission.
+    pub turn: Option<u64>,
     pub kind: OperationKind,
 }
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
 pub struct ControlState {
     pub operation: Option<OperationState>,
     pub busy: bool,
@@ -43,7 +45,9 @@ pub struct ControlState {
     pub pending_steering: usize,
     pub pending_follow_ups: usize,
     pub stop_requested: bool,
+    /// Admission closure, not proof of completed cleanup.
     pub closed: bool,
+    pub shutdown_complete: bool,
 }
 
 /// Prepared messages are literal: only Prompt performs resource expansion.
@@ -101,7 +105,7 @@ impl<M> std::error::Error for RejectedInput<M> {
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
 pub enum InputPhase {
     Preparing,
     Queued,
@@ -127,6 +131,7 @@ pub struct ReturnedInput<M> {
 }
 pub struct AcceptedMetadata<M> {
     pub id: InputId,
+    pub acceptance: super::InputAcceptance,
     pub metadata: M,
     pub(super) reservation: Option<InputReservation>,
 }
@@ -148,6 +153,7 @@ impl OperationOutcome {
 
 pub struct Settlement<M> {
     pub operation: OperationId,
+    pub turn: Option<u64>,
     pub outcome: OperationOutcome,
     pub stop_requested: bool,
     /// Root and absorbed steering metadata in admission order.

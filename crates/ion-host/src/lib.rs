@@ -36,10 +36,12 @@ pub use application::{
 pub use auth::{CredentialStatus, CredentialStore};
 pub use binding::SessionSetup;
 pub use control::{
-    AcceptedMetadata, ControlObserver, ControlState, ControlUpdate, Delivery, InputId, InputPhase,
-    Observation, OperationId, OperationKind, OperationOutcome, OperationState, RecoveryAdmission,
-    RejectedInput, RequestAdmission, ReturnReason, ReturnedInput, SessionControl, Settlement,
-    ShutdownReport, UserInput,
+    AcceptedMetadata, ControlObserver, ControlSnapshot, ControlState, ControlUpdate, Delivery,
+    InputAcceptance, InputCustodyPhase, InputId, InputPhase, InputSnapshot, Observation,
+    OperationId, OperationKind, OperationOutcome, OperationState, OutcomeSnapshot,
+    RecoveryAdmission, RejectedInput, RequestAdmission, ReturnReason, ReturnSnapshot,
+    ReturnedInput, SessionControl, Settlement, ShutdownReport, SnapshotCursor, UpdateSnapshot,
+    UserInput,
 };
 pub use credentials::{CredentialResolutionError, CredentialResolver};
 pub use local_tools::LocalTools;
