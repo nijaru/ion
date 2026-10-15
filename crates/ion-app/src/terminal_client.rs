@@ -839,10 +839,7 @@ impl Frontend {
         let same_session = self.history_session.as_ref() == Some(&session_path);
         if !same_session {
             let had_previous_session = self.history_session.is_some();
-            let label = session_path.file_stem().map_or_else(
-                || "session".into(),
-                |stem| stem.to_string_lossy().into_owned(),
-            );
+            let label = session.id().to_string();
             let tail = resume_history_tail(&history.items);
             self.history_published_items = tail.start;
             self.pending_history_banner = if !history.items.is_empty() {

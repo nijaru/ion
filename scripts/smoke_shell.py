@@ -107,7 +107,8 @@ def terminal_failure_settles_operation(workspace, env, mode, coding, fault):
             # now fails. That error must not mask the terminal's fatal fault.
             with sqlite3.connect(session) as connection:
                 saved_entry = connection.execute("SELECT seq, body FROM entries ORDER BY seq LIMIT 1").fetchone()
-                connection.execute("UPDATE entries SET body = ? WHERE seq = ?", (b"invalid entry", saved_entry[0]))
+                # JSON indexes validate syntax; a scalar still corrupts the typed fact.
+                connection.execute("UPDATE entries SET body = ? WHERE seq = ?", (b'"invalid entry"', saved_entry[0]))
         if fault.startswith("output"):
             os.close(output_master)
             output_master = None

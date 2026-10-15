@@ -115,6 +115,7 @@ fn copy_uses_the_last_completed_answer() {
         termination: ion_ai::ResponseTermination::Completed,
     };
     let view = SessionView {
+        id: Default::default(),
         cwd: Some(PathBuf::from("/tmp")),
         name: None,
         entries: vec![

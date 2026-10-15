@@ -485,14 +485,8 @@ async fn run_cli(cli: Cli) -> Result<()> {
                 let source = CodingSession::open(&path)?;
                 let target = catalog.new_path()?;
                 let cloned = source.clone_to(&target)?;
-                let id = cloned
-                    .path()
-                    .file_stem()
-                    .context("cloned session has no ID")?;
-                print_stdout(format_args!(
-                    "Cloned session as {}",
-                    metadata_field(&id.to_string_lossy())
-                ))?;
+                let id = cloned.id().to_string();
+                print_stdout(format_args!("Cloned session as {}", metadata_field(&id)))?;
                 return Ok(());
             }
             if let Some(Action::Fork { turn, after }) = &action {
@@ -507,14 +501,8 @@ async fn run_cli(cli: Cli) -> Result<()> {
                         ForkPoint::BeforeTurn(*turn)
                     },
                 )?;
-                let id = fork
-                    .path()
-                    .file_stem()
-                    .context("forked session has no ID")?;
-                print_stdout(format_args!(
-                    "Forked session as {}",
-                    metadata_field(&id.to_string_lossy())
-                ))?;
+                let id = fork.id().to_string();
+                print_stdout(format_args!("Forked session as {}", metadata_field(&id)))?;
                 return Ok(());
             }
             if matches!(action, Some(Action::Compact)) {

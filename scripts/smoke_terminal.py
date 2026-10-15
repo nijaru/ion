@@ -74,7 +74,7 @@ def drain_terminal(fd, output):
 
 
 def exercise_unicode_resume(workspace, env, target, mode):
-    """Discover and select a UTF-8 filename through the actual /resume picker."""
+    """Select a Unicode-named Session after its database filename changes."""
     master, slave = pty.openpty()
     fcntl.ioctl(slave, termios.TIOCSWINSZ, struct.pack("HHHH", 30, 240, 0, 0))
 
@@ -378,7 +378,7 @@ with tempfile.TemporaryDirectory(prefix="ion-terminal-") as temporary:
                     sent_clone = True
                 if sent_clone and b"Cloned conversation as" in output and not sent_controls:
                     time.sleep(0.2)
-                    os.write(master, b"/name Smoke repair\r")
+                    os.write(master, "/name Smoke repair 01234567890🦀\r".encode())
                     time.sleep(0.2)
                     os.write(master, b"/new\r")
                     time.sleep(0.2)
@@ -458,11 +458,15 @@ with tempfile.TemporaryDirectory(prefix="ion-terminal-") as temporary:
             # The terminal has exited and all inspect/export processes have
             # settled: rename the owned completed Session, never copy a live
             # SQLite main file away from its WAL.
-            saved = next((work / "state").rglob(f"{session_id}.sqlite"))
+            def logical_id(path):
+                with sqlite3.connect(path) as connection:
+                    return json.loads(connection.execute("SELECT header FROM session WHERE id=1").fetchone()[0])["id"]
+            saved = next(path for path in (work / "state").rglob("*.sqlite") if logical_id(path) == session_id)
             renamed = saved.with_name("01234567890🦀.sqlite")
             saved.rename(renamed)
             unicode_listing = subprocess.run([binary, "--cwd", workspace, "sessions"], env=env, check=True, capture_output=True, text=True).stdout
-            assert "01234567890🦀\t" in unicode_listing, unicode_listing
+            assert f"{session_id}\t" in unicode_listing, unicode_listing
+            assert all(line.split("\t", 1)[0] != "01234567890🦀" for line in unicode_listing.splitlines()), "filename became execution identity"
             reopened = subprocess.run([binary, "--cwd", workspace, "--session", renamed, "inspect"], env=env, check=True, capture_output=True)
             assert json.loads(reopened.stdout) == json.loads(inspected.stdout), "filename rename changed Session facts"
             for mode in ("inline", "fullscreen"):

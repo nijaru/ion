@@ -94,16 +94,16 @@ with tempfile.TemporaryDirectory(prefix="ion-fork-") as temporary:
             children = set((work / "state/ion/sessions").rglob("*.sqlite")) - before_paths
             assert len(children) == 1, "failed confirmation lost or duplicated the saved copy"
             saved = children.pop()
-            assert saved.stem != source_id
-            copied = json.loads(ion("--session", saved.stem, "inspect").stdout)
+            copied = json.loads(ion("--session", saved, "inspect").stdout)
+            assert copied["id"] != source_id
             assert [entry["data"]["turn"] for entry in copied["entries"] if entry["kind"] == "turn_started"] == expected_turns
             assert copied["messages"] == expected_messages and copied["unfinished_turn"] is None, copied
             assert copied["last_model"] == source_view["last_model"]
-            reopened = subprocess.Popen([binary, "--cwd", workspace, "--session", saved.stem, "rpc"], env=env, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, bufsize=0)
+            reopened = subprocess.Popen([binary, "--cwd", workspace, "--session", copied["id"], "rpc"], env=env, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, bufsize=0)
             try:
                 assert select.select([reopened.stdout], [], [], 8)[0], "copied Session writer remained leased"
                 ready = json.loads(reopened.stdout.readline())
-                assert ready["type"] == "ready" and ready["session"] == saved.stem, ready
+                assert ready["type"] == "ready" and ready["session"] == copied["id"], ready
                 reopened.stdin.close()
                 assert reopened.wait(timeout=8) == 0, reopened.stderr.read()
             finally:

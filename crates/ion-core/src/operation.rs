@@ -234,13 +234,31 @@ impl OperationOwner {
         E: Send + From<OperationError> + OperationFailure + 'static,
         F: Future<Output = Result<T, E>> + Send + 'static,
     {
-        let runtime = match tokio::runtime::Handle::try_current() {
-            Ok(runtime) => runtime,
-            Err(_) => return Operation::ready(Err(OperationError::RuntimeUnavailable.into())),
-        };
-        let mut idle = match self.try_lock() {
-            Ok(idle) => idle,
-            Err(error) => return Operation::ready(Err(error.into())),
+        match self.start_prepared(stop, || Ok(((), Some(work)))) {
+            Ok(((), Some(operation))) => operation,
+            Ok(((), None)) => unreachable!("ordinary operations always have work"),
+            Err(error) => Operation::ready(Err(error)),
+        }
+    }
+
+    /// Synchronous admission under exclusive custody, before publishing a receipt
+    /// or allowing the task to run. Reconciliation may produce no new task.
+    pub(crate) fn start_prepared<P, T, E, F>(
+        self: &Arc<Self>,
+        stop: CancellationToken,
+        prepare: impl FnOnce() -> Result<(P, Option<F>), E>,
+    ) -> Result<(P, Option<Operation<T, E>>), E>
+    where
+        T: Send + 'static,
+        E: Send + From<OperationError> + OperationFailure + 'static,
+        F: Future<Output = Result<T, E>> + Send + 'static,
+    {
+        let runtime = tokio::runtime::Handle::try_current()
+            .map_err(|_| E::from(OperationError::RuntimeUnavailable))?;
+        let mut idle = self.try_lock().map_err(E::from)?;
+        let (prepared, work) = prepare()?;
+        let Some(work) = work else {
+            return Ok((prepared, None));
         };
         // Reserve while still holding authority, before another runtime thread
         // can poll the task or a preference/replacement can observe it as idle.
@@ -283,14 +301,17 @@ impl OperationOwner {
             task,
             _completion: completion.clone(),
         });
-        Operation {
-            owner: Some(self.clone()),
-            id,
-            stop,
-            completion,
-            joined: false,
-            notified: Some(Box::pin(self.wake.clone().notified_owned())),
-        }
+        Ok((
+            prepared,
+            Some(Operation {
+                owner: Some(self.clone()),
+                id,
+                stop,
+                completion,
+                joined: false,
+                notified: Some(Box::pin(self.wake.clone().notified_owned())),
+            }),
+        ))
     }
 
     fn poll_join(

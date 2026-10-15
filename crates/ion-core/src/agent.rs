@@ -13,11 +13,22 @@ use thiserror::Error;
 use tokio_util::sync::CancellationToken;
 
 use crate::{
+    RequestReceipt, SubmissionRequest,
     generation::{GeneratedResponse, generate_with_retry, refresh_prompt_cache},
     request::{PreparedRequest, RequestStep},
-    session::{ModelContextSnapshot, Session, SessionError, StoredToolActivity, TurnEndReason},
+    session::{
+        ModelContextSnapshot, Session, SessionError, StoredToolActivity, TurnAdmission,
+        TurnEndReason,
+    },
     tool_set::{ToolActivity, ToolDispatch, ToolExecution, ToolSet, ToolSource},
 };
+
+/// A durable receipt, with a new retained operation only for the first admission.
+/// Reconciliation never restarts an accepted Turn, including unfinished work.
+pub struct RequestSubmission {
+    pub receipt: RequestReceipt,
+    pub operation: Option<crate::Operation<String, AgentError>>,
+}
 
 fn contained_observer<F: FnMut(AgentEvent) + Send>(
     mut observe: F,
@@ -681,6 +692,84 @@ impl Agent {
         self.start_submission(session, input, instructions, stop, Some(steering), observe)
     }
 
+    /// Accept a literal message with stable delivery correlation. Only the message
+    /// defines conflicting reuse; redelivery cannot change the original binding.
+    /// An accepted request reconciles even while another operation is active.
+    pub fn submit_request<F, M: Send + 'static>(
+        &self,
+        session: Arc<Session>,
+        request: SubmissionRequest,
+        instructions: String,
+        stop: CancellationToken,
+        steering: Option<Arc<SteeringInbox<M>>>,
+        observe: F,
+    ) -> Result<RequestSubmission, AgentError>
+    where
+        F: FnMut(AgentEvent) + Send + 'static,
+    {
+        let SubmissionRequest { key, input } = request;
+        if let Some(receipt) = session.reconcile_request(&key, &input)? {
+            return Ok(RequestSubmission {
+                receipt,
+                operation: None,
+            });
+        }
+        let mut input = Some(input);
+        let result = session.operations.start_prepared(stop.clone(), || {
+            self.validate_submission(&session, input.as_ref().expect("unconsumed request"), &stop)?;
+            let admission = session.admit_turn(
+                input.take().expect("validated request"),
+                self.model.clone(),
+                Some(key.clone()),
+            )?;
+            let (turn, interrupted) = match admission {
+                TurnAdmission::Existing(receipt) => return Ok((receipt, None)),
+                TurnAdmission::New { turn, interrupted } => (turn, interrupted),
+            };
+            let receipt = RequestReceipt {
+                session: session.id(),
+                key: key.clone(),
+                turn,
+                end: None,
+            };
+            let agent = self.clone();
+            let session = session.clone();
+            Ok((
+                receipt,
+                Some(async move {
+                    let (mut observe, failed) = contained_observer(observe, stop.clone());
+                    let result = agent
+                        .run_admitted(
+                            &session,
+                            (turn, interrupted),
+                            instructions,
+                            stop,
+                            steering.as_deref(),
+                            &mut observe,
+                        )
+                        .await;
+                    observation_result(result, failed.load(std::sync::atomic::Ordering::Relaxed))
+                }),
+            ))
+        });
+        match result {
+            Ok((receipt, operation)) => Ok(RequestSubmission { receipt, operation }),
+            Err(error) => {
+                // Another owner may have committed between the optimistic lookup
+                // and operation reservation. Reconcile without taking its custody.
+                if let Some(input) = input.as_ref()
+                    && let Some(receipt) = session.reconcile_request(&key, input)?
+                {
+                    return Ok(RequestSubmission {
+                        receipt,
+                        operation: None,
+                    });
+                }
+                Err(error)
+            }
+        }
+    }
+
     fn start_submission<F, M: Send + 'static>(
         &self,
         session: Arc<Session>,
@@ -725,11 +814,23 @@ impl Agent {
     where
         F: FnMut(AgentEvent) + Send,
     {
+        self.validate_submission(session, &input, &stop)?;
+        let admission = session.begin_turn_message(input, self.model.clone())?;
+        self.run_admitted(session, admission, instructions, stop, steering, observe)
+            .await
+    }
+
+    fn validate_submission(
+        &self,
+        session: &Session,
+        input: &Message,
+        stop: &CancellationToken,
+    ) -> Result<(), AgentError> {
         if stop.is_cancelled() {
             return Err(AgentError::Cancelled);
         }
         self.validate_reasoning(session.reasoning()?)?;
-        crate::input::validate_input(&input, self.limits)?;
+        crate::input::validate_input(input, self.limits)?;
         if !self.limits.image_input
             && session.context_messages()?.iter().any(|message| {
                 message
@@ -740,7 +841,21 @@ impl Agent {
         {
             return Err(AgentError::ImagesUnsupported);
         }
-        let (turn, interrupted) = session.begin_turn_message(input, self.model.clone())?;
+        Ok(())
+    }
+
+    async fn run_admitted<F, M: Send>(
+        &self,
+        session: &Session,
+        (turn, interrupted): (u64, usize),
+        instructions: String,
+        stop: CancellationToken,
+        steering: Option<&SteeringInbox<M>>,
+        observe: &mut F,
+    ) -> Result<String, AgentError>
+    where
+        F: FnMut(AgentEvent) + Send,
+    {
         observe(AgentEvent::TurnAccepted { turn });
         if interrupted > 0 {
             observe(AgentEvent::InterruptedCalls(interrupted));

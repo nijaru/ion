@@ -75,6 +75,35 @@ impl Application for Restricted {
     }
 }
 
+#[test]
+fn identified_admission_requires_execution_custody_before_commit() {
+    let root = std::env::temp_dir().join(format!("ion-request-runtime-{}", uuid::Uuid::now_v7()));
+    let catalog = SessionCatalog::new(root.clone(), None);
+    let session = Arc::new(CodingSession::create(catalog.new_path().unwrap(), None).unwrap());
+    let application = Arc::new(Restricted {
+        service: Arc::new(ScriptedModelService::new([])),
+        instructions: RwLock::new(Some("Explicit instructions".into())),
+    });
+    let mut control = SessionSetup::new(session.clone(), catalog, application, None, None)
+        .unwrap()
+        .into_control::<String>();
+    let key = ion_core::RequestKey::new("inbox".into(), "not-accepted".into()).unwrap();
+    let input = Message::user_input("original".into(), []);
+    let rejected = control
+        .submit_request(&key, input.clone(), "metadata".into())
+        .err()
+        .unwrap();
+    assert_eq!(rejected.metadata, "metadata");
+    assert!(matches!(rejected.input, UserInput::Message(found) if found == input));
+    assert!(rejected.reason.to_string().contains("Tokio runtime"));
+    assert!(session.request_receipt(&key).unwrap().is_none());
+    assert!(session.view().unwrap().entries.is_empty());
+    assert!(!control.is_busy());
+    drop(control);
+    drop(session);
+    fs::remove_dir_all(root).unwrap();
+}
+
 #[tokio::test]
 async fn workspace_free_application_keeps_its_authority_across_shared_lifecycle() {
     let root = std::env::temp_dir().join(format!("ion-restricted-{}", uuid::Uuid::now_v7()));

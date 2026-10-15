@@ -56,6 +56,19 @@ pub enum UserInput {
     Message(Message),
 }
 
+/// Existing delivery returns this attempt's metadata without taking new custody.
+/// Started means durable admission, unlike ordinary submit's local InputId.
+pub enum RequestAdmission<M> {
+    Started {
+        id: InputId,
+        receipt: ion_core::RequestReceipt,
+    },
+    Existing {
+        receipt: ion_core::RequestReceipt,
+        metadata: M,
+    },
+}
+
 pub struct RejectedInput<M> {
     pub delivery: Delivery,
     pub input: UserInput,

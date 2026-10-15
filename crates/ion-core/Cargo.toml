@@ -18,7 +18,7 @@ sha2 = "0.10.9"
 thiserror.workspace = true
 tokio.workspace = true
 tokio-util.workspace = true
-uuid = { version = "1.24.1", features = ["v7", "serde"] }
+uuid = { version = "1.24.1", features = ["v4", "v7", "serde"] }
 
 [lints]
 workspace = true

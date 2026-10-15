@@ -76,12 +76,7 @@ impl SessionSetup {
         self.resources.instructions()
     }
     pub fn session_id(&self) -> String {
-        self.session
-            .path()
-            .file_stem()
-            .unwrap_or_default()
-            .to_string_lossy()
-            .into_owned()
+        self.session.id().to_string()
     }
     pub fn into_control<M: Serialize + Send + 'static>(self) -> SessionControl<M> {
         SessionControl::from_setup(self)
@@ -184,11 +179,7 @@ impl<M: Serialize + Send + 'static> SessionControl<M> {
         runtime.agent.validate_reasoning(previous.reasoning()?)?;
         let path = self.setup.catalog.new_path()?;
         let session = Arc::new(previous.clone_to(&path)?);
-        let id = path
-            .file_stem()
-            .context("cloned session has no ID")?
-            .to_string_lossy()
-            .into_owned();
+        let id = session.id().to_string();
         self.publish(session, runtime, resources);
         Ok(id)
     }
@@ -215,11 +206,7 @@ impl<M: Serialize + Send + 'static> SessionControl<M> {
         runtime.agent.validate_reasoning(selected_turn.reasoning)?;
         let path = self.setup.catalog.new_path()?;
         let session = Arc::new(previous.fork_to(&path, point)?);
-        let id = path
-            .file_stem()
-            .context("forked session has no ID")?
-            .to_string_lossy()
-            .into_owned();
+        let id = session.id().to_string();
         self.publish(session, runtime, resources);
         Ok(id)
     }

@@ -167,7 +167,7 @@ with tempfile.TemporaryDirectory(prefix="ion-rpc-") as temporary:
             assert read(probe)["type"] == "ready"
             send(probe, {"id": "text-list", "type": "list_sessions"})
             entries = read(probe)["data"]
-            entry = next(item for item in entries if item["id"] == locator)
+            entry = next(item for item in entries if item["id"] == exact["id"])
             assert entry["model"]["model"] == model_id, entry
             send(probe, {"id": "text-inspect", "type": "inspect"})
             assert read(probe)["data"] == exact
@@ -175,10 +175,10 @@ with tempfile.TemporaryDirectory(prefix="ion-rpc-") as temporary:
             probe.stdin.close()
             assert probe.wait(timeout=8) == 0, probe.stderr.read()
         rows = subprocess.run([binary, "--cwd", workspace, "sessions"], env=env, check=True, capture_output=True).stdout.decode()
-        expected = "LOCATOR       雪\t\t1 turn(s)\trpc-text/MODEL       雪\tTEXT_PREVIEW\n"
+        expected = f"{exact['id']}\t\t1 turn(s)\trpc-text/MODEL       雪\tTEXT_PREVIEW\n"
         assert rows == expected, f"plain sessions row integrity fault: {rows!r}"
-        by_locator = json.loads(subprocess.run([binary, "--cwd", workspace, "--session", locator, "inspect"], env=env, check=True, capture_output=True).stdout)
-        assert by_locator == exact
+        by_identity = json.loads(subprocess.run([binary, "--cwd", workspace, "--session", exact["id"], "inspect"], env=env, check=True, capture_output=True).stdout)
+        assert by_identity == exact
         assert selected == "Selected rpc-text/MODEL       雪\n", repr(selected)
         listing = subprocess.run([binary, "models"], env=env, check=True, capture_output=True).stdout.decode()
         assert "rpc-text/MODEL       雪\t" in listing, repr(listing)
@@ -430,7 +430,10 @@ with tempfile.TemporaryDirectory(prefix="ion-rpc-") as temporary:
         inspected = read(child)
         assert inspected["success"] and inspected["data"]["last_model"]["provider"] == "rpc-alt", inspected
         source_before_clone = inspected["data"]
-        database = next((work / "state").rglob(f"{session}.sqlite"))
+        def logical_id(path):
+            with sqlite3.connect(path) as connection:
+                return json.loads(connection.execute("SELECT header FROM session WHERE id=1").fetchone()[0])["id"]
+        database = next(path for path in (work / "state").rglob("*.sqlite") if logical_id(path) == session)
         with sqlite3.connect(database) as connection:
             connection.execute("CREATE TRIGGER refuse_model BEFORE INSERT ON entries BEGIN SELECT RAISE(ABORT, 'injected model publication failure'); END")
         try:

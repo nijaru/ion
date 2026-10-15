@@ -108,6 +108,32 @@ impl<M> Custody<M> {
     }
 }
 
+fn turn_observer<M: Send + 'static>(
+    custody: Arc<Mutex<Custody<M>>>,
+    observations: broadcast::Sender<Observation>,
+    root: InputId,
+    operation: OperationId,
+) -> impl FnMut(AgentEvent) + Send + 'static {
+    move |event| {
+        match &event {
+            AgentEvent::TurnAccepted { turn } => lock(&custody).accept(root, operation, *turn),
+            AgentEvent::SteeringCommitted { turn, .. } => {
+                let mut custody = lock(&custody);
+                let id = custody
+                    .steering_order
+                    .pop_front()
+                    .expect("Core commits controlled FIFO steering");
+                custody.accept(id, operation, *turn);
+            }
+            _ => {}
+        }
+        let _ = observations.send(Observation::Event {
+            operation,
+            event: Arc::new(event),
+        });
+    }
+}
+
 struct Active<M> {
     id: OperationId,
     root: Option<InputId>,

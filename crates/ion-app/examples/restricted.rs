@@ -14,12 +14,12 @@ use ion_ai::{
     Role, Script, ScriptedModelService, ToolCall, ToolSpec, Usage,
 };
 use ion_core::{
-    CodingAgent, CodingSession, CodingToolOutput, CodingToolSource, ToolDefinition, ToolExecutor,
-    ToolRegistration,
+    CodingAgent, CodingSession, CodingToolOutput, CodingToolSource, RequestKey, ToolDefinition,
+    ToolExecutor, ToolRegistration, TurnEndReason,
 };
 use ion_host::{
-    Application, ApplicationRuntime, ControlUpdate, Delivery, OperationOutcome, Resources,
-    SessionCatalog, SessionSetup, UserInput,
+    Application, ApplicationRuntime, ControlUpdate, OperationOutcome, RequestAdmission, Resources,
+    SessionCatalog, SessionSetup,
 };
 use serde_json::json;
 use tokio_util::sync::CancellationToken;
@@ -126,21 +126,31 @@ async fn main() -> Result<()> {
         service: service.clone(),
         counter: counter.clone(),
     });
-    let catalog = SessionCatalog::new(root, None);
+    let catalog = SessionCatalog::new(root.clone(), None);
     let session = Arc::new(CodingSession::create(catalog.new_path()?, None)?);
+    let path = session.path().to_owned();
+    let session_id = session.id();
+    let key = RequestKey::new("counter-app".into(), "delivery-1".into())?;
+    let literal = Message::user_input("Count 🦀e".into(), []);
     let mut control =
-        SessionSetup::new(session, catalog, application, None, None)?.into_control::<()>();
+        SessionSetup::new(session, catalog, application.clone(), None, None)?.into_control::<()>();
     let result: Result<()> = async {
-        control
-            .submit(
-                Delivery::Start,
-                UserInput::Prompt {
-                    text: "Count 🦀e".into(),
-                    images: Vec::new(),
-                },
-                (),
-            )
+        let admission = control
+            .submit_request(&key, literal.clone(), ())
             .map_err(|input| input.reason)?;
+        ensure!(
+            matches!(admission, RequestAdmission::Started { .. }),
+            "first delivery must start work"
+        );
+        ensure!(
+            matches!(
+                control
+                    .submit_request(&key, literal.clone(), ())
+                    .map_err(|input| input.reason)?,
+                RequestAdmission::Existing { .. }
+            ),
+            "redelivery started another operation"
+        );
         loop {
             match control.next().await {
                 ControlUpdate::Settled(settlement) => {
@@ -188,8 +198,34 @@ async fn main() -> Result<()> {
         ));
     }
     result?;
+    drop(control);
+    let reopened = Arc::new(CodingSession::open(path)?);
+    ensure!(reopened.id() == session_id, "logical identity changed");
+    let mut control = SessionSetup::new(
+        reopened,
+        SessionCatalog::new(root, None),
+        application,
+        None,
+        None,
+    )?
+    .into_control::<()>();
+    let admission = control
+        .submit_request(&key, literal, ())
+        .map_err(|input| input.reason)?;
+    ensure!(
+        matches!(admission, RequestAdmission::Existing { receipt, .. } if receipt.session == session_id && receipt.turn == 1 && receipt.end == Some(TurnEndReason::Completed)),
+        "reopen did not reconcile the completed delivery"
+    );
+    ensure!(
+        counter.0.load(Ordering::SeqCst) == 1 && service.requests().len() == 2,
+        "redelivery executed model/tool work"
+    );
+    ensure!(
+        control.shutdown().await.cleanup_errors.is_empty(),
+        "reopened shutdown failed"
+    );
     println!(
-        "restricted application: custom tool executed; no coding tools, resources or workspace inherited"
+        "restricted application: one custom tool effect; durable delivery reconciled after reopen; no coding defaults or workspace"
     );
     Ok(())
 }

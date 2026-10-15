@@ -175,8 +175,9 @@ async fn unawaited_inspection_fault_blocks_parent_success() {
     let (root, session, turn, call) = fixture();
     rusqlite::Connection::open(session.path())
         .unwrap()
+        // Syntactically valid JSON passes derived indexes but is not a SessionEntry.
         .execute(
-            "UPDATE entries SET body='invalid JSON' WHERE json_extract(CAST(body AS TEXT),'$.kind')='child_tool_result'",
+            "UPDATE entries SET body=CAST('{}' AS BLOB) WHERE json_extract(CAST(body AS TEXT),'$.kind')='child_tool_result'",
             [],
         )
         .unwrap();

@@ -1,4 +1,4 @@
-//! The single durable authority for a local coding conversation.
+//! The single durable authority for a Session and its execution facts.
 //! SQLite commits related events atomically before any external effect runs.
 use std::{
     borrow::Borrow,
@@ -27,10 +27,15 @@ use tokio_util::sync::CancellationToken;
 
 pub(crate) mod code_inspection;
 mod context;
+mod submission;
+#[cfg(test)]
+mod submission_tests;
 use code_inspection::ChildRecordIndex;
 use context::{ProjectedMessage, context_projection};
+pub(crate) use submission::TurnAdmission;
+pub use submission::{RequestKey, RequestReceipt, SubmissionRequest};
 
-const FORMAT_VERSION: u32 = 10;
+const FORMAT_VERSION: u32 = 11;
 // An 8 MiB raw prompt or streamed response can grow up to sixfold when JSON
 // escapes control characters. Keep the storage bound above that encoded size.
 const MAX_ENTRY_BYTES: usize = 64 * 1024 * 1024;
@@ -42,6 +47,7 @@ fn completed_termination() -> ResponseTermination {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct Header {
     version: u32,
+    id: uuid::Uuid,
     provider_session_id: uuid::Uuid,
     cwd: Option<PathBuf>,
     #[serde(default)]
@@ -108,6 +114,8 @@ pub enum SessionEntry {
         turn: u64,
         input: Message,
         model: ModelRef,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        request: Option<RequestKey>,
     },
     Assistant {
         turn: u64,
@@ -193,6 +201,7 @@ pub struct UnobservedUserShell {
 
 #[derive(Debug, Clone, Serialize)]
 pub struct SessionView {
+    pub id: uuid::Uuid,
     pub cwd: Option<PathBuf>,
     pub name: Option<String>,
     pub entries: Vec<SessionEntry>,
@@ -240,7 +249,9 @@ impl SessionView {
                 SessionEntry::ReasoningSelected {
                     reasoning: selected,
                 } => reasoning = *selected,
-                SessionEntry::TurnStarted { turn, input, model } => turns.push(TurnSummary {
+                SessionEntry::TurnStarted {
+                    turn, input, model, ..
+                } => turns.push(TurnSummary {
                     turn: *turn,
                     reasoning,
                     input: input.clone(),
@@ -439,7 +450,9 @@ impl State {
                 }
                 self.compaction = Some((*through_entry, summary.clone()));
             }
-            SessionEntry::TurnStarted { turn, input, model } => {
+            SessionEntry::TurnStarted {
+                turn, input, model, ..
+            } => {
                 if self.active.is_some()
                     || self.pending_shell.is_some()
                     || *turn != self.last_id.saturating_add(1)
@@ -620,6 +633,7 @@ impl State {
 /// Passive, bounded input labels and preferences, not a raw-history export.
 #[derive(Debug, PartialEq, Eq)]
 pub struct SessionMetadata {
+    pub id: uuid::Uuid,
     pub cwd: Option<PathBuf>,
     pub name: Option<String>,
     pub last_model: Option<ModelRef>,
@@ -694,6 +708,8 @@ impl Session {
         initialize_new(&connection)?;
         let header = Header {
             version: FORMAT_VERSION,
+            // Random prefixes remain useful as catalog selectors and short UI labels.
+            id: uuid::Uuid::new_v4(),
             provider_session_id: uuid::Uuid::now_v7(),
             cwd,
             name: None,
@@ -757,7 +773,7 @@ impl Session {
         let source = self.store.lock().map_err(|_| SessionError::Poisoned)?;
         let entries = read_entries(&source.connection)?;
         drop(source);
-        self.copy_entries_to(path.as_ref(), &entries)
+        self.copy_entries_to(path.as_ref(), entries)
     }
 
     /// Copy the valid prefix at a selected Turn boundary into an independent
@@ -788,14 +804,24 @@ impl Session {
             entries.push(SessionEntry::ModelSelected { model });
         }
         drop(source);
-        self.copy_entries_to(path.as_ref(), &entries)
+        self.copy_entries_to(path.as_ref(), entries)
     }
 
-    fn copy_entries_to(&self, path: &Path, entries: &[SessionEntry]) -> Result<Self, SessionError> {
+    fn copy_entries_to(
+        &self,
+        path: &Path,
+        mut entries: Vec<SessionEntry>,
+    ) -> Result<Self, SessionError> {
         let clone = Self::create(path, self.header.cwd.as_deref())?;
+        // A conversation copy is not acceptance of the source's external deliveries.
+        for entry in &mut entries {
+            if let SessionEntry::TurnStarted { request, .. } = entry {
+                *request = None;
+            }
+        }
         let copied = {
             let mut target = clone.store.lock().map_err(|_| SessionError::Poisoned)?;
-            append(&mut target, entries)
+            append(&mut target, &entries)
         };
         if let Err(error) = copied {
             let Self {
@@ -817,6 +843,15 @@ impl Session {
         Ok(clone)
     }
 
+    /// Read only the immutable logical identity, not execution status or history
+    /// validity. Catalog lookup can filter headers before validating full history.
+    pub fn inspect_id(path: impl AsRef<Path>) -> Result<uuid::Uuid, SessionError> {
+        let path = database_path(path.as_ref())?;
+        let connection = Connection::open_with_flags(path, OpenFlags::SQLITE_OPEN_READ_ONLY)?;
+        configure_connection(&connection)?;
+        Ok(read_header(&connection)?.id)
+    }
+
     /// Validate committed history without accumulating historical payloads. Labels
     /// contain at most 120 characters from the first input's first line.
     pub fn inspect_metadata(path: impl AsRef<Path>) -> Result<SessionMetadata, SessionError> {
@@ -828,6 +863,7 @@ impl Session {
         let projection = project_connection(&snapshot, ProjectionMode::Metadata)?;
 
         Ok(SessionMetadata {
+            id: header.id,
             cwd: header.cwd,
             name: header.name,
             last_model: projection.state.last_model,
@@ -846,6 +882,7 @@ impl Session {
             state, messages, ..
         } = project(entries.iter().map(Ok), ProjectionMode::Full)?;
         Ok(SessionView {
+            id: header.id,
             cwd: header.cwd,
             name: header.name,
             entries,
@@ -865,6 +902,10 @@ impl Session {
         })
     }
 
+    /// Logical execution identity; independent of path and provider affinity.
+    pub fn id(&self) -> uuid::Uuid {
+        self.header.id
+    }
     pub fn path(&self) -> &Path {
         &self.path
     }
@@ -1130,6 +1171,7 @@ impl Session {
         let entries = read_entries(&store.connection)?;
         let header = read_header(&store.connection)?;
         Ok(SessionView {
+            id: header.id,
             cwd: header.cwd,
             name: header.name,
             entries,
@@ -1245,10 +1287,28 @@ impl Session {
         input: Message,
         model: ModelRef,
     ) -> Result<(u64, usize), SessionError> {
+        match self.admit_turn(input, model, None)? {
+            TurnAdmission::New { turn, interrupted } => Ok((turn, interrupted)),
+            TurnAdmission::Existing(_) => unreachable!("anonymous input cannot reconcile"),
+        }
+    }
+
+    pub(crate) fn admit_turn(
+        &self,
+        input: Message,
+        model: ModelRef,
+        request: Option<RequestKey>,
+    ) -> Result<TurnAdmission, SessionError> {
         if !valid_user_message(&input) {
             return Err(SessionError::InvalidUserInput);
         }
         let mut store = self.store.lock().map_err(|_| SessionError::Poisoned)?;
+        if let Some(key) = &request
+            && let Some(receipt) =
+                submission::request_receipt(&store.connection, self.id(), key, Some(&input))?
+        {
+            return Ok(TurnAdmission::Existing(receipt));
+        }
         let mut entries = interrupted_operation_entries(&store.state);
         let interrupted = store.state.pending.len();
         let turn = store
@@ -1256,9 +1316,14 @@ impl Session {
             .last_id
             .checked_add(1)
             .ok_or(SessionError::TurnIdExhausted)?;
-        entries.push(SessionEntry::TurnStarted { turn, input, model });
+        entries.push(SessionEntry::TurnStarted {
+            turn,
+            input,
+            model,
+            request,
+        });
         append(&mut store, &entries)?;
-        Ok((turn, interrupted))
+        Ok(TurnAdmission::New { turn, interrupted })
     }
 
     #[cfg(test)]
@@ -1918,10 +1983,18 @@ fn project<E: Borrow<SessionEntry>>(
     let mut context_changes = Vec::new();
     let mut child_records = ChildRecordIndex::default();
     let mut turns = 0usize;
+    let mut request_keys = BTreeSet::new();
     let mut first_input = None;
     for entry in entries {
         let entry = entry?;
         let entry = entry.borrow();
+        if let SessionEntry::TurnStarted {
+            request: Some(key), ..
+        } = entry
+            && !request_keys.insert(key.clone())
+        {
+            return Err(SessionError::InvalidHistory);
+        }
         let mut new_settled = Vec::new();
         state.apply(entry, &mut messages, &settled, &mut new_settled)?;
         if matches!(mode, ProjectionMode::Full) {
@@ -2039,7 +2112,9 @@ fn prepare_writer(connection: &Connection) -> Result<(), SessionError> {
 fn initialize_new(connection: &Connection) -> Result<(), SessionError> {
     configure_connection(connection)?;
     prepare_writer(connection)?;
-    connection.execute_batch("CREATE TABLE session (id INTEGER PRIMARY KEY CHECK(id=1), header BLOB NOT NULL); CREATE TABLE entries (seq INTEGER PRIMARY KEY, body BLOB NOT NULL);")?;
+    connection.execute_batch("CREATE TABLE session (id INTEGER PRIMARY KEY CHECK(id=1), header BLOB NOT NULL); CREATE TABLE entries (seq INTEGER PRIMARY KEY, body BLOB NOT NULL);
+CREATE UNIQUE INDEX request_keys ON entries(json_extract(body, '$.data.request.scope'), json_extract(body, '$.data.request.id')) WHERE json_extract(body, '$.kind') = 'turn_started' AND json_extract(body, '$.data.request') IS NOT NULL;
+CREATE INDEX turn_ends ON entries(json_extract(body, '$.data.turn')) WHERE json_extract(body, '$.kind') = 'turn_ended';")?;
     Ok(())
 }
 
@@ -2111,6 +2186,12 @@ pub enum SessionError {
     UserShellCancelled,
     #[error("user input must contain text or valid images")]
     InvalidUserInput,
+    #[error(
+        "request scope and ID must be nonblank, at most 256 bytes each, without control characters"
+    )]
+    InvalidRequestKey,
+    #[error("request identity was already accepted with different input")]
+    RequestConflict,
     #[error("session name must be at most 120 bytes without control characters")]
     InvalidName,
     #[error("selected Turn boundary does not exist or has not ended")]
@@ -2552,6 +2633,10 @@ mod tests {
         assert_eq!(session.view().unwrap().entries, before);
         drop(session);
         let connection = Connection::open(&path).unwrap();
+        // Inject corruption below normal JSON-index validation, not a valid append.
+        connection
+            .execute_batch("DROP INDEX request_keys; DROP INDEX turn_ends;")
+            .unwrap();
         connection
             .execute(
                 "INSERT INTO entries(body) VALUES (?1)",
@@ -3183,7 +3268,7 @@ mod tests {
             source
                 .copy_entries_to(
                     &destination,
-                    &[SessionEntry::TurnEnded {
+                    vec![SessionEntry::TurnEnded {
                         turn: 1,
                         reason: TurnEndReason::Completed,
                     }]

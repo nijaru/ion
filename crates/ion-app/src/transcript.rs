@@ -233,6 +233,7 @@ mod tests {
         }))
         .unwrap();
         let view = SessionView {
+            id: Default::default(),
             cwd: Some(PathBuf::from("/tmp/project")),
             name: None,
             entries: vec![
@@ -250,6 +251,7 @@ mod tests {
                         provider: "test".into(),
                         model: "test".into(),
                     },
+                    request: None,
                 },
                 SessionEntry::TurnEnded {
                     turn: 1,

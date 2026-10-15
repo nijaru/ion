@@ -65,6 +65,126 @@ impl<M: Serialize + Send + 'static> SessionControl<M> {
         }
     }
 
+    /// Durably admit a literal message, or reconcile the same delivery without
+    /// dispatch. This does not persist pending queues, metadata, or live authority.
+    /// Callers authorize the key's namespace; it is not an authentication token.
+    pub fn submit_request(
+        &mut self,
+        key: &ion_core::RequestKey,
+        input: Message,
+        metadata: M,
+    ) -> Result<RequestAdmission<M>, Box<RejectedInput<M>>> {
+        let known = self.setup.session.reconcile_request(key, &input);
+        match known {
+            Ok(Some(receipt)) => return Ok(RequestAdmission::Existing { receipt, metadata }),
+            Err(reason) => {
+                return Err(Box::new(RejectedInput {
+                    delivery: Delivery::Start,
+                    input: UserInput::Message(input),
+                    metadata,
+                    reason: reason.into(),
+                }));
+            }
+            Ok(None) => {}
+        }
+        let id = InputId(identity());
+        let original = UserInput::Message(input);
+        let admission = match self.admit(id, Delivery::Start, &original, &metadata) {
+            Ok(admission) => admission,
+            Err(reason) => {
+                return Err(Box::new(RejectedInput {
+                    delivery: Delivery::Start,
+                    input: original,
+                    metadata,
+                    reason,
+                }));
+            }
+        };
+        let (message, _, inflight) = admission
+            .prepared
+            .expect("literal messages are prepared")
+            .into_parts();
+        let operation = OperationId(identity());
+        let inbox = Arc::new(SteeringInbox::new(
+            self.setup.runtime.agent.limits(),
+            self.budget.clone(),
+        ));
+        let instructions = self.setup.resources.instructions().to_owned();
+        let mut custody = lock(&self.custody);
+        custody.inputs.insert(
+            id,
+            Input {
+                delivery: Delivery::Start,
+                original: Some(original),
+                metadata,
+                reservation: admission.reservation,
+                prepared: None,
+                inflight: Some(inflight),
+                instructions: instructions.clone(),
+                expanded: None,
+                accepted: false,
+                withdrawn: None,
+            },
+        );
+        // Hold custody until the callback has a complete root to acknowledge.
+        let result = self.setup.runtime.agent.submit_request(
+            self.setup.session.clone(),
+            ion_core::SubmissionRequest {
+                key: key.clone(),
+                input: message,
+            },
+            instructions,
+            CancellationToken::new(),
+            Some(inbox.clone()),
+            turn_observer(
+                self.custody.clone(),
+                self.observations.clone(),
+                id,
+                operation,
+            ),
+        );
+        match result {
+            Ok(ion_core::RequestSubmission {
+                receipt,
+                operation: Some(work),
+            }) => {
+                custody.occupied += 1;
+                custody
+                    .updates
+                    .push_back(ControlUpdate::Dispatched { id, operation });
+                self.stop_requested = false;
+                self.active = Some(Active {
+                    id: operation,
+                    root: Some(id),
+                    work: Work::Turn(work),
+                    inbox,
+                    metadata: None,
+                });
+                Ok(RequestAdmission::Started { id, receipt })
+            }
+            result => {
+                let input = custody
+                    .inputs
+                    .remove(&id)
+                    .expect("unaccepted request retains custody");
+                match result {
+                    Ok(ion_core::RequestSubmission { receipt, .. }) => {
+                        Ok(RequestAdmission::Existing {
+                            receipt,
+                            metadata: input.metadata,
+                        })
+                    }
+                    Err(reason) => Err(Box::new(RejectedInput {
+                        delivery: Delivery::Start,
+                        input: input.original.expect("unaccepted original"),
+                        metadata: input.metadata,
+                        reason: reason.into(),
+                    })),
+                }
+            }
+        }
+    }
+
     fn admit(
         &self,
         id: InputId,

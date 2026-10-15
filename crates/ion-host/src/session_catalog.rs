@@ -120,7 +120,7 @@ impl SessionCatalog {
                 .collect()
         });
         preview.as_ref()?;
-        let id = path.file_stem()?.to_string_lossy().into_owned();
+        let id = view.id.to_string();
         Some(SessionSummary {
             id,
             path,
@@ -154,8 +154,8 @@ impl SessionCatalog {
             .paths()?
             .into_iter()
             .filter(|path| {
-                path.file_stem()
-                    .is_some_and(|stem| stem.to_string_lossy().starts_with(id))
+                CodingSession::inspect_id(path)
+                    .is_ok_and(|identity| identity.to_string().starts_with(id))
             })
             .filter_map(|path| self.summary(path));
         let first = matches.next().context("session ID was not found")?;

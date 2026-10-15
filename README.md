@@ -199,7 +199,10 @@ Session ID. The source retains all later history. These operations copy
 conversation facts, not working files, and an unfinished Turn cannot be an
 after-Turn point. RPC clients can use `list_turns` and `fork` with `turn` and
 optional `after: true`.
-This unreleased branch uses Session format 10; earlier development Session
+Session IDs are immutable UUIDs stored in the header, independent of filenames
+and provider affinity. Renaming a closed database does not change its ID; clone
+and fork create new identities without inheriting external delivery receipts.
+This unreleased branch uses Session format 11; earlier development Session
 files are not reopened. Tool activity classification used by the transcript is
 stored with each assistant tool-call batch, so resumed history is not
 reinterpreted through the currently installed tool catalog.
@@ -798,7 +801,7 @@ contracts are not all implemented:
 | Boundary | Implemented today | Not yet implemented |
 | --- | --- | --- |
 | Application setup | Caller-owned model/tool/instruction configuration through shared control; workspace-free Sessions; explicit shell/local-image authority. Coding is a preset. | Durable restoration/reconciliation of capability scope. The live application recipe must be supplied again on reopen. |
-| Durability | SQLite conversation/effect history and conservative interrupted-work recovery. | Durable queued requests, restart-safe request deduplication and automatic continuation of an interrupted logical Turn. |
+| Durability | SQLite conversation/effect history, conservative interrupted-work recovery and restart-safe direct request admission through the Rust SDK. | Durable pending queues, wire-protocol delivery IDs, recovered capability scope and automatic continuation of an interrupted logical Turn. |
 | Delegation | Independent Sessions, conversation forks and Code Mode nested tool calls. | Managed child-agent relationships and foreground/background supervision. Forks share the live workspace. |
 | Remote use | Foreground stdio RPC and passive, lossy progress observation. | An authenticated network service or complete attachable state API. A bridge must retain the owner independently; RPC EOF stops/joins work. |
 
@@ -883,8 +886,8 @@ uses a synthetic model and one custom counting tool through this same API:
 cargo run --locked -p ion --example restricted -- "$(mktemp -d)"
 ```
 
-It checks the actual requests and custom-tool execution, not a live provider or
-service deployment. Applications must authenticate callers and authorize control;
+It checks actual requests, one custom-tool effect and delivery reconciliation
+after reopen, not a live provider or service deployment. Applications must authenticate callers and authorize control;
 selecting capabilities alone does not isolate untrusted tenants or host effects.
 
 Use `submit(Delivery, UserInput, metadata)` for input. `Prompt` expands resources
@@ -892,6 +895,26 @@ once and normalizes attachments; an already-prepared `Message` stays literal.
 Refusal returns the original input and metadata. The returned `InputId` means
 Host custody, not durable acceptance. Client metadata requires `Serialize + Send`
 but not `Clone`; it never enters model content or Session records.
+
+For durable direct delivery, use `submit_request(&RequestKey, Message, metadata)`.
+Create the key with `RequestKey::new(scope, id)`; both opaque, case-sensitive
+components are nonblank, at most 256 bytes and contain no control characters.
+The application authorizes the namespace—keys are not authentication tokens.
+`RequestAdmission::Started { id, receipt }` is returned only after the key and
+literal input commit together with Turn admission. Normal `Accepted`/`Settled`
+updates still carry this attempt's metadata. Redelivery of the same key and exact
+message returns `Existing { receipt, metadata }` without a task, model request or
+tool dispatch, including while busy, after shutdown or after reopen. Different
+input is an error; changing current configuration does not retarget accepted work.
+
+`session.request_receipt(&key)` reads acceptance without reconstructing an
+application recipe. A receipt names the logical Session and Turn, with its latest
+committed end reason. `end: None` does not prove work is running; lost observations
+remain unknown. Reconciliation is passive. New explicit work closes interrupted
+history conservatively; it does not rerun the old request. Prepare templates and
+local files before constructing this literal message. Pending queues, client
+metadata and live services are not made durable. Ordinary CLI/TUI submits and RPC
+command IDs remain unkeyed; request deduplication is not exactly-once tool execution.
 
 Drive `next()` while handling client I/O. Reliable updates distinguish local
 `Dispatched` correlation, durably `Accepted` input with a Turn ID, `Returned`

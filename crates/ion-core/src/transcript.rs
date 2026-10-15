@@ -743,6 +743,7 @@ mod tests {
             model: "model".into(),
         };
         let view = SessionView {
+            id: Default::default(),
             cwd: Some("/tmp".into()),
             name: None,
             entries: vec![
@@ -750,6 +751,7 @@ mod tests {
                     turn: 1,
                     input: Message::user_input("inspect".into(), std::iter::empty()),
                     model,
+                    request: None,
                 },
                 assistant(
                     1,

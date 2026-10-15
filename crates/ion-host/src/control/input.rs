@@ -249,27 +249,7 @@ impl<M: Serialize + Send + 'static> SessionControl<M> {
                     instructions,
                     CancellationToken::new(),
                     inbox.clone(),
-                    move |event| {
-                        match &event {
-                            AgentEvent::TurnAccepted { turn } => {
-                                lock(&state).accept(root, operation, *turn)
-                            }
-                            AgentEvent::SteeringCommitted { turn, .. } => {
-                                let mut custody = lock(&state);
-                                let id = custody
-                                    .steering_order
-                                    .pop_front()
-                                    .expect("Core commits controlled FIFO steering");
-                                custody.accept(id, operation, *turn);
-                            }
-                            _ => {}
-                        }
-                        // Loss here is observation loss, never owning-handle loss.
-                        let _ = observations.send(Observation::Event {
-                            operation,
-                            event: Arc::new(event),
-                        });
-                    },
+                    turn_observer(state, observations, root, operation),
                 );
                 self.starting = None;
                 self.active = Some(Active {

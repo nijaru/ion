@@ -20,6 +20,7 @@ use serde::{Serialize, Serializer, ser::SerializeStruct};
 #[derive(Serialize)]
 #[serde(remote = "SessionView")]
 struct Inspection {
+    id: uuid::Uuid,
     cwd: Option<PathBuf>,
     name: Option<String>,
     #[serde(serialize_with = "omit_each")]
@@ -92,6 +93,8 @@ enum EntryInspection {
         #[serde(serialize_with = "omit")]
         input: Message,
         model: ModelRef,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        request: Option<ion_core::RequestKey>,
     },
     Assistant {
         turn: u64,
@@ -361,6 +364,7 @@ mod tests {
                 turn: 1,
                 input: input.clone(),
                 model: model.clone(),
+                request: None,
             },
             SessionEntry::Steering { turn: 1, input },
             SessionEntry::Assistant {
@@ -427,6 +431,7 @@ mod tests {
             },
         ];
         SessionView {
+            id: Default::default(),
             cwd: Some(PathBuf::from("/inspection-fixture")),
             name: Some("inspect".into()),
             entries,

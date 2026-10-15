@@ -1,4 +1,4 @@
-//! Ion's local coding loop, typed Session history, and abstract model/tool contracts.
+//! Ion's shared agent loop, typed Session history, and abstract model/tool contracts.
 
 mod agent;
 mod code_gateway;
@@ -18,13 +18,14 @@ pub use operation::{IdleSession, Operation, OperationError};
 
 pub use agent::{
     Agent as CodingAgent, AgentError as CodingAgentError, AgentEvent as CodingAgentEvent,
-    AgentLimits, PromptCacheWarmingPolicy, SteeringInbox,
+    AgentLimits, PromptCacheWarmingPolicy, RequestSubmission, SteeringInbox,
 };
 pub use input::{AcceptedInput, InputBudget, InputReservation};
 pub use session::{
-    ForkPoint, ModelContextSnapshot, Session as CodingSession, SessionEntry,
-    SessionError as CodingSessionError, SessionInputPreview, SessionMetadata, SessionView,
-    StoredToolActivity, TurnEndReason, TurnSummary, UnobservedUserShell, UserShellOutcome,
+    ForkPoint, ModelContextSnapshot, RequestKey, RequestReceipt, Session as CodingSession,
+    SessionEntry, SessionError as CodingSessionError, SessionInputPreview, SessionMetadata,
+    SessionView, StoredToolActivity, SubmissionRequest, TurnEndReason, TurnSummary,
+    UnobservedUserShell, UserShellOutcome,
 };
 pub use tool_set::{
     ToolActivity, ToolActivityKind, ToolCatalog, ToolDefinition, ToolExecutor, ToolExposure,
