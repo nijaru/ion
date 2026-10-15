@@ -7,17 +7,20 @@
   a passing test establishes that the implementation meets those contracts.
 - The first completion target is a dependable Pi-level daily driver through one
   cohesive, idiomatic Rust coding loop for terminal, headless, RPC and embedded
-  clients. Broader agent capabilities follow separately accepted scopes, not a
-  union of reference feature inventories. Pi is the primary mature open-source
-  reference for workflows and harness/provider semantics; fx is the scoped
-  reference for polished, restrained presentation.
-  Other agents and research are optional sources of specific insights, not equal
-  authorities, requirements or templates. Weigh their evidence, maturity and
-  stability/simplicity trade-offs; Pi's experiments do not inherit its established
-  product's status. Verify moving revisions when a decision depends on them,
-  distinguishing observed behavior, inspected source and research/vendor claims.
-  Adopt only for a concrete Ion need; copy no architecture, appearance or feature
-  inventory wholesale.
+  clients. Design execution, context and ownership boundaries to accommodate
+  durable work and subagents from the outset; stage capability delivery through
+  the roadmap rather than replacing the core later. Support composition by
+  callers without making Ion own the services or orchestration around it.
+  Pi and fx are the primary implementation references for harness design and
+  workflows; fx also guides polished, restrained presentation. Codex is a
+  secondary reference, especially for Rust implementation, and Claude Code's
+  documented contracts provide secondary workflow and SDK evidence. Inspect
+  relevant upstream code before materially designing or changing a capability
+  those open-source references provide; maintained reviews are navigation, not
+  substitutes for source. Adapt semantics idiomatically to Rust rather than
+  copying runtimes, appearance or feature inventories. Verify moving revisions
+  when decisions depend on them, distinguishing established behavior, inspected
+  implementation, experiments and vendor claims.
 - Prioritize inline native scrollback, legible activity hierarchy, an editable
   composer and progressive disclosure. Keep fullscreen as a secondary view of
   the same semantics; preserve its correctness without letting separate polish
@@ -29,8 +32,9 @@
   sandbox or VM. Persist observed effects, distinguish unknown effects after
   interruption, and never silently rerun an incomplete call. OAuth is not a
   first-use gate.
-- Workers, personal memory, scheduling and generic workflow authoring remain
-  outside the current coding-agent scope.
+- Broader worker features, personal memory, scheduling and generic workflow
+  authoring are not implied implementation scope. That delivery boundary must
+  not prevent designing the shared core for durable and multi-agent use.
 
 ## Delivery and navigation
 

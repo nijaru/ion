@@ -13,13 +13,14 @@ continues the conversation after relaunch. Terminal, headless, RPC and embedded
 hosts use the same coding semantics. Native tools inherit host permissions;
 there is no implicit sandbox, private workspace importer or rollback promise.
 
-For the initial coding product, current Pi's established product is the primary
-reference for mature workflows and harness semantics; its experimental work is
-a separate source of ideas, not equally proven behavior. fx is the scoped
-reference for terminal presentation. Other agents, articles and research are optional references for
-specific questions, not equal authorities or product requirements. Their
-engineering maturity and stability/simplicity trade-offs vary; distinguish
-observed behavior and inspected source from proposals and vendor claims.
+Pi and fx are the primary implementation references for harness design and
+workflows; fx also guides restrained terminal presentation. Codex is a secondary
+reference, especially for Rust implementation, and Claude Code's documented
+contracts provide secondary workflow and SDK evidence. Inspect relevant upstream
+implementation when designing overlapping capabilities, adapting its useful
+semantics idiomatically to Rust. Distinguish established product behavior,
+experimental implementations and vendor claims; source availability alone does
+not establish maturity or correctness.
 
 Adopt a reference's useful outcome only for a concrete Ion need, preserving
 coherent ownership, stability and simplicity. Copy no class hierarchy, runtime,
