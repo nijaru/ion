@@ -250,7 +250,7 @@ pub async fn chat(init: ChatInit) -> Result<()> {
                         },
                         Action::Shell { command, exclude_from_context, source } => {
                             match runtime.shell(command, exclude_from_context, source) {
-                                Ok(_) => {},
+                                Ok(_) => ui.status.clear(),
                                 Err((source, error)) => {
                                     ui.restore_editor(source);
                                     ui.status = format!("Shell was not started: {error:#}");
