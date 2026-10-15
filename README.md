@@ -415,9 +415,14 @@ command with an unknown external effect, not an invented exit status. The next
 explicit coding or shell admission closes that interruption atomically without
 rerunning it. `!!` interruptions remain excluded from model context.
 
-Ion loads `AGENTS.md` instructions found along the working directory's
-ancestor path. A nested linked worktree's copy shadows the main checkout's
-copy of the same file. `ion use` also accepts a custom model with
+Ion discovers `AGENTS.md` along the working directory's ancestor path.
+Unreadable, invalid UTF-8 and oversized files produce source-specific resource
+diagnostics instead of blocking startup; omissions are also marked in model
+context. Files are included whole, up to 64 KiB each, within a 128 KiB project
+instruction context including bounded omission notices. Closest files get budget
+priority, then included files appear in ancestor-to-local order. A nested linked
+worktree's copy shadows the main checkout's copy of the same file.
+`ion use` also accepts a custom model with
 `--endpoint URL --wire chat-completions` or `--wire anthropic-messages`.
 Custom provider identifiers contain only lowercase ASCII letters, digits and
 hyphens, with 1–64 bytes; the same identifier is used for provider login.

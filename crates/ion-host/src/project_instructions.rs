@@ -6,7 +6,18 @@ use std::{
 
 use anyhow::{Context, Result, ensure};
 
-pub fn load(cwd: &Path) -> Result<String> {
+use crate::resources::ResourceDiagnostic;
+
+const MAX_FILE_BYTES: usize = 64 * 1024;
+const MAX_CONTEXT_BYTES: usize = 128 * 1024;
+const MAX_OMISSION_BYTES: usize = 8 * 1024;
+
+pub(crate) struct ProjectInstructions {
+    pub text: String,
+    pub diagnostics: Vec<ResourceDiagnostic>,
+}
+
+pub(crate) fn load(cwd: &Path) -> Result<ProjectInstructions> {
     let cwd = cwd
         .canonicalize()
         .with_context(|| format!("cannot resolve working directory {}", cwd.display()))?;
@@ -26,35 +37,88 @@ Verify changed behavior with the project's relevant checks. Report changes, veri
     // without allowing quotes or newlines to create instruction lines.
     let cwd_literal = serde_json::to_string(&cwd).context("cannot encode working directory")?;
     instructions.push_str(&format!("\nCurrent working directory: {cwd_literal}\n"));
-    let mut directories = cwd.ancestors().collect::<Vec<_>>();
-    directories.reverse();
-    for directory in directories {
+    ensure!(
+        instructions.len() <= MAX_CONTEXT_BYTES - MAX_OMISSION_BYTES,
+        "working directory context exceeds the instruction byte limit"
+    );
+    let mut remaining = MAX_CONTEXT_BYTES - MAX_OMISSION_BYTES - instructions.len();
+    let mut selected = Vec::new();
+    let mut diagnostics = Vec::new();
+    // Select complete files closest-first so distant ancestors cannot crowd out
+    // the working project's rules. Render accepted files in inheritance order.
+    for directory in cwd.ancestors() {
         let path = directory.join("AGENTS.md");
         if shadowed_main_file.as_ref() == Some(&path) {
             continue;
         }
-        match crate::file_io::read_bounded(&path, 64 * 1024) {
-            Ok(bytes) => {
-                let text = String::from_utf8(bytes).with_context(|| {
-                    format!("project instructions {} are not UTF-8", path.display())
-                })?;
-                let text = text.strip_prefix('\u{feff}').unwrap_or(&text);
-                let path_literal =
-                    serde_json::to_string(&path).context("cannot encode instruction path")?;
-                let block = format!("\nProject instructions from {path_literal}:\n{text}\n");
-                ensure!(
-                    instructions.len().saturating_add(block.len()) <= 128 * 1024,
-                    "project instructions exceed 128 KiB"
-                );
-                instructions.push_str(&block);
+        let loaded = (|| -> Result<Option<String>> {
+            let bytes = match crate::file_io::read_bounded(&path, MAX_FILE_BYTES) {
+                Ok(bytes) => bytes,
+                Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(None),
+                Err(error) => return Err(error.into()),
+            };
+            let text = String::from_utf8(bytes).context("instruction file is not UTF-8")?;
+            let text = text.strip_prefix('\u{feff}').unwrap_or(&text);
+            if text.trim().is_empty() {
+                return Ok(None);
             }
-            Err(error) if error.kind() == io::ErrorKind::NotFound => {}
-            Err(error) => {
-                return Err(error).with_context(|| format!("cannot read {}", path.display()));
+            let path_literal = serde_json::to_string(&path)?;
+            Ok(Some(format!(
+                "\nProject instructions from {path_literal}:\n{text}\n"
+            )))
+        })();
+        match loaded {
+            Ok(Some(block)) if block.len() <= remaining => {
+                remaining -= block.len();
+                selected.push(block);
             }
+            Ok(Some(_)) => diagnostics.push(ResourceDiagnostic {
+                path,
+                message: "instruction file omitted: combined 128 KiB context limit; closer files take priority".into(),
+            }),
+            Ok(None) => {}
+            Err(error) => diagnostics.push(ResourceDiagnostic {
+                path,
+                message: format!("instruction file omitted: {error:#}"),
+            }),
         }
     }
-    Ok(instructions)
+    for block in selected.into_iter().rev() {
+        instructions.push_str(&block);
+    }
+    append_omissions(&mut instructions, &diagnostics)?;
+    Ok(ProjectInstructions {
+        text: instructions,
+        diagnostics,
+    })
+}
+
+fn append_omissions(text: &mut String, diagnostics: &[ResourceDiagnostic]) -> Result<()> {
+    if diagnostics.is_empty() {
+        return Ok(());
+    }
+    let mut notice = String::from("\nProject instruction sources omitted (not loaded):\n");
+    let mut unlisted = diagnostics.len();
+    for diagnostic in diagnostics {
+        let line = format!(
+            "- {}: {}\n",
+            serde_json::to_string(&diagnostic.path)?,
+            serde_json::to_string(&diagnostic.message)?,
+        );
+        // Keep space for the count even when a long source path will not fit.
+        if notice.len().saturating_add(line.len()).saturating_add(128) > MAX_OMISSION_BYTES {
+            break;
+        }
+        notice.push_str(&line);
+        unlisted -= 1;
+    }
+    if unlisted > 0 {
+        notice.push_str(&format!(
+            "{unlisted} additional instruction omissions; inspect Host resource diagnostics for their sources.\n"
+        ));
+    }
+    text.push_str(&notice);
+    Ok(())
 }
 
 /// A nested linked worktree and its main checkout are one repository scope.
@@ -117,7 +181,7 @@ mod tests {
     fn nested_linked_worktree_shadows_main_checkout_instructions() {
         let (base, nested) = fixture();
         fs::write(nested.join("AGENTS.md"), "NESTED_WORKTREE_MARKER\n").unwrap();
-        let instructions = load(&nested.join("src")).unwrap();
+        let instructions = load(&nested.join("src")).unwrap().text;
         assert!(instructions.contains("PARENT_MARKER"));
         assert!(instructions.contains("NESTED_WORKTREE_MARKER"));
         assert!(!instructions.contains("MAIN_CHECKOUT_MARKER"));
@@ -127,7 +191,7 @@ mod tests {
     #[test]
     fn missing_worktree_file_keeps_main_checkout_instructions() {
         let (base, nested) = fixture();
-        let instructions = load(&nested.join("src")).unwrap();
+        let instructions = load(&nested.join("src")).unwrap().text;
         assert!(instructions.contains("PARENT_MARKER"));
         assert!(instructions.contains("MAIN_CHECKOUT_MARKER"));
         fs::remove_dir_all(base).unwrap();
@@ -139,7 +203,7 @@ mod tests {
         let cwd = nested.join("quoted\"\npath");
         fs::create_dir(&cwd).unwrap();
         fs::write(cwd.join("AGENTS.md"), "LOCAL_RULE").unwrap();
-        let instructions = load(&cwd.join(".")).unwrap();
+        let instructions = load(&cwd.join(".")).unwrap().text;
         let line = instructions
             .lines()
             .find_map(|line| line.strip_prefix("Current working directory: "))
@@ -154,10 +218,31 @@ mod tests {
     }
 
     #[test]
+    fn omission_context_is_bounded_and_quotes_source_data() {
+        let diagnostics = (0..32)
+            .map(|index| ResourceDiagnostic {
+                path: PathBuf::from(format!("source-{index}\"\n{}", "x".repeat(1024))),
+                message: "unreadable\nnot an instruction".into(),
+            })
+            .collect::<Vec<_>>();
+        let mut text = String::new();
+        append_omissions(&mut text, &diagnostics).unwrap();
+        assert!(text.len() <= MAX_OMISSION_BYTES);
+        assert!(text.contains(&serde_json::to_string(&diagnostics[0].path).unwrap()));
+        assert!(!text.contains("\nnot an instruction"));
+        let listed = text.lines().filter(|line| line.starts_with("- ")).count();
+        assert!(listed > 0 && listed < diagnostics.len());
+        assert!(text.contains(&format!(
+            "{} additional instruction omissions",
+            diagnostics.len() - listed
+        )));
+    }
+
+    #[test]
     fn instruction_bom_is_not_sent_to_the_model() {
         let (base, nested) = fixture();
         fs::write(nested.join("AGENTS.md"), "\u{feff}# Nested rules\n").unwrap();
-        let instructions = load(&nested.join("src")).unwrap();
+        let instructions = load(&nested.join("src")).unwrap().text;
         assert!(instructions.contains("# Nested rules"));
         assert!(!instructions.contains('\u{feff}'));
         fs::remove_dir_all(base).unwrap();

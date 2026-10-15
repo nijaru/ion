@@ -56,11 +56,12 @@ impl Resources {
         let cwd = cwd
             .canonicalize()
             .with_context(|| format!("cannot resolve {}", cwd.display()))?;
+        let project = project_instructions::load(&cwd)?;
         let mut resources = Self {
-            instructions: project_instructions::load(&cwd)?,
+            instructions: project.text,
             skills: BTreeMap::new(),
             templates: BTreeMap::new(),
-            diagnostics: Vec::new(),
+            diagnostics: project.diagnostics,
         };
         let mut skill_roots = vec![config_root.join("skills")];
         if let Some(home) = home {
@@ -390,6 +391,73 @@ mod tests {
     // Representative of a caller-derived cap, not a product constant.
     fn cap() -> usize {
         ion_core::AgentLimits::default().max_request_bytes
+    }
+
+    #[test]
+    fn discovered_instruction_errors_are_diagnostics_not_startup_failures() {
+        for contents in [Some(vec![0xff]), Some(vec![b'x'; 64 * 1024 + 1]), None] {
+            let root = std::env::temp_dir().join(format!("ion-rules-{}", uuid::Uuid::now_v7()));
+            let project = root.join("project");
+            fs::create_dir_all(project.join(".git")).unwrap();
+            fs::write(root.join("AGENTS.md"), "VALID_ANCESTOR_RULE\n").unwrap();
+            let source = project.join("AGENTS.md");
+            if let Some(bytes) = contents {
+                fs::write(&source, bytes).unwrap();
+            } else {
+                fs::create_dir(&source).unwrap();
+            }
+            let resources =
+                Resources::load_with_home(&project, &root.join("config"), None).unwrap();
+            let source = source.canonicalize().unwrap();
+            assert!(resources.instructions().contains("VALID_ANCESTOR_RULE"));
+            assert!(
+                resources
+                    .diagnostics()
+                    .iter()
+                    .any(|item| item.path == source)
+            );
+            assert!(
+                resources
+                    .instructions()
+                    .contains("Project instruction sources omitted")
+            );
+            assert!(
+                resources
+                    .instructions()
+                    .contains(&serde_json::to_string(&source).unwrap())
+            );
+            assert!(!resources.instructions().contains('\u{fffd}'));
+            assert!(resources.instructions().len() <= 128 * 1024);
+            fs::remove_dir_all(root).unwrap();
+        }
+    }
+
+    #[test]
+    fn instruction_budget_keeps_closest_files_in_inheritance_order() {
+        let root = std::env::temp_dir().join(format!("ion-rules-{}", uuid::Uuid::now_v7()));
+        let parent = root.join("parent");
+        let project = parent.join("project");
+        fs::create_dir_all(project.join(".git")).unwrap();
+        for (directory, marker) in [(&root, "FAR_RULE"), (&parent, "NEAR_RULE")] {
+            fs::write(
+                directory.join("AGENTS.md"),
+                format!("{marker}\n{}", "x".repeat(65_000)),
+            )
+            .unwrap();
+        }
+        fs::write(project.join("AGENTS.md"), "CLOSEST_RULE\n").unwrap();
+        let resources = Resources::load_with_home(&project, &root.join("config"), None).unwrap();
+        let text = resources.instructions();
+        assert!(text.find("NEAR_RULE").unwrap() < text.find("CLOSEST_RULE").unwrap());
+        assert!(!text.contains("FAR_RULE"));
+        assert!(text.len() <= 128 * 1024);
+        assert!(
+            resources
+                .diagnostics()
+                .iter()
+                .any(|item| item.path == root.join("AGENTS.md").canonicalize().unwrap())
+        );
+        fs::remove_dir_all(root).unwrap();
     }
 
     #[test]
