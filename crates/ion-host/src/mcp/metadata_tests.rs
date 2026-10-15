@@ -40,7 +40,7 @@ for line in sys.stdin:
     for spec in issued.specs() {
         observed.push(
             issued
-                .execute(
+                .execute_untracked(
                     &ToolCall {
                         id: spec.name.clone(),
                         name: spec.name.clone(),

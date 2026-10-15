@@ -4,7 +4,7 @@ use std::{
     sync::Arc,
 };
 
-use ion_ai::{BoxFuture, ToolCall, ToolSpec};
+use ion_ai::{BoxFuture, ToolSpec};
 use serde::Deserialize;
 use serde_json::{Value, json};
 use tokio_util::sync::CancellationToken;
@@ -91,9 +91,10 @@ struct LocalExecutor {
 impl ToolExecutor for LocalExecutor {
     fn execute<'a>(
         &'a self,
-        call: &'a ToolCall,
-        stop: CancellationToken,
+        invocation: ion_core::ToolInvocation<'a>,
     ) -> BoxFuture<'a, ToolOutput> {
+        let call = invocation.call();
+        let stop = invocation.stop().clone();
         Box::pin(async move {
             if stop.is_cancelled() {
                 return error("cancelled before tool start");
@@ -169,6 +170,7 @@ fn specs() -> Vec<ToolSpec> {
 mod tests {
     use super::files::hex_digest;
     use super::*;
+    use ion_ai::ToolCall;
     use std::{
         fs::{self, File},
         time::Duration,
@@ -201,7 +203,7 @@ mod tests {
         ] {
             arguments[field] = Value::Null;
             let output = catalog
-                .execute(
+                .execute_untracked(
                     &ToolCall {
                         id: "boundary".into(),
                         name: name.into(),
@@ -278,8 +280,8 @@ mod tests {
             arguments: json!({"path":path,"content":content,"base_digest":hex_digest(b"seed")}),
         });
         let (first, second) = tokio::join!(
-            catalogs[0].execute(&calls[0], CancellationToken::new()),
-            catalogs[1].execute(&calls[1], CancellationToken::new()),
+            catalogs[0].execute_untracked(&calls[0], CancellationToken::new()),
+            catalogs[1].execute_untracked(&calls[1], CancellationToken::new()),
         );
         assert_ne!(first.is_error, second.is_error, "{first:?} {second:?}");
         let (winner, loser) = if first.is_error {
@@ -326,8 +328,8 @@ mod tests {
                 ToolCall { id: anchor.into(), name: "edit".into(), arguments, raw_arguments: None }
             });
             let outputs = tokio::join!(
-                catalogs[0].execute(&calls[0], CancellationToken::new()),
-                catalogs[1].execute(&calls[1], CancellationToken::new()),
+                catalogs[0].execute_untracked(&calls[0], CancellationToken::new()),
+                catalogs[1].execute_untracked(&calls[1], CancellationToken::new()),
             );
             let final_bytes = fs::read(root.join("file")).unwrap();
             let final_text = std::str::from_utf8(&final_bytes).unwrap();
@@ -385,7 +387,7 @@ mod tests {
                 raw_arguments: None,
             };
             let stop = CancellationToken::new();
-            let pending = catalog.execute(&call, stop.clone());
+            let pending = catalog.execute_untracked(&call, stop.clone());
             tokio::pin!(pending);
             assert!(
                 tokio::time::timeout(Duration::from_millis(20), &mut pending)
@@ -458,7 +460,7 @@ mod tests {
                     raw_arguments: None,
                 };
                 let stop = CancellationToken::new();
-                let mut work = Box::pin(catalog.execute(&call, stop.clone()));
+                let mut work = Box::pin(catalog.execute_untracked(&call, stop.clone()));
                 let observed = tokio::time::timeout(Duration::from_millis(10), &mut work).await;
                 let pending = observed.is_err();
                 stop.cancel();

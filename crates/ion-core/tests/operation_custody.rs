@@ -59,9 +59,9 @@ impl CodingToolSource for BlockingWrite {
 impl ToolExecutor for BlockingWrite {
     fn execute<'a>(
         &'a self,
-        _: &'a ToolCall,
-        stop: CancellationToken,
+        invocation: ion_core::ToolInvocation<'a>,
     ) -> BoxFuture<'a, CodingToolOutput> {
+        let stop = invocation.stop().clone();
         Box::pin(async move {
             let release = self.release.clone();
             let started = self.started.clone();

@@ -84,7 +84,7 @@ async fn cancellation_notifies_the_issued_request_and_keeps_a_healthy_connection
     let task_name = name.clone();
     let work = tokio::spawn(async move {
         issued
-            .execute(
+            .execute_untracked(
                 &ToolCall {
                     id: "stopped".into(),
                     name: task_name,
@@ -103,7 +103,7 @@ async fn cancellation_notifies_the_issued_request_and_keeps_a_healthy_connection
         .unwrap();
     let issued = tools.snapshot();
     let next = issued
-        .execute(
+        .execute_untracked(
             &ToolCall {
                 id: "next".into(),
                 name,
@@ -137,7 +137,7 @@ async fn input_required_does_not_issue_an_uncommitted_continuation() {
     let (root, source, tools) = fixture("mrtr").await;
     let issued = tools.snapshot();
     let output = issued
-        .execute(
+        .execute_untracked(
             &ToolCall {
                 id: "one".into(),
                 name: issued.specs()[0].name.clone(),
@@ -173,7 +173,7 @@ async fn cancellation_settles_backpressured_local_issuance_before_returning() {
     let task_stop = stop.clone();
     let work = tokio::spawn(async move {
         issued
-            .execute(
+            .execute_untracked(
                 &ToolCall {
                     id: "pressured".into(),
                     name: issued.specs()[0].name.clone(),
@@ -210,7 +210,7 @@ async fn forced_retirement_joins_an_independently_running_invocation() {
     let issued = tools.snapshot();
     let other = tokio::spawn(async move {
         issued
-            .execute(
+            .execute_untracked(
                 &ToolCall {
                     id: "independent".into(),
                     name: issued.specs()[0].name.clone(),
@@ -227,7 +227,7 @@ async fn forced_retirement_joins_an_independently_running_invocation() {
     let task_stop = stop.clone();
     let work = tokio::spawn(async move {
         issued
-            .execute(
+            .execute_untracked(
                 &ToolCall {
                     id: "pressured".into(),
                     name: issued.specs()[0].name.clone(),
@@ -349,7 +349,7 @@ server.serve_forever()
     let task_stop = stop.clone();
     let work = tokio::spawn(async move {
         issued
-            .execute(
+            .execute_untracked(
                 &ToolCall {
                     id: "http".into(),
                     name: issued.specs()[0].name.clone(),

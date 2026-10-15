@@ -586,6 +586,16 @@ A source publishes `ToolRegistration` values that bind a `ToolDefinition` to a
 its original executor, including an MCP connection and remote tool name. This
 freezes local dispatch identity, not the remote server's implementation.
 
+Executors receive a `ToolInvocation`: the original call, stop token and optional
+`ToolOrigin`. Engine-issued origins identify the logical Session, Turn and
+committed assistant/tool occurrence; Code Mode children also carry their committed
+child index. Reused provider call IDs and model arguments do not supply this
+identity. Fields are read-only and provenance is not sent to the guest or added
+to MCP arguments. `ToolCatalog::execute_untracked` and
+`ToolInvocation::untracked` explicitly omit admission and origin. Provenance is
+not a live lease, capability grant, replay permission or evidence of settlement;
+managed child-Session ownership is still unimplemented.
+
 Tools act directly in the working directory with the host user's permissions.
 There is no implicit sandbox. Settlements distinguish observed host output,
 calls known not to have been dispatched, and unknown effects. Cancellation

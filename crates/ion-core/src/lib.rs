@@ -5,6 +5,7 @@ mod code_gateway;
 mod composition;
 mod generation;
 mod input;
+mod invocation;
 mod json_size;
 mod operation;
 mod request;
@@ -21,6 +22,7 @@ pub use agent::{
     AgentLimits, PromptCacheWarmingPolicy, RequestSubmission, SteeringInbox,
 };
 pub use input::{AcceptedInput, InputBudget, InputReservation};
+pub use invocation::{ToolInvocation, ToolOccurrence, ToolOrigin};
 pub use session::{
     AuthorityScope, ForkPoint, ModelContextSnapshot, RecoveryBinding, RecoveryPoint, RecoveryState,
     RequestKey, RequestReceipt, Session as CodingSession, SessionEntry,
@@ -36,7 +38,7 @@ pub use tool_set::{
 
 pub use composition::{
     ChildIntent, ChildOutcome, CodeLimits, CodeReply, CodeRequest, CodeRequestKind, CodeRuntime,
-    CodeTask, ToolOccurrence,
+    CodeTask,
 };
 pub use tool_result::{
     ToolOutcome, ToolOutput as CodingToolOutput, ToolResultProjection, ToolSettlement,

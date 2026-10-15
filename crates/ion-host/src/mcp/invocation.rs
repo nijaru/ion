@@ -33,9 +33,10 @@ pub(super) struct McpExecutor {
 impl ToolExecutor for McpExecutor {
     fn execute<'a>(
         &'a self,
-        call: &'a ToolCall,
-        stop: CancellationToken,
+        invocation: ion_core::ToolInvocation<'a>,
     ) -> BoxFuture<'a, CodingToolOutput> {
+        let call = invocation.call();
+        let stop = invocation.stop().clone();
         Box::pin(async move {
             match self.call(call, stop).await {
                 Ok((result, cleanup_error)) => {

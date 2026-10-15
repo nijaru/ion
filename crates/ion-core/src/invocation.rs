@@ -1,0 +1,119 @@
+//! Engine-issued tool provenance, distinct from application authority.
+use ion_ai::ToolCall;
+use serde::{Deserialize, Serialize};
+use tokio_util::sync::CancellationToken;
+
+/// One committed assistant call, independent of provider IDs reused in later steps.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ToolOccurrence {
+    /// One-based committed Session entry sequence.
+    pub assistant_entry: u64,
+    /// Zero-based tool-call ordinal, excluding non-call content parts.
+    pub ordinal: usize,
+}
+
+/// Where Core dispatched an admitted call. Provider call IDs and model arguments
+/// are not execution identity. A composed child is a nested tool, not an agent.
+///
+/// This is historical provenance, not a live execution lease, authorization,
+/// replay permission or proof that an effect completed. Copies of Sessions have
+/// different logical identities even when they contain the same history prefix.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize)]
+pub struct ToolOrigin {
+    session: uuid::Uuid,
+    turn: u64,
+    occurrence: ToolOccurrence,
+    composed_child: Option<usize>,
+}
+
+impl ToolOrigin {
+    pub fn session(self) -> uuid::Uuid {
+        self.session
+    }
+
+    pub fn turn(self) -> u64 {
+        self.turn
+    }
+
+    /// The direct assistant call, or the parent Code Mode call for a child.
+    pub fn occurrence(self) -> ToolOccurrence {
+        self.occurrence
+    }
+
+    /// The committed Code Mode child index; absent for a direct invocation.
+    pub fn composed_child(self) -> Option<usize> {
+        self.composed_child
+    }
+}
+
+/// One frozen route receives its original call, cancellation and optional Core
+/// provenance together. Only Core can associate admitted provenance with a call.
+/// Neither this value nor its origin crosses the Code Mode guest boundary.
+/// Trusted in-process executors may forward an invocation; this is not isolation
+/// from malicious host code. The public API cannot rebind its call/provenance:
+///
+/// ```compile_fail
+/// use ion_core::ToolInvocation;
+/// fn rebind<'a>(original: ToolInvocation<'a>, call: &'a ion_ai::ToolCall)
+///     -> ToolInvocation<'a>
+/// {
+///     ToolInvocation {
+///         call,
+///         stop: original.stop().clone(),
+///         origin: original.origin(),
+///     }
+/// }
+/// ```
+pub struct ToolInvocation<'a> {
+    call: &'a ToolCall,
+    stop: CancellationToken,
+    origin: Option<ToolOrigin>,
+}
+
+impl<'a> ToolInvocation<'a> {
+    /// Low-level execution without Session admission. This neither records an
+    /// intent/outcome nor grants any authority. Tools requiring engine provenance
+    /// must reject its absent origin; native tools still use host permissions.
+    pub fn untracked(call: &'a ToolCall, stop: CancellationToken) -> Self {
+        Self {
+            call,
+            stop,
+            origin: None,
+        }
+    }
+
+    pub fn call(&self) -> &'a ToolCall {
+        self.call
+    }
+
+    pub fn stop(&self) -> &CancellationToken {
+        &self.stop
+    }
+
+    pub fn origin(&self) -> Option<ToolOrigin> {
+        self.origin
+    }
+
+    /// Callers must have committed the direct intent, and any child intent,
+    /// before constructing an invocation. Construction itself executes nothing.
+    pub(crate) fn admitted(
+        call: &'a ToolCall,
+        stop: CancellationToken,
+        session: uuid::Uuid,
+        turn: u64,
+        occurrence: ToolOccurrence,
+        composed_child: Option<usize>,
+    ) -> Self {
+        Self {
+            call,
+            stop,
+            origin: Some(ToolOrigin {
+                session,
+                turn,
+                occurrence,
+                composed_child,
+            }),
+        }
+    }
+}

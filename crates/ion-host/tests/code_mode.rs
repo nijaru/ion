@@ -117,8 +117,7 @@ impl CodingToolSource for DiscoverySource {
 impl ion_core::ToolExecutor for DiscoverySource {
     fn execute<'a>(
         &'a self,
-        _: &'a ToolCall,
-        _: CancellationToken,
+        _invocation: ion_core::ToolInvocation<'a>,
     ) -> ion_ai::BoxFuture<'a, ion_core::CodingToolOutput> {
         Box::pin(async move {
             // Publish a changed source while the issued guest retains its catalogue.

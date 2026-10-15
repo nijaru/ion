@@ -4,7 +4,7 @@ use std::{
     io::Write,
     path::{Path, PathBuf},
     sync::{
-        Arc,
+        Arc, Mutex,
         atomic::{AtomicUsize, Ordering},
     },
 };
@@ -23,7 +23,6 @@ use ion_host::{
     SessionCatalog, SessionSetup,
 };
 use serde_json::json;
-use tokio_util::sync::CancellationToken;
 
 const INSTRUCTIONS: &str =
     "Count the characters using count_chars. No workspace or native tools are available.";
@@ -32,6 +31,7 @@ const INSTRUCTIONS: &str =
 struct CharacterCounter {
     effects: AtomicUsize,
     pause_after_effect: bool,
+    origins: Mutex<Vec<ion_core::ToolOrigin>>,
 }
 impl CodingToolSource for CharacterCounter {
     fn registrations(self: Arc<Self>) -> Vec<ToolRegistration> {
@@ -48,12 +48,17 @@ impl CodingToolSource for CharacterCounter {
 impl ToolExecutor for CharacterCounter {
     fn execute<'a>(
         &'a self,
-        call: &'a ToolCall,
-        stop: CancellationToken,
+        invocation: ion_core::ToolInvocation<'a>,
     ) -> BoxFuture<'a, CodingToolOutput> {
+        let call = invocation.call();
+        let stop = invocation.stop().clone();
+        let origin = invocation
+            .origin()
+            .expect("shared control must supply provenance");
         Box::pin(async move {
             match call.arguments.get("text").and_then(|value| value.as_str()) {
                 Some(text) => {
+                    self.origins.lock().expect("counter origins").push(origin);
                     self.effects.fetch_add(1, Ordering::SeqCst);
                     if self.pause_after_effect {
                         // Owned crash fixture: Core has the intent, not this result.
@@ -207,6 +212,13 @@ async fn main() -> Result<()> {
             counter.effects.load(Ordering::SeqCst) == usize::from(!resume),
             "new work must execute once; continuation must not replay the old tool"
         );
+        if !resume {
+            let origins = counter.origins.lock().expect("counter origins");
+            let origin = origins.first().context("missing executor provenance")?;
+            ensure!(origins.len() == 1 && origin.session() == session_id && origin.turn() == 1 && origin.composed_child().is_none(), "incorrect executor identity");
+            let view = control.session().view()?;
+            ensure!(matches!(&view.entries[usize::try_from(origin.occurrence().assistant_entry.checked_sub(1).context("invalid entry sequence")?)?], SessionEntry::Assistant { turn: 1, message, .. } if message.content.iter().any(|part| matches!(part, Content::ToolCall(call) if call.id == "count"))), "origin does not identify the committed intent");
+        }
         let requests = service.requests();
         ensure!(requests.len() == if resume { 1 } else { 2 }, "unexpected model dispatch");
         if resume {

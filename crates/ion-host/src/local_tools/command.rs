@@ -462,7 +462,7 @@ mod tests {
 
     async fn run_exec(cwd: &Path, args: Value, stop: CancellationToken) -> ToolOutput {
         tools(cwd)
-            .execute(
+            .execute_untracked(
                 &ToolCall {
                     id: "exec".into(),
                     name: "exec".into(),

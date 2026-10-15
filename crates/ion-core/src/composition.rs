@@ -11,19 +11,12 @@ use tokio::{
 use tokio_util::sync::CancellationToken;
 
 use crate::{
+    ToolOccurrence,
     tool_result::ToolOutput,
     tool_set::{ToolActivity, ToolDefinition, ToolExposure, ToolPresentation},
 };
 
 pub const CODE_MODE_NAME: &str = "code_mode";
-
-/// One occurrence, independent of provider IDs reused in later assistant steps.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct ToolOccurrence {
-    pub assistant_entry: u64,
-    pub ordinal: usize,
-}
 
 #[derive(Debug, Clone, Copy, Serialize)]
 pub struct CodeLimits {

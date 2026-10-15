@@ -190,11 +190,7 @@ pub trait ToolExecutor: Send + Sync {
     /// Respond to `stop`, settle owned work and return its observed outcome.
     /// The Turn awaits this future through cancellation; dropping it cannot
     /// establish settlement or undo unobserved external effects.
-    fn execute<'a>(
-        &'a self,
-        call: &'a ToolCall,
-        stop: CancellationToken,
-    ) -> BoxFuture<'a, ToolOutput>;
+    fn execute<'a>(&'a self, invocation: crate::ToolInvocation<'a>) -> BoxFuture<'a, ToolOutput>;
 }
 
 /// An inseparable definition and executable identity, published for a future
@@ -482,12 +478,19 @@ impl ToolCatalog {
     /// Invoke a frozen capability, including a deferred one. This low-level
     /// operation does not admit a Turn or publish Session facts; coding execution
     /// must remain inside the Turn's commit/settlement boundary.
-    pub fn execute<'a>(
+    pub fn execute_untracked<'a>(
         &'a self,
         call: &'a ToolCall,
         stop: CancellationToken,
     ) -> BoxFuture<'a, ToolOutput> {
-        let dispatch = self.dispatch(call, stop);
+        self.execute(crate::ToolInvocation::untracked(call, stop))
+    }
+
+    pub(crate) fn execute<'a>(
+        &'a self,
+        invocation: crate::ToolInvocation<'a>,
+    ) -> BoxFuture<'a, ToolOutput> {
+        let dispatch = self.dispatch(invocation);
         Box::pin(async move {
             match dispatch {
                 ToolDispatch::Rejected(reason) => crate::ToolOutcome::NotDispatched { reason }
@@ -507,19 +510,20 @@ impl ToolCatalog {
     /// request's declared loadout.
     pub(crate) fn execute_model_call<'a>(
         &'a self,
-        call: &'a ToolCall,
-        stop: CancellationToken,
+        invocation: crate::ToolInvocation<'a>,
     ) -> ToolDispatch<'a> {
+        let call = invocation.call();
         if !self.is_declared(&call.name) {
             return ToolDispatch::rejected(format!(
                 "tool was not declared for this request: {}",
                 call.name
             ));
         }
-        self.dispatch(call, stop)
+        self.dispatch(invocation)
     }
 
-    fn dispatch<'a>(&'a self, call: &'a ToolCall, stop: CancellationToken) -> ToolDispatch<'a> {
+    fn dispatch<'a>(&'a self, invocation: crate::ToolInvocation<'a>) -> ToolDispatch<'a> {
+        let call = invocation.call();
         if call.raw_arguments.is_some() || !call.arguments.is_object() {
             return ToolDispatch::rejected(
                 "tool arguments were not a valid JSON object; submit a corrected call",
@@ -544,7 +548,7 @@ impl ToolCatalog {
                 // Selecting a frozen route grants no host authority. Even an
                 // executor's synchronous constructor runs only when polled.
                 ToolDispatch::Execution(Box::pin(async move {
-                    ToolExecution::output(executor.execute(call, stop).await)
+                    ToolExecution::output(executor.execute(invocation).await)
                 }))
             }
             Some(RoutedTool {
@@ -688,8 +692,7 @@ mod tests {
     impl ToolExecutor for Stub {
         fn execute<'a>(
             &'a self,
-            _call: &'a ToolCall,
-            _stop: CancellationToken,
+            _invocation: crate::ToolInvocation<'a>,
         ) -> BoxFuture<'a, ToolOutput> {
             Box::pin(async move {
                 ToolOutput {
@@ -754,7 +757,7 @@ mod tests {
         for catalog in [&before, &after] {
             assert_eq!(
                 catalog
-                    .execute(&call("custom"), CancellationToken::new())
+                    .execute_untracked(&call("custom"), CancellationToken::new())
                     .await
                     .value,
                 json!("added"),
@@ -762,21 +765,21 @@ mod tests {
         }
         assert_eq!(
             before
-                .execute(&call("read"), CancellationToken::new())
+                .execute_untracked(&call("read"), CancellationToken::new())
                 .await
                 .value,
             json!("changing:read")
         );
         assert_eq!(
             after
-                .execute(&call("read"), CancellationToken::new())
+                .execute_untracked(&call("read"), CancellationToken::new())
                 .await
                 .value,
             json!("builtin")
         );
         assert_eq!(
             after
-                .execute(&call("new"), CancellationToken::new())
+                .execute_untracked(&call("new"), CancellationToken::new())
                 .await
                 .value,
             json!("changing:new")
@@ -803,12 +806,15 @@ mod tests {
             raw_arguments: None,
         };
         assert_eq!(
-            catalog.execute(&call, CancellationToken::new()).await.value,
+            catalog
+                .execute_untracked(&call, CancellationToken::new())
+                .await
+                .value,
             json!("deferred")
         );
-        let ToolDispatch::Rejected(model_result) =
-            catalog.execute_model_call(&call, CancellationToken::new())
-        else {
+        let ToolDispatch::Rejected(model_result) = catalog.execute_model_call(
+            crate::ToolInvocation::untracked(&call, CancellationToken::new()),
+        ) else {
             panic!("an undeclared model call must be rejected");
         };
         assert_eq!(
@@ -826,9 +832,9 @@ mod tests {
             arguments: json!({"query":"deferred"}),
             raw_arguments: None,
         };
-        let ToolDispatch::Execution(execution) =
-            catalog.execute_model_call(&call, CancellationToken::new())
-        else {
+        let ToolDispatch::Execution(execution) = catalog.execute_model_call(
+            crate::ToolInvocation::untracked(&call, CancellationToken::new()),
+        ) else {
             panic!("tool search cannot select the composition gateway");
         };
         let execution = execution.await;
@@ -893,9 +899,9 @@ mod tests {
     impl ToolExecutor for MixedForRestore {
         fn execute<'a>(
             &'a self,
-            call: &'a ToolCall,
-            _stop: CancellationToken,
+            invocation: crate::ToolInvocation<'a>,
         ) -> BoxFuture<'a, ToolOutput> {
+            let call = invocation.call();
             Box::pin(async move {
                 ToolOutput {
                     value: json!(call.name),

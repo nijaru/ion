@@ -1231,7 +1231,16 @@ impl Agent {
                         return Err(AgentError::Cancelled);
                     }
                     let activity = tool_catalog.activity(&call);
-                    let dispatch = tool_catalog.execute_model_call(&call, stop.clone());
+                    let occurrence = session.tool_occurrence(turn, &call.id)?;
+                    let invocation = crate::ToolInvocation::admitted(
+                        &call,
+                        stop.clone(),
+                        session.id(),
+                        turn,
+                        occurrence,
+                        None,
+                    );
+                    let dispatch = tool_catalog.execute_model_call(invocation);
                     let rejection = match &dispatch {
                         ToolDispatch::Rejected(reason) => Some(reason.clone()),
                         _ => None,
@@ -1565,9 +1574,10 @@ mod tests {
     impl ToolExecutor for TestTools {
         fn execute<'a>(
             &'a self,
-            call: &'a ToolCall,
-            stop: CancellationToken,
+            invocation: crate::ToolInvocation<'a>,
         ) -> BoxFuture<'a, ToolOutput> {
+            let call = invocation.call();
+            let stop = invocation.stop().clone();
             Box::pin(async move {
                 if stop.is_cancelled() {
                     return ToolOutput {
@@ -1848,8 +1858,7 @@ mod tests {
         impl ToolExecutor for BoundExecutor {
             fn execute<'a>(
                 &'a self,
-                _call: &'a ToolCall,
-                _stop: CancellationToken,
+                _invocation: crate::ToolInvocation<'a>,
             ) -> BoxFuture<'a, ToolOutput> {
                 Box::pin(async move {
                     ToolOutput {
@@ -1975,8 +1984,7 @@ mod tests {
         impl ToolExecutor for SlowRead {
             fn execute<'a>(
                 &'a self,
-                _call: &'a ToolCall,
-                _stop: CancellationToken,
+                _invocation: crate::ToolInvocation<'a>,
             ) -> BoxFuture<'a, ToolOutput> {
                 Box::pin(async {
                     tokio::time::sleep(std::time::Duration::from_millis(30)).await;
@@ -2395,9 +2403,9 @@ mod tests {
         impl ToolExecutor for DeferredTool {
             fn execute<'a>(
                 &'a self,
-                call: &'a ToolCall,
-                _stop: CancellationToken,
+                invocation: crate::ToolInvocation<'a>,
             ) -> BoxFuture<'a, ToolOutput> {
+                let call = invocation.call();
                 Box::pin(async move {
                     ToolOutput {
                         value: serde_json::json!({"tool":call.name,"value":"found"}),
@@ -2604,8 +2612,7 @@ mod tests {
         impl ToolExecutor for ReportingTool {
             fn execute<'a>(
                 &'a self,
-                _call: &'a ToolCall,
-                _stop: CancellationToken,
+                _invocation: crate::ToolInvocation<'a>,
             ) -> BoxFuture<'a, ToolOutput> {
                 Box::pin(async move {
                     std::fs::write(self.root.join("mutation.txt"), "effect observed").unwrap();
@@ -2858,8 +2865,7 @@ mod tests {
         impl ToolExecutor for ImageTool {
             fn execute<'a>(
                 &'a self,
-                _: &'a ToolCall,
-                _: CancellationToken,
+                _invocation: crate::ToolInvocation<'a>,
             ) -> BoxFuture<'a, ToolOutput> {
                 Box::pin(async {
                     ToolOutput {
@@ -4469,9 +4475,9 @@ mod tests {
         impl ToolExecutor for ConstructorEffect {
             fn execute<'a>(
                 &'a self,
-                call: &'a ToolCall,
-                _stop: CancellationToken,
+                invocation: crate::ToolInvocation<'a>,
             ) -> BoxFuture<'a, ToolOutput> {
+                let call = invocation.call();
                 // Deliberately synchronous: selecting a route must not run this.
                 std::fs::write(self.0.join(&call.id), "observed effect").unwrap();
                 Box::pin(async {
@@ -4662,7 +4668,7 @@ mod tests {
                 arguments: serde_json::json!({}),
                 raw_arguments: None,
             };
-            let future = catalog.execute(&call, CancellationToken::new());
+            let future = catalog.execute_untracked(&call, CancellationToken::new());
             assert!(!root.join("lazy").exists());
             future.await;
             assert!(root.join("lazy").exists());
@@ -4688,8 +4694,7 @@ mod tests {
         impl ToolExecutor for EffectTools {
             fn execute<'a>(
                 &'a self,
-                _call: &'a ToolCall,
-                _stop: CancellationToken,
+                _invocation: crate::ToolInvocation<'a>,
             ) -> BoxFuture<'a, ToolOutput> {
                 Box::pin(async move {
                     std::fs::write(self.0.join("effect"), "dispatched").unwrap();
@@ -4758,7 +4763,7 @@ mod tests {
         for call in &calls {
             assert!(
                 catalog
-                    .execute(call, CancellationToken::new())
+                    .execute_untracked(call, CancellationToken::new())
                     .await
                     .is_error
             );
@@ -4772,7 +4777,7 @@ mod tests {
         };
         assert!(
             !catalog
-                .execute(&valid, CancellationToken::new())
+                .execute_untracked(&valid, CancellationToken::new())
                 .await
                 .is_error
         );

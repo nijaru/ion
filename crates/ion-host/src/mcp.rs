@@ -427,9 +427,13 @@ for line in sys.stdin:
             arguments: json!({}),
             raw_arguments: None,
         };
-        let observed = issued.execute(&call, CancellationToken::new()).await;
+        let observed = issued
+            .execute_untracked(&call, CancellationToken::new())
+            .await;
         source.shutdown().await.unwrap();
-        let closed = issued.execute(&call, CancellationToken::new()).await;
+        let closed = issued
+            .execute_untracked(&call, CancellationToken::new())
+            .await;
         fs::remove_dir_all(root).unwrap();
 
         assert!(diagnostics.is_empty(), "{diagnostics:?}");
@@ -490,7 +494,7 @@ for line in sys.stdin:
             let stop = CancellationToken::new();
             let task_stop = stop.clone();
             let mut work = tokio::spawn(async move {
-                issued.execute(&ToolCall {
+                issued.execute_untracked(&ToolCall {
                     id: "observed".into(), name: "mcp__10_settlement__probe".into(),
                     arguments: json!({}), raw_arguments: None,
                 }, task_stop).await

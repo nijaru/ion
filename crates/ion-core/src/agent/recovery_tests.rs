@@ -7,8 +7,7 @@ struct Counter(AtomicUsize);
 impl ToolExecutor for Counter {
     fn execute<'a>(
         &'a self,
-        _: &'a ToolCall,
-        _: CancellationToken,
+        _invocation: crate::ToolInvocation<'a>,
     ) -> BoxFuture<'a, crate::CodingToolOutput> {
         Box::pin(async move {
             crate::CodingToolOutput {

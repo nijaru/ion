@@ -9,7 +9,7 @@ use anyhow::{Context, Result};
 use ion_ai::{
     BoxFuture, Content, GenerationControls, Message, ModelRef, ModelRequest, ModelResponse,
     ModelRoute, ModelRouteReason, ModelStreamEvent, PromptCacheIntent, Reasoning,
-    ResponseTermination, Role, Script, ScriptedModelService, ToolCall, ToolChoice, ToolSpec, Usage,
+    ResponseTermination, Role, Script, ScriptedModelService, ToolChoice, ToolSpec, Usage,
 };
 use ion_core::{
     CodingAgent, CodingSession, CodingToolOutput, CodingToolSource, ToolDefinition, ToolExecutor,
@@ -136,9 +136,9 @@ impl CodingToolSource for CatalogTools {
 impl ToolExecutor for CatalogTools {
     fn execute<'a>(
         &'a self,
-        call: &'a ToolCall,
-        _stop: CancellationToken,
+        invocation: ion_core::ToolInvocation<'a>,
     ) -> BoxFuture<'a, CodingToolOutput> {
+        let call = invocation.call();
         Box::pin(async move {
             CodingToolOutput {
                 value: json!({"tool": call.name, "matches":[]}),

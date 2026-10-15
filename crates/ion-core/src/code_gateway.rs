@@ -499,6 +499,7 @@ pub(crate) async fn run<F: FnMut(AgentEvent) + Send>(
                 child: admitted.intent.child,
             });
             let child_stop = gate.stop.clone();
+            let session_id = session.id();
             started.push(Box::pin(async move {
                 let outcome = if child_stop.is_cancelled() {
                     ChildOutcome::NotDispatched {
@@ -506,7 +507,16 @@ pub(crate) async fn run<F: FnMut(AgentEvent) + Send>(
                     }
                 } else {
                     ChildOutcome::Observed {
-                        output: catalog.execute(&admitted.intent.call, child_stop).await,
+                        output: catalog
+                            .execute(crate::ToolInvocation::admitted(
+                                &admitted.intent.call,
+                                child_stop,
+                                session_id,
+                                turn,
+                                admitted.intent.parent,
+                                Some(admitted.intent.child),
+                            ))
+                            .await,
                     }
                 };
                 (admitted, outcome)
