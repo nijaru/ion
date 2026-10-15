@@ -231,7 +231,9 @@ with tempfile.TemporaryDirectory(prefix="ion-fork-") as temporary:
                     if submit_sent and len(requests) > before and b"FORK_OK" in output and not quit_sent:
                         assert len(requests) == before + 1
                         assert requests[-1]["messages"][-1]["content"] == original, "fork changed prompt/image-note associations"
-                        os.write(master, b"\x03")
+                        # Visible answer text can precede Host settlement.
+                        # Explicit quit joins either state; Ctrl-C only stops active work.
+                        os.write(master, b"\x04")
                         quit_sent = True
                     if child.poll() is not None:
                         break
