@@ -49,7 +49,8 @@ impl ToolOrigin {
 
 /// One frozen route receives its original call, cancellation and optional Core
 /// provenance together. Only Core can associate admitted provenance with a call.
-/// Neither this value nor its origin crosses the Code Mode guest boundary.
+/// Core does not pass this value to the Code Mode guest or add its provenance
+/// to tool arguments. Applications still control what their tool outputs disclose.
 /// Trusted in-process executors may forward an invocation; this is not isolation
 /// from malicious host code. The public API cannot rebind its call/provenance:
 ///

@@ -590,8 +590,8 @@ Executors receive a `ToolInvocation`: the original call, stop token and optional
 `ToolOrigin`. Engine-issued origins identify the logical Session, Turn and
 committed assistant/tool occurrence; Code Mode children also carry their committed
 child index. Reused provider call IDs and model arguments do not supply this
-identity. Fields are read-only and provenance is not sent to the guest or added
-to MCP arguments. `ToolCatalog::execute_untracked` and
+identity. Fields are read-only. Core does not inject provenance into guest or
+MCP arguments; applications control what their tool outputs disclose. `ToolCatalog::execute_untracked` and
 `ToolInvocation::untracked` explicitly omit admission and origin. Provenance is
 not a live lease, capability grant, replay permission or evidence of settlement;
 managed child-Session ownership is still unimplemented.
