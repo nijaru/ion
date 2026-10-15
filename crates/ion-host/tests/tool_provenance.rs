@@ -226,14 +226,35 @@ async fn provenance_comes_from_committed_occurrences_not_provider_ids_or_argumen
         origins[0].occurrence().assistant_entry,
         origins[2].occurrence().assistant_entry
     );
-    assert_eq!(origins[3].composed_child(), Some(0));
-    assert_eq!(origins[4].composed_child(), Some(1));
+    let view = session.view().unwrap();
+    let children = [0, 1].map(|order| {
+        view.entries
+            .iter()
+            .find_map(|entry| match entry {
+                SessionEntry::ChildToolAdmitted { intent, .. }
+                    if intent.call.arguments["order"] == order =>
+                {
+                    Some(intent.child)
+                }
+                _ => None,
+            })
+            .unwrap()
+    });
+    for child in children {
+        assert!(
+            origins[3..5]
+                .iter()
+                .any(|origin| origin.composed_child() == Some(child))
+        );
+    }
     assert_eq!(origins[3].occurrence(), origins[4].occurrence());
     assert_eq!(origins[5].turn(), 2);
     assert!(origins[..5].iter().all(|origin| origin.turn() == 1));
     let completed = recorder.completed.lock().unwrap();
-    assert_eq!(completed[3], origins[4]);
-    assert_eq!(completed[4], origins[3]);
+    // Scheduling need not enter constructors in admission order. The waiter
+    // finishes after its sibling, but both retain their committed child index.
+    assert_eq!(completed[3].composed_child(), Some(children[1]));
+    assert_eq!(completed[4].composed_child(), Some(children[0]));
     drop(completed);
     drop(entered);
     drop(agent);
