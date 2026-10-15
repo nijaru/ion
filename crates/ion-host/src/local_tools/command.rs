@@ -1,6 +1,7 @@
 //! Native command custody: one shell route, its process group, output pipes and
 //! bounded/spooled captures. Filesystem and digest work stay in the parent module.
 use std::{
+    borrow::Cow,
     collections::VecDeque,
     fs::{self, OpenOptions},
     os::unix::{
@@ -133,7 +134,23 @@ pub(super) async fn run(cwd: &Path, args: &Value, stop: CancellationToken) -> To
             false,
         ),
     };
-    let result = json!({"exit_code": exit_code, "signal": signal, "wait_error": wait_error, "stdout": String::from_utf8_lossy(&stdout.bytes), "stderr": String::from_utf8_lossy(&stderr.bytes), "stdout_truncated": !stdout.complete || stdout.omitted_bytes != Some(0), "stderr_truncated": !stderr.complete || stderr.omitted_bytes != Some(0), "stdout_omitted_bytes": stdout.omitted_bytes, "stderr_omitted_bytes": stderr.omitted_bytes, "stdout_full_path": stdout.full_path, "stderr_full_path": stderr.full_path, "stdout_full_error": stdout.full_error, "stderr_full_error": stderr.full_error, "cancelled": cancelled, "timed_out": timed_out});
+    let stdout_text = String::from_utf8_lossy(&stdout.bytes);
+    let stderr_text = String::from_utf8_lossy(&stderr.bytes);
+    // This describes decoding of the returned tail, not the entire stream:
+    // a byte-boundary cut can require replacement even for valid UTF-8 output.
+    let result = json!({
+        "exit_code": exit_code, "signal": signal, "wait_error": wait_error,
+        "stdout_lossy": matches!(stdout_text, Cow::Owned(_)),
+        "stderr_lossy": matches!(stderr_text, Cow::Owned(_)),
+        "stdout": stdout_text, "stderr": stderr_text,
+        "stdout_complete": stdout.complete, "stderr_complete": stderr.complete,
+        "stdout_truncated": !stdout.complete || stdout.omitted_bytes != Some(0),
+        "stderr_truncated": !stderr.complete || stderr.omitted_bytes != Some(0),
+        "stdout_omitted_bytes": stdout.omitted_bytes, "stderr_omitted_bytes": stderr.omitted_bytes,
+        "stdout_full_path": stdout.full_path, "stderr_full_path": stderr.full_path,
+        "stdout_full_error": stdout.full_error, "stderr_full_error": stderr.full_error,
+        "cancelled": cancelled, "timed_out": timed_out,
+    });
     ToolOutput {
         value: result,
         images: Vec::new(),
@@ -351,6 +368,26 @@ impl OutputCapture {
                         state.record_error(format!("output pipe read failed: {error}"));
                         break;
                     }
+                }
+            }
+            // A small complete stream normally needs no artifact. If decoding
+            // would destroy bytes, preserve its raw evidence through the same
+            // private spool. Do this only after acquisition, so a UTF-8 sequence
+            // split across pipe reads is not mistaken for invalid output.
+            if state.complete
+                && spool.is_none()
+                && !spool_failed
+                && std::str::from_utf8(state.bytes.make_contiguous()).is_err()
+            {
+                match async {
+                    let mut file = OutputSpool::open()?;
+                    file.write(state.bytes.make_contiguous()).await?;
+                    Ok::<_, std::io::Error>(file)
+                }
+                .await
+                {
+                    Ok(file) => spool = Some(file),
+                    Err(error) => state.record_error(error.to_string()),
                 }
             }
             // Acquisition has stopped, but every started filesystem operation
@@ -649,6 +686,87 @@ mod tests {
         }
     }
     #[tokio::test]
+    async fn small_invalid_output_is_marked_and_preserved_without_failing_the_command() {
+        for (command, expected, lossy) in [
+            (
+                "printf '\\377'; printf '\\376' >&2",
+                vec![vec![0xff], vec![0xfe]],
+                true,
+            ),
+            (
+                "printf '\\357\\277\\275'; printf '\\357\\277\\275' >&2",
+                vec!["\u{fffd}".as_bytes().to_vec(); 2],
+                false,
+            ),
+        ] {
+            let output = run_exec(
+                &std::env::temp_dir(),
+                json!({"command": command}),
+                CancellationToken::new(),
+            )
+            .await;
+            let captures = ["stdout", "stderr"].map(|stream| {
+                output.value[format!("{stream}_full_path")]
+                    .as_str()
+                    .map(|path| {
+                        let bytes = fs::read(path);
+                        let mode = fs::metadata(path).map(|meta| meta.permissions().mode() & 0o777);
+                        fs::remove_file(path).unwrap();
+                        (bytes.unwrap(), mode.unwrap())
+                    })
+            });
+            assert!(!output.is_error, "{}", output.value);
+            assert_eq!(output.value["exit_code"], 0);
+            for ((stream, expected), capture) in
+                ["stdout", "stderr"].into_iter().zip(expected).zip(captures)
+            {
+                assert_eq!(output.value[format!("{stream}_lossy")], lossy);
+                assert_eq!(output.value[format!("{stream}_complete")], true);
+                assert_eq!(output.value[format!("{stream}_truncated")], false);
+                assert_eq!(output.value[format!("{stream}_omitted_bytes")], 0);
+                assert_eq!(output.value[format!("{stream}_full_error")], Value::Null);
+                assert_eq!(output.value[stream], "\u{fffd}");
+                assert_eq!(capture, lossy.then_some((expected, 0o600)));
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn utf8_tail_cut_reports_decoding_loss_separately_from_omitted_bytes() {
+        let output = run_exec(
+            &std::env::temp_dir(),
+            json!({"command": "printf '\\303\\251'; head -c 65535 /dev/zero | tr '\\000' x"}),
+            CancellationToken::new(),
+        )
+        .await;
+        let capture = output.value["stdout_full_path"]
+            .as_str()
+            .map(|path| {
+                let bytes = fs::read(path).unwrap();
+                fs::remove_file(path).unwrap();
+                bytes
+            })
+            .expect("raw capture");
+        assert!(!output.is_error, "{}", output.value);
+        assert!(
+            std::str::from_utf8(&capture).is_ok(),
+            "the full stream is valid UTF-8"
+        );
+        assert_eq!(output.value["stdout_lossy"], true);
+        assert_eq!(output.value["stdout_complete"], true);
+        assert_eq!(output.value["stdout_truncated"], true);
+        assert_eq!(output.value["stdout_omitted_bytes"], 1);
+        assert_eq!(
+            output.value["stdout"],
+            format!("\u{fffd}{}", "x".repeat(MAX_OUTPUT_BYTES - 1))
+        );
+        assert_eq!(
+            capture,
+            [b"\xc3\xa9".as_slice(), &vec![b'x'; MAX_OUTPUT_BYTES - 1]].concat()
+        );
+    }
+
+    #[tokio::test]
     async fn long_command_output_keeps_raw_captures_and_lossy_failure_tails() {
         let output = run_exec(
             &std::env::temp_dir(),
@@ -686,6 +804,8 @@ mod tests {
             assert_eq!(permissions.unwrap(), 0o600);
             assert_eq!(saved.unwrap(), expected);
             assert_eq!(output.value[format!("{stream}_truncated")], true);
+            assert_eq!(output.value[format!("{stream}_lossy")], true);
+            assert_eq!(output.value[format!("{stream}_complete")], true);
             assert_eq!(output.value[format!("{stream}_full_error")], Value::Null);
             assert_eq!(
                 output.value[format!("{stream}_omitted_bytes")],
@@ -716,6 +836,8 @@ mod tests {
         assert!(!output.is_error, "{}", output.value);
         assert_eq!(output.value["exit_code"], 0);
         assert_eq!(output.value["stdout"], "DIRECT_EXIT_MARKER\n");
+        assert_eq!(output.value["stdout_complete"], false);
+        assert_eq!(output.value["stdout_lossy"], false);
         assert_eq!(output.value["stdout_truncated"], true);
         assert_eq!(output.value["stdout_omitted_bytes"], Value::Null);
     }

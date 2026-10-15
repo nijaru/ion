@@ -1291,7 +1291,7 @@ mod tests {
             compact.contains("1 earlier stdout lines") && compact.contains("1 more content lines")
         );
         assert!(compact.contains("not shared with model") && compact.contains("Exited 7"));
-        assert!(compact.contains("/capture/stdout") && compact.contains("truncated/incomplete"));
+        assert!(compact.contains("/capture/stdout") && compact.contains("stdout truncated"));
         let grouped = TranscriptProjection {
             items: vec![TranscriptItem::ActivityGroup(ActivityGroup {
                 turn: 1,
@@ -1347,7 +1347,7 @@ mod tests {
             "FIRST_STDOUT",
             "**literal**",
             "not shared with model",
-            "truncated/incomplete",
+            "stdout truncated",
         ] {
             assert!(expanded.contains(text), "{expanded}");
         }

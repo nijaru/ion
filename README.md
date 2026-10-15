@@ -581,13 +581,19 @@ closes unused calls as not dispatched. After process loss, a call without a
 committed result remains unknown even if dispatch might not have started. The
 next explicit prompt commits that recovery without rerunning the call;
 reopen, fork and export preserve the distinction. `ion --continue inspect`
-reads the existing log without making that repair. `exec` retains the final 64 KiB observed from each
-output stream. A complete truncated stream also has a private temporary file
-at `stdout_full_path` or `stderr_full_path` so earlier output can be inspected
-without rerunning the command. These files may expire across launches. Ion
-reports omitted bytes when capture completes and marks a capture incomplete
-if an inherited pipe remains open after output goes idle; an incomplete
-capture has no full-output path.
+reads the existing log without making that repair. `exec` retains the final
+64 KiB of raw bytes observed from each stream and decodes the tail as UTF-8.
+`stdout_lossy` / `stderr_lossy` mark replacement decoding, including a cut through
+a multibyte character; a genuine U+FFFD character does not set them.
+`stdout_complete` / `stderr_complete` mean pipe EOF was observed. Omitted counts
+are raw bytes, or `null` when capture is incomplete. A complete truncated or
+lossy stream has a private temporary raw file at `stdout_full_path` or
+`stderr_full_path` when capture succeeds; `*_full_error` reports failures.
+Inspect these files instead of repeating effects, but do not assume they survive
+across launches. An inherited pipe left open after output goes idle can produce
+an incomplete capture with no full-output path. Capture loss does not change a
+known command exit. Shared `!` shell context preserves the complete structured
+host observation, including these diagnostics; `!!` remains private.
 Commands use Bash when available, then fall back to POSIX sh. Commands have
 no default timeout; pass `timeout_ms` when a deadline is needed. The deadline
 covers output capture even after the direct shell exits. On timeout, Ion requests

@@ -190,12 +190,45 @@ pub(crate) fn render_command(
                 Preview::Tail(compact_lines),
             );
         }
-        if output[format!("{stream}_truncated")].as_bool() == Some(true) {
-            let notice = output[format!("{stream}_full_path")].as_str().map_or_else(
-                || format!("… {stream} truncated/incomplete · Ctrl-O"),
-                |path| format!("… {stream} truncated/incomplete · capture: {path} · Ctrl-O"),
+        if output[format!("{stream}_complete")].as_bool() == Some(false) {
+            note(
+                rows,
+                prefix,
+                &format!("… {stream} capture incomplete · omitted byte count unknown"),
+                width,
             );
+        } else if output[format!("{stream}_truncated")].as_bool() == Some(true) {
+            let notice = match output[format!("{stream}_omitted_bytes")].as_u64() {
+                Some(bytes) => format!("… {stream} truncated · {bytes} raw bytes omitted · Ctrl-O"),
+                None => format!("… {stream} truncated · Ctrl-O"),
+            };
             note(rows, prefix, &notice, width);
+        }
+        if output[format!("{stream}_lossy")].as_bool() == Some(true) {
+            note(
+                rows,
+                prefix,
+                &format!(
+                    "… {stream} decoding loss · UTF-8 replacement used (possibly at tail boundary)"
+                ),
+                width,
+            );
+        }
+        if let Some(path) = output[format!("{stream}_full_path")].as_str() {
+            note(
+                rows,
+                prefix,
+                &format!("… {stream} temporary raw capture: {path}"),
+                width,
+            );
+        }
+        if let Some(error) = output[format!("{stream}_full_error")].as_str() {
+            note(
+                rows,
+                prefix,
+                &format!("… {stream} capture error: {error}"),
+                width,
+            );
         }
     }
 }
@@ -275,6 +308,58 @@ fn note(rows: &mut Vec<Line<'static>>, prefix: &str, text: &str, width: usize) {
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn command_discloses_decoding_loss_artifacts_and_incomplete_capture_in_both_views() {
+        for detail in [OutputDetail::Compact, OutputDetail::Expanded] {
+            let mut rows = Vec::new();
+            render_command(
+                &mut rows,
+                &json!({
+                    "stdout": "\u{fffd}", "stdout_lossy": true,
+                    "stdout_complete": true, "stdout_truncated": false,
+                    "stdout_full_path": "/tmp/raw",
+                    "stderr": "partial", "stderr_lossy": false,
+                    "stderr_complete": false, "stderr_truncated": true,
+                    "stderr_full_error": "injected failure"
+                }),
+                "",
+                120,
+                detail,
+                3,
+            );
+            let text = rows
+                .iter()
+                .map(ToString::to_string)
+                .collect::<Vec<_>>()
+                .join("\n");
+            assert!(text.contains("stdout decoding loss"), "{text}");
+            assert!(text.contains("temporary raw capture: /tmp/raw"), "{text}");
+            assert!(text.contains("stderr capture incomplete"), "{text}");
+            assert!(text.contains("omitted byte count unknown"), "{text}");
+            assert!(
+                text.contains("stderr capture error: injected failure"),
+                "{text}"
+            );
+            assert!(!text.contains("stdout truncated"), "{text}");
+            assert!(!text.contains("stderr decoding loss"), "{text}");
+
+            rows.clear();
+            render_command(
+                &mut rows,
+                &json!({"stdout": "\u{fffd}", "stdout_lossy": false, "stdout_complete": true}),
+                "",
+                120,
+                detail,
+                3,
+            );
+            assert!(
+                !rows
+                    .iter()
+                    .any(|row| row.to_string().contains("decoding loss"))
+            );
+        }
+    }
 
     #[test]
     fn read_labels_do_not_reinterpret_byte_or_unstructured_results_as_lines() {

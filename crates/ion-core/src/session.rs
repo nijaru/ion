@@ -1850,57 +1850,20 @@ fn shell_message(command: &str, outcome: &UserShellOutcome, excluded: bool) -> M
             ""
         }
     );
-    let output = match outcome {
-        UserShellOutcome::Observed { output, .. } => output,
+    match outcome {
+        UserShellOutcome::Observed { .. } => {
+            // Host owns capture semantics. Preserve its entire observation,
+            // rather than a Core whitelist that silently loses new metadata.
+            body.push_str("\nObserved host result:\n");
+            body.push_str(
+                &serde_json::to_string(outcome)
+                    .expect("a shell observation contains only serializable JSON"),
+            );
+        }
         UserShellOutcome::Unknown => {
             body.push('\n');
             body.push_str(UserShellOutcome::unknown_notice());
-            return Message {
-                role: Role::User,
-                content: vec![Content::Text(body)],
-                provider_replay: None,
-            };
         }
-    };
-    if let Some(stdout) = output.get("stdout").and_then(serde_json::Value::as_str) {
-        body.push_str("\nstdout:\n");
-        body.push_str(stdout);
-        if output
-            .get("stdout_truncated")
-            .and_then(serde_json::Value::as_bool)
-            == Some(true)
-        {
-            body.push_str("\n[stdout truncated]");
-        }
-    }
-    if let Some(stderr) = output.get("stderr").and_then(serde_json::Value::as_str)
-        && !stderr.is_empty()
-    {
-        body.push_str("\nstderr:\n");
-        body.push_str(stderr);
-        if output
-            .get("stderr_truncated")
-            .and_then(serde_json::Value::as_bool)
-            == Some(true)
-        {
-            body.push_str("\n[stderr truncated]");
-        }
-    }
-    if let Some(code) = output.get("exit_code").filter(|value| !value.is_null()) {
-        body.push_str(&format!("\nexit code: {code}"));
-    }
-    if let Some(signal) = output.get("signal").filter(|value| !value.is_null()) {
-        body.push_str(&format!("\nsignal: {signal}"));
-    }
-    if output.get("cancelled").and_then(serde_json::Value::as_bool) == Some(true) {
-        body.push_str("\ncommand cancelled");
-    }
-    if output.get("timed_out").and_then(serde_json::Value::as_bool) == Some(true) {
-        body.push_str("\ncommand timed out");
-    }
-    if let Some(error) = output.get("error").and_then(serde_json::Value::as_str) {
-        body.push_str("\nerror: ");
-        body.push_str(error);
     }
     Message {
         role: Role::User,
@@ -2778,6 +2741,46 @@ mod tests {
             assert_eq!(stored, encoded);
         }
         drop(connection);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn shared_shell_context_preserves_host_metadata_after_reopen() {
+        let (root, path) = fixture();
+        let output = serde_json::json!({
+            "stdout": "\u{fffd}", "stdout_lossy": true, "stdout_complete": true,
+            "stdout_truncated": false, "stdout_omitted_bytes": 0,
+            "stdout_full_path": "/capture/raw", "stdout_full_error": null,
+            "stderr_complete": false, "stderr_omitted_bytes": null,
+            "stderr_full_error": "read failed", "exit_code": 0,
+            "additional_host_data": {"nested": [true, "preserve exactly"]}
+        });
+        let expected = serde_json::to_value(UserShellOutcome::Observed {
+            output: output.clone(),
+            is_error: false,
+        })
+        .unwrap();
+        let check = |session: &Session| {
+            let messages = session.context_messages().unwrap();
+            let Content::Text(text) = &messages[0].content[0] else {
+                panic!("shell context must be text");
+            };
+            let payload = text.rsplit_once('\n').unwrap().1;
+            assert_eq!(
+                serde_json::from_str::<serde_json::Value>(payload).unwrap(),
+                expected
+            );
+        };
+        let session = Session::create(&path, &root).unwrap();
+        let admission = session
+            .admit_user_shell("binary output".into(), false)
+            .unwrap();
+        session.record_user_shell(admission, output, false).unwrap();
+        check(&session);
+        drop(session);
+        let reopened = Session::open(&path).unwrap();
+        check(&reopened);
+        drop(reopened);
         fs::remove_dir_all(root).unwrap();
     }
 
