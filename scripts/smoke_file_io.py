@@ -29,6 +29,14 @@ class Handler(BaseHTTPRequestHandler):
                 args = {"path": "pipe"}
                 delta = {"tool_calls": [{"index": 0, "id": "fifo", "type": "function", "function": {"name": "read", "arguments": json.dumps(args)}}]}
                 reason = "tool_calls"
+        elif fixture == "instructions":
+            assert not results, results
+            system = "\n".join(message["content"] for message in body["messages"] if message["role"] == "system")
+            assert "Project instruction sources omitted" in system, system
+            assert str((workspace / "AGENTS.md").resolve()) in system, system
+            assert "regular file" in system, system
+            delta = {"content": "INSTRUCTION_OMISSION_REPORTED"}
+            reason = "stop"
         else:
             definitions = {tool["function"]["name"]: tool["function"] for tool in body["tools"]}
             properties = definitions["read"]["parameters"]["properties"]
@@ -71,7 +79,8 @@ with tempfile.TemporaryDirectory(prefix="ion-file-io-") as temporary:
     workspace.mkdir()
     (workspace / ".git").mkdir()
     os.mkfifo(workspace / "pipe")
-    env = {**os.environ, "HOME": str(work / "home"), "XDG_CONFIG_HOME": str(work / "config"), "XDG_STATE_HOME": str(work / "state")}
+    env = {key: os.environ[key] for key in ("PATH", "SHELL", "TMPDIR") if key in os.environ}
+    env.update(HOME=str(work / "home"), XDG_CONFIG_HOME=str(work / "config"), XDG_STATE_HOME=str(work / "state"), XDG_DATA_HOME=str(work / "data"), XDG_CACHE_HOME=str(work / "cache"))
     server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
@@ -90,10 +99,12 @@ with tempfile.TemporaryDirectory(prefix="ion-file-io-") as temporary:
         assert len(requests) == 3, len(requests)
         requests.clear()
         os.mkfifo(workspace / "AGENTS.md")
-        result = subprocess.run([binary, "--cwd", workspace, "run", "Never admit this input."], env=env, capture_output=True, text=True, timeout=5)
-        assert result.returncode != 0 and "regular file" in result.stderr, result
-        assert not requests, "invalid instructions reached the provider"
-        print("Ion line ranges, full-file digests and native/startup FIFO rejection: OK")
+        fixture = "instructions"
+        result = subprocess.run([binary, "--cwd", workspace, "run", "Report instruction availability."], env=env, capture_output=True, text=True, timeout=5)
+        assert result.returncode == 0 and result.stdout.strip() == "INSTRUCTION_OMISSION_REPORTED", result
+        assert "instruction file omitted" in result.stderr and "regular file" in result.stderr, result
+        assert len(requests) == 1, len(requests)
+        print("Ion line ranges, full-file digests, native FIFO rejection and instruction omission: OK")
     finally:
         server.shutdown()
         server.server_close()
