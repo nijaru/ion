@@ -4,7 +4,9 @@ Ion is an unreleased Rust coding agent for a local working directory. It has
 one coding loop for terminal chat, headless prompts and Rust library hosts. The
 agent can read, edit and write files and run a native shell command. Sessions
 are saved in SQLite and continue across launches. Ion is experimental;
-everyday coding reliability is not yet qualified.
+everyday coding reliability is not yet qualified. Coding is the first application
+of the shared engine; [architecture](ARCHITECTURE.md) defines the broader targets
+for embedded applications, durable services and managed agents.
 
 ## Start
 
@@ -790,6 +792,15 @@ retention guarantee. No comparative latency/token benefit is established yet.
 
 ## Current limits
 
+The shared engine is not yet a general-agent service SDK:
+
+| Boundary | Implemented today | Not yet implemented |
+| --- | --- | --- |
+| Application setup | Shared coding configuration across terminal, headless, RPC and Rust embedding; lower-level custom model/tool interfaces. | Complete restricted/non-coding configuration through shared control, without inherited native tools or project resources. |
+| Durability | SQLite conversation/effect history and conservative interrupted-work recovery. | Durable queued requests, restart-safe request deduplication and automatic continuation of an interrupted logical Turn. |
+| Delegation | Independent Sessions, conversation forks and Code Mode nested tool calls. | Managed child-agent relationships and foreground/background supervision. Forks share the live workspace. |
+| Remote use | Foreground stdio RPC and passive, lossy progress observation. | An authenticated network service or complete attachable state API. A bridge must retain the owner independently; RPC EOF stops/joins work. |
+
 Common coding workflows are implemented, but Pi-level daily-driver reliability
 and terminal usability are not yet qualified. Selected live coding tasks have
 succeeded; longer workflows have also produced false summaries, inaccurate final
@@ -844,7 +855,10 @@ Construct `SessionSetup::new(host, session, selected, tools, reasoning)` and con
 it with `into_control::<M>()`. `None` reasoning restores the saved preference.
 `SessionControl<M>` is the shared owner used by terminal, headless, RPC and this
 example—not another model/tool loop. It handles preparation, steering, follow-ups,
-operation settlement and idle model/Session replacement.
+operation settlement and idle model/Session replacement. This constructor always
+loads coding instructions/resources and native tools. Its `tools` parameter adds
+or overrides registrations; it is not a complete allowlist. Do not treat this
+high-level setup as a restricted tool host for untrusted remote users.
 
 Use `submit(Delivery, UserInput, metadata)` for input. `Prompt` expands resources
 once and normalizes attachments; an already-prepared `Message` stays literal.
@@ -868,13 +882,18 @@ Drain returned inputs and settlements before replacing a Session or model.
 `observe()` is passive. Lag produces an explicit gap: discard the partial stream
 and reconcile committed Session facts, rather than joining a surviving suffix to
 old deltas. Reader detachment does not cancel execution; a service can retain
-control while clients detach. Foreground clients explicitly stop/join on I/O loss.
+control while clients detach. This is a progress stream, not a complete
+snapshot/cursor-based remote state API. Foreground clients explicitly stop/join
+on I/O loss.
 MCP connection cleanup remains a separate `McpTools::shutdown()` obligation.
 
 For lower-level integration, `ion-core::CodingAgent` and `CodingSession` expose
 retained `Operation` handles and abstract model/tool contracts;
-`Host::agent_with_tools` accepts a custom `CodingToolSource`. Core starts reserve
-execution immediately and reject concurrent starts. Retain/join each handle:
+`Host::agent_with_tools` adds/overrides a custom `CodingToolSource`, while
+`Host::agent_with_tool_source` selects a complete source. Core accepts custom
+instructions and `ModelService`; these lower-level assembly choices cannot yet
+be supplied to shared `SessionSetup`. Starting a Core operation reserves execution
+immediately and rejects concurrent starts. Retain/join each handle:
 dropping an owning wait requests stop, while timing out a borrowed `&mut operation`
 only stops waiting. `CodingSession::shutdown()` joins retained work and reports
 unread failures. A real operation-task panic blocks live owner reuse and leaves

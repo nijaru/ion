@@ -5,9 +5,11 @@
 - `ARCHITECTURE.md` owns accepted contracts; `README.md` describes implemented
   behavior and qualification limits. Check current source rather than treating
   old reviews or passing tests as design authority.
-- Build one idiomatic Rust engine for complete TUI, CLI and embedded-library
-  use. Design for durable/delegated work without making Ion own surrounding
-  services or orchestration. Stage delivery through the accepted roadmap.
+- Build one reusable Rust agent engine; TUI/CLI coding is its first application,
+  not its scope ceiling. Bots, services, phone integrations and swarms must reuse
+  shared control, not fork the loop. Follow architecture's configuration, durable
+  admission, delegation and attachment contracts even when delivery is staged.
+  External hosting/scheduling does not excuse missing engine ownership semantics.
 - Pi and fx are primary implementation references; Codex and Claude Code are
   secondary. Inspect relevant upstream source before materially designing or
   changing overlapping capabilities. Adapt semantics to Rust; distinguish
@@ -20,13 +22,16 @@
 
 ## Owners and navigation
 
-- Core owns committed Session facts, the coding loop, context and recovery.
+- Core owns committed Session/Turn facts, the agent loop, context, recovery and
+  durable delegation relationships. Host owns application configuration, trusted
+  execution environments, shared control and live child supervision.
   Start at `crates/ion-core/src/{agent,session,request}.rs`; `tool_set.rs` freezes
   executable capabilities and `code_gateway.rs` retains composed effects.
 - Shared session control belongs in `crates/ion-host/src/control/`.
   `binding.rs` owns preflight assembly and idle replacement. Do not duplicate
-  input/operation lifecycle
-  rules in clients or implement another model/tool loop. `code_mode.rs` owns
+  input/operation lifecycle rules in clients. Do not freeze coding defaults into
+  general control, bypass it for restricted integrations, or add a separate durable
+  engine. Code Mode tool children are not managed subagents. `code_mode.rs` owns
   the guest VM, not Session authority.
 - Start terminal interaction work in `crates/ion-app/src/terminal_client.rs`
   and its submodules. Keep editor/picker/input presentation separate from shared

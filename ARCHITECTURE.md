@@ -1,278 +1,342 @@
 # Ion architecture
 
-This document owns Ion's accepted design and execution contracts.
-[README.md](README.md) describes implemented behavior and qualification limits;
-source establishes what the current build does. Ion is unreleased v0: replace
-obsolete APIs and development formats rather than keeping parallel implementations
-or compatibility layers.
+This document owns accepted engine and application contracts, including targets
+not yet implemented. [README.md](README.md) describes delivered behavior and
+qualification limits; current source establishes implementation. Ion is unreleased
+v0: replace obsolete APIs, development formats and owners rather than retaining
+parallel implementations or compatibility facades.
 
 ## Product
 
-Ion is a local Rust coding agent with complete TUI, CLI and embedded-library
-use of the same engine. A user chooses a model, inspects and changes a working
-directory, observes and intervenes in work, and continues after relaunch.
-Native tools inherit host permissions, not an implicit sandbox or rollback
-facility. OAuth is an optional access workflow, never a first-use gate.
+Ion is a composable Rust agent engine. A complete TUI and CLI coding agent is its
+first application and qualification workload, not the boundary of the engine.
+Embedded applications, bots, durable services, phone integrations and multi-agent
+coordinators must be able to use the same execution and context machinery without
+reimplementing the model/tool loop or reaching into executable-private state.
 
-Design the execution, context and ownership boundaries for durable work and
-subagents as well. Other applications can supervise Sessions, coordinate agents
-or provide services without reimplementing the coding loop. Ion need not own
-that surrounding infrastructure; broader capability delivery follows concrete
-workflows, not a union of reference feature inventories.
+Ion owns agent execution, durable execution facts, shared control and managed
+Session delegation. Applications may own deployment, transport, authentication,
+business data, delivery queues, scheduling and swarm strategy. No mandatory daemon,
+generic workflow language or Ion-owned coordination service follows from this.
+Leaving infrastructure external must not leave callers to reconstruct acceptance,
+execution identity, parentage or settlement themselves.
 
-Pi and fx are the primary implementation references for harness design and
-workflows; fx also guides restrained presentation. Codex is a secondary Rust
-reference, and Claude Code's documented contracts provide secondary workflow
-and SDK evidence. Inspect relevant upstream implementation, distinguishing
-established behavior, experiments and vendor claims. Adapt useful semantics
-idiomatically to Rust; copy no runtime, appearance or architecture wholesale.
+Pi and fx are primary implementation references for harness design and workflows;
+fx also guides restrained presentation. Codex is a secondary Rust reference, and
+Claude Code's documented contracts provide secondary workflow/SDK evidence. Inspect
+relevant source; distinguish established behavior, experiments and vendor claims.
+Adapt semantics to Rust, not entire runtimes or feature inventories.
 
-## Four concepts
+## Engine concepts and owners
 
-1. **Session:** ordered committed conversation and execution facts, including
-   acceptance, recovery and context history.
-2. **Active operation:** one exclusive coding Turn, direct shell or compaction,
-   retained until its started work settles. A user message starts a Turn; a
-   model response is a step within it. Different Sessions may run concurrently.
-3. **Prepared request:** one model selection, bounded context and immutable
-   executable catalogue binding declarations to execution routes.
-4. **Host services:** providers, credentials, tools, MCP, project resources and
-   shared session control. Clients translate input and present results.
+- **Session:** one ordered committed history and its derived conversation,
+  context and execution state. Stable logical identity is separate from a file
+  path, display name, provider affinity and process-local handle.
+- **Turn and active operation:** a Turn is the logical work from accepted input
+  through model/tool steps to settlement. Its durable identity is distinct from
+  the live operation task. One exclusive operation runs per Session; different
+  Sessions may run concurrently. Coding's direct shell and manual compaction are
+  operations, not additional agent loops.
+- **Prepared request:** one model selection, bounded context and immutable
+  catalogue binding declarations to executable routes and captured authority.
+- **Agent configuration:** caller-selected model services, instructions,
+  capabilities and execution environment. Coding tools, project discovery and
+  local workspace behavior are an application configuration, not universal defaults.
+- **Ownership:** live work has a controlling owner independent of observers.
+  Delegation records the relationship between independently executing Sessions;
+  it does not create another worker engine.
 
-`ion-ai` owns neutral model/content contracts; `ion-core` owns Session, execution,
-context and abstract capabilities; `ion-host` implements services and the shared
-control API; `ion-app` owns client interaction/protocol/presentation;
-`ion-terminal` owns physical terminal mechanics. There is one implementation of
-the model → tools → model loop. External applications may compose its runs.
+`ion-ai` owns neutral model/content contracts. `ion-core` owns Session facts, the
+single agent loop, context, recovery and durable delegation relationships.
+`ion-host` owns providers/credentials, tool environments, configuration assembly,
+shared control and live child supervision. `ion-app` owns client input, protocols
+and presentation; `ion-terminal` owns physical terminal mechanics.
 
-Shared session control owns submission/preparation, steering, follow-ups and
-unaccepted-input recovery. These rules must not be independently implemented
-by terminal, RPC and library callers. Editors, modal UI and protocol correlation
-remain client responsibilities, not fields in a universal frontend framework.
+Shared control owns preparation, reservations, steering/follow-ups, stopping,
+settlement and unaccepted-input recovery. Clients retain editors, modal UI and
+protocol correlation. An application coordinator may compose runs, not implement
+a second model → tools → model loop.
 
-## Coding loop and effects
+## Application configuration and authority
+
+High-level shared control must accept a complete application configuration, not
+require lower-level integration to escape coding defaults. A restricted bot must
+be able to select only its own capabilities and instructions without inheriting
+native shell/file tools, project rules or operator-home resources. Model and tool
+implementations remain replaceable through the same lifecycle API.
+
+Context inheritance, workspace/environment binding and callable authority are
+independent choices. A Session need not require a local coding directory. A child
+may inherit selected conversation context while using another workspace. Explicit
+configuration and prepare-before-publish replacement must preserve these choices
+across model changes, reload, reopen and Session creation.
+
+Applications authenticate callers and authorize control/inspection. Host tools
+capture trusted principal, environment and grants; model-provided arguments cannot
+grant authority. Execution receives trusted Session/Turn/tool-occurrence identity
+when needed for delegation, idempotency or audit, not a parent inferred from text
+or a reusable provider call ID. Persist declarative identity/scope needed for
+recovery, not live credentials or executors; unavailable or changed authority must
+fail or be explicitly reconciled, never silently rebound by name.
+
+Capability selection is not OS isolation. The coding configuration deliberately
+uses the host user's permissions, not an implicit sandbox, VM or rollback facility.
+Untrusted multi-tenant/device integrations need restricted tools and appropriate
+execution isolation. OAuth is an optional access workflow, not a first-use gate.
+
+## Agent loop and effects
 
 Accept input, prepare, generate, commit the assistant response, settle its calls,
-and continue or end. Direct model calls execute in order; opted-in composition
-can admit bounded concurrent children. There is no fixed production step-count
-cap masquerading as task completion.
+and continue or end. Direct calls execute in order; opted-in composition can admit
+bounded concurrent tool children. There is no fixed production step-count cap
+masquerading as task completion.
 
-- Commit assistant calls and resolved semantic activity before dispatch;
-  commit observations before dependent model or guest consumption.
-- Commit final answer and Turn end together. Assistant plus admitted steering
-  is also atomic; a failed commit leaves unaccepted input recoverable.
-- Distinguish admission, execution start, observed outcome and settlement.
-  Publish authoritative events only after commit. Observed, not dispatched
-  and unknown are different outcomes, not interchangeable error strings.
+- Commit calls and resolved semantic activity before dispatch; commit observations
+  before dependent model or guest consumption.
+- Commit final answer and Turn end together. Assistant plus admitted steering is
+  also atomic; failed commits leave unaccepted input recoverable.
+- Admission, dispatch, observed outcome and settlement are distinct. Publish
+  authoritative events after commit. Observed, not dispatched and unknown are
+  different outcomes, not interchangeable error strings.
 - Reject malformed/truncated calls before effects. Identifiable output-truncated
-  calls may commit with synthetic not-dispatched results; otherwise do not
-  invent call identity. A completed empty response is not successful work.
-- Stop closes new dispatch, requests cancellation and joins started work.
-  Rendering, observer or connection failure cannot drop its execution future.
-  Cancellation is not rollback, a hard deadline or proof of descendant/remote
-  quiescence. Storage failure blocks dependent work; uncertainty never grants
-  automatic replay authority.
+  calls may commit with synthetic not-dispatched results; otherwise do not invent
+  call identity. A completed empty response is not successful work.
+- Stop closes dispatch, requests cancellation and joins started work. Rendering,
+  observation and connection failures cannot drop execution custody. Cancellation
+  is not rollback, a hard deadline or proof of descendant/remote quiescence.
+  Storage failure blocks dependent work; uncertainty grants no replay authority.
 
-## Session and recovery
+## Session, durable admission and recovery
 
 Use one typed append-only SQLite history, an exclusive writer lease and atomic
-event batches. Validate candidate state before writing, publish state after
-commit, and derive indexes/lifecycle facts from that history. Do not add a
-second mutable lifecycle ledger or persist live executors and credentials.
+related-fact batches. Validate candidate state before writing and publish derived
+state after commit. Required durable submission, ownership and recovery facts
+belong with execution truth, not a second mutable execution ledger. Business
+queues/state may remain external; another storage backend needs a concrete consumer.
+
+Distinguish these promises:
+
+- **Conversation continuation:** reopen committed context and submit new work.
+- **In-process retention:** cancelled waits do not abandon tasks or outcomes.
+- **Live attachment:** observe work retained by a surviving owner.
+- **Durable submission:** recover an acknowledged request and its acceptance after
+  restart without submitting it twice.
+- **Logical-Turn continuation:** explicitly recover authority to continue the same
+  interrupted work through the existing engine.
+
+A local queue acknowledgement is not durable acceptance. Durable submission must
+bind a caller-scoped request identity to its committed admission and outcome.
+Repeating that identity returns the same admission/status rather than starting
+another Turn; conflicting content is an error. If queued custody is promised
+across restart, persist it before acknowledging that promise. An external delivery
+queue must be able to reconcile acceptance without guessing from prompt text or
+maintaining competing execution truth. Admission deduplication does not make
+external tool effects exactly-once.
 
 Open and inspect passively. A committed call without an observation is unknown,
-even if execution might never have begun. Before new coding or shell authority,
-atomically close interrupted work and admit new input; failed recovery grants
-no authority. Resume continues the conversation, not an interrupted external
-action. Process loss and task panic do not prove effects stopped.
+even if it might never have begun. Conservative recovery atomically closes
+interrupted work before new authority. Logical-Turn continuation requires an
+explicit recovery policy and reconstructed, validated authority; it does not
+restore an arbitrary future, rerun a whole effectful Turn, or replay unknown calls.
+Tool-specific reconciliation/idempotency may resolve uncertainty. Process loss
+and task panic do not prove effects stopped. Durable and foreground operation
+must use the same loop and effect ordering, not separate execution implementations.
 
-Direct shell commits its command and context-sharing choice before dispatch,
-retains that identity through settlement, and commits the actual host observation.
-A missing result stays unknown. `!` shares command/outcome with model context;
-`!!` excludes both, including interruptions. Shell operations are not coding
-Turns.
+Coding's direct shell commits command and context-sharing choice before dispatch,
+then the actual host observation. Missing results remain unknown. `!` shares
+command/outcome with model context; `!!` excludes both, including interruptions.
+Clone/fork creates independent conversation/context from a valid committed prefix
+with fresh provider affinity. It neither snapshots nor rolls back a workspace,
+nor establishes delegation or security isolation. An unfinished Turn is not a
+settled fork boundary. Empty Sessions must not displace useful recent conversations.
 
-Clone/fork creates an independent Session from a valid committed prefix and
-context boundary, with fresh transport affinity. It neither snapshots nor rolls
-back the workspace. An unfinished Turn is not a settled fork boundary; empty
-Sessions must not displace useful recent conversations.
+## Managed delegation and coordination
+
+A managed subagent is another Session plus an explicit owned relationship. Record
+stable parent/child identity, the initiating occurrence, chosen context and
+capability/environment scope, ownership mode and observed outcome. Creation,
+restart and redelivery must find the same delegation, not accidentally spawn a
+second child. Parentage must be available to clients without parsing prose.
+
+- **Foreground:** child work participates in parent settlement. Stop propagates;
+  started child work joins before parent settlement. Cancelling a wait does not
+  abandon the child.
+- **Background:** responsibility transfers explicitly to a longer-lived owner
+  before the parent releases it. Detaching a handle is not a transfer. Parent
+  cancellation and service shutdown have distinct, documented scopes.
+
+Host supervises children using the same engine and shared control. Recovery keeps
+unknown child effects explicit and reconciles the relationship before redispatch.
+Fresh context and an explicit fork are different. Neither automatically grants
+parent secrets; confidentiality requires actual capability/environment isolation.
+Code Mode's nested tool calls are not child-agent Sessions.
+
+A swarm coordinator may choose roles, topology, message routing, budgets and
+scheduling. Ion supplies execution identity, authority, observable relationships,
+stop/join and outcomes. Concurrent agents sharing files need conflict policy;
+cooperating-writer locks alone do not resolve incompatible edits. Worktrees,
+containers or read-only roles are strategies, not a mandatory engine architecture.
 
 ## Capabilities and trust
 
-A registration binds a definition, semantic metadata and executor. Freeze them
-as one request catalogue, not a mutable host/name registry. MCP bindings capture
-the connection and original remote name; an unavailable connection fails rather
-than silently redirecting a call. Local capture cannot freeze a remote server's
-implementation.
+A registration binds definition, semantic metadata and executor. Freeze them as
+one request catalogue. MCP bindings capture connection and original remote name;
+unavailable connections fail instead of redirecting or replaying calls. Local
+capture cannot freeze a remote server's implementation.
 
-Callable authority and model exposure differ. Direct tools are declared;
-discovery activates deferred registrations for later requests, never the issuing
-one. Restore an activation only while its definition remains identical. Overrides
-and refresh affect future requests. Exposure is not a permission system or sandbox.
+Callable authority and model exposure differ. Direct tools are declared; discovery
+activates deferred registrations for later requests, never the issuing request.
+Restore activation only while its definition remains identical. Refresh affects
+future requests; tool visibility is not a permission system or sandbox.
 
-Host boundaries validate untrusted arguments and content. Exact edits validate
-all replacements against one original snapshot, preserve unmatched bytes and
-ordinary BOM/line endings, and respect effective write permissions. Bound inline
-captured text and identify omission, decoding loss and incomplete capture. Full
-capture artifacts have a separate disk lifecycle, not an aggregate quota or a
-retention guarantee. Images have one bounded normalization owner across user,
-native and MCP inputs; unsupported content is an explicit error, not silent discard.
+Host validates untrusted arguments/content. Native exact edits validate disjoint
+replacements against one original snapshot, preserve unmatched bytes/BOM/line
+endings and respect effective write permissions. Bound inline capture and identify
+omission, decoding loss and incomplete EOF. Full artifacts have a separate disk
+lifecycle, not an aggregate quota or retention guarantee. Images have one bounded
+normalization owner across user/native/MCP inputs; unsupported content is explicit.
 
-Resources do not execute repository text or start unconfigured servers.
-Instructions, skills/templates and results are lower-trust data. Report resource
-failures/omissions with provenance, rather than silently truncating instructions.
-MCP discovery isolates server failures and refreshes at later request boundaries;
-possibly effectful invocations are never transparently retried.
+Resources do not execute repository text or start unconfigured servers. Instructions,
+skills/templates and results are lower-trust data. Report failures/omissions with
+provenance, not silent rule truncation. MCP discovery isolates server failures and
+refreshes at later request boundaries; possibly effectful invocations are never
+transparently retried. Executable hooks and UI contributions are separately scoped
+trusted powers, not permission to mutate history or provider wire state.
 
 ## Context and providers
 
 Keep committed facts, bounded model context and human presentation distinct.
-Commit an observed tool outcome with its model-projection decision; delivery
-limits must not rewrite successful host effects as failed raw observations.
-Reopen, fork and compaction use the recorded projection. Storage limits still
-apply; failed result commits leave unknown effects, not fabricated outcomes.
-Generated prose and summaries are claims, not independent verification.
+Commit observed outcomes with their model-projection decisions. Delivery limits
+must not rewrite successful effects as failed raw observations. Reopen, fork and
+compaction use the recorded projection. Failed result commits leave unknown
+effects, not fabricated outcomes. Prose and summaries are claims, not verification.
 
-Context projection, branching and compaction have one shared owner. Compaction
-changes context, not history; commit complete call/result cuts atomically and
-leave the old projection intact if cancelled before commit. Preserve source
-coordinates for explicit retrieval without replay or implicit evidence injection.
-Measure continuation quality, not merely compression.
+Context projection, branching and compaction have one owner. Compaction changes
+context, not history; commit complete call/result cuts atomically and retain the
+old projection when cancelled before commit. Preserve retrieval coordinates without
+replay or implicit evidence injection. Measure continuation quality, not compression
+alone. Context bounds do not imply bounded resident history or artifact retention.
 
 Prepare wire declarations and durable context from the same catalogue. Admit
 model/context changes atomically before issuance. Pre-output retries retain that
-preparation; compaction/reset prepares again. Output ceilings are clamped to
-remaining capacity; exhausting the dispatched output budget is not itself context
-pressure. Capacity recovery is bounded and visible; incompatible context must
-fail or change explicitly, never silently lose content.
+preparation; compaction/reset prepares again. Clamp output ceilings to remaining
+capacity. Exhausting the dispatched output budget is not itself context pressure.
+Recovery is bounded and visible; incompatible context must fail or change explicitly.
 
-Host owns endpoint/capability/credential resolution and prepares replacements
-before publishing them. Failed preparation leaves the previous binding usable;
-a running operation retains its captured binding. Logical selection, effective
-model, returned identity and usage remain distinguishable. Model epochs survive
-reopen, including A → B → A; routing policy is not Session correctness state.
+Host prepares replacements before publishing them. Failed preflight leaves the
+previous binding usable; active operations retain captured configuration. Logical
+selection, effective model, returned identity and usage remain distinct. Model
+epochs survive reopen, including A → B → A; routing policy is not correctness state.
 
-Adapters own framing, error classification and opaque provider continuation.
-Human-readable thinking is distinct from signatures/encrypted replay and returns
-to providers only through the adapter-owned replay path. It counts as observed
-stream output whether displayed or not. Preserve signed prefixes or report an
-explicit reset/incompatibility; never reset inside an outstanding signed tool
-exchange. Core must not branch on provider names.
+Adapters own framing, errors and opaque provider continuation. Human-readable
+thinking differs from signatures/encrypted replay and returns to providers only
+through adapter-owned replay. It counts as observed output whether displayed or
+not. Preserve signed prefixes or report reset/incompatibility; never reset inside
+an outstanding signed exchange. Core must not branch on provider names.
 
-Caching and affinity are optimizations, not authority. Affinity survives reopen
-and changes on fork/clone. Warming is bounded, separately accounted and
-subordinate to effect settlement; failure cannot alter Turn correctness.
-Transient provider retries are bounded, cancellable and allowed only before
-observed output, without repeating completed tools.
+Caching/affinity are optimizations, not authority. Affinity survives reopen and
+changes on fork/clone. Warming is bounded, separately accounted and subordinate
+to settlement. Transient provider retries are bounded, cancellable and allowed
+only before observed output, without repeating completed tools.
 
 ## Clients and extension boundaries
 
-Clients use typed shared session-control operations; RPC encodes them rather
-than defining another lifecycle. Input has explicit custody:
+Clients use typed shared control; RPC encodes it rather than defining a lifecycle.
+Input custody is `draft → preparing → ready/queued → accepted | returned | withdrawn`.
+State whether queue/acceptance promises are volatile or durable. Preserve original
+kind, literals, attachments and reservations until acceptance or explicit handoff.
+Validate before acknowledgement; a byte reservation is not a context/RSS guarantee.
+Expand queued resources at admission. Steering joins a safe boundary in its Turn;
+only explicit follow-ups start later Turns. Return late steering and unaccepted
+inputs on failure/stop, including successful preparation racing cancellation.
+Preparation remains cancellable/joinable without blocking controls; bounded active
+decoders need not support hard interruption.
 
-`draft → preparing → ready/queued → durably accepted | returned | withdrawn`.
+Owners and observers are separate. Dropping/timing out/aborting an owner requests
+stop without relinquishing started-work custody. A service can retain and drive
+that owner independently of transport connections. Observation loss/detachment
+cannot decide execution lifetime. Foreground clients may stop on genuine I/O loss,
+but saturation is backpressure, not execution failure. Reserve lifecycle/recovery
+capacity before effects; do not use unbounded deferred replies or put cancellation
+behind output.
 
-Preserve original input kind, literal editor data, attachments and reservations
-until acceptance or explicit handoff. Validate before queue acknowledgement;
-queue acceptance is not durable Session acceptance or a full-context/RSS promise.
-Expand queued resources at admission, not later execution. Steering joins a safe
-boundary in its active Turn; follow-ups start after settlement. Late steering
-must not silently become follow-up work in one client. Cancellation/failure
-returns unaccepted inputs, including successful preparation racing with stop.
-Preparation must remain cancellable/joinable without blocking client controls;
-active bounded decoders need not support hard interruption.
-
-An owning run handle requests stop and joins; an observation subscription only
-observes. Dropping/timing out/aborting an owner requests stop without relinquishing
-started-work custody. A service may retain that owner while clients detach.
-Foreground applications may stop on genuine I/O loss, but progress saturation
-is backpressure, not by itself execution failure. Bound publication/admission;
-coalesce provisional progress with explicit gap/reconciliation semantics and
-retain authoritative settlement/input recovery. Do not solve slow readers with
-unbounded deferred replies or by blocking cancellation behind output.
+Remote attachment must identify the Session/work and provide an authorized
+snapshot plus an ordered committed revision/cursor or equivalent reconciliation
+contract. Include relevant lifecycle/queue/settlement state, not just model deltas.
+Live progress may be lossy; gaps require resync, never suffix-splicing. Attachment,
+transport acknowledgement and snapshot access do not grant execution authority.
+Applications may implement authenticated network transports over these shared
+operations; neither a required daemon nor a second client loop is implied.
 
 Headless text publishes committed final text. Protocols distinguish acceptance,
-progress, settlement and stop intent without promising exactly-once commands.
+progress, settlement and stop intent without exactly-once transport promises.
 Broken output cannot promise delivery; committed inspection remains available.
-Controlled connection completion closes admission, stops/joins its foreground
-work and preparation, then returns unaccepted input. Healthy final pipe delivery
-still requires a reader to drain or close it.
+Controlled foreground EOF closes admission and stops/joins before final recovery
+publication. A healthy final pipe still requires a reader.
 
-Shutdown closes admission before stopping/joining. Cancelling its wait leaves
-closure and task custody intact; callers must finish it before destroying their
-runtime. Async cleanup cannot be guaranteed by Drop. Unread failures remain
-observable through join/shutdown; a genuine operation-task panic blocks live
-owner reuse and reports unknown effects. No synchronous idle guard crosses await.
-
-Skills/templates, tool sources, executable hooks and UI contributions are
-distinct powers with explicit scope and disposal. Trusted callbacks cannot
-mutate Session history or provider wire state behind their owners. Delegation
-composes Sessions with explicit context, authority, parentage and foreground or
-background ownership; a coordinator need not become another coding engine.
+Shutdown closes admission before stop/join. Cancelling its wait retains closure,
+handles and failures; finish it before destroying the runtime. Drop cannot promise
+async cleanup. A genuine task panic blocks live owner reuse and reports unknown
+effects. No synchronous idle guard crosses await.
 
 ## Terminal experience
 
-Inline native scrollback is primary; fullscreen is a viewport of the same
-semantics. Prefer restrained fx-like hierarchy and progressive disclosure over
-colored tool cards or a flat stream. Keep prompts, prose, activity episodes,
-mutations and notices legible without relying on color. Grouping represents
-source semantics; nested execution needs recorded parentage, not an invented
-process tree. Admission is queued, not running or successful.
+Inline native scrollback is primary; fullscreen is another viewport over the same
+semantics. Prefer restrained fx-like hierarchy and progressive disclosure to tool
+cards or a flat stream. Prompts, prose, activity, mutations and notices must remain
+legible without color. Nested activity uses recorded parentage, not an invented
+process tree. Queued is not running or successful.
 
-Keep the draft editable during work, including multiline editing, history,
-paste/images, external editor, steering and follow-ups. Commands/pickers retain
-unsent input. Budget activity and composer together using semantic items,
-keeping current state and exceptions visible with honest omission/inspection.
-Coalesce repetitive benign output, not consequential mutations or failures.
-Details retain arguments, observations, capture paths and delivery notices.
+Keep drafts editable during work: multiline/history, paste/images, external editor,
+steering and follow-ups. Commands/pickers retain unsent input. Budget activity and
+composer together; keep state/exceptions visible with honest omission/inspection.
+Coalesce benign repetition, not mutations/failures. Details retain arguments,
+observations, capture paths and delivery notices.
 
-Use one control-safe grapheme/display-width policy for rendered content;
-composer byte/cursor mapping remains separate. Semantic styles survive mutable
-rendering and irreversible native publication. Publish settled content once;
-redraw/resize must not publish history or maintain a second committed screen.
-A closed group is not necessarily final. The emulator owns native reflow; resume
-publishes a bounded recent semantic tail with earlier facts inspectable.
-
-Scrolling, resize, viewport changes and exit preserve composer/terminal custody.
-I/O failure stops input/redraw and awaits owned settlement before reporting;
-panic/crash cannot promise that. Physical publication is not execution authority.
+Use one control-safe grapheme/display-width policy for content; composer byte/cursor
+mapping is separate. Semantic styles survive redraw and irreversible publication.
+Publish settled content once. A closed group need not be final. Native reflow belongs
+to the emulator; resume publishes a bounded recent tail with earlier facts inspectable.
+Resize, scrolling, viewport changes and exit preserve composer/terminal custody.
+I/O failure stops input/redraw and awaits settlement before reporting; panic/crash
+cannot promise that. Physical publication is never execution authority.
 
 ## Hybrid composition
 
-Code Mode is opt-in alongside direct calls/discovery. A confined Host VM gets
-owned code, limits and a bounded bridge; Core retains Session/catalogue authority.
-It is not another agent loop or a durable JavaScript runtime. Pi is the primary
-model-facing authoring reference: named discoverable calls, useful input/result
-descriptions, selected structured/text/image output and actionable errors.
-README describes the currently supported subset; no comparative speedup is assumed.
+Code Mode is opt-in beside direct calls/discovery. A confined Host VM gets owned
+code, limits and a bounded bridge; Core retains Session/catalogue authority. It is
+not another agent loop or a durable JavaScript runtime. Pi is the model-facing
+authoring reference: named discoverable calls, useful declarations, selected
+structured/text/image output and actionable errors. README states the implemented
+subset; no comparative speedup is assumed.
 
 Identify a parent by committed assistant-entry sequence and call ordinal, not a
-reusable provider ID. Commit child intent before dispatch and observation before
-guest consumption. Parent settlement requires all children settled; recovery
-closes unknown children first without rerunning code. The guest selects what
-reaches model context; raw child facts remain inspectable, not automatically
-injected as fabricated messages.
+reusable provider ID. Commit nested tool intent before dispatch and observation
+before guest consumption. Parent settlement joins its tool children; recovery
+closes unknown children without rerunning code. Selected results reach model
+context; raw child facts stay inspectable, not fabricated conversation messages.
 
-On guest failure, expose a stable discoverable parent locator. Explicit later
-inspection uses bounded metadata/JSON windows, preserves observed/not-dispatched/
-unknown states, and grants no new effect or replay authority. Keep coordinates
-rebuildable from facts without whole-history clones. Model-tool inspection must
-exclude private shell context, opaque provider replay and normalized image bytes.
-Capture paths may disappear; saved observation, present host state and missing
-evidence are different.
+Guest failure exposes a stable parent locator for bounded metadata/JSON inspection.
+Inspection preserves observed/not-dispatched/unknown, excludes private shell
+context, opaque replay and normalized image bytes, and grants no replay authority.
+Capture paths may disappear; saved observations, host state and missing evidence
+are distinct.
 
-Normal guest return drains transferred requests and started effects. Failure,
-cancellation or budget/storage faults close admission and request stop, retaining
-started futures and joining the VM. Failed observation commits block consumption
-and dependent dispatch even if guest code catches an error. Guest limits, host
-capture/artifacts, audit and final delivery have distinct owners; VM isolation
-does not bound native process resources or guarantee capture retention.
+Normal return drains transferred requests and started effects. Failure, cancellation
+and budget/storage faults close admission and request stop while retaining futures
+and joining the VM. Failed observation commits block consumption/dependent dispatch,
+even when guest code catches errors. VM limits, native resources, capture/audit
+and delivery have separate owners; VM isolation does not sandbox host tools.
 
 ## Qualification
 
-Preserve distinct integrity, concurrency, cancellation and recovery protections;
-remove duplicate fixtures and private-call assertions that no longer protect a
-contract. Exercise changed built clients and repository gates. Source inspection,
-mock/PTY checks, live coding and real-emulator/human review establish different
-things. Neither passing tests nor reference similarity certifies performance,
-model adherence, terminal stability or daily-driver readiness.
+Qualify the shared engine through coding and at least one restricted non-coding
+embedding rather than assuming terminal success proves reuse. Durable requests,
+logical continuation, attachment and foreground/background delegation need their
+own crash/cancellation/redelivery evidence before being advertised.
+
+Preserve distinct integrity/concurrency/cancellation/recovery protections; prune
+obsolete fixtures and private-call assertions. Exercise changed built clients and
+repository gates. Source, mocks/PTY, live tasks and native-emulator/human review
+establish different things. Neither green tests nor reference similarity certifies
+performance, model adherence, terminal stability or daily-driver readiness.
