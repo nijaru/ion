@@ -156,6 +156,7 @@ fn split_editor_input(input: Message) -> Result<(String, Vec<LoadedImage>), &'st
 }
 
 pub struct ChatInit {
+    pub services: std::sync::Arc<ion_host::Host>,
     pub setup: ion_host::SessionSetup,
     pub images: Vec<LoadedImage>,
     pub startup_diagnostics: Vec<String>,
@@ -258,9 +259,9 @@ pub async fn chat(init: ChatInit) -> Result<()> {
                             }
                         },
                         Action::Command(command) => {
-                            dispatch_command(&mut runtime, &mut ui, terminal, screen, command, raw_command).await?;
+                            dispatch_command(&mut runtime, &init.services, &mut ui, terminal, screen, command, raw_command).await?;
                         },
-                        Action::PasteClipboard => start_clipboard_paste(&mut ui, runtime.selected()),
+                        Action::PasteClipboard => start_clipboard_paste(&mut ui, runtime.agent()),
                         Action::Pick(value) => apply_picker(&mut runtime, &mut ui, value)?,
                     }
                     poll_control = true;
@@ -453,6 +454,7 @@ fn apply_fork(
 
 fn handle_command(
     runtime: &mut SessionControl<EditorDraft>,
+    services: &ion_host::Host,
     ui: &mut Frontend,
     command: &str,
 ) -> Result<bool> {
@@ -494,7 +496,10 @@ fn handle_command(
         },
         Some(Builtin::Image) => {
             anyhow::ensure!(!args.is_empty(), "use /image PATH");
-            ion_host::image_input::require_image_input(runtime.selected())?;
+            ion_host::image_input::require_image_input(
+                runtime.agent().model(),
+                runtime.agent().limits().image_input,
+            )?;
             ui.attach_image(ImageSource::Path(PathBuf::from(args)));
         }
         Some(Builtin::Skills) => ui.note(
@@ -530,7 +535,7 @@ fn handle_command(
                     .filter(|entry| matches!(entry, ion_core::SessionEntry::TurnStarted { .. }))
                     .count(),
                 view.name.as_deref().unwrap_or("unnamed"),
-                context_label(&view, runtime.selected().context_window_tokens),
+                context_label(&view, runtime.agent().limits().context_window_tokens),
             ));
         }
         Some(Builtin::Export) => {
@@ -539,7 +544,11 @@ fn handle_command(
             let target = if target.is_absolute() {
                 target.to_owned()
             } else {
-                runtime.session().cwd().join(target)
+                runtime
+                    .session()
+                    .cwd()
+                    .context("relative export path requires a working directory")?
+                    .join(target)
             };
             crate::transcript::save_new(&runtime.session().view()?, &target)?;
             ui.status = format!("Transcript saved to {}", target.display());
@@ -640,10 +649,9 @@ fn handle_command(
                 })?;
                 ui.status = format!("Selected {args}");
             } else {
-                let items = runtime
-                    .host()
+                let items = services
                     .models()
-                    .choices(runtime.host().credentials())?
+                    .choices(services.credentials())?
                     .into_iter()
                     .map(|choice| {
                         let option = choice.selected;
@@ -673,7 +681,7 @@ fn handle_command(
         }
         Some(Builtin::Logout) => {
             anyhow::ensure!(!args.is_empty(), "use /logout PROVIDER");
-            runtime.host().credentials().remove(args)?;
+            services.credentials().remove(args)?;
             ui.status = format!("Removed saved {args} credential");
         }
         Some(Builtin::Tools) => ui.list_tools(),
@@ -815,7 +823,10 @@ impl Frontend {
         self.details = None;
         self.notices.clear();
         self.scroll = 0;
-        self.cwd = session.cwd().to_path_buf();
+        self.cwd = session
+            .cwd()
+            .context("terminal coding requires a working directory")?
+            .to_path_buf();
         if view.unfinished_turn.is_some() {
             self.status = "Previous turn interrupted; tool effects may be unknown".into();
         }

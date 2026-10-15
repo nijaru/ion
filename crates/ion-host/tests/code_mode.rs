@@ -25,7 +25,7 @@ impl Workspace {
         Self(path)
     }
     fn session(&self) -> Arc<CodingSession> {
-        Arc::new(CodingSession::create(self.0.join("session.sqlite"), &self.0).unwrap())
+        Arc::new(CodingSession::create(self.0.join("session.sqlite"), Some(&self.0)).unwrap())
     }
 }
 impl Drop for Workspace {

@@ -15,7 +15,7 @@ use sha2::{Digest, Sha256};
 
 pub struct SessionCatalog {
     root: PathBuf,
-    cwd: PathBuf,
+    cwd: Option<PathBuf>,
     key: String,
 }
 
@@ -30,9 +30,16 @@ pub struct SessionSummary {
 }
 
 impl SessionCatalog {
-    pub fn new(root: PathBuf, cwd: PathBuf) -> Self {
-        let key = format!("{:x}", Sha256::digest(cwd.as_os_str().as_encoded_bytes()));
+    pub fn new(root: PathBuf, cwd: Option<PathBuf>) -> Self {
+        let key = cwd.as_ref().map_or_else(
+            || "workspace-free".to_owned(),
+            |cwd| format!("{:x}", Sha256::digest(cwd.as_os_str().as_encoded_bytes())),
+        );
         Self { root, cwd, key }
+    }
+
+    pub(crate) fn cwd(&self) -> Option<&Path> {
+        self.cwd.as_deref()
     }
 
     pub fn new_path(&self) -> Result<PathBuf> {
@@ -195,7 +202,8 @@ mod tests {
         let root = std::env::temp_dir().join(format!("ion-catalog-{}", uuid::Uuid::now_v7()));
         let workspace = root.join("workspace");
         fs::create_dir_all(&workspace).unwrap();
-        let catalog = SessionCatalog::new(root.join("state"), workspace.canonicalize().unwrap());
+        let catalog =
+            SessionCatalog::new(root.join("state"), Some(workspace.canonicalize().unwrap()));
         (root, catalog)
     }
 
@@ -213,7 +221,7 @@ mod tests {
                     returned_model: None,
                 })])
             }))),
-            Arc::new(LocalTools::new(&catalog.cwd).unwrap()),
+            Arc::new(LocalTools::new(catalog.cwd.as_deref().unwrap()).unwrap()),
             ModelRef {
                 provider: "script".into(),
                 model: "script".into(),
@@ -245,7 +253,7 @@ mod tests {
         let first = catalog.new_path().unwrap();
         let second = catalog.new_path().unwrap();
         assert_ne!(first, second);
-        let session = Arc::new(CodingSession::create(&first, &catalog.cwd).unwrap());
+        let session = Arc::new(CodingSession::create(&first, catalog.cwd.as_deref()).unwrap());
         session.set_name(Some("First task")).unwrap();
         agent(&catalog, 1)
             .submit(
@@ -258,7 +266,7 @@ mod tests {
             .await
             .unwrap();
         drop(session);
-        let session = CodingSession::create(&second, &catalog.cwd).unwrap();
+        let session = CodingSession::create(&second, catalog.cwd.as_deref()).unwrap();
         session.set_name(Some("Second task")).unwrap();
         drop(session);
         let listed = catalog.list().unwrap();
@@ -294,7 +302,7 @@ mod tests {
             (vec![Content::Text(text)], expected),
         ] {
             let path = catalog.new_path().unwrap();
-            let session = Arc::new(CodingSession::create(&path, &catalog.cwd).unwrap());
+            let session = Arc::new(CodingSession::create(&path, catalog.cwd.as_deref()).unwrap());
             let agent = agent(&catalog, 2);
             agent
                 .submit_message(
@@ -341,8 +349,8 @@ mod tests {
         );
         for excluded in [false, true] {
             let path = catalog.new_path().unwrap();
-            let session = Arc::new(CodingSession::create(&path, &catalog.cwd).unwrap());
-            let tools = LocalTools::new(&catalog.cwd).unwrap();
+            let session = Arc::new(CodingSession::create(&path, catalog.cwd.as_deref()).unwrap());
+            let tools = LocalTools::new(catalog.cwd.as_deref().unwrap()).unwrap();
             let output = session
                 .run_user_shell(
                     command.clone(),

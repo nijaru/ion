@@ -27,7 +27,9 @@ jobs:
       - run: cargo clippy --locked --workspace --all-targets --all-features -- -D warnings
       - run: cargo test --locked --workspace
       - name: Build client smoke binaries
-        run: cargo build --locked -p ion --bins --example embedded
+        run: cargo build --locked -p ion --bins --example embedded --example restricted
+      - name: Restricted application smoke
+        run: target/debug/examples/restricted "$(mktemp -d)"
       - name: Embedded SDK custody smoke
         run: python3 scripts/smoke_embedded.py
       - name: Install native-scrollback test terminal

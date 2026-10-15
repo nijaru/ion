@@ -1,71 +1,73 @@
 //! Immutable service preflight and prepare-before-publish binding replacement.
-use std::{
-    fs,
-    path::{Path, PathBuf},
-    sync::Arc,
-};
+use std::{fs, path::PathBuf, sync::Arc};
 
 use anyhow::{Context, Result, ensure};
 use ion_ai::ModelRef;
-use ion_core::{CodingAgent, CodingSession, CodingToolSource, ForkPoint};
+use ion_core::{CodingAgent, CodingSession, ForkPoint};
 use serde::Serialize;
 
-use crate::{Host, Resources, Selection, SessionCatalog, SessionControl};
+use crate::{Application, ApplicationRuntime, Resources, SessionCatalog, SessionControl};
 
-/// Preflight once before choosing the client's metadata type. This value owns
-/// configuration, not execution; consume it to create the sole control owner.
+/// Configuration, not execution. Consume this to create the sole control owner.
 pub struct SessionSetup {
-    pub(crate) host: Arc<Host>,
+    application: Arc<dyn Application>,
     pub(crate) catalog: SessionCatalog,
     pub(crate) session: Arc<CodingSession>,
-    pub(crate) selected: Selection,
-    pub(crate) agent: Arc<CodingAgent>,
+    pub(crate) runtime: ApplicationRuntime,
     pub(crate) resources: Resources,
-    external_tools: Option<Arc<dyn CodingToolSource>>,
 }
 
 impl SessionSetup {
+    /// An omitted model restores the Session preference, then the application's
+    /// default for a fresh Session. Omitted reasoning restores its saved value.
     pub fn new(
-        host: Arc<Host>,
         session: Arc<CodingSession>,
-        selected: Selection,
-        external_tools: Option<Arc<dyn CodingToolSource>>,
+        catalog: SessionCatalog,
+        application: Arc<dyn Application>,
+        model: Option<&ModelRef>,
         reasoning: Option<ion_ai::Reasoning>,
     ) -> Result<Self> {
-        let catalog = host.sessions(session.cwd().to_path_buf());
-        let resources = host.resources(session.cwd())?;
-        let agent =
-            host.agent_with_optional_tools(session.cwd(), &selected, external_tools.clone())?;
+        let model = model.cloned().or(session.model_preference()?);
+        let resources = application.resources(session.cwd())?;
+        let runtime = application.runtime(session.cwd(), model.as_ref())?;
+        validate_model(&runtime, model.as_ref())?;
+        Self::from_prepared(session, catalog, application, resources, runtime, reasoning)
+    }
+
+    pub(crate) fn from_prepared(
+        session: Arc<CodingSession>,
+        catalog: SessionCatalog,
+        application: Arc<dyn Application>,
+        resources: Resources,
+        runtime: ApplicationRuntime,
+        reasoning: Option<ion_ai::Reasoning>,
+    ) -> Result<Self> {
+        ensure!(
+            catalog.cwd() == session.cwd(),
+            "catalog and Session working directories differ"
+        );
         if let Some(reasoning) = reasoning {
-            agent.select_reasoning(&session, reasoning)?;
+            runtime.agent.select_reasoning(&session, reasoning)?;
         } else {
-            agent.validate_reasoning(session.reasoning()?)?;
+            runtime.agent.validate_reasoning(session.reasoning()?)?;
         }
         Ok(Self {
-            host,
+            application,
             catalog,
             session,
-            selected,
-            agent,
+            runtime,
             resources,
-            external_tools,
         })
     }
 
-    pub fn host(&self) -> &Host {
-        &self.host
-    }
     pub fn catalog(&self) -> &SessionCatalog {
         &self.catalog
     }
     pub fn session(&self) -> &Arc<CodingSession> {
         &self.session
     }
-    pub fn selected(&self) -> &Selection {
-        &self.selected
-    }
     pub fn agent(&self) -> &Arc<CodingAgent> {
-        &self.agent
+        &self.runtime.agent
     }
     pub fn resources(&self) -> &Resources {
         &self.resources
@@ -81,32 +83,37 @@ impl SessionSetup {
             .to_string_lossy()
             .into_owned()
     }
-
     pub fn into_control<M: Serialize + Send + 'static>(self) -> SessionControl<M> {
         SessionControl::from_setup(self)
     }
 
-    fn prepare(&self, cwd: &Path, selected: &Selection) -> Result<(Resources, Arc<CodingAgent>)> {
-        let resources = self.host.resources(cwd)?;
-        let agent =
-            self.host
-                .agent_with_optional_tools(cwd, selected, self.external_tools.clone())?;
-        Ok((resources, agent))
+    fn prepare(
+        &self,
+        session: &CodingSession,
+        model: Option<&ModelRef>,
+    ) -> Result<(Resources, ApplicationRuntime)> {
+        let resources = self.application.resources(session.cwd())?;
+        let runtime = self.application.runtime(session.cwd(), model)?;
+        validate_model(&runtime, model)?;
+        runtime.agent.validate_reasoning(session.reasoning()?)?;
+        Ok((resources, runtime))
     }
 }
 
+fn validate_model(runtime: &ApplicationRuntime, requested: Option<&ModelRef>) -> Result<()> {
+    ensure!(
+        requested.is_none_or(|model| model == runtime.agent.model()),
+        "application returned a different model than requested"
+    );
+    Ok(())
+}
+
 impl<M: Serialize + Send + 'static> SessionControl<M> {
-    pub fn host(&self) -> &Host {
-        self.setup.host()
-    }
     pub fn catalog(&self) -> &SessionCatalog {
         self.setup.catalog()
     }
     pub fn session(&self) -> &Arc<CodingSession> {
         self.setup.session()
-    }
-    pub fn selected(&self) -> &Selection {
-        self.setup.selected()
     }
     pub fn agent(&self) -> &Arc<CodingAgent> {
         self.setup.agent()
@@ -121,30 +128,28 @@ impl<M: Serialize + Send + 'static> SessionControl<M> {
         self.setup.session_id()
     }
 
-    /// Reload affects future admission. Active requests and queued expansions
-    /// retain their captured resources. Resource inspection remains available busy.
+    /// Reload affects future admission; active/queued inputs retain their snapshot.
     pub fn reload_resources(&mut self) -> Result<()> {
-        self.setup.resources = self.setup.host.resources(self.setup.session.cwd())?;
+        self.setup.resources = self.setup.application.resources(self.setup.session.cwd())?;
         Ok(())
     }
 
     pub fn select_model(&mut self, model: ModelRef) -> Result<()> {
         self.ensure_replaceable()?;
-        let selected = self.setup.host.models().resolve_identity(&model)?;
-        let agent = self.setup.host.agent_with_optional_tools(
-            self.setup.session.cwd(),
-            &selected,
-            self.setup.external_tools.clone(),
-        )?;
-        agent.select_model(&self.setup.session)?;
-        self.setup.selected = selected;
-        self.setup.agent = agent;
+        let runtime = self
+            .setup
+            .application
+            .runtime(self.setup.session.cwd(), Some(&model))?;
+        validate_model(&runtime, Some(&model))?;
+        runtime.agent.select_model(&self.setup.session)?;
+        self.setup.runtime = runtime;
         Ok(())
     }
 
     pub fn select_reasoning(&self, reasoning: ion_ai::Reasoning) -> Result<()> {
         self.ensure_replaceable()?;
         self.setup
+            .runtime
             .agent
             .select_reasoning(&self.setup.session, reasoning)?;
         Ok(())
@@ -154,16 +159,17 @@ impl<M: Serialize + Send + 'static> SessionControl<M> {
         self.ensure_replaceable()?;
         let previous = self.setup.session.clone();
         let _idle = previous.reserve_idle()?;
-        let selected =
-            self.setup
-                .host
-                .models()
-                .choose(None, None, None, self.setup.host.credentials())?;
-        let (resources, agent) = self.setup.prepare(self.setup.session.cwd(), &selected)?;
+        // Preflight before allocating/publishing a new database. New Sessions
+        // intentionally reset reasoning, unlike conversation copies.
+        let resources = self.setup.application.resources(previous.cwd())?;
+        let runtime = self.setup.application.runtime(previous.cwd(), None)?;
+        runtime
+            .agent
+            .validate_reasoning(ion_ai::Reasoning::ProviderDefault)?;
         let path = self.setup.catalog.new_path()?;
-        let session = Arc::new(CodingSession::create(&path, self.setup.session.cwd())?);
-        agent.select_model(&session)?;
-        self.publish(session, selected, agent, resources);
+        let session = Arc::new(CodingSession::create(&path, previous.cwd())?);
+        runtime.agent.select_model(&session)?;
+        self.publish(session, runtime, resources);
         Ok(())
     }
 
@@ -171,18 +177,19 @@ impl<M: Serialize + Send + 'static> SessionControl<M> {
         self.ensure_replaceable()?;
         let previous = self.setup.session.clone();
         let _idle = previous.reserve_idle()?;
-        let (resources, agent) = self
-            .setup
-            .prepare(self.setup.session.cwd(), &self.setup.selected)?;
-        agent.validate_reasoning(self.setup.session.reasoning()?)?;
+        let resources = self.setup.application.resources(previous.cwd())?;
+        // Retain the resolved configuration, not its lookup key. An unsaved
+        // route must remain usable; a changed store must not redirect a clone.
+        let runtime = self.setup.runtime.clone();
+        runtime.agent.validate_reasoning(previous.reasoning()?)?;
         let path = self.setup.catalog.new_path()?;
-        let session = Arc::new(self.setup.session.clone_to(&path)?);
+        let session = Arc::new(previous.clone_to(&path)?);
         let id = path
             .file_stem()
             .context("cloned session has no ID")?
             .to_string_lossy()
             .into_owned();
-        self.publish(session, self.setup.selected.clone(), agent, resources);
+        self.publish(session, runtime, resources);
         Ok(id)
     }
 
@@ -193,30 +200,27 @@ impl<M: Serialize + Send + 'static> SessionControl<M> {
         let turn = match point {
             ForkPoint::BeforeTurn(turn) | ForkPoint::AfterTurn(turn) => turn,
         };
-        let selected_turn = self
-            .setup
-            .session
+        let selected_turn = previous
             .view()?
             .turns()
             .into_iter()
             .find(|item| item.turn == turn)
             .context("selected Turn does not exist")?;
-        let selected = self.setup.host.models().choose(
-            None,
-            None,
-            Some(selected_turn.model),
-            self.setup.host.credentials(),
-        )?;
-        let (resources, agent) = self.setup.prepare(self.setup.session.cwd(), &selected)?;
-        agent.validate_reasoning(selected_turn.reasoning)?;
+        let resources = self.setup.application.resources(previous.cwd())?;
+        let runtime = self
+            .setup
+            .application
+            .runtime(previous.cwd(), Some(&selected_turn.model))?;
+        validate_model(&runtime, Some(&selected_turn.model))?;
+        runtime.agent.validate_reasoning(selected_turn.reasoning)?;
         let path = self.setup.catalog.new_path()?;
-        let session = Arc::new(self.setup.session.fork_to(&path, point)?);
+        let session = Arc::new(previous.fork_to(&path, point)?);
         let id = path
             .file_stem()
             .context("forked session has no ID")?
             .to_string_lossy()
             .into_owned();
-        self.publish(session, selected, agent, resources);
+        self.publish(session, runtime, resources);
         Ok(id)
     }
 
@@ -225,36 +229,28 @@ impl<M: Serialize + Send + 'static> SessionControl<M> {
         let previous = self.setup.session.clone();
         let _idle = previous.reserve_idle()?;
         let path = self.setup.catalog.resolve_explicit(path)?;
-        if fs::canonicalize(self.setup.session.path())? == fs::canonicalize(&path)? {
+        if fs::canonicalize(previous.path())? == fs::canonicalize(&path)? {
             return self.reload_resources();
         }
         let session = Arc::new(CodingSession::open(path)?);
         ensure!(
-            session.cwd() == self.setup.session.cwd(),
+            session.cwd() == previous.cwd(),
             "session belongs to another working directory"
         );
-        let selected = self.setup.host.models().choose(
-            None,
-            None,
-            session.model_preference()?,
-            self.setup.host.credentials(),
-        )?;
-        let (resources, agent) = self.setup.prepare(session.cwd(), &selected)?;
-        agent.validate_reasoning(session.reasoning()?)?;
-        self.publish(session, selected, agent, resources);
+        let model = session.model_preference()?;
+        let (resources, runtime) = self.setup.prepare(&session, model.as_ref())?;
+        self.publish(session, runtime, resources);
         Ok(())
     }
 
     fn publish(
         &mut self,
         session: Arc<CodingSession>,
-        selected: Selection,
-        agent: Arc<CodingAgent>,
+        runtime: ApplicationRuntime,
         resources: Resources,
     ) {
         self.setup.session = session;
-        self.setup.selected = selected;
-        self.setup.agent = agent;
+        self.setup.runtime = runtime;
         self.setup.resources = resources;
     }
 }

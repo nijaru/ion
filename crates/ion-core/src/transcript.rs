@@ -743,7 +743,7 @@ mod tests {
             model: "model".into(),
         };
         let view = SessionView {
-            cwd: "/tmp".into(),
+            cwd: Some("/tmp".into()),
             name: None,
             entries: vec![
                 SessionEntry::TurnStarted {

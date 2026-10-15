@@ -28,7 +28,8 @@
   Start at `crates/ion-core/src/{agent,session,request}.rs`; `tool_set.rs` freezes
   executable capabilities and `code_gateway.rs` retains composed effects.
 - Shared session control belongs in `crates/ion-host/src/control/`.
-  `binding.rs` owns preflight assembly and idle replacement. Do not duplicate
+  `application.rs` owns complete recipes and the coding preset; `binding.rs`
+  owns preflight publication and idle replacement. Do not duplicate
   input/operation lifecycle rules in clients. Do not freeze coding defaults into
   general control, bypass it for restricted integrations, or add a separate durable
   engine. Code Mode tool children are not managed subagents. `code_mode.rs` owns

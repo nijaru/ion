@@ -158,17 +158,28 @@ impl<M: Serialize + Send + 'static> SessionControl<M> {
                 if let ImageSource::Path(path) = source
                     && !path.is_absolute()
                 {
-                    *path = self.setup.session.cwd().join(&*path);
+                    *path = self
+                        .setup
+                        .session
+                        .cwd()
+                        .expect("relative image admission requires a workspace")
+                        .join(&*path);
                 }
             }
             let text = input.expanded.as_ref().unwrap().clone();
-            let selected = self.setup.selected.clone();
-            let limit = self.setup.agent.limits().max_request_bytes;
+            let model = self.setup.runtime.agent.model().clone();
+            let limits = self.setup.runtime.agent.limits();
             self.preparing = Some((
                 id,
                 crate::preparation::Preparation::start(move |stop| async move {
-                    let images =
-                        crate::image_input::prepare_images(&selected, sources, limit, stop).await?;
+                    let images = crate::image_input::prepare_images(
+                        &model,
+                        limits.image_input,
+                        sources,
+                        limits.max_request_bytes,
+                        stop,
+                    )
+                    .await?;
                     Ok(Message::user_input(text, images))
                 }),
             ));
@@ -223,7 +234,7 @@ impl<M: Serialize + Send + 'static> SessionControl<M> {
                 input.expanded = None;
                 let instructions = input.instructions.clone();
                 let inbox = Arc::new(SteeringInbox::new(
-                    self.setup.agent.limits(),
+                    self.setup.runtime.agent.limits(),
                     self.budget.clone(),
                 ));
                 let state = self.custody.clone();
@@ -232,7 +243,7 @@ impl<M: Serialize + Send + 'static> SessionControl<M> {
                     id: root,
                     operation,
                 });
-                let work = self.setup.agent.submit_message_with_steering(
+                let work = self.setup.runtime.agent.submit_message_with_steering(
                     self.setup.session.clone(),
                     message,
                     instructions,
@@ -298,7 +309,9 @@ impl<M: Serialize + Send + 'static> SessionControl<M> {
             }
         } else {
             match result.and_then(|message| {
-                Ok(self.budget.admit(message, id, self.setup.agent.limits())?)
+                Ok(self
+                    .budget
+                    .admit(message, id, self.setup.runtime.agent.limits())?)
             }) {
                 Ok(prepared) => {
                     let delivery = input.delivery;

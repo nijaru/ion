@@ -37,6 +37,16 @@ impl LocalTools {
     }
 }
 
+impl crate::UserShell for LocalTools {
+    fn prepare(&self, command: &str) -> anyhow::Result<crate::PreparedShell> {
+        let tools = Self::new(&self.cwd)?;
+        let command = command.to_owned();
+        Ok(Box::new(move |stop| {
+            Box::pin(async move { tools.run_user_shell(&command, stop).await })
+        }))
+    }
+}
+
 impl ToolSource for LocalTools {
     fn registrations(self: Arc<Self>) -> Vec<ToolRegistration> {
         specs()
@@ -482,7 +492,7 @@ mod tests {
                 std::env::temp_dir().join(format!("ion-turn-cancel-{}", uuid::Uuid::now_v7()));
             fs::create_dir(&root).unwrap();
             let path = root.join("session.sqlite");
-            let session = Arc::new(CodingSession::create(&path, &root).unwrap());
+            let session = Arc::new(CodingSession::create(&path, Some(&root)).unwrap());
             let response = ModelResponse {
                 message: Message {
                     role: Role::Assistant,

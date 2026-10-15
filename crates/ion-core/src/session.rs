@@ -43,7 +43,7 @@ fn completed_termination() -> ResponseTermination {
 struct Header {
     version: u32,
     provider_session_id: uuid::Uuid,
-    cwd: PathBuf,
+    cwd: Option<PathBuf>,
     #[serde(default)]
     name: Option<String>,
 }
@@ -193,7 +193,7 @@ pub struct UnobservedUserShell {
 
 #[derive(Debug, Clone, Serialize)]
 pub struct SessionView {
-    pub cwd: PathBuf,
+    pub cwd: Option<PathBuf>,
     pub name: Option<String>,
     pub entries: Vec<SessionEntry>,
     pub messages: Vec<Message>,
@@ -620,7 +620,7 @@ impl State {
 /// Passive, bounded input labels and preferences, not a raw-history export.
 #[derive(Debug, PartialEq, Eq)]
 pub struct SessionMetadata {
-    pub cwd: PathBuf,
+    pub cwd: Option<PathBuf>,
     pub name: Option<String>,
     pub last_model: Option<ModelRef>,
     pub turns: usize,
@@ -676,10 +676,10 @@ impl Drop for SessionLock {
 }
 
 impl Session {
-    pub fn create(path: impl AsRef<Path>, cwd: impl AsRef<Path>) -> Result<Self, SessionError> {
+    pub fn create(path: impl AsRef<Path>, cwd: Option<&Path>) -> Result<Self, SessionError> {
         let path = path.as_ref();
-        let cwd = cwd.as_ref().canonicalize()?;
-        if !cwd.is_dir() {
+        let cwd = cwd.map(Path::canonicalize).transpose()?;
+        if cwd.as_ref().is_some_and(|cwd| !cwd.is_dir()) {
             return Err(SessionError::InvalidWorkingDirectory);
         }
         fs::create_dir_all(path.parent().ok_or(SessionError::InvalidPath)?)?;
@@ -792,7 +792,7 @@ impl Session {
     }
 
     fn copy_entries_to(&self, path: &Path, entries: &[SessionEntry]) -> Result<Self, SessionError> {
-        let clone = Self::create(path, &self.header.cwd)?;
+        let clone = Self::create(path, self.header.cwd.as_deref())?;
         let copied = {
             let mut target = clone.store.lock().map_err(|_| SessionError::Poisoned)?;
             append(&mut target, entries)
@@ -868,8 +868,8 @@ impl Session {
     pub fn path(&self) -> &Path {
         &self.path
     }
-    pub fn cwd(&self) -> &Path {
-        &self.header.cwd
+    pub fn cwd(&self) -> Option<&Path> {
+        self.header.cwd.as_deref()
     }
     /// Stable transport affinity identity. Conversation copies get a fresh ID
     /// through `create`, while reopening reads the existing immutable header.
@@ -2165,7 +2165,7 @@ mod tests {
     #[tokio::test]
     async fn user_shell_operation_rejects_overlap_and_commits_before_release() {
         let (root, path) = fixture();
-        let session = Arc::new(Session::create(&path, &root).unwrap());
+        let session = Arc::new(Session::create(&path, Some(&root)).unwrap());
         let (admitted, admission) = tokio::sync::oneshot::channel();
         let (release, released) = tokio::sync::oneshot::channel();
         let operation = session.run_user_shell(
@@ -2217,7 +2217,7 @@ mod tests {
     #[test]
     fn shell_admission_recovers_before_authority_and_rejects_failed_recovery() {
         let (root, path) = fixture();
-        let session = Session::create(&path, &root).unwrap();
+        let session = Session::create(&path, Some(&root)).unwrap();
         let (turn, _) = session
             .begin_turn("interrupted".into(), test_execution().route.logical)
             .unwrap();
@@ -2326,7 +2326,7 @@ mod tests {
     #[test]
     fn shell_admission_and_result_faults_leave_only_committed_authority() {
         let (root, path) = fixture();
-        let session = Session::create(&path, &root).unwrap();
+        let session = Session::create(&path, Some(&root)).unwrap();
         session.store.lock().unwrap().connection.execute_batch(
             "CREATE TRIGGER reject_shell BEFORE INSERT ON entries BEGIN SELECT RAISE(ABORT, 'storage unavailable'); END;"
         ).unwrap();
@@ -2393,7 +2393,7 @@ mod tests {
     fn interrupted_shell_recovery_is_atomic_private_and_never_replayed() {
         for excluded in [false, true] {
             let (root, path) = fixture();
-            let session = Session::create(&path, &root).unwrap();
+            let session = Session::create(&path, Some(&root)).unwrap();
             session
                 .admit_user_shell("interrupted-command".into(), excluded)
                 .unwrap();
@@ -2524,7 +2524,7 @@ mod tests {
     #[test]
     fn passive_metadata_is_bounded_validated_and_does_not_recover_history() {
         let (root, path) = fixture();
-        let session = Session::create(&path, &root).unwrap();
+        let session = Session::create(&path, Some(&root)).unwrap();
         session.set_name(Some("Metadata")).unwrap();
         session
             .admit_user_shell(format!("{}\nSECOND_LINE", "🦀".repeat(130)), true)
@@ -2538,7 +2538,7 @@ mod tests {
             .unwrap();
         let before = session.view().unwrap().entries;
         let metadata = Session::inspect_metadata(&path).unwrap();
-        assert_eq!(metadata.cwd, root.canonicalize().unwrap());
+        assert_eq!(metadata.cwd, Some(root.canonicalize().unwrap()));
         assert_eq!(metadata.name.as_deref(), Some("Metadata"));
         assert_eq!(metadata.last_model, Some(model));
         assert_eq!(metadata.turns, 1);
@@ -2601,7 +2601,7 @@ mod tests {
             ),
         ] {
             let (root, path) = fixture();
-            let session = Session::create(&path, &root).unwrap();
+            let session = Session::create(&path, Some(&root)).unwrap();
             let model = test_execution().route.logical;
             let (turn, _) = session.begin_turn(prompt, model.clone()).unwrap();
             session
@@ -2629,7 +2629,7 @@ mod tests {
     #[test]
     fn metadata_projection_retains_only_pending_shared_shell_slot() {
         let (root, path) = fixture();
-        let session = Session::create(&path, &root).unwrap();
+        let session = Session::create(&path, Some(&root)).unwrap();
         let admission = session.admit_user_shell("shared".into(), false).unwrap();
         let model = ModelRef {
             provider: "test".into(),
@@ -2707,7 +2707,7 @@ mod tests {
     #[test]
     fn reopen_rejects_old_format_or_missing_affinity_without_backfill() {
         let (root, path) = fixture();
-        drop(Session::create(&path, &root).unwrap());
+        drop(Session::create(&path, Some(&root)).unwrap());
         let connection = Connection::open(&path).unwrap();
         for version in [6, FORMAT_VERSION] {
             let encoded = serde_json::to_vec(&serde_json::json!({
@@ -2771,7 +2771,7 @@ mod tests {
                 expected
             );
         };
-        let session = Session::create(&path, &root).unwrap();
+        let session = Session::create(&path, Some(&root)).unwrap();
         let admission = session
             .admit_user_shell("binary output".into(), false)
             .unwrap();
@@ -2787,7 +2787,7 @@ mod tests {
     #[test]
     fn user_shell_context_choice_survives_reopen_and_compaction() {
         let (root, path) = fixture();
-        let session = Session::create(&path, &root).unwrap();
+        let session = Session::create(&path, Some(&root)).unwrap();
         let admission = session.admit_user_shell("pwd".into(), false).unwrap();
         session
             .record_user_shell(admission, serde_json::json!({"stdout":"visible"}), false)
@@ -2875,7 +2875,7 @@ mod tests {
     #[test]
     fn selected_point_forks_preserve_valid_prefix_and_source_history() {
         let (root, path) = fixture();
-        let source = Session::create(&path, &root).unwrap();
+        let source = Session::create(&path, Some(&root)).unwrap();
         let model = ModelRef {
             provider: "test".into(),
             model: "model".into(),
@@ -2967,7 +2967,7 @@ mod tests {
     #[test]
     fn raw_input_limit_can_be_persisted_after_json_encoding() {
         let (root, path) = fixture();
-        let session = Session::create(&path, &root).unwrap();
+        let session = Session::create(&path, Some(&root)).unwrap();
         let mut prompt = "line\n".repeat(8 * 1024 * 1024 / 5);
         prompt.push_str("abc");
         assert_eq!(prompt.len(), 8 * 1024 * 1024);
@@ -3000,7 +3000,7 @@ mod tests {
         .unwrap();
         for text in [Some("inspect"), None] {
             let (root, path) = fixture();
-            let session = Session::create(&path, &root).unwrap();
+            let session = Session::create(&path, Some(&root)).unwrap();
             let mut content = Vec::new();
             if let Some(text) = text {
                 content.push(Content::Text(text.into()));
@@ -3056,7 +3056,7 @@ mod tests {
             provider: "test".into(),
             model: "test".into(),
         };
-        let session = Session::create(&path, &root).unwrap();
+        let session = Session::create(&path, Some(&root)).unwrap();
         let (turn, _) = session.begin_turn("first".into(), model.clone()).unwrap();
         session
             .record_assistant(
@@ -3104,7 +3104,7 @@ mod tests {
         let directory_alias = root.join("alias");
         symlink(&root, &directory_alias).unwrap();
         let file_alias = root.join("alias.sqlite");
-        let session = Session::create(&path, &root).unwrap();
+        let session = Session::create(&path, Some(&root)).unwrap();
         symlink(&path, &file_alias).unwrap();
         for alias in [&file_alias, &directory_alias.join("session.sqlite")] {
             assert!(matches!(
@@ -3140,7 +3140,7 @@ mod tests {
     #[test]
     fn hard_linked_databases_are_rejected_before_sqlite_access() {
         let (root, path) = fixture();
-        drop(Session::create(&path, &root).unwrap());
+        drop(Session::create(&path, Some(&root)).unwrap());
         let alias = root.join("hard.sqlite");
         fs::hard_link(&path, &alias).unwrap();
         for name in [&path, &alias] {
@@ -3161,8 +3161,8 @@ mod tests {
     #[test]
     fn distinct_database_extensions_do_not_share_a_writer_lock() {
         let (root, path) = fixture();
-        let first = Session::create(&path, &root).unwrap();
-        let second = Session::create(path.with_extension("db"), &root).unwrap();
+        let first = Session::create(&path, Some(&root)).unwrap();
+        let second = Session::create(path.with_extension("db"), Some(&root)).unwrap();
         drop(second);
         drop(first);
         fs::remove_dir_all(root).unwrap();
@@ -3171,7 +3171,7 @@ mod tests {
     #[test]
     fn failed_copy_retains_lock_identity_for_waiting_writers() {
         let (root, path) = fixture();
-        let source = Session::create(&path, &root).unwrap();
+        let source = Session::create(&path, Some(&root)).unwrap();
         let destination = root.join("copy.sqlite");
         // A contender can open the lock inode before actually requesting its lease.
         let waiting = OpenOptions::new()
@@ -3191,7 +3191,7 @@ mod tests {
                 .is_err()
         );
         assert!(!destination.exists());
-        let writer = Session::create(&destination, &root).unwrap();
+        let writer = Session::create(&destination, Some(&root)).unwrap();
         assert_eq!(
             flock(&waiting, FlockOperation::NonBlockingLockExclusive),
             Err(rustix::io::Errno::WOULDBLOCK)
@@ -3207,7 +3207,7 @@ mod tests {
     #[test]
     fn releasing_a_session_unlocks_an_inherited_file_description() {
         let (root, path) = fixture();
-        let session = Session::create(&path, &root).unwrap();
+        let session = Session::create(&path, Some(&root)).unwrap();
         assert!(matches!(
             Session::open(&path),
             Err(SessionError::AlreadyOpen)
@@ -3227,7 +3227,7 @@ mod tests {
             provider: "test".into(),
             model: "test".into(),
         };
-        let session = Session::create(&path, &root).unwrap();
+        let session = Session::create(&path, Some(&root)).unwrap();
         let (turn, _) = session.begin_turn("first".into(), model.clone()).unwrap();
         session
             .record_assistant(
@@ -3272,7 +3272,7 @@ mod tests {
     #[test]
     fn final_answer_and_end_share_a_commit() {
         let (root, path) = fixture();
-        let session = Session::create(&path, &root).unwrap();
+        let session = Session::create(&path, Some(&root)).unwrap();
         let model = ModelRef {
             provider: "test".into(),
             model: "test".into(),
@@ -3307,7 +3307,7 @@ mod tests {
     #[test]
     fn rejected_batch_does_not_publish_projection_or_settled_cut() {
         let (root, path) = fixture();
-        let session = Session::create(&path, &root).unwrap();
+        let session = Session::create(&path, Some(&root)).unwrap();
         let (turn, _) = session
             .begin_turn(
                 "first".into(),
@@ -3372,7 +3372,7 @@ mod tests {
     #[test]
     fn name_is_visible_after_reopen_without_changing_history() {
         let (root, path) = fixture();
-        let session = Session::create(&path, &root).unwrap();
+        let session = Session::create(&path, Some(&root)).unwrap();
         session.set_name(Some("  Investigate parser  ")).unwrap();
         assert_eq!(
             session.view().unwrap().name.as_deref(),
@@ -3396,7 +3396,7 @@ mod tests {
         let root = std::env::temp_dir().join(format!("ion-reasoning-{}", uuid::Uuid::now_v7()));
         std::fs::create_dir(&root).unwrap();
         let path = root.join("session.sqlite");
-        let session = Session::create(&path, &root).unwrap();
+        let session = Session::create(&path, Some(&root)).unwrap();
         let choose = |session: &Session, reasoning| -> Result<(), SessionError> {
             let guard = session.operations.try_lock().map_err(SessionError::from)?;
             session.record_selection(&guard, test_execution().route.logical, Some(reasoning))
@@ -3476,7 +3476,7 @@ mod tests {
     #[test]
     fn idle_preferences_do_not_rewrite_or_recover_an_unfinished_turn() {
         let (root, path) = fixture();
-        let session = Session::create(&path, &root).unwrap();
+        let session = Session::create(&path, Some(&root)).unwrap();
         let original = test_execution().route.logical;
         let operation = session.operations.try_lock().unwrap();
         session
@@ -3532,7 +3532,7 @@ mod tests {
     #[test]
     fn idle_model_choice_survives_reopen() {
         let (root, path) = fixture();
-        let session = Session::create(&path, &root).unwrap();
+        let session = Session::create(&path, Some(&root)).unwrap();
         let model = ModelRef {
             provider: "test".into(),
             model: "new".into(),
@@ -3546,7 +3546,7 @@ mod tests {
     #[test]
     fn compaction_changes_only_the_model_projection_and_survives_reopen() {
         let (root, path) = fixture();
-        let session = Session::create(&path, &root).unwrap();
+        let session = Session::create(&path, Some(&root)).unwrap();
         let model = ModelRef {
             provider: "test".into(),
             model: "test".into(),
@@ -3611,7 +3611,7 @@ mod tests {
     #[test]
     fn human_thinking_stays_in_facts_not_model_context_across_history_operations() {
         let (root, path) = fixture();
-        let session = Session::create(&path, &root).unwrap();
+        let session = Session::create(&path, Some(&root)).unwrap();
         let (turn, _) = session
             .begin_turn("question".into(), test_execution().route.logical)
             .unwrap();
@@ -3685,7 +3685,7 @@ mod tests {
     #[test]
     fn model_switch_does_not_revive_earlier_opaque_replay() {
         let (root, path) = fixture();
-        let session = Session::create(&path, &root).unwrap();
+        let session = Session::create(&path, Some(&root)).unwrap();
         let gemini = ModelRef {
             provider: "openrouter".into(),
             model: "google/gemini".into(),
@@ -3798,7 +3798,7 @@ mod tests {
     #[test]
     fn effective_model_route_changes_do_not_revive_old_replay_under_one_logical_model() {
         let (root, path) = fixture();
-        let session = Session::create(&path, &root).unwrap();
+        let session = Session::create(&path, Some(&root)).unwrap();
         let logical = ModelRef {
             provider: "virtual".into(),
             model: "coding".into(),
@@ -3963,7 +3963,7 @@ mod tests {
     #[test]
     fn provider_rebase_is_durable_and_keeps_raw_assistant_history() {
         let (root, path) = fixture();
-        let session = Session::create(&path, &root).unwrap();
+        let session = Session::create(&path, Some(&root)).unwrap();
         let model = ModelRef {
             provider: "anthropic".into(),
             model: "claude-test".into(),
@@ -4041,7 +4041,7 @@ mod tests {
     #[test]
     fn parent_result_cannot_settle_a_pending_child() {
         let (root, path) = fixture();
-        let session = Session::create(&path, &root).unwrap();
+        let session = Session::create(&path, Some(&root)).unwrap();
         let model = ModelRef {
             provider: "test".into(),
             model: "test".into(),
@@ -4125,7 +4125,7 @@ mod tests {
     #[test]
     fn code_parent_discovery_pages_coordinates_and_excludes_unsettled_calls() {
         let (root, path) = fixture();
-        let session = Session::create(&path, &root).unwrap();
+        let session = Session::create(&path, Some(&root)).unwrap();
         let (turn, _) = session
             .begin_turn(
                 "compose".into(),
@@ -4268,7 +4268,7 @@ mod tests {
     #[test]
     fn code_inspection_preserves_states_exact_values_and_bounded_metadata() {
         let (root, path) = fixture();
-        let session = Session::create(&path, &root).unwrap();
+        let session = Session::create(&path, Some(&root)).unwrap();
         let (turn, _) = session
             .begin_turn(
                 "compose".into(),
@@ -4431,7 +4431,7 @@ mod tests {
     #[test]
     fn compaction_never_cuts_between_parallel_tool_results() {
         let (root, path) = fixture();
-        let session = Session::create(&path, &root).unwrap();
+        let session = Session::create(&path, Some(&root)).unwrap();
         let model = ModelRef {
             provider: "test".into(),
             model: "test".into(),
@@ -4512,7 +4512,7 @@ mod tests {
     #[test]
     fn repeated_compaction_after_cancelled_tool_batch_has_no_new_prefix() {
         let (root, path) = fixture();
-        let session = Session::create(&path, &root).unwrap();
+        let session = Session::create(&path, Some(&root)).unwrap();
         let model = ModelRef {
             provider: "test".into(),
             model: "test".into(),
@@ -4587,7 +4587,7 @@ mod tests {
     #[test]
     fn compaction_keeps_oversized_recent_tool_batch_when_older_cut_exists() {
         let (root, path) = fixture();
-        let session = Session::create(&path, &root).unwrap();
+        let session = Session::create(&path, Some(&root)).unwrap();
         let model = ModelRef {
             provider: "test".into(),
             model: "test".into(),
@@ -4665,7 +4665,7 @@ mod tests {
     #[test]
     fn completed_text_response_is_a_compaction_boundary_during_steering() {
         let (root, path) = fixture();
-        let session = Session::create(&path, &root).unwrap();
+        let session = Session::create(&path, Some(&root)).unwrap();
         let model = ModelRef {
             provider: "test".into(),
             model: "test".into(),
@@ -4720,7 +4720,7 @@ mod tests {
     #[test]
     fn failed_tool_result_survives_reopen() {
         let (root, path) = fixture();
-        let session = Session::create(&path, &root).unwrap();
+        let session = Session::create(&path, Some(&root)).unwrap();
         let model = ModelRef {
             provider: "test".into(),
             model: "test".into(),
@@ -4770,7 +4770,7 @@ mod tests {
     #[test]
     fn model_context_changes_are_durable_and_elide_repeats() {
         let (root, path) = fixture();
-        let session = Session::create(&path, &root).unwrap();
+        let session = Session::create(&path, Some(&root)).unwrap();
         let model = ModelRef {
             provider: "test".into(),
             model: "test".into(),
@@ -4820,7 +4820,7 @@ mod tests {
     #[test]
     fn context_timeline_tracks_committed_message_boundaries() {
         let (root, path) = fixture();
-        let session = Session::create(&path, &root).unwrap();
+        let session = Session::create(&path, Some(&root)).unwrap();
         let model = ModelRef {
             provider: "test".into(),
             model: "test".into(),
@@ -4974,7 +4974,7 @@ mod tests {
     #[test]
     fn clone_and_fork_follow_model_context_history() {
         let (root, path) = fixture();
-        let session = Session::create(&path, &root).unwrap();
+        let session = Session::create(&path, Some(&root)).unwrap();
         let model = ModelRef {
             provider: "test".into(),
             model: "test".into(),
@@ -5088,7 +5088,7 @@ mod tests {
     fn cloned_session_preserves_context_but_diverges_independently() {
         let (root, path) = fixture();
         let clone_path = root.join("clone.sqlite");
-        let source = Session::create(&path, &root).unwrap();
+        let source = Session::create(&path, Some(&root)).unwrap();
         let model = ModelRef {
             provider: "test".into(),
             model: "test".into(),

@@ -575,9 +575,9 @@ closure proves that remote effects have stopped.
 When a server announces a changed tool list, Ion refreshes that server before
 the next model request. A failed refresh reports a warning and keeps its last
 known list. Remote MCP OAuth login is not yet supported.
-For Rust embedders, `Host::agent_with_tools` takes the working directory,
-selected route and a custom `CodingToolSource`; it composes that source with
-the built-ins, and a same-name registration replaces that one built-in.
+For Rust embedders, `CodingApplication::new(host, tools)` adds an optional custom
+`CodingToolSource` to the coding tools; a same-name registration replaces that
+built-in. Restricted applications instead supply a complete `Application` recipe.
 A source publishes `ToolRegistration` values that bind a `ToolDefinition` to a
 `ToolExecutor`. Refresh publishes new registrations; an issued request retains
 its original executor, including an MCP connection and remote tool name. This
@@ -685,8 +685,8 @@ save an empty assistant message that would break later provider replay.
 
 `ion --code-mode run 'Read the files in parallel and return a summary'` adds
 `code_mode` alongside direct tools. The same flag works with chat and RPC;
-`Host::with_code_mode(true)` enables it for embedded hosts and later binding
-changes. It is off by default. Its reserved tool name replaces a custom
+`CodingApplication::with_code_mode(true)` enables it for that application's
+initial setup and later binding changes. It is off by default. Its reserved tool name replaces a custom
 `code_mode` registration when enabled.
 
 The model supplies an async JavaScript **body**, for example:
@@ -792,11 +792,12 @@ retention guarantee. No comparative latency/token benefit is established yet.
 
 ## Current limits
 
-The shared engine is not yet a general-agent service SDK:
+Restricted Rust applications can use shared control, but the durable/service
+contracts are not all implemented:
 
 | Boundary | Implemented today | Not yet implemented |
 | --- | --- | --- |
-| Application setup | Shared coding configuration across terminal, headless, RPC and Rust embedding; lower-level custom model/tool interfaces. | Complete restricted/non-coding configuration through shared control, without inherited native tools or project resources. |
+| Application setup | Caller-owned model/tool/instruction configuration through shared control; workspace-free Sessions; explicit shell/local-image authority. Coding is a preset. | Durable restoration/reconciliation of capability scope. The live application recipe must be supplied again on reopen. |
 | Durability | SQLite conversation/effect history and conservative interrupted-work recovery. | Durable queued requests, restart-safe request deduplication and automatic continuation of an interrupted logical Turn. |
 | Delegation | Independent Sessions, conversation forks and Code Mode nested tool calls. | Managed child-agent relationships and foreground/background supervision. Forks share the live workspace. |
 | Remote use | Foreground stdio RPC and passive, lossy progress observation. | An authenticated network service or complete attachable state API. A bridge must retain the owner independently; RPC EOF stops/joins work. |
@@ -850,15 +851,41 @@ example prints only the committed answer using fallible output, restores the
 saved reasoning preference, and connects no MCP servers. It is an SDK lifecycle
 sample, not a replacement for the terminal or RPC client.
 
-`ion-host::Host` assembles providers, credentials, tools and project resources.
-Construct `SessionSetup::new(host, session, selected, tools, reasoning)` and consume
-it with `into_control::<M>()`. `None` reasoning restores the saved preference.
-`SessionControl<M>` is the shared owner used by terminal, headless, RPC and this
-example—not another model/tool loop. It handles preparation, steering, follow-ups,
-operation settlement and idle model/Session replacement. This constructor always
-loads coding instructions/resources and native tools. Its `tools` parameter adds
-or overrides registrations; it is not a complete allowlist. Do not treat this
-high-level setup as a restricted tool host for untrusted remote users.
+`CodingApplication::new(host, tools).setup(session, selected, reasoning)` supplies
+the coding preset. It loads coding instructions/resources and native tools; the
+optional `tools` source adds or overrides registrations, not a complete allowlist.
+Consume the setup with `into_control::<M>()` to create `SessionControl<M>`, the same
+owner used by terminal, headless, RPC and this example—not another model/tool loop.
+It handles preparation, steering, follow-ups, settlement and idle replacement.
+
+For restricted/non-coding embedding, implement `Application`: `resources(cwd)`
+returns explicit resources, and `runtime(cwd, model)` returns the complete agent
+configuration. `Resources::new(instructions)` does no filesystem discovery;
+`ApplicationRuntime::new(agent)` grants neither direct shell nor local-image-path
+access. Encoded/normalized images still require the model's image capability.
+Native input is an explicit grant, not a sandbox or path allowlist.
+
+Construct `SessionSetup::new(session, catalog, application, model, reasoning)`.
+Omitted model/reasoning restore the saved preferences; a fresh Session uses the
+application's model default. The recipe remains attached through reload and
+replacement. Clone retains the resolved runtime rather than resolving a route
+name again. Explicit model selection and reopening resolve through the recipe;
+unavailable requested identities fail rather than silently selecting a default.
+Create a workspace-free Session with `CodingSession::create(path, None)` and its
+catalog with `SessionCatalog::new(state_root, None)`—no dummy directory is needed.
+The coding executable rejects workspace-free Sessions for coding operations;
+inspection can still represent their `cwd` as null.
+
+The credential-free [restricted example](crates/ion-app/examples/restricted.rs)
+uses a synthetic model and one custom counting tool through this same API:
+
+```sh
+cargo run --locked -p ion --example restricted -- "$(mktemp -d)"
+```
+
+It checks the actual requests and custom-tool execution, not a live provider or
+service deployment. Applications must authenticate callers and authorize control;
+selecting capabilities alone does not isolate untrusted tenants or host effects.
 
 Use `submit(Delivery, UserInput, metadata)` for input. `Prompt` expands resources
 once and normalizes attachments; an already-prepared `Message` stays literal.
@@ -889,10 +916,9 @@ MCP connection cleanup remains a separate `McpTools::shutdown()` obligation.
 
 For lower-level integration, `ion-core::CodingAgent` and `CodingSession` expose
 retained `Operation` handles and abstract model/tool contracts;
-`Host::agent_with_tools` adds/overrides a custom `CodingToolSource`, while
-`Host::agent_with_tool_source` selects a complete source. Core accepts custom
-instructions and `ModelService`; these lower-level assembly choices cannot yet
-be supplied to shared `SessionSetup`. Starting a Core operation reserves execution
+`Host::agent(selected, tool_set)` combines a selected HTTP route with a complete
+caller-owned `ToolSet`, without adding coding tools or Code Mode. Custom `ModelService`
+and tool sources can be assembled inside an `Application` and use shared control. Starting a Core operation reserves execution
 immediately and rejects concurrent starts. Retain/join each handle:
 dropping an owning wait requests stop, while timing out a borrowed `&mut operation`
 only stops waiting. `CodingSession::shutdown()` joins retained work and reports

@@ -1,5 +1,5 @@
 //! JSONL translation over the sole shared Host input and execution owner.
-use std::{collections::BTreeMap, path::PathBuf};
+use std::{collections::BTreeMap, path::PathBuf, sync::Arc};
 
 use anyhow::{Context, Result, anyhow, bail, ensure};
 use ion_core::ForkPoint;
@@ -46,6 +46,7 @@ struct OperationReply {
     turn: Option<u64>,
 }
 struct Control {
+    services: Arc<ion_host::Host>,
     host: SessionControl<RpcMetadata>,
     correlations: BTreeMap<InputId, Correlation>,
     turn_reply: Option<OperationReply>,
@@ -57,8 +58,9 @@ struct Control {
     unacknowledged_stops: u64,
 }
 impl Control {
-    fn new(setup: SessionSetup) -> Self {
+    fn new(setup: SessionSetup, services: Arc<ion_host::Host>) -> Self {
         Self {
+            services,
             host: setup.into_control::<RpcMetadata>(),
             correlations: BTreeMap::new(),
             turn_reply: None,
@@ -117,12 +119,12 @@ impl Control {
                     let view = self.host.session().view()?;
                     let state = self.host.state();
                     let operation = state.operation.map(|operation| match operation.kind { ion_host::OperationKind::Turn => "turn", ion_host::OperationKind::Compact => "compact", ion_host::OperationKind::Shell => "shell" });
-                    Ok(json!({"session":self.session_id(),"cwd":view.cwd,"name":view.name,"model":self.host.selected().identity(),"reasoning":view.reasoning.to_string(),"busy":state.busy,"operation":operation,"preparing_input":state.preparing_input,"entries":view.entries.len(),"follow_ups":state.pending_follow_ups}))
+                    Ok(json!({"session":self.session_id(),"cwd":view.cwd,"name":view.name,"model":self.host.agent().model(),"reasoning":view.reasoning.to_string(),"busy":state.busy,"operation":operation,"preparing_input":state.preparing_input,"entries":view.entries.len(),"follow_ups":state.pending_follow_ups}))
                 }
                 "inspect" => inspection::to_value(&self.host.session().view()?),
                 "list_sessions" => Ok(json!(self.host.catalog().list()?.iter().map(|item| json!({"id":item.id,"name":item.name,"preview":item.preview,"turns":item.turns,"model":item.model})).collect::<Vec<_>>())),
                 "list_turns" => Ok(json!(self.host.session().view()?.turns().iter().map(|item| json!({"turn":item.turn,"preview":preview_input(&item.input),"ended":item.end.is_some()})).collect::<Vec<_>>())),
-                "list_models" => Ok(json!(self.host.host().models().choices(self.host.host().credentials())?.iter().map(|item| json!({"provider":item.selected.provider,"model":item.selected.model,"label":item.label,"image_input":item.selected.image_input})).collect::<Vec<_>>())),
+                "list_models" => Ok(json!(self.services.models().choices(self.services.credentials())?.iter().map(|item| json!({"provider":item.selected.provider,"model":item.selected.model,"label":item.label,"image_input":item.selected.image_input})).collect::<Vec<_>>())),
                 "list_resources" => Ok(json!({"skills":self.host.resources().skills().map(|item| json!({"name":item.name,"description":item.description})).collect::<Vec<_>>(),"prompts":self.host.resources().templates().map(|item| json!({"name":item.name,"description":item.description})).collect::<Vec<_>>(),"diagnostics":self.host.resources().diagnostics().iter().map(|item| json!({"path":item.path,"message":item.message})).collect::<Vec<_>>()})),
                 "reload_resources" => {
                     self.idle()?;
@@ -153,29 +155,29 @@ impl Control {
                     let provider = required_string(&value, "provider")?;
                     let model = required_string(&value, "model")?;
                     self.host.select_model(ion_ai::ModelRef { provider: provider.to_owned(), model: model.to_owned() })?;
-                    Ok(json!({"model":self.host.selected().identity()}))
+                    Ok(json!({"model":self.host.agent().model()}))
                 }
                 "new_session" => {
                     self.idle()?;
                     self.host.new_session()?;
-                    Ok(json!({"session":self.session_id(),"model":self.host.selected().identity()}))
+                    Ok(json!({"session":self.session_id(),"model":self.host.agent().model()}))
                 }
                 "clone_session" => {
                     self.idle()?;
                     let session = self.host.clone_session()?;
-                    Ok(json!({"session":session,"model":self.host.selected().identity()}))
+                    Ok(json!({"session":session,"model":self.host.agent().model()}))
                 }
                 "fork" => {
                     self.idle()?;
                     let turn = value.get("turn").and_then(Value::as_u64).context("turn must be an unsigned integer")?;
                     let after = value.get("after").map(|value| value.as_bool().context("after must be a boolean")).transpose()?.unwrap_or(false);
                     self.host.fork_session(if after { ForkPoint::AfterTurn(turn) } else { ForkPoint::BeforeTurn(turn) })?;
-                    Ok(json!({"session":self.session_id(),"model":self.host.selected().identity()}))
+                    Ok(json!({"session":self.session_id(),"model":self.host.agent().model()}))
                 }
                 "switch_session" => {
                     self.idle()?;
                     self.host.switch_session(PathBuf::from(required_string(&value, "session")?))?;
-                    Ok(json!({"session":self.session_id(),"model":self.host.selected().identity()}))
+                    Ok(json!({"session":self.session_id(),"model":self.host.agent().model()}))
                 }
                 "set_name" => {
                     self.idle()?;
@@ -261,8 +263,8 @@ impl Control {
     }
 }
 
-pub async fn run(setup: SessionSetup) -> Result<()> {
-    let mut control = Control::new(setup);
+pub async fn run(setup: SessionSetup, services: Arc<ion_host::Host>) -> Result<()> {
+    let mut control = Control::new(setup, services);
     let opened = stdio::Stdio::open(
         (std::io::stdin(), tokio::io::Interest::READABLE),
         (std::io::stdout(), tokio::io::Interest::WRITABLE),

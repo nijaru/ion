@@ -1,5 +1,5 @@
 use super::*;
-use crate::{ControlUpdate, OperationOutcome, SavedSelection, Wire};
+use crate::{ControlUpdate, Host, OperationOutcome, SavedSelection, Selection, Wire};
 use std::fs;
 use tokio_util::sync::CancellationToken;
 
@@ -14,7 +14,8 @@ fn route(model: &str) -> SavedSelection {
     }
 }
 fn control(host: Arc<Host>, session: Arc<CodingSession>, selected: Selection) -> SessionControl {
-    SessionSetup::new(host, session, selected, None, None)
+    crate::CodingApplication::new(host, None)
+        .setup(session, selected, None)
         .unwrap()
         .into_control()
 }
@@ -27,7 +28,7 @@ async fn direct_shell_preflights_before_recovery_or_admission() {
     let host = Arc::new(Host::new(root.join("config"), root.join("state")));
     let selected = host.models().save_default(&route("one")).unwrap();
     let path = host.sessions(cwd.clone()).new_path().unwrap();
-    let session = Arc::new(CodingSession::create(&path, &cwd).unwrap());
+    let session = Arc::new(CodingSession::create(&path, Some(&cwd)).unwrap());
     let interrupted = session
         .run_user_shell(
             "old command".into(),
@@ -83,6 +84,32 @@ async fn direct_shell_preflights_before_recovery_or_admission() {
 }
 
 #[test]
+fn clone_preserves_resolved_route_without_a_store_entry() {
+    let root = std::env::temp_dir().join(format!("ion-clone-route-{}", uuid::Uuid::now_v7()));
+    let cwd = root.join("work");
+    fs::create_dir_all(&cwd).unwrap();
+    let host = Arc::new(Host::new(root.join("config"), root.join("state")));
+    let selected = host.models().save_default(&route("resolved-only")).unwrap();
+    fs::remove_file(root.join("config/models.json")).unwrap();
+    let session = Arc::new(
+        CodingSession::create(host.sessions(cwd.clone()).new_path().unwrap(), Some(&cwd)).unwrap(),
+    );
+    session.select_model(selected.identity()).unwrap();
+    let identity = selected.identity();
+    let mut control = control(host, session, selected);
+    control
+        .clone_session()
+        .expect("a conversation copy retains the resolved route");
+    assert_eq!(control.agent().model(), &identity);
+    assert_eq!(
+        control.session().model_preference().unwrap(),
+        Some(identity)
+    );
+    drop(control);
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
 fn idle_override_and_effort_restore_as_one_selection() {
     let root = std::env::temp_dir().join(format!("ion-control-{}", uuid::Uuid::now_v7()));
     let cwd = root.join("work");
@@ -93,7 +120,7 @@ fn idle_override_and_effort_restore_as_one_selection() {
     let limited = host.models().save_default(&limited).unwrap();
     let selected = host.models().save_default(&route("override")).unwrap();
     let path = host.sessions(cwd.clone()).new_path().unwrap();
-    let session = Arc::new(CodingSession::create(&path, &cwd).unwrap());
+    let session = Arc::new(CodingSession::create(&path, Some(&cwd)).unwrap());
     session.select_model(limited.identity()).unwrap();
     let binding = control(host.clone(), session.clone(), selected);
     binding.select_reasoning(ion_ai::Reasoning::High).unwrap();
@@ -110,7 +137,7 @@ fn idle_override_and_effort_restore_as_one_selection() {
         )
         .unwrap();
     let binding = control(host.clone(), session, selected);
-    assert_eq!(binding.selected().model, "override");
+    assert_eq!(binding.agent().model().model, "override");
     assert_eq!(
         binding.session().reasoning().unwrap(),
         ion_ai::Reasoning::High
@@ -128,7 +155,7 @@ fn replacement_restores_model_and_keeps_old_binding_on_preflight_failure() {
     let host = Arc::new(Host::new(root.join("config"), root.join("state")));
     let first_model = host.models().save_default(&route("one")).unwrap();
     let first_path = host.sessions(cwd.clone()).new_path().unwrap();
-    let first = Arc::new(CodingSession::create(&first_path, &cwd).unwrap());
+    let first = Arc::new(CodingSession::create(&first_path, Some(&cwd)).unwrap());
     first.select_model(first_model.identity()).unwrap();
     let mut binding = control(host.clone(), first, first_model);
     binding.select_reasoning(ion_ai::Reasoning::High).unwrap();
@@ -150,12 +177,12 @@ fn replacement_restores_model_and_keeps_old_binding_on_preflight_failure() {
             })
             .is_err()
     );
-    assert_eq!(binding.selected().model, "one");
+    assert_eq!(binding.agent().model().model, "one");
     assert_eq!(binding.session().view().unwrap().entries, entries);
     host.models().save_default(&route("two")).unwrap();
     binding.new_session().unwrap();
     let second_id = binding.session_id();
-    assert_eq!(binding.selected().model, "two");
+    assert_eq!(binding.agent().model().model, "two");
     assert_eq!(
         binding.session().reasoning().unwrap(),
         ion_ai::Reasoning::ProviderDefault
@@ -164,10 +191,10 @@ fn replacement_restores_model_and_keeps_old_binding_on_preflight_failure() {
     fs::rename(&cwd, &moved).unwrap();
     assert!(binding.switch_session(first_path.clone()).is_err());
     assert_eq!(binding.session_id(), second_id);
-    assert_eq!(binding.selected().model, "two");
+    assert_eq!(binding.agent().model().model, "two");
     fs::rename(&moved, &cwd).unwrap();
     binding.switch_session(first_path).unwrap();
-    assert_eq!(binding.selected().model, "one");
+    assert_eq!(binding.agent().model().model, "one");
     assert_eq!(
         binding.session().reasoning().unwrap(),
         ion_ai::Reasoning::High

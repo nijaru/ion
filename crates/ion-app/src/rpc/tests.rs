@@ -35,11 +35,13 @@ impl Fixture {
             })
             .unwrap();
         let path = host.sessions(cwd.clone()).new_path().unwrap();
-        let session = Arc::new(ion_core::CodingSession::create(path, cwd).unwrap());
+        let session = Arc::new(ion_core::CodingSession::create(path, Some(&cwd)).unwrap());
         session.select_model(selected.identity()).unwrap();
-        let setup = SessionSetup::new(host, session, selected, None, None).unwrap();
+        let setup = ion_host::CodingApplication::new(host.clone(), None)
+            .setup(session, selected, None)
+            .unwrap();
         Self {
-            control: Some(Control::new(setup)),
+            control: Some(Control::new(setup, host)),
             root,
         }
     }

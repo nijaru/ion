@@ -10,8 +10,7 @@ use anyhow::{Context, Result, ensure};
 use clap::Parser;
 use ion_core::CodingSession;
 use ion_host::{
-    ControlUpdate, Delivery, Host, OperationOutcome, ReturnReason, SessionControl, SessionSetup,
-    UserInput,
+    ControlUpdate, Delivery, Host, OperationOutcome, ReturnReason, SessionControl, UserInput,
 };
 
 #[derive(Parser)]
@@ -38,7 +37,7 @@ async fn main() -> Result<()> {
     let session = Arc::new(if args.session.try_exists()? {
         CodingSession::open(&args.session)?
     } else {
-        CodingSession::create(&args.session, &cwd)?
+        CodingSession::create(&args.session, Some(&cwd))?
     });
 
     // Keep every fallible step after opening the Session inside this outcome.
@@ -57,7 +56,7 @@ async fn main() -> Result<()> {
 
 async fn submit(args: Args, cwd: &Path, session: Arc<CodingSession>) -> Result<()> {
     ensure!(
-        session.cwd() == cwd,
+        session.cwd() == Some(cwd),
         "Session belongs to a different working directory"
     );
     let host = Arc::new(Host::from_environment()?);
@@ -69,7 +68,7 @@ async fn submit(args: Args, cwd: &Path, session: Arc<CodingSession>) -> Result<(
     )?;
     // This example connects no MCP servers and restores the saved reasoning
     // preference instead of overriding it. There is no client-owned agent loop.
-    let setup = SessionSetup::new(host, session, selected, None, None)?;
+    let setup = ion_host::CodingApplication::new(host, None).setup(session, selected, None)?;
     let mut control = setup.into_control::<()>();
     let outcome = async {
         let answer = prompt(&mut control, args.prompt).await?;

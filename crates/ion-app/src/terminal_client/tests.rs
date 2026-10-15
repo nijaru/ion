@@ -2,7 +2,7 @@
 //! stop/acceptance races and decoder lifetimes; do not duplicate those internals.
 use super::activity::OperationKind;
 use super::*;
-use ion_host::{ControlUpdate, Host, OperationOutcome, SavedSelection, SessionSetup, Wire};
+use ion_host::{ControlUpdate, Host, OperationOutcome, SavedSelection, Wire};
 use std::sync::Arc;
 
 pub(super) struct Fixture {
@@ -27,8 +27,11 @@ impl Fixture {
                 image_input: true,
             })
             .unwrap();
-        let session = Arc::new(CodingSession::create(root.join("session.sqlite"), &root).unwrap());
-        let setup = SessionSetup::new(host, session, selected, None, None).unwrap();
+        let session =
+            Arc::new(CodingSession::create(root.join("session.sqlite"), Some(&root)).unwrap());
+        let setup = ion_host::CodingApplication::new(host, None)
+            .setup(session, selected, None)
+            .unwrap();
         Self {
             root,
             control: setup.into_control(),
@@ -285,7 +288,8 @@ async fn clipboard_image_keeps_typed_coordinates_and_refuses_unsupported_routes(
     let mut loaded = ion_ai::normalize_rgba(1, 1, vec![255, 0, 0, 255]).unwrap();
     loaded.note = Some("clipboard coordinates".into());
     let prepared = prepare_clipboard(
-        fixture.control.selected(),
+        fixture.control.agent().model(),
+        fixture.control.agent().limits().image_input,
         crate::clipboard_reader::PasteContent::Image {
             content: loaded.content.clone(),
             note: loaded.note.clone(),
@@ -297,11 +301,10 @@ async fn clipboard_image_keeps_typed_coordinates_and_refuses_unsupported_routes(
     assert!(
         matches!(&ui.images[..], [ImageSource::Normalized { content, note: Some(note) }] if content == &loaded.content && note == "clipboard coordinates")
     );
-    let mut unsupported = fixture.control.selected().clone();
-    unsupported.image_input = false;
     assert!(
         prepare_clipboard(
-            &unsupported,
+            fixture.control.agent().model(),
+            false,
             crate::clipboard_reader::PasteContent::Image {
                 content: loaded.content,
                 note: loaded.note,

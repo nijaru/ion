@@ -7,7 +7,7 @@ use std::{
     },
 };
 
-use anyhow::{Result, ensure};
+use anyhow::{Context, Result, ensure};
 use ion_ai::Message;
 use ion_core::{
     AcceptedInput, CodingAgentError, CodingAgentEvent as AgentEvent, CodingSessionError,
@@ -17,7 +17,7 @@ use serde::Serialize;
 use tokio::sync::broadcast;
 use tokio_util::sync::CancellationToken;
 
-use crate::{LocalTools, SessionSetup, image_input::ImageSource};
+use crate::{SessionSetup, image_input::ImageSource};
 
 mod admission;
 mod input;

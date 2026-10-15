@@ -12,7 +12,7 @@ use ion_ai::{Content, Message};
 use ion_core::{CodingSession, CodingToolSource, ForkPoint};
 use ion_host::{
     CredentialStatus, Host, McpHttpServer, McpServer, McpStdioServer, Resources, SavedSelection,
-    SessionSetup, Wire,
+    Wire,
 };
 
 mod agent_events;
@@ -191,7 +191,7 @@ async fn run_cli(cli: Cli) -> Result<()> {
     {
         bail!("--json requires `run PROMPT` or `--print PROMPT`");
     }
-    let host = Arc::new(Host::from_environment()?.with_code_mode(cli.code_mode));
+    let host = Arc::new(Host::from_environment()?);
     let credentials = host.credentials();
     let models = host.models();
     match cli.action {
@@ -429,9 +429,11 @@ async fn run_cli(cli: Cli) -> Result<()> {
             };
             if let Some(view) = &existing {
                 ensure!(
-                    !explicit_cwd || view.cwd == cwd,
+                    !explicit_cwd || view.cwd.as_deref() == Some(cwd.as_path()),
                     "--cwd does not match the session's working directory ({})",
-                    view.cwd.display()
+                    view.cwd
+                        .as_deref()
+                        .map_or_else(|| "(none)".into(), |cwd| cwd.display().to_string())
                 );
             }
             if matches!(action, Some(Action::Inspect)) {
@@ -447,7 +449,10 @@ async fn run_cli(cli: Cli) -> Result<()> {
                     let target = if output.is_absolute() {
                         output.clone()
                     } else {
-                        view.cwd.join(output)
+                        view.cwd
+                            .as_deref()
+                            .context("relative export path requires a working directory")?
+                            .join(output)
                     };
                     transcript::save_new(&view, &target).with_context(|| {
                         format!("cannot save transcript to {}", target.display())
@@ -515,7 +520,13 @@ async fn run_cli(cli: Cli) -> Result<()> {
             if matches!(action, Some(Action::Compact)) {
                 ensure!(existing.is_some(), "session does not exist");
             }
-            let session_cwd = existing.as_ref().map_or(&cwd, |view| &view.cwd);
+            let session_cwd = match &existing {
+                Some(view) => view
+                    .cwd
+                    .as_deref()
+                    .context("coding requires a working directory")?,
+                None => cwd.as_path(),
+            };
             let previous = existing.as_ref().and_then(|view| view.last_model.clone());
             let selected = models.choose(cli.provider, cli.model, previous, credentials)?;
             selected.require_access(credentials)?;
@@ -534,7 +545,8 @@ async fn run_cli(cli: Cli) -> Result<()> {
             // custody. Preserve default SIGINT here; registering Tokio's handler
             // would also change the later interactive terminal's signal behavior.
             let images = ion_host::image_input::prepare_images(
-                &selected,
+                &selected.identity(),
+                selected.image_input,
                 sources,
                 ion_core::AgentLimits::default().max_request_bytes,
                 tokio_util::sync::CancellationToken::new(),
@@ -543,12 +555,17 @@ async fn run_cli(cli: Cli) -> Result<()> {
             let session = Arc::new(if path.is_file() {
                 CodingSession::open(&path)?
             } else {
-                CodingSession::create(&path, &cwd)?
+                CodingSession::create(&path, Some(&cwd))?
             });
             let startup = if matches!(action, Some(Action::Compact)) {
                 ion_host::McpStartup::default()
             } else {
-                host.external_tools(session.cwd()).await
+                host.external_tools(
+                    session
+                        .cwd()
+                        .context("coding requires a working directory")?,
+                )
+                .await
             };
             let external_mcp = startup.tools;
             let mut preflight_session = Some(session);
@@ -563,13 +580,13 @@ async fn run_cli(cli: Cli) -> Result<()> {
                 let external_tools: Option<Arc<dyn CodingToolSource>> = external_mcp
                     .as_ref()
                     .map(|tools| tools.clone() as Arc<dyn CodingToolSource>);
-                let setup = match SessionSetup::new(
-                    host,
-                    preflight_session.as_ref().expect("unbound Session").clone(),
-                    selected,
-                    external_tools,
-                    cli.reasoning,
-                ) {
+                let setup = match ion_host::CodingApplication::new(host.clone(), external_tools)
+                    .with_code_mode(cli.code_mode)
+                    .setup(
+                        preflight_session.as_ref().expect("unbound Session").clone(),
+                        selected,
+                        cli.reasoning,
+                    ) {
                     Ok(setup) => setup,
                     Err(error) => {
                         // Failed-server cleanup diagnostics must not disappear
@@ -638,10 +655,11 @@ async fn run_cli(cli: Cli) -> Result<()> {
                 drop(preflight_session.take());
                 match client {
                     Client::Headless(request, json) => headless::run(setup, request, json).await,
-                    Client::Rpc => rpc::run(setup).await,
+                    Client::Rpc => rpc::run(setup, host).await,
                     Client::Terminal(images) => {
                         terminal_client::chat(terminal_client::ChatInit {
                             setup,
+                            services: host,
                             images,
                             startup_diagnostics,
                             tui_mode: cli.tui_mode,

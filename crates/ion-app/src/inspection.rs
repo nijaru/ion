@@ -20,7 +20,7 @@ use serde::{Serialize, Serializer, ser::SerializeStruct};
 #[derive(Serialize)]
 #[serde(remote = "SessionView")]
 struct Inspection {
-    cwd: PathBuf,
+    cwd: Option<PathBuf>,
     name: Option<String>,
     #[serde(serialize_with = "omit_each")]
     entries: Vec<SessionEntry>,
@@ -427,7 +427,7 @@ mod tests {
             },
         ];
         SessionView {
-            cwd: PathBuf::from("/inspection-fixture"),
+            cwd: Some(PathBuf::from("/inspection-fixture")),
             name: Some("inspect".into()),
             entries,
             messages,

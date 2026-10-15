@@ -1,6 +1,9 @@
 //! Shared local host setup for Ion clients and Rust embedders.
 //! Session/Turn semantics live in `ion-core`; concrete provider/tool implementations live here.
 
+mod application;
+#[cfg(test)]
+mod application_tests;
 pub mod auth;
 mod binding;
 pub mod catalog;
@@ -25,8 +28,11 @@ use std::{
 };
 
 use anyhow::{Context, Result, ensure};
-use ion_core::{AgentLimits, CodingAgent, CodingToolSource, PromptCacheWarmingPolicy, ToolSet};
+use ion_core::{AgentLimits, CodingAgent, PromptCacheWarmingPolicy, ToolSet};
 
+pub use application::{
+    Application, ApplicationRuntime, CodingApplication, PreparedShell, UserShell,
+};
 pub use auth::{CredentialStatus, CredentialStore};
 pub use binding::SessionSetup;
 pub use control::{
@@ -49,7 +55,6 @@ pub struct Host {
     state_root: PathBuf,
     credentials: CredentialStore,
     models: ModelStore,
-    code_mode: bool,
 }
 
 impl Host {
@@ -61,7 +66,6 @@ impl Host {
             state_root,
             credentials,
             models,
-            code_mode: false,
         }
     }
 
@@ -70,13 +74,6 @@ impl Host {
             app_root("XDG_CONFIG_HOME", ".config")?,
             app_root("XDG_STATE_HOME", ".local/state")?,
         ))
-    }
-
-    /// Enable bounded JavaScript composition beside the direct tools for all
-    /// agents assembled by this host, including later model/session switches.
-    pub fn with_code_mode(mut self, enabled: bool) -> Self {
-        self.code_mode = enabled;
-        self
     }
 
     pub fn config_root(&self) -> &Path {
@@ -93,11 +90,7 @@ impl Host {
     }
 
     pub fn sessions(&self, cwd: PathBuf) -> SessionCatalog {
-        SessionCatalog::new(self.state_root.join("sessions"), cwd)
-    }
-
-    pub fn instructions(&self, cwd: &Path) -> Result<String> {
-        Ok(self.resources(cwd)?.instructions().to_owned())
+        SessionCatalog::new(self.state_root.join("sessions"), Some(cwd))
     }
 
     pub fn resources(&self, cwd: &Path) -> Result<Resources> {
@@ -112,61 +105,9 @@ impl Host {
         McpTools::connect(&self.mcp_config(), cwd).await
     }
 
-    pub fn agent(&self, cwd: &Path, selected: &Selection) -> Result<Arc<CodingAgent>> {
-        let tools = Arc::new(LocalTools::new(cwd)?);
-        self.agent_with_tool_source(selected, tools)
-    }
-
-    pub(crate) fn agent_with_optional_tools(
-        &self,
-        cwd: &Path,
-        selected: &Selection,
-        custom: Option<Arc<dyn CodingToolSource>>,
-    ) -> Result<Arc<CodingAgent>> {
-        match custom {
-            Some(custom) => self.agent_with_tools(cwd, selected, custom),
-            None => self.agent(cwd, selected),
-        }
-    }
-
-    /// Add custom tools to Ion's built-ins. A custom tool with a built-in name
-    /// deliberately replaces that tool while all other built-ins remain.
-    pub fn agent_with_tools(
-        &self,
-        cwd: &Path,
-        selected: &Selection,
-        custom: Arc<dyn CodingToolSource>,
-    ) -> Result<Arc<CodingAgent>> {
-        let builtins: Arc<dyn CodingToolSource> = Arc::new(LocalTools::new(cwd)?);
-        self.agent_with_tool_set(selected, Arc::new(self.tool_set([builtins, custom])))
-    }
-
-    /// Compose a selected route with a complete caller-owned capability source.
-    pub fn agent_with_tool_source(
-        &self,
-        selected: &Selection,
-        tools: Arc<dyn CodingToolSource>,
-    ) -> Result<Arc<CodingAgent>> {
-        self.agent_with_tool_set(selected, Arc::new(self.tool_set([tools])))
-    }
-
-    fn tool_set(&self, sources: impl IntoIterator<Item = Arc<dyn CodingToolSource>>) -> ToolSet {
-        let tools = ToolSet::new(sources);
-        if self.code_mode {
-            tools.with_code_mode(
-                Arc::new(code_mode::QuickJs),
-                ion_core::CodeLimits::default(),
-            )
-        } else {
-            tools
-        }
-    }
-
-    fn agent_with_tool_set(
-        &self,
-        selected: &Selection,
-        tools: Arc<ToolSet>,
-    ) -> Result<Arc<CodingAgent>> {
+    /// Bind a selected HTTP route to a complete caller-owned tool set. This
+    /// adds no native tools, instructions, filesystem input or composition VM.
+    pub fn agent(&self, selected: &Selection, tools: Arc<ToolSet>) -> Result<Arc<CodingAgent>> {
         selected.require_access(&self.credentials)?;
         let resolver = self
             .credentials
@@ -226,19 +167,12 @@ fn app_root(variable: &str, fallback: &str) -> Result<PathBuf> {
 mod tests {
     use super::*;
     use ion_ai::ModelRef;
-    use ion_core::{CodingSession, ToolRegistration};
+    use ion_core::CodingSession;
     use tokio::{
         io::{AsyncReadExt, AsyncWriteExt},
         net::TcpListener,
     };
     use tokio_util::sync::CancellationToken;
-
-    struct NoTools;
-    impl CodingToolSource for NoTools {
-        fn registrations(self: Arc<Self>) -> Vec<ToolRegistration> {
-            Vec::new()
-        }
-    }
 
     #[tokio::test]
     async fn selected_agent_keeps_identity_transport_and_limits_together() {
@@ -289,16 +223,15 @@ mod tests {
         let mut selected = host.models().save_default(&route).unwrap();
         selected.max_output_tokens = 1234;
         selected.context_window_tokens = Some(50_000);
-        let agent = host
-            .agent_with_tool_source(&selected, Arc::new(NoTools))
-            .unwrap();
+        let agent = host.agent(&selected, Arc::new(ToolSet::new([]))).unwrap();
         host.models()
             .save_default(&SavedSelection {
                 model: "new-default".into(),
                 ..route
             })
             .unwrap();
-        let session = Arc::new(CodingSession::create(root.join("session.sqlite"), &root).unwrap());
+        let session =
+            Arc::new(CodingSession::create(root.join("session.sqlite"), Some(&root)).unwrap());
         session
             .select_model(ModelRef {
                 provider: "previous".into(),

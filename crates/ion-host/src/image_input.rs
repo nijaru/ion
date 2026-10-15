@@ -7,7 +7,7 @@ use base64::{Engine, engine::general_purpose::STANDARD};
 use ion_ai::{ImageMime, MAX_SOURCE_BYTES, normalize_image};
 use tokio_util::sync::CancellationToken;
 
-use crate::Selection;
+use ion_ai::ModelRef;
 
 pub use ion_ai::LoadedImage;
 
@@ -39,7 +39,8 @@ impl From<LoadedImage> for ImageSource {
 /// stops queued work and discards results, but cannot interrupt an active decoder.
 /// This payload bound supplements, not replaces, Core's final input admission.
 pub fn prepare_images(
-    selected: &Selection,
+    model: &ModelRef,
+    image_input: bool,
     sources: Vec<ImageSource>,
     max_payload_bytes: usize,
     stop: CancellationToken,
@@ -47,7 +48,7 @@ pub fn prepare_images(
     let capability = if sources.is_empty() {
         Ok(())
     } else {
-        require_image_input(selected)
+        require_image_input(model, image_input)
     };
     async move {
         capability?;
@@ -137,12 +138,12 @@ fn load_source(source: ImageSource) -> Result<LoadedImage> {
 }
 
 /// Validate input capability without preparing already-normalized image bytes.
-pub fn require_image_input(selected: &Selection) -> Result<()> {
+pub fn require_image_input(model: &ModelRef, image_input: bool) -> Result<()> {
     ensure!(
-        selected.image_input,
+        image_input,
         "{}/{} does not declare image input; choose an image-capable model or configure the custom route with --images",
-        selected.provider,
-        selected.model
+        model.provider,
+        model.model
     );
     Ok(())
 }
@@ -151,18 +152,10 @@ pub fn require_image_input(selected: &Selection) -> Result<()> {
 mod tests {
     use super::*;
 
-    fn selected() -> Selection {
-        Selection {
-            provider: "local".into(),
+    fn model() -> ModelRef {
+        ModelRef {
+            provider: "synthetic".into(),
             model: "vision".into(),
-            endpoint: "http://127.0.0.1:1".into(),
-            wire: crate::HttpWire::ChatCompletions,
-            api_key_env: None,
-            max_output_tokens: 1024,
-            context_window_tokens: None,
-            requires_key: false,
-            image_input: true,
-            capabilities: crate::catalog::ModelCapabilities::conservative(),
         }
     }
 
@@ -185,7 +178,8 @@ mod tests {
             waiting.await.unwrap();
             let stop = CancellationToken::new();
             let preparation = tokio::spawn(prepare_images(
-                &selected(),
+                &model(),
+                true,
                 vec![ImageSource::Path(PathBuf::from("missing-image"))],
                 1024,
                 stop.clone(),
@@ -207,11 +201,17 @@ mod tests {
             mime_type: "image/png".into(),
             data: PNG.into(),
         };
-        let image = prepare_images(&selected(), vec![source()], 1024, CancellationToken::new())
-            .await
-            .unwrap()
-            .pop()
-            .unwrap();
+        let image = prepare_images(
+            &model(),
+            true,
+            vec![source()],
+            1024,
+            CancellationToken::new(),
+        )
+        .await
+        .unwrap()
+        .pop()
+        .unwrap();
         let bytes = serde_json::to_vec(&image.content).unwrap().len();
         for (sources, expected) in [
             (vec![source(), source()], "input byte limit"),
@@ -226,7 +226,7 @@ mod tests {
                 "MIME type",
             ),
         ] {
-            let error = prepare_images(&selected(), sources, bytes, CancellationToken::new())
+            let error = prepare_images(&model(), true, sources, bytes, CancellationToken::new())
                 .await
                 .err()
                 .unwrap();

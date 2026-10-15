@@ -12,7 +12,9 @@ use ion_core::{SessionEntry, SessionView};
 
 pub fn render(view: &SessionView) -> String {
     let mut text = String::from("Ion transcript\n");
-    let _ = writeln!(text, "Directory: {}", view.cwd.display());
+    if let Some(cwd) = &view.cwd {
+        let _ = writeln!(text, "Directory: {}", cwd.display());
+    }
     if let Some(name) = &view.name {
         let _ = writeln!(text, "Name: {name}");
     }
@@ -231,7 +233,7 @@ mod tests {
         }))
         .unwrap();
         let view = SessionView {
-            cwd: PathBuf::from("/tmp/project"),
+            cwd: Some(PathBuf::from("/tmp/project")),
             name: None,
             entries: vec![
                 SessionEntry::TurnStarted {

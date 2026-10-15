@@ -2743,7 +2743,7 @@ mod tests {
             });
             let root = std::env::temp_dir().join(format!("ion-partial-wire-{}", uuid::Uuid::now_v7()));
             std::fs::create_dir(&root).unwrap();
-            let session = Arc::new(CodingSession::create(root.join("session.sqlite"), &root).unwrap());
+            let session = Arc::new(CodingSession::create(root.join("session.sqlite"), Some(&root)).unwrap());
             let model = Arc::new(HttpModelService::new(&endpoint, wire, Arc::new(|| None)).unwrap());
             let agent = CodingAgent::with_tool_set(model, Arc::new(ToolSet::new([])), request().route.effective);
             let events = Arc::new(std::sync::Mutex::new(Vec::new()));

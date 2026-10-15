@@ -208,13 +208,13 @@ async fn main() -> Result<()> {
 async fn run(workspace: &std::path::Path, state: &std::path::Path) -> Result<()> {
     println!("ion_runtime_measure_v1");
 
-    let catalog = SessionCatalog::new(state.join("sessions"), workspace.to_path_buf());
+    let catalog = SessionCatalog::new(state.join("sessions"), Some(workspace.to_path_buf()));
 
     let short_service = Arc::new(ScriptedModelService::new(
         (0..SHORT_TURNS).map(|index| completion(format!("short response {index}"))),
     ));
     let short_agent = CodingAgent::new(short_service, Arc::new(NoTools), model());
-    let short = Arc::new(CodingSession::create(catalog.new_path()?, workspace)?);
+    let short = Arc::new(CodingSession::create(catalog.new_path()?, Some(workspace))?);
     fill(&short_agent, &short, SHORT_TURNS, "short").await?;
 
     let discovery_service = Arc::new(ScriptedModelService::new(
@@ -222,7 +222,7 @@ async fn run(workspace: &std::path::Path, state: &std::path::Path) -> Result<()>
     ));
     let discovery_agent = CodingAgent::new(discovery_service, Arc::new(NoTools), model());
     for index in 0..DISCOVERY_SESSIONS {
-        let session = Arc::new(CodingSession::create(catalog.new_path()?, workspace)?);
+        let session = Arc::new(CodingSession::create(catalog.new_path()?, Some(workspace))?);
         discovery_agent
             .submit(
                 session.clone(),
@@ -243,7 +243,7 @@ async fn run(workspace: &std::path::Path, state: &std::path::Path) -> Result<()>
         .chain((0..16).map(|index| completion(format!("summary chunk {index}"))));
     let long_service = Arc::new(ScriptedModelService::new(long_scripts));
     let long_agent = CodingAgent::new(long_service, Arc::new(NoTools), model());
-    let long = Arc::new(CodingSession::create(catalog.new_path()?, workspace)?);
+    let long = Arc::new(CodingSession::create(catalog.new_path()?, Some(workspace))?);
     fill(&long_agent, &long, LONG_PREFILL_TURNS, "long").await?;
 
     let mut turn_samples = Vec::with_capacity(MEASURED_TURNS);

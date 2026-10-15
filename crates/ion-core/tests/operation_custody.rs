@@ -128,7 +128,8 @@ async fn dropped_timed_out_and_aborted_callers_cannot_release_started_work() {
             response(vec![Content::Text("fresh".into())]),
         ]));
         let agent = Arc::new(CodingAgent::new(service.clone(), tools.clone(), model()));
-        let session = Arc::new(CodingSession::create(root.join("session.sqlite"), &root).unwrap());
+        let session =
+            Arc::new(CodingSession::create(root.join("session.sqlite"), Some(&root)).unwrap());
         let stop = CancellationToken::new();
         let operation = agent.submit(
             session.clone(),
@@ -234,7 +235,8 @@ async fn dropped_timed_out_and_aborted_callers_cannot_release_started_work() {
 async fn stop_before_admission_is_inert_and_genuine_task_panic_closes_live_execution() {
     let root = std::env::temp_dir().join(format!("ion-owned-fault-{}", uuid::Uuid::now_v7()));
     fs::create_dir(&root).unwrap();
-    let session = Arc::new(CodingSession::create(root.join("session.sqlite"), &root).unwrap());
+    let session =
+        Arc::new(CodingSession::create(root.join("session.sqlite"), Some(&root)).unwrap());
     let stop = CancellationToken::new();
     stop.cancel();
     let cancelled = session
@@ -294,7 +296,7 @@ async fn unread_settlement_failure_survives_shutdown_and_blocks_silent_replaceme
         let root = std::env::temp_dir().join(format!("ion-owned-storage-{}", uuid::Uuid::now_v7()));
         fs::create_dir(&root).unwrap();
         let path = root.join("session.sqlite");
-        let session = Arc::new(CodingSession::create(&path, &root).unwrap());
+        let session = Arc::new(CodingSession::create(&path, Some(&root)).unwrap());
         let fault = rusqlite::Connection::open(&path).unwrap();
         fault.execute_batch("CREATE TRIGGER refuse_settlement BEFORE INSERT ON entries WHEN json_extract(CAST(NEW.body AS TEXT),'$.kind')='user_shell_settled' BEGIN SELECT RAISE(ABORT,'result unavailable'); END;").unwrap();
         let effect = root.join("effect");
@@ -388,7 +390,8 @@ async fn idle_reservation_excludes_concurrent_admission_and_releases_on_preparat
     use futures_util::FutureExt;
     let root = std::env::temp_dir().join(format!("ion-owned-reservation-{}", uuid::Uuid::now_v7()));
     fs::create_dir(&root).unwrap();
-    let session = Arc::new(CodingSession::create(root.join("session.sqlite"), &root).unwrap());
+    let session =
+        Arc::new(CodingSession::create(root.join("session.sqlite"), Some(&root)).unwrap());
     let idle = session.reserve_idle().unwrap();
     let contender = session.clone();
     let runtime = tokio::runtime::Handle::current();
@@ -435,7 +438,8 @@ fn shell_output() -> CodingToolOutput {
 async fn shutdown_and_operation_waiters_share_actual_completion() {
     let root = std::env::temp_dir().join(format!("ion-owned-join-{}", uuid::Uuid::now_v7()));
     fs::create_dir(&root).unwrap();
-    let session = Arc::new(CodingSession::create(root.join("session.sqlite"), &root).unwrap());
+    let session =
+        Arc::new(CodingSession::create(root.join("session.sqlite"), Some(&root)).unwrap());
     let (release, held) = tokio::sync::oneshot::channel();
     let stop = CancellationToken::new();
     let operation = session.run_user_shell(
@@ -473,7 +477,7 @@ async fn abandoned_shutdown_keeps_admission_closed_and_started_work_holds_writer
     let root = std::env::temp_dir().join(format!("ion-owned-lease-{}", uuid::Uuid::now_v7()));
     fs::create_dir(&root).unwrap();
     let path = root.join("session.sqlite");
-    let session = Arc::new(CodingSession::create(&path, &root).unwrap());
+    let session = Arc::new(CodingSession::create(&path, Some(&root)).unwrap());
     let (release, held) = tokio::sync::oneshot::channel();
     let started = Arc::new(tokio::sync::Semaphore::new(0));
     let ready = started.clone();

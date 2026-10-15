@@ -47,6 +47,16 @@ struct SkillFrontmatter {
 }
 
 impl Resources {
+    /// Explicit application instructions with no filesystem or home discovery.
+    pub fn new(instructions: String) -> Self {
+        Self {
+            instructions,
+            skills: BTreeMap::new(),
+            templates: BTreeMap::new(),
+            diagnostics: Vec::new(),
+        }
+    }
+
     pub fn load(cwd: &Path, config_root: &Path) -> Result<Self> {
         let home = std::env::var_os("HOME").map(PathBuf::from);
         Self::load_with_home(cwd, config_root, home.as_deref())

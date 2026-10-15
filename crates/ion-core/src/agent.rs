@@ -1496,7 +1496,8 @@ mod tests {
     async fn coding_requests_send_the_context_clamped_model_ceiling() {
         let root = std::env::temp_dir().join(format!("ion-budget-run-{}", uuid::Uuid::now_v7()));
         std::fs::create_dir(&root).unwrap();
-        let session = Arc::new(CodingSession::create(root.join("session.sqlite"), &root).unwrap());
+        let session =
+            Arc::new(CodingSession::create(root.join("session.sqlite"), Some(&root)).unwrap());
         let scripts = Arc::new(ScriptedModelService::new([
             response(vec![Content::Text("first".into())]),
             response(vec![Content::Text("second".into())]),
@@ -1604,7 +1605,7 @@ mod tests {
         let root = std::env::temp_dir().join(format!("ion-admission-{}", uuid::Uuid::now_v7()));
         std::fs::create_dir(&root).unwrap();
         let path = root.join("session.sqlite");
-        let session = Arc::new(CodingSession::create(&path, &root).unwrap());
+        let session = Arc::new(CodingSession::create(&path, Some(&root)).unwrap());
         let scripts = Arc::new(ScriptedModelService::new([
             response(vec![Content::Text("first answer".into())]),
             response(vec![Content::Text("must not issue".into())]),
@@ -1711,7 +1712,8 @@ mod tests {
         }
         let root = std::env::temp_dir().join(format!("ion-issued-{}", uuid::Uuid::now_v7()));
         std::fs::create_dir(&root).unwrap();
-        let session = Arc::new(CodingSession::create(root.join("session.sqlite"), &root).unwrap());
+        let session =
+            Arc::new(CodingSession::create(root.join("session.sqlite"), Some(&root)).unwrap());
         let call = |id: &str| {
             Content::ToolCall(ToolCall {
                 id: id.into(),
@@ -1819,7 +1821,8 @@ mod tests {
 
         let root = std::env::temp_dir().join(format!("ion-cache-warm-{}", uuid::Uuid::now_v7()));
         std::fs::create_dir(&root).unwrap();
-        let session = Arc::new(CodingSession::create(root.join("session.sqlite"), &root).unwrap());
+        let session =
+            Arc::new(CodingSession::create(root.join("session.sqlite"), Some(&root)).unwrap());
         let first = Script::Stream(vec![ModelStreamEvent::Completed(ModelResponse {
             message: Message {
                 role: Role::Assistant,
@@ -2008,7 +2011,8 @@ mod tests {
     async fn changed_signed_context_rebases_once_before_dispatch() {
         let root = std::env::temp_dir().join(format!("ion-rebase-{}", uuid::Uuid::now_v7()));
         std::fs::create_dir(&root).unwrap();
-        let session = Arc::new(CodingSession::create(root.join("session.sqlite"), &root).unwrap());
+        let session =
+            Arc::new(CodingSession::create(root.join("session.sqlite"), Some(&root)).unwrap());
         let (prior, _) = session.begin_turn("first".into(), model()).unwrap();
         session
             .record_assistant(
@@ -2072,7 +2076,8 @@ mod tests {
         let root = std::env::temp_dir().join(format!("ion-tool-prefix-{}", uuid::Uuid::now_v7()));
         std::fs::create_dir(&root).unwrap();
         std::fs::write(root.join("file.txt"), "content").unwrap();
-        let session = Arc::new(CodingSession::create(root.join("session.sqlite"), &root).unwrap());
+        let session =
+            Arc::new(CodingSession::create(root.join("session.sqlite"), Some(&root)).unwrap());
         let service = Arc::new(ScriptedModelService::new([
             Script::Stream(vec![ModelStreamEvent::Completed(ModelResponse {
                 message: Message {
@@ -2132,7 +2137,7 @@ mod tests {
         let root = std::env::temp_dir().join(format!("ion-agent-{}", uuid::Uuid::now_v7()));
         std::fs::create_dir(&root).unwrap();
         let path = root.join("session.sqlite");
-        let session = Arc::new(CodingSession::create(&path, &root).unwrap());
+        let session = Arc::new(CodingSession::create(&path, Some(&root)).unwrap());
         let scripts = Arc::new(ScriptedModelService::new([
             response(vec![
                 Content::ToolCall(ToolCall {
@@ -2236,7 +2241,7 @@ mod tests {
         let root = std::env::temp_dir().join(format!("ion-deferred-tool-{}", uuid::Uuid::now_v7()));
         std::fs::create_dir(&root).unwrap();
         let path = root.join("session.sqlite");
-        let session = Arc::new(CodingSession::create(&path, &root).unwrap());
+        let session = Arc::new(CodingSession::create(&path, Some(&root)).unwrap());
         let scripts = Arc::new(ScriptedModelService::new([
             response(vec![Content::ToolCall(ToolCall {
                 id: "search".into(),
@@ -2462,7 +2467,7 @@ mod tests {
                 std::env::temp_dir().join(format!("ion-result-views-{}", uuid::Uuid::now_v7()));
             std::fs::create_dir(&root).unwrap();
             let path = root.join("session.sqlite");
-            let session = Arc::new(CodingSession::create(&path, &root).unwrap());
+            let session = Arc::new(CodingSession::create(&path, Some(&root)).unwrap());
             let scripts = Arc::new(ScriptedModelService::new([
                 response(vec![Content::ToolCall(ToolCall {
                     id: "report-call".into(),
@@ -2685,7 +2690,7 @@ mod tests {
         let root = std::env::temp_dir().join(format!("ion-tool-image-{}", uuid::Uuid::now_v7()));
         std::fs::create_dir(&root).unwrap();
         let path = root.join("session.sqlite");
-        let session = Arc::new(CodingSession::create(&path, &root).unwrap());
+        let session = Arc::new(CodingSession::create(&path, Some(&root)).unwrap());
         let call = || {
             response(vec![Content::ToolCall(ToolCall {
                 id: "picture-call".into(),
@@ -2744,7 +2749,8 @@ mod tests {
         let root = std::env::temp_dir().join(format!("ion-long-turn-{}", uuid::Uuid::now_v7()));
         std::fs::create_dir(&root).unwrap();
         std::fs::write(root.join("file.txt"), "content").unwrap();
-        let session = Arc::new(CodingSession::create(root.join("session.sqlite"), &root).unwrap());
+        let session =
+            Arc::new(CodingSession::create(root.join("session.sqlite"), Some(&root)).unwrap());
         let mut scripts = (0..81)
             .map(|index| {
                 response(vec![Content::ToolCall(ToolCall {
@@ -2780,7 +2786,8 @@ mod tests {
         let root = std::env::temp_dir().join(format!("ion-fast-turn-{}", uuid::Uuid::now_v7()));
         std::fs::create_dir(&root).unwrap();
         std::fs::write(root.join("file.txt"), "content").unwrap();
-        let session = Arc::new(CodingSession::create(root.join("session.sqlite"), &root).unwrap());
+        let session =
+            Arc::new(CodingSession::create(root.join("session.sqlite"), Some(&root)).unwrap());
         let scripts = (0..100)
             .map(|index| {
                 response(vec![Content::ToolCall(ToolCall {
@@ -2822,7 +2829,7 @@ mod tests {
             std::env::temp_dir().join(format!("ion-empty-response-{}", uuid::Uuid::now_v7()));
         std::fs::create_dir(&root).unwrap();
         let path = root.join("session.sqlite");
-        let session = Arc::new(CodingSession::create(&path, &root).unwrap());
+        let session = Arc::new(CodingSession::create(&path, Some(&root)).unwrap());
         let service = Arc::new(ScriptedModelService::new([
             response(Vec::new()),
             response(vec![Content::Text(" \n".into())]),
@@ -2874,7 +2881,7 @@ mod tests {
             std::env::temp_dir().join(format!("ion-truncated-call-{}", uuid::Uuid::now_v7()));
         std::fs::create_dir(&root).unwrap();
         let path = root.join("session.sqlite");
-        let session = Arc::new(CodingSession::create(&path, &root).unwrap());
+        let session = Arc::new(CodingSession::create(&path, Some(&root)).unwrap());
         let scripts = Arc::new(ScriptedModelService::new([
             Script::Stream(vec![ModelStreamEvent::Completed(ModelResponse {
                 message: Message {
@@ -2971,7 +2978,7 @@ mod tests {
             std::env::temp_dir().join(format!("ion-steering-fault-{}", uuid::Uuid::now_v7()));
         std::fs::create_dir(&root).unwrap();
         let path = root.join("session.sqlite");
-        let session = Arc::new(CodingSession::create(&path, &root).unwrap());
+        let session = Arc::new(CodingSession::create(&path, Some(&root)).unwrap());
         let scripts = Arc::new(ScriptedModelService::new([response(vec![Content::Text(
             "done".into(),
         )])]));
@@ -3016,7 +3023,7 @@ mod tests {
             std::env::temp_dir().join(format!("ion-steering-batch-{}", uuid::Uuid::now_v7()));
         std::fs::create_dir(&root).unwrap();
         let path = root.join("session.sqlite");
-        let session = Arc::new(CodingSession::create(&path, &root).unwrap());
+        let session = Arc::new(CodingSession::create(&path, Some(&root)).unwrap());
         let scripts = Arc::new(ScriptedModelService::new([Script::Stream(vec![
             ModelStreamEvent::TextDelta("done".into()),
             ModelStreamEvent::Completed(ModelResponse {
@@ -3107,7 +3114,7 @@ mod tests {
             std::env::temp_dir().join(format!("ion-steering-final-{}", uuid::Uuid::now_v7()));
         std::fs::create_dir(&root).unwrap();
         let path = root.join("session.sqlite");
-        let session = Arc::new(CodingSession::create(&path, &root).unwrap());
+        let session = Arc::new(CodingSession::create(&path, Some(&root)).unwrap());
         let first = ModelResponse {
             message: Message {
                 role: Role::Assistant,
@@ -3184,7 +3191,7 @@ mod tests {
             std::env::temp_dir().join(format!("ion-transcript-restart-{}", uuid::Uuid::now_v7()));
         std::fs::create_dir(&root).unwrap();
         let path = root.join("session.sqlite");
-        let session = Arc::new(CodingSession::create(&path, &root).unwrap());
+        let session = Arc::new(CodingSession::create(&path, Some(&root)).unwrap());
         let scripts = Arc::new(ScriptedModelService::new([
             response(vec![Content::Text("earlier work".into())]),
             Script::Stream(vec![
@@ -3352,7 +3359,7 @@ mod tests {
             std::env::temp_dir().join(format!("ion-image-steering-{}", uuid::Uuid::now_v7()));
         std::fs::create_dir(&root).unwrap();
         let path = root.join("session.sqlite");
-        let session = Arc::new(CodingSession::create(&path, &root).unwrap());
+        let session = Arc::new(CodingSession::create(&path, Some(&root)).unwrap());
         let image = tiny_image();
         let first = ModelResponse {
             message: Message {
@@ -3461,7 +3468,8 @@ mod tests {
         std::fs::create_dir(&root).unwrap();
         for assistant in [false, true] {
             let session =
-                CodingSession::create(root.join(format!("{assistant}.sqlite")), &root).unwrap();
+                CodingSession::create(root.join(format!("{assistant}.sqlite")), Some(&root))
+                    .unwrap();
             let (turn, _) = session
                 .begin_turn_message(user_text("start".into()), model())
                 .unwrap();
@@ -3522,7 +3530,7 @@ mod tests {
         let root =
             std::env::temp_dir().join(format!("ion-image-steering-route-{}", uuid::Uuid::now_v7()));
         std::fs::create_dir(&root).unwrap();
-        let session = CodingSession::create(root.join("session.sqlite"), &root).unwrap();
+        let session = CodingSession::create(root.join("session.sqlite"), Some(&root)).unwrap();
         let (turn, _) = session
             .begin_turn_message(user_text("start".into()), model())
             .unwrap();
@@ -3563,7 +3571,7 @@ mod tests {
         let root = std::env::temp_dir().join(format!("ion-steering-{}", uuid::Uuid::now_v7()));
         std::fs::create_dir(&root).unwrap();
         let path = root.join("session.sqlite");
-        let session = Arc::new(CodingSession::create(&path, &root).unwrap());
+        let session = Arc::new(CodingSession::create(&path, Some(&root)).unwrap());
         let scripts = Arc::new(ScriptedModelService::new([
             response(vec![
                 Content::Text("Before the call".into()),
@@ -3668,7 +3676,7 @@ mod tests {
             std::env::temp_dir().join(format!("ion-idle-preferences-{}", uuid::Uuid::now_v7()));
         std::fs::create_dir(&root).unwrap();
         let path = root.join("session.sqlite");
-        let session = Arc::new(CodingSession::create(&path, &root).unwrap());
+        let session = Arc::new(CodingSession::create(&path, Some(&root)).unwrap());
         let scripts = Arc::new(ScriptedModelService::new([response(vec![Content::Text(
             "continued".into(),
         )])]));
@@ -3782,7 +3790,7 @@ mod tests {
         let root = std::env::temp_dir().join(format!("ion-compact-{}", uuid::Uuid::now_v7()));
         std::fs::create_dir(&root).unwrap();
         let path = root.join("session.sqlite");
-        let session = Arc::new(CodingSession::create(&path, &root).unwrap());
+        let session = Arc::new(CodingSession::create(&path, Some(&root)).unwrap());
         let scripts = Arc::new(ScriptedModelService::new([
             response(vec![Content::Text("first result".into())]),
             response(vec![Content::Text("First task is complete.".into())]),
@@ -3851,7 +3859,8 @@ mod tests {
     async fn provider_overflow_compacts_and_retries_only_the_model_request() {
         let root = std::env::temp_dir().join(format!("ion-overflow-{}", uuid::Uuid::now_v7()));
         std::fs::create_dir(&root).unwrap();
-        let session = Arc::new(CodingSession::create(root.join("session.sqlite"), &root).unwrap());
+        let session =
+            Arc::new(CodingSession::create(root.join("session.sqlite"), Some(&root)).unwrap());
         let scripts = Arc::new(ScriptedModelService::new([
             response(vec![Content::Text("first result".into())]),
             Script::OpenError(ProviderError {
@@ -3890,7 +3899,8 @@ mod tests {
         let root =
             std::env::temp_dir().join(format!("ion-completed-overflow-{}", uuid::Uuid::now_v7()));
         std::fs::create_dir(&root).unwrap();
-        let session = Arc::new(CodingSession::create(root.join("session.sqlite"), &root).unwrap());
+        let session =
+            Arc::new(CodingSession::create(root.join("session.sqlite"), Some(&root)).unwrap());
         let scripts = Arc::new(ScriptedModelService::new([
             response(vec![Content::Text("earlier result".into())]),
             Script::Stream(vec![ModelStreamEvent::Completed(ModelResponse {
@@ -3967,7 +3977,7 @@ mod tests {
                 std::env::temp_dir().join(format!("ion-output-overflow-{}", uuid::Uuid::now_v7()));
             std::fs::create_dir(&root).unwrap();
             let session =
-                Arc::new(CodingSession::create(root.join("session.sqlite"), &root).unwrap());
+                Arc::new(CodingSession::create(root.join("session.sqlite"), Some(&root)).unwrap());
             let scripts = Arc::new(ScriptedModelService::new([
                 response(vec![Content::Text("earlier result".into())]),
                 Script::Stream(
@@ -4040,7 +4050,8 @@ mod tests {
     async fn short_length_stop_compacts_and_retries_without_dispatching_partial_call() {
         let root = std::env::temp_dir().join(format!("ion-short-length-{}", uuid::Uuid::now_v7()));
         std::fs::create_dir(&root).unwrap();
-        let session = Arc::new(CodingSession::create(root.join("session.sqlite"), &root).unwrap());
+        let session =
+            Arc::new(CodingSession::create(root.join("session.sqlite"), Some(&root)).unwrap());
         let scripts = Arc::new(ScriptedModelService::new([
             response(vec![Content::Text("earlier work".into())]),
             Script::Stream(vec![
@@ -4162,7 +4173,7 @@ mod tests {
                 std::env::temp_dir().join(format!("ion-full-length-{}", uuid::Uuid::now_v7()));
             std::fs::create_dir(&root).unwrap();
             let session =
-                Arc::new(CodingSession::create(root.join("session.sqlite"), &root).unwrap());
+                Arc::new(CodingSession::create(root.join("session.sqlite"), Some(&root)).unwrap());
             let model_service = Arc::new(FillBudget {
                 requests: Mutex::new(Vec::new()),
             });
@@ -4225,7 +4236,8 @@ mod tests {
     async fn invented_tool_returns_error_and_model_can_correct_it() {
         let root = std::env::temp_dir().join(format!("ion-invented-tool-{}", uuid::Uuid::now_v7()));
         std::fs::create_dir(&root).unwrap();
-        let session = Arc::new(CodingSession::create(root.join("session.sqlite"), &root).unwrap());
+        let session =
+            Arc::new(CodingSession::create(root.join("session.sqlite"), Some(&root)).unwrap());
         let scripts = Arc::new(ScriptedModelService::new([
             response(vec![Content::ToolCall(ToolCall {
                 id: "invented".into(),
@@ -4293,7 +4305,7 @@ mod tests {
             let root = std::env::temp_dir().join(format!("ion-unstarted-{}", uuid::Uuid::now_v7()));
             std::fs::create_dir(&root).unwrap();
             let path = root.join("session.sqlite");
-            let session = Arc::new(CodingSession::create(&path, &root).unwrap());
+            let session = Arc::new(CodingSession::create(&path, Some(&root)).unwrap());
             if closure_fault {
                 rusqlite::Connection::open(&path).unwrap().execute_batch("CREATE TRIGGER reject_close BEFORE INSERT ON entries WHEN json_extract(NEW.body,'$.kind')='turn_ended' BEGIN SELECT RAISE(ABORT,'closure unavailable'); END;").unwrap();
             }
@@ -4509,7 +4521,8 @@ mod tests {
         let root =
             std::env::temp_dir().join(format!("ion-malformed-call-{}", uuid::Uuid::now_v7()));
         std::fs::create_dir(&root).unwrap();
-        let session = Arc::new(CodingSession::create(root.join("session.sqlite"), &root).unwrap());
+        let session =
+            Arc::new(CodingSession::create(root.join("session.sqlite"), Some(&root)).unwrap());
         let calls = [
             ToolCall {
                 id: "raw".into(),
@@ -4595,7 +4608,7 @@ mod tests {
                 .join(format!("ion-summary-input-probe-{}", uuid::Uuid::now_v7()));
             std::fs::create_dir(&root).unwrap();
             let session =
-                Arc::new(CodingSession::create(root.join("session.sqlite"), &root).unwrap());
+                Arc::new(CodingSession::create(root.join("session.sqlite"), Some(&root)).unwrap());
             let image = tiny_image();
             let (turn, _) = session
                 .begin_turn_message(
@@ -4684,7 +4697,8 @@ mod tests {
     async fn failed_summary_does_not_change_the_context_projection() {
         let root = std::env::temp_dir().join(format!("ion-summary-fail-{}", uuid::Uuid::now_v7()));
         std::fs::create_dir(&root).unwrap();
-        let session = Arc::new(CodingSession::create(root.join("session.sqlite"), &root).unwrap());
+        let session =
+            Arc::new(CodingSession::create(root.join("session.sqlite"), Some(&root)).unwrap());
         let (turn, _) = session.begin_turn("task".into(), model()).unwrap();
         session
             .record_assistant(
@@ -4780,7 +4794,7 @@ mod tests {
                 std::env::temp_dir().join(format!("ion-summary-invalid-{}", uuid::Uuid::now_v7()));
             std::fs::create_dir(&root).unwrap();
             let session =
-                Arc::new(CodingSession::create(root.join("session.sqlite"), &root).unwrap());
+                Arc::new(CodingSession::create(root.join("session.sqlite"), Some(&root)).unwrap());
             let (turn, _) = session.begin_turn("task".into(), model()).unwrap();
             session
                 .record_assistant(
@@ -4862,7 +4876,8 @@ mod tests {
         let root =
             std::env::temp_dir().join(format!("ion-summary-cancel-{}", uuid::Uuid::now_v7()));
         std::fs::create_dir(&root).unwrap();
-        let session = Arc::new(CodingSession::create(root.join("session.sqlite"), &root).unwrap());
+        let session =
+            Arc::new(CodingSession::create(root.join("session.sqlite"), Some(&root)).unwrap());
         let (turn, _) = session.begin_turn("task".into(), model()).unwrap();
         session
             .record_assistant(
@@ -4898,7 +4913,8 @@ mod tests {
     async fn request_pressure_compacts_before_the_next_model_request() {
         let root = std::env::temp_dir().join(format!("ion-pressure-{}", uuid::Uuid::now_v7()));
         std::fs::create_dir(&root).unwrap();
-        let session = Arc::new(CodingSession::create(root.join("session.sqlite"), &root).unwrap());
+        let session =
+            Arc::new(CodingSession::create(root.join("session.sqlite"), Some(&root)).unwrap());
         let scripts = Arc::new(ScriptedModelService::new([
             response(vec![Content::Text("x".repeat(2_200))]),
             response(vec![Content::Text("First task completed.".into())]),
@@ -4937,7 +4953,7 @@ mod tests {
                 std::env::temp_dir().join(format!("ion-summary-capacity-{}", uuid::Uuid::now_v7()));
             std::fs::create_dir(&root).unwrap();
             let path = root.join("session.sqlite");
-            let session = Arc::new(CodingSession::create(&path, &root).unwrap());
+            let session = Arc::new(CodingSession::create(&path, Some(&root)).unwrap());
             let seed_service =
                 Arc::new(ScriptedModelService::new(lengths.iter().map(|&length| {
                     response(vec![Content::Text("b".repeat(length))])
@@ -5019,7 +5035,7 @@ mod tests {
         let root = std::env::temp_dir().join(format!("ion-long-context-{}", uuid::Uuid::now_v7()));
         std::fs::create_dir(&root).unwrap();
         let path = root.join("session.sqlite");
-        let session = Arc::new(CodingSession::create(&path, &root).unwrap());
+        let session = Arc::new(CodingSession::create(&path, Some(&root)).unwrap());
         for index in 0..30 {
             let (turn, _) = session
                 .begin_turn(format!("task {index}: {}", "a".repeat(240)), model())
@@ -5097,7 +5113,8 @@ mod tests {
     async fn oversized_input_is_rejected_before_turn_admission() {
         let root = std::env::temp_dir().join(format!("ion-input-bound-{}", uuid::Uuid::now_v7()));
         std::fs::create_dir(&root).unwrap();
-        let session = Arc::new(CodingSession::create(root.join("session.sqlite"), &root).unwrap());
+        let session =
+            Arc::new(CodingSession::create(root.join("session.sqlite"), Some(&root)).unwrap());
         let scripts = Arc::new(ScriptedModelService::new([response(vec![Content::Text(
             "small input accepted".into(),
         )])]));
@@ -5154,7 +5171,8 @@ mod tests {
         let root =
             std::env::temp_dir().join(format!("ion-atomic-context-{}", uuid::Uuid::now_v7()));
         std::fs::create_dir(&root).unwrap();
-        let session = Arc::new(CodingSession::create(root.join("session.sqlite"), &root).unwrap());
+        let session =
+            Arc::new(CodingSession::create(root.join("session.sqlite"), Some(&root)).unwrap());
         let (turn, _) = session.begin_turn("x".repeat(4_000), model()).unwrap();
         session
             .record_assistant(
@@ -5191,7 +5209,8 @@ mod tests {
     async fn visible_partial_output_is_not_silently_replayed_after_overflow() {
         let root = std::env::temp_dir().join(format!("ion-partial-{}", uuid::Uuid::now_v7()));
         std::fs::create_dir(&root).unwrap();
-        let session = Arc::new(CodingSession::create(root.join("session.sqlite"), &root).unwrap());
+        let session =
+            Arc::new(CodingSession::create(root.join("session.sqlite"), Some(&root)).unwrap());
         let scripts = Arc::new(ScriptedModelService::new([
             response(vec![Content::Text("first result".into())]),
             Script::Stream(vec![
@@ -5243,7 +5262,7 @@ mod tests {
             std::env::temp_dir().join(format!("ion-agent-interrupt-{}", uuid::Uuid::now_v7()));
         std::fs::create_dir(&root).unwrap();
         let path = root.join("session.sqlite");
-        let session = Arc::new(CodingSession::create(&path, &root).unwrap());
+        let session = Arc::new(CodingSession::create(&path, Some(&root)).unwrap());
         let (turn, _) = session.begin_turn("first".into(), model()).unwrap();
         session
             .record_assistant(

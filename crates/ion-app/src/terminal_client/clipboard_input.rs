@@ -2,7 +2,9 @@
 use std::path::PathBuf;
 
 use anyhow::{Context, Result, ensure};
-use ion_host::{Selection, image_input::LoadedImage};
+use ion_core::CodingAgent;
+use ion_host::image_input::LoadedImage;
+use std::sync::Arc;
 use tokio_util::sync::CancellationToken;
 
 use super::Frontend;
@@ -18,19 +20,19 @@ pub(super) struct ClipboardJob {
     pub(super) task: tokio::task::JoinHandle<Result<PreparedPaste>>,
 }
 
-pub(super) fn start_clipboard_paste(ui: &mut Frontend, selected: &Selection) {
+pub(super) fn start_clipboard_paste(ui: &mut Frontend, agent: &Arc<CodingAgent>) {
     if ui.clipboard_job.is_some() {
         ui.status = "Clipboard acquisition is already in progress".into();
         return;
     }
-    let selected = selected.clone();
+    let agent = agent.clone();
     let stop = CancellationToken::new();
     let reader_stop = stop.clone();
     ui.clipboard_job = Some(ClipboardJob {
         stop,
         task: tokio::spawn(async move {
             let content = crate::clipboard_reader::read(&reader_stop).await?;
-            prepare_clipboard(&selected, content)
+            prepare_clipboard(agent.model(), agent.limits().image_input, content)
         }),
     });
     ui.status = "Reading clipboard…".into();
@@ -80,13 +82,14 @@ pub(super) async fn cancel_clipboard_paste(ui: &mut Frontend) -> Result<()> {
 }
 
 pub(super) fn prepare_clipboard(
-    selected: &Selection,
+    model: &ion_ai::ModelRef,
+    image_input: bool,
     content: crate::clipboard_reader::PasteContent,
 ) -> Result<PreparedPaste> {
     match content {
         crate::clipboard_reader::PasteContent::Files(paths) => Ok(PreparedPaste::Files(paths)),
         crate::clipboard_reader::PasteContent::Image { content, note } => {
-            ion_host::image_input::require_image_input(selected)?;
+            ion_host::image_input::require_image_input(model, image_input)?;
             Ok(PreparedPaste::Image(LoadedImage { content, note }))
         }
         crate::clipboard_reader::PasteContent::Text(text) => Ok(PreparedPaste::Text(text)),

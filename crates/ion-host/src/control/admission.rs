@@ -103,7 +103,7 @@ impl<M: Serialize + Send + 'static> SessionControl<M> {
                 }
             }
         }
-        let limits = self.setup.agent.limits();
+        let limits = self.setup.runtime.agent.limits();
         let (message, expanded, ready) = match input {
             UserInput::Message(message) => (message.clone(), None, true),
             UserInput::Prompt { text, images } => {
@@ -112,7 +112,22 @@ impl<M: Serialize + Send + 'static> SessionControl<M> {
                     "prompt is empty"
                 );
                 if !images.is_empty() {
-                    crate::image_input::require_image_input(&self.setup.selected)?;
+                    crate::image_input::require_image_input(
+                        self.setup.runtime.agent.model(),
+                        limits.image_input,
+                    )?;
+                    for source in images {
+                        if let ImageSource::Path(path) = source {
+                            ensure!(
+                                self.setup.runtime.local_images,
+                                "local image inputs are not enabled by this application"
+                            );
+                            ensure!(
+                                path.is_absolute() || self.setup.session.cwd().is_some(),
+                                "relative image input requires a working directory"
+                            );
+                        }
+                    }
                     tokio::runtime::Handle::try_current()?;
                 }
                 let expanded = self
@@ -161,11 +176,17 @@ impl<M: Serialize + Send + 'static> SessionControl<M> {
                 lock(&self.custody).occupied < MAX_ADMISSIONS,
                 "session result/admission capacity is full"
             );
-            let tools = LocalTools::new(self.setup.session.cwd())?;
+            let tools = self
+                .setup
+                .runtime
+                .shell
+                .as_ref()
+                .context("direct shell is not enabled by this application")?
+                .prepare(&command)?;
             let reservation = self.budget.reserve(
                 &Message::user_input(command.clone(), []),
                 &metadata,
-                self.setup.agent.limits(),
+                self.setup.runtime.agent.limits(),
             )?;
             Ok((tools, reservation))
         })();
@@ -179,7 +200,7 @@ impl<M: Serialize + Send + 'static> SessionControl<M> {
             command,
             exclude_from_context,
             CancellationToken::new(),
-            move |command, stop| async move { tools.run_user_shell(&command, stop).await },
+            move |_, stop| tools(stop),
         );
         self.install_direct(id, Work::Shell(work), metadata, reservation);
         Ok(id)
@@ -195,7 +216,7 @@ impl<M: Serialize + Send + 'static> SessionControl<M> {
             Ok(self.budget.reserve(
                 &Message::user_input("compact".into(), []),
                 &metadata,
-                self.setup.agent.limits(),
+                self.setup.runtime.agent.limits(),
             )?)
         })();
         let reservation = match prepared {
@@ -205,7 +226,7 @@ impl<M: Serialize + Send + 'static> SessionControl<M> {
         let id = OperationId(identity());
         let observations = self.observations.clone();
         lock(&self.custody).occupied += 1;
-        let work = self.setup.agent.compact(
+        let work = self.setup.runtime.agent.compact(
             self.setup.session.clone(),
             CancellationToken::new(),
             move |event| {
@@ -232,7 +253,7 @@ impl<M: Serialize + Send + 'static> SessionControl<M> {
             root: None,
             work,
             inbox: Arc::new(SteeringInbox::new(
-                self.setup.agent.limits(),
+                self.setup.runtime.agent.limits(),
                 self.budget.clone(),
             )),
             metadata: Some((metadata, reservation)),

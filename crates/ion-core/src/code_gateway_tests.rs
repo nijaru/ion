@@ -57,7 +57,7 @@ fn assistant(call: ToolCall) -> Message {
 fn fixture() -> (std::path::PathBuf, Session, u64, ToolCall) {
     let root = std::env::temp_dir().join(format!("ion-inspection-{}", uuid::Uuid::now_v7()));
     std::fs::create_dir(&root).unwrap();
-    let session = Session::create(root.join("session.sqlite"), &root).unwrap();
+    let session = Session::create(root.join("session.sqlite"), Some(&root)).unwrap();
     let model = ModelRef {
         provider: "test".into(),
         model: "test".into(),

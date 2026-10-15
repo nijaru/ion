@@ -97,6 +97,8 @@ impl ModelService for Model {
 
 struct Fixture {
     root: PathBuf,
+    host: Arc<Host>,
+    selected: crate::Selection,
     control: SessionControl<Metadata>,
 }
 impl Fixture {
@@ -115,13 +117,16 @@ impl Fixture {
                 image_input: images,
             })
             .unwrap();
-        let session = Arc::new(CodingSession::create(root.join("session.sqlite"), &root).unwrap());
-        let mut setup = SessionSetup::new(host, session, selected, None, None).unwrap();
-        setup.agent = Arc::new(
+        let session =
+            Arc::new(CodingSession::create(root.join("session.sqlite"), Some(&root)).unwrap());
+        let mut setup = crate::CodingApplication::new(host.clone(), None)
+            .setup(session, selected.clone(), None)
+            .unwrap();
+        setup.runtime.agent = Arc::new(
             CodingAgent::with_tool_set(
                 model.clone(),
                 Arc::new(ToolSet::new([])),
-                setup.selected.identity(),
+                setup.runtime.agent.model().clone(),
             )
             .with_limits(AgentLimits {
                 image_input: images,
@@ -130,6 +135,8 @@ impl Fixture {
         );
         Self {
             root,
+            host,
+            selected,
             control: setup.into_control(),
         }
     }
@@ -589,15 +596,10 @@ async fn owner_drop_requests_stop_and_core_retains_the_actual_task() {
     let model = Model::new(1);
     let fixture = Fixture::new(model.clone(), false);
     let session = fixture.control.session().clone();
-    let mut setup = SessionSetup::new(
-        fixture.control.setup.host.clone(),
-        session.clone(),
-        fixture.control.selected().clone(),
-        None,
-        None,
-    )
-    .unwrap();
-    setup.agent = fixture.control.agent().clone();
+    let mut setup = crate::CodingApplication::new(fixture.host.clone(), None)
+        .setup(session.clone(), fixture.selected.clone(), None)
+        .unwrap();
+    setup.runtime.agent = fixture.control.agent().clone();
     let mut control = setup.into_control::<Metadata>();
     control
         .submit(Delivery::Start, prompt("root"), meta("root"))

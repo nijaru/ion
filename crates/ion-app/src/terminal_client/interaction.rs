@@ -63,6 +63,7 @@ pub(super) fn submit_editor(
 
 pub(super) async fn dispatch_command(
     runtime: &mut SessionControl<EditorDraft>,
+    services: &ion_host::Host,
     ui: &mut Frontend,
     terminal: &mut TerminalSession,
     screen: &mut Screen,
@@ -101,7 +102,7 @@ pub(super) async fn dispatch_command(
         return Ok(());
     }
     if builtin == Some(Builtin::Login) && !args.is_empty() {
-        match login_in_terminal(terminal, screen, runtime.host().credentials(), args).await? {
+        match login_in_terminal(terminal, screen, services.credentials(), args).await? {
             Ok(()) => ui.status = "Credential saved".into(),
             // Credential entry is modal, never a recoverable model prompt.
             Err(error) => ui.status = format!("{error:#}"),
@@ -137,7 +138,7 @@ pub(super) async fn dispatch_command(
             Err(error) => ui.status = format!("Editor failed: {error:#}; original draft retained"),
         }
     } else {
-        match handle_command(runtime, ui, &command) {
+        match handle_command(runtime, services, ui, &command) {
             Ok(true) => {
                 let delivery = editor_delivery(runtime);
                 submit_editor(
