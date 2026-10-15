@@ -5,6 +5,7 @@ pub mod auth;
 mod binding;
 pub mod catalog;
 pub mod code_mode;
+mod control;
 mod credentials;
 mod edit_diff;
 pub mod file_io;
@@ -13,7 +14,8 @@ mod local_tools;
 pub mod mcp;
 mod model_http;
 pub mod model_setup;
-pub mod project_instructions;
+mod preparation;
+mod project_instructions;
 pub mod resources;
 pub mod session_catalog;
 
@@ -26,7 +28,12 @@ use anyhow::{Context, Result, ensure};
 use ion_core::{AgentLimits, CodingAgent, CodingToolSource, PromptCacheWarmingPolicy, ToolSet};
 
 pub use auth::{CredentialStatus, CredentialStore};
-pub use binding::SessionBinding;
+pub use binding::SessionSetup;
+pub use control::{
+    AcceptedMetadata, ControlObserver, ControlState, ControlUpdate, Delivery, InputId, InputPhase,
+    Observation, OperationId, OperationKind, OperationOutcome, OperationState, RejectedInput,
+    ReturnReason, ReturnedInput, SessionControl, Settlement, ShutdownReport, UserInput,
+};
 pub use credentials::{CredentialResolutionError, CredentialResolver};
 pub use local_tools::LocalTools;
 pub use mcp::{McpConfig, McpHttpServer, McpServer, McpStartup, McpStdioServer, McpTools};

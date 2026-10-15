@@ -83,11 +83,16 @@ impl<M> SteeringInbox<M> {
         M: serde::Serialize,
     {
         let input = self.budget.admit(input, metadata, self.limits)?;
+        self.push_admitted(input);
+        Ok(())
+    }
+
+    /// Move existing admission custody without releasing/re-acquiring its budget.
+    pub fn push_admitted(&self, input: crate::AcceptedInput<M>) {
         self.pending
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .push_back(input);
-        Ok(())
     }
 
     /// Return inputs that never entered the Session. Call after joining the
@@ -2494,7 +2499,7 @@ mod tests {
                     "report".into(),
                     "test".into(),
                     CancellationToken::new(),
-                    move |event| observed_live.lock().unwrap().observe(event),
+                    move |event| observed_live.lock().unwrap().observe(&event),
                 )
                 .await
                 .unwrap();
@@ -3252,7 +3257,7 @@ mod tests {
                     }
                     let restart = matches!(&event, AgentEvent::ResponseRestarted);
                     let mut live = observed_live.lock().unwrap();
-                    live.observe(event);
+                    live.observe(&event);
                     if restart {
                         *observed_restarted.lock().unwrap() = true;
                         let view = observed_session.view().unwrap();
@@ -3596,7 +3601,7 @@ mod tests {
                             .push("also check the content".into())
                             .unwrap();
                     }
-                    observed_live.lock().unwrap().observe(event);
+                    observed_live.lock().unwrap().observe(&event);
                 },
             )
             .await
@@ -4347,7 +4352,7 @@ mod tests {
                         ) {
                             *closures += 1;
                         }
-                        live.observe(event);
+                        live.observe(&event);
                     },
                 )
                 .await;

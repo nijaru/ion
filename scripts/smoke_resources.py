@@ -337,12 +337,12 @@ with tempfile.TemporaryDirectory(prefix="ion-resources-") as temporary:
                             os.write(master, b"\x1b[200~" + literal.encode() + b"\x1b[201~\x1b[A\x1b[H" + (b"\r" if steer else b"\x1b\r"))
                             output.clear()
                             phase = 2
-                        elif phase == 2 and (b"Steering sent" if steer else b"follow-up(s) queued") in output:
+                        elif phase == 2 and (b"Steering queued" if steer else b"follow-up(s) queued") in output:
                             assert len(requests) == before + 1, "queued resource dispatched early"
                             os.write(master, b"\x03")
                             output.clear()
                             phase = 3
-                        elif phase == 3 and b"Turn ended: turn was cancelled" in output:
+                        elif phase == 3 and b"Turn stopped" in output:
                             release.set()
                             os.write(master, b"PREFIX_\r")
                             output.clear()

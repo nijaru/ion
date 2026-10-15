@@ -232,7 +232,8 @@ with tempfile.TemporaryDirectory(prefix="ion-code-mode-") as temporary:
         rpc_work.mkdir()
         child = subprocess.Popen([binary, "--cwd", rpc_work, "--code-mode", "rpc"], env=env, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, bufsize=0)
         try:
-            assert read_record(child)["type"] == "ready"
+            admission = read_record(child)
+            assert admission["type"] == "ready"
             child.stdin.write(b'{"type":"prompt","message":"IO"}\n')
             ready(rpc_work, child)
             child.stdin.close()
@@ -240,7 +241,17 @@ with tempfile.TemporaryDirectory(prefix="ion-code-mode-") as temporary:
             stdout, stderr = child.communicate(timeout=10)
             assert child.returncode == 0, stderr
             records = [json.loads(line) for line in stdout.splitlines()]
-            assert len([record for record in records if record["type"] == "child_tool_finished" and record["output"]["cancelled"]]) == 2, records
+            ended = next(record for record in records if record["type"] == "turn_end")
+            assert ended["status"] == "cancelled", ended
+            if ended["progress_complete"]:
+                assert len([record for record in records if record["type"] == "child_tool_finished" and record["output"]["cancelled"]]) == 2, records
+            else:
+                assert any(record["type"] == "publication_gap" and record["resync"] == "inspect" for record in records), records
+            # EOF joins before publication, which may omit provisional events.
+            # Durable observations and independently dead processes are required.
+            saved = json.loads(run(env, rpc_work, "--session", admission["session"], "inspect").stdout)
+            outcomes = [entry["data"]["outcome"] for entry in saved["entries"] if entry["kind"] == "child_tool_result"]
+            assert len(outcomes) == 2 and all(outcome["state"] == "observed" and outcome["output"]["value"]["cancelled"] for outcome in outcomes), outcomes
             exited_pids(rpc_work)
         finally:
             if child.poll() is None:

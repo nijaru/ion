@@ -375,12 +375,12 @@ mod tests {
         };
         let mut live =
             LiveTranscript::with_user_input(&Message::user_input("CURRENT_REQUEST".into(), []));
-        live.observe(AgentEvent::TurnAccepted { turn: 2 });
+        live.observe(&AgentEvent::TurnAccepted { turn: 2 });
         let activity = ToolActivity {
             kind: ToolActivityKind::Command,
             subject: Some("run-check".into()),
         };
-        live.observe(AgentEvent::AssistantCommitted {
+        live.observe(&AgentEvent::AssistantCommitted {
             turn: 2,
             content: vec![Content::ToolCall(ToolCall {
                 id: "call".into(),
@@ -402,7 +402,7 @@ mod tests {
         assert!(initial.contains("not shared with model"));
         assert!(initial.contains("queued"));
         assert!(initial.contains("no committed result"));
-        live.observe(AgentEvent::ToolFinished {
+        live.observe(&AgentEvent::ToolFinished {
             call_id: "call".into(),
             name: "exec".into(),
             activity,
@@ -415,14 +415,14 @@ mod tests {
                 },
             },
         });
-        live.observe(AgentEvent::TextDelta("PROVISIONAL_TEXT".into()));
+        live.observe(&AgentEvent::TextDelta("PROVISIONAL_TEXT".into()));
         view.prepare(&history, Some(&live), 120);
         let running = view.rows().join("\n");
         assert!(running.contains("completed"));
         assert!(running.contains("END_MARKER"));
         assert!(running.contains("Assistant · provisional"));
         assert!(running.contains("PROVISIONAL_TEXT"));
-        live.observe(AgentEvent::ResponseRestarted);
+        live.observe(&AgentEvent::ResponseRestarted);
         view.prepare(&history, Some(&live), 120);
         let restarted = view.rows().join("\n");
         assert!(!restarted.contains("PROVISIONAL_TEXT"));

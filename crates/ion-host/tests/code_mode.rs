@@ -338,7 +338,7 @@ async fn native_fanout_selects_context_and_preserves_occurrences_inspection_and_
                 let started = matches!(&event, ion_core::CodingAgentEvent::ChildToolStarted { .. });
                 let mut state = observer.lock().unwrap();
                 let (live, saw_running_child) = &mut *state;
-                live.observe(event);
+                live.observe(&event);
                 if started {
                     *saw_running_child = true;
                     assert!(live.projection().items.iter().any(|item| matches!(item, TranscriptItem::ActivityGroup(group) if group.activities.iter().any(|parent| parent.state == ion_core::ActivityState::Running && parent.children.iter().any(|child| child.state == ion_core::ActivityState::Running)))));

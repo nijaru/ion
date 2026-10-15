@@ -2,7 +2,7 @@
 use ion_core::CodingAgentEvent;
 use serde_json::{Value, json};
 
-pub(super) fn event_record(event: CodingAgentEvent) -> Value {
+pub(super) fn event_record(event: &CodingAgentEvent) -> Value {
     match event {
         CodingAgentEvent::TurnAccepted { turn } => json!({"type":"turn_accepted","turn":turn}),
         CodingAgentEvent::TurnEnded { turn, reason } => {
@@ -45,7 +45,7 @@ pub(super) fn event_record(event: CodingAgentEvent) -> Value {
             activity,
             outcome,
         } => {
-            let state = match &outcome {
+            let state = match outcome {
                 ion_core::ToolOutcome::Observed { .. } => "observed",
                 ion_core::ToolOutcome::NotDispatched { .. } => "not_dispatched",
                 ion_core::ToolOutcome::Unknown => "unknown",
@@ -66,12 +66,12 @@ pub(super) fn event_record(event: CodingAgentEvent) -> Value {
             child,
             outcome,
         } => {
-            let state = match &outcome {
+            let state = match outcome {
                 ion_core::ChildOutcome::Observed { .. } => "observed",
                 ion_core::ChildOutcome::NotDispatched { .. } => "not_dispatched",
                 ion_core::ChildOutcome::Unknown => "unknown",
             };
-            let output = outcome.inspection_output();
+            let output = child_output(outcome);
             json!({"type":"child_tool_finished","parent":parent,"child":child,"state":state,"output":output.value,"is_error":output.is_error,"image_mime_types":output.images.iter().map(|image| image.mime_type().as_str()).collect::<Vec<_>>()})
         }
         CodingAgentEvent::InterruptedCalls(count) => {
@@ -96,7 +96,7 @@ pub(super) fn event_record(event: CodingAgentEvent) -> Value {
 
 /// Build a human diagnostic without performing I/O inside the effect callback.
 /// The headless owner handles a failed write by stopping admission and waiting.
-pub(super) fn diagnostic(event: CodingAgentEvent) -> Option<String> {
+pub(super) fn diagnostic(event: &CodingAgentEvent) -> Option<String> {
     let text = match event {
         CodingAgentEvent::ProviderRetry {
             attempt,
@@ -105,7 +105,7 @@ pub(super) fn diagnostic(event: CodingAgentEvent) -> Option<String> {
         } => format!("[provider retry {attempt}/{max_retries} in {delay_ms}ms]"),
         CodingAgentEvent::ToolStarted { name, .. } => format!("[tool: {name}]"),
         CodingAgentEvent::ToolFinished { name, outcome, .. } => {
-            let label = match &outcome {
+            let label = match outcome {
                 ion_core::ToolOutcome::Observed { .. } => "tool",
                 ion_core::ToolOutcome::NotDispatched { .. } => "tool skipped",
                 ion_core::ToolOutcome::Unknown => "tool effect unknown",
@@ -122,7 +122,7 @@ pub(super) fn diagnostic(event: CodingAgentEvent) -> Option<String> {
             format!("[child tool: {}]", intent.call.name)
         }
         CodingAgentEvent::ChildToolFinished { outcome, .. } => {
-            output_diagnostic("child result", &outcome.inspection_output())
+            output_diagnostic("child result", &child_output(outcome))
         }
         CodingAgentEvent::InterruptedCalls(count) => {
             format!("[recovered {count} incomplete tool call(s); effects unknown]")
@@ -159,6 +159,15 @@ pub(super) fn diagnostic(event: CodingAgentEvent) -> Option<String> {
             })
             .collect(),
     )
+}
+
+fn child_output(
+    outcome: &ion_core::ChildOutcome,
+) -> std::borrow::Cow<'_, ion_core::CodingToolOutput> {
+    match outcome {
+        ion_core::ChildOutcome::Observed { output } => std::borrow::Cow::Borrowed(output),
+        _ => std::borrow::Cow::Owned(outcome.clone().inspection_output()),
+    }
 }
 
 fn output_diagnostic(label: &str, output: &ion_core::CodingToolOutput) -> String {

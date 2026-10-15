@@ -7,6 +7,7 @@ import os
 import pty
 import select
 import signal
+import sqlite3
 import struct
 import subprocess
 import tempfile
@@ -130,7 +131,8 @@ with tempfile.TemporaryDirectory(prefix="ion-images-") as temporary:
             os.setsid()
             fcntl.ioctl(slave, termios.TIOCSCTTY, 0)
 
-        child = subprocess.Popen([binary, "--cwd", workspace, "--image", "red.png", "--tui-mode", "fullscreen", "chat"], env={**env, "TERM": "xterm-256color"}, stdin=slave, stdout=slave, stderr=slave, preexec_fn=attach_terminal)
+        terminal_session = work / "terminal.sqlite"
+        child = subprocess.Popen([binary, "--cwd", workspace, "--session", terminal_session, "--image", "red.png", "--tui-mode", "fullscreen", "chat"], env={**env, "TERM": "xterm-256color"}, stdin=slave, stdout=slave, stderr=slave, preexec_fn=attach_terminal)
         os.close(slave)
         output = bytearray()
         sent_first = attached_second = sent_second = quit_sent = False
@@ -156,8 +158,13 @@ with tempfile.TemporaryDirectory(prefix="ion-images-") as temporary:
                     os.write(master, b"Inspect again.\r")
                     sent_second = True
                 if sent_second and len(requests) >= 4 and not quit_sent:
-                    os.write(master, b"\x03")
-                    quit_sent = True
+                    with sqlite3.connect(terminal_session) as connection:
+                        ended = connection.execute("SELECT COUNT(*) FROM entries WHERE json_extract(CAST(body AS TEXT), '$.kind') = 'turn_ended'").fetchone()[0]
+                    if ended == 2:
+                        # A request reaching the peer is not turn settlement.
+                        # Quit explicitly after both committed image turns.
+                        os.write(master, b"\x04")
+                        quit_sent = True
                 # Leaving the alternate screen is only one teardown write.
                 # Keep draining the PTY until exit so restoration cannot block
                 # on a full terminal output queue (notably on macOS).
@@ -304,11 +311,9 @@ with tempfile.TemporaryDirectory(prefix="ion-images-") as temporary:
                 if predicate(record):
                     return record
 
-        def image_parts(message, text):
-            assert message["content"][0] == {"Text": text}, message
-            image = message["content"][1]["Image"]
-            assert image["mime_type"] == "image/png", image
-            assert base64.b64decode(image["data"]) == tiny_png(), image
+        def returned_image(record, text, source):
+            assert record["reason"] == "cleared", record
+            assert record["input"] == {"Prompt": {"text": text, "images": [source]}}, record
 
         try:
             rpc_session = rpc_read()["session"]
@@ -326,11 +331,12 @@ with tempfile.TemporaryDirectory(prefix="ion-images-") as temporary:
                 rpc_send({"id": command, "type": command, "message": text, "images": [source]})
                 assert rpc_until(lambda record: record.get("id") == command)["success"]
             rpc_send({"id": "clear", "type": "clear_queue"})
-            cleared = rpc_until(lambda record: record.get("id") == "clear")["data"]
-            assert len(cleared["steering"]) == len(cleared["follow_up"]) == 1, cleared
-            image_parts(cleared["steering"][0], "RETURNED_STEERING_PICTURE")
-            assert cleared["follow_up"][0]["id"] == "follow_up", cleared
-            image_parts(cleared["follow_up"][0]["input"], "RETURNED_FOLLOW_UP_PICTURE")
+            assert rpc_until(lambda record: record.get("id") == "clear")["success"]
+            returned = [rpc_read(), rpc_read()]
+            assert {(record["type"], record["id"]) for record in returned} == {("uncommitted_steering", "steer"), ("uncommitted_follow_up", "follow_up")}, returned
+            by_id = {record["id"]: record for record in returned}
+            returned_image(by_id["steer"], "RETURNED_STEERING_PICTURE", {"Encoded": inline})
+            returned_image(by_id["follow_up"], "RETURNED_FOLLOW_UP_PICTURE", {"Path": "red.png"})
             rpc_send({"id": "stop-picture", "type": "abort"})
             assert rpc_until(lambda record: record.get("id") == "stop-picture")["success"]
             assert rpc_until(lambda record: record["type"] == "turn_end")["status"] == "cancelled"

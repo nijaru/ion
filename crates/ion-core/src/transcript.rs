@@ -477,22 +477,22 @@ impl LiveTranscript {
         self.current_response
     }
 
-    pub fn observe(&mut self, event: AgentEvent) {
+    pub fn observe(&mut self, event: &AgentEvent) {
         self.revision += 1;
         match event {
             AgentEvent::TurnAccepted { turn } => {
-                self.turn = Some(turn);
+                self.turn = Some(*turn);
                 for item in &mut self.builder.projection.items {
                     if let TranscriptItem::User(message) = item
                         && message.turn.is_none()
                     {
-                        message.turn = Some(turn);
+                        message.turn = Some(*turn);
                     }
                 }
             }
             AgentEvent::ModelOutputObserved => {}
             AgentEvent::TextDelta(text) => self.push_text(text),
-            AgentEvent::ThinkingDelta { block, text } => self.push_thinking(block, text),
+            AgentEvent::ThinkingDelta { block, text } => self.push_thinking(*block, text),
             AgentEvent::AssistantCommitted {
                 turn,
                 content,
@@ -501,10 +501,10 @@ impl LiveTranscript {
             } => {
                 self.restart_partial_response();
                 self.builder
-                    .push_assistant(turn, &content, &tool_activities, &termination, true);
+                    .push_assistant(*turn, content, tool_activities, termination, true);
             }
             AgentEvent::SteeringCommitted { turn, input } => {
-                self.builder.push_user(Some(turn), true, &input);
+                self.builder.push_user(Some(*turn), true, input);
             }
             AgentEvent::ProviderRetry {
                 attempt,
@@ -537,7 +537,7 @@ impl LiveTranscript {
             // Start is execution progress, not another authoritative call.
             AgentEvent::ToolStarted { call_id, .. } => {
                 let turn = self.turn.expect("tool progress follows TurnAccepted");
-                let activity = self.builder.activity_mut(turn, &call_id);
+                let activity = self.builder.activity_mut(turn, call_id);
                 assert_eq!(activity.state, ActivityState::Queued);
                 activity.state = ActivityState::Running;
             }
@@ -545,7 +545,7 @@ impl LiveTranscript {
                 call_id, outcome, ..
             } => {
                 let turn = self.turn.expect("tool progress follows TurnAccepted");
-                self.builder.push_outcome(turn, &call_id, &outcome);
+                self.builder.push_outcome(turn, call_id, outcome);
             }
             AgentEvent::ChildToolAdmitted {
                 parent_call_id,
@@ -553,12 +553,12 @@ impl LiveTranscript {
             } => {
                 self.builder.push_child(
                     self.turn.expect("child follows TurnAccepted"),
-                    Some(&parent_call_id),
-                    &intent,
+                    Some(parent_call_id),
+                    intent,
                 );
             }
             AgentEvent::ChildToolStarted { parent, child } => {
-                let activity = &mut self.builder.parent_mut(parent).children[child];
+                let activity = &mut self.builder.parent_mut(*parent).children[*child];
                 assert_eq!(activity.state, ActivityState::Queued);
                 activity.state = ActivityState::Running;
             }
@@ -566,7 +566,7 @@ impl LiveTranscript {
                 parent,
                 child,
                 outcome,
-            } => self.builder.push_child_result(parent, child, &outcome),
+            } => self.builder.push_child_result(*parent, *child, outcome),
             AgentEvent::TurnEnded { .. } => self.builder.close_group(),
             AgentEvent::InterruptedCalls(count) => self.note(format!(
                 "{count} previous tool call(s) had unknown effects; inspect before retrying"
@@ -599,7 +599,7 @@ impl LiveTranscript {
         message
     }
 
-    fn push_text(&mut self, text: String) {
+    fn push_text(&mut self, text: &str) {
         if text.is_empty() {
             return;
         }
@@ -609,13 +609,13 @@ impl LiveTranscript {
             .iter_mut()
             .find(|part| matches!(part, TranscriptPart::Text(_)))
         {
-            current.push_str(&text);
+            current.push_str(text);
         } else {
-            message.parts.push(TranscriptPart::Text(text));
+            message.parts.push(TranscriptPart::Text(text.to_owned()));
         }
     }
 
-    fn push_thinking(&mut self, block: usize, text: String) {
+    fn push_thinking(&mut self, block: usize, text: &str) {
         if text.is_empty() {
             return;
         }
@@ -630,14 +630,16 @@ impl LiveTranscript {
             "human thinking block indices are consecutive"
         );
         if block == count {
-            message.parts.push(TranscriptPart::Thinking(text));
+            message
+                .parts
+                .push(TranscriptPart::Thinking(text.to_owned()));
         } else if let Some(TranscriptPart::Thinking(current)) = message
             .parts
             .iter_mut()
             .filter(|part| matches!(part, TranscriptPart::Thinking(_)))
             .nth(block)
         {
-            current.push_str(&text);
+            current.push_str(text);
         }
     }
 
@@ -872,15 +874,15 @@ mod tests {
     #[test]
     fn execution_start_changes_only_the_committed_call() {
         let mut live = LiveTranscript::default();
-        live.observe(AgentEvent::TurnAccepted { turn: 1 });
-        live.observe(committed(
+        live.observe(&AgentEvent::TurnAccepted { turn: 1 });
+        live.observe(&committed(
             1,
             vec![
                 call("first", "read", serde_json::json!({"path":"a"})),
                 call("second", "read", serde_json::json!({"path":"b"})),
             ],
         ));
-        live.observe(AgentEvent::ToolStarted {
+        live.observe(&AgentEvent::ToolStarted {
             call_id: "first".into(),
             name: "read".into(),
             // Start cannot overwrite committed arguments or metadata.
@@ -893,7 +895,7 @@ mod tests {
         assert_eq!(group.activities[0].state, ActivityState::Running);
         assert_eq!(group.activities[0].arguments["path"], "a");
         assert_eq!(group.activities[1].state, ActivityState::Queued);
-        live.observe(AgentEvent::ToolFinished {
+        live.observe(&AgentEvent::ToolFinished {
             call_id: "first".into(),
             name: "read".into(),
             activity: ToolActivity::external("read"),
@@ -916,8 +918,8 @@ mod tests {
     #[test]
     fn live_projection_reopens_a_group_when_partial_text_is_restarted() {
         let mut live = LiveTranscript::default();
-        live.observe(AgentEvent::TurnAccepted { turn: 7 });
-        live.observe(committed(
+        live.observe(&AgentEvent::TurnAccepted { turn: 7 });
+        live.observe(&committed(
             7,
             vec![call(
                 "read-1",
@@ -925,7 +927,7 @@ mod tests {
                 serde_json::json!({"path":"src/lib.rs"}),
             )],
         ));
-        live.observe(AgentEvent::ToolFinished {
+        live.observe(&AgentEvent::ToolFinished {
             call_id: "read-1".into(),
             name: "read".into(),
             activity: ToolActivity {
@@ -941,9 +943,9 @@ mod tests {
                 },
             },
         });
-        live.observe(AgentEvent::TextDelta("discard me".into()));
-        live.observe(AgentEvent::ResponseRestarted);
-        live.observe(committed(
+        live.observe(&AgentEvent::TextDelta("discard me".into()));
+        live.observe(&AgentEvent::ResponseRestarted);
+        live.observe(&committed(
             7,
             vec![call(
                 "read-2",
@@ -952,7 +954,7 @@ mod tests {
             )],
         ));
         // Progress must not duplicate the already committed call.
-        live.observe(AgentEvent::ToolStarted {
+        live.observe(&AgentEvent::ToolStarted {
             call_id: "read-2".into(),
             name: "read".into(),
             arguments: serde_json::json!({"path":"src/main.rs"}),
@@ -973,15 +975,15 @@ mod tests {
     #[test]
     fn thinking_and_prose_share_response_restart_and_commit_custody() {
         let mut live = LiveTranscript::default();
-        live.observe(AgentEvent::TurnAccepted { turn: 1 });
-        live.observe(committed(1, vec![Content::Text("kept".into())]));
+        live.observe(&AgentEvent::TurnAccepted { turn: 1 });
+        live.observe(&committed(1, vec![Content::Text("kept".into())]));
         for (block, text) in [(0, "first "), (0, "thought"), (1, "summary")] {
-            live.observe(AgentEvent::ThinkingDelta {
+            live.observe(&AgentEvent::ThinkingDelta {
                 block,
                 text: text.into(),
             });
         }
-        live.observe(AgentEvent::TextDelta("provisional".into()));
+        live.observe(&AgentEvent::TextDelta("provisional".into()));
         let index = live.provisional_item_index().unwrap();
         let TranscriptItem::Assistant(message) = &live.projection().items[index] else {
             panic!()
@@ -994,14 +996,14 @@ mod tests {
                 TranscriptPart::Text("provisional".into())
             ]
         );
-        live.observe(AgentEvent::ResponseRestarted);
+        live.observe(&AgentEvent::ResponseRestarted);
         assert!(live.provisional_item_index().is_none());
         assert_eq!(live.projection().items.len(), 1);
-        live.observe(AgentEvent::ThinkingDelta {
+        live.observe(&AgentEvent::ThinkingDelta {
             block: 0,
             text: "new thought".into(),
         });
-        live.observe(committed(
+        live.observe(&committed(
             1,
             vec![
                 Content::Thinking("recorded thought".into()),
@@ -1022,12 +1024,12 @@ mod tests {
     #[test]
     fn live_committed_text_splits_the_next_tool_group() {
         let mut live = LiveTranscript::default();
-        live.observe(AgentEvent::TurnAccepted { turn: 3 });
-        live.observe(committed(
+        live.observe(&AgentEvent::TurnAccepted { turn: 3 });
+        live.observe(&committed(
             3,
             vec![call("one", "read", serde_json::json!({"path":"one.rs"}))],
         ));
-        live.observe(AgentEvent::ToolFinished {
+        live.observe(&AgentEvent::ToolFinished {
             call_id: "one".into(),
             name: "read".into(),
             activity: ToolActivity {
@@ -1043,8 +1045,8 @@ mod tests {
                 },
             },
         });
-        live.observe(AgentEvent::TextDelta("provisional".into()));
-        live.observe(committed(
+        live.observe(&AgentEvent::TextDelta("provisional".into()));
+        live.observe(&committed(
             3,
             vec![
                 Content::Text("Now editing.".into()),

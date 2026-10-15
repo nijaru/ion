@@ -1,4 +1,4 @@
-//! Owned input jobs and publication into the editable draft; no terminal I/O.
+//! Clipboard acquisition and publication into the editor. Host prepares images.
 use std::path::PathBuf;
 
 use anyhow::{Context, Result, ensure};
@@ -18,70 +18,9 @@ pub(super) struct ClipboardJob {
     pub(super) task: tokio::task::JoinHandle<Result<PreparedPaste>>,
 }
 
-pub(super) struct ImageJob {
-    pub(super) stop: CancellationToken,
-    pub(super) task: tokio::task::JoinHandle<Result<Vec<LoadedImage>>>,
-}
-
-pub(super) fn start_image_preparation(
-    runtime: &ion_host::SessionBinding,
-    ui: &mut Frontend,
-    path: PathBuf,
-) -> Result<()> {
-    ensure!(
-        ui.image_job.is_none() && ui.clipboard_job.is_none(),
-        "input preparation is already in progress"
-    );
-    ion_host::image_input::require_image_input(runtime.selected())?;
-    let stop = CancellationToken::new();
-    let preparation = runtime.prepare_images(
-        vec![ion_host::image_input::ImageSource::Path(path)],
-        stop.clone(),
-    );
-    ui.image_job = Some(ImageJob {
-        stop,
-        task: tokio::spawn(preparation),
-    });
-    ui.status = "Preparing image…".into();
-    Ok(())
-}
-
-pub(super) fn finish_image_preparation(
-    ui: &mut Frontend,
-    joined: std::result::Result<Result<Vec<LoadedImage>>, tokio::task::JoinError>,
-) {
-    let job = ui.image_job.take().expect("joined image preparation");
-    let result = joined
-        .context("image preparation stopped")
-        .and_then(|result| result);
-    if job.stop.is_cancelled() && result.is_ok() {
-        ui.status = "Image preparation cancelled".into();
-    } else {
-        match result {
-            Ok(images) => {
-                if let Err(error) = ui.attach_images(images) {
-                    ui.status = format!("Image preparation failed: {error:#}");
-                }
-            }
-            Err(error) => ui.status = format!("Image preparation failed: {error:#}"),
-        }
-    }
-}
-
-pub(super) async fn cancel_image_preparation(ui: &mut Frontend) -> Result<()> {
-    if let Some(job) = ui.image_job.take() {
-        job.stop.cancel();
-        let _discarded = job
-            .task
-            .await
-            .context("image preparation stopped during exit")?;
-    }
-    Ok(())
-}
-
 pub(super) fn start_clipboard_paste(ui: &mut Frontend, selected: &Selection) {
-    if ui.clipboard_job.is_some() || ui.image_job.is_some() {
-        ui.status = "Input preparation is already in progress".into();
+    if ui.clipboard_job.is_some() {
+        ui.status = "Clipboard acquisition is already in progress".into();
         return;
     }
     let selected = selected.clone();
@@ -97,6 +36,7 @@ pub(super) fn start_clipboard_paste(ui: &mut Frontend, selected: &Selection) {
     ui.status = "Reading clipboard…".into();
 }
 
+#[cfg(test)]
 pub(super) async fn finish_clipboard_paste(ui: &mut Frontend) -> Result<()> {
     let joined = (&mut ui
         .clipboard_job
@@ -126,29 +66,11 @@ pub(super) fn finish_joined_clipboard_paste(
     apply_clipboard(ui, content)
 }
 
-pub(super) async fn finish_ready_clipboard_paste(ui: &mut Frontend) {
-    if ui
-        .clipboard_job
-        .as_ref()
-        .is_some_and(|job| job.task.is_finished())
-    {
-        finish_pending_clipboard_paste(ui).await;
-    }
-}
-
-pub(super) async fn finish_pending_clipboard_paste(ui: &mut Frontend) {
-    if ui.clipboard_job.is_some()
-        && let Err(error) = finish_clipboard_paste(ui).await
-    {
-        ui.status = format!("Paste failed: {error:#}");
-    }
-}
-
 pub(super) async fn cancel_clipboard_paste(ui: &mut Frontend) -> Result<()> {
     if let Some(job) = ui.clipboard_job.take() {
         job.stop.cancel();
-        // The input is being discarded, but its task must finish. An ordinary
-        // clipboard refusal/cancellation is not a terminal-exit failure.
+        // A refusal/cancellation is recoverable; a failed join is not. Do not
+        // publish a late successful paste into a draft whose client is closing.
         let _discarded = job
             .task
             .await
@@ -182,9 +104,7 @@ pub(super) fn apply_clipboard(ui: &mut Frontend, content: PreparedPaste) -> Resu
             let suffix = after.filter(|ch| !ch.is_whitespace()).map_or("", |_| " ");
             ui.insert(&format!("{prefix}{text}{suffix}"));
         }
-        PreparedPaste::Image(image) => {
-            ui.attach_images(vec![image])?;
-        }
+        PreparedPaste::Image(image) => ui.attach_image(image.into()),
         PreparedPaste::Text(text) => ui.insert(&text),
     }
     Ok(())

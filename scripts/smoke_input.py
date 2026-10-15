@@ -299,11 +299,20 @@ with tempfile.TemporaryDirectory(prefix="ion-input-") as temporary:
                     if cancelled:
                         assert len(requests) == before, "shell stop dispatched an unaccepted queued prompt"
                         assert not any(entry["kind"] == "turn_started" for entry in facts), facts
-                        # Cursor, queued literal and subsequently typed draft all survive.
+                        # Returned inputs preserve their own literal/cursor; never
+                        # merge separate prompts or attachments with the editor.
+                        terminal.send(b"\x1b[1;3A")  # Alt-Up recalls the returned input.
+                        terminal.paint()
                         terminal.send("PREFIX_\r")
                         terminal.wait(lambda: len(requests) == before + 1)
-                        assert user_text(requests[-1]) == "PREFIX_QUEUED🦀\n\nunsent", user_text(requests[-1])
+                        assert user_text(requests[-1]) == "PREFIX_QUEUED🦀", user_text(requests[-1])
                         terminal.wait(lambda: "DONE_PREFIX_QUEUED" in terminal.text())
+                        terminal.wait(lambda: any(entry["kind"] == "turn_ended" for entry in shell_facts()))
+                        terminal.paint()
+                        terminal.send(b"\x1b[1;3A\r")
+                        terminal.wait(lambda: len(requests) == before + 2)
+                        assert user_text(requests[-1]) == "unsent", user_text(requests[-1])
+                        terminal.wait(lambda: "DONE_unsent" in terminal.text())
                     else:
                         assert outcome["output"]["exit_code"] == 7, outcome
                         terminal.wait(lambda: len(requests) == before + 1)
@@ -321,7 +330,7 @@ with tempfile.TemporaryDirectory(prefix="ion-input-") as temporary:
                             os.kill(pid, signal.SIGKILL)
                         except ProcessLookupError:
                             pass
-            print(f"Ion {mode} shell stop restores queued input; nonzero exit retains follow-up intent: OK", flush=True)
+            print(f"Ion {mode} shell stop preserves separate drafts; nonzero exit retains follow-up intent: OK", flush=True)
 
             cwd = work / (mode + "-shell-refusal")
             cwd.mkdir()
@@ -333,7 +342,7 @@ with tempfile.TemporaryDirectory(prefix="ion-input-") as temporary:
                 terminal.send("WAIT_HISTORY\r")
                 terminal.wait(lambda: len(requests) == before + 1)
                 terminal.send(b"  !touch MUST_NOT_EXIST  \x1b[H\r")
-                terminal.wait(lambda: "Shell commands are available after this operation" in terminal.text())
+                terminal.wait(lambda: "Shell was not started:" in terminal.text())
                 terminal.output.clear()
                 release.set()
                 terminal.wait(lambda: "DONE_WAIT_HISTORY" in terminal.text())

@@ -267,34 +267,37 @@ are rejected before mutation.
 Session's working directory) or inline `{ "mime_type": "image/png", "data": "BASE64" }`
 objects. Ion validates and normalizes both before accepting the input.
 Image preparation occupies one pending-input slot, not an accepted queue entry.
-`get_state` reports `busy: true` and `preparing_input: true`; controls such as
-`abort` remain available. Another input or binding-changing command is refused
-until preparation settles. `abort`, `clear_queue` and connection closure cancel
-pending preparation and await its owned work; the original command then receives
-a correlated failure rather than a queue acknowledgement. Already-running image
-decoding cannot be forcibly interrupted. Steering preparation is refused if its
-original Turn ends; follow-up preparation can finish and queue after that Turn.
-`steer` queues typed input for the active Turn. `follow_up` queues a separate
-Turn while one is active; its acknowledgement means only that Ion holds the
-prepared input. A later `follow_up_started` record gives its committed Turn ID.
-`clear_queue` returns uncommitted steering and follow-ups. `abort` requests stop;
-after owned settlement, unaccepted follow-ups are returned as
-`uncommitted_follow_up` records rather than starting another Turn. A stop racing
-successful completion still withdraws queued dispatch without changing the
-observed outcome. Failed operations also return unaccepted follow-ups. Steering
-and follow-ups share a process-local 32 MiB allowance for encoded messages and
-retained correlation IDs. Each input must
-also satisfy the active route's message-size and image-input limits before Ion
-acknowledges it. Accepted input keeps its reservation until Session acceptance
-or return to the editor/client, including while a follow-up waits to start.
-This is a queued-input bound, not a process-memory or context-fit guarantee.
-Output backpressure does not block input controls or owned operation settlement.
-Clients must keep reading stdout: final delivery can wait until the recipient
-reads or closes the pipe. Pending publication behind the current frame has an
-8 MiB high-water mark; an additional frame can cross it, then progress acquisition
-pauses. Settlement and pending-input recovery records are retained and published
-as the backlog drains. Further command replies that cannot enter that backlog
-fail the connection and cancel active work rather than accumulate unbounded output.
+`get_state` reports shared control activity, including `preparing_input`. Image
+preparation remains owned and joinable while controls and other queued input stay
+available; active decoders cannot be forcibly interrupted. A preparation error
+returns the original typed input. Steering preparation cannot attach to a later
+Turn when its target ends.
+
+`steer` targets the active coding Turn. `follow_up` queues a separate Turn behind
+current work, including shell/compaction, or starts when idle. Its queued
+acknowledgement means prepared Host custody, not durable Session acceptance;
+`follow_up_started` supplies the committed Turn ID. `clear_queue` acknowledges withdrawal intent; separate `uncommitted_steering`
+and `uncommitted_follow_up` records return originals. It does not cancel the
+initial prompt. `abort` also stops initial
+preparation and requests stop of active work. Stop wins queued dispatch even if
+an observed result races to success; failed operations return unaccepted inputs.
+
+Inputs share a process-local 32 MiB allowance for originals, prepared messages and
+client metadata, plus 64 retained admission/result slots. Route/image checks apply
+before acknowledgement. Accepted metadata stays reserved through settlement;
+returned input stays reserved until handoff. These are custody bounds, not
+context-fit or process-memory guarantees.
+
+Output pressure alone never cancels work. `ready.publication` advertises a
+32-command reply window; two control slots and one inspection slot are separate.
+Credits remain held through lifecycle settlement and physical reply delivery.
+Provisional output has an 8 MiB high-water mark. Overflow emits `publication_gap`:
+discard incomplete progress and reconcile with `inspect` and reliable settlement.
+Commands beyond reply capacity are not admitted and are counted in a coalesced
+gap, not buffered indefinitely. Abort still conveys stop when its reply cannot
+fit. A gap can replace individual refusal replies; reconcile outstanding requests
+rather than blindly resubmitting possible effects. Keep reading stdout: healthy
+final delivery still needs a reader to drain or close the pipe.
 Closing stdin cancels active work and returns uncommitted steering and
 follow-ups as `uncommitted_steering` and `uncommitted_follow_up` records.
 Returned typed inputs can include image payloads, so clients should handle them
@@ -317,13 +320,12 @@ the committed native output and `is_error`; an error without an outcome makes
 no effect claim. Inspect the Session after admission/storage failure.
 Shell commands share their command and outcome with later model context by
 default; `exclude_from_context: true` excludes both, like terminal `!!`.
-Shell operations make no model request or coding Turn and accept `abort`, not
-steering or follow-ups. EOF and connection faults still cancel and await
+Shell operations make no model request or coding Turn. They accept `abort`
+and explicit queued follow-ups, but cannot be steered. EOF and connection faults still cancel and await
 settlement. `get_state.operation` distinguishes `shell`, `turn` and `compact`.
 `compact` acknowledges that the operation started, can be cancelled with
 `abort`, and later emits `compact_end` with completed/cancelled/failed status
-and whether the model-context projection changed. `steer` and `follow_up`
-remain valid only for a coding Turn. `set_model` saves the idle selection for that Session; `new_session` selects the current global
+and whether the model-context projection changed. `set_model` saves the idle selection for that Session; `new_session` selects the current global
 default, `clone_session` copies the current committed conversation into an
 independent active Session, and `switch_session` restores the selected Session's model. Starting,
 cloning, forking or switching Sessions refreshes project resources; use
@@ -335,18 +337,18 @@ Uncommitted steering is returned as a typed `input` message if a Turn ends
 before the Session accepts it.
 While a turn runs, the editor remains available: Enter steers the next model
 step, Alt-Enter queues a separate follow-up turn, Alt-Up returns the most
-recent queued follow-up to the editor, and Ctrl-C cancels. After a stopped Turn,
-shell or compaction settles, unaccepted queued input returns to the editor rather
-than starting model work. An ordinary nonzero shell exit does not withdraw an
+recent queued follow-up to the editor, and Ctrl-C cancels. After stopped work settles, unaccepted input is returned rather than starting
+model work. An occupied editor stays separate: Alt-Up cycles retained drafts
+without submitting them. Enter during shell/compaction queues a follow-up. An ordinary nonzero shell exit does not withdraw an
 intentional follow-up. The terminal uses the same shared queued-input allowance
 and route checks as RPC. Rejected input remains in the editor with its attachments; recovered steering retains image
 notes with their corresponding images. Queued resource commands expand before
 admission, so later resource changes do not rewrite an accepted follow-up.
 The prepared prompt stays separate from the literal command, arguments and
 editor cursor: dequeue or cancellation restores the literal, not its expansion.
-Recovered aggregate drafts remain intact even when larger than the normal
-64 KiB editor limit. Composer layout retains only its cursor-containing window,
-not every wrapped row of the recovered input.
+Recovery keeps each literal, cursor and attachment group separate; it never
+concatenates independent prompts. Composer layout retains its cursor-containing
+window rather than every wrapped row.
 Both the model message and retained editor metadata count against the shared
 pending-input allowance. Clipboard preparation finishes before input admission.
 Terminal queries share the key reader and use a 500 ms response deadline;
@@ -788,98 +790,39 @@ retention guarantee. No comparative latency/token benefit is established yet.
 
 ## Current limits
 
-Common coding workflows are implemented, but Pi-level reliability and terminal
-usability are not yet qualified. Controlled tests cover persistence, admission,
-cancellation, recovery and shared-client behavior. Selected moderate live coding
-tasks have succeeded; longer captured-output workflows have also produced false
-summaries, inaccurate final reports and fresh duplicate mutations. Those failures
-remain unresolved. Mechanical compaction and absence of automatic replay do not
-establish truthful recall or once-only model behavior. Check saved outcomes,
-working-directory changes and native tests rather than trusting a recap alone.
+Common coding workflows are implemented, but Pi-level daily-driver reliability
+and terminal usability are not yet qualified. Selected live coding tasks have
+succeeded; longer workflows have also produced false summaries, inaccurate final
+reports and fresh duplicate mutations. Mechanical compaction and absence of
+harness replay do not establish truthful recall or once-only model behavior.
+Check committed outcomes, workspace changes and native tests, not a recap alone.
 
-Native clipboard backends, representative native-emulator use and human terminal
-polish remain incompletely qualified. Owner-level full-budget recovery and layout
-measurements do not prove fatal-path recovery through every client, sustained
-whole-application latency or a process-memory bound.
+CI exercises built headless, embedded, RPC and PTY workflows, including storage
+faults, cancellation, recovery, resources and MCP. These checks do not establish
+sustained repository work, representative native-emulator stability, clipboard
+backend coverage or human visual usability. An earlier isolated Ghostty
+qualification failure (exit 101, no useful trace) remains unresolved; PTY success
+does not close it. Harness latency and memory bounds
+need representative measurements; no comparative performance gain is claimed.
 
-The required CI gate now includes Linux PTY, RPC, MCP refresh/withdrawal,
-selected-point fork and resource-reload workflows in addition to format, strict
-Clippy and workspace tests. The terminal workflow exercises inline startup, grouped tool activity,
-temporary full-screen views, persistent fullscreen startup, inline/fullscreen
-mode switching, resize, Session/model controls, masked login, copy, clean
-restoration and an explicit process panic after fullscreen ownership has begun.
-This is automated qualification, not a substitute for manual checks in every
-supported terminal.
+Direct Anthropic and OpenAI still need live account qualification; thinking on
+custom llama.cpp routes is unsupported. Historical route success does not imply
+current availability. Ion has no native ChatGPT subscription integration. Context
+pressure uses an approximate token estimate; unknown-window routes rely on the
+encoded request bound.
 
-Short live coding tasks have passed on macOS with direct DeepSeek and MiMo,
-OpenRouter DeepSeek Flash, custom OpenRouter routes for
-`stealth/space-bunny-alpha` and Gemini 3 Flash Preview, and a custom llama.cpp
-route. OpenRouter and local llama.cpp tasks also passed on Linux. The cataloged
-OpenRouter DeepSeek route passed user-image and workspace-image tasks,
-resource use, MCP tool use and Session continuation. These checks cover
-selected tasks and routes. A separate OpenRouter DeepSeek Flash task used one
-two-replacement `edit` call with a `read.base_digest` guard and verified the
-result with shell. Anthropic and
-direct OpenAI have not been live-qualified.
+Chat-compatible tool messages encode
+`{"is_error": bool, "result": original_payload}`; inspection keeps raw payloads
+and status separate. Saved OpenRouter structured reasoning from older tool-message
+or withheld-output encodings is incompatible: compact that Session or start a new
+one. Ion never silently rewrites a potentially signed prefix or discards reasoning.
+See [ARCHITECTURE.md](ARCHITECTURE.md) for contracts and [AGENTS.md](AGENTS.md)
+for repository checks.
 
-Bounded macOS headless workflows also passed through a temporary, OAuth-only
-ChatGPT subscription bridge using `gpt-6.1-sol`: inspect/edit/native-test/report,
-cross-process Session reopen with a feature change, truthful reporting of a failed
-verification command, cancellation after a mutation followed by completion
-without repeating it. One Session completed six explicit Turns across five
-process reopens, adding JSON, stdin and filtering while accurately retaining an
-earlier rejected-input report.
-
-Before explicit saved-child retrieval, Code Mode recovery passed after a
-successful producer, failed verifier and guest exception: the agent discovered the workspace ledger,
-repaired its library/CLI and verified all 12,000 records without rerunning the
-producer. It correctly disclosed that original child outputs were unavailable.
-With saved-child retrieval, another bounded live task recovered an original
-hidden nonce and exit 7 from a 100,050-byte capture after guest failure, without
-rerunning its non-idempotent producer. Built headless reopen and read-only RPC
-inspection also passed; these are bounded evidence, not universal recovery.
-A separate two-file CLI repair verified a 288,000-byte full capture. Another
-completed real compaction, Session reopen and a feature change without rewriting
-raw facts or repeating the earlier command. Live RPC steering during a native
-call and a separately queued follow-up also passed. A live embedded fixture with a 48 KiB request budget
-completed two automatic compactions during a Turn, preserved a prior
-non-idempotent effect, repaired the code and passed native tests without repeating
-that effect. This budget is a fixture limit, not Ion's production limit. Final
-files, protected files and native checks were verified independently.
-
-A bounded live inline tmux task repaired a Python CSV utility, accepted edited
-steering during diagnosis and completed a separately queued follow-up. Native
-tests and file/stdin JSON checks passed; an unsent Unicode draft remained outside
-model context. Its first shutdown fixture used an unsupported editing shortcut
-and failed. Separate passive terminal reopen and cooked-input checks passed,
-with unchanged saved facts and no model dispatch. This does not qualify
-Ghostty-native reflow, emulator stability or human visual usability.
-
-This is coding-loop evidence, not a native Ion subscription implementation,
-client parity or sustained-workflow qualification. The bridge retained replay in
-memory. Compaction used parent-side authorization of unchanged Core requests,
-an exact known suffix and fresh User/Tool records; protected-reasoning rebases
-and bridge restart remained unsupported.
-
-Direct DeepSeek and MiMo and the qualified OpenRouter routes retain the
-reasoning needed for tool-call continuation across saved Turns. The Gemini
-route completed a signed tool continuation and another Turn after cross-process
-resume. An offline headless Anthropic Messages check completed signed tool
-continuation, cross-process resume and durable reasoning resets after
-compaction and project instructions changed. Chat-compatible tool messages encode
-`{"is_error": bool, "result": original_payload}` as their text content; Session
-inspection retains the original payload and status separately. Saved OpenRouter
-structured reasoning from earlier tool-message or withheld-output encodings is
-explicitly incompatible: compact the Session or start a new one before continuing. Ion does
-not silently rewrite a potentially signed prefix or discard its reasoning.
-The native route still needs a live Anthropic credential and account
-qualification; thinking on custom llama.cpp routes remains unsupported. Context pressure uses an approximate
-token estimate; custom routes without a known context window use only the
-encoded request bound. See [ARCHITECTURE.md](ARCHITECTURE.md) for the design
-contract and [AGENTS.md](AGENTS.md) for repository checks.
+## Rust embedding
 
 The runnable [embedded example](crates/ion-app/examples/embedded.rs) submits one
-prompt through the shared Host binding:
+prompt through shared Host session control:
 
 ```sh
 cargo run --locked -p ion --example embedded -- --help
@@ -896,47 +839,47 @@ example prints only the committed answer using fallible output, restores the
 saved reasoning preference, and connects no MCP servers. It is an SDK lifecycle
 sample, not a replacement for the terminal or RPC client.
 
-For Rust embedding, `ion-host::Host` composes the same model catalog,
-credentials, project instructions and Session discovery used by the CLI.
-`ion-core::CodingAgent` and `CodingSession` own the coding loop and committed
-conversation; `Host::agent_with_tools` accepts a custom `CodingToolSource`.
-Host-created agents bind the selected logical model, transport and limits.
-Core agent constructors also take a `ModelRef`; submission and compaction use
-that bound model without another model argument. Construct a new agent to
-change models; `CodingAgent::select_model(&session)` validates and persists its
-identity against the retained generation preference. `Host::resources` loads project skills and prompt templates. For a long-lived
-Rust client, `ion-host::SessionBinding` owns the active Session, model, agent
-and resources and handles idle model and Session changes. `ion rpc` provides
-long-lived subprocess control. `CodingAgent::select_reasoning(&session, effort)`
-validates and saves a preference; `validate_reasoning(effort)` performs pure
-preflight without saving it. `SessionBinding::new` takes an optional initial
-reasoning override as its fifth argument; `None` restores the Session's choice.
-Custom `ModelService` implementations must implement pure `validate_controls`
-to accept explicit reasoning; the default refuses it. HTTP preflight and encoding
-use the same compiler, before credential lookup or transport.
+`ion-host::Host` assembles providers, credentials, tools and project resources.
+Construct `SessionSetup::new(host, session, selected, tools, reasoning)` and consume
+it with `into_control::<M>()`. `None` reasoning restores the saved preference.
+`SessionControl<M>` is the shared owner used by terminal, headless, RPC and this
+example—not another model/tool loop. It handles preparation, steering, follow-ups,
+operation settlement and idle model/Session replacement.
 
-Submission and compaction take an `Arc<CodingSession>` and return an owned
-`Operation`. Starting reserves the Session immediately; durable acceptance still
-arrives through `TurnAccepted`. Concurrent starts are rejected, not queued.
-Observers and steering inboxes are owned (`Send + 'static`); observers must not
-block or borrow terminal state. Observer panics request stop and surface after
-started work joins, including any settlement failure.
+Use `submit(Delivery, UserInput, metadata)` for input. `Prompt` expands resources
+once and normalizes attachments; an already-prepared `Message` stays literal.
+Refusal returns the original input and metadata. The returned `InputId` means
+Host custody, not durable acceptance. Client metadata requires `Serialize + Send`
+but not `Clone`; it never enters model content or Session records.
 
-Retain and await the operation, using `&mut operation` in repeated selects.
-`request_stop()` is not completion. Dropping the handle, timing out an owning
-wait or aborting its caller requests stop; Session keeps already-started work
-alive through settlement. A timed-out borrow of `&mut operation` only stops
-waiting; request stop explicitly if wanted, then keep joining. `SessionBinding::run_user_shell` preflights synchronously and
-returns `Result<Operation<…>>` with the same custody. Failed, unread completions
-remain reportable and prevent silent replacement; await the original handle, or
-inspect the error from shutdown before reopening. A genuine execution-task panic
-blocks reuse of that live Session and does not prove that effects stopped.
+Drive `next()` while handling client I/O. Reliable updates distinguish local
+`Dispatched` correlation, durably `Accepted` input with a Turn ID, `Returned`
+originals and `Settled` outcomes/metadata. `state()` derives activity and queue
+counts from this owner. Borrowing/cancelling a `next()` wait does not stop work.
+Keep polling to advance preparation and queued follow-ups; do not implement
+another preparation queue or infer acceptance from rendered progress.
 
-Await `CodingSession::shutdown()` before destroying the Tokio runtime. Shutdown
-closes execution admission, stops and joins retained work without consuming a
-retained operation's result, and reports unread failures. Timing out shutdown
-leaves it closed and joinable; noninterruptible work can keep it pending. This
-does not replace the separate `McpTools::shutdown()` obligation.
+`request_stop()` is not completion. Await `shutdown()` before destroying the
+runtime, including on client errors: it closes admission, stops and joins
+preparation/Core work and returns remaining updates and cleanup errors. Cancelling
+that wait leaves it closed and joinable; Drop can request stop but cannot join.
+Drain returned inputs and settlements before replacing a Session or model.
+
+`observe()` is passive. Lag produces an explicit gap: discard the partial stream
+and reconcile committed Session facts, rather than joining a surviving suffix to
+old deltas. Reader detachment does not cancel execution; a service can retain
+control while clients detach. Foreground clients explicitly stop/join on I/O loss.
+MCP connection cleanup remains a separate `McpTools::shutdown()` obligation.
+
+For lower-level integration, `ion-core::CodingAgent` and `CodingSession` expose
+retained `Operation` handles and abstract model/tool contracts;
+`Host::agent_with_tools` accepts a custom `CodingToolSource`. Core starts reserve
+execution immediately and reject concurrent starts. Retain/join each handle:
+dropping an owning wait requests stop, while timing out a borrowed `&mut operation`
+only stops waiting. `CodingSession::shutdown()` joins retained work and reports
+unread failures. A real operation-task panic blocks live owner reuse and leaves
+effects unknown. Custom `ModelService` implementations must provide pure
+`validate_controls` to support explicit reasoning; the default refuses it.
 
 ## License
 

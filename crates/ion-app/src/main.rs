@@ -12,9 +12,8 @@ use ion_ai::{Content, Message};
 use ion_core::{CodingSession, CodingToolSource, ForkPoint};
 use ion_host::{
     CredentialStatus, Host, McpHttpServer, McpServer, McpStdioServer, Resources, SavedSelection,
-    SessionBinding, Wire,
+    SessionSetup, Wire,
 };
-use tokio_util::sync::CancellationToken;
 
 mod agent_events;
 mod clipboard;
@@ -552,6 +551,7 @@ async fn run_cli(cli: Cli) -> Result<()> {
                 host.external_tools(session.cwd()).await
             };
             let external_mcp = startup.tools;
+            let mut preflight_session = Some(session);
             // Every fallible setup step after MCP startup belongs to the same
             // exit scope as the client, so preflight errors still join cleanup.
             let result = async {
@@ -563,14 +563,14 @@ async fn run_cli(cli: Cli) -> Result<()> {
                 let external_tools: Option<Arc<dyn CodingToolSource>> = external_mcp
                     .as_ref()
                     .map(|tools| tools.clone() as Arc<dyn CodingToolSource>);
-                let binding = match SessionBinding::new(
+                let setup = match SessionSetup::new(
                     host,
-                    session,
+                    preflight_session.as_ref().expect("unbound Session").clone(),
                     selected,
                     external_tools,
                     cli.reasoning,
                 ) {
-                    Ok(binding) => binding,
+                    Ok(setup) => setup,
                     Err(error) => {
                         // Failed-server cleanup diagnostics must not disappear
                         // just because independent binding preflight also fails.
@@ -584,7 +584,7 @@ async fn run_cli(cli: Cli) -> Result<()> {
                         return Err(error);
                     }
                 };
-                for diagnostic in binding.resources().diagnostics() {
+                for diagnostic in setup.resources().diagnostics() {
                     startup_diagnostics.push(format!(
                         "[resource: {}: {}]",
                         metadata_field(&diagnostic.path.to_string_lossy()),
@@ -596,76 +596,74 @@ async fn run_cli(cli: Cli) -> Result<()> {
                         print_stderr(format_args!("{diagnostic}"))?;
                     }
                 }
-                match action {
+                enum Client {
+                    Headless(headless::Request, bool),
+                    Rpc,
+                    Terminal(Vec<ion_ai::LoadedImage>),
+                }
+                // Complete fallible preflight before transferring cleanup custody.
+                // Headless resource expansion precedes piped context; its prepared
+                // message remains literal when admitted by shared control.
+                let client = match action {
                     Some(Action::Run { prompt }) => {
-                        headless::run(
-                            binding.session().clone(),
-                            binding.agent().clone(),
-                            binding.instructions().to_owned(),
-                            with_piped_input(expand_input(
-                                binding.resources(),
-                                prompt,
-                                binding.agent().limits().max_request_bytes,
-                            )?)?,
-                            images,
+                        let prompt = with_piped_input(expand_input(
+                            setup.resources(),
+                            prompt,
+                            setup.agent().limits().max_request_bytes,
+                        )?)?;
+                        Client::Headless(
+                            headless::Request::Prompt(Message::user_input(prompt, images)),
                             cli.json,
                         )
-                        .await
                     }
-                    Some(Action::Compact) => {
-                        let stop = CancellationToken::new();
-                        let signal_stop = stop.clone();
-                        let signal = tokio::spawn(async move {
-                            if tokio::signal::ctrl_c().await.is_ok() {
-                                signal_stop.cancel();
-                            }
-                        });
-                        let result = binding
-                            .agent()
-                            .compact(binding.session().clone(), stop, |_| {})
-                            .await;
-                        signal.abort();
-                        if result? {
-                            print_stdout(format_args!(
-                                "Context summarized; raw Session history retained"
-                            ))?;
-                        } else {
-                            print_stdout(format_args!("No settled history to summarize"))?;
-                        }
-                        Ok(())
+                    Some(Action::Compact) => Client::Headless(headless::Request::Compact, false),
+                    Some(Action::Rpc) => Client::Rpc,
+                    Some(Action::Chat) | None if cli.print.is_none() => Client::Terminal(images),
+                    None => {
+                        let prompt = with_piped_input(expand_input(
+                            setup.resources(),
+                            cli.print.expect("matched Some"),
+                            setup.agent().limits().max_request_bytes,
+                        )?)?;
+                        Client::Headless(
+                            headless::Request::Prompt(Message::user_input(prompt, images)),
+                            cli.json,
+                        )
                     }
-                    Some(Action::Clone | Action::Turns | Action::Fork { .. }) => {
-                        unreachable!("session action handled before model selection")
-                    }
-                    Some(Action::Rpc) => rpc::run(binding).await,
-                    Some(Action::Chat) | None if cli.print.is_none() => {
+                    _ => unreachable!("non-agent action handled above"),
+                };
+                // Each client immediately owns shared control and always joins it.
+                // Keeping the original Arc here would pin its exclusive writer
+                // lock after a client switches to a different Session.
+                drop(preflight_session.take());
+                match client {
+                    Client::Headless(request, json) => headless::run(setup, request, json).await,
+                    Client::Rpc => rpc::run(setup).await,
+                    Client::Terminal(images) => {
                         terminal_client::chat(terminal_client::ChatInit {
-                            binding,
+                            setup,
                             images,
                             startup_diagnostics,
                             tui_mode: cli.tui_mode,
                         })
                         .await
                     }
-                    None => {
-                        headless::run(
-                            binding.session().clone(),
-                            binding.agent().clone(),
-                            binding.instructions().to_owned(),
-                            with_piped_input(expand_input(
-                                binding.resources(),
-                                cli.print.expect("matched Some"),
-                                binding.agent().limits().max_request_bytes,
-                            )?)?,
-                            images,
-                            cli.json,
-                        )
-                        .await
-                    }
-                    _ => unreachable!("non-agent action handled above"),
                 }
             }
             .await;
+            // Preflight failures still own the original Session. After handoff,
+            // the client alone owns current-session cleanup, including replacement.
+            let shutdown = match preflight_session {
+                Some(session) => session.shutdown().await,
+                None => Ok(()),
+            };
+            let result = match (result, shutdown) {
+                (result, Ok(())) => result,
+                (Ok(()), Err(error)) => Err(error.into()),
+                (Err(error), Err(shutdown)) => {
+                    Err(error.context(format!("Session shutdown also failed: {shutdown}")))
+                }
+            };
             let cleanup = match external_mcp {
                 Some(tools) => tools.shutdown().await,
                 None => Ok(()),

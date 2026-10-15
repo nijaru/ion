@@ -92,10 +92,15 @@ def qualify(case):
                     send({"id": "state", "type": "get_state"})
                     state = read(child)["data"]
                     assert state["busy"] and state["operation"] == "shell", state
-                    for kind in ("shell", "prompt", "compact", "new_session", "steer", "follow_up"):
+                    for kind in ("shell", "prompt", "compact", "new_session", "steer"):
                         send({"id": kind, "type": kind, "command": "touch forbidden", "message": "forbidden"})
                         refused = read(child)
                         assert refused["id"] == kind and not refused["success"], refused
+                    # Explicit follow-ups share Host admission with every client;
+                    # shell work cannot be steered, but can have queued intent.
+                    send({"id": "queued", "type": "follow_up", "message": "forbidden"})
+                    queued = read(child)
+                    assert queued["id"] == "queued" and queued["success"] and queued["data"]["disposition"] == "queued", queued
                     send({"id": "stop", "type": "abort"})
                     assert read(child)["data"]["disposition"] == "requested"
                 elif case == "eof":
@@ -114,7 +119,14 @@ def qualify(case):
                     os.killpg(pid, signal.SIGKILL)
                     pid = None
                 if case not in ("output", "crash"):
-                    ended = until(child, lambda record: record["type"] == "shell_end")
+                    records = []
+                    while not records or records[-1]["type"] != "shell_end":
+                        records.append(read(child))
+                    ended = records[-1]
+                    if case == "abort":
+                        returned = [record for record in records if record["type"] == "uncommitted_follow_up" and record["id"] == "queued"]
+                        assert len(returned) == 1 and returned[0]["reason"] == "stopped", records
+                        assert returned[0]["input"] == {"Prompt": {"text": "forbidden", "images": []}}, returned
                     assert ended["id"] == "direct" and ended["status"] == "cancelled", ended
                     assert ended["outcome"]["kind"] == "observed" and ended["outcome"]["output"]["cancelled"], ended
                 if case == "abort":

@@ -11,9 +11,28 @@ use crate::Selection;
 
 pub use ion_ai::LoadedImage;
 
+#[derive(Clone, Debug, serde::Serialize)]
 pub enum ImageSource {
     Path(PathBuf),
-    Encoded { mime_type: String, data: String },
+    Encoded {
+        mime_type: String,
+        data: String,
+    },
+    /// Already-normalized editor attachments retain their typed content and
+    /// coordinate note while prompt text still receives resource expansion.
+    Normalized {
+        content: ion_ai::ImageContent,
+        note: Option<String>,
+    },
+}
+
+impl From<LoadedImage> for ImageSource {
+    fn from(image: LoadedImage) -> Self {
+        Self::Normalized {
+            content: image.content,
+            note: image.note,
+        }
+    }
 }
 
 /// Capture the route and sources, then own and join the blocking work. Cancelling
@@ -48,6 +67,7 @@ pub fn prepare_images(
             .try_fold(0usize, |bytes, source| {
                 bytes.checked_add(match source {
                     ImageSource::Encoded { data, .. } => data.len(),
+                    ImageSource::Normalized { content, .. } => content.data().len(),
                     ImageSource::Path(_) => 0,
                 })
             })
@@ -88,6 +108,7 @@ pub fn prepare_images(
 
 fn load_source(source: ImageSource) -> Result<LoadedImage> {
     match source {
+        ImageSource::Normalized { content, note } => Ok(LoadedImage { content, note }),
         ImageSource::Path(path) => {
             let bytes =
                 crate::file_io::read_bounded(&path, MAX_SOURCE_BYTES).with_context(|| {

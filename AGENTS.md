@@ -23,8 +23,9 @@
 - Core owns committed Session facts, the coding loop, context and recovery.
   Start at `crates/ion-core/src/{agent,session,request}.rs`; `tool_set.rs` freezes
   executable capabilities and `code_gateway.rs` retains composed effects.
-- Shared session control and service assembly belong in `ion-host`, starting at
-  `crates/ion-host/src/binding.rs`. Do not duplicate input/operation lifecycle
+- Shared session control belongs in `crates/ion-host/src/control/`.
+  `binding.rs` owns preflight assembly and idle replacement. Do not duplicate
+  input/operation lifecycle
   rules in clients or implement another model/tool loop. `code_mode.rs` owns
   the guest VM, not Session authority.
 - Start terminal interaction work in `crates/ion-app/src/terminal_client.rs`

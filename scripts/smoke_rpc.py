@@ -93,6 +93,21 @@ def until(child, predicate):
             return records
 
 
+def until_all(child, *predicates):
+    records = []
+    remaining = list(predicates)
+    while remaining:
+        record = read(child)
+        records.append(record)
+        remaining = [predicate for predicate in remaining if not predicate(record)]
+    return records
+
+
+def returned_prompt(record, text, images=()):
+    # Host returns the literal editor input, not its expanded/prepared Message.
+    assert record["input"] == {"Prompt": {"text": text, "images": list(images)}}, record
+
+
 def chunk(kind, data):
     return struct.pack(">I", len(data)) + kind + data + struct.pack(">I", zlib.crc32(kind + data) & 0xFFFFFFFF)
 
@@ -201,6 +216,9 @@ with tempfile.TemporaryDirectory(prefix="ion-rpc-") as temporary:
         send(child, {"id": "missing-image", "type": "prompt", "message": "Look", "images": ["missing.png"]})
         rejected = read(child)
         assert rejected["id"] == "missing-image" and rejected["success"] is False
+        returned = read(child)
+        assert returned["type"] == "uncommitted_prompt" and returned["id"] == "missing-image", returned
+        returned_prompt(returned, "Look", [{"Path": "missing.png"}])
         send(child, {"id": "empty-state", "type": "get_state"})
         assert read(child)["data"]["entries"] == 0
 
@@ -237,11 +255,19 @@ with tempfile.TemporaryDirectory(prefix="ion-rpc-") as temporary:
         accepted = [r for r in records if r.get("id") == "first"]
         assert len(accepted) == 1 and accepted[0]["success"]
         assert records[-1]["status"] == "completed"
-        assert any(r["type"] == "final" and r["text"] == "RPC_OK" for r in records)
-        committed = [r for r in records if r["type"] == "assistant_committed"]
-        assert len(committed) == 1 and committed[0]["turn"] == accepted[0]["data"]["turn"], records
-        assert "RPC_OK" in str(committed[0]["content"]), committed
-        assert records.index(committed[0]) < next(i for i, r in enumerate(records) if r["type"] == "final"), records
+        assert records[-1]["text"] == "RPC_OK", records[-1]
+        if records[-1]["progress_complete"]:
+            assert any(r["type"] == "final" and r["text"] == "RPC_OK" for r in records)
+            committed = [r for r in records if r["type"] == "assistant_committed"]
+            assert len(committed) == 1 and committed[0]["turn"] == accepted[0]["data"]["turn"], records
+            assert "RPC_OK" in str(committed[0]["content"]), committed
+            assert records.index(committed[0]) < next(i for i, r in enumerate(records) if r["type"] == "final"), records
+        else:
+            assert any(r["type"] == "publication_gap" for r in records), records
+            send(child, {"id": "first-resync", "type": "inspect"})
+            view = until(child, lambda r: r.get("id") == "first-resync")[-1]["data"]
+            committed = [entry for entry in view["entries"] if entry["kind"] == "assistant" and entry["data"]["turn"] == accepted[0]["data"]["turn"]]
+            assert len(committed) == 1 and "RPC_OK" in str(committed[0]), committed
         assert requests[0]["reasoning_effort"] == "high", requests[0]
         assert "Check RPC." in str(requests[0]["messages"])
         assert "RPC_SHELL_SHARED" in str(requests[0]["messages"]), requests[0]["messages"]
@@ -334,13 +360,12 @@ with tempfile.TemporaryDirectory(prefix="ion-rpc-") as temporary:
         send(child, {"id": "after-abort", "type": "follow_up", "message": "AFTER_ABORT", "images": [inline]})
         assert until(child, lambda r: r.get("id") == "after-abort")[-1]["success"]
         send(child, {"id": "cancel-parent-now", "type": "abort"})
-        parent_records = until(child, lambda r: r["type"] == "turn_end")
-        assert any(r.get("id") == "cancel-parent-now" and r["success"] for r in parent_records)
-        assert parent_records[-1]["status"] == "cancelled", parent_records
-        returned = until(child, lambda r: r["type"] == "uncommitted_follow_up")[-1]
+        parent_records = until_all(child, lambda r: r["type"] == "turn_end", lambda r: r["type"] == "uncommitted_follow_up")
+        assert any(r.get("id") == "cancel-parent-now" and r.get("success") for r in parent_records)
+        assert next(r for r in parent_records if r["type"] == "turn_end")["status"] == "cancelled", parent_records
+        returned = next(r for r in parent_records if r["type"] == "uncommitted_follow_up")
         assert returned["id"] == "after-abort", returned
-        content = returned["input"]["content"]
-        assert content[0]["Text"] == "AFTER_ABORT" and content[1]["Image"]["data"] == inline["data"], returned
+        returned_prompt(returned, "AFTER_ABORT", [{"Encoded": inline}])
         send(child, {"id": "after-abort-state", "type": "get_state"})
         state_records = until(child, lambda r: r.get("id") == "after-abort-state")
         assert not any(r["type"] == "follow_up_started" for r in state_records), state_records
@@ -357,9 +382,17 @@ with tempfile.TemporaryDirectory(prefix="ion-rpc-") as temporary:
         assert steered["success"], steered
         records = until(child, lambda r: r["type"] == "turn_end")
         assert records[-1]["status"] == "completed", records[-1]
-        commits = [r for r in records if r["type"] in {"assistant_committed", "steering_committed"}]
-        assert [r["type"] for r in commits] == ["assistant_committed", "steering_committed", "assistant_committed"], records
-        assert "Inspect the image" in str(commits[1]["input"]["content"]), commits
+        if records[-1]["progress_complete"]:
+            commits = [r for r in records if r["type"] in {"assistant_committed", "steering_committed"}]
+            assert [r["type"] for r in commits] == ["assistant_committed", "steering_committed", "assistant_committed"], records
+            assert "Inspect the image" in str(commits[1]["input"]["content"]), commits
+        else:
+            assert any(r["type"] == "publication_gap" for r in records), records
+            send(child, {"id": "steering-resync", "type": "inspect"})
+            view = until(child, lambda r: r.get("id") == "steering-resync")[-1]["data"]
+            commits = [entry for entry in view["entries"] if entry["kind"] in {"assistant", "steering"} and entry["data"]["turn"] == records[-1]["turn"]]
+            assert [entry["kind"] for entry in commits] == ["assistant", "steering", "assistant"], commits
+            assert "Inspect the image" in str(commits[1]), commits
         latest = [message for message in requests[-1]["messages"] if message["role"] == "user"][-1]["content"]
         assert latest[0] == {"type": "text", "text": "Inspect the image"}, latest
         assert latest[1]["type"] == "image_url" and latest[1]["image_url"]["url"].startswith("data:image/png;base64,"), latest
@@ -381,8 +414,10 @@ with tempfile.TemporaryDirectory(prefix="ion-rpc-") as temporary:
         assert until(child, lambda r: r.get("id") == "clear-me")[-1]["success"]
         send(child, {"id": "clear", "type": "clear_queue"})
         cleared = until(child, lambda r: r.get("id") == "clear")[-1]
-        assert cleared["success"] and len(cleared["data"]["follow_up"]) == 1, cleared
-        assert cleared["data"]["follow_up"][0]["id"] == "clear-me", cleared
+        assert cleared["success"] and cleared["data"]["recovery"] == "input_return_events", cleared
+        returned = until(child, lambda r: r["type"] == "uncommitted_follow_up")[-1]
+        assert returned["id"] == "clear-me" and returned["reason"] == "cleared", returned
+        returned_prompt(returned, "NEVER")
         send(child, {"id": "abort", "type": "abort"})
         records = until(child, lambda r: r["type"] == "turn_end")
         assert any(r.get("id") == "abort" and r["success"] for r in records)
@@ -478,10 +513,12 @@ with tempfile.TemporaryDirectory(prefix="ion-rpc-") as temporary:
         send(closing, {"id": "uncommitted", "type": "follow_up", "message": "LATER"})
         assert until(closing, lambda r: r.get("id") == "uncommitted")[-1]["success"]
         closing.stdin.close()
-        settled = until(closing, lambda r: r["type"] == "turn_end")[-1]
+        closed_records = until_all(closing, lambda r: r["type"] == "turn_end", lambda r: r["type"] == "uncommitted_follow_up")
+        settled = next(r for r in closed_records if r["type"] == "turn_end")
         assert settled["status"] == "cancelled", settled
-        returned = until(closing, lambda r: r["type"] == "uncommitted_follow_up")[-1]
-        assert returned["id"] == "uncommitted" and returned["input"]["content"][0]["Text"] == "LATER", returned
+        returned = next(r for r in closed_records if r["type"] == "uncommitted_follow_up")
+        assert returned["id"] == "uncommitted", returned
+        returned_prompt(returned, "LATER")
         assert closing.wait(timeout=8) == 0, closing.stderr.read()
         incomplete = subprocess.run(
             [binary, "--cwd", workspace, "rpc"],
@@ -527,19 +564,17 @@ with tempfile.TemporaryDirectory(prefix="ion-rpc-") as temporary:
                 assert until(input_fault, lambda record: record.get("id") == kind)[-1]["success"]
             feeder.setsockopt(socket.SOL_SOCKET, socket.SO_LINGER, struct.pack("ii", 1, 0))
             feeder.close()
-            records = until(input_fault, lambda record: record["type"] == "uncommitted_follow_up")
+            records = until_all(input_fault, lambda record: record["type"] == "turn_end", lambda record: record["type"] == "uncommitted_steering", lambda record: record["type"] == "uncommitted_follow_up")
             assert input_fault.wait(timeout=8) != 0, "stdin read failure was reported as success"
             assert b"Connection reset" in input_fault.stderr.read()
             terminal = [record for record in records if record["type"] == "turn_end"]
             steering = [record for record in records if record["type"] == "uncommitted_steering"]
             assert len(terminal) == 1 and terminal[0]["status"] == "cancelled", records
             assert len(steering) == 1, records
-            returned = records[-1]
+            returned = next(record for record in records if record["type"] == "uncommitted_follow_up")
             assert returned["id"] == "follow_up", returned
             for record, message in ((steering[0], "RETAIN_STEERING"), (returned, "RETAIN_FOLLOW_UP")):
-                content = record["input"]["content"]
-                assert content[0]["Text"] == message and content[1]["Image"]["data"] == inline["data"], record
-            assert records.index(terminal[0]) < records.index(steering[0]) < records.index(returned), records
+                returned_prompt(record, message, [{"Encoded": inline}])
             assert len(requests) == before + 1, "input failure admitted queued work"
             view = json.loads(subprocess.run([binary, "--cwd", fault_workspace, "--session", fault_session, "inspect"], env=env, capture_output=True, check=True).stdout)
             outcomes = {entry["data"]["result"]["call_id"]: entry["data"]["result"]["outcome"] for entry in view["entries"] if entry["kind"] == "tool_result"}
@@ -590,14 +625,26 @@ with tempfile.TemporaryDirectory(prefix="ion-rpc-") as temporary:
             assert until(disconnected, lambda record: record.get("id") == "valid-follow")[-1]["success"]
             send(disconnected, {"id": "release-inputs", "type": "clear_queue"})
             cleared = until(disconnected, lambda record: record.get("id") == "release-inputs")[-1]
-            assert cleared["data"]["steering"][0]["content"][0]["Text"] == "KEPT_AFTER_REJECTION", cleared
-            assert cleared["data"]["follow_up"][0]["id"] == "valid-follow", cleared
-            # Follow-ups and steering share one retained-input allowance.
-            for index in range(5):
+            assert cleared["success"] and cleared["data"]["recovery"] == "input_return_events", cleared
+            recovered = until_all(disconnected, lambda record: record["type"] == "uncommitted_steering", lambda record: record["type"] == "uncommitted_follow_up")
+            steering_return = next(record for record in recovered if record["type"] == "uncommitted_steering")
+            follow_return = next(record for record in recovered if record["type"] == "uncommitted_follow_up")
+            returned_prompt(steering_return, "KEPT_AFTER_REJECTION")
+            assert follow_return["id"] == "valid-follow", follow_return
+            returned_prompt(follow_return, "KEPT_FOLLOW_UP")
+            # Raw originals, prepared messages and metadata now share Host's
+            # retained-input allowance. Fill it without assuming the old client's
+            # single-copy accounting or an exact number of accepted messages.
+            for index in range(8):
                 identity = f"budget-follow-{index}"
                 send(disconnected, {"id": identity, "type": "follow_up", "message": "q" * (6 * 1024 * 1024)})
-                assert until(disconnected, lambda record: record.get("id") == identity)[-1]["success"]
-            send(disconnected, {"id": "combined-full", "type": "steer", "message": "s" * (3 * 1024 * 1024)})
+                admitted = until(disconnected, lambda record: record.get("id") == identity)[-1]
+                if not admitted["success"]:
+                    assert "queue is full" in admitted["error"], admitted
+                    break
+            else:
+                raise AssertionError("Host retained-input budget did not fill")
+            send(disconnected, {"id": "combined-full", "type": "steer", "message": "s" * (6 * 1024 * 1024)})
             refused = until(disconnected, lambda record: record.get("id") == "combined-full")[-1]
             assert refused["success"] is False and "queue is full" in refused["error"], "steering bypassed the shared pending-input bound"
             disconnected.stdout.close()
@@ -663,6 +710,12 @@ with tempfile.TemporaryDirectory(prefix="ion-rpc-") as temporary:
                 assert unread[0] >= 4096, "stdout did not acquire the large response"
                 # No reads here. The response is larger than the pipe capacity.
                 if abort:
+                    # Exhaust normal reply admission without consuming stdout.
+                    # Refusals must not grow a deferred reply queue, and the
+                    # dedicated control lane must still convey abort.
+                    for index in range(40):
+                        send(pressure, {"id": f"pressure-state-{index}", "type": "get_state"})
+                    send(pressure, {"id": "second-inspect", "type": "inspect"})
                     send(pressure, {"id": "pressure-abort", "type": "abort"})
                 else:
                     pressure.stdin.close()
@@ -692,6 +745,11 @@ with tempfile.TemporaryDirectory(prefix="ion-rpc-") as temporary:
                 if abort:
                     acknowledgements = [record for record in records if record.get("id") == "pressure-abort"]
                     assert len(acknowledgements) == 1 and acknowledgements[0]["success"], records
+                    assert not any(record.get("id") == "second-inspect" for record in records), "multiple full views were admitted behind stalled output"
+                    states = [record for record in records if str(record.get("id", "")).startswith("pressure-state-")]
+                    assert len(states) <= 32, "normal reply admission was unbounded"
+                    gaps = [record for record in records if record["type"] == "publication_gap"]
+                    assert sum(record["commands_not_admitted"] for record in gaps) >= 9, gaps
                 view = json.loads(subprocess.run([binary, "--cwd", pressure_workspace, "--session", pressure_session, "inspect"], env=env, check=True, capture_output=True).stdout)
                 assert view["unfinished_turn"] is None, view
             finally:

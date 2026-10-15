@@ -1,0 +1,431 @@
+//! Provisional terminal projection of shared control updates, not execution custody.
+use anyhow::{Context, Result};
+use ion_core::{CodingAgentEvent, LiveTranscript, SessionEntry};
+use ion_host::{
+    ControlUpdate, Delivery, InputPhase, Observation, OperationId, OperationOutcome, ReturnReason,
+    SessionControl, UserInput,
+};
+
+use super::{EditorDraft, Frontend};
+
+#[derive(Clone, Copy)]
+pub(super) enum OperationKind {
+    Coding,
+    Shell,
+    Compaction,
+    Preparation,
+}
+
+#[derive(Clone, Copy)]
+pub(super) struct ActiveOperation {
+    pub(super) kind: OperationKind,
+    pub(super) stop_requested: bool,
+    pub(super) pending_follow_ups: usize,
+}
+
+impl ActiveOperation {
+    pub(super) fn is_cancelled(self) -> bool {
+        self.stop_requested
+    }
+
+    pub(super) fn controls(self) -> &'static str {
+        match self.kind {
+            OperationKind::Coding => "Enter steers · Alt-Enter queues · Ctrl-C cancels",
+            OperationKind::Shell | OperationKind::Compaction => "Enter queues · Ctrl-C cancels",
+            OperationKind::Preparation => "Alt-Enter queues · Ctrl-C cancels",
+        }
+    }
+
+    pub(super) fn label(self) -> &'static str {
+        match (self.kind, self.stop_requested) {
+            (OperationKind::Coding, true) => "Cancelling turn…",
+            (OperationKind::Shell, true) => "Cancelling shell…",
+            (OperationKind::Compaction, true) => "Cancelling compaction…",
+            (OperationKind::Preparation, true) => "Cancelling input…",
+            (OperationKind::Coding, false) => "Working",
+            (OperationKind::Shell, false) => "Running shell",
+            (OperationKind::Compaction, false) => "Summarizing context",
+            (OperationKind::Preparation, false) => "Preparing input",
+        }
+    }
+}
+
+#[derive(Default)]
+pub(super) struct Activity {
+    live: Option<(OperationId, LiveTranscript)>,
+}
+
+impl Activity {
+    pub(super) fn view(&self, control: &SessionControl<EditorDraft>) -> Option<ActiveOperation> {
+        let state = control.state();
+        let kind = match state.operation.map(|operation| operation.kind) {
+            Some(ion_host::OperationKind::Turn) => OperationKind::Coding,
+            Some(ion_host::OperationKind::Shell) => OperationKind::Shell,
+            Some(ion_host::OperationKind::Compact) => OperationKind::Compaction,
+            None if state.busy => OperationKind::Preparation,
+            None => return None,
+        };
+        Some(ActiveOperation {
+            kind,
+            stop_requested: state.stop_requested,
+            pending_follow_ups: state.pending_follow_ups,
+        })
+    }
+    pub(super) fn live(&self) -> Option<&LiveTranscript> {
+        self.live.as_ref().map(|(_, live)| live)
+    }
+
+    /// Returned errors have already been made visible in UI status. The caller
+    /// may keep interacting after an ordinary operation failure; shutdown instead
+    /// combines those failures with its primary I/O error.
+    pub(super) fn update(
+        &mut self,
+        ui: &mut Frontend,
+        control: &SessionControl<EditorDraft>,
+        update: ControlUpdate<EditorDraft>,
+    ) -> Result<Option<anyhow::Error>> {
+        match update {
+            ControlUpdate::Input {
+                delivery, phase, ..
+            } => {
+                ui.status = match phase {
+                    InputPhase::Preparing => "Preparing input…",
+                    InputPhase::Queued => match delivery {
+                        Delivery::Start => "Starting turn…",
+                        Delivery::Steer(_) => "Steering queued for the active turn",
+                        Delivery::FollowUp => "Follow-up queued",
+                    },
+                }
+                .into();
+            }
+            ControlUpdate::Dispatched { .. } => {}
+            ControlUpdate::Accepted { .. } => {
+                // No editor custody remains here. In particular, a later history
+                // read failure must never reconstruct or replay accepted input.
+                ui.status.clear();
+            }
+            ControlUpdate::Activity(Observation::Event { operation, event }) => {
+                if let CodingAgentEvent::TurnAccepted { turn } = event.as_ref() {
+                    // A fresh TurnAccepted is the only safe start for this strict
+                    // projection. It is not a tolerant reader for missing tool or
+                    // thinking prefixes after an observation gap.
+                    if ui
+                        .history
+                        .items
+                        .iter()
+                        .any(|item| super::transcript_item_turn(item) == Some(*turn))
+                    {
+                        // An earlier inspection can already include the next Turn.
+                        // Never layer replayed progress over those same facts.
+                        self.live = None;
+                        return Ok(None);
+                    }
+                    let view = match control
+                        .session()
+                        .view()
+                        .context("Session history refresh failed")
+                    {
+                        Ok(view) => view,
+                        Err(error) => {
+                            self.live = None;
+                            ui.status = format!("{error:#}");
+                            return Ok(Some(error));
+                        }
+                    };
+                    let input = view
+                        .entries
+                        .iter()
+                        .find_map(|entry| match entry {
+                            SessionEntry::TurnStarted {
+                                turn: candidate,
+                                input,
+                                ..
+                            } if candidate == turn => Some(input),
+                            _ => None,
+                        })
+                        .context("accepted Turn has no committed input")?;
+                    let mut live = LiveTranscript::with_user_input(input);
+                    live.observe(&event);
+                    self.live = Some((operation, live));
+                } else if let Some((id, live)) = &mut self.live
+                    && *id == operation
+                {
+                    live.observe(&event);
+                } else if matches!(
+                    event.as_ref(),
+                    CodingAgentEvent::AssistantCommitted { .. }
+                        | CodingAgentEvent::SteeringCommitted { .. }
+                        | CodingAgentEvent::ToolFinished { .. }
+                        | CodingAgentEvent::ChildToolAdmitted { .. }
+                        | CodingAgentEvent::ChildToolFinished { .. }
+                        | CodingAgentEvent::TurnEnded { .. }
+                ) {
+                    // After a gap, keep showing newly committed work without
+                    // rebuilding a strict live stream from a surviving suffix.
+                    return Ok(reconcile(ui, control).err());
+                }
+            }
+            ControlUpdate::Activity(Observation::Gap { .. }) => {
+                // Drop the whole partial projection. Host may resume observations
+                // at a committed boundary, but LiveTranscript's tool/child indexes
+                // require an uninterrupted Turn. Stay on committed facts until the
+                // next Turn instead of inventing a second full-history snapshot.
+                self.live = None;
+                ui.note("Live updates skipped; showing committed Session facts".into());
+                return Ok(reconcile(ui, control).err());
+            }
+            ControlUpdate::Returned(returned) => {
+                let UserInput::Prompt { images, .. } = returned.input else {
+                    unreachable!("terminal submits only raw prompts")
+                };
+                if matches!(returned.reason, ReturnReason::Cleared) {
+                    ui.show_draft(super::RecoveredDraft {
+                        source: returned.metadata,
+                        images,
+                    });
+                } else {
+                    ui.return_draft(returned.metadata, images);
+                }
+                let fault = returned
+                    .preparation_error
+                    .map(|error| format!("; preparation also failed: {error:#}"))
+                    .unwrap_or_default();
+                let kind = match returned.delivery {
+                    Delivery::Start => "Prompt",
+                    Delivery::Steer(_) => "Steering",
+                    Delivery::FollowUp => "Follow-up",
+                };
+                let reason = match returned.reason {
+                    ReturnReason::Stopped => "stop requested".into(),
+                    ReturnReason::Cleared => "withdrawn from queue".into(),
+                    ReturnReason::TurnEnded => "turn ended before acceptance".into(),
+                    ReturnReason::NotAccepted => "not durably accepted".into(),
+                    ReturnReason::Preparation(error) => format!("preparation failed: {error:#}"),
+                };
+                ui.note(format!("{kind} returned: {reason}{fault}. Draft retained; {} additional draft(s) · Alt-Up cycles without resubmitting", ui.recovered.len()));
+            }
+            ControlUpdate::Settled(settlement) => {
+                self.live = None;
+                let result = match settlement.outcome {
+                    OperationOutcome::Turn(Err(ion_core::CodingAgentError::Cancelled))
+                        if settlement.stop_requested =>
+                    {
+                        Ok("Turn stopped".into())
+                    }
+                    OperationOutcome::Compact(Err(ion_core::CodingAgentError::Cancelled))
+                        if settlement.stop_requested =>
+                    {
+                        Ok("Compaction stopped".into())
+                    }
+                    OperationOutcome::Turn(result) => {
+                        result.map(|_| String::new()).map_err(Into::into)
+                    }
+                    OperationOutcome::Compact(result) => result
+                        .map(|changed| {
+                            if changed {
+                                "Context summarized; raw history retained".into()
+                            } else {
+                                "No settled history to summarize".into()
+                            }
+                        })
+                        .map_err(Into::into),
+                    OperationOutcome::Shell(result) => result
+                        .map(|output| {
+                            if output.is_error {
+                                "Shell finished with an error".into()
+                            } else {
+                                "Shell finished".into()
+                            }
+                        })
+                        .map_err(Into::into),
+                };
+                let error: Option<anyhow::Error> = match result {
+                    Ok(status) => {
+                        ui.status = status;
+                        None
+                    }
+                    Err(error) => {
+                        ui.status = format!(
+                            "Operation ended: {error:#}; inspect Session and effects before retrying"
+                        );
+                        Some(error)
+                    }
+                };
+                // Direct-operation metadata is correlation, not Returned input.
+                // Do not revive an uncertain command in the composer/recovery
+                // queue. Explicit command recall remains in editor history.
+                drop(settlement.metadata);
+                if let Err(refresh) = reconcile(ui, control) {
+                    let refresh = match error {
+                        Some(error) => {
+                            refresh.context(format!("Concurrent settlement failure: {error:#}"))
+                        }
+                        None => refresh,
+                    };
+                    // Keep the concise history-failure status visible even in
+                    // narrow/fullscreen viewports; retain concurrent details.
+                    ui.note(format!("Operation/inspection failure: {refresh:#}"));
+                    return Ok(Some(refresh));
+                }
+                return Ok(error);
+            }
+            ControlUpdate::Idle => {
+                self.live = None;
+            }
+        }
+        Ok(None)
+    }
+
+    pub(super) fn cleanup_update(
+        &mut self,
+        ui: &mut Frontend,
+        control: &SessionControl<EditorDraft>,
+        update: ControlUpdate<EditorDraft>,
+        outcome: &mut Result<()>,
+    ) {
+        match self.update(ui, control, update) {
+            Ok(Some(error)) | Err(error) => combine_error(outcome, error),
+            Ok(None) => {}
+        }
+    }
+}
+
+fn reconcile(ui: &mut Frontend, control: &SessionControl<EditorDraft>) -> Result<()> {
+    let view = control
+        .session()
+        .view()
+        .context("Session history refresh failed")
+        .inspect_err(|error| ui.status = format!("{error:#}"))?;
+    ui.load_history(control.session(), &view);
+    // A next Turn can already be running, or storage/panic failure can leave
+    // incomplete facts after the operation settled. Neither is immutable native
+    // history: later observations/recovery can change those same projection rows.
+    ui.defer_unsettled_publication(&view);
+    ui.scroll = 0;
+    Ok(())
+}
+
+pub(super) fn combine_error(outcome: &mut Result<()>, error: anyhow::Error) {
+    *outcome = Err(match std::mem::replace(outcome, Ok(())) {
+        Ok(()) => error,
+        Err(primary) => {
+            primary.context(format!("Concurrent cleanup/settlement failure: {error:#}"))
+        }
+    });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::Arc;
+
+    #[tokio::test]
+    async fn stopped_initial_preparation_does_not_lose_its_ui_stop_intent() {
+        let mut fixture = super::super::tests::Fixture::new();
+        fixture
+            .control
+            .submit(
+                Delivery::Start,
+                UserInput::Prompt {
+                    text: "initial".into(),
+                    images: vec![ion_host::image_input::ImageSource::Path(
+                        fixture.root.join("missing.png"),
+                    )],
+                },
+                EditorDraft::at_end("initial".into()),
+            )
+            .unwrap();
+        let mut activity = Activity::default();
+        fixture.control.request_stop();
+        let update = fixture.control.next().await;
+        assert!(matches!(
+            update,
+            ControlUpdate::Input {
+                phase: InputPhase::Preparing,
+                ..
+            }
+        ));
+        assert!(
+            activity
+                .update(&mut Frontend::default(), &fixture.control, update)
+                .unwrap()
+                .is_none()
+        );
+        assert!(activity.view(&fixture.control).unwrap().is_cancelled());
+        fixture.control.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn resync_discards_partial_projection_and_avoids_duplicate_ahead_history() {
+        let mut fixture = super::super::tests::Fixture::new();
+        let id = fixture
+            .control
+            .compact(super::super::EditorDraft::at_end("compact".into()))
+            .unwrap();
+        let mut live = LiveTranscript::default();
+        live.observe(&CodingAgentEvent::TurnAccepted { turn: 1 });
+        live.observe(&CodingAgentEvent::TextDelta("lost prefix".into()));
+        let mut activity = Activity {
+            live: Some((id, live)),
+        };
+        let mut ui = Frontend::default();
+        assert!(
+            activity
+                .update(
+                    &mut ui,
+                    &fixture.control,
+                    ControlUpdate::Activity(Observation::Gap { skipped: 2 })
+                )
+                .unwrap()
+                .is_none()
+        );
+        assert!(activity.live().is_none());
+        for event in [
+            CodingAgentEvent::ResponseRestarted,
+            CodingAgentEvent::TextDelta("surviving tail".into()),
+        ] {
+            assert!(
+                activity
+                    .update(
+                        &mut ui,
+                        &fixture.control,
+                        ControlUpdate::Activity(Observation::Event {
+                            operation: id,
+                            event: Arc::new(event)
+                        })
+                    )
+                    .unwrap()
+                    .is_none()
+            );
+        }
+        assert!(activity.live().is_none());
+        assert_eq!(
+            ui.history,
+            ion_core::TranscriptProjection::from_session(
+                &fixture.control.session().view().unwrap()
+            )
+        );
+        ui.history.items.push(ion_core::TranscriptItem::User(
+            ion_core::TranscriptMessage {
+                turn: Some(2),
+                steering: false,
+                parts: Vec::new(),
+            },
+        ));
+        assert!(
+            activity
+                .update(
+                    &mut ui,
+                    &fixture.control,
+                    ControlUpdate::Activity(Observation::Event {
+                        operation: id,
+                        event: Arc::new(CodingAgentEvent::TurnAccepted { turn: 2 }),
+                    })
+                )
+                .unwrap()
+                .is_none()
+        );
+        assert!(activity.live().is_none());
+        fixture.control.shutdown().await;
+    }
+}

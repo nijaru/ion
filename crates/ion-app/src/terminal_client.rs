@@ -6,7 +6,6 @@ use std::fs;
 use std::{
     collections::{HashSet, VecDeque},
     path::{Path, PathBuf},
-    sync::{Arc, Mutex},
 };
 
 use crate::display_text::{fit_line, push_wrapped};
@@ -16,26 +15,28 @@ use crate::transcript_render::kind_label;
 use anyhow::{Context, Result};
 use ion_ai::{Content, Message, ModelRef};
 use ion_core::{
-    AcceptedInput, AgentLimits, CodingSession, ForkPoint, InputBudget, InputReservation,
-    LiveTranscript, SessionEntry, SessionView, SteeringInbox, TranscriptItem, TranscriptProjection,
-    TurnEndReason,
+    CodingSession, ForkPoint, LiveTranscript, SessionEntry, SessionView, TranscriptItem,
+    TranscriptProjection, TurnEndReason,
 };
-use ion_host::image_input::LoadedImage;
-use ion_host::{CredentialStatus, CredentialStore, Resources};
+use ion_host::image_input::{ImageSource, LoadedImage};
+use ion_host::{CredentialStatus, CredentialStore, Delivery, Resources, SessionControl};
 use ion_terminal::{
     Frame, InputEvent, KeyCode, KeyEvent, Modifiers, MouseKind, Screen, TerminalSession,
 };
 use ratatui::text::Line;
 use tokio::time::Duration;
+#[cfg(test)]
 use tokio_util::sync::CancellationToken;
+mod activity;
+mod clipboard_input;
 mod composer;
 mod editing;
-mod input_preparation;
-mod operation;
+mod interaction;
 mod picker;
+use clipboard_input::*;
 use composer::input_window;
 use editing::{Edit, vertical_cursor};
-use input_preparation::*;
+use interaction::{apply_picker, dispatch_command, submit_editor};
 use picker::{Picker, PickerItem, PickerValue, Pickers};
 
 const MAX_DRAFT: usize = 64 * 1024;
@@ -60,31 +61,7 @@ impl TuiMode {
     }
 }
 
-#[derive(Clone, Copy)]
-enum ActiveOperation<'a> {
-    Coding(&'a CancellationToken),
-    Shell(&'a CancellationToken),
-    Compaction(&'a CancellationToken),
-}
-
-impl ActiveOperation<'_> {
-    fn is_cancelled(self) -> bool {
-        match self {
-            Self::Coding(stop) | Self::Shell(stop) | Self::Compaction(stop) => stop.is_cancelled(),
-        }
-    }
-
-    fn label(self) -> &'static str {
-        match self {
-            Self::Coding(stop) if stop.is_cancelled() => "Cancelling turn…",
-            Self::Shell(stop) if stop.is_cancelled() => "Cancelling shell…",
-            Self::Compaction(stop) if stop.is_cancelled() => "Cancelling compaction…",
-            Self::Coding(_) => "Working",
-            Self::Shell(_) => "Running shell",
-            Self::Compaction(_) => "Summarizing context",
-        }
-    }
-}
+use activity::{ActiveOperation, Activity};
 
 #[derive(Default)]
 struct Frontend {
@@ -95,7 +72,7 @@ struct Frontend {
     fullscreen_rows: usize,
     fullscreen_width: usize,
     draft: String,
-    images: Vec<LoadedImage>,
+    images: Vec<ImageSource>,
     cursor: usize,
     history_session: Option<PathBuf>,
     history_published_items: usize,
@@ -107,14 +84,11 @@ struct Frontend {
     notices: Vec<String>,
     pickers: Pickers,
     completion: Completion,
-    pending: VecDeque<TurnInput>,
-    input_budget: InputBudget,
-    input_limits: AgentLimits,
+    recovered: VecDeque<RecoveredDraft>,
     prompt_history: Vec<String>,
     browsing: Option<PromptBrowse>,
     details: Option<DetailView>,
     clipboard_job: Option<ClipboardJob>,
-    image_job: Option<ImageJob>,
     cwd: PathBuf,
 }
 
@@ -125,7 +99,7 @@ struct PromptBrowse {
     cursor: usize,
 }
 
-#[derive(Clone, serde::Serialize)]
+#[derive(Debug, serde::Serialize)]
 struct EditorDraft {
     literal: String,
     cursor: usize,
@@ -140,35 +114,11 @@ impl EditorDraft {
     }
 }
 
-struct TurnInput {
-    prompt: String,
+// Returned inputs are UI recovery only, never an execution queue. Each item
+// retains its own literal editor text, cursor and attachment associations.
+struct RecoveredDraft {
     source: EditorDraft,
-    images: Vec<LoadedImage>,
-    _reservation: Option<InputReservation>,
-}
-
-impl TurnInput {
-    fn prepared(prompt: String, source: EditorDraft, images: Vec<LoadedImage>) -> Self {
-        Self {
-            prompt,
-            source,
-            images,
-            _reservation: None,
-        }
-    }
-
-    fn from_accepted(input: AcceptedInput<EditorDraft>) -> Self {
-        let (input, source, reservation) = input.into_parts();
-        // The private inbox only accepts messages built by Message::user_input.
-        let (prompt, images) = split_editor_input(input)
-            .expect("terminal inbox must retain the prompt and image-note layout");
-        Self {
-            prompt,
-            source,
-            images,
-            _reservation: Some(reservation),
-        }
-    }
+    images: Vec<ImageSource>,
 }
 
 // Inverse of Message::user_input, not a lossy flattening of arbitrary multipart
@@ -206,293 +156,167 @@ fn split_editor_input(input: Message) -> Result<(String, Vec<LoadedImage>), &'st
 }
 
 pub struct ChatInit {
-    pub binding: ion_host::SessionBinding,
+    pub setup: ion_host::SessionSetup,
     pub images: Vec<LoadedImage>,
     pub startup_diagnostics: Vec<String>,
     pub tui_mode: TuiMode,
 }
 
 pub async fn chat(init: ChatInit) -> Result<()> {
-    let tui_mode = init.tui_mode;
-    let mut runtime = init.binding;
-    let images = init.images;
-    let mut terminal = TerminalSession::enter()
-        .await
-        .context("interactive chat requires a terminal")?;
-    let mut screen = new_inline_screen(&mut terminal).await?;
+    let mut runtime = init.setup.into_control::<EditorDraft>();
     let mut ui = Frontend {
-        mode: tui_mode,
-        images,
+        mode: init.tui_mode,
+        images: init.images.into_iter().map(Into::into).collect(),
         ..Frontend::default()
     };
-    ui.refresh_session(runtime.session())?;
-    for diagnostic in init.startup_diagnostics {
-        ui.note(diagnostic);
-    }
-    let outcome: Result<()> = async {
-    loop {
-        ui.input_limits = runtime.agent().limits();
-        terminal
-            .check_active()
-            .context("terminal lifecycle failed before input dispatch")?;
-        if let Some(incoming) = ui.pending.pop_front() {
-            ui.status.clear();
-            ui.scroll = 0;
-            run_turn(&mut terminal, &mut screen, &mut ui, &runtime, incoming).await?;
-            continue;
+    let mut activity = Activity::default();
+    let mut terminal_owner = None;
+    let mut screen_owner = None;
+    let mut outcome = async {
+        // Even terminal entry and the first history read are inside the shared
+        // shutdown boundary: no post-Session error bypasses retained cleanup.
+        terminal_owner = Some(TerminalSession::enter()
+            .await
+            .context("interactive chat requires a terminal")?);
+        let terminal = terminal_owner.as_mut().expect("entered terminal");
+        screen_owner = Some(new_inline_screen(terminal).await?);
+        let screen = screen_owner.as_mut().expect("initialized screen");
+        ui.refresh_session(runtime.session())?;
+        for diagnostic in init.startup_diagnostics {
+            ui.note(diagnostic);
         }
-        draw(&mut terminal, &mut screen, &mut ui, None, None).await?;
-        #[cfg(debug_assertions)]
-        if std::env::var_os("ION_SMOKE_PANIC_AFTER_FIRST_DRAW").is_some() {
-            panic!("ION smoke panic after first terminal draw");
-        }
-        let retry_inline = screen.reconciliation_pending() && !terminal.is_alt_screen()?;
-        let event = tokio::select! {
-            _ = tokio::time::sleep(Duration::from_millis(50)), if retry_inline => continue,
-            event = terminal.next_input() => event,
-            joined = async { (&mut ui.image_job.as_mut().expect("pending image").task).await }, if ui.image_job.is_some() => {
-                finish_image_preparation(&mut ui, joined);
-                continue;
-            },
-            joined = async { (&mut ui.clipboard_job.as_mut().expect("pending clipboard").task).await }, if ui.clipboard_job.is_some() => {
-                if let Err(error) = finish_joined_clipboard_paste(&mut ui, joined) {
-                    ui.status = format!("Paste failed: {error:#}");
-                }
-                continue;
-            },
-            notice = ui.pickers.complete(), if ui.pickers.has_job() => {
-                if let Some(notice) = notice {
-                    ui.note(notice);
-                }
-                continue;
+        let mut poll_control = true;
+        loop {
+            terminal.check_active().context("terminal lifecycle failed")?;
+            draw(terminal, screen, &mut ui, activity.live(), activity.view(&runtime)).await?;
+            #[cfg(debug_assertions)]
+            if std::env::var_os("ION_SMOKE_PANIC_AFTER_FIRST_DRAW").is_some() {
+                panic!("ION smoke panic after first terminal draw");
             }
-        };
-        let Some(event) = event else {
-            break;
-        };
-        terminal
-            .check_active()
-            .context("terminal lifecycle failed while awaiting input")?;
-        match event? {
-            InputEvent::Key(key) => {
-                let submitted_cursor = ui.cursor;
-                let raw_command = (key.code == KeyCode::Enter
-                    && !key.modifiers.contains(Modifiers::SHIFT)
-                    && !key.modifiers.contains(Modifiers::CONTROL)
-                    && !key.modifiers.contains(Modifiers::ALT)
-                    && ui.draft.trim_start().starts_with('/'))
-                .then(|| EditorDraft {
-                    literal: ui.draft.clone(),
-                    cursor: ui.cursor,
-                });
-                match ui.key(key, Some(runtime.resources())) {
-                    Action::None => {}
-                    Action::Quit => break,
-                    Action::Submit(prompt) => {
-                        ui.status.clear();
-                        ui.scroll = 0;
-                        let images = std::mem::take(&mut ui.images);
-                        run_turn(
-                            &mut terminal,
-                            &mut screen,
-                            &mut ui,
-                            &runtime,
-                            TurnInput::prepared(
-                                prompt.clone(),
-                                EditorDraft {
-                                    literal: prompt,
-                                    cursor: submitted_cursor,
-                                },
-                                images,
-                            ),
-                        )
-                        .await?;
+            let retry_inline = screen.reconciliation_pending() && !terminal.is_alt_screen()?;
+            let event = tokio::select! {
+                // Idle is eager. Disable this branch until another UI action
+                // can have produced work or reliable updates.
+                update = runtime.next(), if poll_control => {
+                    poll_control = !matches!(update, ion_host::ControlUpdate::Idle);
+                    let _visible_settlement_error = activity.update(&mut ui, &runtime, update)?;
+                    continue;
+                },
+                _ = tokio::time::sleep(Duration::from_millis(50)), if retry_inline => continue,
+                event = terminal.next_input() => event,
+                joined = async { (&mut ui.clipboard_job.as_mut().expect("pending clipboard").task).await }, if ui.clipboard_job.is_some() => {
+                    if let Err(error) = finish_joined_clipboard_paste(&mut ui, joined) {
+                        ui.status = format!("Paste failed: {error:#}");
                     }
-                    Action::Shell {
-                        command,
-                        exclude_from_context,
-                        ..
-                    } => {
-                        if let Err(error) = run_user_shell(
-                            &mut terminal,
-                            &mut screen,
-                            &mut ui,
-                            &runtime,
-                            command.clone(),
-                            exclude_from_context,
-                        )
-                        .await?
-                        {
-                            ui.status = format!(
-                                "Shell operation failed: {error:#}; inspect the Session and working directory before retrying\nShell command: {command}"
-                            );
-                        }
+                    continue;
+                },
+                notice = ui.pickers.complete(), if ui.pickers.has_job() => {
+                    if let Some(notice) = notice { ui.note(notice); }
+                    continue;
+                }
+            };
+            terminal.check_active().context("terminal lifecycle failed while awaiting input")?;
+            let event = event.context("terminal input ended unexpectedly")?;
+            match event? {
+                InputEvent::Key(key) => {
+                    if key.code == KeyCode::Char('c') && key.modifiers.contains(Modifiers::CONTROL)
+                        && (runtime.is_busy() || activity.view(&runtime).is_some())
+                    {
+                        runtime.request_stop();
+                        poll_control = true;
+                        continue;
                     }
-                    Action::Command(command) => {
-                        let (name, args) = command
-                            .split_once(char::is_whitespace)
-                            .unwrap_or((&command, ""));
-                        let args = args.trim();
-                        let builtin = Builtin::parse(name);
-                        if (ui.image_job.is_some() || ui.clipboard_job.is_some())
-                            && !matches!(builtin, Some(Builtin::Help | Builtin::Tui | Builtin::Settings | Builtin::Copy))
-                        {
-                            if let Some(source) = raw_command {
-                                ui.draft = source.literal;
-                                ui.cursor = source.cursor;
-                            }
-                            ui.status = "Wait for input preparation or cancel it with Ctrl-C".into();
-                            continue;
-                        }
-                        if builtin == Some(Builtin::Login) && !args.is_empty() {
-                            match login_in_terminal(
-                                &mut terminal,
-                                &mut screen,
-                                runtime.host().credentials(),
-                                args,
-                            )
-                            .await?
-                            {
-                                Ok(()) => ui.status = "Credential saved".into(),
-                                Err(error) => ui.status = format!("{error:#}"),
-                            }
-                        } else if builtin == Some(Builtin::Compact) && args.is_empty() {
-                            run_compaction(&mut terminal, &mut screen, &mut ui, &runtime).await?;
-                        } else if builtin == Some(Builtin::Copy) && args.is_empty() {
-                            match copy_last_answer(runtime.session(), &mut terminal).await {
-                                Ok(crate::clipboard::CopyOutcome::Copied) => {
-                                    ui.status = "Copied last assistant answer".into()
-                                }
-                                Ok(crate::clipboard::CopyOutcome::RequestedFromTerminal) => {
-                                    ui.status = "Sent clipboard request to terminal".into()
-                                }
-                                Err(error) => ui.status = format!("Copy failed: {error:#}"),
-                            }
-                        } else if builtin == Some(Builtin::Editor) && args.is_empty() {
-                            ui.completion.clear();
-                            match edit_draft_in_terminal(&mut terminal, &mut screen, &mut ui)
-                                .await?
-                            {
-                                Ok(()) => ui.status = "Draft returned from editor".into(),
-                                Err(error) => {
-                                    ui.status =
-                                        format!("Editor failed: {error:#}; original draft retained")
-                                }
-                            }
-                        } else {
-                            match handle_command(&mut runtime, &mut ui, &command) {
-                                Ok(Some(prompt)) => {
-                                    ui.status.clear();
-                                    ui.scroll = 0;
-                                    let images = std::mem::take(&mut ui.images);
-                                    run_turn(
-                                        &mut terminal,
-                                        &mut screen,
-                                        &mut ui,
-                                        &runtime,
-                                        TurnInput::prepared(
-                                            prompt,
-                                            raw_command
-                                                .expect("resource command comes from the editor"),
-                                            images,
-                                        ),
-                                    )
-                                    .await?;
-                                }
-                                Ok(None) => {}
-                                Err(error) => {
-                                    if let Some(source) = raw_command {
-                                        ui.draft = source.literal;
-                                        ui.cursor = source.cursor;
-                                    }
-                                    ui.status = format!("{error:#}");
-                                }
-                            }
-                        }
-                    }
-                    Action::Queue(prompt) => ui.queue_follow_up(
-                        EditorDraft {
-                            literal: prompt,
-                            cursor: submitted_cursor,
+                    let cursor = ui.cursor;
+                    let raw_command = (key.code == KeyCode::Enter
+                        && !key.modifiers.contains(Modifiers::SHIFT)
+                        && !key.modifiers.contains(Modifiers::CONTROL)
+                        && !key.modifiers.contains(Modifiers::ALT)
+                        && ui.draft.trim_start().starts_with('/'))
+                        .then(|| EditorDraft { literal: ui.draft.clone(), cursor });
+                    match ui.key(key, Some(runtime.resources())) {
+                        Action::None => {},
+                        Action::Quit => break,
+                        Action::Submit(prompt) => {
+                            let delivery = interaction::editor_delivery(&runtime);
+                            submit_editor(&mut runtime, &mut ui, delivery, EditorDraft { literal: prompt, cursor });
                         },
-                        runtime.agent().limits(),
-                        Some(runtime.resources()),
-                    ),
-                    Action::PasteClipboard => {
-                        start_clipboard_paste(&mut ui, runtime.selected());
+                        Action::Queue(prompt) => {
+                            submit_editor(&mut runtime, &mut ui, Delivery::FollowUp, EditorDraft { literal: prompt, cursor });
+                        },
+                        Action::Recover => {
+                            if runtime.withdraw_last_follow_up().is_none() {
+                                ui.recover_draft();
+                            }
+                        },
+                        Action::Shell { command, exclude_from_context, source } => {
+                            match runtime.shell(command, exclude_from_context, source) {
+                                Ok(_) => {},
+                                Err((source, error)) => {
+                                    ui.restore_editor(source);
+                                    ui.status = format!("Shell was not started: {error:#}");
+                                }
+                            }
+                        },
+                        Action::Command(command) => {
+                            dispatch_command(&mut runtime, &mut ui, terminal, screen, command, raw_command).await?;
+                        },
+                        Action::PasteClipboard => start_clipboard_paste(&mut ui, runtime.selected()),
+                        Action::Pick(value) => apply_picker(&mut runtime, &mut ui, value)?,
                     }
-                    Action::Pick(value) => {
-                        if let PickerValue::File { path, start, end } = value {
-                            ui.insert_file(path, start, end);
-                            continue;
-                        }
-                        if ui.image_job.is_some() || ui.clipboard_job.is_some() {
-                            ui.status = "Wait for input preparation or cancel it with Ctrl-C".into();
-                            continue;
-                        }
-                        if let PickerValue::ForkBefore { turn, input } = value {
-                            if let Err(error) = apply_fork(
-                                &mut runtime,
-                                &mut ui,
-                                ForkPoint::BeforeTurn(turn),
-                                Some(input),
-                            ) {
-                                ui.status = format!("{error:#}");
-                            }
-                            continue;
-                        }
-                        let result = match value {
-                            PickerValue::Session(path) => runtime.switch_session(path),
-                            PickerValue::Model(model) => runtime.select_model(model),
-                            PickerValue::File { .. } | PickerValue::ForkBefore { .. } => {
-                                unreachable!("handled above")
-                            }
-                        };
-                        match result {
-                            Ok(()) => {
-                                ui.refresh_session(runtime.session())?;
-                                ui.status = "Ready".into();
-                            }
-                            Err(error) => ui.status = format!("{error:#}"),
-                        }
-                    }
-                }
+                    poll_control = true;
+                },
+                InputEvent::Paste(text) => ui.insert(&text),
+                InputEvent::Rejected(error) => ui.status = error.to_string(),
+                InputEvent::Resize(_) => screen.note_resize(),
+                InputEvent::Mouse(mouse) => match mouse.kind() {
+                    MouseKind::ScrollUp => ui.scroll = ui.scroll.saturating_add(3),
+                    MouseKind::ScrollDown => ui.scroll = ui.scroll.saturating_sub(3),
+                    _ => {},
+                },
             }
-            InputEvent::Paste(text) => ui.insert(&text),
-            InputEvent::Rejected(error) => ui.status = error.to_string(),
-            InputEvent::Resize(_) => screen.note_resize(),
-            InputEvent::Mouse(mouse) => match mouse.kind() {
-                MouseKind::ScrollUp => ui.scroll = ui.scroll.saturating_add(3),
-                MouseKind::ScrollDown => ui.scroll = ui.scroll.saturating_sub(3),
-                _ => {}
-            },
+        }
+        Ok(())
+    }.await;
+    ui.pickers.close();
+    // shutdown closes admission, stops and joins both preparation and Core work.
+    // Process every reliable return/settlement even when presentation has failed.
+    let report = runtime.shutdown().await;
+    for update in report.updates {
+        activity.cleanup_update(&mut ui, &runtime, update, &mut outcome);
+    }
+    for error in report.cleanup_errors {
+        activity::combine_error(&mut outcome, error.into());
+    }
+    for cleanup in [
+        cancel_clipboard_paste(&mut ui).await,
+        ui.pickers.shutdown().await,
+    ] {
+        if let Err(error) = cleanup {
+            activity::combine_error(&mut outcome, error);
         }
     }
-    if terminal.is_alt_screen()? {
-        terminal.leave_alt_screen()?;
-        screen.invalidate();
-    }
-    if terminal.prepare_inline(&mut screen).await?.is_some() {
-        screen.finish(&mut terminal.output()?)?;
-    }
-    terminal.restore()?;
-    Ok(())
-    }.await;
-    // Stop discovery admission/publication before joining either helper. Every
-    // normal/error exit retains custody until both jobs have been reaped.
-    ui.pickers.close();
-    let image_cleanup = cancel_image_preparation(&mut ui).await;
-    let clipboard_cleanup = cancel_clipboard_paste(&mut ui).await;
-    let discovery_cleanup = ui.pickers.shutdown().await;
-    let mut outcome = outcome;
-    for cleanup in [image_cleanup, clipboard_cleanup, discovery_cleanup] {
-        if let Err(error) = cleanup {
-            outcome = Err(match outcome {
-                Ok(()) => error,
-                Err(primary) => {
-                    primary.context(format!("Terminal helper cleanup also failed: {error:#}"))
+    if let Some(terminal) = terminal_owner.as_mut() {
+        let cleanup: Result<()> = async {
+            if let Some(screen) = screen_owner.as_mut()
+                && outcome.is_ok()
+            {
+                draw(terminal, screen, &mut ui, None, None).await?;
+                if terminal.is_alt_screen()? {
+                    terminal.leave_alt_screen()?;
+                    screen.invalidate();
                 }
-            });
+                if terminal.prepare_inline(screen).await?.is_some() {
+                    screen.finish(&mut terminal.output()?)?;
+                }
+            }
+            Ok(())
+        }
+        .await;
+        if let Err(error) = cleanup {
+            activity::combine_error(&mut outcome, error);
+        }
+        if let Err(error) = terminal.restore() {
+            activity::combine_error(&mut outcome, error.into());
         }
     }
     outcome
@@ -605,7 +429,7 @@ async fn edit_draft_in_terminal(
 }
 
 fn apply_fork(
-    runtime: &mut ion_host::SessionBinding,
+    runtime: &mut SessionControl<EditorDraft>,
     ui: &mut Frontend,
     point: ForkPoint,
     restore: Option<Message>,
@@ -628,10 +452,10 @@ fn apply_fork(
 }
 
 fn handle_command(
-    runtime: &mut ion_host::SessionBinding,
+    runtime: &mut SessionControl<EditorDraft>,
     ui: &mut Frontend,
     command: &str,
-) -> Result<Option<String>> {
+) -> Result<bool> {
     let (name, args) = command
         .split_once(char::is_whitespace)
         .unwrap_or((command, ""));
@@ -670,7 +494,8 @@ fn handle_command(
         },
         Some(Builtin::Image) => {
             anyhow::ensure!(!args.is_empty(), "use /image PATH");
-            start_image_preparation(runtime, ui, PathBuf::from(args))?;
+            ion_host::image_input::require_image_input(runtime.selected())?;
+            ui.attach_image(ImageSource::Path(PathBuf::from(args)));
         }
         Some(Builtin::Skills) => ui.note(
             runtime
@@ -862,216 +687,23 @@ fn handle_command(
         }
         Some(kind) => anyhow::bail!("use {}", kind.usage()),
         None => {
-            if let Some(prompt) = runtime
+            // Recognition only: Host expands exactly once when it admits the
+            // original Prompt, including while an operation is active.
+            if runtime
                 .resources()
-                .expand_command(command, runtime.agent().limits().max_request_bytes)
+                .skills()
+                .any(|skill| name.strip_prefix("/skill:") == Some(skill.name.as_str()))
+                || runtime
+                    .resources()
+                    .templates()
+                    .any(|template| name.strip_prefix('/') == Some(template.name.as_str()))
             {
-                return prompt.map(Some);
+                return Ok(true);
             }
-            ui.status = format!("Unknown command: {name}. Type /help");
+            anyhow::bail!("Unknown command: {name}. Type /help");
         }
     }
-    Ok(None)
-}
-
-async fn run_compaction(
-    terminal: &mut TerminalSession,
-    screen: &mut Screen,
-    ui: &mut Frontend,
-    runtime: &ion_host::SessionBinding,
-) -> Result<()> {
-    terminal
-        .check_active()
-        .context("terminal lifecycle failed before compaction")?;
-    let session = runtime.session();
-    let agent = runtime.agent();
-    ui.status.clear();
-    let stop = CancellationToken::new();
-    let compact = agent.compact(session.clone(), stop.clone(), |_| {});
-    let (result, terminal_result) = operation::pump(
-        terminal,
-        screen,
-        ui,
-        runtime,
-        &stop,
-        operation::Activity::Compaction,
-        compact,
-    )
-    .await;
-    if stop.is_cancelled() || result.is_err() {
-        return_pending_to_editor(ui);
-    }
-    ui.status = match result {
-        Ok(true) => "Context summarized; raw history retained".into(),
-        Ok(false) => "No settled history to summarize".into(),
-        Err(error) => format!("Compaction ended: {error}"),
-    };
-    terminal_result
-}
-
-fn expand_resource_input(
-    resources: &Resources,
-    prompt: String,
-    limits: AgentLimits,
-) -> std::result::Result<String, (String, anyhow::Error)> {
-    match resources.expand_command(prompt.trim(), limits.max_request_bytes) {
-        Some(Ok(expanded)) => Ok(expanded),
-        Some(Err(error)) => Err((prompt, error)),
-        None => Ok(prompt),
-    }
-}
-
-fn busy_key(
-    ui: &mut Frontend,
-    key: KeyEvent,
-    stop: &CancellationToken,
-    steering: Option<&SteeringInbox<EditorDraft>>,
-    resources: Option<&Resources>,
-    limits: AgentLimits,
-) {
-    let submitted_cursor = ui.cursor;
-    let raw_command = (key.code == KeyCode::Enter
-        && !key.modifiers.contains(Modifiers::SHIFT)
-        && !key.modifiers.contains(Modifiers::CONTROL)
-        && !key.modifiers.contains(Modifiers::ALT)
-        && ui.draft.trim_start().starts_with('/'))
-    .then(|| EditorDraft {
-        literal: ui.draft.clone(),
-        cursor: ui.cursor,
-    });
-    let action = ui.key(key, resources);
-    match action {
-        Action::Submit(prompt) => {
-            if let Some(steering) = steering {
-                match steering.push_message(
-                    Message::user_input(prompt.clone(), ui.images.clone()),
-                    EditorDraft {
-                        literal: prompt.clone(),
-                        cursor: submitted_cursor,
-                    },
-                ) {
-                    Ok(()) => {
-                        ui.images.clear();
-                        ui.status = "Steering sent for the next model step".into();
-                    }
-                    Err(error) => {
-                        ui.draft = prompt;
-                        ui.cursor = submitted_cursor;
-                        ui.status = format!("Steering was not queued: {error}");
-                    }
-                }
-            } else {
-                ui.queue_follow_up(
-                    EditorDraft {
-                        literal: prompt,
-                        cursor: submitted_cursor,
-                    },
-                    limits,
-                    resources,
-                );
-            }
-        }
-        Action::Queue(prompt) => ui.queue_follow_up(
-            EditorDraft {
-                literal: prompt,
-                cursor: submitted_cursor,
-            },
-            limits,
-            resources,
-        ),
-        Action::Command(command) => {
-            let (name, args) = command
-                .split_once(char::is_whitespace)
-                .unwrap_or((&command, ""));
-            let builtin = Builtin::parse(name);
-            if builtin == Some(Builtin::Settings) {
-                if let Err(error) = ui.output_settings(args.trim()) {
-                    ui.status = format!("{error:#}");
-                }
-                return;
-            }
-            if matches!(builtin, Some(Builtin::Copy | Builtin::Editor)) {
-                ui.status = "This action is available after the operation".into();
-                return;
-            }
-            if builtin.is_some() {
-                ui.status = "Commands are available after this operation".into();
-            } else if let (Some(steering), Some(resources)) = (steering, resources)
-                && let Some(expanded) = resources.expand_command(&command, limits.max_request_bytes)
-            {
-                match expanded {
-                    Ok(prompt) => {
-                        let source = raw_command
-                            .clone()
-                            .expect("resource command comes from the editor");
-                        match steering
-                            .push_message(Message::user_input(prompt, ui.images.clone()), source)
-                        {
-                            Ok(()) => {
-                                ui.images.clear();
-                                ui.status = "Steering sent for the next model step".into();
-                                return;
-                            }
-                            Err(error) => ui.status = format!("Steering was not queued: {error}"),
-                        }
-                    }
-                    Err(error) => ui.status = format!("{error:#}"),
-                }
-            } else {
-                ui.status = "Commands are available after this operation".into();
-            }
-            let source = raw_command.unwrap_or_else(|| EditorDraft::at_end(command));
-            ui.draft = source.literal;
-            ui.cursor = source.cursor;
-        }
-        Action::Shell { source, .. } => {
-            ui.draft = source.literal;
-            ui.cursor = source.cursor;
-            ui.status = "Shell commands are available after this operation".into();
-        }
-        Action::Quit => stop.cancel(),
-        Action::PasteClipboard => ui.status = "Paste is unavailable during this operation".into(),
-        Action::Pick(PickerValue::File { path, start, end }) => {
-            ui.insert_file(path, start, end);
-        }
-        Action::Pick(_) | Action::None => {}
-    }
-}
-
-fn is_clipboard_shortcut(key: KeyEvent) -> bool {
-    key.code == KeyCode::Char('v') && key.modifiers.contains(Modifiers::CONTROL)
-}
-
-fn return_pending_to_editor(ui: &mut Frontend) {
-    if ui.pending.is_empty() {
-        return;
-    }
-    ui.pickers.close();
-    ui.restore_browsed_draft();
-    let cursor = ui
-        .pending
-        .front()
-        .expect("pending input exists")
-        .source
-        .cursor;
-    let mut restored = Vec::new();
-    let remaining = ui
-        .pending
-        .drain(..)
-        .map(|TurnInput { source, images, .. }| {
-            restored.extend(images);
-            source.literal
-        })
-        .collect::<Vec<_>>()
-        .join("\n\n");
-    restored.append(&mut ui.images);
-    ui.images = restored;
-    if ui.draft.is_empty() {
-        ui.draft = remaining;
-    } else {
-        ui.draft = format!("{remaining}\n\n{}", ui.draft);
-    }
-    ui.cursor = cursor;
+    Ok(false)
 }
 
 fn context_label(view: &ion_core::SessionView, window: Option<u32>) -> String {
@@ -1085,152 +717,6 @@ fn context_label(view: &ion_core::SessionView, window: Option<u32>) -> String {
         label.push_str(&format!(" · summary through {through}"));
     }
     label
-}
-
-async fn run_user_shell(
-    terminal: &mut TerminalSession,
-    screen: &mut Screen,
-    ui: &mut Frontend,
-    runtime: &ion_host::SessionBinding,
-    command: String,
-    exclude_from_context: bool,
-) -> Result<Result<()>> {
-    terminal
-        .check_active()
-        .context("terminal lifecycle failed before shell admission")?;
-    let stop = CancellationToken::new();
-    ui.status.clear();
-    let running = runtime.run_user_shell(&command, stop.clone(), exclude_from_context)?;
-    let (output, terminal_result) = operation::pump(
-        terminal,
-        screen,
-        ui,
-        runtime,
-        &stop,
-        operation::Activity::Shell,
-        running,
-    )
-    .await;
-    // Terminal failure is fatal even when shell settlement also failed. Stop
-    // withdraws queued dispatch even if the observed shell result was Ok.
-    if let Err(error) = terminal_result {
-        return_pending_to_editor(ui);
-        return Err(error);
-    }
-    let result = (|| {
-        let refresh = runtime.session().view().map(|view| {
-            ui.load_history(runtime.session(), &view);
-            ui.scroll = 0;
-        });
-        let output = output.map_err(|error| match &refresh {
-            Ok(()) => error,
-            Err(refresh) => {
-                error.context(format!("Session history refresh also failed: {refresh:#}"))
-            }
-        })?;
-        refresh?;
-        ui.status = if output.is_error {
-            "Shell finished with an error"
-        } else {
-            "Shell finished"
-        }
-        .into();
-        Ok(())
-    })();
-    // A stop withdraws queued dispatch even if the observed shell result is Ok.
-    // An ordinary nonzero exit does not withdraw an intentional follow-up.
-    if stop.is_cancelled() || result.is_err() {
-        return_pending_to_editor(ui);
-    }
-    Ok(result)
-}
-
-async fn run_turn(
-    terminal: &mut TerminalSession,
-    screen: &mut Screen,
-    ui: &mut Frontend,
-    runtime: &ion_host::SessionBinding,
-    incoming: TurnInput,
-) -> Result<()> {
-    terminal
-        .check_active()
-        .context("terminal lifecycle failed before turn admission")?;
-    let session = runtime.session();
-    let user_message =
-        Message::user_input(incoming.prompt.clone(), incoming.images.iter().cloned());
-    // Core's admission event transfers custody. A later history read cannot
-    // decide whether the original input (and its reservation) still belongs here.
-    let unaccepted = Arc::new(Mutex::new(Some(incoming)));
-    let observer_input = unaccepted.clone();
-    let progress = Arc::new(Mutex::new(LiveTranscript::with_user_input(&user_message)));
-    let observer = progress.clone();
-    let stop = CancellationToken::new();
-    let steering = Arc::new(SteeringInbox::new(
-        runtime.agent().limits(),
-        ui.input_budget.clone(),
-    ));
-    let turn = runtime.agent().submit_message_with_steering(
-        session.clone(),
-        user_message,
-        runtime.instructions().to_owned(),
-        stop.clone(),
-        steering.clone(),
-        move |event| {
-            if matches!(&event, ion_core::CodingAgentEvent::TurnAccepted { .. }) {
-                let accepted = observer_input
-                    .lock()
-                    .unwrap_or_else(std::sync::PoisonError::into_inner)
-                    .take();
-                drop(accepted);
-            }
-            observer
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner)
-                .observe(event);
-        },
-    );
-    let (result, terminal_result) = operation::pump(
-        terminal,
-        screen,
-        ui,
-        runtime,
-        &stop,
-        operation::Activity::Coding {
-            progress: &progress,
-            steering: &steering,
-        },
-        turn,
-    )
-    .await;
-    for input in steering.take_uncommitted() {
-        ui.pending.push_back(TurnInput::from_accepted(input));
-    }
-    let unaccepted = unaccepted
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner)
-        .take();
-    if let Some(incoming) = unaccepted {
-        ui.pending.push_front(incoming);
-        return_pending_to_editor(ui);
-    } else if stop.is_cancelled() || result.is_err() {
-        return_pending_to_editor(ui);
-    }
-    ui.status = match result {
-        Ok(_) => String::new(),
-        Err(error) => format!("Turn ended: {error}"),
-    };
-    match session.view() {
-        Ok(view) => ui.load_history(session, &view),
-        Err(error) => {
-            // Stop queued dispatch, but retain the editor and report the read
-            // failure. Started work has already settled; accepted input is never
-            // restored or replayed merely because presentation cannot refresh.
-            return_pending_to_editor(ui);
-            ui.note(format!("Session history refresh failed: {error}"));
-        }
-    }
-    ui.scroll = 0;
-    terminal_result
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1296,6 +782,7 @@ enum Action {
         source: EditorDraft,
     },
     Queue(String),
+    Recover,
     PasteClipboard,
     Command(String),
     Pick(PickerValue),
@@ -1308,29 +795,16 @@ impl Frontend {
         if draft.len() > MAX_DRAFT {
             return Err("selected input exceeds editor limit");
         }
-        self.replace_draft(draft);
-        self.images = images;
+        self.show_draft(RecoveredDraft {
+            source: EditorDraft::at_end(draft),
+            images: images.into_iter().map(Into::into).collect(),
+        });
         Ok(())
     }
 
-    fn attach_images(&mut self, images: Vec<LoadedImage>) -> Result<()> {
-        let bytes = self
-            .images
-            .iter()
-            .chain(&images)
-            .try_fold(0usize, |bytes, image| {
-                bytes
-                    .checked_add(image.content.data().len())
-                    .and_then(|bytes| bytes.checked_add(image.note.as_ref().map_or(0, String::len)))
-            })
-            .context("image payload size overflow")?;
-        anyhow::ensure!(
-            bytes <= self.input_limits.max_request_bytes,
-            "attached images exceed input byte limit"
-        );
-        self.images.extend(images);
+    fn attach_image(&mut self, image: ImageSource) {
+        self.images.push(image);
         self.status = format!("{} image(s) attached to the next prompt", self.images.len());
-        Ok(())
     }
 
     fn refresh_session(&mut self, session: &CodingSession) -> Result<()> {
@@ -1438,6 +912,31 @@ impl Frontend {
         self.cursor = self.draft.len();
     }
 
+    fn defer_unsettled_publication(&mut self, view: &SessionView) {
+        let unfinished = view
+            .unfinished_turn
+            .and_then(|turn| {
+                self.history
+                    .items
+                    .iter()
+                    .position(|item| transcript_item_turn(item) == Some(turn))
+            })
+            .or_else(|| {
+                view.unfinished_user_shell.as_ref().and_then(|_| {
+                    self.history
+                        .items
+                        .iter()
+                        .rposition(|item| matches!(item, TranscriptItem::UserShell(_)))
+                })
+            });
+        if let Some(end) = unfinished {
+            let end = end.max(self.history_published_items);
+            self.pending_history_items
+                .truncate(end.saturating_sub(self.history_published_items));
+            self.pending_history_target = end;
+        }
+    }
+
     fn pending_history_rows(&self, width: usize) -> Vec<Line<'static>> {
         let mut rows = Vec::new();
         if let Some(banner) = &self.pending_history_banner {
@@ -1543,26 +1042,17 @@ impl Frontend {
         }
         // Clipboard preparation owns future attachments. Preserve the literal
         // editor input until it completes, before any client can acknowledge it.
-        if (self.clipboard_job.is_some() || self.image_job.is_some())
+        if self.clipboard_job.is_some()
             && key.code == KeyCode::Enter
             && !key.modifiers.contains(Modifiers::SHIFT)
             && !key.modifiers.contains(Modifiers::CONTROL)
             && Builtin::parse(self.draft.split_whitespace().next().unwrap_or("")).is_none()
         {
-            self.status = if self.image_job.is_some() {
-                "Wait for image preparation, then send the prompt"
-            } else {
-                "Wait for clipboard paste, then send the prompt"
-            }
-            .into();
+            self.status = "Wait for clipboard paste, then send the prompt".into();
             return Action::None;
         }
         if key.code == KeyCode::Char('c') && key.modifiers.contains(Modifiers::CONTROL) {
-            let stop = self
-                .image_job
-                .as_ref()
-                .map(|job| &job.stop)
-                .or_else(|| self.clipboard_job.as_ref().map(|job| &job.stop));
+            let stop = self.clipboard_job.as_ref().map(|job| &job.stop);
             if let Some(stop) = stop
                 && !stop.is_cancelled()
             {
@@ -1648,7 +1138,7 @@ impl Frontend {
                 self.browsing = None;
                 let prompt = std::mem::take(&mut self.draft);
                 self.cursor = 0;
-                if prompt.trim().is_empty() {
+                if prompt.trim().is_empty() && self.images.is_empty() {
                     Action::None
                 } else {
                     Action::Queue(prompt)
@@ -1725,10 +1215,7 @@ impl Frontend {
             KeyEvent {
                 code: KeyCode::Up,
                 modifiers,
-            } if modifiers.contains(Modifiers::ALT) => {
-                self.dequeue();
-                Action::None
-            }
+            } if modifiers.contains(Modifiers::ALT) => Action::Recover,
             KeyEvent {
                 code: KeyCode::Up, ..
             } => {
@@ -1899,66 +1386,47 @@ impl Frontend {
         }
     }
 
-    fn queue_follow_up(
-        &mut self,
-        source: EditorDraft,
-        limits: AgentLimits,
-        resources: Option<&Resources>,
-    ) {
-        let original = &source.literal;
-        let name = original.split_whitespace().next().unwrap_or("");
-        if Builtin::parse(name).is_some() {
-            self.draft = source.literal;
-            self.cursor = source.cursor;
-            self.status =
-                "Terminal commands cannot be queued; submit a prompt or resource command".into();
-            return;
-        }
-        let prompt = match resources {
-            Some(resources) => match expand_resource_input(resources, original.clone(), limits) {
-                Ok(prompt) => prompt,
-                Err((_, error)) => {
-                    self.draft = source.literal;
-                    self.cursor = source.cursor;
-                    self.status = format!("Follow-up was not queued: {error:#}");
-                    return;
-                }
-            },
-            None => original.clone(),
-        };
-        let message = Message::user_input(prompt.clone(), self.images.clone());
-        match self.input_budget.reserve(&message, &source, limits) {
-            Ok(reservation) => {
-                self.pending.push_back(TurnInput {
-                    prompt,
-                    source,
-                    images: std::mem::take(&mut self.images),
-                    _reservation: Some(reservation),
-                });
-                self.status = format!("{} follow-up(s) queued", self.pending.len());
-            }
-            Err(error) => {
-                self.draft = source.literal;
-                self.cursor = source.cursor;
-                self.status = format!("Follow-up was not queued: {error}");
-            }
+    fn restore_editor(&mut self, source: EditorDraft) {
+        self.browsing = None;
+        self.completion.clear();
+        self.draft = source.literal;
+        self.cursor = source.cursor;
+    }
+
+    fn return_draft(&mut self, source: EditorDraft, images: Vec<ImageSource>) {
+        self.restore_browsed_draft();
+        if self.draft.is_empty() && self.images.is_empty() {
+            self.restore_editor(source);
+            self.images = images;
+        } else {
+            self.recovered.push_back(RecoveredDraft { source, images });
         }
     }
 
-    fn dequeue(&mut self) {
-        if let Some(TurnInput { source, images, .. }) = self.pending.pop_back() {
-            self.restore_browsed_draft();
-            self.images.extend(images);
-            if self.draft.is_empty() {
-                self.draft = source.literal;
-                self.cursor = source.cursor;
-            } else {
-                self.cursor = self.draft.len() + 2 + source.cursor;
-                self.draft = format!("{}\n\n{}", self.draft, source.literal);
-            }
-            self.browsing = None;
-            self.status = format!("{} follow-up(s) remain queued", self.pending.len());
+    fn show_draft(&mut self, recovered: RecoveredDraft) {
+        self.restore_browsed_draft();
+        if !self.draft.is_empty() || !self.images.is_empty() {
+            self.recovered.push_back(RecoveredDraft {
+                source: EditorDraft {
+                    literal: std::mem::take(&mut self.draft),
+                    cursor: self.cursor,
+                },
+                images: std::mem::take(&mut self.images),
+            });
         }
+        self.restore_editor(recovered.source);
+        self.images = recovered.images;
+    }
+
+    fn recover_draft(&mut self) {
+        self.restore_browsed_draft();
+        if let Some(recovered) = self.recovered.pop_front() {
+            self.show_draft(recovered);
+        }
+        self.status = format!(
+            "{} recovered draft(s) · Alt-Up cycles drafts",
+            self.recovered.len()
+        );
     }
 }
 
@@ -1991,7 +1459,7 @@ async fn draw(
     screen: &mut Screen,
     ui: &mut Frontend,
     progress: Option<&LiveTranscript>,
-    operation: Option<ActiveOperation<'_>>,
+    operation: Option<ActiveOperation>,
 ) -> Result<()> {
     let Some(geometry) = prepare_draw(terminal, screen, ui).await? else {
         return Ok(());
@@ -1999,35 +1467,12 @@ async fn draw(
     draw_prepared(terminal, screen, ui, progress, operation, geometry)
 }
 
-async fn draw_progress(
-    terminal: &mut TerminalSession,
-    screen: &mut Screen,
-    ui: &mut Frontend,
-    progress: &Mutex<LiveTranscript>,
-    operation: ActiveOperation<'_>,
-) -> Result<()> {
-    let Some(geometry) = prepare_draw(terminal, screen, ui).await? else {
-        return Ok(());
-    };
-    let preview = progress
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner);
-    draw_prepared(
-        terminal,
-        screen,
-        ui,
-        Some(&preview),
-        Some(operation),
-        geometry,
-    )
-}
-
 fn draw_prepared(
     terminal: &mut TerminalSession,
     screen: &mut Screen,
     ui: &mut Frontend,
     progress: Option<&LiveTranscript>,
-    operation: Option<ActiveOperation<'_>>,
+    operation: Option<ActiveOperation>,
     (width, height, surface_reset): (u16, u16, bool),
 ) -> Result<()> {
     if ui.details.is_some() || ui.pickers.active().is_some() {
@@ -2136,17 +1581,32 @@ fn draw_prepared(
     Ok(())
 }
 
-fn visible_status(ui: &Frontend, operation: Option<ActiveOperation<'_>>) -> Option<String> {
+fn visible_status(ui: &Frontend, operation: Option<ActiveOperation>) -> Option<String> {
     let idle = ui.status.is_empty();
     let attachment = if ui.images.is_empty() {
         String::new()
     } else {
         format!(" · {} image(s) attached", ui.images.len())
     };
-    let status = if idle {
-        attachment.trim_start_matches(" · ").to_owned()
+    let recovery = if ui.recovered.is_empty() {
+        String::new()
     } else {
-        format!("{}{}", ui.status, attachment)
+        format!(
+            " · {} recovered draft(s) · Alt-Up cycles",
+            ui.recovered.len()
+        )
+    };
+    let queued = operation
+        .filter(|operation| operation.pending_follow_ups != 0)
+        .map_or_else(String::new, |operation| {
+            format!(" · {} follow-up(s) queued", operation.pending_follow_ups)
+        });
+    let status = if idle {
+        format!("{attachment}{recovery}{queued}")
+            .trim_start_matches(" · ")
+            .to_owned()
+    } else {
+        format!("{}{attachment}{recovery}{queued}", ui.status)
     };
     if let Some(operation) = operation {
         let label = operation.label();
@@ -2157,10 +1617,7 @@ fn visible_status(ui: &Frontend, operation: Option<ActiveOperation<'_>>) -> Opti
                 format!("{label} · {status}")
             }
         } else if status.is_empty() {
-            let controls = match operation {
-                ActiveOperation::Coding(_) => "Enter steers · Alt-Enter queues · Ctrl-C cancels",
-                _ => "Ctrl-C cancels",
-            };
+            let controls = operation.controls();
             format!("{label} · {controls}")
         } else {
             format!("{label} · Ctrl-C cancels · {status}")
@@ -2174,7 +1631,7 @@ fn draw_chat_fullscreen(
     screen: &mut Screen,
     ui: &mut Frontend,
     progress: Option<&LiveTranscript>,
-    operation: Option<ActiveOperation<'_>>,
+    operation: Option<ActiveOperation>,
     width: u16,
     height: u16,
 ) -> Result<()> {
@@ -2281,7 +1738,7 @@ fn draw_modal_fullscreen(
     screen: &mut Screen,
     ui: &mut Frontend,
     progress: Option<&LiveTranscript>,
-    operation: Option<ActiveOperation<'_>>,
+    operation: Option<ActiveOperation>,
     width: u16,
     height: u16,
 ) -> Result<()> {
@@ -2293,7 +1750,7 @@ fn draw_modal_fullscreen(
 fn modal_rows(
     ui: &mut Frontend,
     progress: Option<&LiveTranscript>,
-    operation: Option<ActiveOperation<'_>>,
+    operation: Option<ActiveOperation>,
     width: u16,
     height: u16,
 ) -> (Vec<Line<'static>>, Option<(usize, u16)>) {
@@ -2358,1216 +1815,6 @@ fn modal_rows(
 }
 
 #[cfg(test)]
-mod tests {
-    #[test]
-    fn short_session_labels_preserve_ascii_and_utf8() {
-        for (id, label) in [
-            ("", ""),
-            ("short", "short"),
-            ("0123456789abcdef", "0123456789ab"),
-            ("01234567890🦀", "01234567890🦀"),
-            ("01234567890🦀tail", "01234567890🦀"),
-            ("🦀é", "🦀é"),
-        ] {
-            assert_eq!(super::short_session_id(id), label);
-        }
-    }
-
-    use super::*;
-    use ion_host::Selection;
-    use unicode_width::UnicodeWidthStr;
-
-    // Caller-derived raw-text cap for resource expansion in this file's tests.
-    fn cap() -> usize {
-        AgentLimits::default().max_request_bytes
-    }
-
-    #[test]
-    fn editor_line_shortcuts_keep_other_lines_and_graphemes_intact() {
-        for (draft, cursor, code, expected, expected_cursor) in [
-            (
-                "first\ncafé 👩‍💻 tail",
-                "first\ncafé 👩‍💻".len(),
-                'u',
-                "first\n tail",
-                6,
-            ),
-            (
-                "first\ncafé 👩‍💻 tail",
-                "first\ncafé".len(),
-                'k',
-                "first\ncafé",
-                "first\ncafé".len(),
-            ),
-            ("first\nsecond", 6, 'u', "firstsecond", 5),
-            ("first\nsecond", 5, 'k', "firstsecond", 5),
-            ("café 👩‍💻", "café 👩‍💻".len(), 'w', "café ", "café ".len()),
-            ("first\nsecond", 8, 'a', "first\nsecond", 6),
-            ("first\nsecond", 2, 'e', "first\nsecond", 5),
-        ] {
-            let mut ui = Frontend {
-                draft: draft.into(),
-                cursor,
-                ..Frontend::default()
-            };
-            assert!(matches!(
-                ui.key(KeyEvent::new(KeyCode::Char(code), Modifiers::CONTROL), None),
-                Action::None
-            ));
-            assert_eq!(
-                (ui.draft.as_str(), ui.cursor),
-                (expected, expected_cursor),
-                "Ctrl-{code}"
-            );
-        }
-    }
-
-    #[test]
-    fn busy_editor_clearing_neither_cancels_nor_admits_input() {
-        let mut ui = Frontend {
-            draft: "discard café 界 👩‍💻".into(),
-            cursor: "discard café 界 👩‍💻".len(),
-            ..Frontend::default()
-        };
-        let stop = CancellationToken::new();
-        let steering = SteeringInbox::new(AgentLimits::default(), ui.input_budget.clone());
-        busy_key(
-            &mut ui,
-            KeyEvent::new(KeyCode::Char('u'), Modifiers::CONTROL),
-            &stop,
-            Some(&steering),
-            None,
-            AgentLimits::default(),
-        );
-        assert!(ui.draft.is_empty());
-        assert_eq!(ui.cursor, 0);
-        assert!(!stop.is_cancelled());
-        assert!(steering.take_uncommitted().is_empty());
-    }
-
-    #[test]
-    fn resume_history_tail_keeps_the_last_six_turns() {
-        let items = (1..=9)
-            .map(|turn| {
-                TranscriptItem::User(ion_core::TranscriptMessage {
-                    turn: Some(turn),
-                    steering: false,
-                    parts: vec![ion_core::TranscriptPart::Text(format!("turn-{turn}"))],
-                })
-            })
-            .collect::<Vec<_>>();
-        let tail = resume_history_tail(&items);
-        assert_eq!(tail.start, 3);
-        assert_eq!(tail.omitted_turns, 3);
-        assert_eq!(transcript_item_turn(&items[tail.start]), Some(4));
-    }
-
-    #[test]
-    fn resume_history_tail_bounds_shell_only_history() {
-        let items = (0..40)
-            .map(|index| {
-                TranscriptItem::UserShell(ion_core::UserShellActivity {
-                    command: format!("echo {index}"),
-                    outcome: ion_core::UserShellOutcome::Observed {
-                        output: serde_json::Value::Null,
-                        is_error: false,
-                    },
-                    exclude_from_context: false,
-                })
-            })
-            .collect::<Vec<_>>();
-        let tail = resume_history_tail(&items);
-        assert_eq!(tail.start, 8);
-        assert_eq!(tail.omitted_turns, 0);
-        assert_eq!(tail.omitted_entries, 8);
-    }
-
-    #[test]
-    fn copy_uses_the_last_completed_answer() {
-        let assistant = |turn, text: &str| SessionEntry::Assistant {
-            turn,
-            message: Message {
-                role: Role::Assistant,
-                content: vec![Content::Text(text.into())],
-                provider_replay: None,
-            },
-            tool_activities: Vec::new(),
-            execution: ion_ai::ModelExecution {
-                route: ion_ai::ModelRoute::direct(
-                    ModelRef {
-                        provider: "test".into(),
-                        model: "test".into(),
-                    },
-                    ion_ai::ModelRouteReason::UserRequest,
-                ),
-                returned_model: None,
-            },
-            usage: ion_ai::Usage::unknown(),
-            termination: ion_ai::ResponseTermination::Completed,
-        };
-        let view = SessionView {
-            cwd: PathBuf::from("/tmp"),
-            name: None,
-            entries: vec![
-                assistant(1, "finished"),
-                SessionEntry::TurnEnded {
-                    turn: 1,
-                    reason: TurnEndReason::Completed,
-                },
-                assistant(2, "partial"),
-            ],
-            messages: vec![],
-            unfinished_turn: Some(2),
-            unfinished_user_shell: None,
-            last_end: None,
-            last_model: None,
-            reasoning: ion_ai::Reasoning::ProviderDefault,
-            last_effective_model: None,
-            last_context: None,
-            compacted_through: None,
-            last_execution: None,
-            last_usage: None,
-        };
-        assert_eq!(last_committed_answer(&view).unwrap(), "finished");
-    }
-    #[test]
-    fn display_replaces_terminal_controls() {
-        let mut rows = Vec::new();
-        push_wrapped(&mut rows, "safe\u{1b}[31m", 30);
-        assert_eq!(rows, vec!["safe�[31m"]);
-    }
-    #[test]
-    fn refused_shell_input_retains_literal_syntax_and_cursor() {
-        for (literal, excluded) in [("  !echo ok  ", false), ("  !!echo 🦀  ", true)] {
-            let mut ui = Frontend {
-                draft: literal.into(),
-                cursor: 1,
-                ..Frontend::default()
-            };
-            let stop = CancellationToken::new();
-            busy_key(
-                &mut ui,
-                KeyEvent::new(KeyCode::Enter, Modifiers::NONE),
-                &stop,
-                None,
-                None,
-                AgentLimits::default(),
-            );
-            assert_eq!(ui.draft, literal);
-            assert_eq!(ui.cursor, 1);
-            assert!(ui.pending.is_empty() && !stop.is_cancelled());
-            assert!(
-                matches!(ui.key(KeyEvent::new(KeyCode::Enter, Modifiers::NONE), None), Action::Shell { exclude_from_context, source, .. } if exclude_from_context == excluded && source.literal == literal && source.cursor == 1)
-            );
-        }
-        for literal in ["   !   ", "   !!  "] {
-            let mut ui = Frontend {
-                draft: literal.into(),
-                cursor: 1,
-                ..Frontend::default()
-            };
-            assert!(matches!(
-                ui.key(KeyEvent::new(KeyCode::Enter, Modifiers::NONE), None),
-                Action::None
-            ));
-            assert_eq!((ui.draft.as_str(), ui.cursor), (literal, 1));
-        }
-    }
-
-    #[test]
-    fn alt_enter_queues_a_followup_without_discarding_the_editor() {
-        let mut ui = Frontend::default();
-        ui.insert("follow up");
-        assert!(matches!(
-            ui.key(KeyEvent::new(KeyCode::Enter, Modifiers::ALT), None),
-            Action::Queue(prompt) if prompt == "follow up"
-        ));
-        assert!(ui.draft.is_empty());
-    }
-
-    #[test]
-    fn output_settings_during_work_do_not_republish_or_admit_input() {
-        let mut ui = Frontend {
-            history_published_items: 7,
-            pending_history_target: 7,
-            ..Frontend::default()
-        };
-        let stop = CancellationToken::new();
-        ui.draft = "/settings expanded".into();
-        ui.cursor = ui.draft.len();
-        busy_key(
-            &mut ui,
-            KeyEvent::new(KeyCode::Enter, Modifiers::NONE),
-            &stop,
-            None,
-            None,
-            AgentLimits::default(),
-        );
-        assert_eq!(ui.output_detail, crate::tool_output::OutputDetail::Expanded);
-        assert!(!stop.is_cancelled() && ui.pending.is_empty());
-        assert!(ui.draft.is_empty());
-        assert_eq!(
-            (ui.history_published_items, ui.pending_history_target),
-            (7, 7)
-        );
-        assert!(ui.pending_history_items.is_empty() && ui.pending_history_banner.is_none());
-        assert!(ui.status.contains("native history unchanged"));
-        assert!(ui.output_settings("unknown").is_err());
-        assert_eq!(ui.output_detail, crate::tool_output::OutputDetail::Expanded);
-        ui.output_settings("").unwrap();
-        assert!(
-            ui.notices
-                .last()
-                .unwrap()
-                .contains("Inline progress stays compact")
-        );
-        ui.output_settings("compact").unwrap();
-        assert_eq!(ui.output_detail, crate::tool_output::OutputDetail::Compact);
-        ui.draft = "/settings thinking show".into();
-        ui.cursor = ui.draft.len();
-        busy_key(
-            &mut ui,
-            KeyEvent::new(KeyCode::Enter, Modifiers::NONE),
-            &stop,
-            None,
-            None,
-            AgentLimits::default(),
-        );
-        assert_eq!(
-            ui.thinking_visibility,
-            crate::transcript_render::ThinkingVisibility::Visible
-        );
-        assert_eq!(ui.output_detail, crate::tool_output::OutputDetail::Compact);
-        assert!(
-            !stop.is_cancelled() && ui.pending.is_empty() && ui.pending_history_items.is_empty()
-        );
-        assert_eq!(
-            (ui.history_published_items, ui.pending_history_target),
-            (7, 7)
-        );
-        assert!(ui.output_settings("thinking sometimes").is_err());
-        assert_eq!(
-            ui.thinking_visibility,
-            crate::transcript_render::ThinkingVisibility::Visible
-        );
-        ui.output_settings("thinking hide").unwrap();
-        assert_eq!(
-            ui.thinking_visibility,
-            crate::transcript_render::ThinkingVisibility::Hidden
-        );
-    }
-
-    #[test]
-    fn operation_status_survives_notices_and_tracks_cancellation() {
-        let stop = CancellationToken::new();
-        let operations = [
-            (
-                ActiveOperation::Coding(&stop),
-                "Working",
-                "Cancelling turn…",
-            ),
-            (
-                ActiveOperation::Shell(&stop),
-                "Running shell",
-                "Cancelling shell…",
-            ),
-            (
-                ActiveOperation::Compaction(&stop),
-                "Summarizing context",
-                "Cancelling compaction…",
-            ),
-        ];
-        let mut ui = Frontend::default();
-        assert_eq!(visible_status(&ui, None), None);
-        for notice in [
-            "Details closed",
-            "Steering sent for the next model step",
-            "1 follow-up(s) queued",
-        ] {
-            ui.status = notice.into();
-            for (operation, label, _) in operations {
-                let status = visible_status(&ui, Some(operation)).unwrap();
-                assert!(status.starts_with(label), "{status}");
-                assert!(status.contains(notice), "{status}");
-                assert!(status.contains("Ctrl-C cancels"), "{status}");
-            }
-        }
-        stop.cancel();
-        ui.status = "Details closed".into();
-        for (operation, _, label) in operations {
-            let status = visible_status(&ui, Some(operation)).unwrap();
-            assert!(status.starts_with(label), "{status}");
-            assert!(status.contains("Details closed"), "{status}");
-            assert!(!status.contains("Ctrl-C cancels"), "{status}");
-        }
-        assert_eq!(visible_status(&ui, None).unwrap(), "Details closed");
-    }
-
-    #[test]
-    fn history_refresh_preserves_browsed_draft_and_cursor() {
-        let mut ui = Frontend {
-            prompt_history: vec!["older".into()],
-            draft: "unsent 🦀 draft".into(),
-            cursor: "unsent ".len(),
-            ..Frontend::default()
-        };
-        ui.history_previous();
-        assert_eq!(ui.draft, "older");
-        // Completion/model refresh updates history, not ownership of the editor.
-        ui.replace_prompt_history(vec!["older".into(), "newly committed".into()], true);
-        ui.history_next();
-        assert_eq!(ui.draft, "unsent 🦀 draft");
-        assert_eq!(ui.cursor, "unsent ".len());
-        ui.history_previous();
-        ui.replace_prompt_history(vec!["different session".into()], false);
-        assert_eq!(ui.draft, "unsent 🦀 draft");
-        assert_eq!(ui.cursor, "unsent ".len());
-    }
-
-    #[test]
-    fn recovered_input_and_explicit_clear_end_history_browsing() {
-        let mut ui = Frontend {
-            prompt_history: vec!["older".into()],
-            draft: "unsent".into(),
-            cursor: 6,
-            ..Frontend::default()
-        };
-        ui.history_previous();
-        ui.pending.push_back(TurnInput::prepared(
-            "recovered".into(),
-            EditorDraft::at_end("recovered".into()),
-            vec![],
-        ));
-        return_pending_to_editor(&mut ui);
-        ui.history_next();
-        assert_eq!(ui.draft, "recovered\n\nunsent");
-        ui.history_previous();
-        ui.key(KeyEvent::new(KeyCode::Char('c'), Modifiers::CONTROL), None);
-        ui.history_next();
-        assert!(ui.draft.is_empty());
-        ui.insert("another unsent");
-        ui.history_previous();
-        ui.replace_draft("editor replacement".into());
-        ui.history_next();
-        assert_eq!(ui.draft, "editor replacement");
-    }
-
-    #[test]
-    fn clipboard_paths_are_quoted_for_shell_and_reject_controls() {
-        let paths = vec![PathBuf::from("/tmp/a b.png"), PathBuf::from("/tmp/code.rs")];
-        assert_eq!(
-            clipboard_paths(&paths, false).unwrap(),
-            "/tmp/a b.png\n/tmp/code.rs"
-        );
-        assert_eq!(
-            clipboard_paths(&paths, true).unwrap(),
-            "'/tmp/a b.png' /tmp/code.rs"
-        );
-        assert!(clipboard_paths(&[PathBuf::from("/tmp/bad\nname")], false).is_err());
-        let mut ui = Frontend::default();
-        assert!(matches!(
-            ui.key(KeyEvent::new(KeyCode::Char('v'), Modifiers::CONTROL), None),
-            Action::PasteClipboard
-        ));
-    }
-
-    #[tokio::test]
-    async fn image_preparation_retains_edits_and_discards_cancelled_success() {
-        let mut ui = Frontend::default();
-        let (release, held) = tokio::sync::oneshot::channel();
-        ui.image_job = Some(ImageJob {
-            stop: CancellationToken::new(),
-            task: tokio::spawn(async {
-                held.await.unwrap();
-                Ok(vec![
-                    ion_ai::normalize_rgba(1, 1, vec![255, 0, 0, 255]).unwrap(),
-                ])
-            }),
-        });
-        ui.insert("retained draft");
-        assert!(matches!(
-            ui.key(KeyEvent::new(KeyCode::Enter, Modifiers::NONE), None),
-            Action::None
-        ));
-        assert_eq!(ui.draft, "retained draft");
-        assert!(matches!(
-            ui.key(KeyEvent::new(KeyCode::Char('!'), Modifiers::NONE), None),
-            Action::None
-        ));
-        assert_eq!(ui.draft, "retained draft!");
-        assert!(matches!(
-            ui.key(KeyEvent::new(KeyCode::Char('c'), Modifiers::CONTROL), None),
-            Action::None
-        ));
-        assert!(ui.image_job.as_ref().unwrap().stop.is_cancelled());
-        release.send(()).unwrap();
-        let joined = (&mut ui.image_job.as_mut().unwrap().task).await;
-        finish_image_preparation(&mut ui, joined);
-        assert!(ui.images.is_empty());
-        assert_eq!(ui.draft, "retained draft!");
-        assert!(ui.image_job.is_none());
-    }
-
-    #[tokio::test]
-    async fn image_exit_joins_owned_work_and_attachment_capacity_is_atomic() {
-        let stop = CancellationToken::new();
-        let task_stop = stop.clone();
-        let (cancelled, observed) = tokio::sync::oneshot::channel();
-        let (release, held) = tokio::sync::oneshot::channel();
-        let mut ui = Frontend {
-            image_job: Some(ImageJob {
-                stop,
-                task: tokio::spawn(async move {
-                    task_stop.cancelled().await;
-                    cancelled.send(()).unwrap();
-                    held.await.unwrap();
-                    Ok(Vec::new())
-                }),
-            }),
-            ..Frontend::default()
-        };
-        let cleanup = cancel_image_preparation(&mut ui);
-        tokio::pin!(cleanup);
-        tokio::select! { result = &mut cleanup => panic!("abandoned image work: {result:?}"), _ = observed => {} }
-        release.send(()).unwrap();
-        cleanup.await.unwrap();
-        let image = ion_ai::normalize_rgba(1, 1, vec![255, 0, 0, 255]).unwrap();
-        let bytes = image.content.data().len();
-        let mut ui = Frontend::default();
-        ui.input_limits.max_request_bytes = bytes;
-        ui.attach_images(vec![image.clone()]).unwrap();
-        assert!(ui.attach_images(vec![image]).is_err());
-        assert_eq!(ui.images.len(), 1);
-    }
-
-    #[tokio::test]
-    async fn clipboard_exit_joins_cancelled_work_without_applying_input() {
-        let stop = CancellationToken::new();
-        let reader_stop = stop.clone();
-        let (settled, mut observed) = tokio::sync::oneshot::channel();
-        let mut ui = Frontend {
-            draft: "retained draft".into(),
-            clipboard_job: Some(ClipboardJob {
-                stop,
-                task: tokio::spawn(async move {
-                    reader_stop.cancelled().await;
-                    settled.send(()).unwrap();
-                    Ok(PreparedPaste::Text("unadmitted paste".into()))
-                }),
-            }),
-            ..Frontend::default()
-        };
-        cancel_clipboard_paste(&mut ui).await.unwrap();
-        assert!(observed.try_recv().is_ok());
-        assert!(ui.clipboard_job.is_none());
-        assert_eq!(ui.draft, "retained draft");
-    }
-
-    #[tokio::test]
-    async fn completed_file_paste_clears_reader_status() {
-        let mut ui = Frontend {
-            status: "Reading clipboard…".into(),
-            clipboard_job: Some(ClipboardJob {
-                stop: CancellationToken::new(),
-                task: tokio::spawn(async {
-                    Ok(PreparedPaste::Files(vec![PathBuf::from(
-                        "/tmp/path with spaces.txt",
-                    )]))
-                }),
-            }),
-            ..Frontend::default()
-        };
-        finish_clipboard_paste(&mut ui).await.unwrap();
-        assert_eq!(ui.draft, "/tmp/path with spaces.txt");
-        assert!(ui.status.is_empty());
-    }
-
-    #[test]
-    fn clipboard_image_during_turn_stays_with_typed_steering() {
-        let selected = Selection {
-            provider: "local".into(),
-            model: "vision".into(),
-            endpoint: "http://127.0.0.1:1".into(),
-            wire: ion_host::HttpWire::ChatCompletions,
-            api_key_env: None,
-            max_output_tokens: 1024,
-            context_window_tokens: None,
-            requires_key: false,
-            image_input: true,
-            capabilities: ion_host::catalog::ModelCapabilities::conservative(),
-        };
-        let mut ui = Frontend::default();
-        let prepared = prepare_clipboard(&selected, {
-            let image = ion_ai::normalize_rgba(2, 1, vec![255, 0, 0, 255, 0, 0, 255, 255]).unwrap();
-            crate::clipboard_reader::PasteContent::Image {
-                content: image.content,
-                note: image.note,
-            }
-        })
-        .unwrap();
-        apply_clipboard(&mut ui, prepared).unwrap();
-        ui.insert("describe the picture");
-        let steering = SteeringInbox::new(
-            AgentLimits {
-                image_input: true,
-                ..AgentLimits::default()
-            },
-            ui.input_budget.clone(),
-        );
-        busy_key(
-            &mut ui,
-            KeyEvent::new(KeyCode::Enter, Modifiers::NONE),
-            &CancellationToken::new(),
-            Some(&steering),
-            None,
-            AgentLimits {
-                image_input: true,
-                ..AgentLimits::default()
-            },
-        );
-        let queued = steering.take_uncommitted();
-        assert_eq!(queued.len(), 1);
-        assert_eq!(queued[0].message().content.len(), 2);
-        assert_eq!(
-            queued[0].message().content[0],
-            Content::Text("describe the picture".into())
-        );
-        assert!(matches!(queued[0].message().content[1], Content::Image(_)));
-        assert!(ui.pending.is_empty());
-        assert!(ui.images.is_empty());
-    }
-
-    #[tokio::test]
-    async fn busy_submit_waits_for_pending_clipboard_read() {
-        let mut ui = Frontend::default();
-        ui.insert("describe this");
-        ui.status = "Reading clipboard…".into();
-        ui.clipboard_job = Some(ClipboardJob {
-            stop: CancellationToken::new(),
-            task: tokio::spawn(async { Ok(PreparedPaste::Text(" image".into())) }),
-        });
-        let steering = SteeringInbox::new(
-            AgentLimits {
-                image_input: true,
-                ..AgentLimits::default()
-            },
-            ui.input_budget.clone(),
-        );
-        busy_key(
-            &mut ui,
-            KeyEvent::new(KeyCode::Enter, Modifiers::NONE),
-            &CancellationToken::new(),
-            Some(&steering),
-            None,
-            AgentLimits {
-                image_input: true,
-                ..AgentLimits::default()
-            },
-        );
-        assert_eq!(ui.draft, "describe this");
-        assert!(steering.take_uncommitted().is_empty());
-        assert!(ui.pending.is_empty());
-        finish_pending_clipboard_paste(&mut ui).await;
-        assert_eq!(ui.draft, "describe this image");
-        assert!(ui.status.is_empty());
-    }
-
-    #[tokio::test]
-    async fn pending_clipboard_keeps_literal_input_before_admission() {
-        for (literal, modifiers) in [
-            ("prompt", Modifiers::NONE),
-            ("  /skill:audit ARG\n", Modifiers::NONE),
-            ("  /check ARG\n", Modifiers::ALT),
-        ] {
-            let mut ui = Frontend {
-                draft: literal.into(),
-                cursor: 2,
-                clipboard_job: Some(ClipboardJob {
-                    stop: CancellationToken::new(),
-                    task: tokio::spawn(std::future::pending()),
-                }),
-                ..Frontend::default()
-            };
-            assert!(matches!(
-                ui.key(KeyEvent::new(KeyCode::Enter, modifiers), None),
-                Action::None
-            ));
-            assert_eq!(ui.draft, literal);
-            assert_eq!(ui.cursor, 2);
-            assert!(ui.pending.is_empty());
-            ui.clipboard_job.take().unwrap().task.abort();
-        }
-    }
-
-    #[test]
-    fn resource_inputs_keep_frozen_preparation_and_literal_recovery() {
-        let root = std::env::temp_dir().join(format!(
-            "ion-terminal-resource-{}-{}",
-            std::process::id(),
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_nanos()
-        ));
-        let skill = root.join(".agents/skills/ion-terminal-audit-test");
-        fs::create_dir_all(root.join(".git")).unwrap();
-        fs::create_dir_all(&skill).unwrap();
-        fs::write(
-            skill.join("SKILL.md"),
-            "---\nname: ion-terminal-audit-test\ndescription: Audit a change.\n---\nAUDIT_MARKER\n",
-        )
-        .unwrap();
-        let resources = Resources::load(&root, &root.join("config")).unwrap();
-        let literal = "  /skill:ion-terminal-audit-test src/lib.rs 🦀\n";
-        let cursor = "  /skill:".len();
-        let limits = AgentLimits {
-            image_input: true,
-            ..AgentLimits::default()
-        };
-        for steer in [false, true] {
-            fs::write(skill.join("SKILL.md"), "---\nname: ion-terminal-audit-test\ndescription: Audit a change.\n---\nAUDIT_MARKER\n").unwrap();
-            let mut ui = Frontend::default();
-            let mut image = ion_ai::normalize_rgba(1, 1, vec![255, 0, 0, 255]).unwrap();
-            image.note = Some("Coordinate note".into());
-            ui.images.push(image);
-            ui.insert(literal);
-            ui.cursor = cursor;
-            let steering = SteeringInbox::new(limits, ui.input_budget.clone());
-            busy_key(
-                &mut ui,
-                KeyEvent::new(
-                    KeyCode::Enter,
-                    if steer {
-                        Modifiers::NONE
-                    } else {
-                        Modifiers::ALT
-                    },
-                ),
-                &CancellationToken::new(),
-                steer.then_some(&steering),
-                Some(&resources),
-                limits,
-            );
-            assert!(ui.draft.is_empty());
-            assert!(ui.images.is_empty());
-            if steer {
-                for input in steering.take_uncommitted() {
-                    ui.pending.push_back(TurnInput::from_accepted(input));
-                }
-            }
-            let queued = ui.pending.front().unwrap();
-            assert!(queued.prompt.contains("AUDIT_MARKER"));
-            assert!(queued.prompt.contains("User request: src/lib.rs 🦀"));
-            fs::write(skill.join("SKILL.md"), "---\nname: ion-terminal-audit-test\ndescription: Audit a change.\n---\nRELOADED_MARKER\n").unwrap();
-            let reloaded = Resources::load(&root, &root.join("config")).unwrap();
-            assert!(
-                reloaded
-                    .expand_command(literal.trim(), cap())
-                    .unwrap()
-                    .unwrap()
-                    .contains("RELOADED_MARKER")
-            );
-            assert!(
-                !ui.pending
-                    .front()
-                    .unwrap()
-                    .prompt
-                    .contains("RELOADED_MARKER")
-            );
-            if steer {
-                return_pending_to_editor(&mut ui);
-            } else {
-                ui.dequeue();
-            }
-            assert_eq!(ui.draft, literal);
-            assert_eq!(ui.cursor, cursor);
-            assert_eq!(ui.images.len(), 1);
-            assert_eq!(ui.images[0].note.as_deref(), Some("Coordinate note"));
-        }
-        fs::remove_dir_all(root).unwrap();
-    }
-
-    #[test]
-    fn over_budget_resource_refusal_preserves_literal_custody_without_enqueue() {
-        let root = std::env::temp_dir().join(format!(
-            "ion-terminal-budget-{}-{}",
-            std::process::id(),
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_nanos()
-        ));
-        let prompts = root.join(".ion/prompts");
-        fs::create_dir_all(root.join(".git")).unwrap();
-        fs::create_dir_all(&prompts).unwrap();
-        // Raw arguments fit, but repeated substitution exceeds the host cap.
-        fs::write(prompts.join("amplify.md"), "$1 ".repeat(20)).unwrap();
-        let resources = Resources::load(&root, &root.join("config")).unwrap();
-        // Attachments would also fail encoded admission; the status below
-        // distinguishes the earlier host refusal and checks cap propagation.
-        let limits = AgentLimits {
-            max_request_bytes: 64,
-            image_input: true,
-            ..AgentLimits::default()
-        };
-        let literal = "  /amplify café 🦀 name 👩‍💻\n";
-        for steer in [false, true] {
-            let mut ui = Frontend::default();
-            let mut image = ion_ai::normalize_rgba(1, 1, vec![255, 0, 0, 255]).unwrap();
-            image.note = Some("Coordinate note".into());
-            ui.images.push(image);
-            ui.insert(literal);
-            let cursor = "  /amplify café".len();
-            ui.cursor = cursor;
-            let steering = SteeringInbox::new(limits, ui.input_budget.clone());
-            busy_key(
-                &mut ui,
-                KeyEvent::new(
-                    KeyCode::Enter,
-                    if steer {
-                        Modifiers::NONE
-                    } else {
-                        Modifiers::ALT
-                    },
-                ),
-                &CancellationToken::new(),
-                steer.then_some(&steering),
-                Some(&resources),
-                limits,
-            );
-            // Refusal keeps literal text, cursor and attachments and enqueues
-            // nothing: no steering acceptance, no queued follow-up.
-            assert_eq!(ui.draft, literal);
-            assert_eq!(ui.cursor, cursor);
-            assert_eq!(ui.images.len(), 1);
-            assert_eq!(ui.images[0].note.as_deref(), Some("Coordinate note"));
-            assert!(ui.pending.is_empty());
-            assert!(steering.take_uncommitted().is_empty());
-            assert!(
-                ui.status
-                    .contains("expanded prompt exceeds the 64 byte limit"),
-                "{}",
-                ui.status
-            );
-        }
-        fs::remove_dir_all(root).unwrap();
-    }
-
-    #[test]
-    fn queue_rejection_preserves_editor_and_restored_steering_keeps_its_budget() {
-        let limits = AgentLimits {
-            image_input: true,
-            ..AgentLimits::default()
-        };
-        let message = Message::user_input("first".into(), []);
-        let budget = InputBudget::new(
-            serde_json::to_vec(&(&message, EditorDraft::at_end("first".into())))
-                .unwrap()
-                .len(),
-        );
-        let mut ui = Frontend {
-            input_budget: budget.clone(),
-            ..Frontend::default()
-        };
-        ui.queue_follow_up(EditorDraft::at_end("first".into()), limits, None);
-        let image = ion_ai::normalize_rgba(1, 1, vec![255, 0, 0, 255]).unwrap();
-        ui.images.push(image.clone());
-        ui.insert("  second\n");
-        busy_key(
-            &mut ui,
-            KeyEvent::new(KeyCode::Enter, Modifiers::ALT),
-            &CancellationToken::new(),
-            None,
-            None,
-            limits,
-        );
-        assert_eq!(ui.draft, "  second\n");
-        assert_eq!(ui.images.len(), 1);
-        assert_eq!(ui.images[0].content, image.content);
-        assert_eq!(ui.pending.len(), 1);
-        assert!(ui.status.contains("not queued"));
-        let steering = SteeringInbox::new(limits, budget);
-        assert!(matches!(
-            steering.push_message(
-                Message::user_input("x".into(), []),
-                EditorDraft::at_end("x".into())
-            ),
-            Err(ion_core::CodingAgentError::InputQueueFull { .. })
-        ));
-        ui.dequeue();
-        assert_eq!(ui.draft, "  second\n\n\nfirst");
-        steering
-            .push_message(
-                Message::user_input("x".into(), []),
-                EditorDraft::at_end("x".into()),
-            )
-            .unwrap();
-        let accepted = steering.take_uncommitted().pop().unwrap();
-        ui.pending.push_back(TurnInput::from_accepted(accepted));
-        assert!(matches!(
-            steering.push_message(
-                Message::user_input("x".into(), []),
-                EditorDraft::at_end("x".into())
-            ),
-            Err(ion_core::CodingAgentError::InputQueueFull { .. })
-        ));
-        ui.dequeue();
-        assert_eq!(ui.draft, "  second\n\n\nfirst\n\nx");
-        assert_eq!(ui.images.len(), 1);
-        steering
-            .push_message(
-                Message::user_input("x".into(), []),
-                EditorDraft::at_end("x".into()),
-            )
-            .unwrap();
-    }
-
-    #[test]
-    fn recovered_steering_preserves_prompt_and_each_image_note() {
-        let mut first = ion_ai::normalize_rgba(1, 1, vec![255, 0, 0, 255]).unwrap();
-        first.note = Some("First image coordinates".into());
-        let mut second = ion_ai::normalize_rgba(1, 1, vec![0, 255, 0, 255]).unwrap();
-        second.note = Some("Second image coordinates".into());
-        let message = Message::user_input("  inspect both\n".into(), [first, second]);
-        let accepted = InputBudget::default()
-            .admit(
-                message.clone(),
-                EditorDraft::at_end("  inspect both\n".into()),
-                AgentLimits {
-                    image_input: true,
-                    ..AgentLimits::default()
-                },
-            )
-            .unwrap();
-        let recovered = TurnInput::from_accepted(accepted);
-        assert_eq!(
-            Message::user_input(recovered.prompt, recovered.images),
-            message
-        );
-        let mut ui = Frontend::default();
-        ui.restore_input(message.clone()).unwrap();
-        assert_eq!(Message::user_input(ui.draft, ui.images), message);
-    }
-
-    #[test]
-    fn fork_restore_refuses_lossy_shapes_without_discarding_editor() {
-        let mut multipart = Message::user_input("first".into(), []);
-        multipart.content.push(Content::Text("second".into()));
-        for input in [
-            multipart,
-            Message::user_input("x".repeat(MAX_DRAFT + 1), []),
-        ] {
-            let mut ui = Frontend {
-                draft: "keep unsent".into(),
-                cursor: 4,
-                images: vec![ion_ai::normalize_rgba(1, 1, vec![0, 255, 0, 255]).unwrap()],
-                ..Frontend::default()
-            };
-            assert!(ui.restore_input(input).is_err());
-            assert_eq!(ui.draft, "keep unsent");
-            assert_eq!(ui.cursor, 4);
-            assert_eq!(ui.images.len(), 1);
-        }
-    }
-
-    #[test]
-    fn command_completion_edits_without_dispatch_or_argument_loss() {
-        let mut ui = Frontend {
-            history_published_items: 7,
-            ..Frontend::default()
-        };
-        for ch in "/hel".chars() {
-            assert!(matches!(
-                ui.key(KeyEvent::new(KeyCode::Char(ch), Modifiers::NONE), None),
-                Action::None
-            ));
-        }
-        assert!(ui.completion.active());
-        assert!(matches!(
-            ui.key(KeyEvent::new(KeyCode::Tab, Modifiers::NONE), None),
-            Action::None
-        ));
-        assert_eq!(ui.draft, "/help ");
-        assert!(ui.pending.is_empty());
-        assert_eq!(ui.history_published_items, 7);
-        assert!(
-            matches!(ui.key(KeyEvent::new(KeyCode::Enter, Modifiers::NONE), None), Action::Command(command) if command == "/help")
-        );
-
-        ui.insert("  /help focus 🦀");
-        ui.cursor = "  /hel".len();
-        ui.key(KeyEvent::new(KeyCode::Tab, Modifiers::NONE), None);
-        assert_eq!(ui.draft, "  /help focus 🦀");
-        assert_eq!(ui.cursor, "  /help ".len());
-        ui.draft.clear();
-        ui.cursor = 0;
-        ui.insert("/re");
-        // Pasted ambiguous names open discovery before accepting a proposal.
-        ui.key(KeyEvent::new(KeyCode::Tab, Modifiers::NONE), None);
-        assert_eq!(ui.draft, "/re");
-        assert!(ui.completion.active());
-        ui.key(KeyEvent::new(KeyCode::Esc, Modifiers::NONE), None);
-        assert!(!ui.completion.active());
-        assert_eq!(ui.draft, "/re");
-        ui.draft.clear();
-        ui.cursor = 0;
-        ui.insert("literal");
-        ui.key(KeyEvent::new(KeyCode::Tab, Modifiers::NONE), None);
-        assert_eq!(ui.draft, "literal\t");
-        ui.draft.clear();
-        ui.cursor = 0;
-        ui.insert("/fork");
-        ui.key(KeyEvent::new(KeyCode::Tab, Modifiers::NONE), None);
-        assert!(ui.completion.active());
-        ui.completion.rows(80, 5);
-        ui.key(KeyEvent::new(KeyCode::Down, Modifiers::NONE), None);
-        ui.completion.rows(80, 5);
-        assert!(matches!(
-            ui.key(KeyEvent::new(KeyCode::Enter, Modifiers::NONE), None),
-            Action::None
-        ));
-        assert_eq!(ui.draft, "/fork-after ");
-        ui.draft.clear();
-        ui.cursor = 0;
-        ui.insert("/re");
-        ui.completion.refresh(&ui.draft, ui.cursor, None, false);
-        assert!(ui.completion.rows(80, 1).is_empty());
-        // A menu that cannot fit is not an invisible keyboard target.
-        assert!(
-            matches!(ui.key(KeyEvent::new(KeyCode::Enter, Modifiers::NONE), None), Action::Command(command) if command == "/re")
-        );
-    }
-
-    #[test]
-    fn resource_discovery_and_busy_completion_preserve_admission_authority() {
-        let root = std::env::temp_dir().join(format!("ion-menu-{}", uuid::Uuid::now_v7()));
-        fs::create_dir_all(root.join(".ion/prompts")).unwrap();
-        fs::create_dir(root.join(".git")).unwrap();
-        fs::create_dir_all(root.join(".agents/skills/zzmenu-audit")).unwrap();
-        fs::write(root.join(".agents/skills/zzmenu-audit/SKILL.md"), "---\nname: zzmenu-audit\ndescription: Explicit audit\ndisable-model-invocation: true\n---\nAudit instructions\n").unwrap();
-        let template = root.join(".ion/prompts/zzmenu-check.md");
-        fs::write(&template, "ESC\x1b[31m 🦀\nFirst $1\n").unwrap();
-        fs::write(
-            root.join(".ion/prompts/new.md"),
-            "Must not shadow terminal control\n",
-        )
-        .unwrap();
-        let resources = Resources::load(&root, &root.join("config")).unwrap();
-        let stop = CancellationToken::new();
-        let mut ui = Frontend {
-            history_published_items: 7,
-            ..Frontend::default()
-        };
-        let steering = SteeringInbox::new(AgentLimits::default(), ui.input_budget.clone());
-        ui.insert("/zzmenu-ch");
-        ui.completion
-            .refresh(&ui.draft, ui.cursor, Some(&resources), false);
-        for width in [1, 8, 24, 80] {
-            let rows = ui.completion.rows(width, 5);
-            assert!(rows.len() <= 5);
-            assert!(
-                rows.iter()
-                    .all(|row| !row.contains('\x1b') && row.width() <= width)
-            );
-        }
-        busy_key(
-            &mut ui,
-            KeyEvent::new(KeyCode::Tab, Modifiers::NONE),
-            &stop,
-            Some(&steering),
-            Some(&resources),
-            AgentLimits::default(),
-        );
-        assert_eq!(ui.draft, "/zzmenu-check ");
-        assert!(steering.take_uncommitted().is_empty());
-        ui.insert("concurrency");
-        busy_key(
-            &mut ui,
-            KeyEvent::new(KeyCode::Enter, Modifiers::NONE),
-            &stop,
-            Some(&steering),
-            Some(&resources),
-            AgentLimits::default(),
-        );
-        fs::write(&template, "Changed $1\n").unwrap();
-        let reloaded = Resources::load(&root, &root.join("config")).unwrap();
-        let queued = steering.take_uncommitted();
-        assert_eq!(queued.len(), 1);
-        assert!(
-            matches!(&queued[0].message().content[0], Content::Text(text) if text.contains("First concurrency") && !text.contains("Changed"))
-        );
-        drop(queued);
-        assert_eq!(ui.history_published_items, 7);
-        assert!(!stop.is_cancelled());
-        ui.insert("/zzmenu-au");
-        ui.key(
-            KeyEvent::new(KeyCode::Tab, Modifiers::NONE),
-            Some(&reloaded),
-        );
-        assert_eq!(ui.draft, "/skill:zzmenu-audit ");
-        ui.draft.clear();
-        ui.cursor = 0;
-        ui.insert("/ne");
-        ui.completion
-            .refresh(&ui.draft, ui.cursor, Some(&reloaded), false);
-        assert!(
-            ui.completion
-                .rows(100, 5)
-                .iter()
-                .all(|row| !row.contains("[prompt]"))
-        );
-        ui.draft.clear();
-        ui.cursor = 0;
-        ui.insert("/new");
-        busy_key(
-            &mut ui,
-            KeyEvent::new(KeyCode::Enter, Modifiers::NONE),
-            &stop,
-            Some(&steering),
-            Some(&reloaded),
-            AgentLimits::default(),
-        );
-        assert_eq!(ui.draft, "/new");
-        assert!(steering.take_uncommitted().is_empty());
-        busy_key(
-            &mut ui,
-            KeyEvent::new(KeyCode::Enter, Modifiers::ALT),
-            &stop,
-            Some(&steering),
-            Some(&reloaded),
-            AgentLimits::default(),
-        );
-        assert_eq!(ui.draft, "/new");
-        assert!(ui.pending.is_empty());
-        fs::remove_dir_all(root).unwrap();
-    }
-
-    #[test]
-    fn prompt_history_restores_unsent_draft_and_moves_between_lines() {
-        let mut ui = Frontend {
-            prompt_history: vec!["first".into(), "second\nline".into()],
-            ..Frontend::default()
-        };
-        ui.insert("unsent");
-        ui.key(KeyEvent::new(KeyCode::Up, Modifiers::NONE), None);
-        assert_eq!(ui.draft, "second\nline");
-        ui.key(KeyEvent::new(KeyCode::Up, Modifiers::NONE), None);
-        assert_eq!(ui.cursor, "line".len());
-        ui.key(KeyEvent::new(KeyCode::Up, Modifiers::NONE), None);
-        assert_eq!(ui.draft, "first");
-        ui.key(KeyEvent::new(KeyCode::Down, Modifiers::NONE), None);
-        assert_eq!(ui.draft, "second\nline");
-        ui.key(KeyEvent::new(KeyCode::Down, Modifiers::NONE), None);
-        assert_eq!(ui.draft, "unsent");
-    }
-
-    #[tokio::test]
-    async fn session_refresh_invalidates_discovery_without_transferring_editor_or_queue() {
-        let root =
-            std::env::temp_dir().join(format!("ion-picker-session-{}", uuid::Uuid::now_v7()));
-        fs::create_dir_all(root.join("next")).unwrap();
-        fs::write(root.join("old.rs"), "old").unwrap();
-        let session =
-            CodingSession::create(root.join("session.sqlite"), root.join("next")).unwrap();
-        let mut image = ion_ai::normalize_rgba(1, 1, vec![0, 255, 0, 255]).unwrap();
-        image.note = Some("literal image note".into());
-        let mut ui = Frontend {
-            cwd: root.clone(),
-            images: vec![image.clone()],
-            ..Frontend::default()
-        };
-        ui.insert("  Read ");
-        ui.key(KeyEvent::new(KeyCode::Char('@'), Modifiers::NONE), None);
-        ui.pending.push_back(TurnInput::prepared(
-            "queued".into(),
-            EditorDraft::at_end("  /literal queue  ".into()),
-            vec![image],
-        ));
-        ui.refresh_session(&session).unwrap();
-        assert!(ui.pickers.active().is_none());
-        assert!(ui.pickers.complete().await.is_none());
-        assert!(ui.pickers.active().is_none());
-        assert_eq!(ui.draft, "  Read @");
-        assert_eq!(ui.cursor, ui.draft.len());
-        assert_eq!(ui.images[0].note.as_deref(), Some("literal image note"));
-        assert_eq!(
-            ui.pending.front().unwrap().source.literal,
-            "  /literal queue  "
-        );
-        assert_eq!(
-            ui.pending.front().unwrap().images[0].note.as_deref(),
-            Some("literal image note")
-        );
-        assert_eq!(ui.cwd, root.join("next").canonicalize().unwrap());
-        drop(session);
-        fs::remove_dir_all(root).unwrap();
-    }
-
-    #[test]
-    fn picker_selection_stays_visible_beside_wrapped_query_and_status() {
-        let mut ui = Frontend {
-            status: "Ready".into(),
-            ..Frontend::default()
-        };
-        for selected in [0, 1, 19] {
-            ui.pickers.open(Picker {
-                title: "Choose file",
-                query: "matching-long-project-file".into(),
-                selected,
-                items: (0..20)
-                    .map(|index| PickerItem {
-                        label: format!("{index:02}-matching-long-project-file.rs"),
-                        value: PickerValue::File {
-                            path: format!("file-{index}"),
-                            start: 0,
-                            end: 1,
-                        },
-                    })
-                    .collect(),
-            });
-            for width in [8, 12, 80] {
-                for height in 2..12 {
-                    let (rows, cursor) = modal_rows(&mut ui, None, None, width, height);
-                    assert_eq!(rows.len(), height as usize);
-                    assert!(rows.iter().all(|row| row.width() <= width as usize));
-                    assert!(
-                        rows.iter()
-                            .any(|row| row.to_string().starts_with(&format!("› {selected:02}-"))),
-                        "selected item hidden at {width}x{height}"
-                    );
-                    let (row, column) = cursor.expect("query cursor stays visible");
-                    assert!(row < height as usize && column < width);
-                }
-            }
-        }
-    }
-
-    #[tokio::test]
-    async fn file_picker_inserts_a_selected_project_path() {
-        let root = std::env::temp_dir().join(format!("ion-files-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&root);
-        std::fs::create_dir_all(root.join("src")).unwrap();
-        std::fs::write(root.join("src/main.rs"), "fn main() {}").unwrap();
-        std::fs::write(root.join("src/skip.rs"), "ignored").unwrap();
-        std::fs::write(root.join(".gitignore"), "src/skip.rs\n").unwrap();
-        let mut ui = Frontend {
-            cwd: root.clone(),
-            ..Frontend::default()
-        };
-        ui.insert("Read ");
-        ui.key(KeyEvent::new(KeyCode::Char('@'), Modifiers::NONE), None);
-        ui.key(KeyEvent::new(KeyCode::Char('m'), Modifiers::NONE), None);
-        assert!(ui.pickers.complete().await.is_none());
-        let picker = ui.pickers.active().unwrap();
-        assert_eq!(picker.query, "m");
-        assert_eq!(picker.items.len(), 1);
-        assert_eq!(picker.items[0].label, "src/main.rs");
-        let chosen = ui.key(KeyEvent::new(KeyCode::Enter, Modifiers::NONE), None);
-        let Action::Pick(PickerValue::File { path, start, end }) = chosen else {
-            panic!("file picker did not choose a path")
-        };
-        ui.insert_file(path, start, end);
-        assert_eq!(ui.draft, "Read @src/main.rs");
-        std::fs::remove_dir_all(root).unwrap();
-    }
-}
+mod presentation_tests;
+#[cfg(test)]
+mod tests;

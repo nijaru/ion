@@ -1,4 +1,4 @@
-//! A single-prompt SDK host using Ion's shared binding and owned operation.
+//! A single-prompt SDK client using Ion's shared session-control owner.
 
 use std::{
     io::Write,
@@ -9,8 +9,10 @@ use std::{
 use anyhow::{Context, Result, ensure};
 use clap::Parser;
 use ion_core::CodingSession;
-use ion_host::{Host, SessionBinding};
-use tokio_util::sync::CancellationToken;
+use ion_host::{
+    ControlUpdate, Delivery, Host, OperationOutcome, ReturnReason, SessionControl, SessionSetup,
+    UserInput,
+};
 
 #[derive(Parser)]
 #[command(about = "Submit one prompt through Ion's embedded SDK; Ctrl-C stops and joins")]
@@ -67,33 +69,61 @@ async fn submit(args: Args, cwd: &Path, session: Arc<CodingSession>) -> Result<(
     )?;
     // This example connects no MCP servers and restores the saved reasoning
     // preference instead of overriding it. There is no client-owned agent loop.
-    let binding = SessionBinding::new(host, session.clone(), selected, None, None)?;
-    let mut operation = binding.agent().submit(
-        session,
-        args.prompt,
-        binding.instructions().to_owned(),
-        CancellationToken::new(),
-        |_| {}, // Observers must not block, including on stdout publication.
-    );
-    let answer = tokio::select! {
-        result = &mut operation => result.map_err(anyhow::Error::from),
-        signal = tokio::signal::ctrl_c() => {
-            operation.request_stop();
-            // Even a signal-registration error cannot discard started work.
-            let result = operation.await.map_err(anyhow::Error::from);
-            match (signal, result) {
-                (Ok(()), result) => result,
-                (Err(signal), Ok(_)) => Err(signal).context("listen for Ctrl-C"),
-                (Err(signal), Err(error)) => {
-                    Err(error.context(format!("Ctrl-C listener also failed: {signal}")))
-                }
+    let setup = SessionSetup::new(host, session, selected, None, None)?;
+    let mut control = setup.into_control::<()>();
+    let outcome = async {
+        let answer = prompt(&mut control, args.prompt).await?;
+        // Publish only the committed answer. Failure is not retry authority.
+        let mut output = std::io::stdout().lock();
+        writeln!(output, "{answer}").context("publish committed answer")?;
+        output.flush().context("flush committed answer")
+    }
+    .await;
+    let report = control.shutdown().await;
+    let mut outcome = outcome;
+    for error in report.cleanup_errors {
+        outcome = match outcome {
+            Ok(()) => Err(error.into()),
+            Err(primary) => Err(primary.context(format!("control shutdown also failed: {error}"))),
+        };
+    }
+    outcome
+}
+
+async fn prompt(control: &mut SessionControl, text: String) -> Result<String> {
+    // Registration is fallible before admission, not a detached listener task.
+    let mut signal = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::interrupt())?;
+    control
+        .submit(
+            Delivery::Start,
+            UserInput::Prompt {
+                text,
+                images: Vec::new(),
+            },
+            (),
+        )
+        .map_err(|rejected| rejected.reason)?;
+    let mut listening = true;
+    let mut rejection = None;
+    loop {
+        tokio::select! {
+            _ = signal.recv(), if listening => {
+                listening = false;
+                control.request_stop();
+            }
+            update = control.next() => match update {
+                ControlUpdate::Settled(settlement) => return match settlement.outcome {
+                    OperationOutcome::Turn(result) => result.map_err(Into::into),
+                    _ => unreachable!("this example only submits coding input"),
+                },
+                ControlUpdate::Returned(input) => rejection = Some(match input.reason {
+                    ReturnReason::Preparation(error) => error,
+                    ReturnReason::Stopped => ion_core::CodingAgentError::Cancelled.into(),
+                    reason => anyhow::anyhow!("input not accepted: {reason:?}"),
+                }),
+                ControlUpdate::Idle => return Err(rejection.unwrap_or_else(|| anyhow::anyhow!("operation ended without settlement"))),
+                _ => {} // Passive progress never performs blocking publication.
             }
         }
-    }?;
-
-    // Only the committed answer is published. Failure is not retry authority;
-    // the outer caller still shuts down before returning a publication error.
-    let mut output = std::io::stdout().lock();
-    writeln!(output, "{answer}").context("publish committed answer")?;
-    output.flush().context("flush committed answer")
+    }
 }
