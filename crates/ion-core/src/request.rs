@@ -1,4 +1,4 @@
-//! Coherent coding request preparation, durable admission and request-bound execution.
+//! Request preparation, durable admission and request-bound execution.
 use std::sync::Arc;
 
 use ion_ai::{
@@ -12,44 +12,83 @@ use crate::{
     agent::{AgentError, AgentEvent, AgentLimits},
     generation::{GeneratedResponse, generate_with_retry},
     json_size::encoded_len,
-    session::{ModelContextSnapshot, Session},
+    session::{AuthorityScope, ModelContextSnapshot, RecoveryBinding, Session, SessionError},
     tool_set::{ToolCatalog, ToolSet},
 };
 
-pub(crate) struct PreparedRequest<'s> {
-    session: &'s Session,
+pub(crate) struct PreparedRequest {
     turn: u64,
     request: ModelRequest,
     catalog: ToolCatalog,
 }
 
-pub(crate) struct RequestStep<'s> {
+pub(crate) struct RequestStep {
     pub generated: GeneratedResponse,
-    pub prepared: PreparedRequest<'s>,
+    pub prepared: PreparedRequest,
     pub started: tokio::time::Instant,
 }
 
-impl<'s> PreparedRequest<'s> {
+pub(crate) struct RequestSettings<'a> {
+    pub model: &'a ModelRef,
+    pub instructions: &'a str,
+    pub limits: AgentLimits,
+    pub authority: Option<&'a AuthorityScope>,
+}
+impl RequestSettings<'_> {
+    pub fn binding(
+        &self,
+        session: &Session,
+        catalog: &ToolCatalog,
+    ) -> Result<Option<RecoveryBinding>, SessionError> {
+        use sha2::{Digest, Sha256};
+        self.authority
+            .map(|authority| {
+                let bytes = serde_json::to_vec(&(
+                    session.cwd(),
+                    self.model,
+                    session.reasoning()?,
+                    self.instructions,
+                    self.limits,
+                    catalog.authority_manifest(),
+                ))?;
+                Ok(RecoveryBinding {
+                    session: session.id(),
+                    authority: authority.clone(),
+                    fingerprint: Sha256::digest(bytes).into(),
+                })
+            })
+            .transpose()
+    }
+}
+
+impl PreparedRequest {
     pub fn new(
-        session: &'s Session,
+        session: &Session,
         turn: u64,
         tools: &ToolSet,
-        model: ModelRef,
         reason: ModelRouteReason,
-        instructions: &str,
-        limits: AgentLimits,
+        settings: RequestSettings<'_>,
+        catalog: Option<&ToolCatalog>,
     ) -> Result<Self, AgentError> {
+        let RequestSettings {
+            model,
+            instructions,
+            limits,
+            ..
+        } = settings;
         let previous = session.model_context()?;
-        let catalog = tools.snapshot_with_previous(
-            previous
-                .as_ref()
-                .map_or(&[], |context| context.tools.as_slice()),
+        let previous: &[ToolSpec] = previous
+            .as_ref()
+            .map_or(&[], |context| context.tools.as_slice());
+        let catalog = catalog.map_or_else(
+            || tools.snapshot_with_previous(previous),
+            |catalog| catalog.with_previous(previous),
         );
         let context = ModelContextSnapshot {
             instructions: instructions.into(),
             tools: catalog.declared_specs(),
         };
-        let route = ModelRoute::direct(model, reason);
+        let route = ModelRoute::direct(model.clone(), reason);
         let mut request = ModelRequest {
             messages: session.context_messages_for(&route.effective)?,
             context_timeline: session.context_timeline_for(&route.effective, &context)?,
@@ -76,7 +115,6 @@ impl<'s> PreparedRequest<'s> {
             .request_output_budget(&request, limits.max_output_tokens)?
             .ok_or(AgentError::ContextTooLarge)?;
         Ok(Self {
-            session,
             turn,
             request,
             catalog,
@@ -97,15 +135,16 @@ impl<'s> PreparedRequest<'s> {
 
     pub async fn issue<F>(
         mut self,
+        session: &Session,
         model: &Arc<dyn ModelService>,
         stop: &CancellationToken,
         observe: &mut F,
-    ) -> Result<RequestStep<'s>, AgentError>
+    ) -> Result<RequestStep, AgentError>
     where
         F: FnMut(AgentEvent) + Send,
     {
         model.validate_controls(&self.request.route.effective, &self.request.controls)?;
-        self.session.admit_request(
+        session.admit_request(
             self.turn,
             self.request.route.effective.clone(),
             ModelContextSnapshot {
@@ -113,7 +152,7 @@ impl<'s> PreparedRequest<'s> {
                     .request
                     .instructions
                     .clone()
-                    .expect("coding instructions"),
+                    .expect("agent instructions"),
                 tools: self.request.tools.clone(),
             },
         )?;

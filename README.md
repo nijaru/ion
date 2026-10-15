@@ -201,8 +201,8 @@ after-Turn point. RPC clients can use `list_turns` and `fork` with `turn` and
 optional `after: true`.
 Session IDs are immutable UUIDs stored in the header, independent of filenames
 and provider affinity. Renaming a closed database does not change its ID; clone
-and fork create new identities without inheriting external delivery receipts.
-This unreleased branch uses Session format 11; earlier development Session
+and fork create new identities without inheriting external delivery receipts or continuation grants.
+This unreleased branch uses Session format 12; earlier development Session
 files are not reopened. Tool activity classification used by the transcript is
 stored with each assistant tool-call batch, so resumed history is not
 reinterpreted through the currently installed tool catalog.
@@ -800,8 +800,8 @@ contracts are not all implemented:
 
 | Boundary | Implemented today | Not yet implemented |
 | --- | --- | --- |
-| Application setup | Caller-owned model/tool/instruction configuration through shared control; workspace-free Sessions; explicit shell/local-image authority. Coding is a preset. | Durable restoration/reconciliation of capability scope. The live application recipe must be supplied again on reopen. |
-| Durability | SQLite conversation/effect history, conservative interrupted-work recovery and restart-safe direct request admission through the Rust SDK. | Durable pending queues, wire-protocol delivery IDs, recovered capability scope and automatic continuation of an interrupted logical Turn. |
+| Application setup | Caller-owned model/tool/instruction configuration, workspace-free Sessions and explicit shell/local-image authority. Opt-in continuation checks a saved authority reference and declarations. | Changed-authority reconciliation. Applications must reconstruct and attest live bindings on reopen; the reference is not a credential or sandbox. |
+| Durability | SQLite conversation/effect history, conservative recovery, restart-safe direct admission and explicit same-Turn continuation through the Rust SDK. | Durable pending queues, wire-protocol delivery IDs and automatic restart/continuation. Coding CLI/TUI/RPC submissions do not opt in to continuation. |
 | Delegation | Independent Sessions, conversation forks and Code Mode nested tool calls. | Managed child-agent relationships and foreground/background supervision. Forks share the live workspace. |
 | Remote use | Foreground stdio RPC and passive, lossy progress observation. | An authenticated network service or complete attachable state API. A bridge must retain the owner independently; RPC EOF stops/joins work. |
 
@@ -887,8 +887,11 @@ cargo run --locked -p ion --example restricted -- "$(mktemp -d)"
 ```
 
 It checks actual requests, one custom-tool effect and delivery reconciliation
-after reopen, not a live provider or service deployment. Applications must authenticate callers and authorize control;
-selecting capabilities alone does not isolate untrusted tenants or host effects.
+after reopen. After building the example, `python3 scripts/smoke_recovery.py` also
+kills an owned instance after its effect and explicitly continues the original
+Turn with the missing observation still unknown. These are synthetic SDK checks,
+not live-provider or service qualification. Applications must authenticate callers
+and authorize control; selecting tools does not isolate tenants or host effects.
 
 Use `submit(Delivery, UserInput, metadata)` for input. `Prompt` expands resources
 once and normalizes attachments; an already-prepared `Message` stays literal.
@@ -915,6 +918,36 @@ history conservatively; it does not rerun the old request. Prepare templates and
 local files before constructing this literal message. Pending queues, client
 metadata and live services are not made durable. Ordinary CLI/TUI submits and RPC
 command IDs remain unkeyed; request deduplication is not exactly-once tool execution.
+
+For explicit interrupted-Turn continuation, configure the application's agent with
+`with_recovery_scope(AuthorityScope::new(versioned_reference)?)` **before admission**.
+The reference identifies the actual application/principal, environment, model
+route and grants. It is a trusted application assertion—not proof that equal
+names, schemas or hashes imply equal credentials or executors. Do not put secrets
+in it. On reopen, resolve and authorize that reference and supply the corresponding
+`Application` recipe; Ion does not reconstruct live credentials or executors.
+
+`session.recovery_state()` passively returns the saved authority and a
+`RecoveryPoint { session, turn, checkpoint }` for an opted-in unfinished Turn.
+It does not prove liveness or that old effects stopped. Explicitly choose whether
+to proceed despite uncertainty, then call `control.resume_turn(point, metadata)`.
+Core checks the exact checkpoint, scope, model preference and declaration binding
+before committing continuation and unknown settlements atomically. The same loop
+starts its next model step; it never reruns old calls or reconstructs a guest.
+Changed instructions, controls, callable definitions or scope are rejected. The
+opt-in mode pins executable routes for the whole Turn, while deferred discovery
+can expand model exposure. Prepare dynamic sources before admission; refreshes
+and changed authority require new work, not a silent rebind.
+
+`RecoveryAdmission` returns a local operation ID and its committed checkpoint.
+No new input or Turn is accepted; settlement returns this attempt's metadata in
+`Settlement.metadata`, separately from accepted steering. Reusing an old point is
+stale, not another dispatch. After another process loss, a fresh continuation
+requires an explicit decision against the new checkpoint. Committed-ended Turns
+cannot be resumed, and context copies inherit no continuation grant. Redelivering
+a request key still only reconciles—it never resumes work. Reconcile committed
+history on `TurnResumed`; it is not a fresh-input event. A later model-issued call
+can still duplicate an earlier uncertain effect: this is not exactly-once execution.
 
 Drive `next()` while handling client I/O. Reliable updates distinguish local
 `Dispatched` correlation, durably `Accepted` input with a Turn ID, `Returned`

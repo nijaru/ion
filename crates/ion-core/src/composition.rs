@@ -25,7 +25,7 @@ pub struct ToolOccurrence {
     pub ordinal: usize,
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, Serialize)]
 pub struct CodeLimits {
     pub heap_bytes: usize,
     pub stack_bytes: usize,

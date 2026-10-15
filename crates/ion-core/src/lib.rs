@@ -22,10 +22,11 @@ pub use agent::{
 };
 pub use input::{AcceptedInput, InputBudget, InputReservation};
 pub use session::{
-    ForkPoint, ModelContextSnapshot, RequestKey, RequestReceipt, Session as CodingSession,
-    SessionEntry, SessionError as CodingSessionError, SessionInputPreview, SessionMetadata,
-    SessionView, StoredToolActivity, SubmissionRequest, TurnEndReason, TurnSummary,
-    UnobservedUserShell, UserShellOutcome,
+    AuthorityScope, ForkPoint, ModelContextSnapshot, RecoveryBinding, RecoveryPoint, RecoveryState,
+    RequestKey, RequestReceipt, Session as CodingSession, SessionEntry,
+    SessionError as CodingSessionError, SessionInputPreview, SessionMetadata, SessionView,
+    StoredToolActivity, SubmissionRequest, TurnEndReason, TurnSummary, UnobservedUserShell,
+    UserShellOutcome,
 };
 pub use tool_set::{
     ToolActivity, ToolActivityKind, ToolCatalog, ToolDefinition, ToolExecutor, ToolExposure,

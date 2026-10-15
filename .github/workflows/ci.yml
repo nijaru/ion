@@ -30,6 +30,8 @@ jobs:
         run: cargo build --locked -p ion --bins --example embedded --example restricted
       - name: Restricted application smoke
         run: target/debug/examples/restricted "$(mktemp -d)"
+      - name: Explicit Turn recovery SDK smoke
+        run: python3 scripts/smoke_recovery.py
       - name: Embedded SDK custody smoke
         run: python3 scripts/smoke_embedded.py
       - name: Install native-scrollback test terminal

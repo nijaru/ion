@@ -163,6 +163,7 @@ impl TranscriptProjection {
                 | SessionEntry::EffectiveModelChanged { .. }
                 | SessionEntry::ProviderReplayRebased { .. }
                 | SessionEntry::ModelContextChanged { .. }
+                | SessionEntry::TurnResumed { .. }
                 | SessionEntry::CacheWarm { .. }
                 | SessionEntry::Compacted { .. }
                 | SessionEntry::UserShellSettled { .. } => {}
@@ -490,6 +491,10 @@ impl LiveTranscript {
                     }
                 }
             }
+            AgentEvent::TurnResumed { point } => {
+                self.turn = Some(point.turn);
+                self.note("Interrupted Turn continued; reconcile committed history".into());
+            }
             AgentEvent::ModelOutputObserved => {}
             AgentEvent::TextDelta(text) => self.push_text(text),
             AgentEvent::ThinkingDelta { block, text } => self.push_thinking(*block, text),
@@ -752,6 +757,7 @@ mod tests {
                     input: Message::user_input("inspect".into(), std::iter::empty()),
                     model,
                     request: None,
+                    recovery: None,
                 },
                 assistant(
                     1,

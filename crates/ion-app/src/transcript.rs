@@ -143,6 +143,7 @@ pub fn render(view: &SessionView) -> String {
             }
             SessionEntry::CacheWarm { .. }
             | SessionEntry::ModelContextChanged { .. }
+            | SessionEntry::TurnResumed { .. }
             | SessionEntry::ModelSelected { .. }
             | SessionEntry::ReasoningSelected { .. }
             | SessionEntry::EffectiveModelChanged { .. }
@@ -252,6 +253,7 @@ mod tests {
                         model: "test".into(),
                     },
                     request: None,
+                    recovery: None,
                 },
                 SessionEntry::TurnEnded {
                     turn: 1,

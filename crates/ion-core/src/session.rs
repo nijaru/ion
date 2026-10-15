@@ -27,15 +27,19 @@ use tokio_util::sync::CancellationToken;
 
 pub(crate) mod code_inspection;
 mod context;
+mod recovery;
+#[cfg(test)]
+mod recovery_tests;
 mod submission;
 #[cfg(test)]
 mod submission_tests;
 use code_inspection::ChildRecordIndex;
 use context::{ProjectedMessage, context_projection};
+pub use recovery::{AuthorityScope, RecoveryBinding, RecoveryPoint, RecoveryState};
 pub(crate) use submission::TurnAdmission;
 pub use submission::{RequestKey, RequestReceipt, SubmissionRequest};
 
-const FORMAT_VERSION: u32 = 11;
+const FORMAT_VERSION: u32 = 12;
 // An 8 MiB raw prompt or streamed response can grow up to sixfold when JSON
 // escapes control characters. Keep the storage bound above that encoded size.
 const MAX_ENTRY_BYTES: usize = 64 * 1024 * 1024;
@@ -116,6 +120,13 @@ pub enum SessionEntry {
         model: ModelRef,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         request: Option<RequestKey>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        recovery: Option<RecoveryBinding>,
+    },
+    /// Explicit continuation admitted against this exact prior checkpoint.
+    TurnResumed {
+        turn: u64,
+        checkpoint: u64,
     },
     Assistant {
         turn: u64,
@@ -301,6 +312,8 @@ struct State {
     active: Option<u64>,
     pending_shell: Option<PendingShell>,
     assistant_seen_in_turn: bool,
+    prefix_bound_in_turn: bool,
+    recovery: Option<RecoveryBinding>,
     pending: Vec<PendingTool>,
     last_id: u64,
     last_end: Option<(u64, TurnEndReason)>,
@@ -450,8 +463,20 @@ impl State {
                 }
                 self.compaction = Some((*through_entry, summary.clone()));
             }
+            SessionEntry::TurnResumed { turn, checkpoint } => {
+                if self.active != Some(*turn)
+                    || self.recovery.is_none()
+                    || *checkpoint != self.sequence
+                {
+                    return Err(SessionError::InvalidHistory);
+                }
+            }
             SessionEntry::TurnStarted {
-                turn, input, model, ..
+                turn,
+                input,
+                model,
+                recovery,
+                ..
             } => {
                 if self.active.is_some()
                     || self.pending_shell.is_some()
@@ -462,6 +487,8 @@ impl State {
                 }
                 self.active = Some(*turn);
                 self.assistant_seen_in_turn = false;
+                self.prefix_bound_in_turn = false;
+                self.recovery = recovery.clone();
                 self.last_id = *turn;
                 self.select_model(model);
                 messages.push(ProjectedMessage::new(self.sequence + 1, input.clone()));
@@ -548,6 +575,10 @@ impl State {
                     model_message(message),
                 ));
                 self.assistant_seen_in_turn = true;
+                self.prefix_bound_in_turn |= message
+                    .provider_replay
+                    .as_ref()
+                    .is_some_and(|replay| replay.prefix_bound);
                 self.last_execution = Some(execution.clone());
                 self.last_usage = Some(*usage);
                 if self.pending.is_empty() {
@@ -620,7 +651,9 @@ impl State {
                     return Err(SessionError::InvalidHistory);
                 }
                 self.active = None;
+                self.recovery = None;
                 self.assistant_seen_in_turn = false;
+                self.prefix_bound_in_turn = false;
                 self.last_end = Some((*turn, reason.clone()));
                 new_settled.push(self.sequence + 1);
             }
@@ -1282,12 +1315,13 @@ impl Session {
         )
     }
 
+    #[cfg(test)]
     pub(crate) fn begin_turn_message(
         &self,
         input: Message,
         model: ModelRef,
     ) -> Result<(u64, usize), SessionError> {
-        match self.admit_turn(input, model, None)? {
+        match self.admit_turn(input, model, None, None)? {
             TurnAdmission::New { turn, interrupted } => Ok((turn, interrupted)),
             TurnAdmission::Existing(_) => unreachable!("anonymous input cannot reconcile"),
         }
@@ -1298,6 +1332,7 @@ impl Session {
         input: Message,
         model: ModelRef,
         request: Option<RequestKey>,
+        recovery: Option<RecoveryBinding>,
     ) -> Result<TurnAdmission, SessionError> {
         if !valid_user_message(&input) {
             return Err(SessionError::InvalidUserInput);
@@ -1321,6 +1356,7 @@ impl Session {
             input,
             model,
             request,
+            recovery,
         });
         append(&mut store, &entries)?;
         Ok(TurnAdmission::New { turn, interrupted })
@@ -1896,6 +1932,7 @@ fn message_from_entry(entry: &SessionEntry) -> Option<Message> {
         | SessionEntry::EffectiveModelChanged { .. }
         | SessionEntry::ProviderReplayRebased { .. }
         | SessionEntry::ModelContextChanged { .. }
+        | SessionEntry::TurnResumed { .. }
         | SessionEntry::CacheWarm { .. }
         | SessionEntry::Compacted { .. }
         | SessionEntry::TurnEnded { .. } => None,
@@ -2160,6 +2197,12 @@ fn lock(path: &Path) -> Result<SessionLock, SessionError> {
 
 #[derive(Debug, Error)]
 pub enum SessionError {
+    #[error("authority scope must be nonblank, at most 1024 bytes, without control characters")]
+    InvalidAuthorityScope,
+    #[error("continuation authority or executable declarations changed or are unavailable")]
+    RecoveryAuthorityChanged,
+    #[error("recovery checkpoint is stale, belongs to another Session, or the Turn has ended")]
+    StaleRecoveryPoint,
     #[error("session does not exist")]
     NotFound,
     #[error("session has an active operation")]

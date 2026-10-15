@@ -111,12 +111,14 @@ impl<M> Custody<M> {
 fn turn_observer<M: Send + 'static>(
     custody: Arc<Mutex<Custody<M>>>,
     observations: broadcast::Sender<Observation>,
-    root: InputId,
+    root: Option<InputId>,
     operation: OperationId,
 ) -> impl FnMut(AgentEvent) + Send + 'static {
     move |event| {
         match &event {
-            AgentEvent::TurnAccepted { turn } => lock(&custody).accept(root, operation, *turn),
+            AgentEvent::TurnAccepted { turn } => {
+                lock(&custody).accept(root.expect("new Turn retains a root"), operation, *turn);
+            }
             AgentEvent::SteeringCommitted { turn, .. } => {
                 let mut custody = lock(&custody);
                 let id = custody

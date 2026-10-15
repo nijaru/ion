@@ -207,7 +207,7 @@ fn validate_steering<M>(
     Ok(())
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
 pub struct PromptCacheWarmingPolicy {
     pub lifetime_seconds: u64,
     /// Micro-US-dollars per million tokens.
@@ -295,7 +295,7 @@ impl PromptCacheWarmer {
     }
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, serde::Serialize)]
 pub struct AgentLimits {
     pub max_request_bytes: usize,
     pub max_output_tokens: u32,
@@ -316,13 +316,19 @@ impl Default for AgentLimits {
     }
 }
 
-/// One coding loop bound to a logical model and its immutable host contract.
+mod recovery;
+#[cfg(test)]
+mod recovery_tests;
+use recovery::TurnStart;
+
+/// One agent loop bound to a logical model and its immutable host contract.
 #[derive(Clone)]
 pub struct Agent {
     service: Arc<dyn ModelService>,
     model: ModelRef,
     tools: Arc<ToolSet>,
     limits: AgentLimits,
+    recovery_scope: Option<crate::AuthorityScope>,
 }
 
 impl Agent {
@@ -344,6 +350,7 @@ impl Agent {
             model,
             tools,
             limits: AgentLimits::default(),
+            recovery_scope: None,
         }
     }
 
@@ -717,10 +724,12 @@ impl Agent {
         let mut input = Some(input);
         let result = session.operations.start_prepared(stop.clone(), || {
             self.validate_submission(&session, input.as_ref().expect("unconsumed request"), &stop)?;
+            let (binding, catalog) = self.admission_binding(&session, &instructions)?;
             let admission = session.admit_turn(
                 input.take().expect("validated request"),
                 self.model.clone(),
                 Some(key.clone()),
+                binding,
             )?;
             let (turn, interrupted) = match admission {
                 TurnAdmission::Existing(receipt) => return Ok((receipt, None)),
@@ -741,7 +750,12 @@ impl Agent {
                     let result = agent
                         .run_admitted(
                             &session,
-                            (turn, interrupted),
+                            TurnStart {
+                                turn,
+                                interrupted,
+                                resumed: None,
+                                catalog,
+                            },
                             instructions,
                             stop,
                             steering.as_deref(),
@@ -815,9 +829,26 @@ impl Agent {
         F: FnMut(AgentEvent) + Send,
     {
         self.validate_submission(session, &input, &stop)?;
-        let admission = session.begin_turn_message(input, self.model.clone())?;
-        self.run_admitted(session, admission, instructions, stop, steering, observe)
-            .await
+        let (binding, catalog) = self.admission_binding(session, &instructions)?;
+        let TurnAdmission::New { turn, interrupted } =
+            session.admit_turn(input, self.model.clone(), None, binding)?
+        else {
+            unreachable!("anonymous input cannot reconcile");
+        };
+        self.run_admitted(
+            session,
+            TurnStart {
+                turn,
+                interrupted,
+                resumed: None,
+                catalog,
+            },
+            instructions,
+            stop,
+            steering,
+            observe,
+        )
+        .await
     }
 
     fn validate_submission(
@@ -826,11 +857,19 @@ impl Agent {
         input: &Message,
         stop: &CancellationToken,
     ) -> Result<(), AgentError> {
+        crate::input::validate_input(input, self.limits)?;
+        self.validate_context(session, stop)
+    }
+
+    fn validate_context(
+        &self,
+        session: &Session,
+        stop: &CancellationToken,
+    ) -> Result<(), AgentError> {
         if stop.is_cancelled() {
             return Err(AgentError::Cancelled);
         }
         self.validate_reasoning(session.reasoning()?)?;
-        crate::input::validate_input(input, self.limits)?;
         if !self.limits.image_input
             && session.context_messages()?.iter().any(|message| {
                 message
@@ -847,7 +886,7 @@ impl Agent {
     async fn run_admitted<F, M: Send>(
         &self,
         session: &Session,
-        (turn, interrupted): (u64, usize),
+        start: TurnStart,
         instructions: String,
         stop: CancellationToken,
         steering: Option<&SteeringInbox<M>>,
@@ -856,18 +895,22 @@ impl Agent {
     where
         F: FnMut(AgentEvent) + Send,
     {
-        observe(AgentEvent::TurnAccepted { turn });
-        if interrupted > 0 {
-            observe(AgentEvent::InterruptedCalls(interrupted));
+        if let Some(point) = start.resumed {
+            observe(AgentEvent::TurnResumed { point });
+        } else {
+            observe(AgentEvent::TurnAccepted { turn: start.turn });
         }
-        self.drive(session, turn, instructions, &stop, steering, observe)
+        if start.interrupted > 0 {
+            observe(AgentEvent::InterruptedCalls(start.interrupted));
+        }
+        self.drive(session, start, instructions, &stop, steering, observe)
             .await
     }
 
     async fn drive<F, M: Send>(
         &self,
         session: &Session,
-        turn: u64,
+        start: TurnStart,
         instructions: String,
         stop: &CancellationToken,
         steering: Option<&SteeringInbox<M>>,
@@ -878,13 +921,18 @@ impl Agent {
     {
         // Only this running operation knows which reserved calls never received
         // execution authority. Process-loss recovery remains conservatively Unknown.
+        let turn = start.turn;
+        let (mut assistant_seen_in_turn, mut prefix_bound_continuation) =
+            session.turn_replay_state(turn)?;
         let mut unstarted = BTreeSet::new();
         let outcome = async {
             let mut length_recovery_attempted = false;
-            let mut assistant_seen_in_turn = false;
-            let mut prefix_bound_continuation = false;
             let mut replay_rebased = false;
-            let mut route_reason = ModelRouteReason::UserRequest;
+            let mut route_reason = if start.resumed.is_some() {
+                ModelRouteReason::Recovery
+            } else {
+                ModelRouteReason::UserRequest
+            };
             loop {
                 // Keep a fast in-process model from starving terminal input and
                 // cancellation during a long tool sequence.
@@ -899,8 +947,12 @@ impl Agent {
                 }
                 let mut recovered_overflow = false;
                 let step = loop {
-                    for diagnostic in self.tools.refresh(stop.clone()).await {
-                        observe(AgentEvent::ToolCatalogWarning(diagnostic));
+                    // Opted-in continuation pins executable routes for the Turn.
+                    // Discovery can change exposure, not replace this authority.
+                    if start.catalog.is_none() {
+                        for diagnostic in self.tools.refresh(stop.clone()).await {
+                            observe(AgentEvent::ToolCatalogWarning(diagnostic));
+                        }
                     }
                     if stop.is_cancelled() {
                         return Err(AgentError::Cancelled);
@@ -909,10 +961,9 @@ impl Agent {
                         session,
                         turn,
                         &self.tools,
-                        self.model.clone(),
                         route_reason,
-                        &instructions,
-                        self.limits,
+                        self.request_settings(&instructions),
+                        start.catalog.as_ref(),
                     ) {
                         Ok(prepared) => prepared,
                         Err(AgentError::ContextTooLarge) if !prefix_bound_continuation => {
@@ -930,7 +981,7 @@ impl Agent {
                     let output_budget = prepared.output_budget();
                     let mut emitted_output = false;
                     let issued = prepared
-                        .issue(&self.service, stop, &mut |event| {
+                        .issue(session, &self.service, stop, &mut |event| {
                             if matches!(
                                 event,
                                 AgentEvent::TextDelta(_)
@@ -1289,6 +1340,10 @@ impl Agent {
 
 #[derive(Debug, Clone)]
 pub enum AgentEvent {
+    /// Continuation, not another input acceptance. History must be reconciled.
+    TurnResumed {
+        point: crate::RecoveryPoint,
+    },
     TurnAccepted {
         turn: u64,
     },
@@ -2353,166 +2408,179 @@ mod tests {
             }
         }
 
-        let root = std::env::temp_dir().join(format!("ion-deferred-tool-{}", uuid::Uuid::now_v7()));
-        std::fs::create_dir(&root).unwrap();
-        let path = root.join("session.sqlite");
-        let session = Arc::new(CodingSession::create(&path, Some(&root)).unwrap());
-        let scripts = Arc::new(ScriptedModelService::new([
-            response(vec![Content::ToolCall(ToolCall {
-                id: "search".into(),
-                name: "tool_search".into(),
-                arguments: serde_json::json!({"query":"specialized metadata"}),
-                raw_arguments: None,
-            })]),
-            response(vec![Content::ToolCall(ToolCall {
-                id: "use-special".into(),
-                name: "special_lookup".into(),
-                arguments: serde_json::json!({}),
-                raw_arguments: None,
-            })]),
-            response(vec![Content::Text("done".into())]),
-        ]));
-        let agent = Agent::new(scripts.clone(), Arc::new(DeferredTool), model());
-        assert_eq!(
-            agent
-                .submit(
-                    session.clone(),
-                    "find the metadata".into(),
-                    "test".into(),
-                    CancellationToken::new(),
-                    |_| {},
+        for scoped in [false, true] {
+            let root =
+                std::env::temp_dir().join(format!("ion-deferred-tool-{}", uuid::Uuid::now_v7()));
+            std::fs::create_dir(&root).unwrap();
+            let path = root.join("session.sqlite");
+            let session = Arc::new(CodingSession::create(&path, Some(&root)).unwrap());
+            let scripts = Arc::new(ScriptedModelService::new([
+                response(vec![Content::ToolCall(ToolCall {
+                    id: "search".into(),
+                    name: "tool_search".into(),
+                    arguments: serde_json::json!({"query":"specialized metadata"}),
+                    raw_arguments: None,
+                })]),
+                response(vec![Content::ToolCall(ToolCall {
+                    id: "use-special".into(),
+                    name: "special_lookup".into(),
+                    arguments: serde_json::json!({}),
+                    raw_arguments: None,
+                })]),
+                response(vec![Content::Text("done".into())]),
+            ]));
+            let agent = Agent::new(scripts.clone(), Arc::new(DeferredTool), model());
+            let agent = if scoped {
+                agent.with_recovery_scope(
+                    crate::AuthorityScope::new("deferred-app/grants-v1").unwrap(),
                 )
-                .await
-                .unwrap(),
-            "done"
-        );
+            } else {
+                agent
+            };
+            assert_eq!(
+                agent
+                    .submit(
+                        session.clone(),
+                        "find the metadata".into(),
+                        "test".into(),
+                        CancellationToken::new(),
+                        |_| {},
+                    )
+                    .await
+                    .unwrap(),
+                "done"
+            );
 
-        let requests = scripts.requests();
-        assert_eq!(
-            requests[0]
-                .tools
-                .iter()
-                .map(|tool| tool.name.as_str())
-                .collect::<Vec<_>>(),
-            ["tool_search"]
-        );
-        assert_eq!(
-            requests[1]
-                .tools
-                .iter()
-                .map(|tool| tool.name.as_str())
-                .collect::<Vec<_>>(),
-            ["special_lookup"]
-        );
-        let timeline = requests[1].context_timeline.as_ref().unwrap();
-        assert_eq!(
-            timeline
-                .initial
-                .tools
-                .iter()
-                .map(|tool| tool.name.as_str())
-                .collect::<Vec<_>>(),
-            ["tool_search"]
-        );
-        assert_eq!(timeline.changes.len(), 1);
-        assert_eq!(timeline.changes[0].after_message, 3);
-        assert_eq!(
-            timeline.changes[0]
-                .context
-                .tools
-                .iter()
-                .map(|tool| tool.name.as_str())
-                .collect::<Vec<_>>(),
-            ["special_lookup"]
-        );
-        assert_eq!(
-            requests[2]
-                .tools
-                .iter()
-                .map(|tool| tool.name.as_str())
-                .collect::<Vec<_>>(),
-            ["special_lookup"]
-        );
-        assert!(session.view().unwrap().entries.iter().any(|entry| matches!(
-            entry,
-            crate::session::SessionEntry::ModelContextChanged { context, .. }
-                if context.tools.iter().any(|tool| tool.name == "special_lookup")
-        )));
-        drop(session);
+            let requests = scripts.requests();
+            assert_eq!(
+                requests[0]
+                    .tools
+                    .iter()
+                    .map(|tool| tool.name.as_str())
+                    .collect::<Vec<_>>(),
+                ["tool_search"]
+            );
+            assert_eq!(
+                requests[1]
+                    .tools
+                    .iter()
+                    .map(|tool| tool.name.as_str())
+                    .collect::<Vec<_>>(),
+                ["special_lookup"]
+            );
+            let timeline = requests[1].context_timeline.as_ref().unwrap();
+            assert_eq!(
+                timeline
+                    .initial
+                    .tools
+                    .iter()
+                    .map(|tool| tool.name.as_str())
+                    .collect::<Vec<_>>(),
+                ["tool_search"]
+            );
+            assert_eq!(timeline.changes.len(), 1);
+            assert_eq!(timeline.changes[0].after_message, 3);
+            assert_eq!(
+                timeline.changes[0]
+                    .context
+                    .tools
+                    .iter()
+                    .map(|tool| tool.name.as_str())
+                    .collect::<Vec<_>>(),
+                ["special_lookup"]
+            );
+            assert_eq!(
+                requests[2]
+                    .tools
+                    .iter()
+                    .map(|tool| tool.name.as_str())
+                    .collect::<Vec<_>>(),
+                ["special_lookup"]
+            );
+            assert!(session.view().unwrap().entries.iter().any(|entry| matches!(
+                entry,
+                crate::session::SessionEntry::ModelContextChanged { context, .. }
+                    if context.tools.iter().any(|tool| tool.name == "special_lookup")
+            )));
+            drop(session);
 
-        let reopened = Arc::new(CodingSession::open(&path).unwrap());
-        assert_eq!(
-            reopened
-                .model_context()
-                .unwrap()
-                .unwrap()
-                .tools
-                .iter()
-                .map(|tool| tool.name.as_str())
-                .collect::<Vec<_>>(),
-            ["special_lookup"]
-        );
-        let fork_path = root.join("fork.sqlite");
-        let fork = Arc::new(
-            reopened
-                .fork_to(&fork_path, ForkPoint::AfterTurn(1))
-                .unwrap(),
-        );
+            let reopened = Arc::new(CodingSession::open(&path).unwrap());
+            assert_eq!(
+                reopened
+                    .model_context()
+                    .unwrap()
+                    .unwrap()
+                    .tools
+                    .iter()
+                    .map(|tool| tool.name.as_str())
+                    .collect::<Vec<_>>(),
+                ["special_lookup"]
+            );
+            let fork_path = root.join("fork.sqlite");
+            let fork = Arc::new(
+                reopened
+                    .fork_to(&fork_path, ForkPoint::AfterTurn(1))
+                    .unwrap(),
+            );
 
-        let resumed_scripts = Arc::new(ScriptedModelService::new([response(vec![Content::Text(
-            "resumed".into(),
-        )])]));
-        let resumed_agent = Agent::new(resumed_scripts.clone(), Arc::new(DeferredTool), model());
-        assert_eq!(
-            resumed_agent
-                .submit(
-                    reopened.clone(),
-                    "continue after reopen".into(),
-                    "test".into(),
-                    CancellationToken::new(),
-                    |_| {},
-                )
-                .await
-                .unwrap(),
-            "resumed"
-        );
-        assert_eq!(
-            resumed_scripts.requests()[0]
-                .tools
-                .iter()
-                .map(|tool| tool.name.as_str())
-                .collect::<Vec<_>>(),
-            ["special_lookup"]
-        );
+            let resumed_scripts =
+                Arc::new(ScriptedModelService::new([response(vec![Content::Text(
+                    "resumed".into(),
+                )])]));
+            let resumed_agent =
+                Agent::new(resumed_scripts.clone(), Arc::new(DeferredTool), model());
+            assert_eq!(
+                resumed_agent
+                    .submit(
+                        reopened.clone(),
+                        "continue after reopen".into(),
+                        "test".into(),
+                        CancellationToken::new(),
+                        |_| {},
+                    )
+                    .await
+                    .unwrap(),
+                "resumed"
+            );
+            assert_eq!(
+                resumed_scripts.requests()[0]
+                    .tools
+                    .iter()
+                    .map(|tool| tool.name.as_str())
+                    .collect::<Vec<_>>(),
+                ["special_lookup"]
+            );
 
-        let fork_scripts = Arc::new(ScriptedModelService::new([response(vec![Content::Text(
-            "forked".into(),
-        )])]));
-        let fork_agent = Agent::new(fork_scripts.clone(), Arc::new(DeferredTool), model());
-        assert_eq!(
-            fork_agent
-                .submit(
-                    fork.clone(),
-                    "continue from fork".into(),
-                    "test".into(),
-                    CancellationToken::new(),
-                    |_| {},
-                )
-                .await
-                .unwrap(),
-            "forked"
-        );
-        assert_eq!(
-            fork_scripts.requests()[0]
-                .tools
-                .iter()
-                .map(|tool| tool.name.as_str())
-                .collect::<Vec<_>>(),
-            ["special_lookup"]
-        );
-        drop(fork);
-        drop(reopened);
-        std::fs::remove_dir_all(root).unwrap();
+            let fork_scripts =
+                Arc::new(ScriptedModelService::new([response(vec![Content::Text(
+                    "forked".into(),
+                )])]));
+            let fork_agent = Agent::new(fork_scripts.clone(), Arc::new(DeferredTool), model());
+            assert_eq!(
+                fork_agent
+                    .submit(
+                        fork.clone(),
+                        "continue from fork".into(),
+                        "test".into(),
+                        CancellationToken::new(),
+                        |_| {},
+                    )
+                    .await
+                    .unwrap(),
+                "forked"
+            );
+            assert_eq!(
+                fork_scripts.requests()[0]
+                    .tools
+                    .iter()
+                    .map(|tool| tool.name.as_str())
+                    .collect::<Vec<_>>(),
+                ["special_lookup"]
+            );
+            drop(fork);
+            drop(reopened);
+            std::fs::remove_dir_all(root).unwrap();
+        }
     }
 
     #[tokio::test]

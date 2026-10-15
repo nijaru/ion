@@ -1,6 +1,7 @@
 //! Credential-free non-coding consumer of the same shared lifecycle as the CLI.
 //! Run with a fresh state directory: `cargo run -p ion --example restricted -- STATE`.
 use std::{
+    io::Write,
     path::{Path, PathBuf},
     sync::{
         Arc,
@@ -14,8 +15,8 @@ use ion_ai::{
     Role, Script, ScriptedModelService, ToolCall, ToolSpec, Usage,
 };
 use ion_core::{
-    CodingAgent, CodingSession, CodingToolOutput, CodingToolSource, RequestKey, ToolDefinition,
-    ToolExecutor, ToolRegistration, TurnEndReason,
+    AuthorityScope, CodingAgent, CodingSession, CodingToolOutput, CodingToolSource, RequestKey,
+    SessionEntry, ToolDefinition, ToolExecutor, ToolOutcome, ToolRegistration, TurnEndReason,
 };
 use ion_host::{
     Application, ApplicationRuntime, ControlUpdate, OperationOutcome, RequestAdmission, Resources,
@@ -28,7 +29,10 @@ const INSTRUCTIONS: &str =
     "Count the characters using count_chars. No workspace or native tools are available.";
 
 #[derive(Default)]
-struct CharacterCounter(AtomicUsize);
+struct CharacterCounter {
+    effects: AtomicUsize,
+    pause_after_effect: bool,
+}
 impl CodingToolSource for CharacterCounter {
     fn registrations(self: Arc<Self>) -> Vec<ToolRegistration> {
         vec![ToolRegistration::new(
@@ -45,12 +49,18 @@ impl ToolExecutor for CharacterCounter {
     fn execute<'a>(
         &'a self,
         call: &'a ToolCall,
-        _stop: CancellationToken,
+        stop: CancellationToken,
     ) -> BoxFuture<'a, CodingToolOutput> {
         Box::pin(async move {
             match call.arguments.get("text").and_then(|value| value.as_str()) {
                 Some(text) => {
-                    self.0.fetch_add(1, Ordering::SeqCst);
+                    self.effects.fetch_add(1, Ordering::SeqCst);
+                    if self.pause_after_effect {
+                        // Owned crash fixture: Core has the intent, not this result.
+                        writeln!(std::io::stdout(), "COUNTER_EFFECT")
+                            .expect("qualification marker");
+                        stop.cancelled().await;
+                    }
                     CodingToolOutput {
                         value: json!(text.chars().count()),
                         images: Vec::new(),
@@ -85,11 +95,12 @@ impl Application for CounterApplication {
             model.is_none_or(|model| model == &identity),
             "unknown model"
         );
-        Ok(ApplicationRuntime::new(Arc::new(CodingAgent::new(
-            self.service.clone(),
-            self.counter.clone(),
-            identity,
-        ))))
+        Ok(ApplicationRuntime::new(Arc::new(
+            CodingAgent::new(self.service.clone(), self.counter.clone(), identity)
+                .with_recovery_scope(AuthorityScope::new(
+                    "counter-app/principal/environment/routes-v1",
+                )?),
+        )))
     }
 }
 fn response(content: Vec<Content>) -> Script {
@@ -112,22 +123,38 @@ async fn main() -> Result<()> {
             .nth(1)
             .context("usage: restricted STATE_DIRECTORY")?,
     );
-    let service = Arc::new(ScriptedModelService::new([
-        response(vec![Content::ToolCall(ToolCall {
-            id: "count".into(),
-            name: "count_chars".into(),
-            arguments: json!({"text":"🦀e"}),
-            raw_arguments: None,
-        })]),
-        response(vec![Content::Text("2 characters".into())]),
-    ]));
-    let counter = Arc::new(CharacterCounter::default());
+    let mode = std::env::args_os().nth(2);
+    let resume = mode.as_deref() == Some(std::ffi::OsStr::new("--resume"));
+    let pause = mode.as_deref() == Some(std::ffi::OsStr::new("--pause-after-effect"));
+    ensure!(mode.is_none() || resume || pause, "unknown example mode");
+    let scripts = if resume {
+        vec![response(vec![Content::Text("2 characters".into())])]
+    } else {
+        vec![
+            response(vec![Content::ToolCall(ToolCall {
+                id: "count".into(),
+                name: "count_chars".into(),
+                arguments: json!({"text":"🦀e"}),
+                raw_arguments: None,
+            })]),
+            response(vec![Content::Text("2 characters".into())]),
+        ]
+    };
+    let service = Arc::new(ScriptedModelService::new(scripts));
+    let counter = Arc::new(CharacterCounter {
+        pause_after_effect: pause,
+        ..CharacterCounter::default()
+    });
     let application = Arc::new(CounterApplication {
         service: service.clone(),
         counter: counter.clone(),
     });
     let catalog = SessionCatalog::new(root.clone(), None);
-    let session = Arc::new(CodingSession::create(catalog.new_path()?, None)?);
+    let session = Arc::new(if resume {
+        CodingSession::open(catalog.latest()?)?
+    } else {
+        CodingSession::create(catalog.new_path()?, None)?
+    });
     let path = session.path().to_owned();
     let session_id = session.id();
     let key = RequestKey::new("counter-app".into(), "delivery-1".into())?;
@@ -135,6 +162,11 @@ async fn main() -> Result<()> {
     let mut control =
         SessionSetup::new(session, catalog, application.clone(), None, None)?.into_control::<()>();
     let result: Result<()> = async {
+        if resume {
+            let state = control.session().recovery_state()?.context("no recoverable Turn")?;
+            let admission = control.resume_turn(state.point, ()).map_err(|(_, error)| error)?;
+            ensure!(admission.point.turn == 1, "continued a different Turn");
+        } else {
         let admission = control
             .submit_request(&key, literal.clone(), ())
             .map_err(|input| input.reason)?;
@@ -151,6 +183,7 @@ async fn main() -> Result<()> {
             ),
             "redelivery started another operation"
         );
+        }
         loop {
             match control.next().await {
                 ControlUpdate::Settled(settlement) => {
@@ -171,11 +204,17 @@ async fn main() -> Result<()> {
             }
         }
         ensure!(
-            counter.0.load(Ordering::SeqCst) == 1,
-            "custom tool must execute once"
+            counter.effects.load(Ordering::SeqCst) == usize::from(!resume),
+            "new work must execute once; continuation must not replay the old tool"
         );
         let requests = service.requests();
-        ensure!(requests.len() == 2, "expected a tool exchange");
+        ensure!(requests.len() == if resume { 1 } else { 2 }, "unexpected model dispatch");
+        if resume {
+            let view = control.session().view()?;
+            ensure!(view.entries.iter().filter(|entry| matches!(entry, SessionEntry::TurnStarted { .. })).count() == 1, "continuation created another Turn");
+            ensure!(view.entries.iter().any(|entry| matches!(entry, SessionEntry::ToolResult { result, .. } if matches!(result.outcome, ToolOutcome::Unknown))), "lost observation was not preserved as unknown");
+            ensure!(view.entries.iter().any(|entry| matches!(entry, SessionEntry::TurnResumed { .. })), "continuation admission missing");
+        }
         for request in requests {
             ensure!(
                 request.instructions.as_deref() == Some(INSTRUCTIONS),
@@ -217,15 +256,22 @@ async fn main() -> Result<()> {
         "reopen did not reconcile the completed delivery"
     );
     ensure!(
-        counter.0.load(Ordering::SeqCst) == 1 && service.requests().len() == 2,
+        counter.effects.load(Ordering::SeqCst) == usize::from(!resume)
+            && service.requests().len() == if resume { 1 } else { 2 },
         "redelivery executed model/tool work"
     );
     ensure!(
         control.shutdown().await.cleanup_errors.is_empty(),
         "reopened shutdown failed"
     );
-    println!(
-        "restricted application: one custom tool effect; durable delivery reconciled after reopen; no coding defaults or workspace"
-    );
+    if resume {
+        println!(
+            "restricted application: explicit continuation completed the original Turn without old tool dispatch"
+        );
+    } else {
+        println!(
+            "restricted application: one custom tool effect; durable delivery reconciled after reopen; no coding defaults or workspace"
+        );
+    }
     Ok(())
 }

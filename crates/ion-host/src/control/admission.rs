@@ -139,7 +139,7 @@ impl<M: Serialize + Send + 'static> SessionControl<M> {
             turn_observer(
                 self.custody.clone(),
                 self.observations.clone(),
-                id,
+                Some(id),
                 operation,
             ),
         );
@@ -185,6 +185,63 @@ impl<M: Serialize + Send + 'static> SessionControl<M> {
         }
     }
 
+    /// Continue existing committed work, not another user input. The application
+    /// must reconstruct and attest the saved authority before calling this method.
+    pub fn resume_turn(
+        &mut self,
+        point: ion_core::RecoveryPoint,
+        metadata: M,
+    ) -> Result<RecoveryAdmission, (M, anyhow::Error)> {
+        let prepared = (|| {
+            self.ensure_replaceable()?;
+            ensure!(
+                lock(&self.custody).occupied < MAX_ADMISSIONS,
+                "session result/admission capacity is full"
+            );
+            Ok(self.budget.reserve(
+                &Message::user_input("continue interrupted Turn".into(), []),
+                &metadata,
+                self.setup.runtime.agent.limits(),
+            )?)
+        })();
+        let reservation = match prepared {
+            Ok(value) => value,
+            Err(error) => return Err((metadata, error)),
+        };
+        let operation = OperationId(identity());
+        let inbox = Arc::new(SteeringInbox::new(
+            self.setup.runtime.agent.limits(),
+            self.budget.clone(),
+        ));
+        let result = self.setup.runtime.agent.resume_turn(
+            self.setup.session.clone(),
+            point,
+            self.setup.resources.instructions().to_owned(),
+            CancellationToken::new(),
+            Some(inbox.clone()),
+            turn_observer(
+                self.custody.clone(),
+                self.observations.clone(),
+                None,
+                operation,
+            ),
+        );
+        let (point, work) = match result {
+            Ok(value) => value,
+            Err(error) => return Err((metadata, error.into())),
+        };
+        lock(&self.custody).occupied += 1;
+        self.stop_requested = false;
+        self.active = Some(Active {
+            id: operation,
+            root: None,
+            work: Work::Turn(work),
+            inbox,
+            metadata: Some((metadata, reservation)),
+        });
+        Ok(RecoveryAdmission { operation, point })
+    }
+
     fn admit(
         &self,
         id: InputId,
@@ -209,8 +266,8 @@ impl<M: Serialize + Send + 'static> SessionControl<M> {
                         || self
                             .active
                             .as_ref()
-                            .is_some_and(|active| active.root.is_some()),
-                    "steering requires a coding Turn"
+                            .is_some_and(|active| matches!(active.work, Work::Turn(_))),
+                    "steering requires a model Turn"
                 );
             }
             Delivery::FollowUp => {

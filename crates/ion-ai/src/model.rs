@@ -10,6 +10,7 @@ pub struct ModelRef {
 #[serde(rename_all = "snake_case")]
 pub enum ModelRouteReason {
     UserRequest,
+    Recovery,
     ToolContinuation,
     Steering,
     Retry,

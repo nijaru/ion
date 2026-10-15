@@ -37,9 +37,9 @@ pub use auth::{CredentialStatus, CredentialStore};
 pub use binding::SessionSetup;
 pub use control::{
     AcceptedMetadata, ControlObserver, ControlState, ControlUpdate, Delivery, InputId, InputPhase,
-    Observation, OperationId, OperationKind, OperationOutcome, OperationState, RejectedInput,
-    RequestAdmission, ReturnReason, ReturnedInput, SessionControl, Settlement, ShutdownReport,
-    UserInput,
+    Observation, OperationId, OperationKind, OperationOutcome, OperationState, RecoveryAdmission,
+    RejectedInput, RequestAdmission, ReturnReason, ReturnedInput, SessionControl, Settlement,
+    ShutdownReport, UserInput,
 };
 pub use credentials::{CredentialResolutionError, CredentialResolver};
 pub use local_tools::LocalTools;

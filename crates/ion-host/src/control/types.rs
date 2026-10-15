@@ -69,6 +69,13 @@ pub enum RequestAdmission<M> {
     },
 }
 
+/// A committed continuation and its local owner; no new input was accepted.
+#[derive(Debug)]
+pub struct RecoveryAdmission {
+    pub operation: OperationId,
+    pub point: ion_core::RecoveryPoint,
+}
+
 pub struct RejectedInput<M> {
     pub delivery: Delivery,
     pub input: UserInput,
@@ -145,7 +152,7 @@ pub struct Settlement<M> {
     pub stop_requested: bool,
     /// Root and absorbed steering metadata in admission order.
     pub accepted: Vec<AcceptedMetadata<M>>,
-    /// Direct shell/compaction metadata (there is no user-message acceptance).
+    /// Shell/compaction/continuation metadata (no new user-message acceptance).
     pub metadata: Option<M>,
     pub(super) reservation: Option<InputReservation>,
 }

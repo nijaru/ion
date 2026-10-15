@@ -95,6 +95,12 @@ enum EntryInspection {
         model: ModelRef,
         #[serde(skip_serializing_if = "Option::is_none")]
         request: Option<ion_core::RequestKey>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        recovery: Option<ion_core::RecoveryBinding>,
+    },
+    TurnResumed {
+        turn: u64,
+        checkpoint: u64,
     },
     Assistant {
         turn: u64,
@@ -365,6 +371,7 @@ mod tests {
                 input: input.clone(),
                 model: model.clone(),
                 request: None,
+                recovery: None,
             },
             SessionEntry::Steering { turn: 1, input },
             SessionEntry::Assistant {

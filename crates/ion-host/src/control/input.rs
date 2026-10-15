@@ -249,7 +249,7 @@ impl<M: Serialize + Send + 'static> SessionControl<M> {
                     instructions,
                     CancellationToken::new(),
                     inbox.clone(),
-                    turn_observer(state, observations, root, operation),
+                    turn_observer(state, observations, Some(root), operation),
                 );
                 self.starting = None;
                 self.active = Some(Active {

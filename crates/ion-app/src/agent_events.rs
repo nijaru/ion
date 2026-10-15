@@ -4,6 +4,7 @@ use serde_json::{Value, json};
 
 pub(super) fn event_record(event: &CodingAgentEvent) -> Value {
     match event {
+        CodingAgentEvent::TurnResumed { point } => json!({"type":"turn_resumed","point":point}),
         CodingAgentEvent::TurnAccepted { turn } => json!({"type":"turn_accepted","turn":turn}),
         CodingAgentEvent::TurnEnded { turn, reason } => {
             json!({"type":"turn_ended","turn":turn,"reason":reason})
@@ -124,6 +125,10 @@ pub(super) fn diagnostic(event: &CodingAgentEvent) -> Option<String> {
         CodingAgentEvent::ChildToolFinished { outcome, .. } => {
             output_diagnostic("child result", &child_output(outcome))
         }
+        CodingAgentEvent::TurnResumed { point } => format!(
+            "[continued interrupted Turn {} at checkpoint {}]",
+            point.turn, point.checkpoint
+        ),
         CodingAgentEvent::InterruptedCalls(count) => {
             format!("[recovered {count} incomplete tool call(s); effects unknown]")
         }

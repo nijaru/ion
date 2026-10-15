@@ -43,7 +43,7 @@ fn failed_request_commit_preserves_interrupted_work_and_retry_authority() {
     let key = RequestKey::new("inbox".into(), "delivery".into()).unwrap();
     assert!(
         session
-            .admit_turn(input("next"), model(), Some(key.clone()))
+            .admit_turn(input("next"), model(), Some(key.clone()), None)
             .is_err()
     );
     assert_eq!(session.view().unwrap().entries, before);
@@ -57,7 +57,7 @@ fn failed_request_commit_preserves_interrupted_work_and_retry_authority() {
         .unwrap();
     assert!(matches!(
         session
-            .admit_turn(input("next"), model(), Some(key.clone()))
+            .admit_turn(input("next"), model(), Some(key.clone()), None)
             .unwrap(),
         TurnAdmission::New {
             turn: 2,
@@ -68,11 +68,11 @@ fn failed_request_commit_preserves_interrupted_work_and_retry_authority() {
     let entries = session.view().unwrap().entries;
     assert!(entries.iter().any(|entry| matches!(entry, SessionEntry::ToolResult { result, .. } if matches!(result.outcome, crate::ToolOutcome::Unknown))));
     assert!(
-        matches!(session.admit_turn(input("next"), model(), Some(key.clone())).unwrap(), TurnAdmission::Existing(found) if found == receipt)
+        matches!(session.admit_turn(input("next"), model(), Some(key.clone()), None).unwrap(), TurnAdmission::Existing(found) if found == receipt)
     );
     assert!(matches!(
         session
-            .admit_turn(input("different"), model(), Some(key))
+            .admit_turn(input("different"), model(), Some(key), None)
             .unwrap_err(),
         SessionError::RequestConflict
     ));
@@ -96,6 +96,7 @@ fn duplicate_request_facts_are_invalid_even_without_the_derived_index() {
                 input("literal"),
                 model(),
                 Some(RequestKey::new(scope.into(), "delivery".into()).unwrap()),
+                None,
             )
             .unwrap();
     }
@@ -127,7 +128,7 @@ fn logical_identity_survives_moves_but_copies_do_not_inherit_deliveries() {
     let session = Session::create(&path, None).unwrap();
     let key = RequestKey::new("tenant-a".into(), "same-id".into()).unwrap();
     session
-        .admit_turn(input("hello"), model(), Some(key.clone()))
+        .admit_turn(input("hello"), model(), Some(key.clone()), None)
         .unwrap();
     session
         .record_assistant(
@@ -160,7 +161,7 @@ fn logical_identity_survives_moves_but_copies_do_not_inherit_deliveries() {
     let other_scope = RequestKey::new("tenant-b".into(), "same-id".into()).unwrap();
     assert!(matches!(
         session
-            .admit_turn(input("hello"), model(), Some(other_scope))
+            .admit_turn(input("hello"), model(), Some(other_scope), None)
             .unwrap(),
         TurnAdmission::New { turn: 2, .. }
     ));

@@ -300,6 +300,38 @@ impl ToolSet {
                 }
             }
         }
+        ToolCatalog::from_entries(entries, previous)
+    }
+}
+
+#[derive(Clone)]
+enum ToolRoute {
+    Executor(Arc<dyn ToolExecutor>),
+    Search,
+    Composition(Arc<dyn crate::CodeRuntime>, crate::CodeLimits),
+}
+
+#[derive(Clone)]
+struct RoutedTool {
+    definition: ToolDefinition,
+    route: ToolRoute,
+}
+
+/// Immutable tool schema/presentation/route view used by one model request and
+/// the tool calls produced from that request.
+pub struct ToolCatalog {
+    entries: Vec<RoutedTool>,
+    positions: HashMap<String, usize>,
+    declared: HashSet<String>,
+}
+
+impl ToolCatalog {
+    fn from_entries(mut entries: Vec<RoutedTool>, previous: &[ToolSpec]) -> Self {
+        let mut positions = entries
+            .iter()
+            .enumerate()
+            .map(|(i, entry)| (entry.definition.spec.name.clone(), i))
+            .collect::<HashMap<_, _>>();
         let previous = previous
             .iter()
             .map(|spec| (spec.name.as_str(), spec))
@@ -341,30 +373,38 @@ impl ToolSet {
             declared,
         }
     }
-}
 
-#[derive(Clone)]
-enum ToolRoute {
-    Executor(Arc<dyn ToolExecutor>),
-    Search,
-    Composition(Arc<dyn crate::CodeRuntime>, crate::CodeLimits),
-}
+    /// Rebuild exposure without consulting sources or replacing frozen executors.
+    pub(crate) fn with_previous(&self, previous: &[ToolSpec]) -> Self {
+        Self::from_entries(
+            self.entries
+                .iter()
+                .filter(|entry| !matches!(entry.route, ToolRoute::Search))
+                .cloned()
+                .collect(),
+            previous,
+        )
+    }
 
-#[derive(Clone)]
-struct RoutedTool {
-    definition: ToolDefinition,
-    route: ToolRoute,
-}
-
-/// Immutable tool schema/presentation/route view used by one model request and
-/// the tool calls produced from that request.
-pub struct ToolCatalog {
-    entries: Vec<RoutedTool>,
-    positions: HashMap<String, usize>,
-    declared: HashSet<String>,
-}
-
-impl ToolCatalog {
+    /// Callable declarations, not opaque executor identity. Discovery's temporary
+    /// search route changes model exposure, not application authority.
+    pub(crate) fn authority_manifest(&self) -> Vec<(&ToolSpec, bool, Option<crate::CodeLimits>)> {
+        self.entries
+            .iter()
+            .filter_map(|entry| {
+                let limits = match &entry.route {
+                    ToolRoute::Search => return None,
+                    ToolRoute::Composition(_, limits) => Some(*limits),
+                    ToolRoute::Executor(_) => None,
+                };
+                Some((
+                    &entry.definition.spec,
+                    entry.definition.exposure == ToolExposure::Deferred,
+                    limits,
+                ))
+            })
+            .collect()
+    }
     /// Every callable definition in this frozen catalog, including deferred
     /// capabilities that are not declared directly to the model.
     pub fn specs(&self) -> Vec<ToolSpec> {
