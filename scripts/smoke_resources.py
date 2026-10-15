@@ -266,11 +266,23 @@ with tempfile.TemporaryDirectory(prefix="ion-resources-") as temporary:
                     elif phase == 3 and b"Reloaded resources" in current:
                         checkpoint = len(output)
                         os.write(master, b"/reasoning high\r")
+                        reasoning_retry_at = time.monotonic() + 0.1
                         phase = 31
                     elif phase == 31 and b"Generation effort: high" in current:
                         checkpoint = len(output)
                         os.write(master, b"/la")
                         phase = 4
+                    elif (phase == 31
+                          and b"session control has active work or pending inputs" in current
+                          and time.monotonic() >= reasoning_retry_at
+                          and completed_turns(work / "state", previous_sessions) == 1):
+                        # Streamed text and /reload are valid before settlement;
+                        # changing reasoning requires joined Host control. A busy
+                        # refusal retains this exact command in the composer.
+                        # Retry Enter while draining until its actual success
+                        # acknowledgement, not merely the committed Turn end.
+                        os.write(master, b"\r")
+                        reasoning_retry_at = time.monotonic() + 0.1
                     elif phase == 4 and b"A later prompt" in current:
                         assert len(requests) == before + 1, "reload/discovery issued a model request"
                         checkpoint = len(output)
