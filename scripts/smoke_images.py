@@ -255,7 +255,7 @@ with tempfile.TemporaryDirectory(prefix="ion-images-") as temporary:
                     output.clear()
                     detail_closed = True
                 if detail_closed and not quit_sent and b"result not shared with model" in output:
-                    os.write(master, b"\x03")
+                    os.write(master, b"\x04")  # Quit also joins a settling Turn.
                     quit_sent = True
                 if child.poll() is not None:
                     break

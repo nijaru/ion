@@ -193,7 +193,9 @@ def exercise(mode, supported=True, panic=False, editor_fault=None):
                     assert terminal.stacks[1][-1] == (1 if supported else 8)
                     os.write(master, b"\x1b[27u" if supported else b"\x1b")
                     until(lambda: not terminal.alternate)
-                os.write(master, b"\x03")
+                # Visible answer text can precede Host settlement. Explicit
+                # quit joins either state; Ctrl-C could only request stop.
+                os.write(master, b"\x04")
                 until(lambda: child.poll() is not None)
                 drain()
                 assert child.wait() == 0, output[-2000:]

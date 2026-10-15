@@ -371,7 +371,7 @@ with tempfile.TemporaryDirectory(prefix="ion-code-mode-") as temporary:
                         os.write(master, b"\x1b")
                         closed = True
                     if closed and not quit_sent and b"Details closed" in output:
-                        os.write(master, b"\x03")
+                        os.write(master, b"\x04")  # Quit, not a racing stop request.
                         quit_sent = True
                     if child.poll() is not None:
                         break
