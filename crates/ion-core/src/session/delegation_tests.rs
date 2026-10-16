@@ -72,6 +72,7 @@ fn pending(composed: bool) -> (PathBuf, Session, RecoveryBinding, crate::Delegat
                 composed_child: composed.then_some(0),
             },
             ForegroundSpec {
+                context: crate::DelegationContext::Fresh,
                 directory: root.join("children"),
                 cwd: None,
                 model,
@@ -80,7 +81,8 @@ fn pending(composed: bool) -> (PathBuf, Session, RecoveryBinding, crate::Delegat
                 input: Message::user_input("child".into(), []),
             },
         )
-        .unwrap();
+        .unwrap()
+        .0;
     (root, session, binding, record)
 }
 
@@ -163,26 +165,36 @@ fn recovery_orders_lost_relationships_before_tools_and_rolls_back_as_one_batch()
 #[test]
 fn materialization_uses_only_the_committed_identity_and_binding() {
     let (root, session, _, record) = pending(false);
-    let child = Session::materialize_delegation(&record).unwrap();
+    let materialize =
+        |record: &crate::DelegationRecord| Session::materialize_delegation(record, Vec::new());
+    let child = materialize(&record).unwrap();
     assert_eq!(child.id(), record.child);
     assert_eq!(
         child.view().unwrap().entries,
-        [SessionEntry::ChildSessionOf {
-            record: record.clone()
-        }]
+        [
+            SessionEntry::ChildSessionOf {
+                record: record.clone()
+            },
+            SessionEntry::ModelSelected {
+                model: record.spec.model.clone()
+            },
+            SessionEntry::ReasoningSelected {
+                reasoning: record.spec.reasoning
+            },
+        ]
     );
     assert!(
-        Session::materialize_delegation(&record).is_err(),
+        materialize(&record).is_err(),
         "a live writer's lease must not be adopted"
     );
     drop(child);
     let mut changed = record.clone();
     changed.spec.authority = AuthorityScope::new("different/principal").unwrap();
     assert!(matches!(
-        Session::materialize_delegation(&changed),
+        materialize(&changed),
         Err(SessionError::InvalidHistory)
     ));
-    let child = Session::materialize_delegation(&record).unwrap();
+    let child = materialize(&record).unwrap();
     assert_eq!(child.id(), record.child);
     drop(child);
     // A valid but different database at that exact locator is not adoptable.
@@ -191,7 +203,7 @@ fn materialization_uses_only_the_committed_identity_and_binding() {
     let unrelated_id = unrelated.id();
     drop(unrelated);
     assert!(matches!(
-        Session::materialize_delegation(&record),
+        materialize(&record),
         Err(SessionError::InvalidHistory)
     ));
     assert_eq!(Session::inspect_id(&record.path).unwrap(), unrelated_id);
@@ -199,7 +211,7 @@ fn materialization_uses_only_the_committed_identity_and_binding() {
     let partial = Connection::open(&record.path).unwrap();
     initialize_new(&partial).unwrap();
     drop(partial);
-    assert!(Session::materialize_delegation(&record).is_err());
+    assert!(materialize(&record).is_err());
     let partial = Connection::open(&record.path).unwrap();
     assert_eq!(
         partial

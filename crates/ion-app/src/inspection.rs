@@ -151,7 +151,6 @@ struct DelegationInspection {
     site: ion_core::DelegationSite,
     child: uuid::Uuid,
     path: PathBuf,
-    context: ion_core::DelegationContext,
     ownership: ion_core::DelegationOwnership,
     #[serde(serialize_with = "omit")]
     spec: ion_core::ForegroundSpec,
@@ -160,6 +159,7 @@ struct DelegationInspection {
 #[derive(Serialize)]
 #[serde(remote = "ion_core::ForegroundSpec")]
 struct ForegroundInspection {
+    context: ion_core::DelegationContext,
     directory: PathBuf,
     cwd: Option<PathBuf>,
     model: ModelRef,
@@ -570,9 +570,9 @@ mod tests {
             },
             child,
             path: PathBuf::from("/inspection-fixture").join(format!("{child}.sqlite")),
-            context: ion_core::DelegationContext::Fresh,
             ownership: ion_core::DelegationOwnership::Foreground,
             spec: ion_core::ForegroundSpec {
+                context: ion_core::DelegationContext::Fresh,
                 directory: PathBuf::from("/inspection-fixture"),
                 cwd: None,
                 model: view.last_model.clone().unwrap(),

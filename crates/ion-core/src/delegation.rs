@@ -21,10 +21,11 @@ pub struct DelegationSite {
     pub composed_child: Option<usize>,
 }
 
-/// Complete application assertion for a fresh child. No parent configuration,
-/// conversation, workspace or credentials are implicitly inherited.
+/// Complete child application assertion. Context sharing is explicit and does
+/// not inherit live configuration, workspace, permissions or credentials.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ForegroundSpec {
+    pub context: DelegationContext,
     pub directory: PathBuf,
     pub cwd: Option<PathBuf>,
     pub model: ModelRef,
@@ -36,6 +37,12 @@ pub struct ForegroundSpec {
 impl ForegroundSpec {
     pub(crate) fn valid(&self) -> bool {
         self.directory.is_absolute()
+            && match self.context {
+                DelegationContext::Fresh => true,
+                DelegationContext::Fork {
+                    point: crate::ForkPoint::BeforeTurn(turn) | crate::ForkPoint::AfterTurn(turn),
+                } => turn != 0,
+            }
             && self.cwd.as_ref().is_none_or(|cwd| cwd.is_absolute())
             && self.reasoning.validate().is_ok()
             && crate::session::valid_user_message(&self.input)
@@ -46,6 +53,12 @@ impl ForegroundSpec {
 #[serde(rename_all = "snake_case")]
 pub enum DelegationContext {
     Fresh,
+    /// Share the actual parent's committed conversation/context prefix, including
+    /// historical instructions and tool output as data, not executable authority.
+    /// Applications must authorize this disclosure; it is not secret scrubbing.
+    Fork {
+        point: crate::ForkPoint,
+    },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -59,7 +72,6 @@ pub struct DelegationRecord {
     pub site: DelegationSite,
     pub child: uuid::Uuid,
     pub path: PathBuf,
-    pub context: DelegationContext,
     pub ownership: DelegationOwnership,
     pub spec: ForegroundSpec,
 }

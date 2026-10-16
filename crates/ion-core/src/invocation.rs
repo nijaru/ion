@@ -98,7 +98,7 @@ impl<'a> ToolInvocation<'a> {
         self.origin
     }
 
-    /// Request one fresh foreground child through this live invocation. Exact
+    /// Request one foreground child with explicit context through this live invocation. Exact
     /// repetition reconciles; different work conflicts. Cancelling this borrowed
     /// wait does not revoke a transferred request or abandon started supervision.
     /// Historical origins alone cannot make a request, and closed ports cannot

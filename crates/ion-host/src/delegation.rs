@@ -1,4 +1,4 @@
-//! Fresh foreground children use ordinary assembly and shared Session control.
+//! Foreground children use ordinary assembly and shared Session control.
 use std::{path::PathBuf, sync::Arc};
 
 use anyhow::{Result, ensure};
@@ -12,9 +12,13 @@ use crate::{Application, ControlUpdate, OperationOutcome, SessionCatalog, Sessio
 
 /// Explicit child recipe, independent of the parent configuration. The caller
 /// authenticates this scope and attests its actual environment and authority.
-/// No native tools, workspace, context, model or credentials are inherited.
-/// This supports fresh foreground children only, not forks or background transfer.
+/// Context sharing is explicit, separate from live model/tools/workspace and
+/// credentials. Forking shares historical context facts (including instructions
+/// and tool outputs), not execution grants; authorize that disclosure. Matching
+/// deferred child definitions can regain exposure without adding parent executors.
+/// Background ownership transfer is not supported.
 pub struct ForegroundDelegation {
+    pub context: ion_core::DelegationContext,
     pub directory: PathBuf,
     pub cwd: Option<PathBuf>,
     pub application: Arc<dyn Application>,
@@ -44,6 +48,7 @@ impl ForegroundDelegation {
         crate::binding::validate_model(&runtime, self.model.as_ref())?;
         runtime.agent.validate_reasoning(self.reasoning)?;
         let spec = ForegroundSpec {
+            context: self.context,
             directory: self.directory.clone(),
             cwd: cwd.clone(),
             model: runtime.agent.model().clone(),

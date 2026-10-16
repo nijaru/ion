@@ -148,19 +148,53 @@ fn call(name: &str) -> Content {
     })
 }
 
+async fn drive(control: &mut ion_host::SessionControl) -> Result<()> {
+    while control.is_busy() {
+        control.maintain().await;
+    }
+    let mut settled = false;
+    while let Some(update) = control.take_update() {
+        match update {
+            ControlUpdate::Settled(settlement) => {
+                match settlement.outcome {
+                    OperationOutcome::Turn(result) => {
+                        result?;
+                    }
+                    _ => anyhow::bail!("unexpected operation"),
+                }
+                settled = true;
+            }
+            ControlUpdate::Returned(input) => anyhow::bail!("input returned: {:?}", input.reason),
+            _ => {}
+        }
+    }
+    ensure!(settled, "missing reliable settlement");
+    Ok(())
+}
+
 #[tokio::main]
 async fn main() -> Result<()> {
-    let root = PathBuf::from(
-        std::env::args_os()
-            .nth(1)
-            .context("usage: delegation ABSOLUTE_STATE [--pause-after-effect|--resume|--new]")?,
-    );
+    let root = PathBuf::from(std::env::args_os().nth(1).context(
+        "usage: delegation ABSOLUTE_STATE [--fork] [--pause-after-effect|--resume|--new]",
+    )?);
     ensure!(root.is_absolute(), "state directory must be absolute");
-    let mode = std::env::args().nth(2);
-    let pause = mode.as_deref() == Some("--pause-after-effect");
-    let resume = mode.as_deref() == Some("--resume");
-    let new = mode.as_deref() == Some("--new");
-    ensure!(mode.is_none() || pause || resume || new, "unknown mode");
+    let flags = std::env::args().skip(2).collect::<Vec<_>>();
+    let fork = flags.iter().any(|flag| flag == "--fork");
+    let modes = flags
+        .iter()
+        .filter(|flag| flag.as_str() != "--fork")
+        .collect::<Vec<_>>();
+    let mode = modes.first().map(|flag| flag.as_str());
+    let pause = mode == Some("--pause-after-effect");
+    let resume = mode == Some("--resume");
+    let new = mode == Some("--new");
+    ensure!(
+        modes.len() <= 1
+            && flags.len() == modes.len() + usize::from(fork)
+            && (mode.is_none() || pause || resume || new),
+        "unknown or repeated mode"
+    );
+    let parent_turn = if fork { 2 } else { 1 };
     let recovering = resume || new;
     let session = Arc::new(if recovering {
         CodingSession::open(root.join("parent.sqlite"))?
@@ -188,6 +222,13 @@ async fn main() -> Result<()> {
     ));
     let tools = Arc::new(Delegate {
         child: ForegroundDelegation {
+            context: if fork {
+                ion_core::DelegationContext::Fork {
+                    point: ion_core::ForkPoint::AfterTurn(1),
+                }
+            } else {
+                ion_core::DelegationContext::Fresh
+            },
             directory: root.join("children"),
             cwd: None,
             application: Arc::new(App {
@@ -199,23 +240,32 @@ async fn main() -> Result<()> {
             authority: AuthorityScope::new("example-child/environment/v1")?,
         },
     });
-    let service = Arc::new(ScriptedModelService::new(if recovering {
-        vec![response(vec![Content::Text(
+    let mut scripts = Vec::new();
+    if recovering {
+        scripts.push(response(vec![Content::Text(
             "continued without replay".into(),
-        )])]
+        )]));
     } else {
-        vec![
+        if fork {
+            scripts.push(response(vec![Content::Text("source answer".into())]));
+        }
+        scripts.extend([
             response(vec![call("delegate")]),
             response(vec![Content::Text("parent done".into())]),
-        ]
-    }));
+        ]);
+    }
+    let service = Arc::new(ScriptedModelService::new(scripts));
     let agent = Arc::new(
         CodingAgent::with_tool_set(
             service.clone(),
             Arc::new(ToolSet::new([tools as Arc<dyn CodingToolSource>])),
             model("parent"),
         )
-        .with_recovery_scope(AuthorityScope::new("example-parent/environment/v1")?),
+        .with_recovery_scope(AuthorityScope::new(if fork {
+            "example-parent/environment/fork/v1"
+        } else {
+            "example-parent/environment/fresh/v1"
+        })?),
     );
     let app = Arc::new(App {
         agent,
@@ -232,11 +282,15 @@ async fn main() -> Result<()> {
     let key = ion_core::RequestKey::new("example".into(), "parent-delivery".into())?;
     let input = Message::user_input("delegate the effect".into(), []);
     let run: Result<()> = async {
+        if fork && !recovering {
+            control.submit_request(&ion_core::RequestKey::new("example".into(), "history".into())?, Message::user_input("fork source marker".into(), []), ()).map_err(|rejected| rejected.reason)?;
+            drive(&mut control).await?;
+        }
         let old = if recovering { Some(session.view()?.delegations().first().context("missing original relationship")?.record.clone()) } else { None };
         let before = session.view()?.entries;
         let admission = control.submit_request(&key, input, ()).map_err(|rejected| rejected.reason)?;
         if recovering {
-            ensure!(matches!(admission, RequestAdmission::Existing { receipt, .. } if receipt.turn == 1 && receipt.end.is_none()), "redelivery must only reconcile unfinished work");
+            ensure!(matches!(admission, RequestAdmission::Existing { receipt, .. } if receipt.turn == parent_turn && receipt.end.is_none()), "redelivery must only reconcile unfinished work");
             ensure!(session.view()?.entries == before && !control.is_busy() && service.requests().is_empty(), "redelivery executed or changed work");
             if resume {
                 let point = session.recovery_state()?.context("continuation unavailable")?.point;
@@ -247,12 +301,7 @@ async fn main() -> Result<()> {
         } else {
             ensure!(matches!(admission, RequestAdmission::Started { .. }), "first delivery did not start");
         }
-        loop {
-            if let ControlUpdate::Settled(settlement) = control.next().await {
-                match settlement.outcome { OperationOutcome::Turn(result) => { result?; }, _ => anyhow::bail!("unexpected operation") }
-                break;
-            }
-        }
+        drive(&mut control).await?;
         let view = session.view()?;
         let links = view.delegations();
         ensure!(links.len() == 1 && view.id == original_id, "relationship or parent identity changed");
@@ -260,14 +309,17 @@ async fn main() -> Result<()> {
         ensure!(child.id() == links[0].record.child && child.view()?.parent_delegation() == Some(&links[0].record), "child materialization identity changed");
         if recovering {
             ensure!(links[0].record == old.unwrap() && links[0].outcome == Some(DelegationOutcome::Unknown), "lost relationship was replayed or certainty invented");
-            ensure!(child.view()?.unfinished_turn == Some(1), "parent recovery rewrote the lost child's execution truth");
+            ensure!(child.view()?.unfinished_turn == Some(parent_turn), "parent recovery rewrote the lost child's execution truth");
             ensure!(child_service.requests().is_empty() && service.requests().len() == 1, "recovery dispatched child work");
-            ensure!(view.last_end == Some((if resume { 1 } else { 2 }, TurnEndReason::Completed)), "wrong recovery Turn");
+            ensure!(view.last_end == Some((parent_turn + u64::from(!resume), TurnEndReason::Completed)), "wrong recovery Turn");
         } else {
             ensure!(matches!(&links[0].outcome, Some(DelegationOutcome::Joined { receipt: Some(receipt), error: None }) if receipt.end == Some(TurnEndReason::Completed)), "child did not settle");
-            ensure!(child_service.requests().len() == 2 && service.requests().len() == 2, "unexpected requests");
+            ensure!(child_service.requests().len() == 2 && service.requests().len() == 2 + usize::from(fork), "unexpected requests");
             let requests = child_service.requests();
             ensure!(requests[0].instructions.as_deref() == Some("child-only instructions") && requests[0].tools.len() == 1 && requests[0].tools[0].name == "effect", "parent configuration inherited");
+            let messages = serde_json::to_string(&requests[0].messages)?;
+            ensure!(messages.contains("fork source marker") == fork, "chosen context was not honored");
+            ensure!(!messages.contains("delegate the effect"), "active parent Turn leaked past the selected boundary");
         }
         ensure!(std::fs::read(root.join("effects"))? == b"child effect\n", "unexpected host effects");
         Ok(())

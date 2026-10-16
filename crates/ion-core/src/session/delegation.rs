@@ -40,7 +40,20 @@ impl State {
     pub(super) fn apply_delegation(&mut self, entry: &SessionEntry) -> Result<(), SessionError> {
         match entry {
             SessionEntry::ChildSessionOf { record } => {
-                if self.sequence != 0 || !valid_record(record) {
+                let boundary = match record.spec.context {
+                    DelegationContext::Fresh => self.sequence == 0,
+                    DelegationContext::Fork {
+                        point: ForkPoint::BeforeTurn(turn),
+                    } => self.last_id.checked_add(1) == Some(turn),
+                    DelegationContext::Fork {
+                        point: ForkPoint::AfterTurn(turn),
+                    } => self.last_id == turn,
+                };
+                if !boundary
+                    || self.active.is_some()
+                    || self.pending_shell.is_some()
+                    || !valid_record(record)
+                {
                     return Err(SessionError::InvalidHistory);
                 }
             }
@@ -113,7 +126,7 @@ impl Session {
         &self,
         site: DelegationSite,
         spec: ForegroundSpec,
-    ) -> Result<DelegationRecord, SessionError> {
+    ) -> Result<(DelegationRecord, Vec<SessionEntry>), SessionError> {
         if site.session != self.id() {
             return Err(SessionError::InvalidHistory);
         }
@@ -122,18 +135,29 @@ impl Session {
             site,
             child,
             path: spec.directory.join(format!("{child}.sqlite")),
-            context: DelegationContext::Fresh,
             ownership: DelegationOwnership::Foreground,
             spec,
         };
         let mut store = self.store.lock().map_err(|_| SessionError::Poisoned)?;
+        let context = match record.spec.context {
+            DelegationContext::Fresh => Vec::new(),
+            DelegationContext::Fork { point } => {
+                without_delivery_keys(fork_prefix(&store.connection, point)?.0)
+            }
+        };
+        // Resolve/validate the chosen cut before committing intent or creating
+        // any child file. Keep the captured prefix outside tool-waiter custody.
+        let projection = project(context.iter().map(Ok), ProjectionMode::Metadata)?;
+        if projection.state.active.is_some() || projection.state.pending_shell.is_some() {
+            return Err(SessionError::InvalidForkPoint);
+        }
         append(
             &mut store,
             &[SessionEntry::DelegationAdmitted {
                 record: record.clone(),
             }],
         )?;
-        Ok(record)
+        Ok((record, context))
     }
 
     pub(crate) fn settle_delegation(
@@ -153,7 +177,24 @@ impl Session {
 
     /// Same recorded identity/path only. An existing partial/mismatched database
     /// fails closed; neither initialization nor reopening authorizes dispatch.
-    pub(crate) fn materialize_delegation(record: &DelegationRecord) -> Result<Self, SessionError> {
+    pub(crate) fn materialize_delegation(
+        record: &DelegationRecord,
+        mut context: Vec<SessionEntry>,
+    ) -> Result<Self, SessionError> {
+        // Append, never prepend: inherited tool/shell/compaction coordinates
+        // continue to identify their original entries. Preferences are explicit
+        // child configuration, not authority inherited with the context.
+        context.extend([
+            SessionEntry::ChildSessionOf {
+                record: record.clone(),
+            },
+            SessionEntry::ModelSelected {
+                model: record.spec.model.clone(),
+            },
+            SessionEntry::ReasoningSelected {
+                reasoning: record.spec.reasoning,
+            },
+        ]);
         let child = if record.path.try_exists()? {
             Self::open(&record.path)?
         } else {
@@ -161,14 +202,14 @@ impl Session {
                 &record.path,
                 record.spec.cwd.as_deref(),
                 record.child,
-                vec![SessionEntry::ChildSessionOf {
-                    record: record.clone(),
-                }],
+                &context,
             )?
         };
+        let view = child.view()?;
         if child.id() != record.child
             || child.cwd() != record.spec.cwd.as_deref()
-            || child.view()?.parent_delegation() != Some(record)
+            || view.parent_delegation() != Some(record)
+            || !view.entries.starts_with(&context)
         {
             return Err(SessionError::InvalidHistory);
         }
@@ -204,7 +245,7 @@ impl SessionView {
 
     /// The binding of this logical child, not an inherited copy's parentage.
     pub fn parent_delegation(&self) -> Option<&DelegationRecord> {
-        self.entries.first().and_then(|entry| match entry {
+        self.entries.iter().find_map(|entry| match entry {
             SessionEntry::ChildSessionOf { record } if record.child == self.id => Some(record),
             _ => None,
         })

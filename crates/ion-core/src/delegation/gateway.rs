@@ -63,11 +63,14 @@ impl Gateway {
                         continue;
                     }
                     match parent.admit_delegation(self.site, task.spec) {
-                        Ok(record) => {
+                        Ok((record, context)) => {
                             let child_stop = stop.child_token();
-                            running = Some(Box::pin(run_child(record.clone(), task.work, child_stop)));
+                            running = Some(Box::pin(run_child(record.clone(), context, task.work, child_stop)));
                             receipt = Some(DelegationReceipt { record, outcome: None });
                             reply = Some(sender);
+                        }
+                        Err(SessionError::InvalidForkPoint) => {
+                            let _ = sender.send(Err("invalid fork point".into()));
                         }
                         Err(error) => {
                             stop.cancel();
@@ -107,6 +110,7 @@ impl Gateway {
 
 async fn run_child(
     record: DelegationRecord,
+    context: Vec<crate::SessionEntry>,
     work: ForegroundWork,
     stop: CancellationToken,
 ) -> Completion {
@@ -119,7 +123,7 @@ async fn run_child(
             None,
         );
     }
-    let child = match CodingSession::materialize_delegation(&record) {
+    let child = match CodingSession::materialize_delegation(&record, context) {
         Ok(child) => Arc::new(child),
         Err(error) => {
             let message = format!(

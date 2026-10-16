@@ -1,7 +1,7 @@
 use super::*;
 
 #[tokio::test]
-async fn untracked_or_stopped_invocations_cannot_start_cold_child_work() {
+async fn delegation_requires_live_authority_and_a_valid_context() {
     let root = std::env::temp_dir().join(format!("ion-delegation-port-{}", uuid::Uuid::new_v4()));
     let session = CodingSession::create(root.join("parent.sqlite"), None).unwrap();
     let model = ModelRef {
@@ -30,9 +30,10 @@ async fn untracked_or_stopped_invocations_cannot_start_cold_child_work() {
         )
         .unwrap();
     let before = session.view().unwrap().entries;
-    let task = || {
+    let task = |context| {
         ForegroundTask::new(
             ForegroundSpec {
+                context,
                 directory: root.join("children"),
                 cwd: None,
                 model: model.clone(),
@@ -45,7 +46,46 @@ async fn untracked_or_stopped_invocations_cannot_start_cold_child_work() {
         .unwrap()
     };
     let untracked = crate::ToolInvocation::untracked(&call, CancellationToken::new());
-    assert!(untracked.delegate(task()).await.is_err());
+    assert!(
+        untracked
+            .delegate(task(DelegationContext::Fresh))
+            .await
+            .is_err()
+    );
+    let live = CancellationToken::new();
+    let (invocation, gateway) = crate::ToolInvocation::admitted(
+        &call,
+        live.clone(),
+        session.id(),
+        1,
+        session.tool_occurrence(1, "call").unwrap(),
+        None,
+    );
+    let rejected = gateway
+        .run(
+            &session,
+            &live,
+            invocation.delegate(task(DelegationContext::Fork {
+                point: crate::ForkPoint::AfterTurn(1),
+            })),
+        )
+        .await
+        .unwrap();
+    assert!(
+        rejected.is_err(),
+        "an unsettled Turn is not a valid fork boundary"
+    );
+    assert!(
+        !live.is_cancelled(),
+        "invalid context choice is a refusal, not an infrastructure fault"
+    );
+    assert!(
+        invocation
+            .delegate(task(DelegationContext::Fresh))
+            .await
+            .is_err(),
+        "a surviving historical invocation cannot revive its closed port"
+    );
     let stop = CancellationToken::new();
     let (invocation, gateway) = crate::ToolInvocation::admitted(
         &call,
@@ -58,7 +98,11 @@ async fn untracked_or_stopped_invocations_cannot_start_cold_child_work() {
     stop.cancel();
     assert!(
         gateway
-            .run(&session, &stop, invocation.delegate(task()))
+            .run(
+                &session,
+                &stop,
+                invocation.delegate(task(DelegationContext::Fresh))
+            )
             .await
             .unwrap()
             .is_err()

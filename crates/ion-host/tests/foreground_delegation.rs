@@ -51,6 +51,15 @@ impl CodingToolSource for Effect {
         vec![ToolRegistration::new(definition("effect"), self)]
     }
 }
+struct DeferredChildTools(Arc<Effect>);
+impl CodingToolSource for DeferredChildTools {
+    fn registrations(self: Arc<Self>) -> Vec<ToolRegistration> {
+        vec![ToolRegistration::new(
+            definition("effect").deferred(),
+            self.0.clone(),
+        )]
+    }
+}
 impl ToolExecutor for Effect {
     fn execute<'a>(&'a self, invocation: ToolInvocation<'a>) -> BoxFuture<'a, CodingToolOutput> {
         let origin = invocation.origin().unwrap();
@@ -181,6 +190,14 @@ struct Fixture {
 }
 impl Fixture {
     fn new(wait: Wait, block: bool, composed: bool) -> Self {
+        Self::with_context(wait, block, composed, ion_core::DelegationContext::Fresh)
+    }
+    fn with_context(
+        wait: Wait,
+        block: bool,
+        composed: bool,
+        context: ion_core::DelegationContext,
+    ) -> Self {
         let root = std::env::temp_dir().join(format!("ion-foreground-{}", uuid::Uuid::now_v7()));
         std::fs::create_dir(&root).unwrap();
         let session = Arc::new(CodingSession::create(root.join("parent.sqlite"), None).unwrap());
@@ -198,11 +215,18 @@ impl Fixture {
         ]));
         let child_agent = Arc::new(CodingAgent::with_tool_set(
             child.clone(),
-            Arc::new(ToolSet::new([effect.clone() as Arc<dyn CodingToolSource>])),
+            Arc::new(ToolSet::new([
+                if matches!(context, ion_core::DelegationContext::Fork { .. }) {
+                    Arc::new(DeferredChildTools(effect.clone())) as Arc<dyn CodingToolSource>
+                } else {
+                    effect.clone() as Arc<dyn CodingToolSource>
+                },
+            ])),
             model("child"),
         ));
         let delegate = Arc::new(Delegate {
             child: ForegroundDelegation {
+                context,
                 directory: root.join("children"),
                 cwd: None,
                 application: Arc::new(App {
@@ -224,10 +248,15 @@ impl Fixture {
         } else {
             call("delegate", json!({"parent":"forged"}))
         };
-        let parent = Arc::new(ScriptedModelService::new([
+        let mut scripts = Vec::new();
+        if matches!(context, ion_core::DelegationContext::Fork { .. }) {
+            scripts.push(response(vec![Content::Text("historical answer".into())]));
+        }
+        scripts.extend([
             response(vec![first]),
             response(vec![Content::Text("parent done".into())]),
-        ]));
+        ]);
+        let parent = Arc::new(ScriptedModelService::new(scripts));
         let tools = ToolSet::new([
             delegate as Arc<dyn CodingToolSource>,
             effect.clone() as Arc<dyn CodingToolSource>,
@@ -347,6 +376,91 @@ async fn fresh_foreground_child_reconciles_without_inheriting_parent_configurati
     let root = f.root.clone();
     drop(f);
     std::fs::remove_dir_all(root).unwrap();
+}
+
+#[tokio::test]
+async fn forked_child_shares_only_the_chosen_history_and_current_child_capabilities() {
+    for point in [
+        ion_core::ForkPoint::AfterTurn(1),
+        ion_core::ForkPoint::BeforeTurn(2),
+    ] {
+        let mut f = Fixture::with_context(
+            Wait::Repeat,
+            false,
+            false,
+            ion_core::DelegationContext::Fork { point },
+        );
+        let source_key = ion_core::RequestKey::new("source".into(), "history".into()).unwrap();
+        f.control
+            .submit_request(
+                &source_key,
+                Message::user_input("historical input marker".into(), []),
+                (),
+            )
+            .unwrap();
+        tokio::time::timeout(std::time::Duration::from_secs(5), async {
+            while f.control.is_busy() {
+                f.control.maintain().await;
+            }
+        })
+        .await
+        .unwrap();
+        let mut settled = false;
+        while let Some(update) = f.control.take_update() {
+            if let ControlUpdate::Settled(settlement) = update {
+                assert!(matches!(settlement.outcome, OperationOutcome::Turn(Ok(_))));
+                settled = true;
+            }
+        }
+        assert!(
+            settled,
+            "transfer the first Turn's reliable result before new work"
+        );
+        f.start();
+        let report = f.settle().await;
+        assert!(report.cleanup_errors.is_empty());
+        assert_eq!(f.effect.calls.load(Ordering::SeqCst), 1);
+        let links = f.session.view().unwrap().delegations();
+        assert_eq!(links.len(), 1);
+        assert_eq!(
+            links[0].record.spec.context,
+            ion_core::DelegationContext::Fork { point }
+        );
+        assert_eq!(links[0].record.site.turn, 2);
+        let child = CodingSession::open(&links[0].record.path).unwrap();
+        assert_eq!(
+            child.view().unwrap().parent_delegation(),
+            Some(&links[0].record)
+        );
+        assert!(child.request_receipt(&source_key).unwrap().is_none());
+        assert_eq!(
+            child.view().unwrap().last_end,
+            Some((2, TurnEndReason::Completed))
+        );
+        let requests = f.child.requests();
+        assert_eq!(requests.len(), 2);
+        let request = &requests[0];
+        assert_eq!(request.instructions.as_deref(), Some("child instructions"));
+        assert_eq!(
+            request
+                .tools
+                .iter()
+                .map(|tool| tool.name.as_str())
+                .collect::<Vec<_>>(),
+            ["effect"],
+            "only definition-matching tools in the explicit child application may regain exposure"
+        );
+        let messages = serde_json::to_string(&request.messages).unwrap();
+        assert!(
+            messages.contains("historical input marker") && messages.contains("historical answer")
+        );
+        assert!(!messages.contains("forged") && !messages.contains("parent done"));
+        assert_eq!(f.parent.requests().len(), 3);
+        drop(child);
+        let root = f.root.clone();
+        drop(f);
+        std::fs::remove_dir_all(root).unwrap();
+    }
 }
 
 #[tokio::test]

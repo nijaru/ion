@@ -29,6 +29,8 @@ pub(crate) mod code_inspection;
 mod context;
 mod delegation;
 #[cfg(test)]
+mod delegation_fork_tests;
+#[cfg(test)]
 mod delegation_tests;
 mod recovery;
 #[cfg(test)]
@@ -42,7 +44,7 @@ pub use recovery::{AuthorityScope, RecoveryBinding, RecoveryPoint, RecoveryState
 pub(crate) use submission::TurnAdmission;
 pub use submission::{RequestKey, RequestReceipt, SubmissionRequest};
 
-const FORMAT_VERSION: u32 = 13;
+const FORMAT_VERSION: u32 = 14;
 // An 8 MiB raw prompt or streamed response can grow up to sixfold when JSON
 // escapes control characters. Keep the storage bound above that encoded size.
 const MAX_ENTRY_BYTES: usize = 64 * 1024 * 1024;
@@ -211,7 +213,8 @@ pub enum TurnEndReason {
     Failed(String),
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum ForkPoint {
     BeforeTurn(u64),
     AfterTurn(u64),
@@ -749,14 +752,14 @@ impl Drop for SessionLock {
 
 impl Session {
     pub fn create(path: impl AsRef<Path>, cwd: Option<&Path>) -> Result<Self, SessionError> {
-        Self::create_initial(path.as_ref(), cwd, uuid::Uuid::new_v4(), Vec::new())
+        Self::create_initial(path.as_ref(), cwd, uuid::Uuid::new_v4(), &[])
     }
 
     fn create_initial(
         path: &Path,
         cwd: Option<&Path>,
         id: uuid::Uuid,
-        entries: Vec<SessionEntry>,
+        entries: &[SessionEntry],
     ) -> Result<Self, SessionError> {
         let projection = project(entries.iter().map(Ok), ProjectionMode::Full)?;
         let encoded = entries
@@ -854,26 +857,7 @@ impl Session {
     /// Session. The source and target still share the live working directory.
     pub fn fork_to(&self, path: impl AsRef<Path>, point: ForkPoint) -> Result<Self, SessionError> {
         let source = self.store.lock().map_err(|_| SessionError::Poisoned)?;
-        let mut entries = read_entries(&source.connection)?;
-        let boundary = entries
-            .iter()
-            .position(|entry| match (point, entry) {
-                (ForkPoint::BeforeTurn(selected), SessionEntry::TurnStarted { turn, .. }) => {
-                    selected == *turn
-                }
-                (ForkPoint::AfterTurn(selected), SessionEntry::TurnEnded { turn, .. }) => {
-                    selected == *turn
-                }
-                _ => false,
-            })
-            .ok_or(SessionError::InvalidForkPoint)?;
-        let selected_model = match (&point, &entries[boundary]) {
-            (ForkPoint::BeforeTurn(_), SessionEntry::TurnStarted { model, .. }) => {
-                Some(model.clone())
-            }
-            _ => None,
-        };
-        entries.truncate(boundary + usize::from(matches!(point, ForkPoint::AfterTurn(_))));
+        let (mut entries, selected_model) = fork_prefix(&source.connection, point)?;
         if let Some(model) = selected_model {
             entries.push(SessionEntry::ModelSelected { model });
         }
@@ -884,37 +868,14 @@ impl Session {
     fn copy_entries_to(
         &self,
         path: &Path,
-        mut entries: Vec<SessionEntry>,
+        entries: Vec<SessionEntry>,
     ) -> Result<Self, SessionError> {
-        let clone = Self::create(path, self.header.cwd.as_deref())?;
-        // A conversation copy is not acceptance of the source's external deliveries.
-        for entry in &mut entries {
-            if let SessionEntry::TurnStarted { request, .. } = entry {
-                *request = None;
-            }
-        }
-        let copied = {
-            let mut target = clone.store.lock().map_err(|_| SessionError::Poisoned)?;
-            append(&mut target, &entries)
-        };
-        if let Err(error) = copied {
-            let Self {
-                store, _lock, path, ..
-            } = clone;
-            // Close SQLite before unlinking its files, but keep exclusive custody
-            // through cleanup. Never unlink the lock inode: contenders may have
-            // opened it already and must not acquire a different lease afterward.
-            drop(store);
-            for suffix in ["-wal", "-shm"] {
-                let mut sidecar = path.as_os_str().to_os_string();
-                sidecar.push(suffix);
-                let _ = fs::remove_file(PathBuf::from(sidecar));
-            }
-            let _ = fs::remove_file(path);
-            drop(_lock);
-            return Err(error);
-        }
-        Ok(clone)
+        Self::create_initial(
+            path,
+            self.header.cwd.as_deref(),
+            uuid::Uuid::new_v4(),
+            &without_delivery_keys(entries),
+        )
     }
 
     /// Read only the immutable logical identity, not execution status or history
@@ -1754,6 +1715,41 @@ fn interrupted_operation_entries(state: &State) -> Vec<SessionEntry> {
     entries
 }
 
+/// Preserve entry coordinates, compaction boundaries and replay facts exactly.
+/// The selected settled prefix, not an arbitrary message suffix, is the fork.
+fn fork_prefix(
+    connection: &Connection,
+    point: ForkPoint,
+) -> Result<(Vec<SessionEntry>, Option<ModelRef>), SessionError> {
+    let mut entries = read_entries(connection)?;
+    let boundary = entries
+        .iter()
+        .position(|entry| match (point, entry) {
+            (ForkPoint::BeforeTurn(selected), SessionEntry::TurnStarted { turn, .. })
+            | (ForkPoint::AfterTurn(selected), SessionEntry::TurnEnded { turn, .. }) => {
+                selected == *turn
+            }
+            _ => false,
+        })
+        .ok_or(SessionError::InvalidForkPoint)?;
+    let selected_model = match (&point, &entries[boundary]) {
+        (ForkPoint::BeforeTurn(_), SessionEntry::TurnStarted { model, .. }) => Some(model.clone()),
+        _ => None,
+    };
+    entries.truncate(boundary + usize::from(matches!(point, ForkPoint::AfterTurn(_))));
+    Ok((entries, selected_model))
+}
+
+fn without_delivery_keys(mut entries: Vec<SessionEntry>) -> Vec<SessionEntry> {
+    // Conversation/context copying is not acceptance of external deliveries.
+    for entry in &mut entries {
+        if let SessionEntry::TurnStarted { request, .. } = entry {
+            *request = None;
+        }
+    }
+    entries
+}
+
 fn pending_results(
     turn: u64,
     pending: &[PendingTool],
@@ -2072,6 +2068,7 @@ fn project<E: Borrow<SessionEntry>>(
     let mut turns = 0usize;
     let mut request_keys = BTreeSet::new();
     let mut delegation_children = BTreeSet::new();
+    let mut child_bindings = BTreeSet::new();
     let mut first_input = None;
     for entry in entries {
         let entry = entry?;
@@ -2085,6 +2082,11 @@ fn project<E: Borrow<SessionEntry>>(
         }
         if let SessionEntry::DelegationAdmitted { record } = entry
             && !delegation_children.insert(record.child)
+        {
+            return Err(SessionError::InvalidHistory);
+        }
+        if let SessionEntry::ChildSessionOf { record } = entry
+            && !child_bindings.insert(record.child)
         {
             return Err(SessionError::InvalidHistory);
         }
