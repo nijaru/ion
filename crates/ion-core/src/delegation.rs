@@ -104,8 +104,9 @@ pub struct DelegationReceipt {
     pub outcome: Option<DelegationOutcome>,
 }
 
-/// Ordinary child failure is available to the parent tool. Infrastructure
-/// failure additionally closes the Core gateway, even if tool code catches it.
+/// Ordinary joined child failure is available in its receipt. Infrastructure
+/// failure closes the supervising scope: the parent gateway before release,
+/// or the destination owner after transfer. Catching a tool error cannot suppress it.
 pub enum DelegationFailure {
     Execution(String),
     Infrastructure(String),
