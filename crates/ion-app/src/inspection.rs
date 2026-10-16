@@ -131,6 +131,10 @@ enum EntryInspection {
         #[serde(serialize_with = "omit")]
         record: ion_core::DelegationRecord,
     },
+    DelegationTransferred {
+        child: uuid::Uuid,
+        owner: uuid::Uuid,
+    },
     DelegationSettled {
         child: uuid::Uuid,
         outcome: ion_core::DelegationOutcome,
@@ -153,11 +157,11 @@ struct DelegationInspection {
     path: PathBuf,
     ownership: ion_core::DelegationOwnership,
     #[serde(serialize_with = "omit")]
-    spec: ion_core::ForegroundSpec,
+    spec: ion_core::DelegationSpec,
 }
 
 #[derive(Serialize)]
-#[serde(remote = "ion_core::ForegroundSpec")]
+#[serde(remote = "ion_core::DelegationSpec")]
 struct ForegroundInspection {
     context: ion_core::DelegationContext,
     directory: PathBuf,
@@ -268,7 +272,7 @@ projection!(
     ChildOutcome => ChildInspection,
     CodingToolOutput => OutputInspection,
     ion_core::DelegationRecord => DelegationInspection,
-    ion_core::ForegroundSpec => ForegroundInspection,
+    ion_core::DelegationSpec => ForegroundInspection,
 );
 
 impl Serialize for OmitImages<'_, ImageContent> {
@@ -571,7 +575,7 @@ mod tests {
             child,
             path: PathBuf::from("/inspection-fixture").join(format!("{child}.sqlite")),
             ownership: ion_core::DelegationOwnership::Foreground,
-            spec: ion_core::ForegroundSpec {
+            spec: ion_core::DelegationSpec {
                 context: ion_core::DelegationContext::Fresh,
                 directory: PathBuf::from("/inspection-fixture"),
                 cwd: None,

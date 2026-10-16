@@ -1,8 +1,15 @@
 use super::*;
-use crate::{DelegationOutcome, DelegationSite, ForegroundSpec};
+use crate::{DelegationOutcome, DelegationSite, DelegationSpec};
 use ion_ai::{Content, Message, Role, ToolCall, ToolSpec};
 
 fn pending(composed: bool) -> (PathBuf, Session, RecoveryBinding, crate::DelegationRecord) {
+    pending_for(composed, crate::DelegationOwnership::Foreground)
+}
+
+pub(super) fn pending_for(
+    composed: bool,
+    ownership: crate::DelegationOwnership,
+) -> (PathBuf, Session, RecoveryBinding, crate::DelegationRecord) {
     let root = std::env::temp_dir().join(format!("ion-delegation-state-{}", uuid::Uuid::new_v4()));
     fs::create_dir(&root).unwrap();
     let session = Session::create(root.join("parent.sqlite"), None).unwrap();
@@ -71,7 +78,7 @@ fn pending(composed: bool) -> (PathBuf, Session, RecoveryBinding, crate::Delegat
                 tool,
                 composed_child: composed.then_some(0),
             },
-            ForegroundSpec {
+            DelegationSpec {
                 context: crate::DelegationContext::Fresh,
                 directory: root.join("children"),
                 cwd: None,
@@ -80,6 +87,7 @@ fn pending(composed: bool) -> (PathBuf, Session, RecoveryBinding, crate::Delegat
                 authority: AuthorityScope::new("child/v1").unwrap(),
                 input: Message::user_input("child".into(), []),
             },
+            ownership,
         )
         .unwrap()
         .0;

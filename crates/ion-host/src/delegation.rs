@@ -1,11 +1,11 @@
-//! Foreground children use ordinary assembly and shared Session control.
+//! Explicit child recipes use ordinary assembly and shared Session control.
 use std::{path::PathBuf, sync::Arc};
 
 use anyhow::{Result, ensure};
 use ion_ai::{Message, ModelRef, Reasoning};
 use ion_core::{
-    AuthorityScope, CodingAgentError, CodingSessionError, ForegroundFailure, ForegroundSpec,
-    ForegroundTask,
+    AuthorityScope, CodingAgentError, CodingSessionError, DelegationFailure, DelegationSpec,
+    DelegationTask,
 };
 
 use crate::{Application, ControlUpdate, OperationOutcome, SessionCatalog, SessionSetup};
@@ -16,8 +16,9 @@ use crate::{Application, ControlUpdate, OperationOutcome, SessionCatalog, Sessio
 /// credentials. Forking shares historical context facts (including instructions
 /// and tool outputs), not execution grants; authorize that disclosure. Matching
 /// deferred child definitions can regain exposure without adding parent executors.
-/// Background ownership transfer is not supported.
-pub struct ForegroundDelegation {
+/// Tasks default to foreground joining. For explicit transfer, reserve a slot
+/// from `BackgroundOwner` and pass it to `DelegationTask::in_background`.
+pub struct SessionDelegation {
     pub context: ion_core::DelegationContext,
     pub directory: PathBuf,
     pub cwd: Option<PathBuf>,
@@ -27,11 +28,11 @@ pub struct ForegroundDelegation {
     pub authority: AuthorityScope,
 }
 
-impl ForegroundDelegation {
+impl SessionDelegation {
     /// Preflight captures the complete runtime/resources before relationship
     /// admission. The returned task is cold and owns everything needed to join
     /// preparation, Core execution and shutdown outside the tool's borrowed wait.
-    pub fn prepare(&self, input: Message) -> Result<ForegroundTask> {
+    pub fn prepare(&self, input: Message) -> Result<DelegationTask> {
         ensure!(
             self.directory.is_absolute(),
             "child directory must be absolute"
@@ -47,7 +48,7 @@ impl ForegroundDelegation {
             .runtime(cwd.as_deref(), self.model.as_ref())?;
         crate::binding::validate_model(&runtime, self.model.as_ref())?;
         runtime.agent.validate_reasoning(self.reasoning)?;
-        let spec = ForegroundSpec {
+        let spec = DelegationSpec {
             context: self.context,
             directory: self.directory.clone(),
             cwd: cwd.clone(),
@@ -59,7 +60,7 @@ impl ForegroundDelegation {
         let catalog = SessionCatalog::new(self.directory.clone(), cwd);
         let application = self.application.clone();
         let reasoning = self.reasoning;
-        ForegroundTask::new(spec, move |child, request, stop| {
+        DelegationTask::new(spec, move |child, request, stop| {
             Box::pin(async move {
                 let setup = SessionSetup::from_prepared(
                     child,
@@ -69,7 +70,7 @@ impl ForegroundDelegation {
                     runtime,
                     Some(reasoning),
                 )
-                .map_err(|error| ForegroundFailure::Infrastructure(error.to_string()))?;
+                .map_err(|error| DelegationFailure::Infrastructure(error.to_string()))?;
                 let mut control = setup.into_control::<()>();
                 let admission =
                     control.submit_linked_request(&request.key, request.input, (), stop.clone());
@@ -91,9 +92,9 @@ impl ForegroundDelegation {
                         && let OperationOutcome::Turn(Err(error)) = settlement.outcome
                     {
                         let error = if infrastructure(&error) {
-                            ForegroundFailure::Infrastructure(error.to_string())
+                            DelegationFailure::Infrastructure(error.to_string())
                         } else {
-                            ForegroundFailure::Execution(error.to_string())
+                            DelegationFailure::Execution(error.to_string())
                         };
                         retain_failure(&mut failure, error);
                     }
@@ -101,7 +102,7 @@ impl ForegroundDelegation {
                 for error in report.cleanup_errors {
                     retain_failure(
                         &mut failure,
-                        ForegroundFailure::Infrastructure(error.to_string()),
+                        DelegationFailure::Infrastructure(error.to_string()),
                     );
                 }
                 failure.map_or(Ok(()), Err)
@@ -120,7 +121,7 @@ fn infrastructure(error: &CodingAgentError) -> bool {
     )
 }
 
-fn admission_failure(error: anyhow::Error) -> ForegroundFailure {
+fn admission_failure(error: anyhow::Error) -> DelegationFailure {
     // The initial receipt lookup returns SessionError directly; later admission
     // can wrap it in AgentError. Neither may become a catchable tool failure.
     if error.downcast_ref::<CodingSessionError>().is_some()
@@ -128,27 +129,27 @@ fn admission_failure(error: anyhow::Error) -> ForegroundFailure {
             .downcast_ref::<CodingAgentError>()
             .is_some_and(infrastructure)
     {
-        ForegroundFailure::Infrastructure(error.to_string())
+        DelegationFailure::Infrastructure(error.to_string())
     } else {
-        ForegroundFailure::Execution(error.to_string())
+        DelegationFailure::Execution(error.to_string())
     }
 }
 
-fn retain_failure(current: &mut Option<ForegroundFailure>, next: ForegroundFailure) {
+fn retain_failure(current: &mut Option<DelegationFailure>, next: DelegationFailure) {
     let Some(previous) = current.take() else {
         *current = Some(next);
         return;
     };
-    let infrastructure = matches!(previous, ForegroundFailure::Infrastructure(_))
-        || matches!(next, ForegroundFailure::Infrastructure(_));
-    let (ForegroundFailure::Execution(previous) | ForegroundFailure::Infrastructure(previous)) =
+    let infrastructure = matches!(previous, DelegationFailure::Infrastructure(_))
+        || matches!(next, DelegationFailure::Infrastructure(_));
+    let (DelegationFailure::Execution(previous) | DelegationFailure::Infrastructure(previous)) =
         previous;
-    let (ForegroundFailure::Execution(next) | ForegroundFailure::Infrastructure(next)) = next;
+    let (DelegationFailure::Execution(next) | DelegationFailure::Infrastructure(next)) = next;
     let errors = format!("{previous}; {next}");
     *current = Some(if infrastructure {
-        ForegroundFailure::Infrastructure(errors)
+        DelegationFailure::Infrastructure(errors)
     } else {
-        ForegroundFailure::Execution(errors)
+        DelegationFailure::Execution(errors)
     });
 }
 
@@ -166,21 +167,21 @@ mod tests {
         ] {
             assert!(matches!(
                 admission_failure(error),
-                ForegroundFailure::Infrastructure(_)
+                DelegationFailure::Infrastructure(_)
             ));
         }
         let mut failure = Some(admission_failure(anyhow::anyhow!("ordinary refusal")));
-        assert!(matches!(failure, Some(ForegroundFailure::Execution(_))));
+        assert!(matches!(failure, Some(DelegationFailure::Execution(_))));
         retain_failure(
             &mut failure,
-            ForegroundFailure::Infrastructure("first cleanup".into()),
+            DelegationFailure::Infrastructure("first cleanup".into()),
         );
         retain_failure(
             &mut failure,
-            ForegroundFailure::Infrastructure("second cleanup".into()),
+            DelegationFailure::Infrastructure("second cleanup".into()),
         );
         assert!(
-            matches!(failure, Some(ForegroundFailure::Infrastructure(error)) if error == "ordinary refusal; first cleanup; second cleanup")
+            matches!(failure, Some(DelegationFailure::Infrastructure(error)) if error == "ordinary refusal; first cleanup; second cleanup")
         );
     }
 }

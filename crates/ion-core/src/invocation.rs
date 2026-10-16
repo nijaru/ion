@@ -98,15 +98,18 @@ impl<'a> ToolInvocation<'a> {
         self.origin
     }
 
-    /// Request one foreground child with explicit context through this live invocation. Exact
+    /// Request one child with explicit context through this live invocation. Exact
     /// repetition reconciles; different work conflicts. Cancelling this borrowed
     /// wait does not revoke a transferred request or abandon started supervision.
     /// Historical origins alone cannot make a request, and closed ports cannot
-    /// start another child. Ordinary child failure is reported in the receipt;
-    /// infrastructure failure also blocks the parent even when this error is caught.
+    /// start another child. Foreground returns only after joining; background
+    /// returns a committed transfer, not completion. Later outcomes belong to
+    /// the destination owner and Session facts. Infrastructure failure blocks
+    /// the parent before release, or closes the destination after transfer,
+    /// even when tool code catches an error.
     pub async fn delegate(
         &self,
-        task: crate::ForegroundTask,
+        task: crate::DelegationTask,
     ) -> Result<crate::DelegationReceipt, String> {
         let port = self
             .delegation

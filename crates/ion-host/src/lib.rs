@@ -5,11 +5,15 @@ mod application;
 #[cfg(test)]
 mod application_tests;
 pub mod auth;
+mod background;
 mod binding;
 pub mod catalog;
 pub mod code_mode;
 mod control;
 mod credentials;
+pub use background::{
+    BackgroundChildSnapshot, BackgroundDestination, BackgroundOwner, BackgroundSnapshot,
+};
 mod delegation;
 mod edit_diff;
 pub mod file_io;
@@ -45,7 +49,7 @@ pub use control::{
     UserInput,
 };
 pub use credentials::{CredentialResolutionError, CredentialResolver};
-pub use delegation::ForegroundDelegation;
+pub use delegation::SessionDelegation;
 pub use local_tools::LocalTools;
 pub use mcp::{McpConfig, McpHttpServer, McpServer, McpStartup, McpStdioServer, McpTools};
 pub use model_http::{HttpModelService, HttpWire};

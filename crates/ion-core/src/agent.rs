@@ -818,7 +818,7 @@ impl Agent {
 
     async fn submit_inner<F, M: Send>(
         &self,
-        session: &Session,
+        session: &Arc<Session>,
         input: Message,
         instructions: String,
         stop: CancellationToken,
@@ -885,7 +885,7 @@ impl Agent {
 
     async fn run_admitted<F, M: Send>(
         &self,
-        session: &Session,
+        session: &Arc<Session>,
         start: TurnStart,
         instructions: String,
         stop: CancellationToken,
@@ -909,7 +909,7 @@ impl Agent {
 
     async fn drive<F, M: Send>(
         &self,
-        session: &Session,
+        session: &Arc<Session>,
         start: TurnStart,
         instructions: String,
         stop: &CancellationToken,

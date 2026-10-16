@@ -1,4 +1,4 @@
-//! Credential-free foreground delegation through the ordinary shared engine.
+//! Credential-free foreground/background delegation through the shared engine.
 //! Run with a fresh absolute state directory. The smoke also kills this process
 //! after a synced child effect, then exercises both explicit recovery policies.
 use std::{
@@ -18,8 +18,8 @@ use ion_core::{
     TurnEndReason,
 };
 use ion_host::{
-    Application, ApplicationRuntime, ControlUpdate, ForegroundDelegation, OperationOutcome,
-    RequestAdmission, Resources, SessionCatalog, SessionSetup,
+    Application, ApplicationRuntime, BackgroundOwner, ControlUpdate, OperationOutcome,
+    RequestAdmission, Resources, SessionCatalog, SessionDelegation, SessionSetup,
 };
 use serde_json::json;
 
@@ -44,6 +44,8 @@ struct Effect {
     parent: Arc<CodingSession>,
     file: PathBuf,
     pause: bool,
+    release: Option<Arc<tokio::sync::Notify>>,
+    synced: Arc<tokio::sync::Notify>,
 }
 impl CodingToolSource for Effect {
     fn registrations(self: Arc<Self>) -> Vec<ToolRegistration> {
@@ -67,17 +69,24 @@ impl ToolExecutor for Effect {
                 .expect("owned effect file");
             file.write_all(b"child effect\n").expect("effect write");
             file.sync_all().expect("effect sync");
+            self.synced.notify_one();
             if self.pause {
                 println!("CHILD_EFFECT_SYNCED");
                 std::io::stdout().flush().expect("marker flush");
                 invocation.stop().cancelled().await;
+            } else if let Some(release) = &self.release {
+                tokio::select! {
+                    () = release.notified() => {},
+                    () = invocation.stop().cancelled() => {},
+                }
             }
             output(json!({"written": true}), false)
         })
     }
 }
 struct Delegate {
-    child: ForegroundDelegation,
+    child: SessionDelegation,
+    owner: Option<Arc<BackgroundOwner>>,
 }
 impl CodingToolSource for Delegate {
     fn registrations(self: Arc<Self>) -> Vec<ToolRegistration> {
@@ -94,9 +103,15 @@ impl ToolExecutor for Delegate {
                 Ok(task) => task,
                 Err(error) => return output(json!(error.to_string()), true),
             };
+            let task = if let Some(owner) = &self.owner {
+                task.in_background(owner.destination())
+            } else {
+                task
+            };
             match invocation.delegate(task).await {
                 Ok(receipt) => {
-                    let failed = !matches!(&receipt.outcome, Some(DelegationOutcome::Joined { receipt: Some(receipt), error: None }) if receipt.end == Some(TurnEndReason::Completed));
+                    let failed = !receipt.transferred
+                        && !matches!(&receipt.outcome, Some(DelegationOutcome::Joined { receipt: Some(receipt), error: None }) if receipt.end == Some(TurnEndReason::Completed));
                     output(
                         serde_json::to_value(receipt).expect("receipt serialization"),
                         failed,
@@ -175,14 +190,15 @@ async fn drive(control: &mut ion_host::SessionControl) -> Result<()> {
 #[tokio::main]
 async fn main() -> Result<()> {
     let root = PathBuf::from(std::env::args_os().nth(1).context(
-        "usage: delegation ABSOLUTE_STATE [--fork] [--pause-after-effect|--resume|--new]",
+        "usage: delegation ABSOLUTE_STATE [--fork] [--background] [--pause-after-effect|--resume|--new]",
     )?);
     ensure!(root.is_absolute(), "state directory must be absolute");
     let flags = std::env::args().skip(2).collect::<Vec<_>>();
     let fork = flags.iter().any(|flag| flag == "--fork");
+    let background = flags.iter().any(|flag| flag == "--background");
     let modes = flags
         .iter()
-        .filter(|flag| flag.as_str() != "--fork")
+        .filter(|flag| flag.as_str() != "--fork" && flag.as_str() != "--background")
         .collect::<Vec<_>>();
     let mode = modes.first().map(|flag| flag.as_str());
     let pause = mode == Some("--pause-after-effect");
@@ -190,8 +206,9 @@ async fn main() -> Result<()> {
     let new = mode == Some("--new");
     ensure!(
         modes.len() <= 1
-            && flags.len() == modes.len() + usize::from(fork)
-            && (mode.is_none() || pause || resume || new),
+            && flags.len() == modes.len() + usize::from(fork) + usize::from(background)
+            && (mode.is_none() || pause || resume || new)
+            && !(background && resume),
         "unknown or repeated mode"
     );
     let parent_turn = if fork { 2 } else { 1 };
@@ -210,10 +227,15 @@ async fn main() -> Result<()> {
             response(vec![Content::Text("child done".into())]),
         ]
     }));
+    let owner = Arc::new(BackgroundOwner::new(1)?);
+    let synced = Arc::new(tokio::sync::Notify::new());
+    let release = Arc::new(tokio::sync::Notify::new());
     let effects = Arc::new(Effect {
         parent: session.clone(),
         file: root.join("effects"),
         pause,
+        release: background.then(|| release.clone()),
+        synced: synced.clone(),
     });
     let child_agent = Arc::new(CodingAgent::with_tool_set(
         child_service.clone(),
@@ -221,7 +243,8 @@ async fn main() -> Result<()> {
         model("child"),
     ));
     let tools = Arc::new(Delegate {
-        child: ForegroundDelegation {
+        owner: background.then(|| owner.clone()),
+        child: SessionDelegation {
             context: if fork {
                 ion_core::DelegationContext::Fork {
                     point: ion_core::ForkPoint::AfterTurn(1),
@@ -290,7 +313,7 @@ async fn main() -> Result<()> {
         let before = session.view()?.entries;
         let admission = control.submit_request(&key, input, ()).map_err(|rejected| rejected.reason)?;
         if recovering {
-            ensure!(matches!(admission, RequestAdmission::Existing { receipt, .. } if receipt.turn == parent_turn && receipt.end.is_none()), "redelivery must only reconcile unfinished work");
+            ensure!(matches!(admission, RequestAdmission::Existing { receipt, .. } if receipt.turn == parent_turn && (if background { receipt.end == Some(TurnEndReason::Completed) } else { receipt.end.is_none() })), "redelivery must only reconcile original work");
             ensure!(session.view()?.entries == before && !control.is_busy() && service.requests().is_empty(), "redelivery executed or changed work");
             if resume {
                 let point = session.recovery_state()?.context("continuation unavailable")?.point;
@@ -302,6 +325,21 @@ async fn main() -> Result<()> {
             ensure!(matches!(admission, RequestAdmission::Started { .. }), "first delivery did not start");
         }
         drive(&mut control).await?;
+        if background && !recovering {
+            synced.notified().await;
+            let link = session.view()?.delegations().into_iter().next().context("missing transfer")?;
+            ensure!(link.transferred && link.outcome.is_none(), "release must follow transfer, not child settlement");
+            let report = control.shutdown().await;
+            ensure!(report.cleanup_errors.is_empty(), "parent shutdown failed");
+            if pause {
+                println!("BACKGROUND_PARENT_JOINED");
+                std::io::stdout().flush()?;
+                std::future::pending::<()>().await;
+            }
+            release.notify_one();
+            while !owner.snapshot().children[0].joined { owner.maintain().await; }
+            owner.take(link.record.child).context("missing retained background result")??;
+        }
         let view = session.view()?;
         let links = view.delegations();
         ensure!(links.len() == 1 && view.id == original_id, "relationship or parent identity changed");
@@ -325,6 +363,7 @@ async fn main() -> Result<()> {
         Ok(())
     }.await;
     let report = control.shutdown().await;
+    owner.join_shutdown().await;
     ensure!(
         report.cleanup_errors.is_empty(),
         "cleanup failed: {:?}; run: {run:?}",
@@ -332,7 +371,7 @@ async fn main() -> Result<()> {
     );
     run?;
     println!(
-        "foreground delegation: explicit environment, retained join, stable identity; no lost child replay"
+        "delegation: explicit environment, retained ownership/join, stable identity; no lost child replay"
     );
     Ok(())
 }

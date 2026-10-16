@@ -77,7 +77,7 @@ struct Inspection {
 }
 
 struct Gate<'a, F> {
-    session: &'a Session,
+    session: &'a Arc<Session>,
     catalog: &'a ToolCatalog,
     observe: &'a mut F,
     turn: u64,
@@ -423,7 +423,7 @@ impl Write for BoundedJson {
 pub(crate) async fn run<F: FnMut(AgentEvent) + Send>(
     runtime: &Arc<dyn CodeRuntime>,
     limits: CodeLimits,
-    session: &Session,
+    session: &Arc<Session>,
     turn: u64,
     catalog: &ToolCatalog,
     parent_call: &ToolCall,

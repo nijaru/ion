@@ -4,12 +4,12 @@ use std::collections::{BTreeMap, BTreeSet};
 use super::*;
 use crate::{
     DelegationContext, DelegationOutcome, DelegationOwnership, DelegationReceipt, DelegationRecord,
-    DelegationSite, ForegroundSpec,
+    DelegationSite, DelegationSpec,
 };
 
 #[derive(Default, Clone)]
 pub(super) struct PendingDelegations {
-    active: BTreeMap<Option<usize>, uuid::Uuid>,
+    active: BTreeMap<Option<usize>, (uuid::Uuid, DelegationOwnership, DelegationSite)>,
     finished: BTreeSet<Option<usize>>,
 }
 
@@ -29,7 +29,7 @@ impl PendingDelegations {
     pub(super) fn unknowns(&self) -> impl Iterator<Item = SessionEntry> + '_ {
         self.active
             .values()
-            .map(|child| SessionEntry::DelegationSettled {
+            .map(|(child, _, _)| SessionEntry::DelegationSettled {
                 child: *child,
                 outcome: DelegationOutcome::Unknown,
             })
@@ -73,21 +73,24 @@ impl State {
                 {
                     return Err(SessionError::InvalidHistory);
                 }
-                parent.delegations.active.insert(key, record.child);
+                parent
+                    .delegations
+                    .active
+                    .insert(key, (record.child, record.ownership, record.site));
+            }
+            SessionEntry::DelegationTransferred { child, owner } => {
+                let (parent, key) = pending_site(&mut self.pending, *child)?;
+                let (_, ownership, site) = parent.delegations.active[&key];
+                if ownership != (DelegationOwnership::Background { owner: *owner }) {
+                    return Err(SessionError::InvalidHistory);
+                }
+                parent.delegations.active.remove(&key);
+                parent.delegations.finished.insert(key);
+                if self.backgrounds.insert(*child, site).is_some() {
+                    return Err(SessionError::InvalidHistory);
+                }
             }
             SessionEntry::DelegationSettled { child, outcome } => {
-                let (parent, key) = self
-                    .pending
-                    .iter_mut()
-                    .find_map(|pending| {
-                        let key = pending
-                            .delegations
-                            .active
-                            .iter()
-                            .find_map(|(key, id)| (id == child).then_some(*key))?;
-                        Some((pending, key))
-                    })
-                    .ok_or(SessionError::InvalidHistory)?;
                 if let DelegationOutcome::Joined {
                     receipt: Some(receipt),
                     ..
@@ -98,13 +101,33 @@ impl State {
                 {
                     return Err(SessionError::InvalidHistory);
                 }
-                parent.delegations.active.remove(&key);
-                parent.delegations.finished.insert(key);
+                if self.backgrounds.remove(child).is_none() {
+                    let (parent, key) = pending_site(&mut self.pending, *child)?;
+                    parent.delegations.active.remove(&key);
+                    parent.delegations.finished.insert(key);
+                }
             }
             _ => unreachable!("delegation variants only"),
         }
         Ok(())
     }
+}
+
+fn pending_site(
+    pending: &mut [PendingTool],
+    child: uuid::Uuid,
+) -> Result<(&mut PendingTool, Option<usize>), SessionError> {
+    pending
+        .iter_mut()
+        .find_map(|pending| {
+            let key = pending
+                .delegations
+                .active
+                .iter()
+                .find_map(|(key, (id, _, _))| (*id == child).then_some(*key))?;
+            Some((pending, key))
+        })
+        .ok_or(SessionError::InvalidHistory)
 }
 
 fn valid_record(record: &DelegationRecord) -> bool {
@@ -114,6 +137,7 @@ fn valid_record(record: &DelegationRecord) -> bool {
         && record.site.turn != 0
         && record.site.tool.assistant_entry != 0
         && record.spec.valid()
+        && !matches!(record.ownership, DelegationOwnership::Background { owner } if owner.is_nil())
         && record.path
             == record
                 .spec
@@ -125,7 +149,8 @@ impl Session {
     pub(crate) fn admit_delegation(
         &self,
         site: DelegationSite,
-        spec: ForegroundSpec,
+        spec: DelegationSpec,
+        ownership: DelegationOwnership,
     ) -> Result<(DelegationRecord, Vec<SessionEntry>), SessionError> {
         if site.session != self.id() {
             return Err(SessionError::InvalidHistory);
@@ -135,7 +160,7 @@ impl Session {
             site,
             child,
             path: spec.directory.join(format!("{child}.sqlite")),
-            ownership: DelegationOwnership::Foreground,
+            ownership,
             spec,
         };
         let mut store = self.store.lock().map_err(|_| SessionError::Poisoned)?;
@@ -158,6 +183,28 @@ impl Session {
             }],
         )?;
         Ok((record, context))
+    }
+
+    pub(crate) fn transfer_delegation(
+        &self,
+        record: &DelegationRecord,
+        lease: &std::sync::Arc<()>,
+    ) -> Result<(), SessionError> {
+        let DelegationOwnership::Background { owner } = record.ownership else {
+            return Err(SessionError::InvalidHistory);
+        };
+        let mut store = self.store.lock().map_err(|_| SessionError::Poisoned)?;
+        append(
+            &mut store,
+            &[SessionEntry::DelegationTransferred {
+                child: record.child,
+                owner,
+            }],
+        )?;
+        store
+            .live_backgrounds
+            .insert(record.child, std::sync::Arc::downgrade(lease));
+        Ok(())
     }
 
     pub(crate) fn settle_delegation(
@@ -229,8 +276,14 @@ impl SessionView {
                     positions.insert(record.child, receipts.len());
                     receipts.push(DelegationReceipt {
                         record: record.clone(),
+                        transferred: false,
                         outcome: None,
                     });
+                }
+                SessionEntry::DelegationTransferred { child, .. } => {
+                    if let Some(&index) = positions.get(child) {
+                        receipts[index].transferred = true;
+                    }
                 }
                 SessionEntry::DelegationSettled { child, outcome } => {
                     if let Some(&index) = positions.get(child) {

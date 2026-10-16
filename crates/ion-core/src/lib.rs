@@ -23,8 +23,9 @@ pub use agent::{
     AgentLimits, PromptCacheWarmingPolicy, RequestSubmission, SteeringInbox,
 };
 pub use delegation::{
-    DelegationContext, DelegationOutcome, DelegationOwnership, DelegationReceipt, DelegationRecord,
-    DelegationSite, ForegroundFailure, ForegroundSpec, ForegroundTask,
+    BackgroundJob, BackgroundSlot, BackgroundStartError, DelegationContext, DelegationFailure,
+    DelegationOutcome, DelegationOwnership, DelegationReceipt, DelegationRecord, DelegationSite,
+    DelegationSpec, DelegationTask,
 };
 pub use input::{AcceptedInput, InputBudget, InputReservation};
 pub use invocation::{ToolInvocation, ToolOccurrence, ToolOrigin};

@@ -202,7 +202,7 @@ optional `after: true`.
 Session IDs are immutable UUIDs stored in the header, independent of filenames
 and provider affinity. Renaming a closed database does not change its ID; clone
 and fork create new identities without inheriting external delivery receipts or continuation grants.
-This unreleased branch uses Session format 14; earlier development Session
+This unreleased branch uses Session format 15; earlier development Session
 files are not reopened. Tool activity classification used by the transcript is
 stored with each assistant tool-call batch, so resumed history is not
 reinterpreted through the currently installed tool catalog.
@@ -595,8 +595,8 @@ MCP arguments; applications control what their tool outputs disclose. `ToolCatal
 `ToolInvocation::untracked` explicitly omit admission and origin. Provenance is
 not a live lease, capability grant, replay permission or evidence of settlement.
 
-Rust applications can prepare a foreground child with Host's
-`ForegroundDelegation` and request it through `ToolInvocation::delegate`. Its
+Rust applications can prepare a child with Host's
+`SessionDelegation` and request it through `ToolInvocation::delegate`. Its
 private live admission port is separate from the historical origin. The complete
 child application, authority assertion and environment are explicit. Choose
 `DelegationContext::Fresh` or `Fork { point }`, with `ForkPoint::BeforeTurn(n)` or
@@ -614,20 +614,46 @@ and explicit preferences append after the prefix in the header's initialization
 transaction; inherited delivery keys, continuation grants and child ownership
 are not transferred.
 
-Core records a stable child identity and relationship before materialization,
-and retains Host supervision
-until shared control and started work join—even if the tool abandons its wait.
-Exact repeated specifications reconcile; different work at that invocation
-conflicts. Relationship storage failure blocks dependent execution, including a
-Code Mode guest that catches the tool error. `SessionView::delegations()` and
-`parent_delegation()` expose typed relationships without parsing tool prose;
-conversation copies acquire no child ownership.
+Core records a stable child identity and relationship before materialization.
+Tasks default to foreground: parent stop propagates, and supervision joins shared
+control and started work before parent settlement—even if the tool abandons its
+wait. Exact repeated specifications reconcile; different work, ownership mode or
+owner epoch at that invocation conflicts. `SessionView::delegations()` and
+`parent_delegation()` expose typed relationships without parsing tool prose.
 
-After owner loss, conservative recovery or explicit parent-Turn continuation
-records the unresolved relationship as unknown before closing its tool call;
-neither restarts the old child nor rewrites the child's missing observations.
-A new model-issued delegation is new work, not an exactly-once effect guarantee.
-There is no default coding delegation tool or background ownership transfer yet.
+For background work, retain a Host `BackgroundOwner` and choose its live
+destination: `recipe.prepare(input)?.in_background(owner.destination())`. Core
+reconciles exact repeats first, then reserves Host custody before admitting new
+work. Even a full or closed owner permits reconciliation of an existing transfer.
+The destination installs a retained operation and Core commits
+`DelegationTransferred` before the parent receives its transfer receipt. That
+receipt is not child settlement or liveness. Cancellation observed at transfer
+admission refuses cold work; a racing cancellation may lose to that admission.
+After transfer, parent cancellation/shutdown does not stop the child. Owner
+shutdown closes admission, stops its children and joins their full Host controls.
+Drop requests stop; finish `join_shutdown().await` before destroying the runtime.
+Cancelled maintenance/shutdown waits retain tasks and results. `maintain()` joins
+without consuming; only `take(child)` releases a joined result's capacity. Capacity
+bounds reservations, running jobs and unread results together (1–64 slots), not
+history, encoded bytes or RSS. Snapshots are privileged custody views, not an
+authenticated remote service or atomic Core/Host snapshots.
+
+Relationship storage failure blocks dependent execution before release, including
+a Code Mode guest that catches the error. Later infrastructure failure or panic
+closes the destination owner and requests its other children's stop, independently
+of output readers. It cannot retroactively change an acknowledged parent result.
+Joined ordinary child failures remain available in receipts. Panic and process
+loss do not prove effects stopped.
+
+After owner loss, inspection is passive. The next explicit new-work admission,
+direct shell or authorized parent-Turn continuation closes orphan relationships
+as unknown before dependent work—even if the original parent Turn already ended.
+A surviving transfer task retains the parent writer lease and is not closed by
+new parent work. Copies retain foreign history but acquire no child ownership.
+Recovery neither restarts the old child nor rewrites its missing observations;
+an owner UUID is not authority to adopt or resume it. New model-issued delegation
+is new work, not an exactly-once effect guarantee. There is no default coding
+delegation tool or live-model delegation qualification yet.
 
 Tools act directly in the working directory with the host user's permissions.
 There is no implicit sandbox. Settlements distinguish observed host output,
@@ -845,7 +871,7 @@ contracts are not all implemented:
 | --- | --- | --- |
 | Application setup | Caller-owned model/tool/instruction configuration, workspace-free Sessions and explicit shell/local-image authority. Opt-in continuation checks a saved authority reference and declarations. | Changed-authority reconciliation. Applications must reconstruct and attest live bindings on reopen; the reference is not a credential or sandbox. |
 | Durability | SQLite conversation/effect history, conservative recovery, restart-safe direct admission and explicit same-Turn continuation through the Rust SDK. | Durable pending queues, wire-protocol delivery IDs and automatic restart/continuation. Coding CLI/TUI/RPC submissions do not opt in to continuation. |
-| Delegation | Foreground SDK children with fresh or explicit forked context, recorded identity, explicit application/environment, retained stop/join and conservative process-loss recovery. Code Mode nested tools remain distinct. | Background transfer and a default coding delegation tool; no live-model delegation qualification yet. Ordinary conversation forks still share the source cwd; managed children choose their own environment. |
+| Delegation | Foreground and explicitly transferred background SDK children, fresh/forked context, stable identity, explicit application/environment, bounded retained supervision/results and conservative owner-loss recovery. Code Mode nested tools remain distinct. | No default coding delegation tool or live-model/service-scale delegation qualification. Ordinary conversation forks still share the source cwd; managed children choose their own environment. |
 | Remote use | Foreground stdio RPC, lossy progress and complete pull snapshots through shared control. A service embedding retains/drives the owner independently of connections. | No built-in authenticated network server, reliable activity replay or durable queue/metadata recovery. RPC EOF still stops/joins work. |
 
 Common coding workflows are implemented, but Pi-level daily-driver reliability
@@ -942,12 +968,14 @@ uses separate restricted parent and child applications through shared control:
 ```sh
 cargo run --locked -p ion --example delegation -- "$(mktemp -d)"
 cargo run --locked -p ion --example delegation -- "$(mktemp -d)" --fork
+cargo run --locked -p ion --example delegation -- "$(mktemp -d)" --background --fork
 ```
 
 After building it, `python3 scripts/smoke_delegation.py` also kills an owned
-process after a synced child host effect, for both fresh and forked context.
-Explicit parent-Turn continuation and fresh-work recovery preserve the original
-child identity and unknown effects
+process after a synced child host effect, for fresh/forked foreground children
+and background children whose parent has already joined. Explicit parent-Turn
+continuation (foreground) and fresh-work recovery preserve the original child
+identity and unknown effects
 without replay or a replacement child. Focused faults cover relationship commits,
 joined cancellation and Code Mode error catching. These are bounded offline SDK
 checks, not live-model, background-agent or remote-effect quiescence qualification.

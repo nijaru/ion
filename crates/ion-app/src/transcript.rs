@@ -149,6 +149,7 @@ pub fn render(view: &SessionView) -> String {
             | SessionEntry::EffectiveModelChanged { .. }
             | SessionEntry::UserShellSettled { .. }
             | SessionEntry::DelegationAdmitted { .. }
+            | SessionEntry::DelegationTransferred { .. }
             | SessionEntry::DelegationSettled { .. }
             | SessionEntry::ChildSessionOf { .. } => {}
         }

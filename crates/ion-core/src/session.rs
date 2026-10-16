@@ -2,7 +2,7 @@
 //! SQLite commits related events atomically before any external effect runs.
 use std::{
     borrow::Borrow,
-    collections::BTreeSet,
+    collections::{BTreeMap, BTreeSet},
     fs::{self, File, OpenOptions},
     os::unix::fs::{MetadataExt, OpenOptionsExt},
     path::{Path, PathBuf},
@@ -29,6 +29,8 @@ pub(crate) mod code_inspection;
 mod context;
 mod delegation;
 #[cfg(test)]
+mod delegation_background_tests;
+#[cfg(test)]
 mod delegation_fork_tests;
 #[cfg(test)]
 mod delegation_tests;
@@ -44,7 +46,7 @@ pub use recovery::{AuthorityScope, RecoveryBinding, RecoveryPoint, RecoveryState
 pub(crate) use submission::TurnAdmission;
 pub use submission::{RequestKey, RequestReceipt, SubmissionRequest};
 
-const FORMAT_VERSION: u32 = 14;
+const FORMAT_VERSION: u32 = 15;
 // An 8 MiB raw prompt or streamed response can grow up to sixfold when JSON
 // escapes control characters. Keep the storage bound above that encoded size.
 const MAX_ENTRY_BYTES: usize = 64 * 1024 * 1024;
@@ -160,6 +162,10 @@ pub enum SessionEntry {
     /// Parent relationship intent, committed before child materialization.
     DelegationAdmitted {
         record: crate::DelegationRecord,
+    },
+    DelegationTransferred {
+        child: uuid::Uuid,
+        owner: uuid::Uuid,
     },
     DelegationSettled {
         child: uuid::Uuid,
@@ -334,6 +340,7 @@ struct State {
     prefix_bound_in_turn: bool,
     recovery: Option<RecoveryBinding>,
     pending: Vec<PendingTool>,
+    backgrounds: BTreeMap<uuid::Uuid, crate::DelegationSite>,
     last_id: u64,
     last_end: Option<(u64, TurnEndReason)>,
     last_model: Option<ModelRef>,
@@ -672,6 +679,7 @@ impl State {
                 }
             }
             SessionEntry::DelegationAdmitted { .. }
+            | SessionEntry::DelegationTransferred { .. }
             | SessionEntry::DelegationSettled { .. }
             | SessionEntry::ChildSessionOf { .. } => self.apply_delegation(entry)?,
             SessionEntry::TurnEnded { turn, reason } => {
@@ -727,6 +735,8 @@ struct Store {
     // not retain or reproject historical tool payloads on each model request.
     context_changes: Vec<ModelContextChange>,
     child_records: ChildRecordIndex,
+    // Process-local task custody only; absent after reopen. Not replay grants.
+    live_backgrounds: BTreeMap<uuid::Uuid, std::sync::Weak<()>>,
 }
 
 /// A writable Session holds a cross-process lock and retains its exclusive
@@ -805,6 +815,7 @@ impl Session {
                 messages: projection.messages,
                 context_changes: projection.context_changes,
                 child_records: projection.child_records,
+                live_backgrounds: BTreeMap::new(),
             }),
             _lock: lock,
             header,
@@ -836,6 +847,7 @@ impl Session {
                 messages,
                 context_changes,
                 child_records,
+                live_backgrounds: BTreeMap::new(),
             }),
             _lock: lock,
             header,
@@ -998,7 +1010,7 @@ impl Session {
         exclude_from_context: bool,
     ) -> Result<u64, SessionError> {
         let mut store = self.store.lock().map_err(|_| SessionError::Poisoned)?;
-        let mut entries = interrupted_operation_entries(&store.state);
+        let mut entries = interrupted_operation_entries(&store, self.id());
         entries.push(SessionEntry::UserShellAdmitted {
             command,
             exclude_from_context,
@@ -1346,7 +1358,7 @@ impl Session {
         {
             return Ok(TurnAdmission::Existing(receipt));
         }
-        let mut entries = interrupted_operation_entries(&store.state);
+        let mut entries = interrupted_operation_entries(&store, self.id());
         let interrupted = store.state.pending.len();
         let turn = store
             .state
@@ -1697,21 +1709,42 @@ impl Session {
     }
 }
 
-fn interrupted_operation_entries(state: &State) -> Vec<SessionEntry> {
+impl Store {
+    fn orphaned_backgrounds(&self, session: uuid::Uuid) -> Vec<SessionEntry> {
+        self.state
+            .backgrounds
+            .iter()
+            .filter(|(child, site)| {
+                site.session == session
+                    && self
+                        .live_backgrounds
+                        .get(child)
+                        .is_none_or(|lease| lease.strong_count() == 0)
+            })
+            .map(|(child, _)| SessionEntry::DelegationSettled {
+                child: *child,
+                outcome: crate::DelegationOutcome::Unknown,
+            })
+            .collect()
+    }
+}
+
+fn interrupted_operation_entries(store: &Store, session: uuid::Uuid) -> Vec<SessionEntry> {
+    let state = &store.state;
+    let mut entries = store.orphaned_backgrounds(session);
     if let Some(shell) = &state.pending_shell {
-        return vec![SessionEntry::UserShellSettled {
+        entries.push(SessionEntry::UserShellSettled {
             admission_entry: shell.admission_entry,
             outcome: UserShellOutcome::Unknown,
-        }];
+        });
     }
-    let Some(turn) = state.active else {
-        return Vec::new();
-    };
-    let mut entries = pending_results(turn, &state.pending, &BTreeSet::new());
-    entries.push(SessionEntry::TurnEnded {
-        turn,
-        reason: TurnEndReason::Interrupted,
-    });
+    if let Some(turn) = state.active {
+        entries.extend(pending_results(turn, &state.pending, &BTreeSet::new()));
+        entries.push(SessionEntry::TurnEnded {
+            turn,
+            reason: TurnEndReason::Interrupted,
+        });
+    }
     entries
 }
 
@@ -1836,6 +1869,9 @@ fn append(store: &mut Store, entries: &[SessionEntry]) -> Result<(), SessionErro
     for entry in entries {
         sequence += 1;
         store.child_records.observe(sequence, entry);
+        if let SessionEntry::DelegationSettled { child, .. } = entry {
+            store.live_backgrounds.remove(child);
+        }
     }
     store.state = candidate;
     store.settled.extend(new_settled);
@@ -1969,6 +2005,7 @@ fn message_from_entry(entry: &SessionEntry) -> Option<Message> {
         SessionEntry::ChildToolAdmitted { .. }
         | SessionEntry::ChildToolResult { .. }
         | SessionEntry::DelegationAdmitted { .. }
+        | SessionEntry::DelegationTransferred { .. }
         | SessionEntry::DelegationSettled { .. }
         | SessionEntry::ChildSessionOf { .. }
         | SessionEntry::UserShellAdmitted { .. }

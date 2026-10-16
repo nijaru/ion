@@ -16,11 +16,14 @@ use ion_core::{
     ToolRegistration, ToolSet, TurnEndReason,
 };
 use ion_host::{
-    Application, ApplicationRuntime, ControlUpdate, ForegroundDelegation, OperationOutcome,
-    Resources, SessionCatalog, SessionControl, SessionSetup,
+    Application, ApplicationRuntime, ControlUpdate, OperationOutcome, Resources, SessionCatalog,
+    SessionControl, SessionDelegation, SessionSetup,
 };
 use serde_json::json;
 use tokio::sync::{Notify, watch};
+
+#[path = "foreground_delegation/background.rs"]
+mod background;
 
 struct App {
     agent: Arc<CodingAgent>,
@@ -97,9 +100,14 @@ enum Wait {
     Join,
     Abandon,
     Repeat,
+    Panic,
+    HoldAfterTransfer,
+    StopBeforeTransfer,
+    CloseBeforeTransfer,
 }
 struct Delegate {
-    child: ForegroundDelegation,
+    child: SessionDelegation,
+    owner: Option<Arc<ion_host::BackgroundOwner>>,
     effect: Arc<Effect>,
     wait: Wait,
 }
@@ -112,9 +120,47 @@ impl ToolExecutor for Delegate {
     fn execute<'a>(&'a self, invocation: ToolInvocation<'a>) -> BoxFuture<'a, CodingToolOutput> {
         Box::pin(async move {
             let task = || {
-                self.child
-                    .prepare(Message::user_input("count two characters".into(), []))
+                let input = Message::user_input("count two characters".into(), []);
+                let task = if matches!(self.wait, Wait::Panic) {
+                    ion_core::DelegationTask::new(
+                        ion_core::DelegationSpec {
+                            context: self.child.context,
+                            directory: self.child.directory.clone(),
+                            cwd: None,
+                            model: model("child"),
+                            reasoning: self.child.reasoning,
+                            authority: self.child.authority.clone(),
+                            input,
+                        },
+                        |_, _, _| Box::pin(async { panic!("injected child supervisor panic") }),
+                    )
                     .unwrap()
+                } else {
+                    self.child.prepare(input).unwrap()
+                };
+                match &self.owner {
+                    Some(owner) => {
+                        let permit = owner.destination();
+                        match self.wait {
+                            Wait::StopBeforeTransfer => {
+                                task.in_background(background::BeforeTransfer {
+                                    permit,
+                                    stop: Some(invocation.stop().clone()),
+                                    close: None,
+                                })
+                            }
+                            Wait::CloseBeforeTransfer => {
+                                task.in_background(background::BeforeTransfer {
+                                    permit,
+                                    stop: None,
+                                    close: Some(owner.clone()),
+                                })
+                            }
+                            _ => task.in_background(permit),
+                        }
+                    }
+                    None => task,
+                }
             };
             let result = match self.wait {
                 Wait::Abandon => {
@@ -124,9 +170,17 @@ impl ToolExecutor for Delegate {
                         _ = started.wait_for(|started| *started) => return output(json!("wait abandoned")),
                     }
                 }
-                Wait::Join | Wait::Repeat => invocation.delegate(task()).await,
+                Wait::Join
+                | Wait::Repeat
+                | Wait::Panic
+                | Wait::HoldAfterTransfer
+                | Wait::StopBeforeTransfer
+                | Wait::CloseBeforeTransfer => invocation.delegate(task()).await,
             };
             if let Ok(receipt) = result {
+                if matches!(self.wait, Wait::HoldAfterTransfer) {
+                    invocation.stop().cancelled().await;
+                }
                 if matches!(self.wait, Wait::Repeat) {
                     assert_eq!(invocation.delegate(task()).await.unwrap(), receipt);
                     let different = self
@@ -134,6 +188,15 @@ impl ToolExecutor for Delegate {
                         .prepare(Message::user_input("different input".into(), []))
                         .unwrap();
                     assert!(invocation.delegate(different).await.is_err());
+                    if self.owner.is_some() {
+                        let other = ion_host::BackgroundOwner::new(1).unwrap();
+                        let changed_owner = self
+                            .child
+                            .prepare(Message::user_input("count two characters".into(), []))
+                            .unwrap()
+                            .in_background(other.destination());
+                        assert!(invocation.delegate(changed_owner).await.is_err());
+                    }
                 }
                 output(json!({"child":receipt.record.child, "outcome":receipt.outcome}))
             } else {
@@ -202,6 +265,15 @@ impl Fixture {
         composed: bool,
         context: ion_core::DelegationContext,
     ) -> Self {
+        Self::with_owner(wait, block, composed, context, None)
+    }
+    fn with_owner(
+        wait: Wait,
+        block: bool,
+        composed: bool,
+        context: ion_core::DelegationContext,
+        owner: Option<Arc<ion_host::BackgroundOwner>>,
+    ) -> Self {
         let root = std::env::temp_dir().join(format!("ion-foreground-{}", uuid::Uuid::now_v7()));
         std::fs::create_dir(&root).unwrap();
         let session = Arc::new(CodingSession::create(root.join("parent.sqlite"), None).unwrap());
@@ -228,8 +300,9 @@ impl Fixture {
             ])),
             model("child"),
         ));
+        let background = owner.is_some();
         let delegate = Arc::new(Delegate {
-            child: ForegroundDelegation {
+            child: SessionDelegation {
                 context,
                 directory: root.join("children"),
                 cwd: None,
@@ -241,6 +314,7 @@ impl Fixture {
                 reasoning: ion_ai::Reasoning::ProviderDefault,
                 authority: AuthorityScope::new("fixture-child/v1").unwrap(),
             },
+            owner,
             effect: effect.clone(),
             wait,
         });
@@ -260,6 +334,9 @@ impl Fixture {
             response(vec![first]),
             response(vec![Content::Text("parent done".into())]),
         ]);
+        if background {
+            scripts.push(response(vec![Content::Text("later parent work".into())]));
+        }
         let parent = Arc::new(ScriptedModelService::new(scripts));
         let tools = ToolSet::new([
             delegate as Arc<dyn CodingToolSource>,

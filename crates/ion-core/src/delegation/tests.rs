@@ -3,7 +3,7 @@ use super::*;
 #[tokio::test]
 async fn delegation_requires_live_authority_and_a_valid_context() {
     let root = std::env::temp_dir().join(format!("ion-delegation-port-{}", uuid::Uuid::new_v4()));
-    let session = CodingSession::create(root.join("parent.sqlite"), None).unwrap();
+    let session = Arc::new(CodingSession::create(root.join("parent.sqlite"), None).unwrap());
     let model = ModelRef {
         provider: "fixture".into(),
         model: "fixture".into(),
@@ -31,8 +31,8 @@ async fn delegation_requires_live_authority_and_a_valid_context() {
         .unwrap();
     let before = session.view().unwrap().entries;
     let task = |context| {
-        ForegroundTask::new(
-            ForegroundSpec {
+        DelegationTask::new(
+            DelegationSpec {
                 context,
                 directory: root.join("children"),
                 cwd: None,

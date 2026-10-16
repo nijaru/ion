@@ -24,7 +24,7 @@ impl Gateway {
 
     pub(crate) async fn run<T: Send>(
         mut self,
-        parent: &CodingSession,
+        parent: &Arc<CodingSession>,
         stop: &CancellationToken,
         tool: impl Future<Output = T> + Send,
     ) -> Result<T, SessionError> {
@@ -48,9 +48,9 @@ impl Gateway {
                 }
                 request = self.requests.recv(), if !closed && running.is_none() => {
                     let Some(request) = request else { closed = true; continue; };
-                    let DelegationRequest { task, reply: sender } = request;
+                    let DelegationRequest { mut task, reply: sender } = request;
                     if let Some(known) = &receipt {
-                        let result = if known.record.spec == task.spec {
+                        let result = if known.record.spec == task.spec && known.record.ownership == task.ownership() {
                             Ok(known.clone())
                         } else {
                             Err("this invocation already delegated different work".into())
@@ -62,12 +62,48 @@ impl Gateway {
                         let _ = sender.send(Err("delegation admission is closed".into()));
                         continue;
                     }
-                    match parent.admit_delegation(self.site, task.spec) {
+                    if let Some(destination) = task.background.as_mut()
+                        && let Err(error) = destination.reserve() {
+                        let _ = sender.send(Err(error));
+                        continue;
+                    }
+                    if stop.is_cancelled() {
+                        let _ = sender.send(Err("delegation admission is closed".into()));
+                        continue;
+                    }
+                    let ownership = task.ownership();
+                    match parent.admit_delegation(self.site, task.spec, ownership) {
                         Ok((record, context)) => {
-                            let child_stop = stop.child_token();
-                            running = Some(Box::pin(run_child(record.clone(), context, task.work, child_stop)));
-                            receipt = Some(DelegationReceipt { record, outcome: None });
-                            reply = Some(sender);
+                            if let Some(slot) = task.background {
+                                let result = slot.install(BackgroundJob {
+                                    parent: parent.clone(), record: record.clone(), context,
+                                    work: task.work, parent_stop: stop.clone(),
+                                });
+                                match result {
+                                    Ok(transferred) => {
+                                        receipt = Some(transferred.clone());
+                                        let _ = sender.send(Ok(transferred));
+                                    }
+                                    Err(error) => {
+                                        let (message, infrastructure) = match error {
+                                            BackgroundStartError::Refused(message) => (message, None),
+                                            BackgroundStartError::Infrastructure(error) => (error.to_string(), Some(error)),
+                                        };
+                                        let outcome = DelegationOutcome::Joined { receipt: None, error: Some(message.clone()) };
+                                        if let Err(error) = parent.settle_delegation(&record, outcome.clone()) {
+                                            fault = Some(error);
+                                        } else { fault = infrastructure; }
+                                        receipt = Some(DelegationReceipt { record, transferred: false, outcome: Some(outcome) });
+                                        if fault.is_some() { stop.cancel(); }
+                                        let _ = sender.send(Err(message));
+                                    }
+                                }
+                            } else {
+                                let child_stop = stop.child_token();
+                                running = Some(Box::pin(run_child(record.clone(), context, task.work, child_stop)));
+                                receipt = Some(DelegationReceipt { record, transferred: false, outcome: None });
+                                reply = Some(sender);
+                            }
                         }
                         Err(SessionError::InvalidForkPoint) => {
                             let _ = sender.send(Err("invalid fork point".into()));
@@ -108,10 +144,10 @@ impl Gateway {
     }
 }
 
-async fn run_child(
+pub(super) async fn run_child(
     record: DelegationRecord,
     context: Vec<crate::SessionEntry>,
-    work: ForegroundWork,
+    work: DelegationWork,
     stop: CancellationToken,
 ) -> Completion {
     if stop.is_cancelled() {
@@ -150,8 +186,8 @@ async fn run_child(
     let mut errors = Vec::new();
     match result {
         Ok(()) => {}
-        Err(ForegroundFailure::Execution(error)) => errors.push(error),
-        Err(ForegroundFailure::Infrastructure(error)) => {
+        Err(DelegationFailure::Execution(error)) => errors.push(error),
+        Err(DelegationFailure::Infrastructure(error)) => {
             infrastructure = Some(error.clone());
             errors.push(error);
         }

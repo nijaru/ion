@@ -89,6 +89,7 @@ impl Session {
             turn: expected.turn,
             checkpoint: expected.checkpoint,
         }];
+        entries.extend(store.orphaned_backgrounds(self.id()));
         entries.extend(pending_results(
             expected.turn,
             &store.state.pending,

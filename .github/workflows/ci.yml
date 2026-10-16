@@ -32,7 +32,7 @@ jobs:
         run: target/debug/examples/restricted "$(mktemp -d)"
       - name: Explicit Turn recovery SDK smoke
         run: python3 scripts/smoke_recovery.py
-      - name: Foreground delegation and process-loss SDK smoke
+      - name: Managed delegation and owner-loss SDK smoke
         run: python3 scripts/smoke_delegation.py
       - name: Retained service attachment SDK smoke
         run: target/debug/examples/service "$(mktemp -d)"

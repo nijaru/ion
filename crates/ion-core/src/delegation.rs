@@ -1,4 +1,4 @@
-//! Managed foreground work uses the ordinary Session engine, never a second loop.
+//! Managed children use the ordinary Session engine, never a second loop.
 use std::{path::PathBuf, sync::Arc};
 
 use ion_ai::{BoxFuture, Message, ModelRef, Reasoning};
@@ -8,6 +8,8 @@ use tokio_util::sync::CancellationToken;
 
 use crate::{AuthorityScope, CodingSession, RequestReceipt, SubmissionRequest, ToolOccurrence};
 
+mod background;
+pub use background::{BackgroundJob, BackgroundSlot, BackgroundStartError};
 pub(crate) mod gateway;
 #[cfg(test)]
 mod tests;
@@ -24,7 +26,7 @@ pub struct DelegationSite {
 /// Complete child application assertion. Context sharing is explicit and does
 /// not inherit live configuration, workspace, permissions or credentials.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct ForegroundSpec {
+pub struct DelegationSpec {
     pub context: DelegationContext,
     pub directory: PathBuf,
     pub cwd: Option<PathBuf>,
@@ -34,7 +36,7 @@ pub struct ForegroundSpec {
     pub input: Message,
 }
 
-impl ForegroundSpec {
+impl DelegationSpec {
     pub(crate) fn valid(&self) -> bool {
         self.directory.is_absolute()
             && match self.context {
@@ -65,6 +67,10 @@ pub enum DelegationContext {
 #[serde(rename_all = "snake_case")]
 pub enum DelegationOwnership {
     Foreground,
+    /// Intended destination, not proof of transfer or a live owner.
+    Background {
+        owner: uuid::Uuid,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -73,7 +79,7 @@ pub struct DelegationRecord {
     pub child: uuid::Uuid,
     pub path: PathBuf,
     pub ownership: DelegationOwnership,
-    pub spec: ForegroundSpec,
+    pub spec: DelegationSpec,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -92,22 +98,25 @@ pub enum DelegationOutcome {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct DelegationReceipt {
     pub record: DelegationRecord,
+    /// Responsibility was committed to the destination before parent release.
+    /// This is not liveness, completion or authority to resume after owner loss.
+    pub transferred: bool,
     pub outcome: Option<DelegationOutcome>,
 }
 
 /// Ordinary child failure is available to the parent tool. Infrastructure
 /// failure additionally closes the Core gateway, even if tool code catches it.
-pub enum ForegroundFailure {
+pub enum DelegationFailure {
     Execution(String),
     Infrastructure(String),
 }
 
-pub(crate) type ForegroundWork = Box<
+pub(crate) type DelegationWork = Box<
     dyn FnOnce(
             Arc<CodingSession>,
             SubmissionRequest,
             CancellationToken,
-        ) -> BoxFuture<'static, Result<(), ForegroundFailure>>
+        ) -> BoxFuture<'static, Result<(), DelegationFailure>>
         + Send,
 >;
 
@@ -117,34 +126,54 @@ pub(crate) type ForegroundWork = Box<
 /// child work. Core retains the callback independently of the tool's waiter.
 /// Trusted host code supplies the assertion and actual captured environment;
 /// schema/model equality does not attest credentials or executable identity.
-pub struct ForegroundTask {
-    pub(crate) spec: ForegroundSpec,
-    pub(crate) work: ForegroundWork,
+pub struct DelegationTask {
+    pub(crate) spec: DelegationSpec,
+    pub(crate) work: DelegationWork,
+    pub(crate) background: Option<Box<dyn BackgroundSlot>>,
 }
 
-impl ForegroundTask {
+impl DelegationTask {
     pub fn new(
-        spec: ForegroundSpec,
+        spec: DelegationSpec,
         work: impl FnOnce(
             Arc<CodingSession>,
             SubmissionRequest,
             CancellationToken,
-        ) -> BoxFuture<'static, Result<(), ForegroundFailure>>
+        ) -> BoxFuture<'static, Result<(), DelegationFailure>>
         + Send
         + 'static,
     ) -> Result<Self, String> {
         if !spec.valid() {
-            return Err("invalid foreground child specification".into());
+            return Err("invalid child specification".into());
         }
         Ok(Self {
             spec,
             work: Box::new(work),
+            background: None,
         })
+    }
+
+    /// Explicit live transfer destination. Core reconciles first, then asks
+    /// Host to reserve custody before committing intent. Exact repeats need no
+    /// extra capacity; dropping unadmitted work releases any reservation.
+    pub fn in_background(mut self, slot: impl BackgroundSlot + 'static) -> Self {
+        self.background = Some(Box::new(slot));
+        self
+    }
+
+    pub(crate) fn ownership(&self) -> DelegationOwnership {
+        self.background
+            .as_ref()
+            .map_or(DelegationOwnership::Foreground, |slot| {
+                DelegationOwnership::Background {
+                    owner: slot.owner(),
+                }
+            })
     }
 }
 
 pub(crate) struct DelegationRequest {
-    pub task: ForegroundTask,
+    pub task: DelegationTask,
     pub reply: oneshot::Sender<Result<DelegationReceipt, String>>,
 }
 

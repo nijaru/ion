@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Built SDK: chosen context, foreground join and loss after a synced child effect."""
+"""Built SDK: context, foreground/background custody and actual owner loss."""
 import copy
 import json
 import os
@@ -28,11 +28,20 @@ def lose_child(binary, state, env, flags):
     child = subprocess.Popen([str(binary), str(state), *flags, "--pause-after-effect"], env=env,
                              stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
     marker = queue.Queue(maxsize=1)
-    reader = threading.Thread(target=lambda: marker.put(child.stdout.readline()))
+    def ready():
+        lines = [child.stdout.readline().strip()]
+        if "--background" in flags:
+            lines.append(child.stdout.readline().strip())
+        marker.put(lines)
+
+    reader = threading.Thread(target=ready)
     reader.start()
     try:
-        line = marker.get(timeout=15)
-        assert line.strip() == "CHILD_EFFECT_SYNCED", line
+        lines = marker.get(timeout=15)
+        expected = ["CHILD_EFFECT_SYNCED"]
+        if "--background" in flags:
+            expected.append("BACKGROUND_PARENT_JOINED")
+        assert lines == expected, lines
     finally:
         if child.poll() is None:
             child.kill()
@@ -54,16 +63,26 @@ def main():
         home.mkdir()
         env = {key: os.environ[key] for key in ("PATH", "SHELL", "TMPDIR") if key in os.environ}
         env.update(HOME=str(home), XDG_CONFIG_HOME=str(home / "config"), XDG_DATA_HOME=str(home / "data"))
-        for fork, flags in ((False, ()), (True, ("--fork",))):
-            context = root / ("fork" if fork else "fresh")
+        for fork, background, flags in (
+            (False, False, ()), (True, False, ("--fork",)),
+            (False, True, ("--background",)), (True, True, ("--background", "--fork")),
+        ):
+            context = root / (("background-" if background else "foreground-") + ("fork" if fork else "fresh"))
             run(binary, context / "normal", env, *flags)
-            for mode in ("--resume", "--new"):
+            for mode in (("--new",) if background else ("--resume", "--new")):
                 state = context / mode.removeprefix("--")
                 lose_child(binary, state, env, flags)
                 parent_header, entries = facts(state / "parent.sqlite")
                 records = [entry["data"]["record"] for entry in entries if entry["kind"] == "delegation_admitted"]
                 assert len(records) == 1 and not any(entry["kind"] == "delegation_settled" for entry in entries)
                 record = records[0]
+                transfers = [entry for entry in entries if entry["kind"] == "delegation_transferred"]
+                if background:
+                    assert len(transfers) == 1
+                    assert transfers[0]["data"] == {"child": record["child"], "owner": record["ownership"]["background"]["owner"]}
+                    assert any(entry["kind"] == "turn_ended" and entry["data"]["turn"] == (2 if fork else 1) and entry["data"]["reason"] == "completed" for entry in entries), "parent was not joined before background owner loss"
+                else:
+                    assert not transfers and record["ownership"] == "foreground"
                 child_path = Path(record["path"])
                 child_header, child_entries = facts(child_path)
                 assert child_header["id"] == record["child"]
@@ -89,11 +108,14 @@ def main():
                 assert [entry["data"]["record"] for entry in after if entry["kind"] == "delegation_admitted"] == records
                 index = next(index for index, entry in enumerate(after) if entry["kind"] == "delegation_settled")
                 assert after[index]["data"] == {"child": record["child"], "outcome": {"kind": "unknown"}}
-                assert after[index + 1]["kind"] == "tool_result", "relationship must close before its outer tool"
+                expected_next = "turn_started" if background else "tool_result"
+                assert after[index + 1]["kind"] == expected_next, "unknown relationship must precede dependent admission/settlement"
+                if background:
+                    assert after[:len(entries)] == entries, "owner loss rewrote already-completed parent work"
                 assert facts(child_path) == (child_header, child_entries), "parent recovery rewrote or replayed child work"
                 assert list((state / "children").glob("*.sqlite")) == [child_path], "recovery allocated another child"
                 assert (state / "effects").read_bytes() == b"child effect\n"
-        print("delegation smoke passed: fresh/fork context; both recovery policies preserve unknown child effects without replay")
+        print("delegation smoke passed: fresh/fork, foreground/background; actual loss preserves unknown effects without child replay")
 
 
 if __name__ == "__main__":

@@ -1,11 +1,11 @@
 use super::*;
 use crate::{
-    ChildIntent, ChildOutcome, DelegationContext, DelegationOutcome, DelegationSite, ForegroundSpec,
+    ChildIntent, ChildOutcome, DelegationContext, DelegationOutcome, DelegationSite, DelegationSpec,
 };
 use ion_ai::{Content, ProviderReplay, ToolCall};
 
-fn spec(root: &Path) -> ForegroundSpec {
-    ForegroundSpec {
+fn spec(root: &Path) -> DelegationSpec {
+    DelegationSpec {
         context: DelegationContext::Fresh,
         directory: root.join("children"),
         cwd: None,
@@ -68,6 +68,7 @@ fn fork_copies_literal_prefix_and_coordinates_but_not_parent_ownership_or_config
                     composed_child: None,
                 },
                 spec(&root),
+                crate::DelegationOwnership::Foreground,
             )
             .unwrap();
         let parent = Session::materialize_delegation(&binding, context).unwrap();
@@ -132,6 +133,7 @@ fn fork_copies_literal_prefix_and_coordinates_but_not_parent_ownership_or_config
                     composed_child: Some(0),
                 },
                 spec(&root),
+                crate::DelegationOwnership::Foreground,
             )
             .unwrap();
         parent
@@ -196,6 +198,7 @@ fn fork_copies_literal_prefix_and_coordinates_but_not_parent_ownership_or_config
                     composed_child: None,
                 },
                 child_spec,
+                crate::DelegationOwnership::Foreground,
             )
             .unwrap();
         let cutoff = match point {

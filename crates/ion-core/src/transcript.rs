@@ -168,6 +168,7 @@ impl TranscriptProjection {
                 | SessionEntry::Compacted { .. }
                 | SessionEntry::UserShellSettled { .. }
                 | SessionEntry::DelegationAdmitted { .. }
+                | SessionEntry::DelegationTransferred { .. }
                 | SessionEntry::DelegationSettled { .. }
                 | SessionEntry::ChildSessionOf { .. } => {}
             }
