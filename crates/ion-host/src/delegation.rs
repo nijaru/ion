@@ -16,8 +16,9 @@ use crate::{Application, ControlUpdate, OperationOutcome, SessionCatalog, Sessio
 /// credentials. Forking shares historical context facts (including instructions
 /// and tool outputs), not execution grants; authorize that disclosure. Matching
 /// deferred child definitions can regain exposure without adding parent executors.
-/// Tasks default to foreground joining. For explicit transfer, reserve a slot
-/// from `BackgroundOwner` and pass it to `DelegationTask::in_background`.
+/// Tasks default to foreground joining. For explicit transfer, pass
+/// `BackgroundOwner::destination()` to `DelegationTask::in_background`; Core
+/// reserves custody only after exact reconciliation and before new admission.
 pub struct SessionDelegation {
     pub context: ion_core::DelegationContext,
     pub directory: PathBuf,
@@ -122,13 +123,15 @@ fn infrastructure(error: &CodingAgentError) -> bool {
 }
 
 fn admission_failure(error: anyhow::Error) -> DelegationFailure {
-    // The initial receipt lookup returns SessionError directly; later admission
-    // can wrap it in AgentError. Neither may become a catchable tool failure.
-    if error.downcast_ref::<CodingSessionError>().is_some()
-        || error
-            .downcast_ref::<CodingAgentError>()
-            .is_some_and(infrastructure)
-    {
+    // Anyhow context preserves root downcasts, but standard error wrappers can
+    // put the Session fault deeper in the causal chain. Neither form may turn
+    // an infrastructure failure into a catchable tool refusal.
+    if error.chain().any(|cause| {
+        cause.is::<CodingSessionError>()
+            || cause
+                .downcast_ref::<CodingAgentError>()
+                .is_some_and(infrastructure)
+    }) {
         DelegationFailure::Infrastructure(error.to_string())
     } else {
         DelegationFailure::Execution(error.to_string())
@@ -158,18 +161,38 @@ mod tests {
     use super::*;
 
     #[test]
-    fn direct_and_wrapped_storage_failures_remain_infrastructure_faults() {
+    fn session_faults_in_causal_chains_remain_infrastructure_failures() {
         for error in [
             anyhow::Error::new(CodingSessionError::InvalidHistory).context("receipt lookup"),
             anyhow::Error::new(CodingAgentError::Session(
                 CodingSessionError::InvalidHistory,
             )),
+            anyhow::Error::new(ion_core::BackgroundStartError::Infrastructure(
+                CodingSessionError::InvalidHistory,
+            ))
+            .context("install child"),
         ] {
             assert!(matches!(
                 admission_failure(error),
                 DelegationFailure::Infrastructure(_)
             ));
         }
+        let message = CodingSessionError::InvalidHistory.to_string();
+        for error in [
+            anyhow::Error::msg(message.clone()),
+            anyhow::Error::new(ion_core::BackgroundStartError::Refused(message))
+                .context("install child"),
+            anyhow::Error::new(CodingAgentError::IncompleteModelResponse).context("child request"),
+        ] {
+            assert!(matches!(
+                admission_failure(error),
+                DelegationFailure::Execution(_)
+            ));
+        }
+    }
+
+    #[test]
+    fn independent_cleanup_failures_remain_infrastructure_failures() {
         let mut failure = Some(admission_failure(anyhow::anyhow!("ordinary refusal")));
         assert!(matches!(failure, Some(DelegationFailure::Execution(_))));
         retain_failure(
