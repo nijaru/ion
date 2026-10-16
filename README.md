@@ -239,7 +239,7 @@ IDs can repeat in later steps. An observed host cancellation response need not
 establish that a remote server stopped its external effects.
 `assistant_committed` publishes a durable assistant boundary with `turn`,
 `content`, `tool_activities` and `termination`; `content` uses the library's
-`Content` encoding (for example, `{"Text":"answer"}` or `{"ToolCall":{...}}).
+`Content` encoding (for example, `{"Text":"answer"}` or `{"ToolCall":{...}}`).
 It replaces the current provisional response, including content that arrived
 without text deltas. `steering_committed` publishes accepted steering as a
 `turn` and typed `input` message, in Session order. A queued steering
