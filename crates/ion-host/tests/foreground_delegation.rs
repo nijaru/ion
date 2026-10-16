@@ -63,15 +63,19 @@ impl CodingToolSource for DeferredChildTools {
 impl ToolExecutor for Effect {
     fn execute<'a>(&'a self, invocation: ToolInvocation<'a>) -> BoxFuture<'a, CodingToolOutput> {
         let origin = invocation.origin().unwrap();
-        let links = self.parent.view().unwrap().delegations();
-        let record = &links.last().unwrap().record;
-        assert_eq!(record.child, origin.session());
-        assert_eq!(
-            CodingSession::inspect_id(&record.path).unwrap(),
-            record.child
-        );
-        assert!(links.last().unwrap().outcome.is_none());
+        // Count forbidden follow-on parent execution too. A child-only assertion
+        // here could panic before recording that effect and mask a gateway bug.
         self.calls.fetch_add(1, Ordering::SeqCst);
+        if origin.session() != self.parent.id() {
+            let links = self.parent.view().unwrap().delegations();
+            let record = &links.last().unwrap().record;
+            assert_eq!(record.child, origin.session());
+            assert_eq!(
+                CodingSession::inspect_id(&record.path).unwrap(),
+                record.child
+            );
+            assert!(links.last().unwrap().outcome.is_none());
+        }
         self.started.send_replace(true);
         let stop = invocation.stop().clone();
         Box::pin(async move {
@@ -524,11 +528,12 @@ async fn relationship_faults_cannot_be_caught_to_continue_direct_or_composed_wor
         f.trigger(kind);
         f.start();
         let report = f.settle().await;
+        assert!(report.cleanup_errors.is_empty());
         assert_eq!(f.parent.requests().len(), 1);
         assert_eq!(f.effect.calls.load(Ordering::SeqCst), effects);
         assert_eq!(f.session.view().unwrap().last_end, None);
         assert!(report.updates.iter().any(|update| matches!(update, ControlUpdate::Settled(settlement)
-            if matches!(settlement.outcome, OperationOutcome::Turn(Err(CodingAgentError::Session(_)))))));
+            if matches!(settlement.outcome, OperationOutcome::Turn(Err(CodingAgentError::Session(ion_core::CodingSessionError::Sqlite(_))))))));
         let links = f.session.view().unwrap().delegations();
         if effects == 0 {
             assert!(links.is_empty());
