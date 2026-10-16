@@ -177,6 +177,35 @@ stop/join and outcomes. Concurrent agents sharing files need conflict policy;
 cooperating-writer locks alone do not resolve incompatible edits. Worktrees,
 containers or read-only roles are strategies, not a mandatory engine architecture.
 
+### Coding delegation policy
+
+Managed delegation is a normal capability of the main coding preset, not a
+feature gate imposed on the reusable engine. Restricted applications still choose
+their own complete capabilities. Child coding roles do not automatically enable
+further delegation.
+
+Unless explicitly configured otherwise, a coding child uses the initiating
+request's selected model route and reasoning, the same workspace and the coding
+resources/tools. Fresh context does not reset execution preferences. Context,
+model, environment and authority remain independently configurable by Host;
+model arguments select only choices the application has authorized.
+
+Fresh context and foreground waiting are defaults. The coding integration must
+also support an explicit committed-prefix fork and background execution through
+the same managed Session owners. Background work belongs to the coding
+application, not the initiating Turn or a detached future. Parent cancellation,
+explicit child cancellation and application shutdown have distinct scopes.
+Application shutdown stops and joins owned work; a one-shot headless host must
+retain ownership through child settlement or explicit cancellation, not exit and
+promise orphaned work will continue. No daemon is implied.
+
+Return and retain actual child outcomes through typed custody/inspection, with
+completion observation independent of lossy activity. Do not fabricate user
+instructions or successful answers to deliver notifications. Automatic root
+continuation must not silently select or adopt a managed child; explicit child
+selection remains available. README distinguishes implemented choices from
+unfinished coding integration.
+
 ## Capabilities and trust
 
 A registration binds definition, semantic metadata and executor. Freeze them as

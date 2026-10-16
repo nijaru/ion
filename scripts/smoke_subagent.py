@@ -1,6 +1,7 @@
 """Qualify the opt-in coding subagent consumer without provider credentials."""
 import json
 import os
+import select
 import signal
 import sqlite3
 import subprocess
@@ -73,9 +74,12 @@ with tempfile.TemporaryDirectory(prefix="ion-coding-subagent-") as temporary:
                 fresh = body["messages"][-1]["role"] == "user"
                 assert body["model"] == "coding"
                 assert "SUBAGENT_RESOURCE" in json.dumps(body)
-                if user == "PARENT_DISABLED":
-                    assert "subagent" not in tools
-                    delta = {"content": "DISABLED_OK"}
+                expected_effort = {"PARENT_DIRECT":"high", "CHILD_DIRECT":"high", "PARENT_COMPOSED":"low", "CHILD_COMPOSED":"low", "PARENT_CANCEL":"medium", "CHILD_CANCEL":"medium"}.get(user)
+                if expected_effort:
+                    assert body.get("reasoning_effort") == expected_effort, body
+                if user == "PARENT_DEFAULT":
+                    assert "subagent" in tools
+                    delta = {"content": "DEFAULT_OK"}
                 elif user.startswith("PARENT_"):
                     assert "subagent" in tools
                     if fresh:
@@ -139,12 +143,12 @@ with tempfile.TemporaryDirectory(prefix="ion-coding-subagent-") as temporary:
     passed = False
     try:
         configure(env, endpoint)
-        assert command(env, workspace, "run", "PARENT_DISABLED").stdout.strip() == "DISABLED_OK"
+        assert command(env, workspace, "run", "PARENT_DEFAULT").stdout.strip() == "DEFAULT_OK"
         for composed in (False, True):
             configure(env, endpoint)
             before = set(Path(env["XDG_STATE_HOME"]).rglob("*.sqlite"))
             prompt = "PARENT_COMPOSED" if composed else "PARENT_DIRECT"
-            records = [json.loads(line) for line in command(env, workspace, "--subagents", *(["--code-mode"] if composed else []), "--json", "run", prompt).stdout.splitlines()]
+            records = [json.loads(line) for line in command(env, workspace, "--reasoning", "low" if composed else "high", *(["--code-mode"] if composed else []), "--json", "run", prompt).stdout.splitlines()]
             result = next(record["output"] for record in records if record["type"] == "tool_finished")
             if composed:
                 result = result["result"]
@@ -169,7 +173,7 @@ with tempfile.TemporaryDirectory(prefix="ion-coding-subagent-") as temporary:
             assert admitted["child"] == child_header["id"] == result["child_session"]
             assert admitted["site"]["session"] == parent_header["id"]
             assert admitted["ownership"] == "foreground" and admitted["spec"]["context"] == "fresh"
-            assert admitted["spec"]["reasoning"] == "ProviderDefault"
+            assert admitted["spec"]["reasoning"] == ("Low" if composed else "High")
             assert child_entries[0] == {"kind": "child_session_of", "data": {"record": admitted}}
             assert Path(child_header["cwd"]).samefile(workspace), (child_header["cwd"], workspace)
             assert child_path.parent == parent_path.parent / "children"
@@ -185,7 +189,16 @@ with tempfile.TemporaryDirectory(prefix="ion-coding-subagent-") as temporary:
         # started native child process before the client can return.
         configure(env, endpoint)
         before = set(Path(env["XDG_STATE_HOME"]).rglob("*.sqlite"))
-        child = subprocess.Popen([binary, "--cwd", workspace, "--subagents", "rpc"], env=env, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        child = subprocess.Popen([binary, "--cwd", workspace, "rpc"], env=env, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        assert select.select([child.stdout], [], [], 8)[0], "RPC startup timed out"
+        assert json.loads(child.stdout.readline())["type"] == "ready"
+        # A preference changed after application assembly must reach the child,
+        # not just an initial CLI value captured by a recipe factory.
+        child.stdin.write(json.dumps({"type":"set_reasoning", "id":"effort", "effort":"medium"}) + "\n")
+        child.stdin.flush()
+        assert select.select([child.stdout], [], [], 8)[0], "reasoning change timed out"
+        acknowledgement = json.loads(child.stdout.readline())
+        assert acknowledgement.get("id") == "effort" and acknowledgement.get("success"), acknowledgement
         child.stdin.write(json.dumps({"type": "prompt", "id": "root", "message": "PARENT_CANCEL"}) + "\n")
         child.stdin.flush()
         deadline = time.monotonic() + 10

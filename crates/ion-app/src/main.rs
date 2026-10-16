@@ -47,9 +47,6 @@ struct Cli {
     /// Enable bounded JavaScript composition alongside direct tools.
     #[arg(long, global = true)]
     code_mode: bool,
-    /// Enable fresh foreground coding subagents in the same workspace.
-    #[arg(long, global = true)]
-    subagents: bool,
     /// Working directory for a new session (defaults to the current directory).
     #[arg(long, global = true)]
     cwd: Option<PathBuf>,
@@ -573,7 +570,6 @@ async fn run_cli(cli: Cli) -> Result<()> {
                     .map(|tools| tools.clone() as Arc<dyn CodingToolSource>);
                 let setup = match ion_host::CodingApplication::new(host.clone(), external_tools)
                     .with_code_mode(cli.code_mode)
-                    .with_subagents(cli.subagents)
                     .setup(
                         preflight_session.as_ref().expect("unbound Session").clone(),
                         selected,

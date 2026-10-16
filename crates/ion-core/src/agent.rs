@@ -1239,6 +1239,7 @@ impl Agent {
                         turn,
                         occurrence,
                         None,
+                        prepared.reasoning(),
                     );
                     let dispatch = tool_catalog.execute_model_call(invocation);
                     let rejection = match &dispatch {
@@ -1267,6 +1268,7 @@ impl Agent {
                                 turn,
                                 tool_catalog,
                                 &call,
+                                prepared.reasoning(),
                                 stop,
                                 observe,
                             )

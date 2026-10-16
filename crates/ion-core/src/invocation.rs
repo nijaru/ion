@@ -1,5 +1,5 @@
 //! Engine-issued tool provenance, distinct from application authority.
-use ion_ai::ToolCall;
+use ion_ai::{Reasoning, ToolCall};
 use serde::{Deserialize, Serialize};
 use tokio_util::sync::CancellationToken;
 
@@ -70,6 +70,7 @@ pub struct ToolInvocation<'a> {
     call: &'a ToolCall,
     stop: CancellationToken,
     origin: Option<ToolOrigin>,
+    reasoning: Option<Reasoning>,
     delegation: Option<crate::delegation::AdmissionPort>,
 }
 
@@ -82,6 +83,7 @@ impl<'a> ToolInvocation<'a> {
             call,
             stop,
             origin: None,
+            reasoning: None,
             delegation: None,
         }
     }
@@ -96,6 +98,13 @@ impl<'a> ToolInvocation<'a> {
 
     pub fn origin(&self) -> Option<ToolOrigin> {
         self.origin
+    }
+
+    /// Reasoning selected for the request that issued this call, not a fresh
+    /// lookup of mutable Session preferences. Absent for untracked execution.
+    /// This metadata is not authority or a delegation grant.
+    pub fn reasoning(&self) -> Option<Reasoning> {
+        self.reasoning
     }
 
     /// Request one child with explicit context through this live invocation. Exact
@@ -133,6 +142,7 @@ impl<'a> ToolInvocation<'a> {
         turn: u64,
         occurrence: ToolOccurrence,
         composed_child: Option<usize>,
+        reasoning: Reasoning,
     ) -> (Self, crate::delegation::gateway::Gateway) {
         let (port, gateway) = crate::delegation::gateway::Gateway::new(crate::DelegationSite {
             session,
@@ -145,6 +155,7 @@ impl<'a> ToolInvocation<'a> {
                 call,
                 stop,
                 delegation: Some(port),
+                reasoning: Some(reasoning),
                 origin: Some(ToolOrigin {
                     session,
                     turn,

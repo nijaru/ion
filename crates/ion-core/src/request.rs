@@ -125,6 +125,10 @@ impl PreparedRequest {
         self.request.controls.max_output_tokens
     }
 
+    pub fn reasoning(&self) -> Reasoning {
+        self.request.controls.reasoning
+    }
+
     pub fn catalog(&self) -> &ToolCatalog {
         &self.catalog
     }

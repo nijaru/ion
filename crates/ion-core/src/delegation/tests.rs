@@ -88,6 +88,7 @@ async fn delegation_requires_live_authority_and_a_valid_context() {
         1,
         session.tool_occurrence(1, "call").unwrap(),
         None,
+        ion_ai::Reasoning::ProviderDefault,
     );
     let rejected = gateway
         .run(
@@ -122,6 +123,7 @@ async fn delegation_requires_live_authority_and_a_valid_context() {
         1,
         session.tool_occurrence(1, "call").unwrap(),
         None,
+        ion_ai::Reasoning::ProviderDefault,
     );
     stop.cancel();
     assert!(

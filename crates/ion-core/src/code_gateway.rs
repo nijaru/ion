@@ -6,7 +6,7 @@ use std::{
 };
 
 use futures_util::{StreamExt, stream::FuturesUnordered};
-use ion_ai::{BoxFuture, ToolCall};
+use ion_ai::{BoxFuture, Reasoning, ToolCall};
 use serde::{Deserialize, Serialize, Serializer as _, ser::SerializeSeq};
 use serde_json::{Value, json};
 use tokio::sync::oneshot;
@@ -526,6 +526,7 @@ pub(crate) async fn run<F: FnMut(AgentEvent) + Send>(
     turn: u64,
     catalog: &ToolCatalog,
     parent_call: &ToolCall,
+    reasoning: Reasoning,
     operation_stop: &CancellationToken,
     observe: &mut F,
 ) -> Result<ToolOutput, AgentError> {
@@ -624,6 +625,7 @@ pub(crate) async fn run<F: FnMut(AgentEvent) + Send>(
                         turn,
                         admitted.intent.parent,
                         Some(admitted.intent.child),
+                        reasoning,
                     );
                     gateway
                         .run(session, &child_stop, catalog.execute(invocation))

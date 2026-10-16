@@ -48,13 +48,19 @@ impl ApplicationRuntime {
     }
 }
 
-/// The local coding application: native tools, discovered resources and optional
-/// additional tools. This recipe, not shared control, owns the coding defaults.
+#[derive(PartialEq, Eq)]
+enum CodingRole {
+    Main,
+    Subagent,
+}
+
+/// The local coding application: native tools, managed delegation, discovered
+/// resources and optional additional tools. Shared control owns none of these defaults.
 pub struct CodingApplication {
     host: Arc<Host>,
     external_tools: Option<Arc<dyn CodingToolSource>>,
     code_mode: bool,
-    subagents: bool,
+    role: CodingRole,
 }
 
 impl CodingApplication {
@@ -63,20 +69,13 @@ impl CodingApplication {
             host,
             external_tools,
             code_mode: false,
-            subagents: false,
+            role: CodingRole::Main,
         }
     }
 
     /// Enable composition for this application, including later replacements.
     pub fn with_code_mode(mut self, enabled: bool) -> Self {
         self.code_mode = enabled;
-        self
-    }
-
-    /// Enable fresh foreground coding children in the same workspace. This
-    /// recipe chooses their complete capabilities; model arguments cannot.
-    pub fn with_subagents(mut self, enabled: bool) -> Self {
-        self.subagents = enabled;
         self
     }
 
@@ -111,10 +110,10 @@ impl CodingApplication {
     ) -> Result<ApplicationRuntime> {
         let native = Arc::new(LocalTools::new(cwd)?);
         let mut sources: Vec<Arc<dyn CodingToolSource>> = vec![native.clone()];
-        sources.extend(self.external_tools.iter().cloned());
-        if self.subagents {
+        if self.role == CodingRole::Main {
             sources.push(Arc::new(subagent::Subagent::new(self, cwd, selected)));
         }
+        sources.extend(self.external_tools.iter().cloned());
         let tools = ion_core::ToolSet::new(sources);
         let tools = if self.code_mode {
             tools.with_code_mode(

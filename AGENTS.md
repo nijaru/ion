@@ -15,7 +15,9 @@
   not repeated live development trials. Inspect that source before materially
   changing overlapping capabilities; adapt it to Rust and Ion's ownership,
   durability and authority contracts. Distinguish established behavior,
-  experiments and documentation-only claims.
+  experiments and documentation-only claims. Delivery staging must not invent
+  product defaults, feature gates or permanent SDK-only boundaries. Keep the
+  designed coding workflow distinct from its currently implemented subset.
 - Inline native scrollback is primary. Fullscreen is another viewport over the
   same semantics, not a separate runtime or competing polish workstream.
 - Ion is unreleased v0 without compatibility guarantees. Replace obsolete
