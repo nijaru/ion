@@ -975,10 +975,11 @@ After building it, `python3 scripts/smoke_delegation.py` also kills an owned
 process after a synced child host effect, for fresh/forked foreground children
 and background children whose parent has already joined. Explicit parent-Turn
 continuation (foreground) and fresh-work recovery preserve the original child
-identity and unknown effects
-without replay or a replacement child. Focused faults cover relationship commits,
-joined cancellation and Code Mode error catching. These are bounded offline SDK
-checks, not live-model, background-agent or remote-effect quiescence qualification.
+identity and unknown effects without replay or a replacement child. Focused faults
+cover transfer/relationship commits, both cancellation scopes, unread custody,
+concurrent joins, reader-independent failure/panic and Code Mode error catching.
+These qualify bounded offline SDK ownership/recovery, not live-model delegation,
+service scale or remote-effect quiescence.
 
 Use `submit(Delivery, UserInput, metadata)` for input. `Prompt` expands resources
 once and normalizes attachments; an already-prepared `Message` stays literal.
