@@ -99,10 +99,16 @@ with tempfile.TemporaryDirectory(prefix="ion-coding-subagent-") as temporary:
                             delta = call("exec", {"command": "printf '%s' $$ > child.pid; touch child.ready; exec sleep 30", "timeout_ms": 120000})
                         else:
                             marker = next(name for name in tools if name.startswith("mcp__") and name.endswith("marker"))
-                            first = call(marker, {})["tool_calls"][0]
-                            second = call("write", {"path": user + ".txt", "content": "CHILD_EFFECT"})["tool_calls"][0]
-                            second["index"] = 1
-                            delta = {"tool_calls": [first, second]}
+                            if user == "CHILD_COMPOSED":
+                                # Both parent and child VMs stay owned: the parent
+                                # awaits delegation while the child composes tools.
+                                code = "const m=await tools[" + json.dumps(marker) + "]({}); await tools.write({path:'CHILD_COMPOSED.txt',content:'CHILD_EFFECT'}); return {marker:m.value.content};"
+                                delta = call("code_mode", {"code": code})
+                            else:
+                                first = call(marker, {})["tool_calls"][0]
+                                second = call("write", {"path": user + ".txt", "content": "CHILD_EFFECT"})["tool_calls"][0]
+                                second["index"] = 1
+                                delta = {"tool_calls": [first, second]}
                     else:
                         assert "PRIVATE_CHILD_TOOL" in json.dumps(body)
                         delta = {"content": "CHILD_ANSWER_" + user}
