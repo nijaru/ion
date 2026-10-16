@@ -261,7 +261,8 @@ prompt response includes a Turn ID and confirms that the input entered the
 Session. Keep reading progress records with that Turn ID until `turn_end`
 reports `completed`, `cancelled` or `failed`; a response alone is not the
 answer. `final` is the committed answer. Other commands are `steer`,
-`follow_up`, `clear_queue`, `abort`, `get_state`, `inspect`, `list_sessions`, `list_turns`, `list_models`,
+`follow_up`, `submit_request`, `get_request`, `clear_queue`, `abort`, `get_state`,
+`inspect`, `list_sessions`, `list_turns`, `list_models`,
 `list_resources`, `reload_resources`, `shell`, `compact`, `set_model`, `new_session`,
 `clone_session`, `fork`, `switch_session`, `set_reasoning` and `set_name`.
 `set_name.name` must be a string; null or omission clears it. `fork.after` must
@@ -287,6 +288,33 @@ initial prompt. `abort` also stops initial
 preparation and requests stop of active work. Stop wins queued dispatch even if
 an observed result races to success; failed operations return unaccepted inputs.
 
+For restart-safe direct **literal text** delivery, supply a separate scoped key:
+
+```json
+{"id":"wire-1","type":"submit_request","key":{"scope":"my-client","id":"job-42"},"message":"/check stays literal"}
+{"id":"wire-2","type":"get_request","key":{"scope":"my-client","id":"job-42"}}
+```
+
+`submit_request` replies with `data.disposition` (`started` or `existing`) and
+`data.receipt`: logical `session` UUID, `key`, `turn` and committed `end` reason.
+A new `started` response means the literal input and key committed together and
+Host retained execution; read through `turn_end` for settlement as with `prompt`.
+Exact redelivery returns the same admission/latest status without starting work,
+including while busy or after reopening. Different text under the same key is an
+error. A new key requires idle, drained control; it is not queued.
+`get_request` returns `data.receipt` or null without repairing history or dispatching
+work. It shares the inspection reply slot. An `end` of null does not prove liveness:
+process loss leaves unfinished facts until new explicit work closes them
+conservatively. Neither lookup nor redelivery resumes the lost execution.
+
+Keys are case-sensitive nonblank `scope`/`id` strings, each at most 256 bytes with
+no control characters. They are caller-supplied identities, not credentials or
+namespace authorization. These two commands reject unknown fields. The keyed
+message is not template-expanded and has no `images` field or local-file
+preparation; use ordinary prepared input for those. Wire `id` values, pending queues and reply
+custody remain volatile. If an acknowledgement is lost, reconcile using the same
+key and exact text, not a new identity or assumed exactly-once tool effects.
+
 Inputs share a process-local 32 MiB allowance for originals, prepared messages and
 client metadata, plus 64 retained admission/result slots. Route/image checks apply
 before acknowledgement. Accepted metadata stays reserved through settlement;
@@ -310,9 +338,10 @@ as their own input data. Input errors also cancel and await active work, then
 return terminal records and pending inputs while stdout remains healthy before
 exiting with an error. If stdout is broken, no terminal record can be promised;
 reopen or inspect the Session for committed outcomes.
-An operation panic emits `operation_failed` when stdout is healthy and ends the
-connection with an error. This record is not durable Turn closure: unfinished
-effects remain unknown and are not retried automatically. Pending steering and
+A Core operation-task failure reports through its terminal record (or
+`operation_failed` when no Turn was known) while stdout is healthy, and ends the
+connection with an error. A failed protocol record is not itself durable Turn
+closure: unfinished effects remain unknown and are not retried automatically. Pending steering and
 follow-ups are returned, including a starting follow-up whose input had not
 entered the Session; input already accepted by the Session is never returned
 as uncommitted.
@@ -870,7 +899,7 @@ contracts are not all implemented:
 | Boundary | Implemented today | Not yet implemented |
 | --- | --- | --- |
 | Application setup | Caller-owned model/tool/instruction configuration, workspace-free Sessions and explicit shell/local-image authority. Opt-in continuation checks a saved authority reference and declarations. | Changed-authority reconciliation. Applications must reconstruct and attest live bindings on reopen; the reference is not a credential or sandbox. |
-| Durability | SQLite conversation/effect history, conservative recovery, restart-safe direct admission and explicit same-Turn continuation through the Rust SDK. | Durable pending queues, wire-protocol delivery IDs and automatic restart/continuation. Coding CLI/TUI/RPC submissions do not opt in to continuation. |
+| Durability | SQLite conversation/effect history, conservative recovery, restart-safe direct admission through the Rust SDK and keyed RPC literal text; explicit same-Turn continuation through the Rust SDK. | Durable pending queues, wire-protocol delivery IDs and automatic restart/continuation. Coding CLI/TUI/RPC submissions do not opt in to continuation. |
 | Delegation | Foreground and explicitly transferred background SDK children, fresh/forked context, stable identity, explicit application/environment, bounded retained supervision/results and conservative owner-loss recovery. Code Mode nested tools remain distinct. | No default coding delegation tool or live-model/service-scale delegation qualification. Ordinary conversation forks still share the source cwd; managed children choose their own environment. |
 | Remote use | Foreground stdio RPC, lossy progress and complete pull snapshots through shared control. A service embedding retains/drives the owner independently of connections. | No built-in authenticated network server, reliable activity replay or durable queue/metadata recovery. RPC EOF still stops/joins work. |
 
@@ -1005,7 +1034,8 @@ remain unknown. Reconciliation is passive. New explicit work closes interrupted
 history conservatively; it does not rerun the old request. Prepare templates and
 local files before constructing this literal message. Pending queues, client
 metadata and live services are not made durable. Ordinary CLI/TUI submits and RPC
-command IDs remain unkeyed; request deduplication is not exactly-once tool execution.
+wire command IDs remain unkeyed; RPC `submit_request` uses a separate explicit key
+for literal text. Request deduplication is not exactly-once tool execution.
 
 For explicit interrupted-Turn continuation, configure the application's agent with
 `with_recovery_scope(AuthorityScope::new(versioned_reference)?)` **before admission**.

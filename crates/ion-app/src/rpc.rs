@@ -19,6 +19,7 @@ use crate::{
 mod connection;
 mod input;
 mod lifecycle;
+mod requests;
 #[cfg(test)]
 mod tests;
 use input::CommandReader;
@@ -38,6 +39,8 @@ struct Correlation {
     credit: ReplyCredit,
     acknowledged: bool,
     position: usize,
+    /// Direct keyed admission commits before the asynchronous Host callback.
+    turn: Option<u64>,
 }
 struct OperationReply {
     operation: OperationId,
@@ -104,6 +107,8 @@ impl Control {
         }
         let outcome: Result<Value> = (|| {
             match command {
+                "submit_request" => self.submit_request(&value, id.clone(), credit.clone()),
+                "get_request" => self.get_request(&value),
                 "clear_queue" => {
                     self.host.clear_queue();
                     // Recovery arrives as reliable Returned updates, not a
@@ -257,6 +262,7 @@ impl Control {
                 credit,
                 acknowledged: false,
                 position,
+                turn: None,
             },
         );
         Ok(())

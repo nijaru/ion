@@ -54,7 +54,7 @@ pub(super) async fn connection<R: AsyncBufRead + Unpin, W: AsyncWrite + Unpin>(
                     let command = value.as_ref().ok().filter(|value| value.is_object() && value.get("id").is_none_or(Value::is_string)).and_then(|value| value.get("type")).and_then(Value::as_str).unwrap_or("parse");
                     let pool = match command {
                         "abort" | "clear_queue" => &controls,
-                        "inspect" | "list_sessions" | "list_turns" | "list_models" | "list_resources" => &inspections,
+                        "inspect" | "get_request" | "list_sessions" | "list_turns" | "list_models" | "list_resources" => &inspections,
                         _ => &replies,
                     };
                     let Some(credit) = pool.acquire() else {

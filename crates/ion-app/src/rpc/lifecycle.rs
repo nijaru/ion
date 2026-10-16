@@ -69,7 +69,7 @@ impl Control {
                     operation,
                     id: item.id.clone(),
                     credit: item.credit.clone(),
-                    turn: None,
+                    turn: item.turn,
                 });
             }
             ControlUpdate::Accepted {
@@ -88,17 +88,24 @@ impl Control {
                         credit: item.credit.clone(),
                         turn: Some(turn),
                     });
-                    let record = if item.command == "prompt" {
-                        success(
+                    let record = match item.command {
+                        "submit_request" => {
+                            ensure!(item.turn == Some(turn), "request receipt Turn mismatch");
+                            // The synchronous durable receipt already acknowledged
+                            // this input; the callback must not issue a second reply.
+                            None
+                        }
+                        "prompt" => Some(success(
                             item.id.clone(),
                             "prompt",
                             json!({"disposition":"started","turn":turn}),
-                        )
-                    } else {
-                        json!({"type":"follow_up_started","id":item.id,"turn":turn})
+                        )),
+                        _ => Some(json!({"type":"follow_up_started","id":item.id,"turn":turn})),
                     };
                     item.acknowledged = true;
-                    if output.is_healthy() {
+                    if let Some(record) = record
+                        && output.is_healthy()
+                    {
                         output.enqueue_reliable(record, item.credit.clone())?;
                     }
                 }
@@ -231,6 +238,10 @@ impl Control {
             .remove(&returned.id)
             .context("returned Host input has protocol correlation")?;
         let metadata = returned.metadata;
+        ensure!(
+            metadata.command != "submit_request",
+            "durably admitted request was returned; inspect committed acceptance"
+        );
         let (reason, error) = match returned.reason {
             ReturnReason::Stopped => ("stopped", None),
             ReturnReason::Cleared => ("cleared", None),

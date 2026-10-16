@@ -13,6 +13,9 @@ use std::{
 };
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, ReadBuf};
 
+#[path = "request_tests.rs"]
+mod requests;
+
 struct Fixture {
     control: Option<Control>,
     root: PathBuf,
@@ -241,6 +244,7 @@ async fn original_typed_input_and_protocol_id_survive_clear_queue() {
             credit,
             acknowledged: false,
             position: 1,
+            turn: None,
         },
     );
     control.host.clear_queue();
