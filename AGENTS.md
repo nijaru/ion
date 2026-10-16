@@ -11,9 +11,11 @@
   admission, delegation and attachment contracts even when delivery is staged.
   External hosting/scheduling does not excuse missing engine ownership semantics.
 - Pi and fx are primary implementation references; Codex and Claude Code are
-  secondary. Inspect relevant upstream source before materially designing or
-  changing overlapping capabilities. Adapt semantics to Rust; distinguish
-  established behavior, experiments and documentation-only claims.
+  secondary. Implement established APIs/workflows from relevant upstream source,
+  not repeated live development trials. Inspect that source before materially
+  changing overlapping capabilities; adapt it to Rust and Ion's ownership,
+  durability and authority contracts. Distinguish established behavior,
+  experiments and documentation-only claims.
 - Inline native scrollback is primary. Fullscreen is another viewport over the
   same semantics, not a separate runtime or competing polish workstream.
 - Ion is unreleased v0 without compatibility guarantees. Replace obsolete
@@ -68,9 +70,11 @@ outcomes—not just Ion's exit code. Pause unrelated GUI testing after a crash o
 unexplained timeout and investigate before targeted reproduction. PTY/tmux,
 native-emulator runs, live coding and human polish review are different evidence.
 
-Live coding qualification uses bounded isolated tasks and explicitly approved
-models/routes; paid tests require authorization. Judge actual requests, committed
-facts and independent host effects, including after cancellation/cuts/reopen.
+Use live coding qualification when the changed contract needs model interaction
+or broader workflow acceptance, not as a gate between every implementation slice.
+Use bounded isolated tasks and explicitly approved models/routes; paid tests
+require authorization. Judge actual requests, committed facts and independent
+host effects, including after cancellation/cuts/reopen.
 Do not hide failures with canned summaries, fixture-specific suppression or
 larger retry budgets. Provider availability must not stall independent work or
 become a route-inventory project.
