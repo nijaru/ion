@@ -7,7 +7,7 @@ use std::{
 
 use futures_util::{StreamExt, stream::FuturesUnordered};
 use ion_ai::{BoxFuture, ToolCall};
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Serialize, Serializer as _, ser::SerializeSeq};
 use serde_json::{Value, json};
 use tokio::sync::oneshot;
 use tokio_util::sync::CancellationToken;
@@ -414,6 +414,29 @@ impl Write for BoundedJson {
     }
 }
 
+fn tool_manifest<'a>(
+    names: impl Iterator<Item = &'a str>,
+    limits: CodeLimits,
+) -> Result<String, String> {
+    let too_large = |_| "code_mode tool manifest byte limit exceeded".to_owned();
+    let mut writer = BoundedJson {
+        data: Vec::new(),
+        limit: limits.max_json_bytes.min(limits.max_host_bytes),
+    };
+    let mut encoder = serde_json::Serializer::new(&mut writer);
+    let mut array = encoder.serialize_seq(None).map_err(too_large)?;
+    for name in names {
+        if matches!(name, "then" | "toJSON") {
+            return Err(format!(
+                "code_mode cannot expose reserved tool name {name:?}"
+            ));
+        }
+        array.serialize_element(name).map_err(too_large)?;
+    }
+    array.end().map_err(too_large)?;
+    Ok(String::from_utf8(writer.data).expect("JSON is UTF-8"))
+}
+
 /// Retain both worker and admitted effects through every expected fault. The
 /// closed worker sender is the FIFO fence for already-transferred requests.
 #[expect(
@@ -451,11 +474,20 @@ pub(crate) async fn run<F: FnMut(AgentEvent) + Send>(
         return Ok(failure("invalid code_mode admission limits"));
     }
     let parent = session.tool_occurrence(turn, &parent_call.id)?;
+    let names = catalog
+        .definitions()
+        .filter(|definition| !catalog.is_intrinsic(&definition.spec.name))
+        .map(|definition| definition.spec.name.as_str());
+    let tools_json = match tool_manifest(names, limits) {
+        Ok(json) => json,
+        Err(error) => return Ok(failure(error)),
+    };
+    let host_bytes = tools_json.len();
     let stop = operation_stop.child_token();
     let CodeTask {
         mut requests,
         mut result,
-    } = match runtime.start(input.code, limits, stop.clone()) {
+    } = match runtime.start(input.code, tools_json, limits, stop.clone()) {
         Ok(task) => task,
         Err(error) => return Ok(failure(error)),
     };
@@ -473,7 +505,7 @@ pub(crate) async fn run<F: FnMut(AgentEvent) + Send>(
         calls: 0,
         failed: 0,
         skipped: 0,
-        host_bytes: 0,
+        host_bytes,
         audit_bytes: 0,
         fault: None,
         problem: None,
@@ -602,6 +634,45 @@ mod tests;
 #[cfg(test)]
 mod discovery_tests {
     use super::*;
+
+    #[test]
+    fn manifest_preserves_exact_names_and_never_publishes_a_partial_namespace() {
+        let names = [
+            "a-b",
+            "a_b",
+            "Read",
+            "read",
+            "__proto__",
+            "call",
+            "inspect",
+            "quote\"\\\n",
+        ];
+        let json = tool_manifest(names.into_iter(), CodeLimits::default()).unwrap();
+        assert_eq!(serde_json::from_str::<Vec<String>>(&json).unwrap(), names);
+        for budget in [json.len() - 1, json.len()] {
+            for host_budget in [true, false] {
+                let mut limits = CodeLimits::default();
+                if host_budget {
+                    limits.max_host_bytes = budget;
+                } else {
+                    limits.max_json_bytes = budget;
+                }
+                let result = tool_manifest(names.into_iter(), limits);
+                if budget == json.len() {
+                    assert_eq!(result.unwrap(), json);
+                } else {
+                    assert!(result.unwrap_err().contains("manifest byte limit"));
+                }
+            }
+        }
+        for name in ["then", "toJSON"] {
+            assert!(
+                tool_manifest(["read", name].into_iter(), CodeLimits::default())
+                    .unwrap_err()
+                    .contains("reserved tool name")
+            );
+        }
+    }
 
     #[test]
     fn untrusted_search_limits_reject_in_core() {

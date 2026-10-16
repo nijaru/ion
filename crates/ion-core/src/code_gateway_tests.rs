@@ -13,6 +13,7 @@ impl CodeRuntime for Guest {
     fn start(
         &self,
         query: String,
+        _tools_json: String,
         _limits: CodeLimits,
         stop: CancellationToken,
     ) -> Result<CodeTask, String> {
@@ -168,6 +169,73 @@ fn inspection_has_capacity_independent_of_the_waiting_guest() {
         drop(session);
         std::fs::remove_dir_all(root).unwrap();
     });
+}
+
+#[tokio::test]
+async fn namespace_and_replies_share_one_delivery_budget() {
+    struct Describer;
+    impl CodeRuntime for Describer {
+        fn start(
+            &self,
+            _: String,
+            tools_json: String,
+            _: CodeLimits,
+            _: CancellationToken,
+        ) -> Result<CodeTask, String> {
+            assert_eq!(tools_json, "[]");
+            let (sender, requests) = mpsc::channel(1);
+            let result = tokio::spawn(async move {
+                let (reply, receive) = oneshot::channel();
+                sender
+                    .send(CodeRequest {
+                        kind: CodeRequestKind::DescribeTool {
+                            name: "missing".into(),
+                        },
+                        reply,
+                    })
+                    .await
+                    .unwrap();
+                receive.await.unwrap()
+            });
+            Ok(CodeTask { requests, result })
+        }
+    }
+    // Empty namespace is two encoded bytes; the missing description is `null`
+    // (four). A five-byte total must fail even though either value fits alone.
+    for (budget, succeeds) in [(5, false), (6, true)] {
+        let (root, session, turn, call) = fixture();
+        let entries = session.view().unwrap().entries.len();
+        let guest: Arc<dyn CodeRuntime> = Arc::new(Describer);
+        let output = run(
+            &guest,
+            CodeLimits {
+                max_host_bytes: budget,
+                ..CodeLimits::default()
+            },
+            &session,
+            turn,
+            &ToolSet::new([]).snapshot(),
+            &call,
+            &CancellationToken::new(),
+            &mut |_| {},
+        )
+        .await
+        .unwrap();
+        assert_eq!(!output.is_error, succeeds, "{output:?}");
+        if succeeds {
+            assert_eq!(output.value["result"], Value::Null);
+        } else {
+            assert!(
+                output.value["error"]
+                    .as_str()
+                    .unwrap()
+                    .contains("host reply byte limit")
+            );
+        }
+        assert_eq!(session.view().unwrap().entries.len(), entries);
+        drop(session);
+        std::fs::remove_dir_all(root).unwrap();
+    }
 }
 
 #[tokio::test(flavor = "current_thread")]

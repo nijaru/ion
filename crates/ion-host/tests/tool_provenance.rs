@@ -167,7 +167,7 @@ async fn provenance_comes_from_committed_occurrences_not_provider_ids_or_argumen
             "same",
             "code_mode",
             json!({"code":
-                "return await Promise.all([tools.call('observe',{order:0,turn:999}),tools.call('observe',{order:1,turn:999})]);"
+                "return await Promise.all([tools.observe({order:0,turn:999}),tools.observe({order:1,turn:999})]);"
             }),
         )]),
         response(vec![Content::Text("first done".into())]),

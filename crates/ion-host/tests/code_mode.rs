@@ -149,7 +149,7 @@ async fn discovery_is_exact_read_only_deferred_and_request_frozen() {
             const one = await searchTools('CaNdIdAtE_11', {limit: 1});
             const missing = await Promise.all(['candidate_11x','Candidate_11','Similar discovery candidate_11','tool_search','code_mode'].map(describeTool));
             const exclusions = await Promise.all(['tool_search','code_mode'].map(query => searchTools(query)));
-            await tools.call(exact.name, {});
+            await tools[exact.name]({});
             const frozen = await describeTool(exact.name);
             return {page, bounded, emptyOptions, priority, one, exact, missing, exclusions, frozen};
         "#,
@@ -253,8 +253,8 @@ async fn observer_panic_stops_and_joins_other_started_vm_children() {
         [response(vec![code(
             "parent",
             r#"
-        const slow=tools.call('exec',{command:'printf "%s" "$$" > slow.pid; exec sleep 30',timeout_ms:120000});
-        const fast=tools.call('exec',{command:'while [ ! -f slow.pid ]; do sleep 0.01; done; printf FAST_DONE',timeout_ms:120000});
+        const slow=tools.exec({command:'printf "%s" "$$" > slow.pid; exec sleep 30',timeout_ms:120000});
+        const fast=tools.exec({command:'while [ ! -f slow.pid ]; do sleep 0.01; done; printf FAST_DONE',timeout_ms:120000});
         await Promise.all([slow,fast]); return true;
     "#,
         )])],
@@ -298,11 +298,11 @@ async fn native_fanout_selects_context_and_preserves_occurrences_inspection_and_
     fs::write(root.0.join("one"), "PRIVATE_INTERMEDIATE_ONE").unwrap();
     fs::write(root.0.join("two"), "PRIVATE_INTERMEDIATE_TWO").unwrap();
     let first = "const def = await describeTool('read');
-        const values = await Promise.all(['one','two'].map(path => tools.call(def.name,{path})));
-        await tools.call('write',{path:'changed',content:'changed'});
-        const missing = await tools.call('read',{path:'missing'});
+        const values = await Promise.all(['one','two'].map(path => tools[def.name]({path})));
+        await tools.write({path:'changed',content:'changed'});
+        const missing = await tools.read({path:'missing'});
         let rejected = false;
-        try { await tools.call('unknown_capability',{}); } catch { rejected = true; }
+        try { await tools.unknown_capability({}); } catch { rejected = true; }
         return {lengths:values.map(r => r.value.content.length), missing:missing.is_error, rejected};";
     let (agent, model) = make_agent(
         &root.0,
@@ -311,12 +311,12 @@ async fn native_fanout_selects_context_and_preserves_occurrences_inspection_and_
                 code("reused", first),
                 code(
                     "other",
-                    "void tools.call('write',{path:'unawaited',content:'done'}); return true;",
+                    "void tools.write({path:'unawaited',content:'done'}); return true;",
                 ),
             ]),
             response(vec![code(
                 "reused",
-                "const r=await tools.call('read',{path:'one'}); return r.value.content.length;",
+                "const r=await tools.read({path:'one'}); return r.value.content.length;",
             )]),
             response(vec![Content::Text("DONE".into())]),
         ],
@@ -452,7 +452,7 @@ async fn guest_budget_excludes_awaited_host_work_and_post_return_settlement() {
                 response(vec![code(
                     "parent",
                     &format!(
-                        "const pending = [0,1,2,3].map(i => tools.call('exec',{{command:`sleep 0.4; printf done > settled-${{i}}`}})); {} return 7;",
+                        "const pending = [0,1,2,3].map(i => tools.exec({{command:`sleep 0.4; printf done > settled-${{i}}`}})); {} return 7;",
                         if awaited {
                             "await Promise.all(pending);"
                         } else {
@@ -499,7 +499,7 @@ async fn cancellation_settles_native_children_before_return() {
         &root.0,
         [response(vec![code(
             "parent",
-            "await Promise.all(['a','b'].map(x => tools.call('exec',{command:`printf started; printf ready > ${x}; exec sleep 30`,timeout_ms:120000}))); return true;",
+            "await Promise.all(['a','b'].map(x => tools.exec({command:`printf started; printf ready > ${x}; exec sleep 30`,timeout_ms:120000}))); return true;",
         )])],
         CodeLimits::default(),
     );
@@ -563,9 +563,9 @@ async fn child_commit_failure_blocks_consumption_drains_started_work_and_reopens
         BEGIN SELECT RAISE(ABORT,'child observation fault'); END;").unwrap();
     let (agent, model) = make_agent(&root.0, [response(vec![code("parent",
         "await Promise.all([
-            tools.call('exec',{command:'printf first > first; sleep 0.15; printf FIRST'}),
-            tools.call('exec',{command:'printf second > second; printf SECOND; exec sleep 30',timeout_ms:120000})]);
-         await tools.call('write',{path:'dependent',content:'must not happen'}); return true;")])], CodeLimits::default());
+            tools.exec({command:'printf first > first; sleep 0.15; printf FIRST'}),
+            tools.exec({command:'printf second > second; printf SECOND; exec sleep 30',timeout_ms:120000})]);
+         await tools.write({path:'dependent',content:'must not happen'}); return true;")])], CodeLimits::default());
     let result = tokio::time::timeout(
         Duration::from_secs(5),
         agent.submit(
@@ -644,7 +644,7 @@ async fn child_intent_fault_prevents_native_dispatch() {
         &root.0,
         [response(vec![code(
             "parent",
-            "await tools.call('write',{path:'effect',content:'must not happen'}); return true;",
+            "await tools.write({path:'effect',content:'must not happen'}); return true;",
         )])],
         CodeLimits::default(),
     );
@@ -705,7 +705,7 @@ async fn failed_guest_evidence_is_rediscovered_after_cut_and_reopen_without_reex
         [
             response(vec![code(
                 "original",
-                "await tools.call('read',{path:'report'}); await tools.call('exec',{command:'printf ONCE >> effects; printf ORIGINAL_FAILURE >&2; exit 7'}); throw new Error('after effects');",
+                "await tools.read({path:'report'}); await tools.exec({command:'printf ONCE >> effects; printf ORIGINAL_FAILURE >&2; exit 7'}); throw new Error('after effects');",
             )]),
             response(vec![Content::Text("FAILED_GUEST".into())]),
             // Deliberately omit the locator to exercise a lossy summary boundary,
@@ -759,13 +759,13 @@ async fn failed_guest_evidence_is_rediscovered_after_cut_and_reopen_without_reex
     fs::remove_file(root.0.join("report")).unwrap();
     drop(session);
     let reopened = Arc::new(CodingSession::open(root.0.join("session.sqlite")).unwrap());
-    let script = "const parents=await tools.inspect({kind:'parents'});
+    let script = "const parents=await inspectSaved({kind:'parents'});
         const parent=parents.parents[0].parent;
-        const meta=await tools.inspect({kind:'children',parent});
+        const meta=await inspectSaved({kind:'children',parent});
         let offset=0, text='';
-        do { const page=await tools.inspect({kind:'output',parent,child:0,pointer:'/content',offset,limit:512});
+        do { const page=await inspectSaved({kind:'output',parent,child:0,pointer:'/content',offset,limit:512});
              text+=page.json; offset=page.next_offset; } while(offset!==null);
-        const failure=await tools.inspect({kind:'output',parent,child:1});
+        const failure=await inspectSaved({kind:'output',parent,child:1});
         return {parents,content:JSON.parse(text), original_failed:failure.is_error, original:JSON.parse(failure.json), states:meta.children.map(c=>c.state)};";
     let (next, next_model) = make_agent(
         &root.0,
@@ -837,9 +837,9 @@ async fn guest_failure_retains_prior_mutation_and_budget_exhaustion_settles_nati
         let root = Workspace::new();
         let session = root.session();
         let script = if exhaust_budget {
-            "await tools.call('write',{path:'effect',content:'kept'}); void tools.call('exec',{command:'printf BEFORE_BUDGET; exec sleep 30',timeout_ms:120000}); while(true) {}"
+            "await tools.write({path:'effect',content:'kept'}); void tools.exec({command:'printf BEFORE_BUDGET; exec sleep 30',timeout_ms:120000}); while(true) {}"
         } else {
-            "await tools.call('write',{path:'effect',content:'kept'}); throw new Error('after mutation');"
+            "await tools.write({path:'effect',content:'kept'}); throw new Error('after mutation');"
         };
         let (agent, model) = make_agent(
             &root.0,
@@ -907,7 +907,7 @@ async fn child_images_stay_inspectable_and_reply_limit_is_cumulative() {
         [
             response(vec![code(
                 "parent",
-                "const i=await tools.call('read',{path:'pixel.png'}); if(i.image_mime_types[0]!=='image/png') throw 'missing image'; await tools.call('read',{path:'report'}); await tools.call('read',{path:'report'}); await tools.call('write',{path:'dependent',content:'bad'}); return true;",
+                "const i=await tools.read({path:'pixel.png'}); if(i.image_mime_types[0]!=='image/png') throw 'missing image'; await tools.read({path:'report'}); await tools.read({path:'report'}); await tools.write({path:'dependent',content:'bad'}); return true;",
             )]),
             response(vec![Content::Text("LIMIT_REPORTED".into())]),
         ],
@@ -975,7 +975,7 @@ async fn reply_and_audit_budgets_preserve_observations_and_stop_dependents() {
             [
                 response(vec![code(
                     "parent",
-                    "const r=await tools.call('read',{path:'report'}); await tools.call('write',{path:'dependent',content:'bad'}); return r.value;",
+                    "const r=await tools.read({path:'report'}); await tools.write({path:'dependent',content:'bad'}); return r.value;",
                 )]),
                 response(vec![Content::Text("LIMIT_REPORTED".into())]),
             ],

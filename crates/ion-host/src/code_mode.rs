@@ -2,6 +2,7 @@
 
 use std::{
     cell::{Cell, RefCell},
+    collections::HashSet,
     panic::{AssertUnwindSafe, catch_unwind},
     rc::Rc,
     thread,
@@ -17,7 +18,8 @@ use tokio::sync::{mpsc, oneshot};
 use tokio_util::sync::CancellationToken;
 
 /// A fresh, isolated VM on a blocking worker for each async JavaScript body.
-/// No Session, catalogue, module loader, filesystem, network or timers enter it.
+/// Only owned code and callable-name data enter it, never a Session or executable
+/// catalogue. No module loader, filesystem, network or timers are available.
 #[derive(Debug, Default, Clone, Copy)]
 pub struct QuickJs;
 
@@ -25,18 +27,19 @@ impl CodeRuntime for QuickJs {
     fn start(
         &self,
         code: String,
+        tools_json: String,
         limits: CodeLimits,
         stop: CancellationToken,
     ) -> Result<CodeTask, String> {
         let setup = (|| {
-            validate(&code, limits)?;
+            validate(&code, &tools_json, limits)?;
             let handle = tokio::runtime::Handle::try_current()
                 .map_err(|_| "QuickJS requires a Tokio runtime")?;
             let (sender, requests) = mpsc::channel(limits.max_calls);
             let worker_stop = stop.clone();
             let result = handle.spawn_blocking(move || {
                 let result = catch_unwind(AssertUnwindSafe(|| {
-                    execute(code, limits, sender, &worker_stop)
+                    execute(code, tools_json, limits, sender, &worker_stop)
                 }))
                 .unwrap_or_else(|_| Err("QuickJS worker panicked".into()));
                 if result.is_err() {
@@ -53,7 +56,7 @@ impl CodeRuntime for QuickJs {
     }
 }
 
-fn validate(code: &str, limits: CodeLimits) -> Result<(), String> {
+fn validate(code: &str, tools_json: &str, limits: CodeLimits) -> Result<(), String> {
     if [
         limits.heap_bytes,
         limits.stack_bytes,
@@ -76,6 +79,22 @@ fn validate(code: &str, limits: CodeLimits) -> Result<(), String> {
     }
     if code.len() > limits.max_code_bytes {
         return Err("JavaScript code byte limit".into());
+    }
+    if tools_json.len() > limits.max_json_bytes.min(limits.max_host_bytes) {
+        return Err("code_mode tool manifest byte limit exceeded".into());
+    }
+    let names: Vec<String> = serde_json::from_str(tools_json)
+        .map_err(|_| "code_mode tool manifest must be an array of names")?;
+    let mut seen = HashSet::new();
+    for name in &names {
+        if matches!(name.as_str(), "then" | "toJSON") {
+            return Err(format!(
+                "code_mode cannot expose reserved tool name {name:?}"
+            ));
+        }
+        if !seen.insert(name) {
+            return Err("code_mode tool manifest contains duplicate names".into());
+        }
     }
     Instant::now()
         .checked_add(limits.execution_budget)
@@ -220,6 +239,7 @@ fn js_error(
 fn start_guest<'js>(
     ctx: Ctx<'js>,
     code: &str,
+    tools_json: &str,
     bridge: &Rc<Bridge>,
 ) -> rquickjs::Result<Persistent<Promise<'static>>> {
     ctx.globals().remove("queueMicrotask")?;
@@ -242,8 +262,21 @@ fn start_guest<'js>(
         let query_json = json_text(&ctx, query, inspections.limits.max_json_bytes)?;
         enqueue(&ctx, &inspections, CodeRequestKind::Inspect { query_json })
     })?;
-    let tools = Object::new(ctx.clone())?;
-    tools.set("call", call)?;
+    // Install only exact frozen names. Alias normalization would make punctuation
+    // and case-distinct registrations compete for another tool's executable route.
+    let namespace: Function = ctx.eval(
+        r#"((names, dispatch) => {
+            const tools = Object.create(null);
+            for (const name of names) {
+                Object.defineProperty(tools, name, {
+                    value: args => dispatch(name, args), enumerable: true
+                });
+            }
+            return Object.freeze(tools);
+        })"#,
+    )?;
+    let names: Value = ctx.json_parse(tools_json)?;
+    let tools: Object = namespace.call((names, call))?;
     ctx.globals().set("describeTool", describe)?;
     let searches = bridge.clone();
     let search = Function::new(
@@ -284,7 +317,7 @@ fn start_guest<'js>(
     )?;
     let search: Function = search_wrapper.call((search,))?;
     ctx.globals().set("searchTools", search)?;
-    tools.set("inspect", inspect)?;
+    ctx.globals().set("inspectSaved", inspect)?;
     let input: Function = ctx.eval(format!("(async (tools) => {{\n{code}\n}})"))?;
     let root: Promise = input.call((tools,))?;
     Ok(Persistent::save(&ctx, root))
@@ -379,6 +412,7 @@ impl GuestBudget {
 
 fn execute(
     code: String,
+    tools_json: String,
     limits: CodeLimits,
     sender: mpsc::Sender<CodeRequest>,
     stop: &CancellationToken,
@@ -412,7 +446,7 @@ fn execute(
             .with(|ctx| diagnostic_helper(&ctx))
             .map_err(|e| context.with(|ctx| js_error(&ctx, e, None)))?;
         let root = context
-            .with(|ctx| start_guest(ctx, &code, &bridge))
+            .with(|ctx| start_guest(ctx, &code, &tools_json, &bridge))
             .map_err(|e| context.with(|ctx| js_error(&ctx, e, Some(&helper))))?;
         loop {
             if stop.is_cancelled() {
@@ -487,8 +521,41 @@ mod tests {
     }
 
     fn start(code: &str, limits: CodeLimits) -> (CodeTask, CancellationToken) {
+        start_named(
+            code,
+            &[
+                "forbidden",
+                "echo",
+                "effect",
+                "host",
+                "checkpoint",
+                "waiting",
+                "must not dispatch",
+                "bad",
+                "outer",
+                "inner",
+                "first",
+                "next",
+                "queued",
+            ],
+            limits,
+        )
+    }
+
+    fn start_named(
+        code: &str,
+        names: &[&str],
+        limits: CodeLimits,
+    ) -> (CodeTask, CancellationToken) {
         let stop = CancellationToken::new();
-        let task = QuickJs.start(code.into(), limits, stop.clone()).unwrap();
+        let task = QuickJs
+            .start(
+                code.into(),
+                serde_json::to_string(names).unwrap(),
+                limits,
+                stop.clone(),
+            )
+            .unwrap();
         (task, stop)
     }
 
@@ -574,7 +641,7 @@ mod tests {
             "({get message() {hook()}, toString: hook, [Symbol.toPrimitive]: hook})",
         ] {
             let code = format!(
-                "const hook = () => {{void tools.call('forbidden', {{}}); return 'unsafe';}}; throw {expression};"
+                "const hook = () => {{void tools.forbidden({{}}); return 'unsafe';}}; throw {expression};"
             );
             let (mut task, stop) = start(&code, limits());
             assert_eq!(
@@ -586,7 +653,7 @@ mod tests {
             assert!(task.requests.recv().await.is_none(), "{expression}");
         }
         let (mut task, _) = start(
-            "const e = new Error('safe'); const hook = () => {void tools.call('forbidden', {}); return 'unsafe';}; Object.getOwnPropertyDescriptor = hook; String.prototype.slice = hook; Function.prototype.call = hook; Function.prototype.bind = hook; Object.defineProperty(e, 'stack', {get: hook}); Object.defineProperty(globalThis, 'String', {get: hook}); Object.defineProperty(globalThis, 'Object', {get: hook}); throw e;",
+            "const e = new Error('safe'); const hook = () => {void tools.forbidden({}); return 'unsafe';}; Object.getOwnPropertyDescriptor = hook; String.prototype.slice = hook; Function.prototype.call = hook; Function.prototype.bind = hook; Object.defineProperty(e, 'stack', {get: hook}); Object.defineProperty(globalThis, 'String', {get: hook}); Object.defineProperty(globalThis, 'Object', {get: hook}); throw e;",
             limits(),
         );
         assert_eq!(finish(&mut task).await, Err("safe".into()));
@@ -596,7 +663,7 @@ mod tests {
     #[tokio::test]
     async fn awaited_json_calls_discovery_and_inspect() {
         let (mut task, stop) = start(
-            "const a = await tools.call('echo', {n: 1}); const b = await describeTool('ec'); const c = await tools.inspect({kind:'children',parent:{assistant_entry:12,ordinal:0}}); return {a, b, c};",
+            "const a = await tools.echo({n: 1}); const b = await describeTool('ec'); const c = await inspectSaved({kind:'children',parent:{assistant_entry:12,ordinal:0}}); return {a, b, c};",
             limits(),
         );
         let call = request(&mut task).await;
@@ -649,7 +716,7 @@ mod tests {
             }
         }
         let (mut task, stop) = start(
-            "await searchTools('candidate'); await describeTool('candidate'); await tools.call('must not dispatch', {});",
+            "await searchTools('candidate'); await describeTool('candidate'); await tools['must not dispatch']({});",
             CodeLimits {
                 max_calls: 2,
                 max_concurrency: 1,
@@ -718,7 +785,7 @@ mod tests {
 
     #[tokio::test]
     async fn unawaited_transfer_survives_successful_return() {
-        let (mut task, stop) = start("void tools.call('effect', {n: 1}); return 7;", limits());
+        let (mut task, stop) = start("void tools.effect({n: 1}); return 7;", limits());
         assert_eq!(finish(&mut task).await, Ok("7".into()));
         assert!(!stop.is_cancelled());
         let call = request(&mut task).await;
@@ -737,7 +804,7 @@ mod tests {
             json!({"value": {"exit_code": 7}, "is_error": true}),
         ] {
             let (mut task, stop) = start(
-                "return await tools.call('host', {});",
+                "return await tools.host({});",
                 CodeLimits {
                     execution_budget: Duration::from_millis(100),
                     ..limits()
@@ -756,12 +823,12 @@ mod tests {
     #[tokio::test]
     async fn reply_guest_code_and_idle_promises_resume_budget_accounting() {
         for code in [
-            "await tools.call('host', {}); while(true) {}",
+            "await tools.host({}); while(true) {}",
             "await describeTool('host'); while(true) {}",
             "await searchTools('host'); while(true) {}",
-            "await tools.call('host', {}); await new Promise(() => {});",
-            "Object.defineProperty(Object.prototype, 'then', {get() {while(true) {}}}); return await tools.call('host', {});",
-            "await tools.call('host', {}); return {toJSON() {while(true) {}}};",
+            "await tools.host({}); await new Promise(() => {});",
+            "Object.defineProperty(Object.prototype, 'then', {get() {while(true) {}}}); return await tools.host({});",
+            "await tools.host({}); return {toJSON() {while(true) {}}};",
         ] {
             let (mut task, stop) = start(
                 code,
@@ -787,7 +854,7 @@ mod tests {
     #[tokio::test]
     async fn host_replies_do_not_reset_accumulated_execution_budget() {
         let (mut task, stop) = start(
-            "for(let i=0;i<512;i++) { for(let j=0;j<1000000;j++) {} await tools.call('checkpoint', {}); } return 'budget reset';",
+            "for(let i=0;i<512;i++) { for(let j=0;j<1000000;j++) {} await tools.checkpoint({}); } return 'budget reset';",
             CodeLimits {
                 execution_budget: Duration::from_millis(100),
                 max_calls: 1024,
@@ -827,8 +894,8 @@ mod tests {
     #[tokio::test]
     async fn execution_budget_bounds_cpu_idle_promises_and_jobs() {
         for code in [
-            "void tools.call('waiting', {}); while (true) {}",
-            "void tools.call('waiting', {}); const again = () => Promise.resolve().then(again); again(); await new Promise(() => {});",
+            "void tools.waiting({}); while (true) {}",
+            "void tools.waiting({}); const again = () => Promise.resolve().then(again); again(); await new Promise(() => {});",
             "while (true) {}",
             "await Promise.resolve(); while (true) {}",
             "await new Promise(() => {});",
@@ -849,7 +916,7 @@ mod tests {
             );
             assert!(began.elapsed() < Duration::from_secs(1), "{code}");
             assert!(stop.is_cancelled());
-            if code.contains("tools.call") {
+            if code.contains("tools.waiting(") {
                 let call = request(&mut task).await;
                 assert!(
                     matches!(call.kind, CodeRequestKind::Call { name, .. } if name == "waiting")
@@ -865,7 +932,8 @@ mod tests {
         stop.cancel();
         let mut task = QuickJs
             .start(
-                "void tools.call('must not transfer', {}); return 0;".into(),
+                "void tools['must not transfer']({}); return 0;".into(),
+                "[\"must not transfer\"]".into(),
                 limits(),
                 stop,
             )
@@ -873,12 +941,9 @@ mod tests {
         assert_eq!(finish(&mut task).await, Err("JavaScript cancelled".into()));
         assert!(task.requests.recv().await.is_none());
 
-        for code in [
-            "await tools.call('waiting', {});",
-            "await new Promise(() => {});",
-        ] {
+        for code in ["await tools.waiting({});", "await new Promise(() => {});"] {
             let (mut task, stop) = start(code, limits());
-            let held = if code.contains("tools.call") {
+            let held = if code.contains("tools.waiting(") {
                 Some(request(&mut task).await)
             } else {
                 tokio::time::sleep(Duration::from_millis(10)).await;
@@ -899,7 +964,7 @@ mod tests {
             "const a = {}; a.a = a; return a;",
             "return 1n;",
             "return 'x'.repeat(5000);",
-            "await tools.call('bad', 'x'.repeat(5000));",
+            "await tools.bad('x'.repeat(5000));",
             "const a = []; while (true) a.push('x'.repeat(65536));",
             "function recur() { return recur(); } recur();",
             "const e = new Error(); Object.defineProperty(e, 'message', {get() {while(true) {}}}); throw e;",
@@ -917,27 +982,58 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn only_the_tools_bridge_has_host_capabilities() {
-        let (mut task, stop) = start(
+    async fn named_namespace_is_exact_immutable_and_has_no_ambient_authority() {
+        let names = [
+            "call",
+            "inspect",
+            "__proto__",
+            "constructor",
+            "a-b",
+            "a_b",
+            "Read",
+            "read",
+        ];
+        let (mut task, stop) = start_named(
             "const absent = ['process','require','module','exports','fs','fetch','XMLHttpRequest','WebSocket',
                 'setTimeout','setInterval','setImmediate','queueMicrotask','console','Deno','Bun','std','os'];
+             const names = Object.keys(tools);
+             for (const name of names) await tools[name]({name});
              return {absent: absent.every(k => typeof globalThis[k] === 'undefined'),
-                     bridge: Object.keys(tools).sort()};",
+                     names, frozen: Object.isFrozen(tools), nullPrototype: Object.getPrototypeOf(tools) === null,
+                     unknown: tools.unknown === undefined, savedInspection: typeof inspectSaved === 'function',
+                     immutable: !Reflect.set(tools, 'read', () => {})};",
+            &names,
             limits(),
         );
+        for expected in names {
+            let call = request(&mut task).await;
+            assert!(
+                matches!(call.kind, CodeRequestKind::Call { name, args_json }
+                if name == expected && serde_json::from_str::<serde_json::Value>(&args_json).unwrap() == json!({"name":expected}))
+            );
+            call.reply.send(Ok("null".into())).unwrap();
+        }
+        let result: serde_json::Value =
+            serde_json::from_str(&finish(&mut task).await.unwrap()).unwrap();
         assert_eq!(
-            finish(&mut task).await.unwrap(),
-            "{\"absent\":true,\"bridge\":[\"call\",\"inspect\"]}"
+            result,
+            json!({"absent":true,"names":names,"frozen":true,"nullPrototype":true,
+            "unknown":true,"savedInspection":true,"immutable":true})
         );
+        assert!(task.requests.recv().await.is_none());
         assert!(!stop.is_cancelled());
     }
 
     #[tokio::test]
     async fn serialization_reentry_cannot_exceed_admission() {
         let (mut task, stop) = start(
-            "try { await tools.call('outer', {toJSON() { void tools.call('inner', {}); return {}; }}); }
+            "try { await tools.outer({toJSON() { void tools.inner({}); return {}; }}); }
              catch (e) { return e.message; }",
-            CodeLimits { max_calls: 1, max_concurrency: 1, ..limits() },
+            CodeLimits {
+                max_calls: 1,
+                max_concurrency: 1,
+                ..limits()
+            },
         );
         assert_eq!(finish(&mut task).await, Ok("\"bridge call limit\"".into()));
         let call = request(&mut task).await;
@@ -953,7 +1049,7 @@ mod tests {
              Object.defineProperty(Object.prototype, 'then', {configurable: true, get() {
                  if (!fired) { fired = true; void searchTools('nested'); } return undefined;
              }});
-             const a = await tools.call('first', {}); delete Object.prototype.then; return a;",
+             const a = await tools.first({}); delete Object.prototype.then; return a;",
             limits(),
         );
         let call = request(&mut task).await;
@@ -970,7 +1066,7 @@ mod tests {
     #[tokio::test]
     async fn total_calls_are_bounded_even_after_replies_settle() {
         let (mut task, stop) = start(
-            "for (let i = 0; i < 3; i++) await tools.call('next', {i}); return true;",
+            "for (let i = 0; i < 3; i++) await tools.next({i}); return true;",
             CodeLimits {
                 max_calls: 2,
                 max_concurrency: 1,
@@ -991,7 +1087,7 @@ mod tests {
     #[tokio::test]
     async fn root_failure_signals_stop_before_completion_with_queued_work() {
         let (mut task, stop) = start(
-            "void tools.call('queued', {}); throw new Error('failed');",
+            "void tools.queued({}); throw new Error('failed');",
             limits(),
         );
         tokio::time::timeout(Duration::from_secs(1), stop.cancelled())
@@ -1011,7 +1107,7 @@ mod tests {
             Some(Err("x".repeat(5000))),
             None,
         ] {
-            let (mut task, stop) = start("return await tools.call('host', {});", limits());
+            let (mut task, stop) = start("return await tools.host({});", limits());
             let call = request(&mut task).await;
             if let Some(reply) = reply {
                 call.reply.send(reply).unwrap();
@@ -1019,6 +1115,41 @@ mod tests {
                 drop(call.reply);
             }
             assert!(finish(&mut task).await.is_err());
+            assert!(stop.is_cancelled());
+        }
+    }
+
+    #[test]
+    fn invalid_manifests_fail_before_worker_creation() {
+        for (names, limits, message) in [
+            ("null", limits(), "array of names"),
+            ("[1]", limits(), "array of names"),
+            ("[\"read\",\"read\"]", limits(), "duplicate names"),
+            ("[\"then\"]", limits(), "reserved tool name"),
+            ("[\"toJSON\"]", limits(), "reserved tool name"),
+            (
+                "[]",
+                CodeLimits {
+                    max_json_bytes: 1,
+                    ..limits()
+                },
+                "manifest byte limit",
+            ),
+            (
+                "[]",
+                CodeLimits {
+                    max_host_bytes: 1,
+                    ..limits()
+                },
+                "manifest byte limit",
+            ),
+        ] {
+            let stop = CancellationToken::new();
+            let error = QuickJs
+                .start("return 0;".into(), names.into(), limits, stop.clone())
+                .err()
+                .expect("invalid manifest started a worker");
+            assert!(error.contains(message), "{error}");
             assert!(stop.is_cancelled());
         }
     }
@@ -1091,7 +1222,7 @@ mod tests {
             let stop = CancellationToken::new();
             assert!(
                 QuickJs
-                    .start("return 0;".into(), limits, stop.clone())
+                    .start("return 0;".into(), "[]".into(), limits, stop.clone())
                     .is_err(),
                 "{limits:?}"
             );

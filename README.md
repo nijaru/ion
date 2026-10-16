@@ -794,16 +794,26 @@ The model supplies an async JavaScript **body**, for example:
 
 ```js
 const results = await Promise.all(
-  ['src/main.rs', 'Cargo.toml'].map(path => tools.call('read', {path}))
+  ['src/main.rs', 'Cargo.toml'].map(path => tools.read({path}))
 );
 return results.map(r => ({characters: r.value.content.length, failed: r.is_error}));
 ```
 
-`tools.call(name, arguments)` returns `{value, is_error, image_mime_types}` for
-observed tool outcomes, including native failures with `is_error: true`.
-Invalid bridge requests, unknown/non-guest capabilities and gateway faults
-reject instead of returning an envelope. Catching a rejection does not undo
-prior effects or establish that unknown work is safe to retry.
+`tools.read(arguments)` and `tools[name](arguments)` invoke exact callable names
+from the request's frozen catalogue, including deferred tools. The namespace is
+finite, frozen and has no prototype or normalized aliases. Use brackets for names
+such as `tools['server_lookup-item'](arguments)`. Unknown members are `undefined`;
+`call` and `inspect` are ordinary tool names, not dispatcher/inspection helpers.
+Callable names `then` and `toJSON` prevent Code Mode startup rather than risk
+implicit dispatch during promise resolution or serialization; direct calls remain
+available. The complete name manifest must fit the per-value and cumulative host
+JSON budgets before any guest or child work starts; an oversized catalogue is not
+silently truncated.
+
+Calls return `{value, is_error, image_mime_types}` for observed tool outcomes,
+including native failures with `is_error: true`. Invalid bridge requests and
+gateway faults reject instead. Catching a rejection does not undo prior effects
+or establish that unknown work is safe to retry.
 Global `searchTools(query, {limit})` returns bounded `{name, description}`
 candidates. Options and `limit` may be omitted (default ten); a supplied limit
 must be an integer 1..10. Null/nonobject options, unknown keys and invalid limits
@@ -828,10 +838,10 @@ can explicitly retrieve saved evidence without rerunning the failed script,
 even if compaction has removed that locator from visible context:
 
 ```js
-const saved = await tools.inspect({kind: 'parents'});
+const saved = await inspectSaved({kind: 'parents'});
 const parent = saved.parents[0].parent; // select the relevant saved parent
-const children = await tools.inspect({kind: 'children', parent});
-const page = await tools.inspect({
+const children = await inspectSaved({kind: 'children', parent});
+const page = await inspectSaved({
   kind: 'output', parent, child: 0, pointer: '/stdout_full_path'
 });
 return {children, capture_path: JSON.parse(page.json), original_failed: page.is_error};
@@ -854,7 +864,7 @@ and accepts 4–65536 bytes. Concatenate pages before parsing a larger value.
 Observed results preserve `is_error`; `not_dispatched` and `unknown` have no
 invented output. Only settled parents with saved children are inspectable.
 
-Inspection is read-only and shares the guest's bridge/reply budgets. Invalid
+Global `inspectSaved(query)` is read-only and shares the guest's bridge/reply budgets. Invalid
 queries reject their promise. Page size bounds returned data, not lookup CPU:
 a saved value is decoded by an owned read task outside the Session writer lock
 and guest VM; cancellation stops delivery but still joins that read. It exposes
@@ -873,8 +883,8 @@ the script. `Promise.all` does not roll back writes or external calls.
 QuickJS runs on a separate blocking worker without ambient filesystem, network,
 module or timer APIs. Default limits are a cumulative 30-second runnable guest
 budget, 64 bridge requests, four concurrent calls, a 64 MiB JS heap,
-512 KiB stack, 64 KiB source and 1 MiB per JSON value. Cumulative guest replies
-are limited to 8 MiB. A 32 MiB child-audit admission threshold stops further
+512 KiB stack, 64 KiB source and 1 MiB per JSON value. The callable-name manifest
+and cumulative JSON reply data share an 8 MiB host-delivery budget. A 32 MiB child-audit admission threshold stops further
 dispatch; already-started outcomes still commit, so it can overshoot. Successful
 guest return ends its budget, not host settlement. Idle waits for pending Core
 bridge replies are excluded; guest computation, promise jobs, serialization and

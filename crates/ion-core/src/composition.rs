@@ -29,6 +29,7 @@ pub struct CodeLimits {
     pub max_json_bytes: usize,
     pub max_calls: usize,
     pub max_concurrency: usize,
+    /// Encoded callable-name manifest plus cumulative JSON replies delivered to the VM.
     pub max_host_bytes: usize,
     /// Stop further dispatch after this much child audit. Already started
     /// outcomes still commit: this admission threshold can overshoot, not cut.
@@ -64,8 +65,8 @@ pub struct CodeRequest {
 }
 
 /// Close the request sender when the worker exits. Guest failure cancels `stop`;
-/// successful return leaves transferred work alive. No Session/catalogue enters
-/// the worker. The coding operation retains this task until it joins.
+/// successful return leaves transferred work alive. No Session or executable
+/// catalogue enters the worker. The coding operation retains this task until it joins.
 pub struct CodeTask {
     pub requests: mpsc::Receiver<CodeRequest>,
     pub result: JoinHandle<CodeReply>,
@@ -74,10 +75,14 @@ pub struct CodeTask {
 /// runnable guest work cumulatively, including reply resolution/serialization;
 /// only idle bridge waits may be excluded. Signal failure before closing the
 /// sender, and do not cancel transferred effects on successful guest return.
+/// `tools_json` is the complete bounded JSON array of exact callable names from
+/// the frozen catalogue, not executable authority. Its bytes are charged against
+/// the same JSON-delivery budget as replies; publish no partial namespace.
 pub trait CodeRuntime: Send + Sync {
     fn start(
         &self,
         code: String,
+        tools_json: String,
         limits: CodeLimits,
         stop: CancellationToken,
     ) -> Result<CodeTask, String>;
@@ -126,7 +131,26 @@ pub(crate) fn definition(limits: CodeLimits) -> ToolDefinition {
         spec: ToolSpec {
             name: CODE_MODE_NAME.into(),
             description: format!(
-                "Run an async JavaScript function body without ambient filesystem, network, modules or timers. Await tools.call(name,args) for {{value,is_error,image_mime_types}}; searchTools(query,options?) returns matching {{name,description}} candidates; options accepts only limit, an integer 1..10 (default 10), with exact ASCII-insensitive names ranked first; describeTool(name) returns the exact case-sensitive frozen ToolSpec (name/description/input_schema) or null for unknown/non-guest capabilities. Both include callable deferred tools, exclude intrinsic tool_search/code_mode, and are read-only, not activation or effects. Return JSON selected for the model; raw child outputs stay inspectable and are not automatically added to model context. tools.inspect({{kind:'parents'}}) discovers up to 10 settled parents with saved children, newest first; pass next_before as before for older locators, including after compaction/reopen. tools.inspect({{kind:'children',parent}}) pages saved child metadata; pass next_after as after for more. tools.inspect({{kind:'output',parent,child,pointer:'/stdout_full_path'}}) returns UTF-8 chunks of encoded saved output.value as json with next_offset and total_bytes; pointer defaults to the whole value, offset to 0, limit to 4096 (4..65536 bytes). parent is a Session-scoped locator from the prior envelope or parents page; pointer is a JSON Pointer. Inspection is read-only, excludes image bytes and general history, and preserves observed/not_dispatched/unknown states. Return only selected evidence. Observed native tool failures set is_error in the reply envelope; invalid bridge requests, unknown/non-guest capabilities and gateway faults reject rather than return envelopes. Transferred requests settle even if unawaited. Failure/cancellation stops new dispatch and awaits started effects; no rollback or script replay. Limits: {}ms cumulative runnable guest budget (idle bridge waits excluded), {} bridge requests, {} concurrent tools, {} byte JS heap, {} byte JSON value, {} cumulative host reply bytes. Direct tools remain available.",
+                concat!(
+                    "Run an async JavaScript function body without ambient filesystem, network, modules or timers. ",
+                    "Await tools.name(args), or tools[name](args) for exact names needing brackets, for {{value,is_error,image_mime_types}}. ",
+                    "tools is a frozen null-prototype namespace of all callable direct/deferred tools, without aliases; then/toJSON names prevent startup to avoid implicit dispatch. ",
+                    "Unknown members are undefined. ",
+                    "searchTools(query,options?) returns matching {{name,description}} candidates; options accepts only limit, an integer 1..10 (default 10), with exact ASCII-insensitive names ranked first; describeTool(name) returns the exact case-sensitive frozen ToolSpec (name/description/input_schema) or null for unknown/non-guest capabilities. ",
+                    "Both include callable deferred tools, exclude intrinsic tool_search/code_mode, and are read-only, not activation or effects. ",
+                    "Return JSON selected for the model; raw child outputs stay inspectable and are not automatically added to model context. ",
+                    "inspectSaved({{kind:'parents'}}) discovers up to 10 settled parents with saved children, newest first; pass next_before as before for older locators, including after compaction/reopen. ",
+                    "inspectSaved({{kind:'children',parent}}) pages saved child metadata; pass next_after as after for more. ",
+                    "inspectSaved({{kind:'output',parent,child,pointer:'/stdout_full_path'}}) returns UTF-8 chunks of encoded saved output.value as json with next_offset and total_bytes; pointer defaults to the whole value, offset to 0, limit to 4096 (4..65536 bytes). ",
+                    "parent is a Session-scoped locator from the prior envelope or parents page; pointer is a JSON Pointer. ",
+                    "Inspection is read-only, excludes image bytes and general history, and preserves observed/not_dispatched/unknown states. ",
+                    "Return only selected evidence. ",
+                    "Observed native tool failures set is_error in the reply envelope; invalid bridge requests, unknown/non-guest capabilities and gateway faults reject rather than return envelopes. ",
+                    "Transferred requests settle even if unawaited. ",
+                    "Failure/cancellation stops new dispatch and awaits started effects; no rollback or script replay. ",
+                    "Limits: {}ms cumulative runnable guest budget (idle bridge waits excluded), {} bridge requests, {} concurrent tools, {} byte JS heap, {} byte JSON value, {} cumulative host JSON bytes including the name manifest. ",
+                    "Direct tools remain available.",
+                ),
                 limits.execution_budget.as_millis(),
                 limits.max_calls,
                 limits.max_concurrency,

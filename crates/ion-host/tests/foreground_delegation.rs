@@ -321,7 +321,7 @@ impl Fixture {
         let first = if composed {
             call(
                 "code_mode",
-                json!({"code":"try { await tools.call('delegate', {}); } catch {} return await tools.call('effect', {});"}),
+                json!({"code":"try { await tools.delegate({}); } catch {} return await tools.effect({});"}),
             )
         } else {
             call("delegate", json!({"parent":"forged"}))

@@ -47,20 +47,20 @@ def program(prompt):
     if prompt == "RECOVER_FAIL":
         producer = "import secrets; print(secrets.token_hex(24)); print('X'*100000)"
         command = f"printf ONCE >> effects; {shlex.quote(sys.executable)} -c {shlex.quote(producer)}; exit 7"
-        return "await tools.call('exec'," + json.dumps({"command": command}) + "); throw new Error('after effect');"
+        return "await tools.exec(" + json.dumps({"command": command}) + "); throw new Error('after effect');"
     if prompt == "GUARD":
-        return "const before=await tools.call('read',{path:'guarded',limit:1}); if(!before.value.has_more) throw new Error('expected paged source'); const first=await tools.call('write',{path:'guarded',content:'FIRST',base_digest:before.value.base_digest}); if(first.is_error) throw new Error('first guarded write'); const second=await tools.call('write',{path:'guarded',content:'SECOND',base_digest:first.value.new_digest}); if(second.is_error) throw new Error('second guarded write'); const stale=await tools.call('write',{path:'guarded',content:'LOST',base_digest:before.value.base_digest}); const after=await tools.call('read',{path:'guarded'}); return {first:first.value.new_digest,second:second.value.new_digest,stale:stale.is_error,final:after.value.content};"
+        return "const before=await tools.read({path:'guarded',limit:1}); if(!before.value.has_more) throw new Error('expected paged source'); const first=await tools.write({path:'guarded',content:'FIRST',base_digest:before.value.base_digest}); if(first.is_error) throw new Error('first guarded write'); const second=await tools.write({path:'guarded',content:'SECOND',base_digest:first.value.new_digest}); if(second.is_error) throw new Error('second guarded write'); const stale=await tools.write({path:'guarded',content:'LOST',base_digest:before.value.base_digest}); const after=await tools.read({path:'guarded'}); return {first:first.value.new_digest,second:second.value.new_digest,stale:stale.is_error,final:after.value.content};"
     if prompt == "ACTIVE":
-        return "await Promise.all(['a','b'].map(x=>tools.call('exec',{command:`touch ${x}.ready; sleep 1.5; printf done`}))); return true;"
+        return "await Promise.all(['a','b'].map(x=>tools.exec({command:`touch ${x}.ready; sleep 1.5; printf done`}))); return true;"
     if prompt == "MCP":
-        return "const candidates=await searchTools('Lookup an item'); const bounded=await searchTools('Lookup an item',{limit:1}); if(bounded.length!==1 || bounded[0].name!==candidates[0].name) throw new Error('bounded discovery'); let rejected=false; try { await searchTools('Lookup an item',{limit:null}); } catch (_) { rejected=true; } if(!rejected) throw new Error('invalid limit admitted'); const [candidate]=bounded; const d=await describeTool(candidate.name); if(d.input_schema.required[0]!=='index' || await describeTool('code_mode')!==null || await describeTool('missing')!==null) throw new Error('discovery contract'); const rs=await Promise.all([1,2].map(index=>tools.call(d.name,{index}))); return {total:rs.reduce((n,r)=>n+r.value.structured_content.count,0)};"
+        return "const candidates=await searchTools('Lookup an item'); const bounded=await searchTools('Lookup an item',{limit:1}); if(bounded.length!==1 || bounded[0].name!==candidates[0].name) throw new Error('bounded discovery'); let rejected=false; try { await searchTools('Lookup an item',{limit:null}); } catch (_) { rejected=true; } if(!rejected) throw new Error('invalid limit admitted'); const [candidate]=bounded; const d=await describeTool(candidate.name); if(d.input_schema.required[0]!=='index' || await describeTool('code_mode')!==null || await describeTool('missing')!==null) throw new Error('discovery contract'); const rs=await Promise.all([1,2].map(index=>tools[d.name]({index}))); return {total:rs.reduce((n,r)=>n+r.value.structured_content.count,0)};"
     if prompt in ("IO", "STDERR"):
         first = "sleep 0.5; printf FIRST_DONE" if prompt == "STDERR" else "exec sleep 30"
         return "await Promise.all([" + ",".join(
-            "tools.call('exec'," + json.dumps({"command": f"printf '%s\\n' $$ > {x}.pid; printf STARTED_{x}; touch {x}.ready; {end}", "timeout_ms": 120000}) + ")"
+            "tools.exec(" + json.dumps({"command": f"printf '%s\\n' $$ > {x}.pid; printf STARTED_{x}; touch {x}.ready; {end}", "timeout_ms": 120000}) + ")"
             for x, end in [("a", first), ("b", "exec sleep 30")]
         ) + "]); return true;"
-    return "const rs=await Promise.all(['one','two'].map(path=>tools.call('read',{path}))); await tools.call('write',{path:'changed',content:'done'}); return {lengths:rs.map(r=>r.value.content.length)};"
+    return "const rs=await Promise.all(['one','two'].map(path=>tools.read({path}))); await tools.write({path:'changed',content:'done'}); return {lengths:rs.map(r=>r.value.content.length)};"
 
 
 class Provider(BaseHTTPRequestHandler):
@@ -76,10 +76,10 @@ class Provider(BaseHTTPRequestHandler):
         if enabled and prompt in ("RECOVER_CAPTURE", "INSPECT_RPC") and fresh:
             if prompt == "RECOVER_CAPTURE":
                 assert "assistant_entry" not in json.dumps(messages), "cut retained the original locator"
-            discovery = "const refs=await tools.inspect({kind:'parents'}); let parent; for(const ref of refs.parents) { const cs=await tools.inspect({kind:'children',parent:ref.parent}); if(cs.children.some(c=>c.name==='exec')) { parent=ref.parent; break; } } if(!parent) throw new Error('saved exec not found'); "
-            code = discovery + "const meta=await tools.inspect({kind:'children',parent}); const path=await tools.inspect({kind:'output',parent,child:0,pointer:'/stdout_full_path'}); const exit=await tools.inspect({kind:'output',parent,child:0,pointer:'/exit_code'}); const saved=await tools.call('read',{path:JSON.parse(path.json),limit:1024}); if(saved.is_error) return {read_failure:saved.value}; return {nonce:saved.value.content.split('\\n')[0], original_failed:path.is_error, exit:JSON.parse(exit.json), states:meta.children.map(c=>c.state)};"
+            discovery = "const refs=await inspectSaved({kind:'parents'}); let parent; for(const ref of refs.parents) { const cs=await inspectSaved({kind:'children',parent:ref.parent}); if(cs.children.some(c=>c.name==='exec')) { parent=ref.parent; break; } } if(!parent) throw new Error('saved exec not found'); "
+            code = discovery + "const meta=await inspectSaved({kind:'children',parent}); const path=await inspectSaved({kind:'output',parent,child:0,pointer:'/stdout_full_path'}); const exit=await inspectSaved({kind:'output',parent,child:0,pointer:'/exit_code'}); const saved=await tools.read({path:JSON.parse(path.json),limit:1024}); if(saved.is_error) return {read_failure:saved.value}; return {nonce:saved.value.content.split('\\n')[0], original_failed:path.is_error, exit:JSON.parse(exit.json), states:meta.children.map(c=>c.state)};"
             if prompt == "INSPECT_RPC":
-                code = discovery + "const exit=await tools.inspect({kind:'output',parent,child:0,pointer:'/exit_code'}); return {exit:JSON.parse(exit.json), original_failed:exit.is_error};"
+                code = discovery + "const exit=await inspectSaved({kind:'output',parent,child:0,pointer:'/exit_code'}); return {exit:JSON.parse(exit.json), original_failed:exit.is_error};"
             delta = {"tool_calls": [{"index": 0, "id": "inspect", "type": "function", "function": {"name": "code_mode", "arguments": json.dumps({"code": code})}}]}
             reason = "tool_calls"
         elif enabled and prompt in ("FANOUT", "GUARD", "MCP", "IO", "STDERR", "ACTIVE", "RECOVER_FAIL") and fresh:
