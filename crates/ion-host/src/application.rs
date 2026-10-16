@@ -8,6 +8,8 @@ use tokio_util::sync::CancellationToken;
 
 use crate::{Host, LocalTools, Resources, Selection, SessionSetup};
 
+mod subagent;
+
 /// Retained recipe used for initial assembly, reload and idle replacement.
 /// Implementations select the complete model/tool environment, not additions to
 /// coding defaults. A missing model requests the application's own default.
@@ -52,6 +54,7 @@ pub struct CodingApplication {
     host: Arc<Host>,
     external_tools: Option<Arc<dyn CodingToolSource>>,
     code_mode: bool,
+    subagents: bool,
 }
 
 impl CodingApplication {
@@ -60,12 +63,20 @@ impl CodingApplication {
             host,
             external_tools,
             code_mode: false,
+            subagents: false,
         }
     }
 
     /// Enable composition for this application, including later replacements.
     pub fn with_code_mode(mut self, enabled: bool) -> Self {
         self.code_mode = enabled;
+        self
+    }
+
+    /// Enable fresh foreground coding children in the same workspace. This
+    /// recipe chooses their complete capabilities; model arguments cannot.
+    pub fn with_subagents(mut self, enabled: bool) -> Self {
+        self.subagents = enabled;
         self
     }
 
@@ -101,6 +112,9 @@ impl CodingApplication {
         let native = Arc::new(LocalTools::new(cwd)?);
         let mut sources: Vec<Arc<dyn CodingToolSource>> = vec![native.clone()];
         sources.extend(self.external_tools.iter().cloned());
+        if self.subagents {
+            sources.push(Arc::new(subagent::Subagent::new(self, cwd, selected)));
+        }
         let tools = ion_core::ToolSet::new(sources);
         let tools = if self.code_mode {
             tools.with_code_mode(

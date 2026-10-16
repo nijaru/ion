@@ -34,6 +34,27 @@ impl SessionDelegation {
     /// admission. The returned task is cold and owns everything needed to join
     /// preparation, Core execution and shutdown outside the tool's borrowed wait.
     pub fn prepare(&self, input: Message) -> Result<DelegationTask> {
+        self.prepare_inner(input, None)
+    }
+
+    /// Observe the answer of a successfully executed child after full Host join,
+    /// before relationship settlement. The callback is synchronous and must not
+    /// block. It is not a settlement receipt: await delegation before dependent
+    /// parent consumption. Passive reconciliation does not execute the callback
+    /// or reconstruct output; retain the original observation or inspect facts.
+    pub fn prepare_with_answer(
+        &self,
+        input: Message,
+        on_answer: impl FnOnce(String) + Send + 'static,
+    ) -> Result<DelegationTask> {
+        self.prepare_inner(input, Some(Box::new(on_answer)))
+    }
+
+    fn prepare_inner(
+        &self,
+        input: Message,
+        on_answer: Option<Box<dyn FnOnce(String) + Send>>,
+    ) -> Result<DelegationTask> {
         ensure!(
             self.directory.is_absolute(),
             "child directory must be absolute"
@@ -88,16 +109,22 @@ impl SessionDelegation {
                 // Completion facts precede Host settlement. Always join the whole
                 // owner, even after admission refusal or a parent stop.
                 let report = control.shutdown().await;
+                let mut answer = None;
                 for update in report.updates {
                     if let ControlUpdate::Settled(settlement) = update
-                        && let OperationOutcome::Turn(Err(error)) = settlement.outcome
+                        && let OperationOutcome::Turn(outcome) = settlement.outcome
                     {
-                        let error = if infrastructure(&error) {
-                            DelegationFailure::Infrastructure(error.to_string())
-                        } else {
-                            DelegationFailure::Execution(error.to_string())
-                        };
-                        retain_failure(&mut failure, error);
+                        match outcome {
+                            Ok(text) => answer = Some(text),
+                            Err(error) => {
+                                let error = if infrastructure(&error) {
+                                    DelegationFailure::Infrastructure(error.to_string())
+                                } else {
+                                    DelegationFailure::Execution(error.to_string())
+                                };
+                                retain_failure(&mut failure, error);
+                            }
+                        }
                     }
                 }
                 for error in report.cleanup_errors {
@@ -105,6 +132,16 @@ impl SessionDelegation {
                         &mut failure,
                         DelegationFailure::Infrastructure(error.to_string()),
                     );
+                }
+                if failure.is_none()
+                    && let Some(on_answer) = on_answer
+                {
+                    let answer = answer.ok_or_else(|| {
+                        DelegationFailure::Infrastructure(
+                            "child control joined without its successful answer".into(),
+                        )
+                    })?;
+                    on_answer(answer);
                 }
                 failure.map_or(Ok(()), Err)
             })

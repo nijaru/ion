@@ -14,9 +14,8 @@ use ion_core::{CodingSession, SessionInputPreview};
 use sha2::{Digest, Sha256};
 
 pub struct SessionCatalog {
-    root: PathBuf,
+    directory: PathBuf,
     cwd: Option<PathBuf>,
-    key: String,
 }
 
 pub struct SessionSummary {
@@ -35,7 +34,15 @@ impl SessionCatalog {
             || "workspace-free".to_owned(),
             |cwd| format!("{:x}", Sha256::digest(cwd.as_os_str().as_encoded_bytes())),
         );
-        Self { root, cwd, key }
+        Self {
+            directory: root.join(key),
+            cwd,
+        }
+    }
+
+    /// Concrete workspace directory; inspecting it creates no files.
+    pub(crate) fn directory(&self) -> &Path {
+        &self.directory
     }
 
     pub(crate) fn cwd(&self) -> Option<&Path> {
@@ -43,12 +50,12 @@ impl SessionCatalog {
     }
 
     pub fn new_path(&self) -> Result<PathBuf> {
-        let directory = self.root.join(&self.key);
+        let directory = self.directory();
         if !directory.exists() {
             DirBuilder::new()
                 .recursive(true)
                 .mode(0o700)
-                .create(&directory)
+                .create(directory)
                 .with_context(|| format!("cannot create {}", directory.display()))?;
         }
         for _ in 0..16 {
@@ -79,8 +86,7 @@ impl SessionCatalog {
 
     fn paths(&self) -> Result<Vec<PathBuf>> {
         let mut paths = Vec::new();
-        let directory = self.root.join(&self.key);
-        match fs::read_dir(&directory) {
+        match fs::read_dir(self.directory()) {
             Ok(entries) => {
                 for entry in entries {
                     let entry = entry?;

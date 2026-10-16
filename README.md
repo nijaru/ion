@@ -681,8 +681,8 @@ A surviving transfer task retains the parent writer lease and is not closed by
 new parent work. Copies retain foreign history but acquire no child ownership.
 Recovery neither restarts the old child nor rewrites its missing observations;
 an owner UUID is not authority to adopt or resume it. New model-issued delegation
-is new work, not an exactly-once effect guarantee. There is no default coding
-delegation tool or live-model delegation qualification yet.
+is new work, not an exactly-once effect guarantee. Coding delegation is opt-in
+below; live-model delegation qualification remains open.
 
 Tools act directly in the working directory with the host user's permissions.
 There is no implicit sandbox. Settlements distinguish observed host output,
@@ -781,6 +781,40 @@ Coding requests use the catalog model's output ceiling, reduced when the
 current context leaves less estimated room; there is no separate 16k app cap.
 A completed response with no answer or tool call fails the Turn; it does not
 save an empty assistant message that would break later provider replay.
+
+## Optional coding subagents
+
+`ion --subagents run 'Delegate a self-contained coding task, then review it'`
+adds `subagent({task})`. The same flag works with chat and RPC;
+`CodingApplication::with_subagents(true)` retains it through application reload
+and binding replacement. It is off by default. When enabled, its reserved name
+replaces an external `subagent` registration.
+
+Each call runs one **fresh foreground Session** through the existing engine and
+shared control. The child uses the parent's selected model route (including
+invocation-local overrides), provider-default reasoning, the same workspace and
+project/home resources, native and supplied external tools (MCP for the CLI), and
+the application's Code Mode setting. It does not automatically enable another
+built-in subagent. Parent conversation is not copied: supply a self-contained
+`task`, at most 64 KiB of UTF-8. Model arguments cannot choose tools, credentials,
+model, workspace or ownership mode.
+
+The tool joins execution and cleanup before returning `answer`, `child_session`,
+`path` and the typed `outcome`/request receipt. Managed files live under the
+workspace catalog's `children/`, outside automatic `--continue` root selection;
+use the returned path to inspect or explicitly open one. An answer is the child's
+claim, not verification of its work. Raw child conversation and intermediate tool output
+do not automatically enter parent context. Parent stop and foreground client EOF
+stop/join the child; cancellation does not roll back its effects. The same
+workspace is not conflict isolation, and native tools retain host permissions.
+
+Forked context, background ownership and other explicit recipes remain SDK
+capabilities, not options of this coding preset. The SDK's
+`SessionDelegation::prepare_with_answer` can observe a newly executed child's
+answer after Host shutdown; consumers must still await the delegation receipt.
+Passive reconciliation does not call that hook or rerun work. A missing local
+answer is reported explicitly with its known outcome, not fabricated or retried.
+No live-model adherence or service-scale claim follows from the offline consumer.
 
 ## Optional Code Mode
 
@@ -932,7 +966,7 @@ contracts are not all implemented:
 | --- | --- | --- |
 | Application setup | Caller-owned model/tool/instruction configuration, workspace-free Sessions and explicit shell/local-image authority. Opt-in continuation checks a saved authority reference and declarations. | Changed-authority reconciliation. Applications must reconstruct and attest live bindings on reopen; the reference is not a credential or sandbox. |
 | Durability | SQLite conversation/effect history, conservative recovery, restart-safe direct admission through the Rust SDK and keyed RPC literal text; explicit same-Turn continuation through the Rust SDK. | Durable pending queues, wire-protocol delivery IDs and automatic restart/continuation. Coding CLI/TUI/RPC submissions do not opt in to continuation. |
-| Delegation | Foreground and explicitly transferred background SDK children, fresh/forked context, stable identity, explicit application/environment, bounded retained supervision/results and conservative owner-loss recovery. Code Mode nested tools remain distinct. | No default coding delegation tool or live-model/service-scale delegation qualification. Ordinary conversation forks still share the source cwd; managed children choose their own environment. |
+| Delegation | Opt-in fresh foreground coding subagents. SDK children also support background ownership and forked context, with stable identity, explicit application/environment, bounded retained supervision/results and conservative owner-loss recovery. Code Mode nested tools remain distinct. | No enabled-by-default policy or live-model/service-scale delegation qualification. This coding preset does not expose fork/background choices; managed SDK recipes choose their own environment. |
 | Remote use | Foreground stdio RPC, lossy progress and complete pull snapshots through shared control. A service embedding retains/drives the owner independently of connections. | No built-in authenticated network server, reliable activity replay or durable queue/metadata recovery. RPC EOF still stops/joins work. |
 
 Common coding workflows are implemented, but Pi-level daily-driver reliability
