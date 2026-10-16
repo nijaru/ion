@@ -490,11 +490,12 @@ fn run_guest(
                     // Observe rejection before settling any more bridge replies.
                     if let Some(value) = root.result::<Value>() {
                         let json = value.and_then(|v| {
-                            if v.is_undefined() {
-                                Ok("null".into())
+                            let value = if v.is_undefined() {
+                                Value::new_null(ctx.clone())
                             } else {
-                                json_text(&ctx, v, limits.max_json_bytes)
-                            }
+                                v
+                            };
+                            json_text(&ctx, value, limits.max_json_bytes)
                         })?;
                         output.finish(&ctx, json.len())?;
                         return Ok(Some(json));
@@ -1046,6 +1047,28 @@ mod tests {
                 assert_eq!(result.result.unwrap(), "null");
             }
             assert_eq!(stop.is_cancelled(), fails);
+        }
+    }
+
+    #[tokio::test]
+    async fn implicit_and_explicit_null_returns_share_the_json_bound() {
+        for body in ["", "return null;"] {
+            for limit in [3, 4] {
+                let (mut task, _) = start_named(
+                    body,
+                    &[],
+                    CodeLimits {
+                        max_json_bytes: limit,
+                        ..limits()
+                    },
+                );
+                let result = finish(&mut task).await;
+                if limit == 3 {
+                    assert!(result.unwrap_err().contains("JSON byte limit"));
+                } else {
+                    assert_eq!(result.unwrap(), "null");
+                }
+            }
         }
     }
 
