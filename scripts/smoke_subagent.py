@@ -1,4 +1,4 @@
-"""Qualify the opt-in coding subagent consumer without provider credentials."""
+"""Exercise coding delegation defaults and ownership without provider credentials."""
 import json
 import os
 import select
