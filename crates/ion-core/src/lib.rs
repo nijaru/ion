@@ -3,6 +3,7 @@
 mod agent;
 mod code_gateway;
 mod composition;
+mod delegation;
 mod generation;
 mod input;
 mod invocation;
@@ -20,6 +21,10 @@ pub use operation::{IdleSession, Operation, OperationError};
 pub use agent::{
     Agent as CodingAgent, AgentError as CodingAgentError, AgentEvent as CodingAgentEvent,
     AgentLimits, PromptCacheWarmingPolicy, RequestSubmission, SteeringInbox,
+};
+pub use delegation::{
+    DelegationContext, DelegationOutcome, DelegationOwnership, DelegationReceipt, DelegationRecord,
+    DelegationSite, ForegroundFailure, ForegroundSpec, ForegroundTask,
 };
 pub use input::{AcceptedInput, InputBudget, InputReservation};
 pub use invocation::{ToolInvocation, ToolOccurrence, ToolOrigin};

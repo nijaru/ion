@@ -166,7 +166,10 @@ impl TranscriptProjection {
                 | SessionEntry::TurnResumed { .. }
                 | SessionEntry::CacheWarm { .. }
                 | SessionEntry::Compacted { .. }
-                | SessionEntry::UserShellSettled { .. } => {}
+                | SessionEntry::UserShellSettled { .. }
+                | SessionEntry::DelegationAdmitted { .. }
+                | SessionEntry::DelegationSettled { .. }
+                | SessionEntry::ChildSessionOf { .. } => {}
             }
         }
         for item in &mut builder.projection.items {

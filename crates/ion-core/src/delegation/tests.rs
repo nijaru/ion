@@ -1,0 +1,70 @@
+use super::*;
+
+#[tokio::test]
+async fn untracked_or_stopped_invocations_cannot_start_cold_child_work() {
+    let root = std::env::temp_dir().join(format!("ion-delegation-port-{}", uuid::Uuid::new_v4()));
+    let session = CodingSession::create(root.join("parent.sqlite"), None).unwrap();
+    let model = ModelRef {
+        provider: "fixture".into(),
+        model: "fixture".into(),
+    };
+    session
+        .begin_turn("delegate".into(), model.clone())
+        .unwrap();
+    let call = ion_ai::ToolCall {
+        id: "call".into(),
+        name: "delegate".into(),
+        arguments: serde_json::json!({"session": session.id(), "turn": 1, "assistant_entry": 2, "ordinal": 0}),
+        raw_arguments: None,
+    };
+    session
+        .record_assistant(
+            1,
+            Message {
+                role: ion_ai::Role::Assistant,
+                content: vec![ion_ai::Content::ToolCall(call.clone())],
+                provider_replay: None,
+            },
+            ion_ai::Usage::unknown(),
+            false,
+        )
+        .unwrap();
+    let before = session.view().unwrap().entries;
+    let task = || {
+        ForegroundTask::new(
+            ForegroundSpec {
+                directory: root.join("children"),
+                cwd: None,
+                model: model.clone(),
+                reasoning: Reasoning::ProviderDefault,
+                authority: AuthorityScope::new("child/v1").unwrap(),
+                input: Message::user_input("child".into(), []),
+            },
+            |_, _, _| panic!("cold child work ran without live dispatch authority"),
+        )
+        .unwrap()
+    };
+    let untracked = crate::ToolInvocation::untracked(&call, CancellationToken::new());
+    assert!(untracked.delegate(task()).await.is_err());
+    let stop = CancellationToken::new();
+    let (invocation, gateway) = crate::ToolInvocation::admitted(
+        &call,
+        stop.clone(),
+        session.id(),
+        1,
+        session.tool_occurrence(1, "call").unwrap(),
+        None,
+    );
+    stop.cancel();
+    assert!(
+        gateway
+            .run(&session, &stop, invocation.delegate(task()))
+            .await
+            .unwrap()
+            .is_err()
+    );
+    assert_eq!(session.view().unwrap().entries, before);
+    assert!(!root.join("children").exists());
+    drop(session);
+    std::fs::remove_dir_all(root).unwrap();
+}

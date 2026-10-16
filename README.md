@@ -202,7 +202,7 @@ optional `after: true`.
 Session IDs are immutable UUIDs stored in the header, independent of filenames
 and provider affinity. Renaming a closed database does not change its ID; clone
 and fork create new identities without inheriting external delivery receipts or continuation grants.
-This unreleased branch uses Session format 12; earlier development Session
+This unreleased branch uses Session format 13; earlier development Session
 files are not reopened. Tool activity classification used by the transcript is
 stored with each assistant tool-call batch, so resumed history is not
 reinterpreted through the currently installed tool catalog.
@@ -593,8 +593,27 @@ child index. Reused provider call IDs and model arguments do not supply this
 identity. Fields are read-only. Core does not inject provenance into guest or
 MCP arguments; applications control what their tool outputs disclose. `ToolCatalog::execute_untracked` and
 `ToolInvocation::untracked` explicitly omit admission and origin. Provenance is
-not a live lease, capability grant, replay permission or evidence of settlement;
-managed child-Session ownership is still unimplemented.
+not a live lease, capability grant, replay permission or evidence of settlement.
+
+Rust applications can prepare a fresh foreground child with Host's
+`ForegroundDelegation` and request it through `ToolInvocation::delegate`. Its
+private live admission port is separate from the historical origin. The complete
+child application, authority assertion and environment are explicit; parent
+context, cwd, tools and credentials are not inherited. Core records a stable child
+identity and relationship before materialization, and retains Host supervision
+until shared control and started work join—even if the tool abandons its wait.
+Exact repeated specifications reconcile; different work at that invocation
+conflicts. Relationship storage failure blocks dependent execution, including a
+Code Mode guest that catches the tool error. `SessionView::delegations()` and
+`parent_delegation()` expose typed relationships without parsing tool prose;
+conversation copies acquire no child ownership.
+
+After owner loss, conservative recovery or explicit parent-Turn continuation
+records the unresolved relationship as unknown before closing its tool call;
+neither restarts the old child nor rewrites the child's missing observations.
+A new model-issued delegation is new work, not an exactly-once effect guarantee.
+There is no default coding delegation tool, forked child-context configuration or
+background ownership transfer yet.
 
 Tools act directly in the working directory with the host user's permissions.
 There is no implicit sandbox. Settlements distinguish observed host output,
@@ -812,7 +831,7 @@ contracts are not all implemented:
 | --- | --- | --- |
 | Application setup | Caller-owned model/tool/instruction configuration, workspace-free Sessions and explicit shell/local-image authority. Opt-in continuation checks a saved authority reference and declarations. | Changed-authority reconciliation. Applications must reconstruct and attest live bindings on reopen; the reference is not a credential or sandbox. |
 | Durability | SQLite conversation/effect history, conservative recovery, restart-safe direct admission and explicit same-Turn continuation through the Rust SDK. | Durable pending queues, wire-protocol delivery IDs and automatic restart/continuation. Coding CLI/TUI/RPC submissions do not opt in to continuation. |
-| Delegation | Independent Sessions, conversation forks and Code Mode nested tool calls. | Managed child-agent relationships and foreground/background supervision. Forks share the live workspace. |
+| Delegation | Fresh foreground SDK children with recorded identity, explicit application/environment, retained stop/join and conservative process-loss recovery; independent conversation forks and Code Mode nested tools remain distinct. | Forked child-context configuration, background transfer and a default coding delegation tool. Conversation forks share the live workspace; no live-model delegation qualification yet. |
 | Remote use | Foreground stdio RPC, lossy progress and complete pull snapshots through shared control. A service embedding retains/drives the owner independently of connections. | No built-in authenticated network server, reliable activity replay or durable queue/metadata recovery. RPC EOF still stops/joins work. |
 
 Common coding workflows are implemented, but Pi-level daily-driver reliability
@@ -902,6 +921,20 @@ kills an owned instance after its effect and explicitly continues the original
 Turn with the missing observation still unknown. These are synthetic SDK checks,
 not live-provider or service qualification. Applications must authenticate callers
 and authorize control; selecting tools does not isolate tenants or host effects.
+
+The credential-free [delegation example](crates/ion-app/examples/delegation.rs)
+uses separate restricted parent and child applications through shared control:
+
+```sh
+cargo run --locked -p ion --example delegation -- "$(mktemp -d)"
+```
+
+After building it, `python3 scripts/smoke_delegation.py` also kills an owned
+process after a synced child host effect. Both explicit parent-Turn continuation
+and fresh-work recovery preserve the original child identity and unknown effects
+without replay or a replacement child. Focused faults cover relationship commits,
+joined cancellation and Code Mode error catching. These are bounded offline SDK
+checks, not live-model, background-agent or remote-effect quiescence qualification.
 
 Use `submit(Delivery, UserInput, metadata)` for input. `Prompt` expands resources
 once and normalizes attachments; an already-prepared `Message` stays literal.

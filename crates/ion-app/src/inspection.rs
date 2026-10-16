@@ -127,10 +127,46 @@ enum EntryInspection {
         #[serde(serialize_with = "omit")]
         outcome: ChildOutcome,
     },
+    DelegationAdmitted {
+        #[serde(serialize_with = "omit")]
+        record: ion_core::DelegationRecord,
+    },
+    DelegationSettled {
+        child: uuid::Uuid,
+        outcome: ion_core::DelegationOutcome,
+    },
+    ChildSessionOf {
+        #[serde(serialize_with = "omit")]
+        record: ion_core::DelegationRecord,
+    },
     TurnEnded {
         turn: u64,
         reason: TurnEndReason,
     },
+}
+
+#[derive(Serialize)]
+#[serde(remote = "ion_core::DelegationRecord")]
+struct DelegationInspection {
+    site: ion_core::DelegationSite,
+    child: uuid::Uuid,
+    path: PathBuf,
+    context: ion_core::DelegationContext,
+    ownership: ion_core::DelegationOwnership,
+    #[serde(serialize_with = "omit")]
+    spec: ion_core::ForegroundSpec,
+}
+
+#[derive(Serialize)]
+#[serde(remote = "ion_core::ForegroundSpec")]
+struct ForegroundInspection {
+    directory: PathBuf,
+    cwd: Option<PathBuf>,
+    model: ModelRef,
+    reasoning: Reasoning,
+    authority: ion_core::AuthorityScope,
+    #[serde(serialize_with = "omit")]
+    input: Message,
 }
 
 #[derive(Serialize)]
@@ -231,6 +267,8 @@ projection!(
     ToolOutcome => OutcomeInspection,
     ChildOutcome => ChildInspection,
     CodingToolOutput => OutputInspection,
+    ion_core::DelegationRecord => DelegationInspection,
+    ion_core::ForegroundSpec => ForegroundInspection,
 );
 
 impl Serialize for OmitImages<'_, ImageContent> {
@@ -505,6 +543,59 @@ mod tests {
             original,
             "inspection changed facts"
         );
+    }
+
+    #[test]
+    fn delegation_inspection_omits_child_input_images() {
+        let mut view = view();
+        let input = view.messages[0].clone();
+        let image = match &input.content[1] {
+            Content::Image(image) => image,
+            _ => unreachable!(),
+        };
+        let marker = format!(
+            "[base64 image data omitted: {} characters]",
+            image.data().len()
+        );
+        let child = uuid::Uuid::new_v4();
+        let record = ion_core::DelegationRecord {
+            site: ion_core::DelegationSite {
+                session: view.id,
+                turn: 1,
+                tool: ToolOccurrence {
+                    assistant_entry: 4,
+                    ordinal: 0,
+                },
+                composed_child: None,
+            },
+            child,
+            path: PathBuf::from("/inspection-fixture").join(format!("{child}.sqlite")),
+            context: ion_core::DelegationContext::Fresh,
+            ownership: ion_core::DelegationOwnership::Foreground,
+            spec: ion_core::ForegroundSpec {
+                directory: PathBuf::from("/inspection-fixture"),
+                cwd: None,
+                model: view.last_model.clone().unwrap(),
+                reasoning: Reasoning::ProviderDefault,
+                authority: ion_core::AuthorityScope::new("inspection/v1").unwrap(),
+                input,
+            },
+        };
+        view.entries = vec![
+            SessionEntry::ChildSessionOf {
+                record: record.clone(),
+            },
+            SessionEntry::DelegationAdmitted { record },
+        ];
+        view.messages.clear();
+        let original = serde_json::to_value(&view).unwrap();
+        let mut expected = original.clone();
+        for index in [0, 1] {
+            expected["entries"][index]["data"]["record"]["spec"]["input"]["content"][1]["Image"]
+                ["data"] = json!(marker);
+        }
+        assert_eq!(to_value(&view).unwrap(), expected);
+        assert_eq!(serde_json::to_value(&view).unwrap(), original);
     }
 
     #[test]

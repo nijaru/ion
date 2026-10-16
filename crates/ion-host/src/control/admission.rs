@@ -74,6 +74,16 @@ impl<M: Serialize + Send + 'static> SessionControl<M> {
         input: Message,
         metadata: M,
     ) -> Result<RequestAdmission<M>, Box<RejectedInput<M>>> {
+        self.submit_linked_request(key, input, metadata, CancellationToken::new())
+    }
+
+    pub(crate) fn submit_linked_request(
+        &mut self,
+        key: &ion_core::RequestKey,
+        input: Message,
+        metadata: M,
+        stop: CancellationToken,
+    ) -> Result<RequestAdmission<M>, Box<RejectedInput<M>>> {
         let known = self.setup.session.reconcile_request(key, &input);
         match known {
             Ok(Some(receipt)) => return Ok(RequestAdmission::Existing { receipt, metadata }),
@@ -134,7 +144,7 @@ impl<M: Serialize + Send + 'static> SessionControl<M> {
                 input: message,
             },
             instructions,
-            CancellationToken::new(),
+            stop,
             Some(inbox.clone()),
             turn_observer(
                 self.custody.clone(),

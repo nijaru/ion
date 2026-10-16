@@ -27,6 +27,9 @@ use tokio_util::sync::CancellationToken;
 
 pub(crate) mod code_inspection;
 mod context;
+mod delegation;
+#[cfg(test)]
+mod delegation_tests;
 mod recovery;
 #[cfg(test)]
 mod recovery_tests;
@@ -39,7 +42,7 @@ pub use recovery::{AuthorityScope, RecoveryBinding, RecoveryPoint, RecoveryState
 pub(crate) use submission::TurnAdmission;
 pub use submission::{RequestKey, RequestReceipt, SubmissionRequest};
 
-const FORMAT_VERSION: u32 = 12;
+const FORMAT_VERSION: u32 = 13;
 // An 8 MiB raw prompt or streamed response can grow up to sixfold when JSON
 // escapes control characters. Keep the storage bound above that encoded size.
 const MAX_ENTRY_BYTES: usize = 64 * 1024 * 1024;
@@ -151,6 +154,18 @@ pub enum SessionEntry {
         parent: crate::ToolOccurrence,
         child: usize,
         outcome: crate::ChildOutcome,
+    },
+    /// Parent relationship intent, committed before child materialization.
+    DelegationAdmitted {
+        record: crate::DelegationRecord,
+    },
+    DelegationSettled {
+        child: uuid::Uuid,
+        outcome: crate::DelegationOutcome,
+    },
+    /// Atomically initialized with the child's immutable logical identity.
+    ChildSessionOf {
+        record: crate::DelegationRecord,
     },
     TurnEnded {
         turn: u64,
@@ -298,6 +313,7 @@ struct PendingTool {
     activity: ToolActivity,
     next_child: usize,
     children: BTreeSet<usize>,
+    delegations: delegation::PendingDelegations,
 }
 
 #[derive(Clone)]
@@ -560,6 +576,7 @@ impl State {
                                 activity: stored.activity.clone(),
                                 next_child: 0,
                                 children: BTreeSet::new(),
+                                delegations: delegation::PendingDelegations::default(),
                             });
                             activity_index += 1;
                         }
@@ -590,13 +607,15 @@ impl State {
                     pending.call_id == result.call_id
                         && pending.name == result.name
                         && pending.children.is_empty()
+                        && pending.delegations.empty()
                 });
                 if self.active != Some(*turn) || position.is_none() {
                     return Err(SessionError::InvalidHistory);
                 }
                 let position = position.expect("checked above");
                 if matches!(result.outcome, crate::ToolOutcome::NotDispatched { .. })
-                    && self.pending[position].next_child != 0
+                    && (self.pending[position].next_child != 0
+                        || self.pending[position].delegations.ever_admitted())
                 {
                     return Err(SessionError::InvalidHistory);
                 }
@@ -642,10 +661,16 @@ impl State {
                     .iter_mut()
                     .find(|pending| pending.occurrence == *parent)
                     .ok_or(SessionError::InvalidHistory)?;
-                if self.active != Some(*turn) || !pending.children.remove(child) {
+                if self.active != Some(*turn)
+                    || pending.delegations.unresolved(Some(*child))
+                    || !pending.children.remove(child)
+                {
                     return Err(SessionError::InvalidHistory);
                 }
             }
+            SessionEntry::DelegationAdmitted { .. }
+            | SessionEntry::DelegationSettled { .. }
+            | SessionEntry::ChildSessionOf { .. } => self.apply_delegation(entry)?,
             SessionEntry::TurnEnded { turn, reason } => {
                 if self.active != Some(*turn) || !self.pending.is_empty() {
                     return Err(SessionError::InvalidHistory);
@@ -724,7 +749,20 @@ impl Drop for SessionLock {
 
 impl Session {
     pub fn create(path: impl AsRef<Path>, cwd: Option<&Path>) -> Result<Self, SessionError> {
-        let path = path.as_ref();
+        Self::create_initial(path.as_ref(), cwd, uuid::Uuid::new_v4(), Vec::new())
+    }
+
+    fn create_initial(
+        path: &Path,
+        cwd: Option<&Path>,
+        id: uuid::Uuid,
+        entries: Vec<SessionEntry>,
+    ) -> Result<Self, SessionError> {
+        let projection = project(entries.iter().map(Ok), ProjectionMode::Full)?;
+        let encoded = entries
+            .iter()
+            .map(encode_entry)
+            .collect::<Result<Vec<_>, _>>()?;
         let cwd = cwd.map(Path::canonicalize).transpose()?;
         if cwd.as_ref().is_some_and(|cwd| !cwd.is_dir()) {
             return Err(SessionError::InvalidWorkingDirectory);
@@ -742,7 +780,7 @@ impl Session {
         let header = Header {
             version: FORMAT_VERSION,
             // Random prefixes remain useful as catalog selectors and short UI labels.
-            id: uuid::Uuid::new_v4(),
+            id,
             provider_session_id: uuid::Uuid::now_v7(),
             cwd,
             name: None,
@@ -752,15 +790,18 @@ impl Session {
             "INSERT INTO session(id, header) VALUES (1, ?1)",
             params![serde_json::to_vec(&header)?],
         )?;
+        for body in encoded {
+            tx.execute("INSERT INTO entries(body) VALUES (?1)", params![body])?;
+        }
         tx.commit()?;
         Ok(Self {
             store: Mutex::new(Store {
                 connection,
-                state: State::default(),
-                settled: BTreeSet::new(),
-                messages: Vec::new(),
-                context_changes: Vec::new(),
-                child_records: ChildRecordIndex::default(),
+                state: projection.state,
+                settled: projection.settled,
+                messages: projection.messages,
+                context_changes: projection.context_changes,
+                child_records: projection.child_records,
             }),
             _lock: lock,
             header,
@@ -1721,19 +1762,21 @@ fn pending_results(
     pending
         .iter()
         .flat_map(|pending| {
-            pending
-                .children
-                .iter()
-                .map(|child| SessionEntry::ChildToolResult {
-                    turn,
-                    parent: pending.occurrence,
-                    child: *child,
-                    outcome: crate::ChildOutcome::Unknown,
-                })
-                .chain(std::iter::once(SessionEntry::ToolResult {
-                    turn,
-                    result: pending_settlement(pending, unstarted),
-                }))
+            pending.delegations.unknowns().chain(
+                pending
+                    .children
+                    .iter()
+                    .map(|child| SessionEntry::ChildToolResult {
+                        turn,
+                        parent: pending.occurrence,
+                        child: *child,
+                        outcome: crate::ChildOutcome::Unknown,
+                    })
+                    .chain(std::iter::once(SessionEntry::ToolResult {
+                        turn,
+                        result: pending_settlement(pending, unstarted),
+                    })),
+            )
         })
         .collect()
 }
@@ -1785,11 +1828,7 @@ fn append(store: &mut Store, entries: &[SessionEntry]) -> Result<(), SessionErro
                     context: model_context_state(context),
                 });
             }
-            let bytes = serde_json::to_vec(entry)?;
-            if bytes.len() > MAX_ENTRY_BYTES {
-                return Err(SessionError::EntryTooLarge);
-            }
-            Ok(bytes)
+            encode_entry(entry)
         })
         .collect::<Result<Vec<_>, SessionError>>()?;
     let tx = store.connection.transaction()?;
@@ -1810,6 +1849,14 @@ fn append(store: &mut Store, entries: &[SessionEntry]) -> Result<(), SessionErro
     store.messages.extend(new_messages);
     store.context_changes.extend(new_context_changes);
     Ok(())
+}
+
+fn encode_entry(entry: &SessionEntry) -> Result<Vec<u8>, SessionError> {
+    let bytes = serde_json::to_vec(entry)?;
+    if bytes.len() > MAX_ENTRY_BYTES {
+        return Err(SessionError::EntryTooLarge);
+    }
+    Ok(bytes)
 }
 
 fn summary_message(summary: &str) -> Message {
@@ -1925,6 +1972,9 @@ fn message_from_entry(entry: &SessionEntry) -> Option<Message> {
         SessionEntry::ToolResult { result, .. } => Some(result.message(false)),
         SessionEntry::ChildToolAdmitted { .. }
         | SessionEntry::ChildToolResult { .. }
+        | SessionEntry::DelegationAdmitted { .. }
+        | SessionEntry::DelegationSettled { .. }
+        | SessionEntry::ChildSessionOf { .. }
         | SessionEntry::UserShellAdmitted { .. }
         | SessionEntry::UserShellSettled { .. }
         | SessionEntry::ModelSelected { .. }
@@ -2021,6 +2071,7 @@ fn project<E: Borrow<SessionEntry>>(
     let mut child_records = ChildRecordIndex::default();
     let mut turns = 0usize;
     let mut request_keys = BTreeSet::new();
+    let mut delegation_children = BTreeSet::new();
     let mut first_input = None;
     for entry in entries {
         let entry = entry?;
@@ -2029,6 +2080,11 @@ fn project<E: Borrow<SessionEntry>>(
             request: Some(key), ..
         } = entry
             && !request_keys.insert(key.clone())
+        {
+            return Err(SessionError::InvalidHistory);
+        }
+        if let SessionEntry::DelegationAdmitted { record } = entry
+            && !delegation_children.insert(record.child)
         {
             return Err(SessionError::InvalidHistory);
         }
@@ -2151,6 +2207,7 @@ fn initialize_new(connection: &Connection) -> Result<(), SessionError> {
     prepare_writer(connection)?;
     connection.execute_batch("CREATE TABLE session (id INTEGER PRIMARY KEY CHECK(id=1), header BLOB NOT NULL); CREATE TABLE entries (seq INTEGER PRIMARY KEY, body BLOB NOT NULL);
 CREATE UNIQUE INDEX request_keys ON entries(json_extract(body, '$.data.request.scope'), json_extract(body, '$.data.request.id')) WHERE json_extract(body, '$.kind') = 'turn_started' AND json_extract(body, '$.data.request') IS NOT NULL;
+CREATE UNIQUE INDEX delegation_children ON entries(json_extract(body, '$.data.record.child')) WHERE json_extract(body, '$.kind') = 'delegation_admitted';
 CREATE INDEX turn_ends ON entries(json_extract(body, '$.data.turn')) WHERE json_extract(body, '$.kind') = 'turn_ended';")?;
     Ok(())
 }
@@ -2203,6 +2260,8 @@ pub enum SessionError {
     RecoveryAuthorityChanged,
     #[error("recovery checkpoint is stale, belongs to another Session, or the Turn has ended")]
     StaleRecoveryPoint,
+    #[error("delegation infrastructure failed: {0}")]
+    DelegationInfrastructure(String),
     #[error("session does not exist")]
     NotFound,
     #[error("session has an active operation")]
@@ -2678,7 +2737,9 @@ mod tests {
         let connection = Connection::open(&path).unwrap();
         // Inject corruption below normal JSON-index validation, not a valid append.
         connection
-            .execute_batch("DROP INDEX request_keys; DROP INDEX turn_ends;")
+            .execute_batch(
+                "DROP INDEX request_keys; DROP INDEX turn_ends; DROP INDEX delegation_children;",
+            )
             .unwrap();
         connection
             .execute(

@@ -147,7 +147,10 @@ pub fn render(view: &SessionView) -> String {
             | SessionEntry::ModelSelected { .. }
             | SessionEntry::ReasoningSelected { .. }
             | SessionEntry::EffectiveModelChanged { .. }
-            | SessionEntry::UserShellSettled { .. } => {}
+            | SessionEntry::UserShellSettled { .. }
+            | SessionEntry::DelegationAdmitted { .. }
+            | SessionEntry::DelegationSettled { .. }
+            | SessionEntry::ChildSessionOf { .. } => {}
         }
     }
     text.chars()

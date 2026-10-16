@@ -70,6 +70,7 @@ pub struct ToolInvocation<'a> {
     call: &'a ToolCall,
     stop: CancellationToken,
     origin: Option<ToolOrigin>,
+    delegation: Option<crate::delegation::AdmissionPort>,
 }
 
 impl<'a> ToolInvocation<'a> {
@@ -81,6 +82,7 @@ impl<'a> ToolInvocation<'a> {
             call,
             stop,
             origin: None,
+            delegation: None,
         }
     }
 
@@ -96,6 +98,29 @@ impl<'a> ToolInvocation<'a> {
         self.origin
     }
 
+    /// Request one fresh foreground child through this live invocation. Exact
+    /// repetition reconciles; different work conflicts. Cancelling this borrowed
+    /// wait does not revoke a transferred request or abandon started supervision.
+    /// Historical origins alone cannot make a request, and closed ports cannot
+    /// start another child. Ordinary child failure is reported in the receipt;
+    /// infrastructure failure also blocks the parent even when this error is caught.
+    pub async fn delegate(
+        &self,
+        task: crate::ForegroundTask,
+    ) -> Result<crate::DelegationReceipt, String> {
+        let port = self
+            .delegation
+            .as_ref()
+            .ok_or("untracked invocation cannot delegate")?;
+        let (reply, result) = tokio::sync::oneshot::channel();
+        port.send(crate::delegation::DelegationRequest { task, reply })
+            .await
+            .map_err(|_| "delegation admission is closed".to_owned())?;
+        result
+            .await
+            .map_err(|_| "delegation owner ended without a receipt".to_owned())?
+    }
+
     /// Callers must have committed the direct intent, and any child intent,
     /// before constructing an invocation. Construction itself executes nothing.
     pub(crate) fn admitted(
@@ -105,16 +130,26 @@ impl<'a> ToolInvocation<'a> {
         turn: u64,
         occurrence: ToolOccurrence,
         composed_child: Option<usize>,
-    ) -> Self {
-        Self {
-            call,
-            stop,
-            origin: Some(ToolOrigin {
-                session,
-                turn,
-                occurrence,
-                composed_child,
-            }),
-        }
+    ) -> (Self, crate::delegation::gateway::Gateway) {
+        let (port, gateway) = crate::delegation::gateway::Gateway::new(crate::DelegationSite {
+            session,
+            turn,
+            tool: occurrence,
+            composed_child,
+        });
+        (
+            Self {
+                call,
+                stop,
+                delegation: Some(port),
+                origin: Some(ToolOrigin {
+                    session,
+                    turn,
+                    occurrence,
+                    composed_child,
+                }),
+            },
+            gateway,
+        )
     }
 }

@@ -1232,7 +1232,7 @@ impl Agent {
                     }
                     let activity = tool_catalog.activity(&call);
                     let occurrence = session.tool_occurrence(turn, &call.id)?;
-                    let invocation = crate::ToolInvocation::admitted(
+                    let (invocation, gateway) = crate::ToolInvocation::admitted(
                         &call,
                         stop.clone(),
                         session.id(),
@@ -1280,6 +1280,7 @@ impl Agent {
                             )),
                         }
                     });
+                    let tool = Box::pin(async { gateway.run(session, stop, tool).await? });
                     let execution = self
                         .execute_tool_with_cache_warming(
                             session,

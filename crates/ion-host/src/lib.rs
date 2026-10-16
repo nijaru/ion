@@ -10,6 +10,7 @@ pub mod catalog;
 pub mod code_mode;
 mod control;
 mod credentials;
+mod delegation;
 mod edit_diff;
 pub mod file_io;
 pub mod image_input;
@@ -44,6 +45,7 @@ pub use control::{
     UserInput,
 };
 pub use credentials::{CredentialResolutionError, CredentialResolver};
+pub use delegation::ForegroundDelegation;
 pub use local_tools::LocalTools;
 pub use mcp::{McpConfig, McpHttpServer, McpServer, McpStartup, McpStdioServer, McpTools};
 pub use model_http::{HttpModelService, HttpWire};

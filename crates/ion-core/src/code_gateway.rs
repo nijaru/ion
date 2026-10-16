@@ -478,7 +478,8 @@ pub(crate) async fn run<F: FnMut(AgentEvent) + Send>(
         fault: None,
         problem: None,
     };
-    let mut started = FuturesUnordered::<BoxFuture<'_, (Admitted, ChildOutcome)>>::new();
+    let mut started =
+        FuturesUnordered::<BoxFuture<'_, (Admitted, Result<ChildOutcome, SessionError>)>>::new();
     let mut root = None;
     let mut requests_closed = false;
     loop {
@@ -502,22 +503,22 @@ pub(crate) async fn run<F: FnMut(AgentEvent) + Send>(
             let session_id = session.id();
             started.push(Box::pin(async move {
                 let outcome = if child_stop.is_cancelled() {
-                    ChildOutcome::NotDispatched {
+                    Ok(ChildOutcome::NotDispatched {
                         reason: "stopped before dispatch".into(),
-                    }
+                    })
                 } else {
-                    ChildOutcome::Observed {
-                        output: catalog
-                            .execute(crate::ToolInvocation::admitted(
-                                &admitted.intent.call,
-                                child_stop,
-                                session_id,
-                                turn,
-                                admitted.intent.parent,
-                                Some(admitted.intent.child),
-                            ))
-                            .await,
-                    }
+                    let (invocation, gateway) = crate::ToolInvocation::admitted(
+                        &admitted.intent.call,
+                        child_stop.clone(),
+                        session_id,
+                        turn,
+                        admitted.intent.parent,
+                        Some(admitted.intent.child),
+                    );
+                    gateway
+                        .run(session, &child_stop, catalog.execute(invocation))
+                        .await
+                        .map(|output| ChildOutcome::Observed { output })
                 };
                 (admitted, outcome)
             }));
@@ -551,7 +552,13 @@ pub(crate) async fn run<F: FnMut(AgentEvent) + Send>(
             }
             completed = started.next(), if !started.is_empty() => {
                 let (admitted, outcome) = completed.expect("nonempty started set");
-                gate.complete(admitted, outcome);
+                match outcome {
+                    Ok(outcome) => gate.complete(admitted, outcome),
+                    Err(error) => {
+                        gate.storage_fault(error);
+                        let _ = admitted.reply.send(Err("delegation infrastructure failed".into()));
+                    }
+                }
             }
         }
     }

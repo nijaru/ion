@@ -95,7 +95,10 @@ impl SessionSetup {
     }
 }
 
-fn validate_model(runtime: &ApplicationRuntime, requested: Option<&ModelRef>) -> Result<()> {
+pub(crate) fn validate_model(
+    runtime: &ApplicationRuntime,
+    requested: Option<&ModelRef>,
+) -> Result<()> {
     ensure!(
         requested.is_none_or(|model| model == runtime.agent.model()),
         "application returned a different model than requested"
