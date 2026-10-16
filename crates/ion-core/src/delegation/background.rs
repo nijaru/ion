@@ -19,9 +19,15 @@ pub trait BackgroundSlot: Send {
     ) -> Result<DelegationReceipt, BackgroundStartError>;
 }
 
+/// Refusal or infrastructure failure while installing a background child.
+#[derive(Debug, thiserror::Error)]
 pub enum BackgroundStartError {
+    #[error("background start refused: {0}")]
     Refused(String),
-    Infrastructure(CodingSessionError),
+    // An explicit source preserves the Session error itself for classification;
+    // a transparent wrapper would delegate past it in the error chain.
+    #[error("{0}")]
+    Infrastructure(#[source] CodingSessionError),
 }
 
 /// Only a live invocation gateway can create this cold transfer. Historical

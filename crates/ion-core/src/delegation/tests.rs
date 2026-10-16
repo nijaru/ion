@@ -1,5 +1,33 @@
 use super::*;
 
+#[test]
+fn background_refusal_has_no_session_fault() {
+    let error: Box<dyn std::error::Error + Send + Sync> =
+        Box::new(BackgroundStartError::Refused("owner at capacity".into()));
+    assert!(matches!(
+        error.downcast_ref::<BackgroundStartError>(),
+        Some(BackgroundStartError::Refused(reason)) if reason == "owner at capacity"
+    ));
+    assert!(error.source().is_none());
+}
+
+#[test]
+fn background_infrastructure_preserves_the_typed_session_cause() {
+    let error: Box<dyn std::error::Error + Send + Sync> = Box::new(
+        BackgroundStartError::Infrastructure(crate::CodingSessionError::InvalidHistory),
+    );
+    assert!(matches!(
+        error.downcast_ref::<BackgroundStartError>(),
+        Some(BackgroundStartError::Infrastructure(_))
+    ));
+    assert!(matches!(
+        error
+            .source()
+            .and_then(|cause| cause.downcast_ref::<crate::CodingSessionError>()),
+        Some(crate::CodingSessionError::InvalidHistory)
+    ));
+}
+
 #[tokio::test]
 async fn delegation_requires_live_authority_and_a_valid_context() {
     let root = std::env::temp_dir().join(format!("ion-delegation-port-{}", uuid::Uuid::new_v4()));
