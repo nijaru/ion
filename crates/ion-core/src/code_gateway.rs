@@ -1,6 +1,6 @@
 //! Session-owned composed effects. Guest completion is not effect settlement.
 use std::{
-    collections::VecDeque,
+    collections::{BTreeMap, VecDeque},
     io::{self, Write},
     sync::Arc,
 };
@@ -13,8 +13,8 @@ use tokio::sync::oneshot;
 use tokio_util::sync::CancellationToken;
 
 use crate::{
-    ChildIntent, ChildOutcome, CodeLimits, CodeReply, CodeRequest, CodeRequestKind, CodeRuntime,
-    CodeTask, ToolOccurrence,
+    ChildIntent, ChildOutcome, CodeLimits, CodeOutput, CodeReply, CodeRequest, CodeRequestKind,
+    CodeResult, CodeRuntime, CodeTask, ToolOccurrence,
     agent::{AgentError, AgentEvent},
     composition::failure,
     json_size::encoded_len,
@@ -92,6 +92,7 @@ struct Gate<'a, F> {
     skipped: usize,
     host_bytes: usize,
     audit_bytes: usize,
+    images: BTreeMap<String, ion_ai::ImageContent>,
     fault: Option<SessionError>,
     problem: Option<String>,
 }
@@ -353,16 +354,25 @@ impl<F: FnMut(AgentEvent)> Gate<'_, F> {
                         struct Reply<'a> {
                             value: &'a Value,
                             is_error: bool,
-                            image_mime_types: Vec<&'a str>,
+                            images: Vec<Value>,
                         }
+                        let images = output
+                            .images
+                            .iter()
+                            .map(|image| {
+                                // A fresh ID prevents a copied or earlier invocation's
+                                // block from accidentally selecting a different image.
+                                let id = uuid::Uuid::new_v4().to_string();
+                                let block =
+                                    json!({"type":"image", "id":id, "mime_type":image.mime_type()});
+                                self.images.insert(id, image.clone());
+                                block
+                            })
+                            .collect();
                         let value = Reply {
                             value: &output.value,
                             is_error: output.is_error,
-                            image_mime_types: output
-                                .images
-                                .iter()
-                                .map(|image| image.mime_type().as_str())
-                                .collect(),
+                            images,
                         };
                         if self.stop.is_cancelled() {
                             // The observation remains committed/inspectable, but
@@ -437,6 +447,72 @@ fn tool_manifest<'a>(
     Ok(String::from_utf8(writer.data).expect("JSON is UTF-8"))
 }
 
+fn selected_output(
+    root: CodeResult,
+    images: &BTreeMap<String, ion_ai::ImageContent>,
+    limits: CodeLimits,
+) -> ToolOutput {
+    let result = root.result.and_then(|json| {
+        if json.len() > limits.max_json_bytes {
+            return Err("guest JSON byte limit exceeded".into());
+        }
+        serde_json::from_str::<Value>(&json).map_err(|error| format!("invalid guest JSON: {error}"))
+    });
+    let mut output = match result {
+        Ok(value) => ToolOutput {
+            value: json!({"result":value}),
+            images: Vec::new(),
+            is_error: false,
+        },
+        Err(error) => failure(error),
+    };
+    output.value["output"] = json!([]);
+    // Charge the actual selected image, not its tiny guest handle. Check each
+    // addition before cloning: repeated selections must not allocate unbounded
+    // copies before discovering that the complete result is too large.
+    let mut bytes = encoded_len(&(&output.value, &output.images)).expect("selected JSON");
+    let too_large = || {
+        failure("code_mode selected output byte limit exceeded; child observations remain saved")
+    };
+    if bytes > limits.max_output_bytes {
+        return too_large();
+    }
+    let mut selected = Vec::new();
+    for item in root.output {
+        let (item, image) = match item {
+            CodeOutput::Text { text } => (json!({"type":"text", "text":text}), None),
+            CodeOutput::Image { id } => {
+                let Some(image) = images.get(&id) else {
+                    return failure(
+                        "image block does not belong to a committed child observation of this invocation",
+                    );
+                };
+                (
+                    json!({"type":"image", "index":output.images.len()}),
+                    Some(image),
+                )
+            }
+        };
+        let mut added =
+            encoded_len(&item).expect("selected JSON") + usize::from(!selected.is_empty());
+        if let Some(image) = image {
+            added = added
+                .saturating_add(encoded_len(image).expect("validated image"))
+                .saturating_add(usize::from(!output.images.is_empty()));
+        }
+        if added > limits.max_output_bytes.saturating_sub(bytes) {
+            return too_large();
+        }
+        bytes += added;
+        selected.push(item);
+        if let Some(image) = image {
+            output.images.push(image.clone());
+        }
+    }
+    output.value["output"] = Value::Array(selected);
+    output
+}
+
 /// Retain both worker and admitted effects through every expected fault. The
 /// closed worker sender is the FIFO fence for already-transferred requests.
 #[expect(
@@ -465,6 +541,7 @@ pub(crate) async fn run<F: FnMut(AgentEvent) + Send>(
         || limits.max_concurrency > limits.max_calls
         || limits.max_host_bytes == 0
         || limits.max_json_bytes == 0
+        || limits.max_output_bytes == 0
         || limits.audit_admission_bytes == 0
         || limits.execution_budget.is_zero()
         || tokio::time::Instant::now()
@@ -507,6 +584,7 @@ pub(crate) async fn run<F: FnMut(AgentEvent) + Send>(
         skipped: 0,
         host_bytes,
         audit_bytes: 0,
+        images: BTreeMap::new(),
         fault: None,
         problem: None,
     };
@@ -569,8 +647,11 @@ pub(crate) async fn run<F: FnMut(AgentEvent) + Send>(
             // retain their tool contracts, cancellation and owned joins.
             biased;
             joined = &mut result, if root.is_none() => {
-                let outcome = joined.unwrap_or_else(|error| Err(format!("code_mode worker failed: {error}")));
-                if outcome.is_err() { gate.stop.cancel(); }
+                let outcome = joined.unwrap_or_else(|error| CodeResult {
+                    result: Err(format!("code_mode worker failed: {error}")),
+                    output: Vec::new(),
+                });
+                if outcome.result.is_err() { gate.stop.cancel(); }
                 root = Some(outcome);
             }
             // One owned read at a time also bounds inspection admission. The
@@ -597,25 +678,11 @@ pub(crate) async fn run<F: FnMut(AgentEvent) + Send>(
     if let Some(fault) = gate.fault {
         return Err(fault.into());
     }
-    let outcome = match (
-        gate.problem,
-        root.expect("worker joined before gateway exits"),
-    ) {
-        (Some(problem), _) | (None, Err(problem)) => Err(problem),
-        (None, Ok(json)) if json.len() <= limits.max_json_bytes => {
-            serde_json::from_str::<Value>(&json)
-                .map_err(|error| format!("invalid guest JSON: {error}"))
-        }
-        _ => Err("guest JSON byte limit exceeded".into()),
-    };
-    let mut output = match outcome {
-        Ok(value) => ToolOutput {
-            value: json!({"result":value}),
-            images: Vec::new(),
-            is_error: false,
-        },
-        Err(error) => failure(error),
-    };
+    let mut root = root.expect("worker joined before gateway exits");
+    if let Some(problem) = gate.problem {
+        root.result = Err(problem);
+    }
+    let mut output = selected_output(root, &gate.images, limits);
     let counters = output
         .value
         .as_object_mut()

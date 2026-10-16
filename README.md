@@ -810,7 +810,7 @@ available. The complete name manifest must fit the per-value and cumulative host
 JSON budgets before any guest or child work starts; an oversized catalogue is not
 silently truncated.
 
-Calls return `{value, is_error, image_mime_types}` for observed tool outcomes,
+Calls return `{value, is_error, images}` for observed tool outcomes,
 including native failures with `is_error: true`. Invalid bridge requests and
 gateway faults reject instead. Catching a rejection does not undo prior effects
 or establish that unknown work is safe to retry.
@@ -827,14 +827,32 @@ Both include callable deferred tools and exclude intrinsic `tool_search` and
 `code_mode`. Discovery is read-only: it neither activates tools nor records child
 effects, and shares existing bridge, JSON, reply, cancellation and guest budgets.
 This is not full Pi API parity; typed result schemas are not yet exposed.
-Images stay in saved inspection; the guest receives MIME
-metadata, not image bytes. The selected JSON return value, call count and
-failure/skip counts reach the model. Raw child arguments and observations remain
-in the Session, export and nested Ctrl-O/tool detail, without automatic addition
-to model context. A guest can explicitly select their content in its return.
-If it fails before returning, the model receives the parent error, counters and
-Session-scoped `parent` locator, not the original child outputs. A later guest
-can explicitly retrieve saved evidence without rerunning the failed script,
+Select model-visible output with a JSON `return`, `text(value)` or `image(block)`:
+
+```js
+const picture = await tools.read({path: 'plot.png'});
+text({description: 'Selected plot', failed: picture.is_error});
+image(picture.images[0]);
+```
+
+`text` snapshots primitives as strings and objects as JSON. `image` accepts an
+invocation-scoped `{type:'image', id, mime_type}` block from a tool reply; Core
+resolves it to the committed image. Image bytes never pass through JavaScript.
+Handles from another invocation, including saved/copied handles, are invalid;
+URLs and raw image data are not accepted. This deliberately differs from Pi's
+inline-image input rather than copying large base64 payloads through the VM.
+The parent envelope contains `result` (null without an explicit return), ordered
+`output` items (`{type:'text',text}` or `{type:'image',index}`), and call/failure/skip
+counts. Image indexes refer to its separate typed image attachments. The model
+route's existing image-support and request-size projection still applies.
+
+Raw child arguments and observations remain in the Session, export and nested
+Ctrl-O/tool detail, without automatic addition to model context. Explicit
+selections survive ordinary script failure alongside the parent error, counters
+and Session-scoped `parent` locator. Invalid image selections or a combined
+output-limit failure return an error instead of the selected payload;
+infrastructure faults still block dependent consumption. A later guest can
+explicitly retrieve saved evidence without rerunning the failed script,
 even if compaction has removed that locator from visible context:
 
 ```js
@@ -869,7 +887,7 @@ queries reject their promise. Page size bounds returned data, not lookup CPU:
 a saved value is decoded by an owned read task outside the Session writer lock
 and guest VM; cancellation stops delivery but still joins that read. It exposes
 neither normalized image bytes, private direct-shell history nor provider replay.
-Only the later guest's selected return enters model context. Saved observations
+Only the later guest's explicit selections enter model context. Saved observations
 are not fresh verification, and a stored capture path does not guarantee the file
 still exists. Inspect current host effects or disclose evidence that is missing.
 
@@ -884,8 +902,12 @@ QuickJS runs on a separate blocking worker without ambient filesystem, network,
 module or timer APIs. Default limits are a cumulative 30-second runnable guest
 budget, 64 bridge requests, four concurrent calls, a 64 MiB JS heap,
 512 KiB stack, 64 KiB source and 1 MiB per JSON value. The callable-name manifest
-and cumulative JSON reply data share an 8 MiB host-delivery budget. A 32 MiB child-audit admission threshold stops further
-dispatch; already-started outcomes still commit, so it can overshoot. Successful
+and cumulative JSON reply data share an 8 MiB host-delivery budget. A separate
+8 MiB selected-output limit bounds the combined JSON return, text items and
+actual image attachments, not just handle sizes. Text-buffer exhaustion fails
+even if caught and closes admission; Core validates the complete selection after
+joining the VM and child work. A 32 MiB child-audit admission threshold stops
+further dispatch; already-started outcomes still commit, so it can overshoot. Successful
 guest return ends its budget, not host settlement. Idle waits for pending Core
 bridge replies are excluded; guest computation, promise jobs, serialization and
 reply resolution still consume the budget. Unresolved promises without pending

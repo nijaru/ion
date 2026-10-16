@@ -896,6 +896,130 @@ async fn guest_failure_retains_prior_mutation_and_budget_exhaustion_settles_nati
 }
 
 #[tokio::test]
+async fn only_explicit_text_and_images_reach_model_context_even_after_script_error() {
+    for fails in [false, true] {
+        let root = Workspace::new();
+        let session = root.session();
+        image::RgbImage::new(1, 1)
+            .save(root.0.join("unselected.png"))
+            .unwrap();
+        image::RgbImage::from_pixel(1, 1, image::Rgb([255, 0, 0]))
+            .save(root.0.join("selected.png"))
+            .unwrap();
+        fs::write(root.0.join("report"), "PRIVATE_OBSERVATION").unwrap();
+        let body = format!(
+            "await tools.read({{path:'unselected.png'}}); const chosen=await tools.read({{path:'selected.png'}}); const report=await tools.read({{path:'report'}}); text({{length:report.value.content.length}}); image(chosen.images[0]); {}",
+            if fails {
+                "throw new Error('after selection');"
+            } else {
+                ""
+            }
+        );
+        let (agent, model) = make_agent(
+            &root.0,
+            [
+                response(vec![code("select", &body)]),
+                response(vec![Content::Text("done".into())]),
+            ],
+            CodeLimits::default(),
+        );
+        let agent = agent.with_limits(ion_core::AgentLimits {
+            image_input: true,
+            ..ion_core::AgentLimits::default()
+        });
+        agent
+            .submit(
+                session.clone(),
+                "select".into(),
+                String::new(),
+                CancellationToken::new(),
+                |_| {},
+            )
+            .await
+            .unwrap();
+        let requests = model.requests();
+        let result = requests[1]
+            .messages
+            .iter()
+            .flat_map(|m| &m.content)
+            .find_map(|part| match part {
+                Content::ToolResult(result) if result.name == "code_mode" => Some(result),
+                _ => None,
+            })
+            .unwrap();
+        assert_eq!(result.is_error, fails);
+        assert_eq!(
+            result.result["output"],
+            json!([{"type":"text","text":"{\"length\":19}"}, {"type":"image","index":0}])
+        );
+        assert_eq!(result.images.len(), 1);
+        assert!(
+            !serde_json::to_string(&requests[1])
+                .unwrap()
+                .contains("PRIVATE_OBSERVATION")
+        );
+        let view = session.view().unwrap();
+        let images = view
+            .entries
+            .iter()
+            .filter_map(|entry| match entry {
+                SessionEntry::ChildToolResult {
+                    outcome: ChildOutcome::Observed { output },
+                    ..
+                } if !output.images.is_empty() => Some(&output.images[0]),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(images.len(), 2);
+        assert_ne!(images[0], images[1]);
+        assert_eq!(&result.images[0], images[1]);
+    }
+}
+
+#[tokio::test]
+async fn caught_output_exhaustion_cannot_dispatch_a_dependent_effect() {
+    let root = Workspace::new();
+    let session = root.session();
+    let (agent, _) = make_agent(
+        &root.0,
+        [
+            response(vec![code(
+                "select",
+                "try { text('x'.repeat(1000)); } catch (_) {} await tools.write({path:'dependent',content:'bad'}); return true;",
+            )]),
+            response(vec![Content::Text("done".into())]),
+        ],
+        CodeLimits {
+            max_output_bytes: 128,
+            ..CodeLimits::default()
+        },
+    );
+    agent
+        .submit(
+            session.clone(),
+            "select".into(),
+            String::new(),
+            CancellationToken::new(),
+            |_| {},
+        )
+        .await
+        .unwrap();
+    assert!(!root.0.join("dependent").exists());
+    assert!(
+        session
+            .view()
+            .unwrap()
+            .entries
+            .iter()
+            .any(|entry| matches!(entry,
+                SessionEntry::ToolResult { result, .. } if matches!(&result.outcome,
+                    ion_core::ToolOutcome::Observed { output, .. } if output.is_error
+                )
+            ))
+    );
+}
+
+#[tokio::test]
 async fn child_images_stay_inspectable_and_reply_limit_is_cumulative() {
     let root = Workspace::new();
     let session = root.session();
@@ -907,7 +1031,7 @@ async fn child_images_stay_inspectable_and_reply_limit_is_cumulative() {
         [
             response(vec![code(
                 "parent",
-                "const i=await tools.read({path:'pixel.png'}); if(i.image_mime_types[0]!=='image/png') throw 'missing image'; await tools.read({path:'report'}); await tools.read({path:'report'}); await tools.write({path:'dependent',content:'bad'}); return true;",
+                "const i=await tools.read({path:'pixel.png'}); if(i.images[0].mime_type!=='image/png') throw 'missing image'; await tools.read({path:'report'}); await tools.read({path:'report'}); await tools.write({path:'dependent',content:'bad'}); return true;",
             )]),
             response(vec![Content::Text("LIMIT_REPORTED".into())]),
         ],

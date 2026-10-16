@@ -1,4 +1,5 @@
 """Exercise opt-in composition through headless, MCP, RPC, and terminal hosts."""
+import base64
 import errno
 import fcntl
 import hashlib
@@ -52,6 +53,8 @@ def program(prompt):
         return "const before=await tools.read({path:'guarded',limit:1}); if(!before.value.has_more) throw new Error('expected paged source'); const first=await tools.write({path:'guarded',content:'FIRST',base_digest:before.value.base_digest}); if(first.is_error) throw new Error('first guarded write'); const second=await tools.write({path:'guarded',content:'SECOND',base_digest:first.value.new_digest}); if(second.is_error) throw new Error('second guarded write'); const stale=await tools.write({path:'guarded',content:'LOST',base_digest:before.value.base_digest}); const after=await tools.read({path:'guarded'}); return {first:first.value.new_digest,second:second.value.new_digest,stale:stale.is_error,final:after.value.content};"
     if prompt == "ACTIVE":
         return "await Promise.all(['a','b'].map(x=>tools.exec({command:`touch ${x}.ready; sleep 1.5; printf done`}))); return true;"
+    if prompt == "SELECT":
+        return "const report=await tools.read({path:'one'}); text({length:report.value.content.length}); const picture=await tools.read({path:'pixel.png'}); image(picture.images[0]);"
     if prompt == "MCP":
         return "const candidates=await searchTools('Lookup an item'); const bounded=await searchTools('Lookup an item',{limit:1}); if(bounded.length!==1 || bounded[0].name!==candidates[0].name) throw new Error('bounded discovery'); let rejected=false; try { await searchTools('Lookup an item',{limit:null}); } catch (_) { rejected=true; } if(!rejected) throw new Error('invalid limit admitted'); const [candidate]=bounded; const d=await describeTool(candidate.name); if(d.input_schema.required[0]!=='index' || await describeTool('code_mode')!==null || await describeTool('missing')!==null) throw new Error('discovery contract'); const rs=await Promise.all([1,2].map(index=>tools[d.name]({index}))); return {total:rs.reduce((n,r)=>n+r.value.structured_content.count,0)};"
     if prompt in ("IO", "STDERR"):
@@ -82,7 +85,7 @@ class Provider(BaseHTTPRequestHandler):
                 code = discovery + "const exit=await inspectSaved({kind:'output',parent,child:0,pointer:'/exit_code'}); return {exit:JSON.parse(exit.json), original_failed:exit.is_error};"
             delta = {"tool_calls": [{"index": 0, "id": "inspect", "type": "function", "function": {"name": "code_mode", "arguments": json.dumps({"code": code})}}]}
             reason = "tool_calls"
-        elif enabled and prompt in ("FANOUT", "GUARD", "MCP", "IO", "STDERR", "ACTIVE", "RECOVER_FAIL") and fresh:
+        elif enabled and prompt in ("FANOUT", "GUARD", "MCP", "SELECT", "IO", "STDERR", "ACTIVE", "RECOVER_FAIL") and fresh:
             delta = {"tool_calls": [{"index": 0, "id": "parent", "type": "function", "function": {"name": "code_mode", "arguments": json.dumps({"code": program(prompt)})}}]}
             reason = "tool_calls"
         else:
@@ -140,13 +143,14 @@ with tempfile.TemporaryDirectory(prefix="ion-code-mode-") as temporary:
     workspace.mkdir()
     (workspace / "one").write_text("PRIVATE_ONE_" * 100)
     (workspace / "two").write_text("PRIVATE_TWO_" * 100)
+    (workspace / "pixel.png").write_bytes(base64.b64decode("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGP4z8DwHwAFAAH/iZk9HQAAAABJRU5ErkJggg=="))
     env = {**os.environ, "XDG_CONFIG_HOME": str(work / "config"), "XDG_STATE_HOME": str(work / "state"), "TERM": "xterm-256color"}
     server = ThreadingHTTPServer(("127.0.0.1", 0), Provider)
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
     try:
         endpoint = f"http://127.0.0.1:{server.server_port}/v1/chat/completions"
-        subprocess.run([binary, "use", "smoke", "code", "--endpoint", endpoint, "--wire", "chat-completions"], env=env, check=True, capture_output=True)
+        subprocess.run([binary, "use", "smoke", "code", "--endpoint", endpoint, "--wire", "chat-completions", "--images"], env=env, check=True, capture_output=True)
         assert run(env, workspace, "run", "DEFAULT").stdout.strip() == "DIRECT_OK"
         records = [json.loads(line) for line in run(env, workspace, "--code-mode", "--json", "run", "FANOUT").stdout.splitlines()]
         session_id = next(record["id"] for record in records if record["type"] == "session")
@@ -169,6 +173,14 @@ with tempfile.TemporaryDirectory(prefix="ion-code-mode-") as temporary:
         assert parent["output"]["result"] == {"total": 3}, parent
         assert len([record for record in records if record["type"] == "child_tool_finished"]) == 2
         config.unlink()
+
+        selected = [json.loads(line) for line in run(env, workspace, "--code-mode", "--json", "run", "SELECT").stdout.splitlines()]
+        parent = next(record for record in selected if record["type"] == "tool_finished")
+        assert parent["output"]["result"] is None, parent
+        assert parent["output"]["output"] == [{"type": "text", "text": '{"length":1200}'}, {"type": "image", "index": 0}], parent
+        assert parent["image_mime_types"] == ["image/png"], parent
+        image_parts = [part for message in requests[-1]["messages"] if isinstance(message["content"], list) for part in message["content"] if part["type"] == "image_url"]
+        assert len(image_parts) == 1 and image_parts[0]["image_url"]["url"].startswith("data:image/png;base64,"), requests[-1]
 
         # The nonce exists only at the start of a retained complete capture,
         # not in the bounded native tail or any model-visible parent output.

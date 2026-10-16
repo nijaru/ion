@@ -9,13 +9,17 @@ use std::{
     time::{Duration, Instant},
 };
 
-use ion_core::{CodeLimits, CodeReply, CodeRequest, CodeRequestKind, CodeRuntime, CodeTask};
+use ion_core::{
+    CodeLimits, CodeReply, CodeRequest, CodeRequestKind, CodeResult, CodeRuntime, CodeTask,
+};
 use rquickjs::{
     Context, Ctx, Exception, Function, Object, Persistent, Promise, Runtime, Value,
     context::intrinsic,
 };
 use tokio::sync::{mpsc, oneshot};
 use tokio_util::sync::CancellationToken;
+
+mod output;
 
 /// A fresh, isolated VM on a blocking worker for each async JavaScript body.
 /// Only owned code and callable-name data enter it, never a Session or executable
@@ -41,8 +45,11 @@ impl CodeRuntime for QuickJs {
                 let result = catch_unwind(AssertUnwindSafe(|| {
                     execute(code, tools_json, limits, sender, &worker_stop)
                 }))
-                .unwrap_or_else(|_| Err("QuickJS worker panicked".into()));
-                if result.is_err() {
+                .unwrap_or_else(|_| CodeResult {
+                    result: Err("QuickJS worker panicked".into()),
+                    output: Vec::new(),
+                });
+                if result.result.is_err() {
                     worker_stop.cancel();
                 }
                 result
@@ -62,6 +69,7 @@ fn validate(code: &str, tools_json: &str, limits: CodeLimits) -> Result<(), Stri
         limits.stack_bytes,
         limits.max_code_bytes,
         limits.max_json_bytes,
+        limits.max_output_bytes,
         limits.max_calls,
         limits.max_concurrency,
         limits.max_host_bytes,
@@ -241,8 +249,10 @@ fn start_guest<'js>(
     code: &str,
     tools_json: &str,
     bridge: &Rc<Bridge>,
+    output: &Rc<output::Output>,
 ) -> rquickjs::Result<Persistent<Promise<'static>>> {
     ctx.globals().remove("queueMicrotask")?;
+    output.install(&ctx)?;
     let calls = bridge.clone();
     // Ctx must be injected per invocation, not captured in an opaque Rust
     // closure: captured contexts hide GC edges and can prevent VM teardown.
@@ -416,6 +426,25 @@ fn execute(
     limits: CodeLimits,
     sender: mpsc::Sender<CodeRequest>,
     stop: &CancellationToken,
+) -> CodeResult {
+    let output = Rc::new(output::Output::new(limits.max_output_bytes, stop.clone()));
+    let mut result = run_guest(code, tools_json, limits, sender, stop, &output);
+    if output.exhausted() {
+        result = Err("selected output byte limit exceeded".into());
+    }
+    CodeResult {
+        result,
+        output: output.take(),
+    }
+}
+
+fn run_guest(
+    code: String,
+    tools_json: String,
+    limits: CodeLimits,
+    sender: mpsc::Sender<CodeRequest>,
+    stop: &CancellationToken,
+    output: &Rc<output::Output>,
 ) -> CodeReply {
     if stop.is_cancelled() {
         return Err("JavaScript cancelled".into());
@@ -446,7 +475,7 @@ fn execute(
             .with(|ctx| diagnostic_helper(&ctx))
             .map_err(|e| context.with(|ctx| js_error(&ctx, e, None)))?;
         let root = context
-            .with(|ctx| start_guest(ctx, &code, &tools_json, &bridge))
+            .with(|ctx| start_guest(ctx, &code, &tools_json, &bridge, output))
             .map_err(|e| context.with(|ctx| js_error(&ctx, e, Some(&helper))))?;
         loop {
             if stop.is_cancelled() {
@@ -460,9 +489,15 @@ fn execute(
                     let root = root.clone().restore(&ctx)?;
                     // Observe rejection before settling any more bridge replies.
                     if let Some(value) = root.result::<Value>() {
-                        return value
-                            .and_then(|v| json_text(&ctx, v, limits.max_json_bytes))
-                            .map(Some);
+                        let json = value.and_then(|v| {
+                            if v.is_undefined() {
+                                Ok("null".into())
+                            } else {
+                                json_text(&ctx, v, limits.max_json_bytes)
+                            }
+                        })?;
+                        output.finish(&ctx, json.len())?;
+                        return Ok(Some(json));
                     }
                     poll_replies(&ctx, &bridge)?;
                     Ok(None)
@@ -564,6 +599,7 @@ mod tests {
             .await
             .expect("worker must terminate")
             .expect("worker must contain panics")
+            .result
     }
 
     async fn request(task: &mut CodeTask) -> CodeRequest {
@@ -884,7 +920,7 @@ mod tests {
             let _ = finish(&mut task).await;
         }
         assert_eq!(
-            result.unwrap(),
+            result.unwrap().result,
             Err("JavaScript execution budget exceeded".into())
         );
         assert!(stop.is_cancelled());
@@ -960,7 +996,6 @@ mod tests {
     async fn failures_cancel_and_error_reporting_never_runs_guest_getters() {
         for code in [
             "return (;", // parse failure
-            "return undefined;",
             "const a = {}; a.a = a; return a;",
             "return 1n;",
             "return 'x'.repeat(5000);",
@@ -978,6 +1013,62 @@ mod tests {
             assert!(began.elapsed() < Duration::from_secs(1), "{code}");
             assert!(stop.is_cancelled(), "{code}");
             assert!(task.requests.recv().await.is_none(), "{code}");
+        }
+    }
+
+    #[tokio::test]
+    async fn selected_output_snapshots_values_and_survives_script_failure() {
+        for fails in [false, true] {
+            let body = format!(
+                "text({{toJSON() {{ text('inner'); return {{n:2}}; }} }}); image({{type:'image',id:'current'}}); {}",
+                if fails {
+                    "throw new Error('after selection');"
+                } else {
+                    ""
+                }
+            );
+            let (mut task, stop) = start(&body, limits());
+            let result = tokio::time::timeout(Duration::from_secs(3), &mut task.result)
+                .await
+                .unwrap()
+                .unwrap();
+            assert_eq!(
+                serde_json::to_value(result.output).unwrap(),
+                json!([
+                    {"type":"text", "text":"inner"},
+                    {"type":"text", "text":"{\"n\":2}"},
+                    {"type":"image", "id":"current"}
+                ])
+            );
+            if fails {
+                assert_eq!(result.result.unwrap_err(), "after selection");
+            } else {
+                assert_eq!(result.result.unwrap(), "null");
+            }
+            assert_eq!(stop.is_cancelled(), fails);
+        }
+    }
+
+    #[tokio::test]
+    async fn selected_output_limit_is_cumulative_and_cannot_be_caught() {
+        for body in [
+            "try { text('x'.repeat(100)); } catch (_) {} return true;",
+            "text('x'.repeat(40)); return 'x'.repeat(40);",
+        ] {
+            let (mut task, stop) = start(
+                body,
+                CodeLimits {
+                    max_output_bytes: 100,
+                    ..limits()
+                },
+            );
+            assert!(
+                finish(&mut task)
+                    .await
+                    .unwrap_err()
+                    .contains("selected output byte limit")
+            );
+            assert!(stop.is_cancelled());
         }
     }
 

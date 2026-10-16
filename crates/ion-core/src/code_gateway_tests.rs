@@ -6,6 +6,63 @@ use tokio::sync::mpsc;
 use super::*;
 use crate::{ToolActivity, ToolSet, session::TurnEndReason};
 
+#[test]
+fn selected_images_are_invocation_scoped_and_charged_before_copying() {
+    let image = ion_ai::ImageContent::from_bytes(&[
+        137, 80, 78, 71, 13, 10, 26, 10, 0, 0, 0, 13, 73, 72, 68, 82, 0, 0, 0, 1, 0, 0, 0, 1, 8, 6,
+        0, 0, 0, 31, 21, 196, 137, 0, 0, 0, 13, 73, 68, 65, 84, 120, 156, 99, 248, 207, 192, 240,
+        31, 0, 5, 0, 1, 255, 137, 153, 61, 29, 0, 0, 0, 0, 73, 69, 78, 68, 174, 66, 96, 130,
+    ])
+    .unwrap();
+    let images = BTreeMap::from([("current".into(), image.clone())]);
+    let root = || CodeResult {
+        result: Ok("{\"n\":3}".into()),
+        output: vec![
+            CodeOutput::Text {
+                text: "selected".into(),
+            },
+            CodeOutput::Image {
+                id: "current".into(),
+            },
+        ],
+    };
+    let result = selected_output(root(), &images, CodeLimits::default());
+    assert_eq!(
+        result.value,
+        json!({"result":{"n":3},"output":[{"type":"text","text":"selected"},{"type":"image","index":0}]})
+    );
+    assert_eq!(result.images, [image]);
+    let bytes = encoded_len(&(&result.value, &result.images)).unwrap();
+    for (limit, fails) in [(bytes - 1, true), (bytes, false)] {
+        let result = selected_output(
+            root(),
+            &images,
+            CodeLimits {
+                max_output_bytes: limit,
+                ..CodeLimits::default()
+            },
+        );
+        assert_eq!(result.is_error, fails);
+        assert_eq!(result.images.len(), usize::from(!fails));
+    }
+    assert!(selected_output(root(), &BTreeMap::new(), CodeLimits::default()).is_error);
+    let mut repeated = root();
+    repeated.output.push(CodeOutput::Image {
+        id: "current".into(),
+    });
+    assert!(
+        selected_output(
+            repeated,
+            &images,
+            CodeLimits {
+                max_output_bytes: bytes,
+                ..CodeLimits::default()
+            }
+        )
+        .is_error
+    );
+}
+
 struct Guest {
     await_reply: bool,
 }
@@ -23,7 +80,7 @@ impl CodeRuntime for Guest {
         // Like QuickJS, the guest retains a blocking-pool thread while awaiting
         // its bridge. Inspection must not need another thread from that pool.
         let result = tokio::task::spawn_blocking(move || {
-            runtime.block_on(async move {
+            let result = runtime.block_on(async move {
                 let (reply, receive) = oneshot::channel();
                 sender
                     .send(CodeRequest {
@@ -41,7 +98,11 @@ impl CodeRuntime for Guest {
                     drop(receive);
                     Ok("null".into())
                 }
-            })
+            });
+            CodeResult {
+                result,
+                output: Vec::new(),
+            }
         });
         Ok(CodeTask { requests, result })
     }
@@ -195,7 +256,10 @@ async fn namespace_and_replies_share_one_delivery_budget() {
                     })
                     .await
                     .unwrap();
-                receive.await.unwrap()
+                CodeResult {
+                    result: receive.await.unwrap(),
+                    output: Vec::new(),
+                }
             });
             Ok(CodeTask { requests, result })
         }

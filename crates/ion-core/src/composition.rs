@@ -27,6 +27,8 @@ pub struct CodeLimits {
     pub execution_budget: Duration,
     pub max_code_bytes: usize,
     pub max_json_bytes: usize,
+    /// Combined selected JSON return, text items and image attachments.
+    pub max_output_bytes: usize,
     pub max_calls: usize,
     pub max_concurrency: usize,
     /// Encoded callable-name manifest plus cumulative JSON replies delivered to the VM.
@@ -44,6 +46,7 @@ impl Default for CodeLimits {
             execution_budget: Duration::from_secs(30),
             max_code_bytes: 64 * 1024,
             max_json_bytes: 1024 * 1024,
+            max_output_bytes: 8 * 1024 * 1024,
             max_calls: 64,
             max_concurrency: 4,
             max_host_bytes: 8 * 1024 * 1024,
@@ -53,6 +56,27 @@ impl Default for CodeLimits {
 }
 
 pub type CodeReply = Result<String, String>;
+
+/// Explicit guest selections, never an instruction to execute or replay a tool.
+#[derive(Debug, Serialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum CodeOutput {
+    Text {
+        text: String,
+    },
+    /// Resolves only against this invocation's committed child observations.
+    Image {
+        id: String,
+    },
+}
+
+/// Selected output survives an ordinary script error; infrastructure faults
+/// still prevent parent consumption. `result` is the JSON return or diagnostic.
+pub struct CodeResult {
+    pub result: CodeReply,
+    pub output: Vec<CodeOutput>,
+}
+
 pub enum CodeRequestKind {
     Call { name: String, args_json: String },
     DescribeTool { name: String },
@@ -69,7 +93,7 @@ pub struct CodeRequest {
 /// catalogue enters the worker. The coding operation retains this task until it joins.
 pub struct CodeTask {
     pub requests: mpsc::Receiver<CodeRequest>,
-    pub result: JoinHandle<CodeReply>,
+    pub result: JoinHandle<CodeResult>,
 }
 /// Owns guest budget enforcement and cancellation responsiveness. Charge all
 /// runnable guest work cumulatively, including reply resolution/serialization;
@@ -133,12 +157,14 @@ pub(crate) fn definition(limits: CodeLimits) -> ToolDefinition {
             description: format!(
                 concat!(
                     "Run an async JavaScript function body without ambient filesystem, network, modules or timers. ",
-                    "Await tools.name(args), or tools[name](args) for exact names needing brackets, for {{value,is_error,image_mime_types}}. ",
+                    "Await tools.name(args), or tools[name](args) for exact names needing brackets, for {{value,is_error,images}}. ",
                     "tools is a frozen null-prototype namespace of all callable direct/deferred tools, without aliases; then/toJSON names prevent startup to avoid implicit dispatch. ",
                     "Unknown members are undefined. ",
                     "searchTools(query,options?) returns matching {{name,description}} candidates; options accepts only limit, an integer 1..10 (default 10), with exact ASCII-insensitive names ranked first; describeTool(name) returns the exact case-sensitive frozen ToolSpec (name/description/input_schema) or null for unknown/non-guest capabilities. ",
                     "Both include callable deferred tools, exclude intrinsic tool_search/code_mode, and are read-only, not activation or effects. ",
-                    "Return JSON selected for the model; raw child outputs stay inspectable and are not automatically added to model context. ",
+                    "Return JSON and/or call text(value) and image(block) to select output for the model. text renders primitives as strings and objects as JSON. ",
+                    "images contains small invocation-scoped {{type:'image',id,mime_type}} blocks; image(block) selects a committed image from this invocation without copying bytes through JavaScript. It does not accept URLs, raw image data or historical locators. ",
+                    "No explicit return means null. Selected output survives ordinary script errors and is marked with the parent failure; raw unselected child outputs stay inspectable, not automatically added to model context. ",
                     "inspectSaved({{kind:'parents'}}) discovers up to 10 settled parents with saved children, newest first; pass next_before as before for older locators, including after compaction/reopen. ",
                     "inspectSaved({{kind:'children',parent}}) pages saved child metadata; pass next_after as after for more. ",
                     "inspectSaved({{kind:'output',parent,child,pointer:'/stdout_full_path'}}) returns UTF-8 chunks of encoded saved output.value as json with next_offset and total_bytes; pointer defaults to the whole value, offset to 0, limit to 4096 (4..65536 bytes). ",
@@ -149,6 +175,7 @@ pub(crate) fn definition(limits: CodeLimits) -> ToolDefinition {
                     "Transferred requests settle even if unawaited. ",
                     "Failure/cancellation stops new dispatch and awaits started effects; no rollback or script replay. ",
                     "Limits: {}ms cumulative runnable guest budget (idle bridge waits excluded), {} bridge requests, {} concurrent tools, {} byte JS heap, {} byte JSON value, {} cumulative host JSON bytes including the name manifest. ",
+                    "Selected return, text and image attachments share a {} byte output limit. Exceeding output limits fails the script even if caught. ",
                     "Direct tools remain available.",
                 ),
                 limits.execution_budget.as_millis(),
@@ -156,7 +183,8 @@ pub(crate) fn definition(limits: CodeLimits) -> ToolDefinition {
                 limits.max_concurrency,
                 limits.heap_bytes,
                 limits.max_json_bytes,
-                limits.max_host_bytes
+                limits.max_host_bytes,
+                limits.max_output_bytes
             ),
             input_schema: json!({"type":"object","additionalProperties":false,"required":["code"],"properties":{"code":{"type":"string","maxLength":limits.max_code_bytes}}}),
         },

@@ -43,8 +43,8 @@ pub use tool_set::{
 };
 
 pub use composition::{
-    ChildIntent, ChildOutcome, CodeLimits, CodeReply, CodeRequest, CodeRequestKind, CodeRuntime,
-    CodeTask,
+    ChildIntent, ChildOutcome, CodeLimits, CodeOutput, CodeReply, CodeRequest, CodeRequestKind,
+    CodeResult, CodeRuntime, CodeTask,
 };
 pub use tool_result::{
     ToolOutcome, ToolOutput as CodingToolOutput, ToolResultProjection, ToolSettlement,
