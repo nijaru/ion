@@ -1,4 +1,4 @@
-//! Presentation of a recorded edit observation; patch syntax never determines effect state.
+//! Presentation of a recorded edit or write observation; patch syntax never determines effect state.
 use crate::presentation_style::{Role, style};
 use ion_core::{ActivityState, ToolActivityKind, TranscriptActivity};
 #[cfg(test)]
@@ -14,8 +14,10 @@ pub(crate) struct RecordedDiff<'a> {
 }
 
 pub(crate) fn recorded(activity: &TranscriptActivity) -> Option<RecordedDiff<'_>> {
-    if activity.activity.kind != ToolActivityKind::Edit
-        || activity.state != ActivityState::Completed
+    if !matches!(
+        activity.activity.kind,
+        ToolActivityKind::Edit | ToolActivityKind::Write
+    ) || activity.state != ActivityState::Completed
     {
         return None;
     }
@@ -104,6 +106,38 @@ mod tests {
         TranscriptProjection,
     };
     use serde_json::json;
+
+    #[test]
+    fn write_activity_uses_the_same_recorded_diff_presentation() {
+        let mut activity = TranscriptActivity {
+            call_id: "write-1".into(),
+            name: "write".into(),
+            activity: ToolActivity {
+                kind: ToolActivityKind::Write,
+                subject: Some("file".into()),
+            },
+            arguments: json!({"path":"file"}),
+            state: ActivityState::Completed,
+            result: Some(ActivityResult {
+                projection: Some(ToolResultProjection::Observed),
+                value: json!({"path":"file", "diff":{"text":"--- file\n+++ file\n@@ -1 +1 @@\n-old\n+new\n","truncated":false}}),
+                image_mime_types: vec![],
+                is_error: false,
+            }),
+            children: vec![],
+        };
+        let mut rows = Vec::new();
+        render(
+            &mut rows,
+            &activity,
+            "  ",
+            80,
+            crate::tool_output::OutputDetail::Compact,
+        );
+        assert!(rows.iter().any(|row| row.to_string().contains("+new")));
+        activity.activity.kind = ToolActivityKind::Read;
+        assert!(recorded(&activity).is_none());
+    }
 
     #[test]
     fn preview_bounds_physical_rows_and_inspection_retains_the_recorded_patch() {

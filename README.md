@@ -163,13 +163,16 @@ in the formatted view. User prompts and tool output remain literal. Ctrl-O
 source inspection, saved Session facts, copy and export retain original Markdown.
 Tables, syntax highlighting and other Markdown extensions are not implemented.
 
-Successful native edits record a unified patch from the text read and the
-replacement written, alongside both digests. The patch capture is limited to
-64 KiB and explicitly marked when truncated; it is not a later filesystem diff.
-Compact output previews up to eight patch rows with addition/removal styles;
-long lines and additional rows are omitted with an ellipsis. Ctrl-O or `/tool N`
-shows the full recorded capture, including truncation, without interpreting its
-contents as Markdown. Write-file diffs are not implemented.
+Successful native edits and writes record a unified patch from the previous
+text and the published text, alongside both digests where applicable. A created
+file is diffed against empty content. The patch capture is limited to 64 KiB and
+explicitly marked when truncated; it is not a later filesystem diff. If a write's
+previous content is unreadable, not UTF-8 or exceeds the native file bound, the
+result reports `diff_omitted` instead of inventing a patch. Compact output
+previews up to eight patch rows with addition/removal styles; long lines and
+additional rows are omitted with an ellipsis. Ctrl-O or `/tool N` shows the full
+recorded capture, including truncation, without interpreting its contents as
+Markdown.
 
 `/settings` shows the current tool-output presentation; `/settings compact`
 (the default) or `/settings expanded` changes it without changing model behavior.

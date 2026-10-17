@@ -206,28 +206,63 @@ pub(super) fn write(cwd: &Path, args: &Value, stop: &CancellationToken) -> ToolO
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => None,
         Err(e) => return error(e.to_string()),
     };
-    if let Some(expected) = &input.base_digest {
-        if previous.is_none() {
-            return error("guarded write requires an existing file");
+    let created = previous.is_none();
+    let mut previous_bytes = None;
+    let mut diff_omitted = None;
+    if !created {
+        match crate::file_io::read_bounded(mutation.path(), MAX_FILE_BYTES) {
+            Ok(bytes) => {
+                if let Some(expected) = &input.base_digest
+                    && expected != &hex_digest(&bytes)
+                {
+                    return error("file changed since supplied base_digest");
+                }
+                previous_bytes = Some(bytes);
+            }
+            Err(e) if input.base_digest.is_some() => {
+                return error(format!("read guarded write target: {e}"));
+            }
+            Err(e) => {
+                diff_omitted = Some(format!("existing content could not be captured: {e}"));
+            }
         }
-        let bytes = match crate::file_io::read_bounded(mutation.path(), MAX_FILE_BYTES) {
-            Ok(bytes) => bytes,
-            Err(e) => return error(format!("read guarded write target: {e}")),
-        };
-        if expected != &hex_digest(&bytes) {
-            return error("file changed since supplied base_digest");
-        }
+    } else if input.base_digest.is_some() {
+        return error("guarded write requires an existing file");
     }
     if previous.is_some()
         && let Err(e) = mutation.ensure_writable()
     {
         return error(format!("write {}: {e}", input.path));
     }
-    let created = previous.is_none();
+    let diff = if created {
+        Some(crate::edit_diff::capture(&input.path, "", &input.content))
+    } else {
+        match previous_bytes {
+            Some(bytes) => match String::from_utf8(bytes) {
+                Ok(text) => Some(crate::edit_diff::capture(
+                    &input.path,
+                    &text,
+                    &input.content,
+                )),
+                Err(_) => {
+                    diff_omitted = Some("existing file is not UTF-8".into());
+                    None
+                }
+            },
+            None => None,
+        }
+    };
     match mutation.replace(input.content.as_bytes(), previous) {
-        Ok(()) => success(
-            json!({"path": input.path, "created": created, "bytes": input.content.len(), "new_digest": hex_digest(input.content.as_bytes())}),
-        ),
+        Ok(()) => {
+            let mut value = json!({"path": input.path, "created": created, "bytes": input.content.len(), "new_digest": hex_digest(input.content.as_bytes())});
+            if let Some(diff) = diff {
+                value["diff"] = serde_json::to_value(diff).expect("write diff is serializable");
+            }
+            if let Some(reason) = diff_omitted {
+                value["diff_omitted"] = Value::String(reason);
+            }
+            success(value)
+        }
         Err(e) => error(format!("write failed: {e}")),
     }
 }
@@ -423,6 +458,59 @@ mod tests {
         );
         assert!(!created.is_error && created.value["created"] == true);
         assert_eq!(created.value["new_digest"], hex_digest(b"created"));
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn write_records_bounded_diff_for_replacements_and_creations() {
+        let root = std::env::temp_dir().join(format!("ion-write-diff-{}", uuid::Uuid::now_v7()));
+        fs::create_dir(&root).unwrap();
+        let tools = LocalTools::new(&root).unwrap();
+        let stop = CancellationToken::new();
+        fs::write(root.join("file"), "old\n").unwrap();
+        let replaced = write(&tools.cwd, &json!({"path":"file","content":"new\n"}), &stop);
+        assert!(!replaced.is_error, "{}", replaced.value);
+        let diff = replaced.value["diff"]["text"].as_str().unwrap();
+        assert!(diff.contains("-old") && diff.contains("+new"), "{diff}");
+        assert!(replaced.value.get("diff_omitted").is_none());
+        assert_eq!(replaced.value["diff"]["truncated"], false);
+
+        let created = write(
+            &tools.cwd,
+            &json!({"path":"created","content":"created\n"}),
+            &stop,
+        );
+        assert!(!created.is_error, "{}", created.value);
+        let diff = created.value["diff"]["text"].as_str().unwrap();
+        assert!(diff.contains("+created"), "{diff}");
+        assert_eq!(created.value["created"], true);
+
+        fs::write(root.join("binary"), [0xff, 0xfe]).unwrap();
+        let binary = write(
+            &tools.cwd,
+            &json!({"path":"binary","content":"text\n"}),
+            &stop,
+        );
+        assert!(!binary.is_error, "{}", binary.value);
+        assert!(binary.value.get("diff").is_none());
+        assert_eq!(binary.value["diff_omitted"], "existing file is not UTF-8");
+
+        fs::write(root.join("large"), vec![b'x'; MAX_FILE_BYTES + 1]).unwrap();
+        let large = write(
+            &tools.cwd,
+            &json!({"path":"large","content":"replacement"}),
+            &stop,
+        );
+        assert!(!large.is_error, "{}", large.value);
+        assert!(large.value.get("diff").is_none());
+        assert!(
+            large.value["diff_omitted"]
+                .as_str()
+                .unwrap()
+                .contains("could not be captured"),
+            "{}",
+            large.value
+        );
         fs::remove_dir_all(root).unwrap();
     }
 
