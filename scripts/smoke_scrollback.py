@@ -1,5 +1,6 @@
 """Check actual inline publication in tmux, whose full-screen erase saves history."""
 
+import hashlib
 import json
 import os
 import shlex
@@ -23,6 +24,7 @@ with tempfile.TemporaryDirectory(prefix="ion-scrollback-") as temporary:
     workspace = work / "workspace"
     workspace.mkdir()
     (workspace / "data.txt").write_text("observed data\n")
+    data_digest = hashlib.sha256(b"observed data\n").hexdigest()
     home = work / "home"
     home.mkdir()
     env = os.environ.copy()
@@ -44,7 +46,7 @@ with tempfile.TemporaryDirectory(prefix="ion-scrollback-") as temporary:
             if len(requests) in (1, 3):
                 calls = [
                     ("read", {"path": "data.txt"}),
-                    ("edit", {"path": "data.txt", "edits": [{"old_text": "observed data", "new_text": "UPDATED_SNAPSHOT"}]}),
+                    ("edit", {"path": "data.txt", "base_digest": data_digest, "edits": [{"old_text": "observed data", "new_text": "UPDATED_SNAPSHOT"}]}),
                     ("exec", {"command": "printf 'FIRST_%s\\nmid-one\\nmid-two\\nCOMMAND_OUTPUT_%s\\n' HIDDEN ONCE"}),
                 ] if len(requests) == 1 else [
                     ("exec", {"command": "printf 'FUTURE_%s\\nmid-one\\nmid-two\\nfuture-last\\n' FIRST"}),

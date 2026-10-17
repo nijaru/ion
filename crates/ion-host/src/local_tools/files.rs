@@ -53,6 +53,8 @@ struct WriteInput {
     content: String,
     #[serde(default, deserialize_with = "present_input")]
     base_digest: Option<String>,
+    #[serde(default)]
+    unconditional: bool,
 }
 
 pub(super) fn read(cwd: &Path, args: &Value, stop: &CancellationToken) -> ToolOutput {
@@ -136,6 +138,9 @@ pub(super) fn edit(cwd: &Path, args: &Value, stop: &CancellationToken) -> ToolOu
     if input.edits.is_empty() {
         return error("edits must contain at least one replacement");
     }
+    let Some(base_digest) = input.base_digest else {
+        return error("edit requires base_digest from a complete read");
+    };
     let path = match path(cwd, &input.path) {
         Ok(path) => path,
         Err(e) => return error(e),
@@ -152,11 +157,7 @@ pub(super) fn edit(cwd: &Path, args: &Value, stop: &CancellationToken) -> ToolOu
         return error(format!("edit {}: {e}", input.path));
     }
     let actual = hex_digest(&bytes);
-    if input
-        .base_digest
-        .as_ref()
-        .is_some_and(|digest| digest != &actual)
-    {
+    if base_digest != actual {
         return error("file changed since supplied base_digest");
     }
     let text = match String::from_utf8(bytes) {
@@ -191,6 +192,9 @@ pub(super) fn write(cwd: &Path, args: &Value, stop: &CancellationToken) -> ToolO
     if input.content.len() > MAX_FILE_BYTES {
         return error("content exceeds 8 MiB");
     }
+    if input.base_digest.is_some() && input.unconditional {
+        return error("write accepts base_digest or unconditional, not both");
+    }
     let path = match path(cwd, &input.path) {
         Ok(path) => path,
         Err(e) => return error(e),
@@ -207,6 +211,11 @@ pub(super) fn write(cwd: &Path, args: &Value, stop: &CancellationToken) -> ToolO
         Err(e) => return error(e.to_string()),
     };
     let created = previous.is_none();
+    if !created && input.base_digest.is_none() && !input.unconditional {
+        return error(
+            "write replacement requires base_digest from read; set unconditional=true only for intentional unread replacement",
+        );
+    }
     let mut previous_bytes = None;
     let mut diff_omitted = None;
     if !created {
@@ -444,13 +453,33 @@ mod tests {
             .is_error
         );
         assert_eq!(fs::read(root.join("large")).unwrap(), oversized);
-        let unconditional = write(
+        let unguarded = write(
             &tools.cwd,
             &json!({"path":"large","content":"second"}),
             &stop,
         );
-        assert!(!unconditional.is_error);
+        assert!(unguarded.is_error);
+        assert!(
+            unguarded.value["error"]
+                .as_str()
+                .unwrap()
+                .contains("requires base_digest")
+        );
+        assert_eq!(fs::read(root.join("large")).unwrap(), oversized);
+        let unconditional = write(
+            &tools.cwd,
+            &json!({"path":"large","content":"second","unconditional":true}),
+            &stop,
+        );
+        assert!(!unconditional.is_error, "{}", unconditional.value);
         assert_eq!(unconditional.value["new_digest"], hex_digest(b"second"));
+        let conflicting = write(
+            &tools.cwd,
+            &json!({"path":"large","content":"third","base_digest":hex_digest(b"second"),"unconditional":true}),
+            &stop,
+        );
+        assert!(conflicting.is_error);
+        assert_eq!(fs::read(root.join("large")).unwrap(), b"second");
         let created = write(
             &tools.cwd,
             &json!({"path":"new/parents/file","content":"created"}),
@@ -468,7 +497,18 @@ mod tests {
         let tools = LocalTools::new(&root).unwrap();
         let stop = CancellationToken::new();
         fs::write(root.join("file"), "old\n").unwrap();
-        let replaced = write(&tools.cwd, &json!({"path":"file","content":"new\n"}), &stop);
+        let rejected = write(
+            &tools.cwd,
+            &json!({"path":"file","content":"lost\n"}),
+            &stop,
+        );
+        assert!(rejected.is_error);
+        assert_eq!(fs::read(root.join("file")).unwrap(), b"old\n");
+        let replaced = write(
+            &tools.cwd,
+            &json!({"path":"file","content":"new\n","base_digest":hex_digest(b"old\n")}),
+            &stop,
+        );
         assert!(!replaced.is_error, "{}", replaced.value);
         let diff = replaced.value["diff"]["text"].as_str().unwrap();
         assert!(diff.contains("-old") && diff.contains("+new"), "{diff}");
@@ -488,17 +528,18 @@ mod tests {
         fs::write(root.join("binary"), [0xff, 0xfe]).unwrap();
         let binary = write(
             &tools.cwd,
-            &json!({"path":"binary","content":"text\n"}),
+            &json!({"path":"binary","content":"text\n","base_digest":hex_digest(&[0xff,0xfe])}),
             &stop,
         );
         assert!(!binary.is_error, "{}", binary.value);
         assert!(binary.value.get("diff").is_none());
         assert_eq!(binary.value["diff_omitted"], "existing file is not UTF-8");
 
-        fs::write(root.join("large"), vec![b'x'; MAX_FILE_BYTES + 1]).unwrap();
+        let oversized = vec![b'x'; MAX_FILE_BYTES + 1];
+        fs::write(root.join("large"), &oversized).unwrap();
         let large = write(
             &tools.cwd,
-            &json!({"path":"large","content":"replacement"}),
+            &json!({"path":"large","content":"replacement","unconditional":true}),
             &stop,
         );
         assert!(!large.is_error, "{}", large.value);
@@ -524,7 +565,7 @@ mod tests {
         let tools = LocalTools::new(&root).unwrap();
         let output = write(
             &tools.cwd,
-            &json!({"path":"link.txt","content":"new"}),
+            &json!({"path":"link.txt","content":"new","base_digest":hex_digest(b"old")}),
             &CancellationToken::new(),
         );
         assert!(!output.is_error, "{}", output.value);
@@ -548,13 +589,13 @@ mod tests {
         let tools = LocalTools::new(&root).unwrap();
         let edit = edit(
             &tools.cwd,
-            &json!({"path":"file.txt","edits":[{"old_text":"old","new_text":"new"}]}),
+            &json!({"path":"file.txt","edits":[{"old_text":"old","new_text":"new"}],"base_digest":hex_digest(b"old")}),
             &CancellationToken::new(),
         );
         assert!(edit.is_error, "{}", edit.value);
         let write = write(
             &tools.cwd,
-            &json!({"path":"file.txt","content":"new"}),
+            &json!({"path":"file.txt","content":"new","base_digest":hex_digest(b"old")}),
             &CancellationToken::new(),
         );
         assert!(write.is_error, "{}", write.value);
@@ -684,7 +725,7 @@ mod tests {
             fs::write(&path, source).unwrap();
             let output = edit(
                 &tools.cwd,
-                &json!({"path":"file.txt","edits":edits}),
+                &json!({"path":"file.txt","edits":edits,"base_digest":hex_digest(source.as_bytes())}),
                 &CancellationToken::new(),
             );
             assert!(output.is_error, "{}", output.value);

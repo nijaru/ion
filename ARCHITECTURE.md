@@ -243,10 +243,13 @@ Selection is application configuration for its managed children, not a session
 guarantee, authority grant or sandbox. Tool visibility is not a permission system
 or sandbox.
 
-Host validates untrusted arguments/content. Native exact edits validate disjoint
-replacements against one original snapshot, preserve unmatched bytes/BOM/line
-endings and respect effective write permissions. Bound inline capture and identify
-omission, decoding loss and incomplete EOF. Full artifacts have a separate disk
+Host validates untrusted arguments/content. Native exact edits require the
+complete-file digest returned by read and validate disjoint replacements against
+one original snapshot; write replacements require that digest unless the caller
+explicitly opts into unconditional replacement. Creation remains unguarded.
+Edits preserve unmatched bytes/BOM/line endings and respect effective write
+permissions. Bound inline capture and identify omission, decoding loss and
+incomplete EOF. Full artifacts have a separate disk
 lifecycle, not an aggregate quota or retention guarantee. Images have one bounded
 normalization owner across user/native/MCP inputs; unsupported content is explicit.
 

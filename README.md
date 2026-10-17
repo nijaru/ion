@@ -795,11 +795,14 @@ files and exactly one line past EOF return an empty page; larger offsets reject.
 Continue reading when a complete file is needed; a partial window is not safe
 full-file replacement content. For files within its 8 MiB text-edit bound, `read.base_digest` covers
 the full file, not that window, and can guard a later `edit` or `write`.
-`write.base_digest` requires an existing regular file whose complete digest
-still matches under the native mutation lock. Missing parents are not created
-for guarded writes. Omit the guard for intentional unconditional replacement
-or creation. A successful write returns `new_digest`, SHA256 of the content it
-published; that observation does not lease the file against later changes.
+`edit` requires `base_digest` from a read of the complete current file; missing
+or stale digests reject before replacement. `write` requires the same guard to
+replace an existing file, while creation needs neither field and creates missing
+parents. `unconditional: true` is the explicit opt-out for an intentional unread
+replacement; it cannot be combined with `base_digest` and does not create a
+read. Guarded writes do not create missing parents. A successful write returns
+`new_digest`, SHA256 of the content it published; that observation does not
+lease the file against later changes.
 
 `edit` takes an `edits` array of `{old_text, new_text}` replacements against one
 original file snapshot. It rejects ambiguous or overlapping matches before

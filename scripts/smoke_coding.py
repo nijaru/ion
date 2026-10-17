@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """Credential-free fixed coding task with an independent workspace oracle."""
+import hashlib
 import json
 import os
 import subprocess
@@ -15,6 +16,7 @@ BINARY = Path(os.environ.get("ION_SMOKE_BIN", ROOT / "target/debug/ion"))
 SOURCE = """def add(a, b):
     return a - b
 """
+SOURCE_DIGEST = hashlib.sha256(SOURCE.encode()).hexdigest()
 TEST = """import unittest
 from calculator import add
 
@@ -73,6 +75,7 @@ class Provider(BaseHTTPRequestHandler):
                         "edit",
                         {
                             "path": "calculator.py",
+                            "base_digest": SOURCE_DIGEST,
                             "edits": [
                                 {
                                     "old_text": "def add(a, b):\n    return a - b",

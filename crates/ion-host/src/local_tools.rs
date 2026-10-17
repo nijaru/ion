@@ -160,8 +160,8 @@ fn error(message: impl Into<String>) -> ToolOutput {
 fn specs() -> Vec<ToolSpec> {
     vec![
         ToolSpec { name: "read".into(), description: "Read UTF-8 text or a supported image (JPEG, PNG, GIF, WebP) from the live working directory. Images are attached to the result. Paths may be relative or absolute. Text reads use one-based line ranges (default 2000 lines), bounded to 65536 bytes of complete lines. Check has_more and pass next_line as offset to continue. An oversized first line requires an explicitly bounded exec read. base_digest covers the complete file when available, not just returned content. Do not recreate an existing file from an incomplete read; prefer exact edits or read all pages before full replacement.".into(), input_schema: json!({"type":"object","additionalProperties":false,"required":["path"],"properties":{"path":{"type":"string"},"offset":{"type":"integer","minimum":1,"description":"One-based starting line (default 1). Pass the prior result's next_line to continue. Omit for images."},"limit":{"type":"integer","minimum":1,"maximum":2000,"description":"Maximum complete lines to return (default and maximum 2000); the 65536-byte output bound may stop earlier. Omit for images."}}}) },
-        ToolSpec { name: "edit".into(), description: "Apply one or more disjoint exact text replacements to a UTF-8 file in one write. Each old_text must occur exactly once in the original file; overlapping edits are rejected. Optionally reject changes since base_digest. Operates with the host user's permissions.".into(), input_schema: json!({"type":"object","additionalProperties":false,"required":["path","edits"],"properties":{"path":{"type":"string"},"edits":{"type":"array","minItems":1,"items":{"type":"object","additionalProperties":false,"required":["old_text","new_text"],"properties":{"old_text":{"type":"string","minLength":1},"new_text":{"type":"string"}}}},"base_digest":{"type":"string"}}}) },
-        ToolSpec { name: "write".into(), description: "Create or replace a UTF-8 file in the live working directory. Omitted base_digest permits unconditional replacement and creation of missing parents. A supplied string must match the entire existing regular file under the native mutation lock; stale, missing or unreadable targets reject without replacement or parent creation. Use exact edit or complete-source guarded replacement, not an incomplete read window. Success returns path, created, bytes and new_digest (SHA256 of published content), plus a bounded unified diff when the previous content is readable UTF-8; otherwise diff_omitted explains the omission. The digest is not a lease against later changes.".into(), input_schema: json!({"type":"object","additionalProperties":false,"required":["path","content"],"properties":{"path":{"type":"string"},"content":{"type":"string"},"base_digest":{"type":"string"}}}) },
+        ToolSpec { name: "edit".into(), description: "Apply one or more disjoint exact text replacements to a UTF-8 file in one write. Requires base_digest from a read of the complete current file; stale content is rejected. Each old_text must occur exactly once in the original file; overlapping edits are rejected. Operates with the host user's permissions.".into(), input_schema: json!({"type":"object","additionalProperties":false,"required":["path","edits","base_digest"],"properties":{"path":{"type":"string"},"edits":{"type":"array","minItems":1,"items":{"type":"object","additionalProperties":false,"required":["old_text","new_text"],"properties":{"old_text":{"type":"string","minLength":1},"new_text":{"type":"string"}}}},"base_digest":{"type":"string","description":"Complete-file digest returned by read; required."}}}) },
+        ToolSpec { name: "write".into(), description: "Create or replace a UTF-8 file in the live working directory. Replacing an existing file requires base_digest from read, or unconditional=true only for an intentional unread replacement; creation needs neither and creates missing parents. A supplied digest must match the entire existing regular file under the native mutation lock; stale, missing or unreadable targets reject. Use exact edit or complete-source guarded replacement, not an incomplete read window. Success returns path, created, bytes and new_digest (SHA256 of published content), plus a bounded unified diff when the previous content is readable UTF-8; otherwise diff_omitted explains the omission. The digest is not a lease against later changes.".into(), input_schema: json!({"type":"object","additionalProperties":false,"required":["path","content"],"properties":{"path":{"type":"string"},"content":{"type":"string"},"base_digest":{"type":"string","description":"Complete-file digest returned by read; required to replace an existing file."},"unconditional":{"type":"boolean","description":"Only for intentional unguarded replacement; do not use after a read."}}}) },
         ToolSpec { name: "exec".into(), description: "Run a Bash command (or POSIX sh when Bash is unavailable) in the live working directory with the host user's permissions; this is not sandboxed. Timeout is optional. Returns the observed direct command exit and the final 64 KiB of each raw output stream decoded as UTF-8. Per-stream stdout_/stderr_ flags: lossy means decoding replaced bytes in the returned tail (including possible UTF-8 boundary cuts, not a literal U+FFFD); complete means pipe EOF was observed; truncated means bytes were omitted or capture is incomplete. omitted_bytes counts raw bytes outside the tail, or is null when capture is incomplete. For complete truncated or lossy captures, full_path names a private temporary raw file when available; full_error reports capture/artifact failures. Artifact paths do not guarantee retention. Inspect available raw evidence instead of rerunning effects. Capture/decoding loss does not change a known command exit. Cancellation is best effort.".into(), input_schema: json!({"type":"object","additionalProperties":false,"required":["command"],"properties":{"command":{"type":"string"},"timeout_ms":{"type":"integer","minimum":1}}}) },
     ]
 }
@@ -261,6 +261,38 @@ mod tests {
         );
     }
 
+    #[test]
+    fn native_schema_requires_edit_digest_and_exposes_write_opt_out() {
+        let catalog =
+            ion_core::ToolSet::new([
+                Arc::new(LocalTools::new(std::env::temp_dir()).unwrap()) as Arc<dyn ToolSource>
+            ])
+            .snapshot();
+        let specs = catalog.specs();
+        let edit = specs.iter().find(|spec| spec.name == "edit").unwrap();
+        assert!(
+            edit.input_schema["required"]
+                .as_array()
+                .unwrap()
+                .contains(&json!("base_digest"))
+        );
+        assert_eq!(
+            edit.input_schema["properties"]["base_digest"]["type"],
+            "string"
+        );
+        let write = specs.iter().find(|spec| spec.name == "write").unwrap();
+        assert!(
+            !write.input_schema["required"]
+                .as_array()
+                .unwrap()
+                .contains(&json!("base_digest"))
+        );
+        assert_eq!(
+            write.input_schema["properties"]["unconditional"]["type"],
+            "boolean"
+        );
+    }
+
     #[tokio::test]
     async fn concurrent_guarded_writes_admit_one_current_digest() {
         let root = std::env::temp_dir().join(format!("ion-write-race-{}", uuid::Uuid::now_v7()));
@@ -350,7 +382,13 @@ mod tests {
                         }
                     })
             } else {
-                successful == 2 && left && right
+                successful == 0
+                    && final_bytes == source.as_bytes()
+                    && [&outputs.0, &outputs.1].iter().all(|output| {
+                        output.value["error"]
+                            .as_str()
+                            .is_some_and(|error| error.contains("requires base_digest"))
+                    })
             };
             if !correct {
                 failures.push(format!(
@@ -376,9 +414,12 @@ mod tests {
         for (name, arguments) in [
             (
                 "edit",
-                json!({"path":"file","edits":[{"old_text":"old","new_text":"edited"}]}),
+                json!({"path":"file","edits":[{"old_text":"old","new_text":"edited"}],"base_digest":hex_digest(b"old")}),
             ),
-            ("write", json!({"path":"file","content":"written"})),
+            (
+                "write",
+                json!({"path":"file","content":"written","base_digest":hex_digest(b"old")}),
+            ),
         ] {
             let call = ToolCall {
                 id: name.into(),
@@ -412,7 +453,7 @@ mod tests {
         drop(holder);
         let output = files::write(
             &root,
-            &json!({"path":"file","content":"released"}),
+            &json!({"path":"file","content":"released","base_digest":hex_digest(b"old")}),
             &CancellationToken::new(),
         );
         assert!(!output.is_error, "{}", output.value);
@@ -440,9 +481,9 @@ mod tests {
                 ("read", json!({"path":"file.txt"})),
                 (
                     "edit",
-                    json!({"path":"file.txt","edits":[{"old_text":"old","new_text":"new"}]}),
+                    json!({"path":"file.txt","edits":[{"old_text":"old","new_text":"new"}],"base_digest":hex_digest(b"old")}),
                 ),
-                ("write", json!({"path":"file.txt","content":"new"})),
+                ("write", json!({"path":"file.txt","content":"new","base_digest":hex_digest(b"old")})),
             ] {
                 // Hold the real blocking-pool resource, not a fake native tool.
                 // Cancellation must remain serviceable while dispatch is queued.

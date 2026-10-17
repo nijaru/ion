@@ -1,5 +1,6 @@
 """Deterministic local Chat Completions stream for the executable smoke check."""
 
+import hashlib
 import json
 import os
 import sys
@@ -9,9 +10,10 @@ from pathlib import Path
 
 
 port_file, requests_file = map(Path, sys.argv[1:3])
+DATA_DIGEST = hashlib.sha256(b"sample data\nsecond token\n").hexdigest()
 steps = [
     ("read", {"path": "data.txt"}),
-    ("edit", {"path": "data.txt", "edits": [
+    ("edit", {"path": "data.txt", "base_digest": DATA_DIGEST, "edits": [
         {"old_text": "second token", "new_text": "second token updated"},
         {"old_text": "sample data", "new_text": "sample data updated"},
     ]}),
