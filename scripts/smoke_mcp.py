@@ -149,6 +149,20 @@ class Provider(BaseHTTPRequestHandler):
                 {"id": "mcp", "choices": [{"index": 0, "delta": {"content": "MCP_RESOURCE_OK"}, "finish_reason": None}]},
                 {"id": "mcp", "choices": [{"index": 0, "delta": {}, "finish_reason": "stop"}]},
             ]
+        elif len(requests) == 20:
+            names = {tool["function"]["name"] for tool in body["tools"]}
+            assert names == {"read", "list_mcp_resources", "list_mcp_resource_templates", "read_mcp_resource"}, names
+            changes = [
+                {"id": "mcp", "choices": [{"index": 0, "delta": {"content": "READ_ONLY_OK"}, "finish_reason": None}]},
+                {"id": "mcp", "choices": [{"index": 0, "delta": {}, "finish_reason": "stop"}]},
+            ]
+        elif len(requests) == 21:
+            names = {tool["function"]["name"] for tool in body["tools"]}
+            assert names == {"read", "write"}, names
+            changes = [
+                {"id": "mcp", "choices": [{"index": 0, "delta": {"content": "TOOL_SELECTION_OK"}, "finish_reason": None}]},
+                {"id": "mcp", "choices": [{"index": 0, "delta": {}, "finish_reason": "stop"}]},
+            ]
         else:
             assert any(message.get("role") == "tool" and "Hello, Ion!" in message.get("content", "") for message in body["messages"]), body
             changes = [
@@ -557,6 +571,10 @@ with tempfile.TemporaryDirectory(prefix="ion-mcp-") as temporary:
         assert resource.stdout.strip() == "MCP_RESOURCE_OK", resource
         events = (workspace / "mcp-events.txt").read_text()
         assert "read:mem://guide" in events, events
+        read_only = subprocess.run([binary, "--cwd", workspace, "--read-only", "run", "Inspect without mutations."], env=env, check=True, capture_output=True, text=True)
+        assert read_only.stdout.strip() == "READ_ONLY_OK", read_only
+        selected = subprocess.run([binary, "--cwd", workspace, "--tools", "read,write", "run", "Read and write only."], env=env, check=True, capture_output=True, text=True)
+        assert selected.stdout.strip() == "TOOL_SELECTION_OK", selected
         config["servers"].pop("malformed")
         config_path.write_text(json.dumps(config))
         subprocess.run([binary, "mcp", "remove", "demo"], env=env, check=True, capture_output=True)

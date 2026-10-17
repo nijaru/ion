@@ -102,6 +102,79 @@ pub enum ToolExposure {
     Deferred,
 }
 
+/// Application-selected model-visible tool loadout. Patterns use `*` as a
+/// wildcard; exclusions win over inclusions. Selection narrows what the model can
+/// call for this application; it is not an OS sandbox or authority grant.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct ToolSelection {
+    include: Option<Vec<String>>,
+    exclude: Vec<String>,
+}
+
+impl ToolSelection {
+    pub fn all() -> Self {
+        Self::default()
+    }
+
+    pub fn include(patterns: impl IntoIterator<Item = String>) -> Self {
+        let patterns = patterns.into_iter().collect::<Vec<_>>();
+        Self {
+            include: (!patterns.is_empty()).then_some(patterns),
+            exclude: Vec::new(),
+        }
+    }
+
+    pub fn with_exclude(mut self, patterns: impl IntoIterator<Item = String>) -> Self {
+        self.exclude = patterns.into_iter().collect();
+        self
+    }
+
+    pub fn is_filtered(&self) -> bool {
+        self.include.is_some() || !self.exclude.is_empty()
+    }
+
+    pub fn allows(&self, name: &str) -> bool {
+        let included = self.include.as_ref().is_none_or(|patterns| {
+            patterns
+                .iter()
+                .any(|pattern| pattern_matches(pattern, name))
+        });
+        included
+            && !self
+                .exclude
+                .iter()
+                .any(|pattern| pattern_matches(pattern, name))
+    }
+}
+
+fn pattern_matches(pattern: &str, name: &str) -> bool {
+    let pattern = pattern.as_bytes();
+    let name = name.as_bytes();
+    let (mut p, mut n) = (0, 0);
+    let mut star = None;
+    let mut retry = 0;
+    while n < name.len() {
+        if p < pattern.len() && pattern[p] == name[n] {
+            p += 1;
+            n += 1;
+        } else if p < pattern.len() && pattern[p] == b'*' {
+            star = Some(p);
+            p += 1;
+            retry = n;
+        } else if let Some(at) = star {
+            p = at + 1;
+            retry += 1;
+            n = retry;
+        } else {
+            return false;
+        }
+    }
+    while p < pattern.len() && pattern[p] == b'*' {
+        p += 1;
+    }
+    p == pattern.len()
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct ToolDefinition {
     pub spec: ToolSpec,
@@ -223,6 +296,7 @@ pub trait ToolSource: Send + Sync {
 pub struct ToolSet {
     sources: Vec<Arc<dyn ToolSource>>,
     composition: Option<(Arc<dyn crate::CodeRuntime>, crate::CodeLimits)>,
+    selection: ToolSelection,
 }
 
 impl ToolSet {
@@ -230,7 +304,15 @@ impl ToolSet {
         Self {
             sources: sources.into_iter().collect(),
             composition: None,
+            selection: ToolSelection::all(),
         }
+    }
+
+    /// Narrow the model-visible loadout without changing source registration or
+    /// captured executor authority.
+    pub fn with_selection(mut self, selection: ToolSelection) -> Self {
+        self.selection = selection;
+        self
     }
 
     /// Opt in to a Session-owned composed call alongside the direct tools.
@@ -268,6 +350,9 @@ impl ToolSet {
         for source in &self.sources {
             for registration in source.clone().registrations() {
                 let name = registration.definition.spec.name.clone();
+                if !self.selection.allows(&name) {
+                    continue;
+                }
                 let routed = RoutedTool {
                     definition: registration.definition,
                     route: ToolRoute::Executor(registration.executor),
@@ -284,19 +369,21 @@ impl ToolSet {
         if let Some((runtime, limits)) = &self.composition {
             let definition = crate::composition::definition(*limits);
             let name = definition.spec.name.clone();
-            let routed = RoutedTool {
-                definition,
-                route: ToolRoute::Composition(runtime.clone(), *limits),
-            };
-            match positions.get(&name).copied() {
-                Some(index) => entries[index] = routed,
-                None => {
-                    positions.insert(name, entries.len());
-                    entries.push(routed);
+            if self.selection.allows(&name) {
+                let routed = RoutedTool {
+                    definition,
+                    route: ToolRoute::Composition(runtime.clone(), *limits),
+                };
+                match positions.get(&name).copied() {
+                    Some(index) => entries[index] = routed,
+                    None => {
+                        positions.insert(name, entries.len());
+                        entries.push(routed);
+                    }
                 }
             }
         }
-        ToolCatalog::from_entries(entries, previous)
+        ToolCatalog::from_entries(entries, previous, self.selection.clone())
     }
 }
 
@@ -319,10 +406,15 @@ pub struct ToolCatalog {
     entries: Vec<RoutedTool>,
     positions: HashMap<String, usize>,
     declared: HashSet<String>,
+    selection: ToolSelection,
 }
 
 impl ToolCatalog {
-    fn from_entries(mut entries: Vec<RoutedTool>, previous: &[ToolSpec]) -> Self {
+    fn from_entries(
+        mut entries: Vec<RoutedTool>,
+        previous: &[ToolSpec],
+        selection: ToolSelection,
+    ) -> Self {
         let mut positions = entries
             .iter()
             .enumerate()
@@ -343,10 +435,12 @@ impl ToolCatalog {
             .map(|entry| entry.definition.spec.name.clone())
             .collect::<HashSet<_>>();
 
-        if entries.iter().any(|entry| {
-            entry.definition.exposure == ToolExposure::Deferred
-                && !declared.contains(&entry.definition.spec.name)
-        }) {
+        if selection.allows(TOOL_SEARCH_NAME)
+            && entries.iter().any(|entry| {
+                entry.definition.exposure == ToolExposure::Deferred
+                    && !declared.contains(&entry.definition.spec.name)
+            })
+        {
             let definition = tool_search_definition();
             let name = definition.spec.name.clone();
             let routed = RoutedTool {
@@ -367,6 +461,7 @@ impl ToolCatalog {
             entries,
             positions,
             declared,
+            selection,
         }
     }
 
@@ -379,6 +474,7 @@ impl ToolCatalog {
                 .cloned()
                 .collect(),
             previous,
+            self.selection.clone(),
         )
     }
 
@@ -910,6 +1006,39 @@ mod tests {
                 }
             })
         }
+    }
+
+    #[test]
+    fn selection_patterns_and_exclusions_narrow_the_model_loadout() {
+        assert!(pattern_matches("read", "read"));
+        assert!(pattern_matches("mcp__*", "mcp__8_demo__probe"));
+        assert!(pattern_matches("*__probe", "mcp__8_demo__probe"));
+        assert!(pattern_matches("*probe*", "mcp__8_demo__probe"));
+        assert!(!pattern_matches("read", "write"));
+
+        let included = ToolSet::new([Arc::new(MixedForRestore) as Arc<dyn ToolSource>])
+            .with_selection(ToolSelection::include(["direct".into()]))
+            .snapshot();
+        assert!(included.is_declared("direct"));
+        assert!(!included.is_declared("deferred"));
+        assert!(!included.is_declared("tool_search"));
+
+        let excluded = ToolSet::new([Arc::new(MixedForRestore) as Arc<dyn ToolSource>])
+            .with_selection(ToolSelection::all().with_exclude(["deferred".into()]))
+            .snapshot();
+        assert!(excluded.is_declared("direct"));
+        assert!(!excluded.is_declared("deferred"));
+        assert!(!excluded.is_declared("tool_search"));
+
+        let without_search = ToolSet::new([Arc::new(MixedForRestore) as Arc<dyn ToolSource>])
+            .with_selection(
+                ToolSelection::include(["direct".into(), "deferred".into()])
+                    .with_exclude(["tool_search".into()]),
+            )
+            .snapshot();
+        assert!(without_search.is_declared("direct"));
+        assert!(!without_search.is_declared("deferred"));
+        assert!(!without_search.is_declared("tool_search"));
     }
 
     #[test]

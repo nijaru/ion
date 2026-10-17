@@ -3,7 +3,7 @@ use std::{path::Path, sync::Arc};
 
 use anyhow::{Context, Result};
 use ion_ai::{BoxFuture, ModelRef};
-use ion_core::{CodingAgent, CodingSession, CodingToolOutput, CodingToolSource};
+use ion_core::{CodingAgent, CodingSession, CodingToolOutput, CodingToolSource, ToolSelection};
 use tokio_util::sync::CancellationToken;
 
 use crate::{Host, LocalTools, Resources, Selection, SessionSetup};
@@ -66,8 +66,17 @@ pub struct CodingApplication {
     host: Arc<Host>,
     external_tools: Option<Arc<dyn CodingToolSource>>,
     code_mode: bool,
+    selection: ToolSelection,
     role: CodingRole,
 }
+
+const READ_ONLY_TOOLS: &[&str] = &[
+    "read",
+    "list_mcp_resources",
+    "list_mcp_resource_templates",
+    "read_mcp_resource",
+    "code_mode",
+];
 
 impl CodingApplication {
     pub fn new(host: Arc<Host>, external_tools: Option<Arc<dyn CodingToolSource>>) -> Self {
@@ -75,6 +84,7 @@ impl CodingApplication {
             host,
             external_tools,
             code_mode: false,
+            selection: ToolSelection::all(),
             role: CodingRole::Main(Arc::new(
                 crate::BackgroundOwner::new(64).expect("supported custody capacity"),
             )),
@@ -84,6 +94,23 @@ impl CodingApplication {
     /// Enable composition for this application, including later replacements.
     pub fn with_code_mode(mut self, enabled: bool) -> Self {
         self.code_mode = enabled;
+        self
+    }
+
+    /// Narrow model-visible tools without changing the application's authority.
+    /// This is not an OS sandbox; excluded tools are not reachable by model calls
+    /// or Code Mode, but user shell commands and host-side application actions
+    /// remain separate.
+    pub fn with_tool_selection(mut self, selection: ToolSelection) -> Self {
+        self.selection = selection;
+        self
+    }
+
+    /// Select the read-only coding tools. This excludes native mutations, direct
+    /// shell execution and managed children; it is a model-loadout policy, not
+    /// an OS or credential boundary.
+    pub fn with_read_only_tools(mut self) -> Self {
+        self.selection = ToolSelection::include(READ_ONLY_TOOLS.iter().map(|name| (*name).into()));
         self
     }
 
@@ -127,7 +154,7 @@ impl CodingApplication {
             )));
         }
         sources.extend(self.external_tools.iter().cloned());
-        let tools = ion_core::ToolSet::new(sources);
+        let tools = ion_core::ToolSet::new(sources).with_selection(self.selection.clone());
         let tools = if self.code_mode {
             tools.with_code_mode(
                 Arc::new(crate::code_mode::QuickJs),

@@ -227,8 +227,13 @@ tools are callable but omitted from the declared loadout until discovery activat
 them for a later request, never the issuing request. Hidden capabilities are not
 model-reachable and their MCP resources are omitted from resource tools. Restore
 activation only while its definition remains identical. Exposure changes affect
-future requests, never an issued request. Tool visibility is not a permission
-system or sandbox.
+future requests, never an issued request. Applications may narrow the
+model-visible loadout with include/exclude patterns; excluded capabilities are
+rejected before model dispatch and omitted from discovery and composition. An
+intrinsic discovery tool is available only when the selected loadout allows it.
+Selection is application configuration for its managed children, not a session
+guarantee, authority grant or sandbox. Tool visibility is not a permission system
+or sandbox.
 
 Host validates untrusted arguments/content. Native exact edits validate disjoint
 replacements against one original snapshot, preserve unmatched bytes/BOM/line

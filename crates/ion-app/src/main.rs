@@ -9,7 +9,7 @@ use std::{
 use anyhow::{Context, Result, bail, ensure};
 use clap::{Parser, Subcommand};
 use ion_ai::{Content, Message};
-use ion_core::{CodingSession, CodingToolSource, ForkPoint};
+use ion_core::{CodingSession, CodingToolSource, ForkPoint, ToolSelection};
 use ion_host::{
     Application, CredentialStatus, Host, McpExposure, McpHttpServer, McpServer, McpStdioServer,
     Resources, SavedSelection, Wire,
@@ -47,6 +47,15 @@ struct Cli {
     /// Enable bounded JavaScript composition alongside direct tools.
     #[arg(long, global = true)]
     code_mode: bool,
+    /// Limit model-visible tools to comma-separated names or `*` patterns.
+    #[arg(long, global = true, value_delimiter = ',')]
+    tools: Vec<String>,
+    /// Remove model-visible tools by comma-separated names or `*` patterns.
+    #[arg(long, global = true, value_delimiter = ',')]
+    exclude_tools: Vec<String>,
+    /// Use only read-only model tools; excludes native mutations, direct shell and managed children.
+    #[arg(long, global = true, conflicts_with_all = ["tools", "exclude_tools"])]
+    read_only: bool,
     /// Working directory for a new session (defaults to the current directory).
     #[arg(long, global = true)]
     cwd: Option<PathBuf>,
@@ -176,6 +185,31 @@ enum McpAction {
     },
 }
 
+fn parse_tool_selection(cli: &Cli) -> Result<ToolSelection> {
+    if cli.read_only {
+        return Ok(ToolSelection::all());
+    }
+    let include = validated_tool_patterns(&cli.tools)?;
+    let exclude = validated_tool_patterns(&cli.exclude_tools)?;
+    let selection = if include.is_empty() {
+        ToolSelection::all()
+    } else {
+        ToolSelection::include(include)
+    };
+    Ok(selection.with_exclude(exclude))
+}
+
+fn validated_tool_patterns(values: &[String]) -> Result<Vec<String>> {
+    values
+        .iter()
+        .map(|value| {
+            let value = value.trim();
+            ensure!(!value.is_empty(), "tool pattern is empty");
+            Ok(value.to_owned())
+        })
+        .collect()
+}
+
 #[tokio::main]
 async fn main() {
     if let Err(error) = run_cli(Cli::parse()).await {
@@ -206,12 +240,21 @@ async fn run_cli(cli: Cli) -> Result<()> {
     {
         bail!("--image requires a coding prompt or chat");
     }
+    if (cli.read_only || !cli.tools.is_empty() || !cli.exclude_tools.is_empty())
+        && !matches!(
+            &cli.action,
+            Some(Action::Run { .. } | Action::Chat | Action::Rpc) | None
+        )
+    {
+        bail!("--tools, --exclude-tools and --read-only require a coding client");
+    }
     if cli.json
         && (!matches!(&cli.action, Some(Action::Run { .. }) | None)
             || cli.action.is_none() && cli.print.is_none())
     {
         bail!("--json requires `run PROMPT` or `--print PROMPT`");
     }
+    let tool_selection = parse_tool_selection(&cli)?;
     let host = Arc::new(Host::from_environment()?);
     let credentials = host.credentials();
     let models = host.models();
@@ -593,8 +636,13 @@ async fn run_cli(cli: Cli) -> Result<()> {
             let external_tools: Option<Arc<dyn CodingToolSource>> = external_mcp
                 .as_ref()
                 .map(|tools| tools.clone() as Arc<dyn CodingToolSource>);
-            let application = ion_host::CodingApplication::new(host.clone(), external_tools)
+            let mut application = ion_host::CodingApplication::new(host.clone(), external_tools)
                 .with_code_mode(cli.code_mode);
+            if cli.read_only {
+                application = application.with_read_only_tools();
+            } else {
+                application = application.with_tool_selection(tool_selection);
+            }
             let background = application.background();
             // Every fallible setup step after MCP startup belongs to the same
             // exit scope as the client, so preflight errors still join cleanup.

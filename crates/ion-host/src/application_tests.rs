@@ -252,3 +252,57 @@ async fn workspace_free_application_keeps_its_authority_across_shared_lifecycle(
     drop(reopened);
     fs::remove_dir_all(root).unwrap();
 }
+
+#[tokio::test]
+async fn coding_application_selection_and_read_only_narrow_the_model_loadout() {
+    let root = std::env::temp_dir().join(format!("ion-selection-{}", uuid::Uuid::now_v7()));
+    let cwd = root.join("work");
+    fs::create_dir_all(&cwd).unwrap();
+    let host = Arc::new(crate::Host::new(root.join("config"), root.join("state")));
+    let selected = host
+        .models()
+        .save_default(&crate::SavedSelection {
+            provider: "offline".into(),
+            model: "selection-model".into(),
+            endpoint: Some("http://127.0.0.1:1/v1/chat/completions".into()),
+            wire: Some(crate::Wire::ChatCompletions),
+            api_key_env: None,
+            image_input: false,
+        })
+        .unwrap();
+
+    let session = Arc::new(
+        CodingSession::create(host.sessions(cwd.clone()).new_path().unwrap(), Some(&cwd)).unwrap(),
+    );
+    let application = crate::CodingApplication::new(host.clone(), None).with_tool_selection(
+        ion_core::ToolSelection::include(["read".into(), "write".into()]),
+    );
+    let control = application
+        .setup(session.clone(), selected.clone(), None)
+        .unwrap()
+        .into_control::<()>();
+    let catalog = control.agent().tool_catalog();
+    assert!(catalog.is_declared("read") && catalog.is_declared("write"));
+    assert!(!catalog.is_declared("edit"));
+    assert!(!catalog.is_declared("exec"));
+    assert!(!catalog.is_declared("subagent"));
+    drop(control);
+    drop(session);
+
+    let session = Arc::new(
+        CodingSession::create(host.sessions(cwd.clone()).new_path().unwrap(), Some(&cwd)).unwrap(),
+    );
+    let application = crate::CodingApplication::new(host.clone(), None).with_read_only_tools();
+    let control = application
+        .setup(session.clone(), selected, None)
+        .unwrap()
+        .into_control::<()>();
+    let catalog = control.agent().tool_catalog();
+    assert!(catalog.is_declared("read"));
+    for excluded in ["edit", "write", "exec", "subagent"] {
+        assert!(!catalog.is_declared(excluded), "{excluded}");
+    }
+    drop(control);
+    drop(session);
+    fs::remove_dir_all(root).unwrap();
+}

@@ -67,6 +67,18 @@ cleanup rather than panic. Effects already applied before a failed confirmation�
 such as a saved model selection, transcript or Session copy—are not rolled back
 or automatically retried.
 
+`--tools LIST` limits the model-visible tools to comma-separated exact names or
+`*` patterns; `--exclude-tools LIST` removes matches after inclusion. Exclusions
+win, and both apply to native tools, MCP tools and Code Mode's callable namespace.
+`--read-only` is an allowlist preset for `read`, MCP resource inspection and
+Code Mode when enabled; it excludes native mutations, direct shell execution and
+managed children. These flags are model-loadout policies for the invocation, not
+OS sandboxes or credential boundaries: user `!` shell commands and host-side
+application effects remain separate. A managed child inherits the initiating
+application's selection. `tool_search` is added only when the selection allows it
+and selected deferred tools need discovery. `--read-only` cannot be combined with
+`--tools` or `--exclude-tools`.
+
 `--cwd PATH` chooses a working directory. By default, a run starts a new
 session; `--continue` reopens the most recently active one in that directory.
 `--session ID` selects a listed session, and `--session PATH` can create or
@@ -1078,6 +1090,11 @@ sample, not a replacement for the terminal or RPC client.
 `CodingApplication::new(host, tools).setup(session, selected, reasoning)` supplies
 the coding preset. It loads coding instructions/resources and native tools; the
 optional `tools` source adds or overrides registrations, not a complete allowlist.
+`with_tool_selection(ToolSelection::include(...).with_exclude(...))` narrows the
+model-visible loadout; `with_read_only_tools()` selects the read-only preset.
+Both filter model declarations, discovery and the Code Mode namespace, and
+managed children inherit the parent selection. They are application loadout
+policies, not OS sandboxes or authority grants.
 Consume the setup with `into_control::<M>()` to create `SessionControl<M>`, the same
 owner used by terminal, headless, RPC and this example—not another model/tool loop.
 It handles preparation, steering, follow-ups, settlement and idle replacement.

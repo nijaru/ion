@@ -38,7 +38,7 @@ pub use session::{
 };
 pub use tool_set::{
     ToolActivity, ToolActivityKind, ToolCatalog, ToolDefinition, ToolExecutor, ToolExposure,
-    ToolPresentation, ToolPresentationTarget, ToolRegistration, ToolSet,
+    ToolPresentation, ToolPresentationTarget, ToolRegistration, ToolSelection, ToolSet,
     ToolSource as CodingToolSource,
 };
 

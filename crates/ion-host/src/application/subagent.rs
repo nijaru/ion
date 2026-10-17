@@ -57,6 +57,7 @@ impl Subagent {
                     host: parent.host.clone(),
                     external_tools: parent.external_tools.clone(),
                     code_mode: parent.code_mode,
+                    selection: parent.selection.clone(),
                     role: CodingRole::Subagent,
                 },
                 selected: selected.clone(),
