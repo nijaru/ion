@@ -24,6 +24,8 @@ class CursorReplies:
         self.position = (2, 1)  # The fixture's initial shell cursor, one-based.
         self.saved = self.position
         self.pending = b""
+        self.keyboard_replied = False
+        self.device_replied = False
 
     def resize(self, rows, columns):
         row, column = self.position
@@ -32,6 +34,14 @@ class CursorReplies:
     def feed(self, data):
         data = self.pending + data
         replies = []
+        if b"\x1b[?u" in data and not self.keyboard_replied:
+            # Answer the keyboard capability query so startup exercises a
+            # supporting terminal instead of waiting for the 500 ms fallback.
+            replies.append(b"\x1b[?0u")
+            self.keyboard_replied = True
+        if b"\x1b[c" in data and not self.device_replied:
+            replies.append(b"\x1b[?1;2c")
+            self.device_replied = True
         end = 0
         for token in re.finditer(rb"\x1b\[([0-9;?]*)([@-~])", data):
             parameters, final = token.groups()
