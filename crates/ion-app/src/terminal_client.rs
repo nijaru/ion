@@ -1122,6 +1122,9 @@ impl Frontend {
     }
 
     fn note(&mut self, message: String) {
+        if self.notices.last() == Some(&message) {
+            return;
+        }
         self.notices.push(message);
         if self.notices.len() > 16 {
             self.notices.remove(0);

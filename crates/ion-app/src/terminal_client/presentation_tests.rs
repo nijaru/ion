@@ -1,6 +1,17 @@
 use super::*;
 
 #[test]
+fn consecutive_notes_are_coalesced_without_hiding_distinct_messages() {
+    let mut ui = Frontend::default();
+    ui.note("same".into());
+    ui.note("same".into());
+    assert_eq!(ui.notices, ["same"]);
+    ui.note("different".into());
+    ui.note("same".into());
+    assert_eq!(ui.notices, ["same", "different", "same"]);
+}
+
+#[test]
 fn short_session_labels_preserve_ascii_and_utf8() {
     for (id, label) in [
         ("", ""),
