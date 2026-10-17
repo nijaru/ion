@@ -1,8 +1,9 @@
 //! OSC 7501 root-record publication. The terminal client owns state transitions;
 //! this module owns the bounded wire encoding and physical write contract.
 
-/// Root-record program state. `blocked` is intentionally absent until Ion has a
-/// real user-blocking interaction to report; ordinary idle is not blocked.
+/// Root-record program state. Only interactions Ion actually exposes are
+/// represented; ordinary idle is not blocked and no approval/question state is
+/// invented.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ProgramStatus {
     Idle,
