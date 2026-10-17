@@ -27,6 +27,11 @@ Claude Code's documented contracts provide secondary workflow/SDK evidence. Insp
 relevant source; distinguish established behavior, experiments and vendor claims.
 Adapt semantics to Rust, not entire runtimes or feature inventories.
 
+The first completion target is the coding daily driver. Dynamic extension
+ecosystems, virtual routers, session trees, authenticated services, multi-tenant
+sandboxing and durable queues are post-v1 choices unless a concrete daily-driver
+need changes the scope; they are not permanent engine exclusions.
+
 ## Engine concepts and owners
 
 - **Session:** one ordered committed history and its derived conversation,
@@ -82,7 +87,10 @@ fail or be explicitly reconciled, never silently rebound by name.
 Capability selection is not OS isolation. The coding configuration deliberately
 uses the host user's permissions, not an implicit sandbox, VM or rollback facility.
 Untrusted multi-tenant/device integrations need restricted tools and appropriate
-execution isolation. OAuth is an optional access workflow, not a first-use gate.
+execution isolation. Approval and consent are application policy, not an implicit
+engine UI; a future approval boundary must decide before effect dispatch and
+cannot retroactively stop started work. V1 does not claim OS sandboxing. OAuth is
+an optional access workflow, not a first-use gate.
 
 ## Agent loop and effects
 
