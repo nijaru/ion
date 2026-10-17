@@ -29,6 +29,7 @@ for line in sys.stdin:
                 McpServer::Stdio(McpStdioServer {
                     command: "python3".into(),
                     args: vec!["-c".into(), script.into(), tool.into()],
+                    exposure: McpExposure::Direct,
                 }),
             )
             .unwrap();

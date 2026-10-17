@@ -64,6 +64,7 @@ async fn native_roots_are_reaped_after_shutdown_and_failed_startup() {
                     McpServer::Stdio(McpStdioServer {
                         command: "python3".into(),
                         args: vec!["-c".into(), SERVER.into(), mode.into()],
+                        exposure: McpExposure::Direct,
                     }),
                 )
                 .unwrap();
@@ -134,6 +135,7 @@ async fn shutdown_reaps_root_while_protocol_send_is_backpressured() {
         McpServer::Stdio(McpStdioServer {
             command: "python3".into(),
             args: vec!["-c".into(), SERVER.into(), "blocked-send".into()],
+            exposure: McpExposure::Direct,
         }),
         &root,
         ChangeHandler(Arc::new(AtomicU64::new(0))),
@@ -196,6 +198,7 @@ async fn failed_http_startup_closes_pending_request_before_runtime_teardown() {
             let config = McpConfig::new(&root);
             config.add("stalled", McpServer::Http(McpHttpServer {
                 url: format!("http://{address}/mcp"), bearer_token_env: None,
+                exposure: McpExposure::Direct,
             })).unwrap();
             let startup = McpTools::connect(&config, &root).await;
             let closed = tokio::time::timeout(Duration::from_secs(1), &mut server).await;

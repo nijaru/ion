@@ -5,7 +5,7 @@ use ion_core::{CodingToolSource, ToolSet};
 use serde_json::{Value, json};
 use tokio_util::sync::CancellationToken;
 
-use super::{McpConfig, McpServer, McpStdioServer, McpTools};
+use super::{McpConfig, McpExposure, McpServer, McpStdioServer, McpTools};
 
 const PNG_1X1: &str = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==";
 
@@ -121,6 +121,7 @@ async fn resources_list_templates_read_and_capability_gating() {
             McpServer::Stdio(McpStdioServer {
                 command: "python3".into(),
                 args: vec!["-c".into(), resource_server()],
+                exposure: McpExposure::Direct,
             }),
         )
         .unwrap();
@@ -130,6 +131,7 @@ async fn resources_list_templates_read_and_capability_gating() {
             McpServer::Stdio(McpStdioServer {
                 command: "python3".into(),
                 args: vec!["-c".into(), broken_resource_server()],
+                exposure: McpExposure::Direct,
             }),
         )
         .unwrap();
@@ -348,6 +350,7 @@ for line in sys.stdin:
             McpServer::Stdio(McpStdioServer {
                 command: "python3".into(),
                 args: vec!["-c".into(), server.into()],
+                exposure: McpExposure::Direct,
             }),
         )
         .unwrap();
@@ -401,6 +404,7 @@ for line in sys.stdin:
             McpServer::Stdio(McpStdioServer {
                 command: "python3".into(),
                 args: vec!["-c".into(), server.into()],
+                exposure: McpExposure::Direct,
             }),
         )
         .unwrap();
@@ -468,6 +472,7 @@ for line in sys.stdin:
             McpServer::Stdio(McpStdioServer {
                 command: "python3".into(),
                 args: vec!["-c".into(), server.into()],
+                exposure: McpExposure::Direct,
             }),
         )
         .unwrap();
@@ -487,6 +492,78 @@ for line in sys.stdin:
     .await;
     assert!(!text.is_error, "{}", text.value);
     assert_eq!(text.value["contents"][0]["text"], "only");
+    source.shutdown().await.unwrap();
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[tokio::test]
+async fn deferred_exposure_requires_discovery_and_hidden_exposure_removes_capabilities() {
+    let root = std::env::temp_dir().join(format!("ion-mcp-exposure-{}", uuid::Uuid::now_v7()));
+    fs::create_dir(&root).unwrap();
+    let config = McpConfig::new(&root);
+    config
+        .add(
+            "deferred",
+            McpServer::Stdio(McpStdioServer {
+                command: "python3".into(),
+                args: vec!["-c".into(), resource_server()],
+                exposure: McpExposure::Deferred,
+            }),
+        )
+        .unwrap();
+    let startup = McpTools::connect(&config, &root).await;
+    assert!(startup.diagnostics.is_empty(), "{:?}", startup.diagnostics);
+    let source = startup.tools.unwrap();
+    let tool_set = ToolSet::new([source.clone() as Arc<dyn CodingToolSource>]);
+    let snapshot = tool_set.snapshot();
+    let deferred_name = snapshot
+        .specs()
+        .into_iter()
+        .find(|spec| spec.name.starts_with("mcp__8_deferred__"))
+        .expect("deferred MCP tool")
+        .name;
+    assert!(!snapshot.is_declared(&deferred_name));
+    assert!(snapshot.is_declared("tool_search"));
+    assert!(snapshot.is_declared("list_mcp_resources"));
+    let deferred_spec = snapshot
+        .specs()
+        .into_iter()
+        .find(|spec| spec.name == deferred_name)
+        .unwrap();
+    let activated = tool_set.snapshot_with_previous(std::slice::from_ref(&deferred_spec));
+    assert!(activated.is_declared(&deferred_name));
+    source.shutdown().await.unwrap();
+    config.remove("deferred").unwrap();
+
+    let config = McpConfig::new(&root);
+    config
+        .add(
+            "hidden",
+            McpServer::Stdio(McpStdioServer {
+                command: "python3".into(),
+                args: vec!["-c".into(), resource_server()],
+                exposure: McpExposure::Hidden,
+            }),
+        )
+        .unwrap();
+    let startup = McpTools::connect(&config, &root).await;
+    assert!(startup.diagnostics.is_empty(), "{:?}", startup.diagnostics);
+    let source = startup.tools.unwrap();
+    let snapshot = ToolSet::new([source.clone() as Arc<dyn CodingToolSource>]).snapshot();
+    let names = snapshot
+        .specs()
+        .into_iter()
+        .map(|spec| spec.name)
+        .collect::<Vec<_>>();
+    assert!(
+        names.iter().all(|name| !name.starts_with("mcp__")),
+        "{names:?}"
+    );
+    assert!(
+        !names.iter().any(|name| name.starts_with("list_mcp_")),
+        "{names:?}"
+    );
+    assert!(!names.iter().any(|name| name == "tool_search"), "{names:?}");
     source.shutdown().await.unwrap();
     fs::remove_dir_all(root).unwrap();
 }

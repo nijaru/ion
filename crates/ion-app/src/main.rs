@@ -11,8 +11,8 @@ use clap::{Parser, Subcommand};
 use ion_ai::{Content, Message};
 use ion_core::{CodingSession, CodingToolSource, ForkPoint};
 use ion_host::{
-    Application, CredentialStatus, Host, McpHttpServer, McpServer, McpStdioServer, Resources,
-    SavedSelection, Wire,
+    Application, CredentialStatus, Host, McpExposure, McpHttpServer, McpServer, McpStdioServer,
+    Resources, SavedSelection, Wire,
 };
 
 mod agent_events;
@@ -135,12 +135,31 @@ enum Action {
     Compact,
 }
 
+#[derive(Clone, Copy, Debug, clap::ValueEnum)]
+enum ExposureArg {
+    Direct,
+    Deferred,
+    Hidden,
+}
+
+impl From<ExposureArg> for McpExposure {
+    fn from(value: ExposureArg) -> Self {
+        match value {
+            ExposureArg::Direct => Self::Direct,
+            ExposureArg::Deferred => Self::Deferred,
+            ExposureArg::Hidden => Self::Hidden,
+        }
+    }
+}
+
 #[derive(Subcommand)]
 enum McpAction {
     List,
     Add {
         name: String,
         command: String,
+        #[arg(long, value_enum, default_value = "direct")]
+        exposure: ExposureArg,
         #[arg(trailing_var_arg = true)]
         args: Vec<String>,
     },
@@ -149,6 +168,8 @@ enum McpAction {
         url: String,
         #[arg(long)]
         bearer_token_env: Option<String>,
+        #[arg(long, value_enum, default_value = "direct")]
+        exposure: ExposureArg,
     },
     Remove {
         name: String,
@@ -353,16 +374,18 @@ async fn run_cli(cli: Cli) -> Result<()> {
                         match server {
                             McpServer::Stdio(server) => {
                                 print_stdout(format_args!(
-                                    "{}\t{} {}",
+                                    "{}\t{}\t{} {}",
                                     metadata_field(&name),
+                                    server.exposure.as_str(),
                                     metadata_field(&server.command),
                                     metadata_field(&server.args.join(" "))
                                 ))?;
                             }
                             McpServer::Http(server) => {
                                 print_stdout(format_args!(
-                                    "{}\t{}",
+                                    "{}\t{}\t{}",
                                     metadata_field(&name),
+                                    server.exposure.as_str(),
                                     metadata_field(&server.url)
                                 ))?;
                             }
@@ -372,21 +395,31 @@ async fn run_cli(cli: Cli) -> Result<()> {
                 McpAction::Add {
                     name,
                     command,
+                    exposure,
                     args,
                 } => {
-                    config.add(&name, McpServer::Stdio(McpStdioServer { command, args }))?;
+                    config.add(
+                        &name,
+                        McpServer::Stdio(McpStdioServer {
+                            command,
+                            args,
+                            exposure: exposure.into(),
+                        }),
+                    )?;
                     print_stdout(format_args!("Added MCP server {}", metadata_field(&name)))?;
                 }
                 McpAction::AddHttp {
                     name,
                     url,
                     bearer_token_env,
+                    exposure,
                 } => {
                     config.add(
                         &name,
                         McpServer::Http(McpHttpServer {
                             url,
                             bearer_token_env,
+                            exposure: exposure.into(),
                         }),
                     )?;
                     print_stdout(format_args!("Added MCP server {}", metadata_field(&name)))?;

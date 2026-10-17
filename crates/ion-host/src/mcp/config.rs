@@ -18,12 +18,49 @@ pub enum McpServer {
     Http(McpHttpServer),
 }
 
+impl McpServer {
+    pub fn exposure(&self) -> McpExposure {
+        match self {
+            Self::Stdio(server) => server.exposure,
+            Self::Http(server) => server.exposure,
+        }
+    }
+}
+
+/// How a configured MCP server's tools reach the model. Exposure is not
+/// authority: every registered executor remains callable by the frozen
+/// catalogue, and hidden servers are omitted from both tools and resources.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum McpExposure {
+    #[default]
+    Direct,
+    Deferred,
+    Hidden,
+}
+
+impl McpExposure {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Direct => "direct",
+            Self::Deferred => "deferred",
+            Self::Hidden => "hidden",
+        }
+    }
+
+    fn is_direct(&self) -> bool {
+        *self == Self::Direct
+    }
+}
+
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct McpStdioServer {
     pub command: String,
     #[serde(default)]
     pub args: Vec<String>,
+    #[serde(default, skip_serializing_if = "McpExposure::is_direct")]
+    pub exposure: McpExposure,
 }
 
 #[derive(Clone, Serialize, Deserialize)]
@@ -32,6 +69,8 @@ pub struct McpHttpServer {
     pub url: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub bearer_token_env: Option<String>,
+    #[serde(default, skip_serializing_if = "McpExposure::is_direct")]
+    pub exposure: McpExposure,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -197,6 +236,34 @@ mod tests {
     use std::sync::{Arc, Barrier};
 
     #[test]
+    fn exposure_defaults_to_direct_and_round_trips_explicit_modes() {
+        let direct: McpStdioServer = serde_json::from_value(serde_json::json!({
+            "command": "python3"
+        }))
+        .unwrap();
+        assert_eq!(direct.exposure, McpExposure::Direct);
+        let deferred: McpStdioServer = serde_json::from_value(serde_json::json!({
+            "command": "python3",
+            "exposure": "deferred"
+        }))
+        .unwrap();
+        assert_eq!(deferred.exposure, McpExposure::Deferred);
+        let hidden: McpHttpServer = serde_json::from_value(serde_json::json!({
+            "url": "https://example.com/mcp",
+            "exposure": "hidden"
+        }))
+        .unwrap();
+        assert_eq!(hidden.exposure, McpExposure::Hidden);
+        let encoded = serde_json::to_value(McpStdioServer {
+            command: "python3".into(),
+            args: Vec::new(),
+            exposure: McpExposure::Direct,
+        })
+        .unwrap();
+        assert!(encoded.get("exposure").is_none());
+    }
+
+    #[test]
     fn remote_config_requires_http_url_and_named_ambient_token() {
         let root = std::env::temp_dir().join(format!("ion-mcp-{}", uuid::Uuid::now_v7()));
         fs::create_dir(&root).unwrap();
@@ -205,6 +272,7 @@ mod tests {
             McpServer::Http(McpHttpServer {
                 url: url.into(),
                 bearer_token_env: bearer_token_env.map(str::to_owned),
+                exposure: McpExposure::Direct,
             })
         };
         assert!(
@@ -261,6 +329,7 @@ mod tests {
                 McpServer::Stdio(McpStdioServer {
                     command: "echo".into(),
                     args: Vec::new(),
+                    exposure: McpExposure::Direct,
                 }),
             )
             .unwrap();
@@ -288,6 +357,7 @@ mod tests {
             McpServer::Stdio(McpStdioServer {
                 command: "python3".into(),
                 args: Vec::new(),
+                exposure: McpExposure::Direct,
             })
         };
         for index in 0..8 {

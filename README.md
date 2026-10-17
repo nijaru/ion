@@ -576,8 +576,16 @@ unfamiliar resources before using them.
 Add local MCP tool servers explicitly with `ion mcp add NAME COMMAND [ARGS...]`.
 Use `ion mcp add-http NAME URL` for a Streamable HTTP server; add
 `--bearer-token-env VARIABLE` when it requires a bearer token already set in
-the environment. `ion mcp list` and `ion mcp remove NAME` manage the saved
-user configuration; concurrent mutations serialize across Ion processes.
+the environment. Add `--exposure direct|deferred|hidden` to either command.
+`direct` is the default and declares the server's tools. `deferred` keeps them
+callable but out of the initial model loadout until `tool_search` activates a
+match for a later request; Code Mode can also call them. `hidden` exposes no
+model-visible tools and omits the server's resources from the MCP resource
+tools. Hidden is model exposure, not process isolation or authority: the server
+is still configured and inherits the host environment if started. Exposure
+changes apply to future requests, never an already-issued request. `ion mcp list`
+and `ion mcp remove NAME` manage the saved user configuration; concurrent
+mutations serialize across Ion processes.
 Ion starts configured servers when a coding client starts, discovers their
 tools, and exposes each as `mcp__LENGTH_NAME__TOOL` alongside read, edit, write and
 exec. `LENGTH` is the ASCII server-name length: `demo` uses `mcp__4_demo__TOOL`.

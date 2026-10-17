@@ -45,7 +45,7 @@ mod metadata_tests;
 #[cfg(test)]
 mod resource_tests;
 
-pub use config::{McpConfig, McpHttpServer, McpListing, McpServer, McpStdioServer};
+pub use config::{McpConfig, McpExposure, McpHttpServer, McpListing, McpServer, McpStdioServer};
 use config::{validate_name, validate_server};
 
 #[derive(Clone)]
@@ -63,6 +63,7 @@ type Catalog = BTreeMap<String, RegisteredTools>;
 
 struct Server {
     name: String,
+    exposure: McpExposure,
     /// The initialize handshake advertised resource operations. Capabilities are
     /// fixed for the connection, so callers do not need a second discovery round.
     resources: bool,
@@ -137,11 +138,13 @@ impl McpTools {
         validate_server(&definition)?;
         let changed = Arc::new(AtomicU64::new(0));
         let handler = ChangeHandler(changed.clone());
+        let exposure = definition.exposure();
         let client = Connection::start(&name, definition, cwd, handler).await?;
         let peer = client.client.peer_info();
-        let resources = peer
-            .as_ref()
-            .is_some_and(|info| info.capabilities.resources.is_some());
+        let resources = exposure != McpExposure::Hidden
+            && peer
+                .as_ref()
+                .is_some_and(|info| info.capabilities.resources.is_some());
         let advertises_tools = peer
             .as_ref()
             .is_none_or(|info| info.capabilities.tools.is_some());
@@ -154,6 +157,7 @@ impl McpTools {
             Ok(tools) => Ok((
                 Server {
                     name,
+                    exposure,
                     resources,
                     client: RwLock::new(Some(client)),
                     catalog,
@@ -351,6 +355,9 @@ impl CodingToolSource for McpTools {
             let Some(tools) = catalog.get(&server.name) else {
                 continue;
             };
+            if server.exposure == McpExposure::Hidden {
+                continue;
+            }
             for (spec, original) in tools {
                 registrations.push(ToolRegistration::new(
                     ToolDefinition {
@@ -359,7 +366,10 @@ impl CodingToolSource for McpTools {
                             ToolActivityKind::External,
                             original.clone(),
                         ),
-                        exposure: ToolExposure::Direct,
+                        exposure: match server.exposure {
+                            McpExposure::Direct => ToolExposure::Direct,
+                            McpExposure::Deferred | McpExposure::Hidden => ToolExposure::Deferred,
+                        },
                     },
                     Arc::new(McpExecutor {
                         server: server.clone(),
@@ -426,6 +436,7 @@ for line in sys.stdin:
                 McpServer::Stdio(McpStdioServer {
                     command: "python3".into(),
                     args: vec!["-c".into(), server.into()],
+                    exposure: McpExposure::Direct,
                 }),
             )
             .unwrap();
@@ -499,6 +510,7 @@ for line in sys.stdin:
 "#;
             config.add("settlement", McpServer::Stdio(McpStdioServer {
                 command: "python3".into(), args: vec!["-c".into(), server.into()],
+                exposure: McpExposure::Direct,
             })).unwrap();
             let startup = McpTools::connect(&config, &root).await;
             assert!(startup.diagnostics.is_empty(), "{:?}", startup.diagnostics);

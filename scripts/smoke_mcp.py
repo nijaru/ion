@@ -502,7 +502,12 @@ with tempfile.TemporaryDirectory(prefix="ion-mcp-") as temporary:
         subprocess.run([binary, "mcp", "add", "changing", sys.executable, str(changing_script)], env=env, check=True, capture_output=True)
         subprocess.run([binary, "mcp", "add-http", "remote", f"http://127.0.0.1:{remote.server_port}/mcp", "--bearer-token-env", "REMOTE_MCP_TOKEN"], env=env, check=True, capture_output=True)
         listing = subprocess.run([binary, "mcp", "list"], env=env, check=True, capture_output=True, text=True)
-        assert "demo" in listing.stdout and str(server_script) in listing.stdout and "/mcp" in listing.stdout
+        assert "demo" in listing.stdout and "demo\tdirect\t" in listing.stdout, listing.stdout
+        assert str(server_script) in listing.stdout and "/mcp" in listing.stdout
+        subprocess.run([binary, "mcp", "add", "flag-probe", "--exposure", "hidden", sys.executable, "-c", "import sys"], env=env, check=True, capture_output=True)
+        flagged = subprocess.run([binary, "mcp", "list"], env=env, check=True, capture_output=True, text=True)
+        assert "flag-probe\thidden\t" in flagged.stdout, flagged.stdout
+        subprocess.run([binary, "mcp", "remove", "flag-probe"], env=env, check=True, capture_output=True)
         config_path = Path(env["XDG_CONFIG_HOME"]) / "ion" / "mcp.json"
         config = json.loads(config_path.read_text())
         config["servers"]["malformed"] = {"command": 7}

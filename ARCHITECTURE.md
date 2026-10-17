@@ -222,10 +222,13 @@ one request catalogue. MCP bindings capture connection and original remote name;
 unavailable connections fail instead of redirecting or replaying calls. Local
 capture cannot freeze a remote server's implementation.
 
-Callable authority and model exposure differ. Direct tools are declared; discovery
-activates deferred registrations for later requests, never the issuing request.
-Restore activation only while its definition remains identical. Refresh affects
-future requests; tool visibility is not a permission system or sandbox.
+Callable authority and model exposure differ. Direct tools are declared; deferred
+tools are callable but omitted from the declared loadout until discovery activates
+them for a later request, never the issuing request. Hidden capabilities are not
+model-reachable and their MCP resources are omitted from resource tools. Restore
+activation only while its definition remains identical. Exposure changes affect
+future requests, never an issued request. Tool visibility is not a permission
+system or sandbox.
 
 Host validates untrusted arguments/content. Native exact edits validate disjoint
 replacements against one original snapshot, preserve unmatched bytes/BOM/line
@@ -241,8 +244,11 @@ refreshes at later request boundaries; possibly effectful invocations are never
 transparently retried. MCP resources are bounded read-only context operations:
 listings use frozen server identity, reads use the ordinary image or private-file
 path rather than model-visible base64, and an observation grants no effect,
-settlement or replay authority. Executable hooks and UI contributions are separately scoped
-trusted powers, not permission to mutate history or provider wire state.
+settlement or replay authority. Dynamic extension loading is not implied:
+in-process extensions are compiled Rust application/tool registrations,
+out-of-process tools use MCP, and inert instructions, skills and templates remain
+lower-trust resources. Executable hooks and UI contributions are separately
+scoped trusted powers, not permission to mutate history or provider wire state.
 
 ## Context and providers
 

@@ -52,7 +52,9 @@ pub use control::{
 pub use credentials::{CredentialResolutionError, CredentialResolver};
 pub use delegation::SessionDelegation;
 pub use local_tools::LocalTools;
-pub use mcp::{McpConfig, McpHttpServer, McpServer, McpStartup, McpStdioServer, McpTools};
+pub use mcp::{
+    McpConfig, McpExposure, McpHttpServer, McpServer, McpStartup, McpStdioServer, McpTools,
+};
 pub use model_http::{HttpModelService, HttpWire};
 pub use model_setup::{ModelChoice, ModelStore, SavedSelection, Selection, Wire};
 pub use resources::{PromptTemplate, ResourceDiagnostic, Resources, Skill};
