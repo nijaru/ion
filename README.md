@@ -601,8 +601,8 @@ dropping their runtime. Current MCP support handles text, structured data and
 normalized image tool results; audio and
 embedded resource content report an explicit unsupported-content error.
 Servers that advertise resources also expose `list_mcp_resources`,
-`list_mcp_resource_templates` and `read_mcp_resource`; these tools are present
-only while at least one connected server advertises resource capability.
+`list_mcp_resource_templates` and `read_mcp_resource`; these tools are added
+when at least one configured server advertises resource capability.
 Omitting `server` lists every resource-capable server with at most 64 pages per
 server, while a `server` argument returns one page and an opaque `cursor`
 continues it. MCP App UI resources (`ui://` or `mcp-app` profile HTML) are
