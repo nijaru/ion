@@ -34,27 +34,6 @@ impl SessionDelegation {
     /// admission. The returned task is cold and owns everything needed to join
     /// preparation, Core execution and shutdown outside the tool's borrowed wait.
     pub fn prepare(&self, input: Message) -> Result<DelegationTask> {
-        self.prepare_inner(input, None)
-    }
-
-    /// Observe the answer of a successfully executed child after full Host join,
-    /// before relationship settlement. The callback is synchronous and must not
-    /// block. It is not a settlement receipt: await delegation before dependent
-    /// parent consumption. Passive reconciliation does not execute the callback
-    /// or reconstruct output; retain the original observation or inspect facts.
-    pub fn prepare_with_answer(
-        &self,
-        input: Message,
-        on_answer: impl FnOnce(String) + Send + 'static,
-    ) -> Result<DelegationTask> {
-        self.prepare_inner(input, Some(Box::new(on_answer)))
-    }
-
-    fn prepare_inner(
-        &self,
-        input: Message,
-        on_answer: Option<Box<dyn FnOnce(String) + Send>>,
-    ) -> Result<DelegationTask> {
         ensure!(
             self.directory.is_absolute(),
             "child directory must be absolute"
@@ -133,17 +112,14 @@ impl SessionDelegation {
                         DelegationFailure::Infrastructure(error.to_string()),
                     );
                 }
-                if failure.is_none()
-                    && let Some(on_answer) = on_answer
-                {
-                    let answer = answer.ok_or_else(|| {
-                        DelegationFailure::Infrastructure(
-                            "child control joined without its successful answer".into(),
-                        )
-                    })?;
-                    on_answer(answer);
+                if let Some(failure) = failure {
+                    return Err(failure);
                 }
-                failure.map_or(Ok(()), Err)
+                answer.map(Some).ok_or_else(|| {
+                    DelegationFailure::Infrastructure(
+                        "child control joined without its successful answer".into(),
+                    )
+                })
             })
         })
         .map_err(anyhow::Error::msg)

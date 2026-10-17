@@ -12,7 +12,8 @@ pub mod code_mode;
 mod control;
 mod credentials;
 pub use background::{
-    BackgroundChildSnapshot, BackgroundDestination, BackgroundOwner, BackgroundSnapshot,
+    BackgroundChildSnapshot, BackgroundDestination, BackgroundJobStatus, BackgroundOwner,
+    BackgroundSnapshot, BackgroundSummary,
 };
 mod delegation;
 mod edit_diff;

@@ -74,7 +74,7 @@ impl<M: Serialize + Send + 'static> SessionControl<M> {
         input: Message,
         metadata: M,
     ) -> Result<RequestAdmission<M>, Box<RejectedInput<M>>> {
-        self.submit_linked_request(key, input, metadata, CancellationToken::new())
+        self.submit_linked_request(key, input, metadata, self.work_stop())
     }
 
     pub(crate) fn submit_linked_request(
@@ -228,7 +228,7 @@ impl<M: Serialize + Send + 'static> SessionControl<M> {
             self.setup.session.clone(),
             point,
             self.setup.resources.instructions().to_owned(),
-            CancellationToken::new(),
+            self.work_stop(),
             Some(inbox.clone()),
             turn_observer(
                 self.custody.clone(),
@@ -261,6 +261,9 @@ impl<M: Serialize + Send + 'static> SessionControl<M> {
         input: &UserInput,
         metadata: &M,
     ) -> Result<Admission> {
+        if let Some(owner) = self.background() {
+            owner.ensure_open()?;
+        }
         ensure!(!self.closed, "session control is closed");
         ensure!(
             lock(&self.custody).occupied < MAX_ADMISSIONS,
@@ -388,7 +391,7 @@ impl<M: Serialize + Send + 'static> SessionControl<M> {
         let work = self.setup.session.run_user_shell(
             command,
             exclude_from_context,
-            CancellationToken::new(),
+            self.work_stop(),
             move |_, stop| tools(stop),
         );
         self.install_direct(id, Work::Shell(work), metadata, reservation);
@@ -417,7 +420,7 @@ impl<M: Serialize + Send + 'static> SessionControl<M> {
         lock(&self.custody).occupied += 1;
         let work = self.setup.runtime.agent.compact(
             self.setup.session.clone(),
-            CancellationToken::new(),
+            self.work_stop(),
             move |event| {
                 let _ = observations.send(Observation::Event {
                     operation: id,

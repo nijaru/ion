@@ -165,6 +165,8 @@ pub struct ChatInit {
 
 pub async fn chat(init: ChatInit) -> Result<()> {
     let mut runtime = init.setup.into_control::<EditorDraft>();
+    let background = runtime.background();
+    let mut background_revision = 0;
     let mut ui = Frontend {
         mode: init.tui_mode,
         images: init.images.into_iter().map(Into::into).collect(),
@@ -201,6 +203,14 @@ pub async fn chat(init: ChatInit) -> Result<()> {
                 update = runtime.next(), if poll_control => {
                     poll_control = !matches!(update, ion_host::ControlUpdate::Idle);
                     let _visible_settlement_error = activity.update(&mut ui, &runtime, update)?;
+                    continue;
+                },
+                revision = async { background.as_ref().expect("guarded owner").changed(background_revision).await }, if background.is_some() => {
+                    background_revision = revision;
+                    let owner = background.as_ref().expect("guarded owner");
+                    owner.check()?;
+                    let summary = owner.summary();
+                    ui.status = format!("Background: {} running · {} retained results · /tasks", summary.running, summary.joined);
                     continue;
                 },
                 _ = tokio::time::sleep(Duration::from_millis(50)), if retry_inline => continue,
@@ -281,7 +291,15 @@ pub async fn chat(init: ChatInit) -> Result<()> {
     ui.pickers.close();
     // shutdown closes admission, stops and joins both preparation and Core work.
     // Process every reliable return/settlement even when presentation has failed.
+    if let Some(owner) = &background {
+        owner.request_shutdown();
+    }
     let report = runtime.shutdown().await;
+    if let Some(owner) = &background
+        && let Err(error) = owner.join_shutdown().await
+    {
+        activity::combine_error(&mut outcome, error.into());
+    }
     for update in report.updates {
         activity.cleanup_update(&mut ui, &runtime, update, &mut outcome);
     }
@@ -683,6 +701,63 @@ fn handle_command(
             anyhow::ensure!(!args.is_empty(), "use /logout PROVIDER");
             services.credentials().remove(args)?;
             ui.status = format!("Removed saved {args} credential");
+        }
+        Some(Builtin::Tasks) => {
+            let owner = runtime
+                .background()
+                .context("application has no background owner")?;
+            if args.is_empty() {
+                let jobs = owner.jobs();
+                if jobs.is_empty() {
+                    ui.note("No retained background tasks".into());
+                }
+                for job in jobs {
+                    ui.note(format!(
+                        "{} · {} · parent {} · {:?}{} · {}",
+                        job.child,
+                        if job.joined { "joined" } else { "unjoined" },
+                        job.parent,
+                        job.end,
+                        job.error
+                            .map(|error| format!(" · {error}"))
+                            .unwrap_or_default(),
+                        job.path.display()
+                    ));
+                }
+            } else {
+                let (action, id) = args
+                    .split_once(char::is_whitespace)
+                    .context("use /tasks [result|cancel|acknowledge UUID]")?;
+                let child = id.trim().parse::<uuid::Uuid>()?;
+                match action {
+                    "result" => {
+                        let report = owner
+                            .child(child)
+                            .context("child is not owned here (unknown or acknowledged)")?;
+                        anyhow::ensure!(report.joined, "child has not joined");
+                        let outcome = report
+                            .receipt
+                            .outcome
+                            .context("joined without a committed outcome; inspect Session facts")?;
+                        ui.note(format!(
+                            "Child {child} · observed outcome\n{}",
+                            serde_json::to_string_pretty(&outcome)?
+                        ));
+                    }
+                    "cancel" => {
+                        owner.request_stop(child)?;
+                        ui.status = format!("Stop requested for {child}");
+                    }
+                    "acknowledge" => {
+                        let receipt = owner.take(child).context("no joined result to acknowledge (running, unknown or already acknowledged)")??;
+                        ui.note(format!(
+                            "Acknowledged {child}; committed facts remain at {}",
+                            receipt.record.path.display()
+                        ));
+                    }
+                    _ => anyhow::bail!("use /tasks [result|cancel|acknowledge UUID]"),
+                }
+            }
         }
         Some(Builtin::Tools) => ui.list_tools(),
         Some(Builtin::Tool) => {

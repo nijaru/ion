@@ -70,23 +70,31 @@ async fn submit(args: Args, cwd: &Path, session: Arc<CodingSession>) -> Result<(
     // preference instead of overriding it. There is no client-owned agent loop.
     let setup = ion_host::CodingApplication::new(host, None).setup(session, selected, None)?;
     let mut control = setup.into_control::<()>();
-    let outcome = async {
-        let answer = prompt(&mut control, args.prompt).await?;
-        // Publish only the committed answer. Failure is not retry authority.
-        let mut output = std::io::stdout().lock();
-        writeln!(output, "{answer}").context("publish committed answer")?;
-        output.flush().context("flush committed answer")
+    let background = control.background();
+    let mut outcome = prompt(&mut control, args.prompt).await;
+    if let Some(owner) = &background {
+        owner.request_shutdown();
     }
-    .await;
     let report = control.shutdown().await;
-    let mut outcome = outcome;
+    if let Some(owner) = &background
+        && let Err(error) = owner.join_shutdown().await
+    {
+        outcome = Err(match outcome {
+            Ok(_) => error.into(),
+            Err(primary) => primary.context(format!("application shutdown also failed: {error}")),
+        });
+    }
     for error in report.cleanup_errors {
         outcome = match outcome {
-            Ok(()) => Err(error.into()),
+            Ok(_) => Err(error.into()),
             Err(primary) => Err(primary.context(format!("control shutdown also failed: {error}"))),
         };
     }
-    outcome
+    // No blocking publisher can delay joining application-owned children.
+    let answer = outcome?;
+    let mut output = std::io::stdout().lock();
+    writeln!(output, "{answer}").context("publish committed answer")?;
+    output.flush().context("flush committed answer")
 }
 
 async fn prompt(control: &mut SessionControl, text: String) -> Result<String> {
@@ -104,14 +112,14 @@ async fn prompt(control: &mut SessionControl, text: String) -> Result<String> {
         .map_err(|rejected| rejected.reason)?;
     let mut listening = true;
     let mut rejection = None;
-    loop {
+    let answer = loop {
         tokio::select! {
             _ = signal.recv(), if listening => {
                 listening = false;
                 control.request_stop();
             }
             update = control.next() => match update {
-                ControlUpdate::Settled(settlement) => return match settlement.outcome {
+                ControlUpdate::Settled(settlement) => break match settlement.outcome {
                     OperationOutcome::Turn(result) => result.map_err(Into::into),
                     _ => unreachable!("this example only submits coding input"),
                 },
@@ -120,9 +128,22 @@ async fn prompt(control: &mut SessionControl, text: String) -> Result<String> {
                     ReturnReason::Stopped => ion_core::CodingAgentError::Cancelled.into(),
                     reason => anyhow::anyhow!("input not accepted: {reason:?}"),
                 }),
-                ControlUpdate::Idle => return Err(rejection.unwrap_or_else(|| anyhow::anyhow!("operation ended without settlement"))),
+                ControlUpdate::Idle => break Err(rejection.unwrap_or_else(|| anyhow::anyhow!("operation ended without settlement"))),
                 _ => {} // Passive progress never performs blocking publication.
             }
         }
+    };
+    if answer.is_ok()
+        && let Some(owner) = control.background()
+    {
+        tokio::select! {
+            _ = signal.recv(), if listening => {
+                owner.request_shutdown();
+                owner.join_shutdown().await?;
+                return Err(ion_core::CodingAgentError::Cancelled.into());
+            }
+            result = owner.drain() => result?,
+        }
     }
+    answer
 }

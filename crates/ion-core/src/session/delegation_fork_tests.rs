@@ -142,6 +142,7 @@ fn fork_copies_literal_prefix_and_coordinates_but_not_parent_ownership_or_config
                 DelegationOutcome::Joined {
                     receipt: None,
                     error: Some("stopped before materialization".into()),
+                    answer: None,
                 },
             )
             .unwrap();

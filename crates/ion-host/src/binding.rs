@@ -60,6 +60,10 @@ impl SessionSetup {
         })
     }
 
+    pub fn background(&self) -> Option<Arc<crate::BackgroundOwner>> {
+        self.application.background()
+    }
+
     pub fn catalog(&self) -> &SessionCatalog {
         &self.catalog
     }
@@ -107,6 +111,10 @@ pub(crate) fn validate_model(
 }
 
 impl<M: Serialize + Send + 'static> SessionControl<M> {
+    pub fn background(&self) -> Option<Arc<crate::BackgroundOwner>> {
+        self.setup.background()
+    }
+
     pub fn catalog(&self) -> &SessionCatalog {
         self.setup.catalog()
     }
@@ -218,11 +226,14 @@ impl<M: Serialize + Send + 'static> SessionControl<M> {
         self.ensure_replaceable()?;
         let previous = self.setup.session.clone();
         let _idle = previous.reserve_idle()?;
-        let path = self.setup.catalog.resolve_explicit(path)?;
-        if fs::canonicalize(previous.path())? == fs::canonicalize(&path)? {
+        let path = fs::canonicalize(self.setup.catalog.resolve_explicit(path)?)?;
+        if previous.path() == path {
             return self.reload_resources();
         }
-        let session = Arc::new(CodingSession::open(path)?);
+        let session = match self.background().and_then(|owner| owner.parent(&path)) {
+            Some(parent) => parent,
+            None => Arc::new(CodingSession::open(path)?),
+        };
         ensure!(
             session.cwd() == previous.cwd(),
             "session belongs to another working directory"

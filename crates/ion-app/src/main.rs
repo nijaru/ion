@@ -11,8 +11,8 @@ use clap::{Parser, Subcommand};
 use ion_ai::{Content, Message};
 use ion_core::{CodingSession, CodingToolSource, ForkPoint};
 use ion_host::{
-    CredentialStatus, Host, McpHttpServer, McpServer, McpStdioServer, Resources, SavedSelection,
-    Wire,
+    Application, CredentialStatus, Host, McpHttpServer, McpServer, McpStdioServer, Resources,
+    SavedSelection, Wire,
 };
 
 mod agent_events;
@@ -557,6 +557,12 @@ async fn run_cli(cli: Cli) -> Result<()> {
             };
             let external_mcp = startup.tools;
             let mut preflight_session = Some(session);
+            let external_tools: Option<Arc<dyn CodingToolSource>> = external_mcp
+                .as_ref()
+                .map(|tools| tools.clone() as Arc<dyn CodingToolSource>);
+            let application = ion_host::CodingApplication::new(host.clone(), external_tools)
+                .with_code_mode(cli.code_mode);
+            let background = application.background();
             // Every fallible setup step after MCP startup belongs to the same
             // exit scope as the client, so preflight errors still join cleanup.
             let result = async {
@@ -565,16 +571,11 @@ async fn run_cli(cli: Cli) -> Result<()> {
                     .into_iter()
                     .map(|diagnostic| format!("[mcp: {}]", metadata_field(&diagnostic)))
                     .collect::<Vec<_>>();
-                let external_tools: Option<Arc<dyn CodingToolSource>> = external_mcp
-                    .as_ref()
-                    .map(|tools| tools.clone() as Arc<dyn CodingToolSource>);
-                let setup = match ion_host::CodingApplication::new(host.clone(), external_tools)
-                    .with_code_mode(cli.code_mode)
-                    .setup(
-                        preflight_session.as_ref().expect("unbound Session").clone(),
-                        selected,
-                        cli.reasoning,
-                    ) {
+                let setup = match application.setup(
+                    preflight_session.as_ref().expect("unbound Session").clone(),
+                    selected,
+                    cli.reasoning,
+                ) {
                     Ok(setup) => setup,
                     Err(error) => {
                         // Failed-server cleanup diagnostics must not disappear
@@ -657,6 +658,19 @@ async fn run_cli(cli: Cli) -> Result<()> {
                 }
             }
             .await;
+            // Unconditional outer fallback, including preflight/client failure.
+            // Join children before releasing their captured MCP environment.
+            let result = if let Some(owner) = &background {
+                match (result, owner.join_shutdown().await) {
+                    (result, Ok(())) => result,
+                    (Ok(()), Err(error)) => Err(error.into()),
+                    (Err(error), Err(cleanup)) => {
+                        Err(error.context(format!("application shutdown also failed: {cleanup}")))
+                    }
+                }
+            } else {
+                result
+            };
             // Preflight failures still own the original Session. After handoff,
             // the client alone owns current-session cleanup, including replacement.
             let shutdown = match preflight_session {

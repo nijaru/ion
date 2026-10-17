@@ -190,21 +190,30 @@ resources/tools. Fresh context does not reset execution preferences. Context,
 model, environment and authority remain independently configurable by Host;
 model arguments select only choices the application has authorized.
 
-Fresh context and foreground waiting are defaults. The coding integration must
-also support an explicit committed-prefix fork and background execution through
-the same managed Session owners. Background work belongs to the coding
-application, not the initiating Turn or a detached future. Parent cancellation,
+Fresh context and foreground waiting are defaults; an explicit fork selects an
+eligible committed prefix, and background execution transfers to the coding
+application's managed owner. The owner is shared across runtime reload and
+binding replacement, not captured by child recipes. Parent cancellation,
 explicit child cancellation and application shutdown have distinct scopes.
-Application shutdown stops and joins owned work; a one-shot headless host must
-retain ownership through child settlement or explicit cancellation, not exit and
-promise orphaned work will continue. No daemon is implied.
+Parent Session shutdown does not stop transferred background children.
+Application shutdown stops and joins them. A one-shot headless host retains
+ownership through normal completion; interruption, RPC EOF and terminal quit
+stop and join it before potentially blocking final publication. No daemon is
+implied.
 
-Return and retain actual child outcomes through typed custody/inspection, with
-completion observation independent of lossy activity. Do not fabricate user
-instructions or successful answers to deliver notifications. Automatic root
-continuation must not silently select or adopt a managed child; explicit child
-selection remains available. README distinguishes implemented choices from
-unfinished coding integration.
+Model-facing coding actions are start/list/status/wait/cancel/acknowledge. A
+background start receipt means committed responsibility transfer, not completion.
+Wait and status return retained typed outcomes without consuming them;
+acknowledgement releases only joined capacity. A child's original visible answer
+is retained only when its requested Turn completed and full Host/Core joining
+succeeded. Failure clears it; it is never reconstructed by reopening storage.
+Notifications are invalidations, not result delivery or completion proof.
+
+Do not fabricate user instructions or successful answers to deliver
+notifications. Automatic root continuation must not silently select or adopt a
+managed child; explicit child selection remains available. Live-model adherence,
+service-scale delegation and native GUI visual acceptance remain qualification,
+not reasons to narrow the designed coding workflow.
 
 ## Capabilities and trust
 

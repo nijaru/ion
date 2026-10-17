@@ -76,6 +76,15 @@ impl Control {
     fn session_id(&self) -> String {
         self.host.session_id()
     }
+    fn cancel_background(&self, value: &Value) -> Result<Value> {
+        let child = required_string(value, "child")?.parse::<uuid::Uuid>()?;
+        self.host
+            .background()
+            .context("application has no background owner")?
+            .request_stop(child)?;
+        Ok(json!({"child":child,"stop_requested":true}))
+    }
+
     fn idle(&self) -> Result<()> {
         ensure!(
             !self.host.is_busy(),
@@ -125,6 +134,14 @@ impl Control {
                     let state = self.host.state();
                     let operation = state.operation.map(|operation| match operation.kind { ion_host::OperationKind::Turn => "turn", ion_host::OperationKind::Compact => "compact", ion_host::OperationKind::Shell => "shell" });
                     Ok(json!({"session":self.session_id(),"cwd":view.cwd,"name":view.name,"model":self.host.agent().model(),"reasoning":view.reasoning.to_string(),"busy":state.busy,"operation":operation,"preparing_input":state.preparing_input,"entries":view.entries.len(),"follow_ups":state.pending_follow_ups}))
+                }
+                "get_background" => Ok(json!({"background":self.host.background().map(|owner| owner.snapshot())})),
+                "cancel_background" => self.cancel_background(&value),
+                "acknowledge_background" => {
+                    let child = required_string(&value, "child")?.parse::<uuid::Uuid>()?;
+                    let owner = self.host.background().context("application has no background owner")?;
+                    let result = owner.take(child).context("no joined result to acknowledge (running, unknown or already acknowledged)")??;
+                    Ok(json!({"receipt":result}))
                 }
                 "inspect" => inspection::to_value(&self.host.session().view()?),
                 "list_sessions" => Ok(json!(self.host.catalog().list()?.iter().map(|item| json!({"id":item.id,"name":item.name,"preview":item.preview,"turns":item.turns,"model":item.model})).collect::<Vec<_>>())),

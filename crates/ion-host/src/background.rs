@@ -1,28 +1,28 @@
-//! Bounded live ownership of transferred Sessions, independent of parent waits.
+//! Bounded application ownership of transferred Sessions, independent of readers.
 use std::{
     collections::BTreeMap,
     future::poll_fn,
+    path::Path,
     pin::Pin,
     sync::{
-        Arc, Mutex, MutexGuard,
-        atomic::{AtomicBool, Ordering},
+        Arc, Mutex, MutexGuard, Weak,
+        atomic::{AtomicBool, AtomicU64, Ordering},
     },
     task::Poll,
 };
 
 use anyhow::{Result, ensure};
 use ion_core::{
-    BackgroundJob, BackgroundSlot, BackgroundStartError, CodingSessionError, DelegationReceipt,
-    Operation,
+    BackgroundJob, BackgroundSlot, BackgroundStartError, CodingSession, CodingSessionError,
+    DelegationReceipt, Operation,
 };
 use serde::Serialize;
 use tokio::sync::Notify;
 use tokio_util::sync::CancellationToken;
 
-/// One service/application owner epoch. Reserve before delegation admission;
-/// unread joined results still occupy capacity. There is no task scheduler or
-/// second agent loop here. Drop closes/stops; explicit shutdown joins. Neither
-/// runtime destruction nor a panicked child promises physical effect quiescence.
+/// One application/service epoch. Reserve before effects; unread joined results
+/// occupy capacity. Drop requests stop; explicit shutdown joins. No daemon,
+/// scheduler, second agent loop or physical descendant-quiescence guarantee.
 pub struct BackgroundOwner {
     shared: Arc<Shared>,
 }
@@ -32,6 +32,7 @@ struct Shared {
     state: Mutex<State>,
     closed: AtomicBool,
     failed: AtomicBool,
+    revision: AtomicU64,
     stop: CancellationToken,
     changed: Notify,
 }
@@ -39,27 +40,44 @@ struct Shared {
 struct State {
     reserved: usize,
     children: BTreeMap<uuid::Uuid, Child>,
+    failures: Vec<String>,
 }
 struct Child {
     receipt: DelegationReceipt,
+    parent: Weak<CodingSession>,
     operation: Option<Operation<DelegationReceipt, CodingSessionError>>,
     result: Option<Result<DelegationReceipt, CodingSessionError>>,
 }
 
-/// A cold live destination. Core reserves custody only after reconciling the
-/// initiating occurrence and before committing intent. Not serialized authority.
+/// Cold live destination, not serialized authority.
 pub struct BackgroundDestination {
     shared: Arc<Shared>,
     reserved: bool,
 }
-
 #[derive(Clone, Serialize)]
 pub struct BackgroundSnapshot {
     pub owner: uuid::Uuid,
+    /// Invalidation lower bound, not a cross-owner atomic snapshot coordinate.
+    pub revision: u64,
     pub closed: bool,
     pub failed: bool,
     pub reserved: usize,
     pub children: Vec<BackgroundChildSnapshot>,
+}
+#[derive(Clone, Serialize)]
+pub struct BackgroundJobStatus {
+    pub child: uuid::Uuid,
+    pub parent: uuid::Uuid,
+    pub path: std::path::PathBuf,
+    pub joined: bool,
+    pub end: Option<ion_core::TurnEndReason>,
+    pub error: Option<String>,
+}
+#[derive(Clone, Serialize)]
+pub struct BackgroundSummary {
+    pub running: usize,
+    pub joined: usize,
+    pub reserved: usize,
 }
 #[derive(Clone, Serialize)]
 pub struct BackgroundChildSnapshot {
@@ -68,10 +86,26 @@ pub struct BackgroundChildSnapshot {
     pub joined: bool,
     pub error: Option<String>,
 }
-
+impl Child {
+    fn snapshot(&self) -> BackgroundChildSnapshot {
+        BackgroundChildSnapshot {
+            receipt: self
+                .result
+                .as_ref()
+                .and_then(|r| r.as_ref().ok())
+                .unwrap_or(&self.receipt)
+                .clone(),
+            joined: self.operation.is_none(),
+            error: self
+                .result
+                .as_ref()
+                .and_then(|r| r.as_ref().err())
+                .map(ToString::to_string),
+        }
+    }
+}
 impl BackgroundOwner {
-    /// Bounds retained jobs, reservations and unread results together (1..=64).
-    /// This is not a history, encoded-byte or process RSS quota.
+    /// Count bounds reservations, jobs and unread results together (1..=64), not RSS.
     pub fn new(capacity: usize) -> Result<Self> {
         ensure!(
             (1..=64).contains(&capacity),
@@ -84,70 +118,175 @@ impl BackgroundOwner {
                 state: Mutex::new(State::default()),
                 closed: AtomicBool::new(false),
                 failed: AtomicBool::new(false),
+                revision: AtomicU64::new(0),
                 stop: CancellationToken::new(),
                 changed: Notify::new(),
             }),
         })
     }
-
     pub fn destination(&self) -> BackgroundDestination {
         BackgroundDestination {
             shared: self.shared.clone(),
             reserved: false,
         }
     }
-
-    /// Privileged whole custody view. Does not consume or drive results and
-    /// confers no execution authority. Applications authorize/project disclosure.
+    pub(crate) fn work_stop(&self) -> CancellationToken {
+        self.shared.stop.child_token()
+    }
+    pub(crate) fn ensure_open(&self) -> Result<()> {
+        self.check()?;
+        ensure!(
+            !self.shared.closed.load(Ordering::SeqCst),
+            "application background owner is closed"
+        );
+        Ok(())
+    }
+    pub fn revision(&self) -> u64 {
+        self.shared.revision.load(Ordering::SeqCst)
+    }
+    pub fn has_work(&self) -> bool {
+        let state = self.shared.lock();
+        state.reserved != 0
+            || state
+                .children
+                .values()
+                .any(|child| child.operation.is_some())
+    }
+    /// Sticky after acknowledgement. Joining enriches an early task-loss signal
+    /// with original operation errors; neither a reader nor a tool can clear it.
+    pub fn check(&self) -> Result<(), CodingSessionError> {
+        if !self.shared.failed.load(Ordering::SeqCst) {
+            return Ok(());
+        }
+        let state = self.shared.lock();
+        let message = if state.failures.is_empty() {
+            "background infrastructure failed; inspect committed facts and effects".into()
+        } else {
+            state.failures.join("; ")
+        };
+        Err(CodingSessionError::DelegationInfrastructure(message))
+    }
+    /// Privileged whole custody view; applications authorize/project disclosure.
     pub fn snapshot(&self) -> BackgroundSnapshot {
         let state = self.shared.lock();
-        // Read failed first: failed implies closed, even when the lock-free
-        // failure hook races this view during task destruction.
+        // Read revision first: a racing lock-free failure may be included under
+        // an older revision, never omitted under an already-consumed new one.
+        let revision = self.revision();
         let failed = self.shared.failed.load(Ordering::SeqCst);
         let closed = self.shared.closed.load(Ordering::SeqCst);
         BackgroundSnapshot {
             owner: self.shared.id,
+            revision,
             closed,
             failed,
             reserved: state.reserved,
-            children: state
-                .children
-                .values()
-                .map(|child| BackgroundChildSnapshot {
-                    receipt: child
-                        .result
-                        .as_ref()
-                        .and_then(|result| result.as_ref().ok())
-                        .unwrap_or(&child.receipt)
-                        .clone(),
+            children: state.children.values().map(Child::snapshot).collect(),
+        }
+    }
+    /// Job coordinates/status without copying tasks or successful answers.
+    pub fn jobs(&self) -> Vec<BackgroundJobStatus> {
+        self.shared
+            .lock()
+            .children
+            .values()
+            .map(|child| {
+                let receipt = child
+                    .result
+                    .as_ref()
+                    .and_then(|result| result.as_ref().ok())
+                    .unwrap_or(&child.receipt);
+                let (end, error) = match &receipt.outcome {
+                    Some(ion_core::DelegationOutcome::Joined { receipt, error, .. }) => {
+                        (receipt.as_ref().and_then(|r| r.end.clone()), error.clone())
+                    }
+                    _ => (None, None),
+                };
+                BackgroundJobStatus {
+                    child: receipt.record.child,
+                    parent: receipt.record.site.session,
+                    path: receipt.record.path.clone(),
                     joined: child.operation.is_none(),
+                    end,
                     error: child
                         .result
                         .as_ref()
-                        .and_then(|result| result.as_ref().err())
-                        .map(ToString::to_string),
-                })
-                .collect(),
+                        .and_then(|r| r.as_ref().err())
+                        .map(ToString::to_string)
+                        .or(error),
+                }
+            })
+            .collect()
+    }
+    /// Cheap presentation counters, without copying tasks or retained answers.
+    pub fn summary(&self) -> BackgroundSummary {
+        let state = self.shared.lock();
+        let running = state
+            .children
+            .values()
+            .filter(|child| child.operation.is_some())
+            .count();
+        BackgroundSummary {
+            running,
+            joined: state.children.len() - running,
+            reserved: state.reserved,
         }
     }
-
-    /// Drive one or more joins without transferring result custody. Cancelling
-    /// this wait retains operations and their original results. No output reader
-    /// is involved in stop, infrastructure closure, or child execution.
+    pub fn child(&self, child: uuid::Uuid) -> Option<BackgroundChildSnapshot> {
+        self.shared.lock().children.get(&child).map(Child::snapshot)
+    }
+    /// Reuse an actual retained parent while a transferred task holds its writer.
+    /// Weak handles do not let unread results pin a writer after settlement.
+    pub(crate) fn parent(&self, path: &Path) -> Option<Arc<CodingSession>> {
+        self.shared
+            .lock()
+            .children
+            .values()
+            .filter_map(|child| child.parent.upgrade())
+            .find(|parent| parent.path() == path)
+    }
+    /// Cancellation-safe invalidation, including when every parent is idle.
+    /// Results remain in custody; this never acknowledges them. No busy polling
+    /// when only unread joined results (or no jobs) remain.
+    pub async fn changed(&self, previous: u64) -> u64 {
+        loop {
+            let notified = self.shared.changed.notified();
+            tokio::pin!(notified);
+            notified.as_mut().enable();
+            let revision = self.revision();
+            if revision != previous {
+                return revision;
+            }
+            let running = self
+                .shared
+                .lock()
+                .children
+                .values()
+                .any(|child| child.operation.is_some());
+            if running {
+                tokio::select! { () = &mut notified => {}, () = self.maintain() => {} }
+            } else {
+                notified.await;
+            }
+        }
+    }
+    /// Drive joins, retaining original outcomes before yielding. Several borrowed
+    /// waiters can drive this owner without transferring or cancelling custody.
     pub async fn maintain(&self) {
         let notified = self.shared.changed.notified();
         tokio::pin!(notified);
+        notified.as_mut().enable();
         poll_fn(|cx| {
             let mut state = self.shared.lock();
             let mut completed = false;
             let mut busy = false;
+            let mut failures = Vec::new();
             for child in state.children.values_mut() {
                 if let Some(operation) = &mut child.operation {
                     match Pin::new(operation).poll(cx) {
                         Poll::Pending => busy = true,
                         Poll::Ready(result) => {
-                            if result.is_err() {
-                                self.shared.close(true);
+                            if let Err(error) = &result {
+                                failures.push(error.to_string());
                             }
                             child.operation = None;
                             child.result = Some(result);
@@ -156,11 +295,12 @@ impl BackgroundOwner {
                     }
                 }
             }
+            if !failures.is_empty() {
+                state.failures.extend(failures);
+                self.shared.close(true);
+            }
             if completed {
-                // An Operation has one notification future. Several callers
-                // may poll it with different wakers, so publish the joined
-                // custody change to every owner waiter, not just its last poller.
-                self.shared.changed.notify_waiters();
+                self.shared.invalidate();
             }
             if completed || !busy || notified.as_mut().poll(cx).is_ready() {
                 Poll::Ready(())
@@ -170,75 +310,91 @@ impl BackgroundOwner {
         })
         .await;
     }
-
-    /// Stop only the transferred child named by this owner, not its parent.
-    pub fn request_stop(&self, child: uuid::Uuid) -> Result<()> {
+    /// Borrowed wait for one actual owned job. Parent cancellation can select
+    /// away from this without stopping the independently transferred child.
+    pub async fn wait(&self, id: uuid::Uuid) -> Result<BackgroundChildSnapshot> {
+        loop {
+            let revision = self.revision();
+            let joined = {
+                let state = self.shared.lock();
+                let child = state.children.get(&id).ok_or_else(|| {
+                    anyhow::anyhow!("child is not owned here (unknown or acknowledged)")
+                })?;
+                child.operation.is_none().then(|| child.snapshot())
+            };
+            if let Some(child) = joined {
+                self.check()?;
+                return Ok(child);
+            }
+            self.changed(revision).await;
+        }
+    }
+    pub fn request_stop(&self, id: uuid::Uuid) -> Result<()> {
         let state = self.shared.lock();
         let child = state
             .children
-            .get(&child)
-            .ok_or_else(|| anyhow::anyhow!("child is not owned here"))?;
+            .get(&id)
+            .ok_or_else(|| anyhow::anyhow!("child is not owned here (unknown or acknowledged)"))?;
         if let Some(operation) = &child.operation {
             operation.request_stop();
         }
+        self.shared.invalidate();
         Ok(())
     }
-
-    /// Close before requesting stop. Parent stop/shutdown does not cross this
-    /// ownership boundary; owner shutdown stops all its transferred children.
     pub fn request_shutdown(&self) {
-        // Serialize explicit shutdown with installation. Failure closure must
-        // also work from a task dropped synchronously by spawn, so it uses
-        // atomic flags and cancellation instead of reacquiring this lock.
         let _state = self.shared.lock();
         self.shared.close(false);
     }
-
-    pub async fn join_shutdown(&self) {
-        self.request_shutdown();
+    /// Natural completion without stopping children. Interrupted waits retain all
+    /// operations/results; the application must still explicitly close and join.
+    pub async fn drain(&self) -> Result<(), CodingSessionError> {
         loop {
-            if self
-                .shared
-                .lock()
-                .children
-                .values()
-                .all(|child| child.operation.is_none())
-            {
-                return;
+            let revision = self.revision();
+            if !self.has_work() {
+                return self.check();
             }
-            self.maintain().await;
+            self.changed(revision).await;
         }
     }
-
-    /// The only operation that releases a joined result's capacity. Unjoined or
-    /// unknown IDs return None. Snapshot and shutdown never acknowledge results.
+    pub async fn join_shutdown(&self) -> Result<(), CodingSessionError> {
+        self.request_shutdown();
+        self.drain().await
+    }
+    /// Explicitly acknowledge one joined result. Unknown/unjoined returns None;
+    /// callers can inspect first to distinguish running from absent custody.
     pub fn take(&self, child: uuid::Uuid) -> Option<Result<DelegationReceipt, CodingSessionError>> {
         let mut state = self.shared.lock();
         if state.children.get(&child)?.operation.is_some() {
             return None;
         }
-        state.children.remove(&child)?.result
+        let result = state.children.remove(&child)?.result;
+        self.shared.invalidate();
+        result
     }
 }
-
 impl Shared {
     fn lock(&self) -> MutexGuard<'_, State> {
         match self.state.lock() {
             Ok(state) => state,
             Err(error) => {
-                // Preserve join custody after panic, but never reuse admission.
                 self.close(true);
                 error.into_inner()
             }
         }
     }
-    fn close(&self, failure: bool) {
-        self.closed.store(true, Ordering::SeqCst);
-        if failure {
-            self.failed.store(true, Ordering::SeqCst);
-        }
-        self.stop.cancel();
+    fn invalidate(&self) {
+        self.revision
+            .try_update(Ordering::SeqCst, Ordering::SeqCst, |n| n.checked_add(1))
+            .expect("background revision exhausted");
         self.changed.notify_waiters();
+    }
+    fn close(&self, failure: bool) {
+        let closed = self.closed.swap(true, Ordering::SeqCst);
+        let failed = failure && !self.failed.swap(true, Ordering::SeqCst);
+        self.stop.cancel();
+        if !closed || failed {
+            self.invalidate();
+        }
     }
 }
 impl Drop for BackgroundOwner {
@@ -250,6 +406,7 @@ impl Drop for BackgroundDestination {
     fn drop(&mut self) {
         if self.reserved {
             self.shared.lock().reserved -= 1;
+            self.shared.invalidate();
         }
     }
 }
@@ -271,6 +428,7 @@ impl BackgroundSlot for BackgroundDestination {
         }
         state.reserved += 1;
         self.reserved = true;
+        self.shared.invalidate();
         Ok(())
     }
     fn install(
@@ -288,6 +446,7 @@ impl BackgroundSlot for BackgroundDestination {
                 "background owner is closed".into(),
             ));
         }
+        let parent = Arc::downgrade(job.parent());
         let weak = Arc::downgrade(&self.shared);
         let (receipt, operation) =
             job.start(self.shared.id, self.shared.stop.child_token(), move || {
@@ -299,13 +458,14 @@ impl BackgroundSlot for BackgroundDestination {
             receipt.record.child,
             Child {
                 receipt: receipt.clone(),
+                parent,
                 operation: Some(operation),
                 result: None,
             },
         );
         state.reserved -= 1;
         self.reserved = false;
-        self.shared.changed.notify_waiters();
+        self.shared.invalidate();
         Ok(receipt)
     }
 }

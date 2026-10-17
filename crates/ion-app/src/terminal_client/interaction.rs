@@ -78,7 +78,7 @@ pub(super) async fn dispatch_command(
     if ui.clipboard_job.is_some()
         && !matches!(
             builtin,
-            Some(Builtin::Help | Builtin::Tui | Builtin::Settings | Builtin::Copy)
+            Some(Builtin::Help | Builtin::Tui | Builtin::Settings | Builtin::Copy | Builtin::Tasks)
         )
     {
         if let Some(source) = source {

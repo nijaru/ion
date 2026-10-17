@@ -89,7 +89,7 @@ impl Gateway {
                                             BackgroundStartError::Refused(message) => (message, None),
                                             BackgroundStartError::Infrastructure(error) => (error.to_string(), Some(error)),
                                         };
-                                        let outcome = DelegationOutcome::Joined { receipt: None, error: Some(message.clone()) };
+                                        let outcome = DelegationOutcome::Joined { receipt: None, error: Some(message.clone()), answer: None };
                                         if let Err(error) = parent.settle_delegation(&record, outcome.clone()) {
                                             fault = Some(error);
                                         } else { fault = infrastructure; }
@@ -155,6 +155,7 @@ pub(super) async fn run_child(
             DelegationOutcome::Joined {
                 receipt: None,
                 error: Some("stopped before child materialization".into()),
+                answer: None,
             },
             None,
         );
@@ -170,6 +171,7 @@ pub(super) async fn run_child(
                 DelegationOutcome::Joined {
                     receipt: None,
                     error: Some(message.clone()),
+                    answer: None,
                 },
                 Some(message),
             );
@@ -184,8 +186,9 @@ pub(super) async fn run_child(
     let receipt = child.reconcile_request(&key, &record.spec.input);
     let mut infrastructure = None;
     let mut errors = Vec::new();
+    let mut answer = None;
     match result {
-        Ok(()) => {}
+        Ok(observed) => answer = observed,
         Err(DelegationFailure::Execution(error)) => errors.push(error),
         Err(DelegationFailure::Infrastructure(error)) => {
             infrastructure = Some(error.clone());
@@ -209,10 +212,23 @@ pub(super) async fn run_child(
         infrastructure = Some(error.clone());
         errors.push(error);
     }
+    if answer.is_some()
+        && receipt
+            .as_ref()
+            .is_none_or(|receipt| receipt.end != Some(crate::TurnEndReason::Completed))
+    {
+        let error = "child reported an answer without its completed request".to_owned();
+        infrastructure = Some(error.clone());
+        errors.push(error);
+    }
+    if !errors.is_empty() {
+        answer = None;
+    }
     (
         DelegationOutcome::Joined {
             receipt,
             error: (!errors.is_empty()).then(|| errors.join("; ")),
+            answer,
         },
         infrastructure,
     )

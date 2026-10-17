@@ -92,6 +92,9 @@ pub enum DelegationOutcome {
     Joined {
         receipt: Option<RequestReceipt>,
         error: Option<String>,
+        /// Visible text of the requested child's committed final response,
+        /// observed only after successful full joining. No thinking or replay.
+        answer: Option<String>,
     },
 }
 
@@ -117,13 +120,16 @@ pub(crate) type DelegationWork = Box<
             Arc<CodingSession>,
             SubmissionRequest,
             CancellationToken,
-        ) -> BoxFuture<'static, Result<(), DelegationFailure>>
+        ) -> BoxFuture<'static, Result<Option<String>, DelegationFailure>>
         + Send,
 >;
 
 /// A cold, owned Host supervision callback. It must use the child Session's
 /// ordinary engine and finish shared-control shutdown (including preparation)
-/// before returning. Construction and dropping an unadmitted task execute no
+/// before returning its original visible answer, if any. Core observes that
+/// answer only with the requested completed Turn and successful full joining;
+/// trusted Host code attests the output, just as it attests the environment.
+/// Construction and dropping an unadmitted task execute no
 /// child work. Core retains the callback independently of the tool's waiter.
 /// Trusted host code supplies the assertion and actual captured environment;
 /// schema/model equality does not attest credentials or executable identity.
@@ -140,7 +146,7 @@ impl DelegationTask {
             Arc<CodingSession>,
             SubmissionRequest,
             CancellationToken,
-        ) -> BoxFuture<'static, Result<(), DelegationFailure>>
+        ) -> BoxFuture<'static, Result<Option<String>, DelegationFailure>>
         + Send
         + 'static,
     ) -> Result<Self, String> {

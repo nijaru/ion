@@ -78,7 +78,9 @@ existing session uses its recorded directory, and an explicit `--cwd` must
 match it. Headless runs print the
 session ID to stderr. In the TUI, `/new`, `/clone`, `/fork`, `/fork-after TURN`, `/resume`, `/name`, `/session`,
 `/model` and `/compact` manage the conversation; `/login PROVIDER` and `/logout PROVIDER`
-manage saved keys. The TUI model picker searches catalog and configured
+manage saved keys. `/tasks` lists application-owned background Sessions; use
+`/tasks result ID`, `/tasks cancel ID` and `/tasks acknowledge ID` to inspect,
+stop or release joined custody without deleting committed facts. The TUI model picker searches catalog and configured
 custom routes. A resumed session restores its model; `ion use` sets the
 default for new sessions. Custom routes and that default are published together
 in `$XDG_CONFIG_HOME/ion/models.json` (or `~/.config/ion/models.json`), with
@@ -202,7 +204,7 @@ optional `after: true`.
 Session IDs are immutable UUIDs stored in the header, independent of filenames
 and provider affinity. Renaming a closed database does not change its ID; clone
 and fork create new identities without inheriting external delivery receipts or continuation grants.
-This unreleased branch uses Session format 15; earlier development Session
+This unreleased branch uses Session format 16; earlier development Session
 files are not reopened. Tool activity classification used by the transcript is
 stored with each assistant tool-call batch, so resumed history is not
 reinterpreted through the currently installed tool catalog.
@@ -264,7 +266,8 @@ answer. `final` is the committed answer. Other commands are `steer`,
 `follow_up`, `submit_request`, `get_request`, `clear_queue`, `abort`, `get_state`,
 `inspect`, `list_sessions`, `list_turns`, `list_models`,
 `list_resources`, `reload_resources`, `shell`, `compact`, `set_model`, `new_session`,
-`clone_session`, `fork`, `switch_session`, `set_reasoning` and `set_name`.
+`clone_session`, `fork`, `switch_session`, `set_reasoning`, `get_background`,
+`cancel_background`, `acknowledge_background` and `set_name`.
 `set_name.name` must be a string; null or omission clears it. `fork.after` must
 be a boolean when present and defaults to false when omitted. Wrong field types
 are rejected before mutation.
@@ -303,7 +306,11 @@ Exact redelivery returns the same admission/latest status without starting work,
 including while busy or after reopening. Different text under the same key is an
 error. A new key requires idle, drained control; it is not queued.
 `get_request` returns `data.receipt` or null without repairing history or dispatching
-work. It shares the inspection reply slot. An `end` of null does not prove liveness:
+work. It shares the inspection reply slot. `get_background` returns the application
+owner's retained job/result snapshot; `cancel_background` explicitly stops one
+child; `acknowledge_background` releases one joined result's capacity. The
+independent `background_changed` record is an invalidation, not a result or a
+completion proof. An `end` of null does not prove liveness:
 process loss leaves unfinished facts until new explicit work closes them
 conservatively. Neither lookup nor redelivery resumes the lost execution.
 
@@ -651,21 +658,38 @@ owner epoch at that invocation conflicts. `SessionView::delegations()` and
 `parent_delegation()` expose typed relationships without parsing tool prose.
 
 For background work, retain a Host `BackgroundOwner` and choose its live
-destination: `recipe.prepare(input)?.in_background(owner.destination())`. Core
-reconciles exact repeats first, then reserves Host custody before admitting new
-work. Even a full or closed owner permits reconciliation of an existing transfer.
-The destination installs a retained operation and Core commits
+destination: `recipe.prepare(input)?.in_background(owner.destination())`. The
+coding application owns one owner for its lifetime, shared across runtime reload
+and binding replacement; a child recipe does not capture it. Core reconciles
+exact repeats first, then reserves Host custody before admitting new work. Even a
+full or closed owner permits reconciliation of an existing transfer. The
+destination installs a retained operation and Core commits
 `DelegationTransferred` before the parent receives its transfer receipt. That
 receipt is not child settlement or liveness. Cancellation observed at transfer
 admission refuses cold work; a racing cancellation may lose to that admission.
-After transfer, parent cancellation/shutdown does not stop the child. Owner
-shutdown closes admission, stops its children and joins their full Host controls.
-Drop requests stop; finish `join_shutdown().await` before destroying the runtime.
-Cancelled maintenance/shutdown waits retain tasks and results. `maintain()` joins
-without consuming; only `take(child)` releases a joined result's capacity. Capacity
-bounds reservations, running jobs and unread results together (1–64 slots), not
-history, encoded bytes or RSS. Snapshots are privileged custody views, not an
-authenticated remote service or atomic Core/Host snapshots.
+After transfer, parent cancellation and parent-Session shutdown do not stop the
+child. Explicit `cancel` stops one child; application shutdown closes admission,
+stops its children and joins their full Host controls. Drop requests stop; finish
+`join_shutdown().await` before destroying the runtime, which returns the retained
+infrastructure error. Cancelled maintenance/shutdown waits retain tasks and
+results. `maintain()` joins without consuming; `wait(child)` returns one joined
+report without acknowledging it; `child()`/`jobs()` inspect retained status;
+only `take(child)` releases a joined result's capacity. Capacity bounds
+reservations, running jobs and unread results together (1–64 slots), not history,
+encoded bytes or RSS. Changes are published through a revision plus notification;
+clients still reconcile snapshots rather than treating notification as delivery.
+Snapshots are privileged custody views, not an authenticated remote service or
+atomic Core/Host snapshots.
+
+A foreground child's actual original answer is retained with its joined
+relationship only after full Host/Core joining and a completed requested Turn.
+The Host callback returns that observed text; Core does not reopen the child
+database or reconstruct a report. Execution, cleanup or storage failure clears
+the answer rather than presenting it as success. A background transfer
+acknowledgement is not a result; use wait/status and the same retained outcome.
+While a transferred job retains its parent writer, an application rebinding the
+same Session reuses that retained handle rather than opening a competing writer.
+Unread results do not pin the writer after settlement.
 
 Relationship storage failure blocks dependent execution before release, including
 a Code Mode guest that catches the error. Later infrastructure failure or panic
@@ -681,8 +705,8 @@ A surviving transfer task retains the parent writer lease and is not closed by
 new parent work. Copies retain foreign history but acquire no child ownership.
 Recovery neither restarts the old child nor rewrites its missing observations;
 an owner UUID is not authority to adopt or resume it. New model-issued delegation
-is new work, not an exactly-once effect guarantee. The coding preset exposes
-foreground delegation below; live-model delegation qualification remains open.
+is new work, not an exactly-once effect guarantee. Live-model delegation
+qualification remains open.
 
 Tools act directly in the working directory with the host user's permissions.
 There is no implicit sandbox. Settlements distinguish observed host output,
@@ -784,39 +808,50 @@ save an empty assistant message that would break later provider replay.
 
 ## Coding subagents
 
-The main coding preset includes `subagent({task})` in run, chat and RPC. For
+The main coding preset includes `subagent({...})` in run, chat and RPC. For
 example, `ion run 'Delegate a self-contained coding task, then review it'` needs
 no enabling flag. `CodingApplication` retains this policy through reload and
 binding replacement; supplied external registrations can override coding defaults.
 Restricted applications still choose their own complete `Application` recipe.
 
-Each call currently runs one **fresh foreground Session** through the existing
-engine and shared control. The child inherits the initiating request's selected
-model route (including invocation-local overrides) and reasoning, the same workspace and
-project/home resources, native and supplied external tools (MCP for the CLI), and
-the application's Code Mode setting. It does not automatically enable another
-built-in subagent. Parent conversation is not copied: supply a self-contained
-`task`, at most 64 KiB of UTF-8. Model arguments cannot choose tools, credentials,
-model, workspace or ownership mode.
+The tool has explicit actions: `start`, `list`, `status`, `wait`, `cancel` and
+`acknowledge`. `start` accepts a self-contained `task` of at most 64 KiB UTF-8,
+optional `mode` (`foreground`, the default, or `background`), and optional
+`context`. Fresh context is the default; `{"type":"fork"}` copies the settled
+committed prefix before the initiating Turn, not the active conversation, and an
+explicit `point` may select an earlier `before_turn` or `after_turn` boundary.
+Core validates and captures that cut in the admission transaction. The child
+inherits the initiating request's selected model route, including invocation-local
+overrides, and its reasoning. It also inherits the same workspace, project/home
+resources, native and supplied external tools (MCP for the CLI), and the
+application's Code Mode setting. It does not automatically enable another
+built-in subagent. Model arguments cannot choose tools, credentials, model,
+workspace or arbitrary authority.
 
-The tool joins execution and cleanup before returning `answer`, `child_session`,
-`path` and the typed `outcome`/request receipt. Managed files live under the
-workspace catalog's `children/`, outside automatic `--continue` root selection;
-use the returned path to inspect or explicitly open one. An answer is the child's
-claim, not verification of its work. Raw child conversation and intermediate tool output
-do not automatically enter parent context. Parent stop and foreground client EOF
-stop/join the child; cancellation does not roll back its effects. The same
-workspace is not conflict isolation, and native tools retain host permissions.
+Foreground `start` joins execution and cleanup before returning the typed
+child/outcome locator and request receipt. Background `start` returns only after
+responsibility has transferred to the coding application's owner; it is not a
+completion claim and survives parent stop, parent-Session switch and reload, but
+not application shutdown. `list` and `status` inspect retained application jobs;
+`wait` waits for one joined report without consuming it; `cancel` explicitly
+stops one child; `acknowledge` releases one joined result's capacity without
+deleting its committed facts. A cancelled wait does not stop a background child.
 
-Forked context and background ownership are implemented in the SDK but are
-**unfinished coding-tool integration**, not permanent SDK-only product policy.
-The [coding delegation contract](ARCHITECTURE.md#coding-delegation-policy) owns
-the target lifecycle and configuration. The SDK's
-`SessionDelegation::prepare_with_answer` can observe a newly executed child's
-answer after Host shutdown; consumers must still await the delegation receipt.
-Passive reconciliation does not call that hook or rerun work. A missing local
-answer is reported explicitly with its known outcome, not fabricated or retried.
-No live-model adherence or service-scale claim follows from the offline consumer.
+A joined answer is the child's actual original final visible text, retained after
+full Host/Core joining of the requested completed Turn. It is not reconstructed
+from storage, and execution, cleanup or storage failure clears it. Treat it as
+the child's claim, not verification of its work. Raw child conversation,
+thinking and intermediate tool output do not automatically enter parent context.
+
+Managed files live under the workspace catalog's `children/`, outside automatic
+`--continue` root selection; use the returned path to inspect or explicitly open
+one. The same workspace is not conflict isolation, and native tools retain host
+permissions. Parent stop and foreground client EOF stop/join their owned children;
+background children require explicit cancel or application shutdown. Cancellation
+does not roll back effects. Normal headless completion drains application-owned
+work, while interruption, RPC EOF and terminal quit stop and join it. These are
+offline lifecycle guarantees; live-model adherence, service scale and native
+GUI visual acceptance remain open.
 
 ## Optional Code Mode
 
@@ -968,7 +1003,7 @@ contracts are not all implemented:
 | --- | --- | --- |
 | Application setup | Caller-owned model/tool/instruction configuration, workspace-free Sessions and explicit shell/local-image authority. Opt-in continuation checks a saved authority reference and declarations. | Changed-authority reconciliation. Applications must reconstruct and attest live bindings on reopen; the reference is not a credential or sandbox. |
 | Durability | SQLite conversation/effect history, conservative recovery, restart-safe direct admission through the Rust SDK and keyed RPC literal text; explicit same-Turn continuation through the Rust SDK. | Durable pending queues, wire-protocol delivery IDs and automatic restart/continuation. Coding CLI/TUI/RPC submissions do not opt in to continuation. |
-| Delegation | Main coding preset includes fresh foreground subagents, inheriting the selected route and reasoning. SDK children also support background ownership and forked context, with stable identity, complete environments, retained supervision/results and conservative recovery. Code Mode nested tools remain distinct. | Fork/background coding-tool integration and live-model/service-scale delegation qualification remain unfinished; engine SDK support alone does not close those workflows. |
+| Delegation | Main coding preset exposes fresh/fork foreground and background Sessions with inherited route/reasoning, application-owned retained results, wait/status/cancel/acknowledge and joined original answers. SDK children use the same stable identity, complete environments and conservative recovery; Code Mode nested tools remain distinct. | Live-model/service-scale delegation qualification and native-app visual acceptance remain open. Model arguments never grant execution authority. |
 | Remote use | Foreground stdio RPC, lossy progress and complete pull snapshots through shared control. A service embedding retains/drives the owner independently of connections. | No built-in authenticated network server, reliable activity replay or durable queue/metadata recovery. RPC EOF still stops/joins work. |
 
 Common coding workflows are implemented, but Pi-level daily-driver reliability

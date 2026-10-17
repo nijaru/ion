@@ -296,6 +296,7 @@ fn conservative_recovery_preserves_joined_relationships() {
     let outcome = DelegationOutcome::Joined {
         receipt: None,
         error: Some("stopped before materialization".into()),
+        answer: None,
     };
     session.settle_delegation(&record, outcome.clone()).unwrap();
     session

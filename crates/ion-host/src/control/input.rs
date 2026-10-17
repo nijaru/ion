@@ -92,6 +92,12 @@ impl<M: Serialize + Send + 'static> SessionControl<M> {
     }
 
     pub(super) fn advance(&mut self) {
+        if self
+            .background()
+            .is_some_and(|owner| owner.ensure_open().is_err())
+        {
+            self.request_shutdown();
+        }
         let mut custody = lock(&self.custody);
         // A transferred steer stays in the inbox until Core's callback or a
         // synchronized withdrawal. Never return a committed-but-not-yet-observed input.
@@ -254,7 +260,7 @@ impl<M: Serialize + Send + 'static> SessionControl<M> {
                     self.setup.session.clone(),
                     message,
                     instructions,
-                    CancellationToken::new(),
+                    self.work_stop(),
                     inbox.clone(),
                     turn_observer(state, observations, Some(root), operation),
                 );

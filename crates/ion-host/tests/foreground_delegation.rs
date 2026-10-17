@@ -22,14 +22,20 @@ use ion_host::{
 use serde_json::json;
 use tokio::sync::{Notify, watch};
 
+#[path = "foreground_delegation/application_scope.rs"]
+mod application_scope;
 #[path = "foreground_delegation/background.rs"]
 mod background;
 
 struct App {
     agent: Arc<CodingAgent>,
     instructions: &'static str,
+    background: Option<Arc<ion_host::BackgroundOwner>>,
 }
 impl Application for App {
+    fn background(&self) -> Option<Arc<ion_host::BackgroundOwner>> {
+        self.background.clone()
+    }
     fn resources(&self, _: Option<&std::path::Path>) -> anyhow::Result<Resources> {
         Ok(Resources::new(self.instructions.into()))
     }
@@ -287,7 +293,10 @@ impl Fixture {
         });
         let child = Arc::new(ScriptedModelService::new([
             response(vec![call("effect", json!({}))]),
-            response(vec![Content::Text("two".into())]),
+            response(vec![
+                Content::Thinking("PRIVATE_CHILD_THINKING".into()),
+                Content::Text("two".into()),
+            ]),
         ]));
         let child_agent = Arc::new(CodingAgent::with_tool_set(
             child.clone(),
@@ -309,6 +318,7 @@ impl Fixture {
                 application: Arc::new(App {
                     agent: child_agent,
                     instructions: "child instructions",
+                    background: None,
                 }),
                 model: None,
                 reasoning: ion_ai::Reasoning::ProviderDefault,
@@ -361,6 +371,7 @@ impl Fixture {
             Arc::new(App {
                 agent,
                 instructions: "parent instructions",
+                background: None,
             }),
             None,
             None,
@@ -421,8 +432,19 @@ async fn fresh_foreground_child_reconciles_without_inheriting_parent_configurati
     assert_eq!(f.child.requests().len(), 2);
     assert_eq!(view.last_end, Some((1, TurnEndReason::Completed)));
     assert!(
-        matches!(&links[0].outcome, Some(DelegationOutcome::Joined { receipt: Some(receipt), error: None })
+        matches!(&links[0].outcome, Some(DelegationOutcome::Joined { receipt: Some(receipt), error: None, answer: Some(_) })
         if receipt.session == links[0].record.child && receipt.end == Some(TurnEndReason::Completed))
+    );
+    let Some(DelegationOutcome::Joined { answer, .. }) = &links[0].outcome else {
+        panic!("joined child");
+    };
+    assert_eq!(answer.as_deref(), Some("two"));
+    assert_eq!(
+        CodingSession::inspect(f.session.path())
+            .unwrap()
+            .delegations()[0]
+            .outcome,
+        links[0].outcome
     );
     let child = CodingSession::open(&links[0].record.path).unwrap();
     assert_eq!(

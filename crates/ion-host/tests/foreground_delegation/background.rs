@@ -3,13 +3,13 @@ use ion_core::{BackgroundSlot, DelegationContext, ForkPoint, RequestKey};
 use ion_host::BackgroundOwner;
 use std::time::Duration;
 
-fn reserve(owner: &BackgroundOwner) -> Result<ion_host::BackgroundDestination, String> {
+pub(super) fn reserve(owner: &BackgroundOwner) -> Result<ion_host::BackgroundDestination, String> {
     let mut destination = owner.destination();
     destination.reserve()?;
     Ok(destination)
 }
 
-async fn drain(control: &mut SessionControl) {
+pub(super) async fn drain(control: &mut SessionControl) {
     tokio::time::timeout(Duration::from_secs(5), async {
         while control.is_busy() {
             control.maintain().await;
@@ -104,7 +104,7 @@ async fn transfer_survives_parent_work_and_shutdown_and_retains_unread_results()
         );
         let receipt = owner.take(child).unwrap().unwrap();
         assert!(
-            matches!(receipt.outcome, Some(DelegationOutcome::Joined { receipt: Some(ref receipt), error: None }) if receipt.end == Some(TurnEndReason::Completed))
+            matches!(receipt.outcome, Some(DelegationOutcome::Joined { receipt: Some(ref receipt), error: None, answer: Some(_) }) if receipt.end == Some(TurnEndReason::Completed))
         );
         let reused = reserve(&owner).unwrap();
         assert!(
@@ -115,7 +115,7 @@ async fn transfer_survives_parent_work_and_shutdown_and_retains_unread_results()
         assert!(owner.take(child).is_none());
         assert!(f.session.view().unwrap().delegations()[0].outcome.is_some());
         assert_eq!(f.effect.calls.load(Ordering::SeqCst), 1);
-        owner.join_shutdown().await;
+        owner.join_shutdown().await.unwrap();
         let root = f.root.clone();
         drop(f);
         drop(owner);
@@ -152,6 +152,7 @@ async fn owner_shutdown_is_joined_even_when_its_wait_is_cancelled() {
     f.effect.release.notify_one();
     tokio::time::timeout(Duration::from_secs(5), owner.join_shutdown())
         .await
+        .unwrap()
         .unwrap();
     let receipt = owner.take(child).unwrap().unwrap();
     assert!(
@@ -187,7 +188,7 @@ async fn transfer_failure_cannot_be_caught_to_continue_and_creates_no_child() {
     assert_eq!(f.parent.requests().len(), 1);
     assert!(report.updates.iter().any(|update| matches!(update, ControlUpdate::Settled(settlement)
         if matches!(settlement.outcome, OperationOutcome::Turn(Err(CodingAgentError::Session(_)))))));
-    owner.join_shutdown().await;
+    owner.join_shutdown().await.unwrap();
     let root = f.root.clone();
     drop(f);
     drop(owner);
@@ -222,7 +223,7 @@ async fn late_settlement_failure_closes_owner_without_any_result_reader() {
     .unwrap();
     assert!(reserve(&owner).is_err());
     assert!(f.session.view().unwrap().delegations()[0].outcome.is_none());
-    owner.join_shutdown().await;
+    owner.join_shutdown().await.unwrap_err();
     assert!(owner.take(child).unwrap().is_err());
     assert!(owner.snapshot().failed);
     assert!(
@@ -273,7 +274,8 @@ async fn panic_closes_owner_and_stops_siblings_without_a_result_reader() {
     sibling.effect.release.notify_one();
     tokio::time::timeout(Duration::from_secs(5), owner.join_shutdown())
         .await
-        .unwrap();
+        .unwrap()
+        .unwrap_err();
     let snapshot = owner.snapshot();
     assert!(snapshot.children.iter().all(|child| child.joined));
     assert_eq!(
@@ -352,7 +354,7 @@ async fn cancellation_and_owner_close_before_transfer_refuse_cold_work() {
             TurnEndReason::Completed
         };
         assert_eq!(f.session.view().unwrap().last_end, Some((1, expected)));
-        owner.join_shutdown().await;
+        owner.join_shutdown().await.unwrap();
         let root = f.root.clone();
         drop((f, owner));
         std::fs::remove_dir_all(root).unwrap();
@@ -394,9 +396,9 @@ async fn cancelling_the_active_parent_after_transfer_does_not_cancel_the_child()
     let child = owner.snapshot().children[0].receipt.record.child;
     let receipt = owner.take(child).unwrap().unwrap();
     assert!(
-        matches!(receipt.outcome, Some(DelegationOutcome::Joined { receipt: Some(ref receipt), error: None }) if receipt.end == Some(TurnEndReason::Completed))
+        matches!(receipt.outcome, Some(DelegationOutcome::Joined { receipt: Some(ref receipt), error: None, answer: Some(_) }) if receipt.end == Some(TurnEndReason::Completed))
     );
-    owner.join_shutdown().await;
+    owner.join_shutdown().await.unwrap();
     let root = f.root.clone();
     drop((f, owner));
     std::fs::remove_dir_all(root).unwrap();
@@ -451,7 +453,7 @@ async fn concurrent_maintenance_waiters_both_observe_the_join() {
     )
     .await
     .is_ok();
-    owner.join_shutdown().await;
+    owner.join_shutdown().await.unwrap();
     for task in tasks {
         task.await.unwrap();
     }

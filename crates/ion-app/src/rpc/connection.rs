@@ -35,6 +35,8 @@ pub(super) async fn connection<R: AsyncBufRead + Unpin, W: AsyncWrite + Unpin>(
     let inspections = ReplyCredits::new(1);
     let controls = ReplyCredits::new(2);
     let mut poll_host = true;
+    let background = control.host.background();
+    let mut background_revision = 0;
     let result: Result<()> = async {
         loop {
             control.publish_gap(&mut output)?;
@@ -43,6 +45,13 @@ pub(super) async fn connection<R: AsyncBufRead + Unpin, W: AsyncWrite + Unpin>(
                 update = control.host.next(), if poll_host => {
                     poll_host = !matches!(update, ControlUpdate::Idle);
                     control.update(update, &mut output)?;
+                }
+                revision = async { background.as_ref().expect("guarded owner").changed(background_revision).await }, if background.is_some() => {
+                    background_revision = revision;
+                    let owner = background.as_ref().expect("guarded owner");
+                    owner.check()?;
+                    if output.can_acquire() { output.enqueue(serde_json::json!({"type":"background_changed","revision":revision,"resync":"get_background"}))?; }
+                    else { control.mark_gap(0); }
                 }
                 line = input.next() => {
                     let value = match line? {
@@ -53,14 +62,16 @@ pub(super) async fn connection<R: AsyncBufRead + Unpin, W: AsyncWrite + Unpin>(
                     };
                     let command = value.as_ref().ok().filter(|value| value.is_object() && value.get("id").is_none_or(Value::is_string)).and_then(|value| value.get("type")).and_then(Value::as_str).unwrap_or("parse");
                     let pool = match command {
-                        "abort" | "clear_queue" => &controls,
-                        "inspect" | "get_request" | "list_sessions" | "list_turns" | "list_models" | "list_resources" => &inspections,
+                        "abort" | "clear_queue" | "cancel_background" => &controls,
+                        "inspect" | "get_request" | "get_background" | "acknowledge_background" | "list_sessions" | "list_turns" | "list_models" | "list_resources" => &inspections,
                         _ => &replies,
                     };
                     let Some(credit) = pool.acquire() else {
                         if command == "abort" {
                             control.host.request_stop();
                             poll_host = true;
+                            control.unacknowledged_stops = control.unacknowledged_stops.saturating_add(1);
+                        } else if command == "cancel_background" && value.as_ref().is_ok_and(|value| control.cancel_background(value).is_ok()) {
                             control.unacknowledged_stops = control.unacknowledged_stops.saturating_add(1);
                         } else {
                             control.refused = control.refused.saturating_add(1);
@@ -83,6 +94,9 @@ pub(super) async fn connection<R: AsyncBufRead + Unpin, W: AsyncWrite + Unpin>(
     // No publication wait can postpone stop/join. Borrowed shutdown itself is
     // cancellation safe; this foreground owner awaits it to completion on every
     // EOF/read/write/protocol-invariant/unknown-task failure path.
+    if let Some(owner) = &background {
+        owner.request_shutdown();
+    }
     if control.host.is_busy() {
         // shutdown deliberately discards observations while joining. Zero is
         // a resync request, not a fabricated count of missing shell events.
@@ -90,6 +104,13 @@ pub(super) async fn connection<R: AsyncBufRead + Unpin, W: AsyncWrite + Unpin>(
     }
     let report = control.host.shutdown().await;
     let mut result = result;
+    if let Some(owner) = &background {
+        result = combine_errors(
+            result,
+            owner.join_shutdown().await.map_err(Into::into),
+            "application cleanup also failed",
+        );
+    }
     for update in report.updates {
         result = combine_errors(
             result,

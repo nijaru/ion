@@ -16,6 +16,11 @@ mod subagent;
 pub trait Application: Send + Sync {
     fn resources(&self, cwd: Option<&Path>) -> Result<Resources>;
     fn runtime(&self, cwd: Option<&Path>, model: Option<&ModelRef>) -> Result<ApplicationRuntime>;
+    /// Optional application-lifetime custody, independent of any Session's
+    /// shutdown or binding. The outer application explicitly closes/joins it.
+    fn background(&self) -> Option<Arc<crate::BackgroundOwner>> {
+        None
+    }
 }
 
 /// Explicit authority for direct user shell commands, separate from model tools.
@@ -48,14 +53,15 @@ impl ApplicationRuntime {
     }
 }
 
-#[derive(PartialEq, Eq)]
+#[derive(Clone)]
 enum CodingRole {
-    Main,
+    Main(Arc<crate::BackgroundOwner>),
     Subagent,
 }
 
 /// The local coding application: native tools, managed delegation, discovered
 /// resources and optional additional tools. Shared control owns none of these defaults.
+#[derive(Clone)]
 pub struct CodingApplication {
     host: Arc<Host>,
     external_tools: Option<Arc<dyn CodingToolSource>>,
@@ -69,7 +75,9 @@ impl CodingApplication {
             host,
             external_tools,
             code_mode: false,
-            role: CodingRole::Main,
+            role: CodingRole::Main(Arc::new(
+                crate::BackgroundOwner::new(64).expect("supported custody capacity"),
+            )),
         }
     }
 
@@ -82,7 +90,7 @@ impl CodingApplication {
     /// Preserve the executable's already-resolved initial route (including
     /// explicit overrides); subsequent selections use this application's store.
     pub fn setup(
-        self,
+        &self,
         session: Arc<CodingSession>,
         selected: Selection,
         reasoning: Option<ion_ai::Reasoning>,
@@ -96,7 +104,7 @@ impl CodingApplication {
         SessionSetup::from_prepared(
             session,
             catalog,
-            Arc::new(self),
+            Arc::new(self.clone()),
             resources,
             runtime,
             reasoning,
@@ -110,8 +118,13 @@ impl CodingApplication {
     ) -> Result<ApplicationRuntime> {
         let native = Arc::new(LocalTools::new(cwd)?);
         let mut sources: Vec<Arc<dyn CodingToolSource>> = vec![native.clone()];
-        if self.role == CodingRole::Main {
-            sources.push(Arc::new(subagent::Subagent::new(self, cwd, selected)));
+        if let CodingRole::Main(owner) = &self.role {
+            sources.push(Arc::new(subagent::Subagent::new(
+                self,
+                cwd,
+                selected,
+                owner.clone(),
+            )));
         }
         sources.extend(self.external_tools.iter().cloned());
         let tools = ion_core::ToolSet::new(sources);
@@ -133,6 +146,13 @@ impl CodingApplication {
 }
 
 impl Application for CodingApplication {
+    fn background(&self) -> Option<Arc<crate::BackgroundOwner>> {
+        match &self.role {
+            CodingRole::Main(owner) => Some(owner.clone()),
+            CodingRole::Subagent => None,
+        }
+    }
+
     fn resources(&self, cwd: Option<&Path>) -> Result<Resources> {
         self.host
             .resources(cwd.context("coding requires a working directory")?)

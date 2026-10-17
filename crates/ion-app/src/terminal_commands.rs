@@ -34,6 +34,7 @@ commands! {
     Model => ("model", "[PROVIDER/MODEL]", "Choose a model"),
     Reasoning => ("reasoning", "[default|off|low|medium|high|budget:TOKENS]", "Select generation effort (route support varies)"),
     Compact => ("compact", "", "Summarize settled context"),
+    Tasks => ("tasks", "[result|cancel|acknowledge UUID]", "Inspect or control application-owned background Sessions"),
     Tools => ("tools", "", "List recorded tool operations"),
     Tool => ("tool", "[N]", "Inspect recorded tool evidence"),
     Settings => ("settings", "[compact|expanded|thinking show|thinking hide]", "Change terminal presentation"),

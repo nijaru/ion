@@ -50,6 +50,13 @@ impl<F: FnOnce()> Drop for FailOnDrop<F> {
 }
 
 impl BackgroundJob {
+    /// The actual retained parent, not an authority reconstructed from its ID.
+    /// Destinations may keep a weak handle for rebinding while work is live;
+    /// unread results must not keep the exclusive writer alive after settlement.
+    pub fn parent(&self) -> &Arc<CodingSession> {
+        &self.parent
+    }
+
     /// Install under the destination owner's admission lock. The existing
     /// retained-operation primitive checks runtime/custody before the transfer
     /// transaction and starts work only afterward. A cancelled parent observed

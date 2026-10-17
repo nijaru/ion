@@ -92,6 +92,18 @@ impl State {
             }
             SessionEntry::DelegationSettled { child, outcome } => {
                 if let DelegationOutcome::Joined {
+                    receipt,
+                    error,
+                    answer: Some(_),
+                } = outcome
+                    && (error.is_some()
+                        || receipt
+                            .as_ref()
+                            .is_none_or(|receipt| receipt.end != Some(TurnEndReason::Completed)))
+                {
+                    return Err(SessionError::InvalidHistory);
+                }
+                if let DelegationOutcome::Joined {
                     receipt: Some(receipt),
                     ..
                 } = outcome

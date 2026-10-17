@@ -20,9 +20,20 @@ pub(super) enum Request {
 
 pub(super) async fn run(setup: SessionSetup, request: Request, json_output: bool) -> Result<()> {
     let mut control = setup.into_control::<()>();
+    let background = control.background();
     let result = foreground(&mut control, request, json_output).await;
+    if let Some(owner) = &background {
+        owner.request_shutdown();
+    }
     let report = control.shutdown().await;
     let mut result = result;
+    if let Some(owner) = &background {
+        result = combine(
+            result,
+            owner.join_shutdown().await.map_err(Into::into),
+            "application shutdown also failed",
+        );
+    }
     for error in report.cleanup_errors {
         result = combine(result, Err(error.into()), "Session shutdown also failed");
     }
@@ -81,19 +92,49 @@ async fn foreground(
     // Once this publisher loses a prefix, suppress the remaining provisional
     // stream. The reliable committed final below is the reconciliation boundary.
     let mut suppress_progress = false;
+    let background = control.background();
+    let mut background_revision = 0;
+    let mut parent_result = None;
     let result = loop {
+        if parent_result.is_some() && !background.as_ref().is_some_and(|owner| owner.has_work()) {
+            let result = parent_result.take().expect("settled parent");
+            break match &background {
+                Some(owner) => match (result, owner.check()) {
+                    (result, Ok(())) => result,
+                    (Ok(_), Err(error)) => Err(error.into()),
+                    (Err(parent), Err(error)) => Err(anyhow::Error::new(error)
+                        .context(format!("parent settlement also failed: {parent:#}"))),
+                },
+                None => result,
+            };
+        }
         tokio::select! {
             _ = signal.recv(), if listening => {
                 listening = false;
                 control.request_stop();
+                if let Some(owner) = &background { owner.request_shutdown(); }
+                if parent_result.is_some() { parent_result = Some(Err(CodingAgentError::Cancelled.into())); }
             }
             published = output.advance(), if output.is_healthy() && output.has_pending() => {
                 if let Err(error) = published {
                     publication_error = Some(error);
                     control.request_stop();
+                    if let Some(owner) = &background { owner.request_shutdown(); }
                 }
             }
-            update = control.next() => match update {
+            revision = async { background.as_ref().expect("guarded owner").changed(background_revision).await }, if background.is_some() => {
+                background_revision = revision;
+                let owner = background.as_ref().expect("guarded owner");
+                if owner.check().is_err() { control.request_stop(); owner.request_shutdown(); }
+                // Invalidation only: actual results remain in bounded owner
+                // custody and committed facts, independent of this publisher.
+                if output.can_acquire() {
+                    let record = if json_output { output.enqueue(json!({"type":"background_changed","revision":revision,"resync":"inspect"})) }
+                        else { output.enqueue("[background task state changed; results remain inspectable]".to_owned()) };
+                    if let Err(error) = record { publication_error = Some(error); control.request_stop(); owner.request_shutdown(); }
+                }
+            }
+            update = control.next(), if parent_result.is_none() => match update {
                 ControlUpdate::Activity(Observation::Event { event, .. }) => {
                     // Final is delivered reliably from settlement, never twice
                     // and never dependent on a provisional observation ring.
@@ -111,6 +152,7 @@ async fn foreground(
                     if let Err(error) = queued {
                         publication_error = Some(error);
                         control.request_stop();
+                        if let Some(owner) = &background { owner.request_shutdown(); }
                     }
                 }
                 ControlUpdate::Activity(Observation::Gap { skipped }) => {
@@ -127,8 +169,15 @@ async fn foreground(
                         rejected = rejected.map(|first| first.context(format!("preparation also failed: {error:#}")));
                     }
                 }
-                ControlUpdate::Settled(settlement) => break answer(settlement.outcome),
-                ControlUpdate::Idle => break Err(rejected.unwrap_or_else(|| anyhow!("operation ended without settlement"))),
+                ControlUpdate::Settled(settlement) => {
+                    let result = answer(settlement.outcome);
+                    if result.is_err() && let Some(owner) = &background { owner.request_shutdown(); }
+                    parent_result = Some(result);
+                }
+                ControlUpdate::Idle => {
+                    if let Some(owner) = &background { owner.request_shutdown(); }
+                    parent_result = Some(Err(rejected.take().unwrap_or_else(|| anyhow!("operation ended without settlement"))));
+                }
                 ControlUpdate::Input { .. } | ControlUpdate::Dispatched { .. } | ControlUpdate::Accepted { .. } => {}
             }
         }

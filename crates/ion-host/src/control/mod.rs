@@ -293,7 +293,14 @@ impl<M: Serialize + Send + 'static> SessionControl<M> {
                 .and_then(|input| input.acceptance.map(|accepted| accepted.turn))
         })
     }
+    fn work_stop(&self) -> CancellationToken {
+        self.background()
+            .map_or_else(CancellationToken::new, |owner| owner.work_stop())
+    }
     pub(crate) fn ensure_replaceable(&self) -> Result<()> {
+        if let Some(owner) = self.background() {
+            owner.ensure_open()?;
+        }
         ensure!(!self.closed, "session control is closed");
         ensure!(
             !self.is_busy(),

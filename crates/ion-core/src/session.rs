@@ -46,7 +46,7 @@ pub use recovery::{AuthorityScope, RecoveryBinding, RecoveryPoint, RecoveryState
 pub(crate) use submission::TurnAdmission;
 pub use submission::{RequestKey, RequestReceipt, SubmissionRequest};
 
-const FORMAT_VERSION: u32 = 15;
+const FORMAT_VERSION: u32 = 16;
 // An 8 MiB raw prompt or streamed response can grow up to sixfold when JSON
 // escapes control characters. Keep the storage bound above that encoded size.
 const MAX_ENTRY_BYTES: usize = 64 * 1024 * 1024;
