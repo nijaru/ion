@@ -287,7 +287,7 @@ fn floor_char_boundary(text: &str, mut offset: usize) -> usize {
     offset
 }
 
-fn save_full_mcp_output(bytes: &[u8]) -> AnyResult<PathBuf> {
+pub(super) fn save_full_mcp_output(bytes: &[u8]) -> AnyResult<PathBuf> {
     let mut nonce = [0u8; 16];
     getrandom::fill(&mut nonce)
         .map_err(|error| anyhow::anyhow!("cannot name MCP output: {error}"))?;

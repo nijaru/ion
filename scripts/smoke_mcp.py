@@ -136,6 +136,19 @@ class Provider(BaseHTTPRequestHandler):
                 {"id": "mcp", "choices": [{"index": 0, "delta": {"content": "MCP_LARGE_OK"}, "finish_reason": None}]},
                 {"id": "mcp", "choices": [{"index": 0, "delta": {}, "finish_reason": "stop"}]},
             ]
+        elif len(requests) == 18:
+            names = {tool["function"]["name"] for tool in body["tools"]}
+            assert {"list_mcp_resources", "list_mcp_resource_templates", "read_mcp_resource"} <= names, names
+            changes = [
+                {"id": "mcp", "choices": [{"index": 0, "delta": {"tool_calls": [{"index": 0, "id": "call-resource", "type": "function", "function": {"name": "read_mcp_resource", "arguments": '{"server":"demo","uri":"mem://guide"}'}}]}, "finish_reason": None}]},
+                {"id": "mcp", "choices": [{"index": 0, "delta": {}, "finish_reason": "tool_calls"}]},
+            ]
+        elif len(requests) == 19:
+            assert body["messages"][-1]["role"] == "tool" and "RESOURCE_OK" in body["messages"][-1]["content"], body
+            changes = [
+                {"id": "mcp", "choices": [{"index": 0, "delta": {"content": "MCP_RESOURCE_OK"}, "finish_reason": None}]},
+                {"id": "mcp", "choices": [{"index": 0, "delta": {}, "finish_reason": "stop"}]},
+            ]
         else:
             assert any(message.get("role") == "tool" and "Hello, Ion!" in message.get("content", "") for message in body["messages"]), body
             changes = [
@@ -242,7 +255,7 @@ for line in sys.stdin.buffer:
     request = json.loads(line)
     method = request.get('method')
     if method == 'initialize':
-        result = {'protocolVersion': '2025-06-18', 'capabilities': {'tools': {}}, 'serverInfo': {'name': 'ion-smoke', 'version': '1'}}
+        result = {'protocolVersion': '2025-06-18', 'capabilities': {'tools': {}, 'resources': {}}, 'serverInfo': {'name': 'ion-smoke', 'version': '1'}}
     elif method == 'tools/list':
         result = {'tools': [
             {'name': 'greet.user', 'description': 'Greet a name', 'inputSchema': {'type': 'object', 'properties': {'name': {'type': 'string'}}, 'required': ['name']}},
@@ -251,6 +264,11 @@ for line in sys.stdin.buffer:
             {'name': 'picture', 'description': 'Return a picture', 'inputSchema': {'type': 'object', 'properties': {}}},
             {'name': 'large_report', 'description': 'Return a large text report', 'inputSchema': {'type': 'object'}},
         ]}
+    elif method == 'resources/list':
+        result = {'resources': [{'uri': 'mem://guide', 'name': 'Guide', 'mimeType': 'text/plain'}]}
+    elif method == 'resources/read':
+        with log.open('a') as output: output.write('read:' + request['params']['uri'] + '\\n')
+        result = {'contents': [{'uri': 'mem://guide', 'mimeType': 'text/plain', 'text': 'RESOURCE_OK\\nGuide body'}]}
     elif method == 'tools/call':
         if request['params']['name'] == 'greet.user':
             name = request['params']['arguments']['name']
@@ -530,6 +548,10 @@ with tempfile.TemporaryDirectory(prefix="ion-mcp-") as temporary:
         assert len(remote_calls) == 4 and remote_calls[-1]["params"]["name"] == "lowercase", remote_calls
         large = subprocess.run([binary, "--cwd", workspace, "run", "Read the large MCP report."], env=env, check=True, capture_output=True, text=True)
         assert large.stdout.strip() == "MCP_LARGE_OK", large
+        resource = subprocess.run([binary, "--cwd", workspace, "run", "Read the MCP guide resource."], env=env, check=True, capture_output=True, text=True)
+        assert resource.stdout.strip() == "MCP_RESOURCE_OK", resource
+        events = (workspace / "mcp-events.txt").read_text()
+        assert "read:mem://guide" in events, events
         config["servers"].pop("malformed")
         config_path.write_text(json.dumps(config))
         subprocess.run([binary, "mcp", "remove", "demo"], env=env, check=True, capture_output=True)

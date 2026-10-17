@@ -238,7 +238,10 @@ Resources do not execute repository text or start unconfigured servers. Instruct
 skills/templates and results are lower-trust data. Report failures/omissions with
 provenance, not silent rule truncation. MCP discovery isolates server failures and
 refreshes at later request boundaries; possibly effectful invocations are never
-transparently retried. Executable hooks and UI contributions are separately scoped
+transparently retried. MCP resources are bounded read-only context operations:
+listings use frozen server identity, reads use the ordinary image or private-file
+path rather than model-visible base64, and an observation grants no effect,
+settlement or replay authority. Executable hooks and UI contributions are separately scoped
 trusted powers, not permission to mutate history or provider wire state.
 
 ## Context and providers

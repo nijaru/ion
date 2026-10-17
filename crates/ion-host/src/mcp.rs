@@ -31,6 +31,7 @@ mod config;
 mod connection;
 mod http;
 mod invocation;
+mod resource_tools;
 mod send;
 use connection::{Connection, combine_cleanup};
 use invocation::McpExecutor;
@@ -41,6 +42,8 @@ mod invocation_tests;
 mod lifecycle_tests;
 #[cfg(test)]
 mod metadata_tests;
+#[cfg(test)]
+mod resource_tests;
 
 pub use config::{McpConfig, McpHttpServer, McpListing, McpServer, McpStdioServer};
 use config::{validate_name, validate_server};
@@ -60,6 +63,9 @@ type Catalog = BTreeMap<String, RegisteredTools>;
 
 struct Server {
     name: String,
+    /// The initialize handshake advertised resource operations. Capabilities are
+    /// fixed for the connection, so callers do not need a second discovery round.
+    resources: bool,
     client: RwLock<Option<Connection>>,
     catalog: Arc<SyncRwLock<Catalog>>,
     tool_list_version: Arc<AtomicU64>,
@@ -132,11 +138,23 @@ impl McpTools {
         let changed = Arc::new(AtomicU64::new(0));
         let handler = ChangeHandler(changed.clone());
         let client = Connection::start(&name, definition, cwd, handler).await?;
-        let discovered = discover_tools(&name, &client.client).await;
+        let peer = client.client.peer_info();
+        let resources = peer
+            .as_ref()
+            .is_some_and(|info| info.capabilities.resources.is_some());
+        let advertises_tools = peer
+            .as_ref()
+            .is_none_or(|info| info.capabilities.tools.is_some());
+        let discovered = if advertises_tools {
+            discover_tools(&name, &client.client).await
+        } else {
+            Ok(Vec::new())
+        };
         match discovered {
             Ok(tools) => Ok((
                 Server {
                     name,
+                    resources,
                     client: RwLock::new(Some(client)),
                     catalog,
                     tool_list_version: changed,
@@ -350,6 +368,8 @@ impl CodingToolSource for McpTools {
                 ));
             }
         }
+        drop(catalog);
+        registrations.extend(resource_tools::registrations(&self.servers));
         registrations
     }
 
