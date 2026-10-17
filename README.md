@@ -199,10 +199,11 @@ not become answer text or standalone model context.
 Inline remains the default, but persistent fullscreen is also available with
 `--tui-mode fullscreen`; use `/tui inline` or `/tui fullscreen` to switch
 inside chat. The interactive terminal publishes an OSC 7501 root record with
-`app=ion` on state changes: `idle`, `working`, `done` or `error`. `done` and
+`app=ion` on state changes: `idle`, `working`, `done`, `error`, or `blocked`
+with `kind=auth` while the masked credential prompt is waiting. `done` and
 `error` remain until replaced; `working` is not re-sent as a heartbeat. The
 sequence is emitted only by the interactive terminal's physical output owner,
-never by headless, RPC or redirected output. Message/title/progress and blocked
+never by headless, RPC or redirected output. Message/title/progress and the permission/question blocked
 kinds are not emitted yet, so there is no invented approval or question state.
 Fullscreen owns the transcript viewport and scrolling while using
 the same Session, agent loop and semantic transcript projection. File/model/

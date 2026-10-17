@@ -4,8 +4,8 @@ use ion_host::{Delivery, SessionControl, UserInput};
 use ion_terminal::{Screen, TerminalSession};
 
 use super::{
-    Builtin, EditorDraft, ForkPoint, Frontend, PickerValue, apply_fork, copy_last_answer,
-    edit_draft_in_terminal, handle_command, login_in_terminal,
+    Builtin, CommandInput, EditorDraft, ForkPoint, Frontend, PickerValue, ProgramStatusState,
+    apply_fork, copy_last_answer, edit_draft_in_terminal, handle_command, login_in_terminal,
 };
 
 pub(super) fn editor_delivery(runtime: &SessionControl<EditorDraft>) -> Delivery {
@@ -67,9 +67,10 @@ pub(super) async fn dispatch_command(
     ui: &mut Frontend,
     terminal: &mut TerminalSession,
     screen: &mut Screen,
-    command: String,
-    source: Option<EditorDraft>,
+    program: &mut ProgramStatusState,
+    input: CommandInput,
 ) -> Result<()> {
+    let CommandInput { command, source } = input;
     let (name, args) = command
         .split_once(char::is_whitespace)
         .unwrap_or((&command, ""));
@@ -102,7 +103,7 @@ pub(super) async fn dispatch_command(
         return Ok(());
     }
     if builtin == Some(Builtin::Login) && !args.is_empty() {
-        match login_in_terminal(terminal, screen, services.credentials(), args).await? {
+        match login_in_terminal(terminal, screen, services.credentials(), args, program).await? {
             Ok(()) => ui.status = "Credential saved".into(),
             // Credential entry is modal, never a recoverable model prompt.
             Err(error) => ui.status = format!("{error:#}"),

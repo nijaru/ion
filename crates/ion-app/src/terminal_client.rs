@@ -45,6 +45,35 @@ const LIVE_REGION_MAX_ROWS: usize = 12;
 const RESUME_TURN_LIMIT: usize = 6;
 const RESUME_ENTRY_LIMIT_WITHOUT_TURNS: usize = 32;
 
+#[derive(Default)]
+pub(super) struct ProgramStatusState {
+    current: Option<ProgramStatus>,
+    published: Option<ProgramStatus>,
+}
+
+impl ProgramStatusState {
+    fn set(&mut self, status: ProgramStatus) {
+        self.current = Some(status);
+    }
+
+    fn publish(&mut self, terminal: &mut TerminalSession) -> Result<()> {
+        let status = self.current.unwrap_or(ProgramStatus::Idle);
+        if self.published == Some(status) {
+            return Ok(());
+        }
+        terminal
+            .publish_status(status)
+            .context("publish terminal program status")?;
+        self.published = Some(status);
+        Ok(())
+    }
+}
+
+pub(super) struct CommandInput {
+    command: String,
+    source: Option<EditorDraft>,
+}
+
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, clap::ValueEnum)]
 pub enum TuiMode {
     #[default]
@@ -174,8 +203,7 @@ pub async fn chat(init: ChatInit) -> Result<()> {
         ..Frontend::default()
     };
     let mut activity = Activity::default();
-    let mut program_status = ProgramStatus::Idle;
-    let mut published_status = None;
+    let mut program = ProgramStatusState::default();
     let mut terminal_owner = None;
     let mut screen_owner = None;
     let mut outcome = async {
@@ -194,7 +222,7 @@ pub async fn chat(init: ChatInit) -> Result<()> {
         let mut poll_control = true;
         loop {
             terminal.check_active().context("terminal lifecycle failed")?;
-            publish_program_status(terminal, &mut published_status, program_status)?;
+            program.publish(terminal)?;
             draw(terminal, screen, &mut ui, activity.live(), activity.view(&runtime)).await?;
             #[cfg(debug_assertions)]
             if std::env::var_os("ION_SMOKE_PANIC_AFTER_FIRST_DRAW").is_some() {
@@ -207,7 +235,7 @@ pub async fn chat(init: ChatInit) -> Result<()> {
                 update = runtime.next(), if poll_control => {
                     poll_control = !matches!(update, ion_host::ControlUpdate::Idle);
                     if let Some(status) = update_program_status(&update) {
-                        program_status = status;
+                        program.set(status);
                     }
                     let _visible_settlement_error = activity.update(&mut ui, &runtime, update)?;
                     continue;
@@ -241,7 +269,7 @@ pub async fn chat(init: ChatInit) -> Result<()> {
                         && (runtime.is_busy() || activity.view(&runtime).is_some())
                     {
                         runtime.request_stop();
-                        program_status = ProgramStatus::Working;
+                        program.set(ProgramStatus::Working);
                         poll_control = true;
                         continue;
                     }
@@ -270,18 +298,27 @@ pub async fn chat(init: ChatInit) -> Result<()> {
                         Action::Shell { command, exclude_from_context, source } => {
                             match runtime.shell(command, exclude_from_context, source) {
                                 Ok(_) => {
-                                    program_status = ProgramStatus::Working;
+                                    program.set(ProgramStatus::Working);
                                     ui.status.clear();
                                 }
                                 Err((source, error)) => {
-                                    program_status = ProgramStatus::Error;
+                                    program.set(ProgramStatus::Error);
                                     ui.restore_editor(source);
                                     ui.status = format!("Shell was not started: {error:#}");
                                 }
                             }
                         },
                         Action::Command(command) => {
-                            dispatch_command(&mut runtime, &init.services, &mut ui, terminal, screen, command, raw_command).await?;
+                            dispatch_command(
+                                &mut runtime,
+                                &init.services,
+                                &mut ui,
+                                terminal,
+                                screen,
+                                &mut program,
+                                CommandInput { command, source: raw_command },
+                            )
+                            .await?;
                         },
                         Action::PasteClipboard => start_clipboard_paste(&mut ui, runtime.agent()),
                         Action::Pick(value) => apply_picker(&mut runtime, &mut ui, value)?,
@@ -387,15 +424,19 @@ async fn login_in_terminal(
     screen: &mut Screen,
     credentials: &CredentialStore,
     provider: &str,
+    program: &mut ProgramStatusState,
 ) -> Result<Result<()>> {
     anyhow::ensure!(!provider.is_empty(), "use /login PROVIDER");
+    program.set(ProgramStatus::BlockedAuth);
+    program.publish(terminal)?;
     let result = match terminal.read_secret(&format!("{provider} API key: ")).await {
         Ok(key) => credentials.save_api_key(provider, &key),
         Err(error) => Err(error).context("read login credential"),
     };
-    *screen = new_inline_screen(terminal)
-        .await
-        .context("restore inline chat after login")?;
+    let restored = new_inline_screen(terminal).await;
+    program.set(ProgramStatus::Idle);
+    program.publish(terminal)?;
+    *screen = restored.context("restore inline chat after login")?;
     Ok(result)
 }
 
@@ -1673,21 +1714,6 @@ fn draw_prepared(
     if painted && (!ui.pending_history_items.is_empty() || ui.pending_history_banner.is_some()) {
         ui.finish_history_commit();
     }
-    Ok(())
-}
-
-fn publish_program_status(
-    terminal: &mut TerminalSession,
-    published: &mut Option<ProgramStatus>,
-    status: ProgramStatus,
-) -> Result<()> {
-    if *published == Some(status) {
-        return Ok(());
-    }
-    terminal
-        .publish_status(status)
-        .context("publish terminal program status")?;
-    *published = Some(status);
     Ok(())
 }
 
