@@ -198,7 +198,7 @@ with tempfile.TemporaryDirectory(prefix="ion-rpc-") as temporary:
         mcp_config = (work / "config/ion/mcp.json").read_text()
         assert json.loads(mcp_config)["servers"]["text-smoke"] == {"command": command, "args": [argument]}, mcp_config
         mcp_rows = subprocess.run([binary, "mcp", "list"], env=env, check=True, capture_output=True).stdout.decode()
-        assert mcp_rows == "text-smoke\tCOMMAND       雪 ARG       雪\n", repr(mcp_rows)
+        assert mcp_rows == "text-smoke\tdirect\tCOMMAND       雪 ARG       雪\n", repr(mcp_rows)
         subprocess.run([binary, "mcp", "remove", "text-smoke"], env=env, check=True, capture_output=True)
         child = subprocess.Popen([binary, "--cwd", workspace, "rpc"], env=env, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, bufsize=0)
         ready = read(child)
