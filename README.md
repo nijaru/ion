@@ -589,6 +589,14 @@ Add local MCP tool servers explicitly with `ion mcp add NAME COMMAND [ARGS...]`.
 Use `ion mcp add-http NAME URL` for a Streamable HTTP server; add
 `--bearer-token-env VARIABLE` when it requires a bearer token already set in
 the environment. Add `--exposure direct|deferred|hidden` to either command.
+Project servers live in `<repository root>/.ion/mcp.json`; write them with
+`ion mcp add --project ...` and remove them with `ion mcp remove --project NAME`.
+Project configuration is inert until `ion trust` records its canonical project
+root and current file digest. Editing the file invalidates trust; untrusted
+entries are never connected. `ion mcp list` reports the project path and an
+untrusted diagnostic. Trusted project entries override user entries with the
+same name; `ion untrust` removes the trust record. Trust is an explicit launch
+decision, not process isolation or a sandbox.
 `direct` is the default and declares the server's tools. `deferred` keeps them
 callable but out of the initial model loadout until `tool_search` activates a
 match for a later request; Code Mode can also call them. `hidden` exposes no
@@ -1036,7 +1044,7 @@ contracts are not all implemented:
 | Application setup | Caller-owned model/tool/instruction configuration, workspace-free Sessions and explicit shell/local-image authority. Opt-in continuation checks a saved authority reference and declarations. | Changed-authority reconciliation. Applications must reconstruct and attest live bindings on reopen; the reference is not a credential or sandbox. |
 | Durability | SQLite conversation/effect history, conservative recovery, restart-safe direct admission through the Rust SDK and keyed RPC literal text; explicit same-Turn continuation through the Rust SDK. | Durable pending queues, wire-protocol delivery IDs and automatic restart/continuation. Coding CLI/TUI/RPC submissions do not opt in to continuation. |
 | Delegation | Main coding preset exposes fresh/fork foreground and background Sessions with inherited route/reasoning, application-owned retained results, wait/status/cancel/acknowledge and joined original answers. SDK children use the same stable identity, complete environments and conservative recovery; Code Mode nested tools remain distinct. | Live-model/service-scale delegation qualification and native-app visual acceptance remain open. Model arguments never grant execution authority. |
-| Controls and trust | Model-loadout include/exclude selection, read-only model tools, MCP direct/deferred/hidden exposure and host-permission execution. | Per-call approval/consent, OS sandboxing, project-scoped MCP configuration/trust and dynamic executable extensions. Loadout selection is not a security boundary. |
+| Controls and trust | Model-loadout include/exclude selection, read-only model tools, MCP direct/deferred/hidden exposure, digest-bound project MCP trust and host-permission execution. | Per-call approval/consent, OS sandboxing, dynamic executable extensions, MCP OAuth and per-tool exposure patterns. Loadout selection and trust are not security boundaries. |
 | Remote use | Foreground stdio RPC, lossy progress and complete pull snapshots through shared control. A service embedding retains/drives the owner independently of connections. | No built-in authenticated network server, reliable activity replay or durable queue/metadata recovery. RPC EOF still stops/joins work. |
 
 Common coding workflows are implemented, but Pi-level daily-driver reliability

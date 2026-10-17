@@ -111,6 +111,10 @@ enum Action {
     Logout { provider: String },
     /// Show credential sources without displaying secrets.
     Auth,
+    /// Trust the current project's MCP configuration for its current contents.
+    Trust,
+    /// Remove trust for the current project's MCP configuration.
+    Untrust,
     /// List saved sessions for the working directory.
     Sessions,
     /// List skills and prompt templates available in the working directory.
@@ -167,6 +171,9 @@ enum McpAction {
     Add {
         name: String,
         command: String,
+        /// Write to the project `.ion/mcp.json` instead of user configuration.
+        #[arg(long)]
+        project: bool,
         #[arg(long, value_enum, default_value = "direct")]
         exposure: ExposureArg,
         #[arg(trailing_var_arg = true)]
@@ -177,11 +184,15 @@ enum McpAction {
         url: String,
         #[arg(long)]
         bearer_token_env: Option<String>,
+        #[arg(long)]
+        project: bool,
         #[arg(long, value_enum, default_value = "direct")]
         exposure: ExposureArg,
     },
     Remove {
         name: String,
+        #[arg(long)]
+        project: bool,
     },
 }
 
@@ -197,6 +208,15 @@ fn parse_tool_selection(cli: &Cli) -> Result<ToolSelection> {
         ToolSelection::include(include)
     };
     Ok(selection.with_exclude(exclude))
+}
+
+fn configured_cwd(cwd: Option<PathBuf>) -> Result<PathBuf> {
+    let path = cwd.unwrap_or(std::env::current_dir()?);
+    let path = path
+        .canonicalize()
+        .with_context(|| format!("cannot resolve working directory {}", path.display()))?;
+    ensure!(path.is_dir(), "working directory is not a directory");
+    Ok(path)
 }
 
 fn validated_tool_patterns(values: &[String]) -> Result<Vec<String>> {
@@ -402,10 +422,37 @@ async fn run_cli(cli: Cli) -> Result<()> {
             }
             Ok(())
         }
+        Some(Action::Trust) => {
+            let cwd = configured_cwd(cli.cwd.clone())?;
+            let config = host.mcp_config_for(&cwd)?;
+            config.trust_project()?;
+            let path = config
+                .project_path()
+                .context("project MCP configuration path is unavailable")?;
+            print_stdout(format_args!(
+                "Trusted project MCP configuration {}",
+                metadata_field(&path.to_string_lossy())
+            ))?;
+            Ok(())
+        }
+        Some(Action::Untrust) => {
+            let cwd = configured_cwd(cli.cwd.clone())?;
+            let config = host.mcp_config_for(&cwd)?;
+            config.untrust_project()?;
+            print_stdout(format_args!("Removed project MCP trust"))?;
+            Ok(())
+        }
         Some(Action::Mcp { action }) => {
-            let config = host.mcp_config();
+            let cwd = configured_cwd(cli.cwd.clone())?;
+            let config = host.mcp_config_for(&cwd)?;
             match action {
                 McpAction::List => {
+                    if let Some(path) = config.project_path().filter(|path| path.is_file()) {
+                        print_stderr(format_args!(
+                            "[mcp project: {}]",
+                            metadata_field(&path.to_string_lossy())
+                        ))?;
+                    }
                     let listing = config.list()?;
                     for diagnostic in listing.diagnostics {
                         print_stderr(format_args!(
@@ -438,38 +485,60 @@ async fn run_cli(cli: Cli) -> Result<()> {
                 McpAction::Add {
                     name,
                     command,
+                    project,
                     exposure,
                     args,
                 } => {
-                    config.add(
-                        &name,
-                        McpServer::Stdio(McpStdioServer {
-                            command,
-                            args,
-                            exposure: exposure.into(),
-                        }),
-                    )?;
-                    print_stdout(format_args!("Added MCP server {}", metadata_field(&name)))?;
+                    let server = McpServer::Stdio(McpStdioServer {
+                        command,
+                        args,
+                        exposure: exposure.into(),
+                    });
+                    if project {
+                        config.add_project(&name, server)?;
+                        print_stdout(format_args!(
+                            "Added project MCP server {}; run `ion trust` to enable it",
+                            metadata_field(&name)
+                        ))?;
+                    } else {
+                        config.add(&name, server)?;
+                        print_stdout(format_args!("Added MCP server {}", metadata_field(&name)))?;
+                    }
                 }
                 McpAction::AddHttp {
                     name,
                     url,
                     bearer_token_env,
+                    project,
                     exposure,
                 } => {
-                    config.add(
-                        &name,
-                        McpServer::Http(McpHttpServer {
-                            url,
-                            bearer_token_env,
-                            exposure: exposure.into(),
-                        }),
-                    )?;
-                    print_stdout(format_args!("Added MCP server {}", metadata_field(&name)))?;
+                    let server = McpServer::Http(McpHttpServer {
+                        url,
+                        bearer_token_env,
+                        exposure: exposure.into(),
+                    });
+                    if project {
+                        config.add_project(&name, server)?;
+                        print_stdout(format_args!(
+                            "Added project MCP server {}; run `ion trust` to enable it",
+                            metadata_field(&name)
+                        ))?;
+                    } else {
+                        config.add(&name, server)?;
+                        print_stdout(format_args!("Added MCP server {}", metadata_field(&name)))?;
+                    }
                 }
-                McpAction::Remove { name } => {
-                    config.remove(&name)?;
-                    print_stdout(format_args!("Removed MCP server {}", metadata_field(&name)))?;
+                McpAction::Remove { name, project } => {
+                    if project {
+                        config.remove_project(&name)?;
+                        print_stdout(format_args!(
+                            "Removed project MCP server {}",
+                            metadata_field(&name)
+                        ))?;
+                    } else {
+                        config.remove(&name)?;
+                        print_stdout(format_args!("Removed MCP server {}", metadata_field(&name)))?;
+                    }
                 }
             }
             Ok(())

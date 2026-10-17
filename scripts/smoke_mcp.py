@@ -575,6 +575,37 @@ with tempfile.TemporaryDirectory(prefix="ion-mcp-") as temporary:
         assert read_only.stdout.strip() == "READ_ONLY_OK", read_only
         selected = subprocess.run([binary, "--cwd", workspace, "--tools", "read,write", "run", "Read and write only."], env=env, check=True, capture_output=True, text=True)
         assert selected.stdout.strip() == "TOOL_SELECTION_OK", selected
+
+        # Project MCP configuration is inert until explicitly trusted for its
+        # current contents. Editing it invalidates trust.
+        (workspace / ".git").mkdir()
+        (workspace / ".ion").mkdir()
+        project_config = workspace / ".ion/mcp.json"
+        project_config.write_text(json.dumps({"servers": {"project-demo": {"command": sys.executable, "args": ["-c", "import sys"]}}}))
+        untrusted = subprocess.run([binary, "--cwd", workspace, "mcp", "list"], env=env, check=True, capture_output=True, text=True)
+        assert "project-demo" not in untrusted.stdout and "not trusted" in untrusted.stderr, untrusted
+        trusted = subprocess.run([binary, "--cwd", workspace, "trust"], env=env, check=True, capture_output=True, text=True)
+        assert "Trusted project MCP configuration" in trusted.stdout, trusted
+        listed = subprocess.run([binary, "--cwd", workspace, "mcp", "list"], env=env, check=True, capture_output=True, text=True)
+        assert "project-demo\tdirect\t" in listed.stdout, listed
+        changed_config = json.loads(project_config.read_text())
+        changed_config["servers"]["project-two"] = {"command": sys.executable, "args": ["-c", "import sys"]}
+        project_config.write_text(json.dumps(changed_config))
+        changed = subprocess.run([binary, "--cwd", workspace, "mcp", "list"], env=env, check=True, capture_output=True, text=True)
+        assert "project-demo" not in changed.stdout and "not trusted" in changed.stderr, changed
+        subprocess.run([binary, "--cwd", workspace, "trust"], env=env, check=True, capture_output=True)
+        added = subprocess.run([binary, "--cwd", workspace, "mcp", "add", "--project", "project-added", "--exposure", "hidden", sys.executable, "-c", "import sys"], env=env, check=True, capture_output=True, text=True)
+        assert "run `ion trust`" in added.stdout, added
+        pending = subprocess.run([binary, "--cwd", workspace, "mcp", "list"], env=env, check=True, capture_output=True, text=True)
+        assert "project-added" not in pending.stdout and "not trusted" in pending.stderr, pending
+        subprocess.run([binary, "--cwd", workspace, "trust"], env=env, check=True, capture_output=True)
+        added_listed = subprocess.run([binary, "--cwd", workspace, "mcp", "list"], env=env, check=True, capture_output=True, text=True)
+        assert "project-added\thidden\t" in added_listed.stdout, added_listed
+        subprocess.run([binary, "--cwd", workspace, "mcp", "remove", "--project", "project-added"], env=env, check=True, capture_output=True)
+        subprocess.run([binary, "--cwd", workspace, "untrust"], env=env, check=True, capture_output=True)
+        project_config.unlink()
+        (workspace / ".ion/mcp.lock").unlink(missing_ok=True)
+        (workspace / ".ion").rmdir()
         config["servers"].pop("malformed")
         config_path.write_text(json.dumps(config))
         subprocess.run([binary, "mcp", "remove", "demo"], env=env, check=True, capture_output=True)

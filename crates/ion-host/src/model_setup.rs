@@ -361,7 +361,16 @@ fn read_json<T: DeserializeOwned>(path: &Path) -> Result<Option<T>> {
 }
 
 pub(crate) fn write_json<T: Serialize>(path: &Path, value: &T) -> Result<()> {
-    let parent = path.parent().context("model config path has no parent")?;
+    write_json_with_mode(path, value, 0o600)
+}
+
+/// Project files are ordinary repository files, not private credentials.
+pub(crate) fn write_shared_json<T: Serialize>(path: &Path, value: &T) -> Result<()> {
+    write_json_with_mode(path, value, 0o644)
+}
+
+fn write_json_with_mode<T: Serialize>(path: &Path, value: &T, mode: u32) -> Result<()> {
+    let parent = path.parent().context("config path has no parent")?;
     if !parent.exists() {
         DirBuilder::new()
             .recursive(true)
@@ -379,7 +388,7 @@ pub(crate) fn write_json<T: Serialize>(path: &Path, value: &T) -> Result<()> {
     let mut file = OpenOptions::new()
         .write(true)
         .create_new(true)
-        .mode(0o600)
+        .mode(mode)
         .open(&temp)?;
     let result = (|| -> Result<()> {
         file.write_all(&serde_json::to_vec_pretty(value)?)?;

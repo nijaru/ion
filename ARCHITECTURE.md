@@ -252,9 +252,13 @@ normalization owner across user/native/MCP inputs; unsupported content is explic
 
 Resources do not execute repository text or start unconfigured servers. Instructions,
 skills/templates and results are lower-trust data. Report failures/omissions with
-provenance, not silent rule truncation. MCP discovery isolates server failures and
-refreshes at later request boundaries; possibly effectful invocations are never
-transparently retried. MCP resources are bounded read-only context operations:
+provenance, not silent rule truncation. Project-scoped MCP configuration is inert
+until an explicit trust decision binds the canonical project root to the current
+file digest; editing the file invalidates trust. Untrusted entries are not
+connected, trusted project entries may override user entries by name, and trust is
+not sandboxing. MCP discovery isolates server failures and refreshes at later
+request boundaries; possibly effectful invocations are never transparently
+retried. MCP resources are bounded read-only context operations:
 listings use frozen server identity, reads use the ordinary image or private-file
 path rather than model-visible base64, and an observation grants no effect,
 settlement or replay authority. Dynamic extension loading is not implied:

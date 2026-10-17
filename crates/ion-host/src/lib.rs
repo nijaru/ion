@@ -109,12 +109,27 @@ impl Host {
         Resources::load(cwd, &self.config_root)
     }
 
+    /// User-level MCP configuration only. Callers that are loading a project
+    /// configuration must use `mcp_config_for`, which enforces project trust.
     pub fn mcp_config(&self) -> McpConfig {
         McpConfig::new(&self.config_root)
     }
 
+    pub fn mcp_config_for(&self, cwd: &Path) -> Result<McpConfig> {
+        McpConfig::with_project(&self.config_root, cwd)
+    }
+
     pub async fn external_tools(&self, cwd: &Path) -> McpStartup {
-        McpTools::connect(&self.mcp_config(), cwd).await
+        let config = match self.mcp_config_for(cwd) {
+            Ok(config) => config,
+            Err(error) => {
+                return McpStartup {
+                    diagnostics: vec![format!("{error:#}")],
+                    ..McpStartup::default()
+                };
+            }
+        };
+        McpTools::connect(&config, cwd).await
     }
 
     /// Bind a selected HTTP route to a complete caller-owned tool set. This
