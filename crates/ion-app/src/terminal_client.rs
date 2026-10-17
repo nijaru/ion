@@ -21,7 +21,8 @@ use ion_core::{
 use ion_host::image_input::{ImageSource, LoadedImage};
 use ion_host::{CredentialStatus, CredentialStore, Delivery, Resources, SessionControl};
 use ion_terminal::{
-    Frame, InputEvent, KeyCode, KeyEvent, Modifiers, MouseKind, Screen, TerminalSession,
+    Frame, InputEvent, KeyCode, KeyEvent, Modifiers, MouseKind, ProgramStatus, Screen,
+    TerminalSession,
 };
 use ratatui::text::Line;
 use tokio::time::Duration;
@@ -173,6 +174,8 @@ pub async fn chat(init: ChatInit) -> Result<()> {
         ..Frontend::default()
     };
     let mut activity = Activity::default();
+    let mut program_status = ProgramStatus::Idle;
+    let mut published_status = None;
     let mut terminal_owner = None;
     let mut screen_owner = None;
     let mut outcome = async {
@@ -191,6 +194,7 @@ pub async fn chat(init: ChatInit) -> Result<()> {
         let mut poll_control = true;
         loop {
             terminal.check_active().context("terminal lifecycle failed")?;
+            publish_program_status(terminal, &mut published_status, program_status)?;
             draw(terminal, screen, &mut ui, activity.live(), activity.view(&runtime)).await?;
             #[cfg(debug_assertions)]
             if std::env::var_os("ION_SMOKE_PANIC_AFTER_FIRST_DRAW").is_some() {
@@ -202,6 +206,9 @@ pub async fn chat(init: ChatInit) -> Result<()> {
                 // can have produced work or reliable updates.
                 update = runtime.next(), if poll_control => {
                     poll_control = !matches!(update, ion_host::ControlUpdate::Idle);
+                    if let Some(status) = update_program_status(&update) {
+                        program_status = status;
+                    }
                     let _visible_settlement_error = activity.update(&mut ui, &runtime, update)?;
                     continue;
                 },
@@ -234,6 +241,7 @@ pub async fn chat(init: ChatInit) -> Result<()> {
                         && (runtime.is_busy() || activity.view(&runtime).is_some())
                     {
                         runtime.request_stop();
+                        program_status = ProgramStatus::Working;
                         poll_control = true;
                         continue;
                     }
@@ -261,8 +269,12 @@ pub async fn chat(init: ChatInit) -> Result<()> {
                         },
                         Action::Shell { command, exclude_from_context, source } => {
                             match runtime.shell(command, exclude_from_context, source) {
-                                Ok(_) => ui.status.clear(),
+                                Ok(_) => {
+                                    program_status = ProgramStatus::Working;
+                                    ui.status.clear();
+                                }
                                 Err((source, error)) => {
+                                    program_status = ProgramStatus::Error;
                                     ui.restore_editor(source);
                                     ui.status = format!("Shell was not started: {error:#}");
                                 }
@@ -1662,6 +1674,51 @@ fn draw_prepared(
         ui.finish_history_commit();
     }
     Ok(())
+}
+
+fn publish_program_status(
+    terminal: &mut TerminalSession,
+    published: &mut Option<ProgramStatus>,
+    status: ProgramStatus,
+) -> Result<()> {
+    if *published == Some(status) {
+        return Ok(());
+    }
+    terminal
+        .publish_status(status)
+        .context("publish terminal program status")?;
+    *published = Some(status);
+    Ok(())
+}
+
+fn update_program_status<M>(update: &ion_host::ControlUpdate<M>) -> Option<ProgramStatus> {
+    match update {
+        ion_host::ControlUpdate::Input { .. }
+        | ion_host::ControlUpdate::Dispatched { .. }
+        | ion_host::ControlUpdate::Accepted { .. }
+        | ion_host::ControlUpdate::Activity(_) => Some(ProgramStatus::Working),
+        ion_host::ControlUpdate::Settled(settlement) => {
+            Some(settlement_program_status(&settlement.outcome))
+        }
+        ion_host::ControlUpdate::Returned(_) | ion_host::ControlUpdate::Idle => None,
+    }
+}
+
+fn settlement_program_status(outcome: &ion_host::OperationOutcome) -> ProgramStatus {
+    use ion_host::OperationOutcome;
+    match outcome {
+        OperationOutcome::Turn(Err(ion_core::CodingAgentError::Cancelled))
+        | OperationOutcome::Compact(Err(ion_core::CodingAgentError::Cancelled)) => {
+            ProgramStatus::Idle
+        }
+        OperationOutcome::Shell(Ok(output)) if output.value["cancelled"] == true => {
+            ProgramStatus::Idle
+        }
+        OperationOutcome::Turn(Err(_))
+        | OperationOutcome::Compact(Err(_))
+        | OperationOutcome::Shell(Err(_)) => ProgramStatus::Error,
+        _ => ProgramStatus::Done,
+    }
 }
 
 fn visible_status(ui: &Frontend, operation: Option<ActiveOperation>) -> Option<String> {

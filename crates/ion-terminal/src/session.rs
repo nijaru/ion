@@ -9,10 +9,9 @@ use std::sync::{
 use crossterm::{SynchronizedUpdate, terminal};
 use tokio::sync::Notify;
 
-use crate::CapabilitySupport;
-use crate::Screen;
 use crate::input::{InputEvent, InputStream};
 use crate::requirements::TerminalRequirements;
+use crate::{CapabilitySupport, ProgramStatus, Screen};
 
 #[path = "modes.rs"]
 mod modes;
@@ -159,6 +158,14 @@ impl TerminalSession {
 
     pub fn check_active(&self) -> io::Result<()> {
         self.lock().usable()
+    }
+
+    /// Replace Ion's OSC 7501 root record. The physical owner serializes this
+    /// with drawing and mode transitions; callers emit only on state changes.
+    pub fn publish_status(&mut self, status: ProgramStatus) -> io::Result<()> {
+        let mut output = self.output()?;
+        output.write_all(status.sequence())?;
+        output.flush()
     }
 
     pub async fn next_input(&mut self) -> Option<io::Result<InputEvent>> {

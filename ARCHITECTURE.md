@@ -346,7 +346,12 @@ effects. No synchronous idle guard crosses await.
 ## Terminal experience
 
 Inline native scrollback is primary; fullscreen is another viewport over the same
-semantics. Prefer restrained fx-like hierarchy and progressive disclosure to tool
+semantics. OSC 7501 root status is derived from typed operation/client state and
+emitted by the physical publication owner; a report replaces the root record,
+repeats stable application identity, and contains no task text, guessed progress
+or invented blocked state. Interactive terminal publication only; headless, RPC
+and redirected output never carry these reports. Prefer restrained fx-like
+hierarchy and progressive disclosure to tool
 cards or a flat stream. Prompts, prose, activity, mutations and notices must remain
 legible without color. Nested activity uses recorded parentage, not an invented
 process tree. Queued is not running or successful.

@@ -420,6 +420,8 @@ with tempfile.TemporaryDirectory(prefix="ion-terminal-") as temporary:
             alt_leaves = output.count(b"\x1b[?1049l")
             assert saw_inline_start, "inline composer never appeared before modal interaction"
             assert alt_enters > 0 and alt_enters == alt_leaves, (alt_enters, alt_leaves)
+            for state in (b"idle", b"working", b"done"):
+                assert b"\x1b]7501;state=" + state + b":app=ion\x1b\\" in output, state
             plain_output = re.sub(rb"\x1b\[[0-9;?]*[A-Za-z]", b"", bytes(output))
             assert b"MARKDOWN_BOLD and literal_code docs (https://example.org/ion)" in plain_output, "assistant Markdown was not rendered"
             assert b"-sample data" in plain_output and b"+sample data updated" in plain_output, "actual edit patch was not rendered"

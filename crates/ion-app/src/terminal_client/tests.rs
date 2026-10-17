@@ -5,6 +5,32 @@ use super::*;
 use ion_host::{ControlUpdate, Host, OperationOutcome, SavedSelection, Wire};
 use std::sync::Arc;
 
+#[test]
+fn settlement_program_status_distinguishes_done_and_cancelled() {
+    assert_eq!(
+        settlement_program_status(&OperationOutcome::Turn(Ok("answer".into()))),
+        ProgramStatus::Done
+    );
+    assert_eq!(
+        settlement_program_status(&OperationOutcome::Turn(Err(
+            ion_core::CodingAgentError::Cancelled
+        ))),
+        ProgramStatus::Idle
+    );
+    assert_eq!(
+        settlement_program_status(&OperationOutcome::Compact(Err(
+            ion_core::CodingAgentError::Cancelled
+        ))),
+        ProgramStatus::Idle
+    );
+    assert_eq!(
+        settlement_program_status(&OperationOutcome::Turn(Err(
+            ion_core::CodingAgentError::EmptyPrompt
+        ))),
+        ProgramStatus::Error
+    );
+}
+
 pub(super) struct Fixture {
     pub(super) root: PathBuf,
     pub(super) control: SessionControl<EditorDraft>,
