@@ -82,10 +82,14 @@ cargo build --locked -p ion
 
 Exercise changed built user entry points. `scripts/smoke.sh` covers offline
 headless submit/reopen; `scripts/smoke_headless.py` covers streaming, pressure and
-cancellation. Feature smokes include terminal, RPC, MCP, fork, resources and
-images; `.github/workflows/ci.yml` owns the required set. Add focused faults for
-changed storage, provider, framing or cancellation contracts. Reuse valid evidence
-for unchanged inputs; measure relevant harness costs before performance claims.
+cancellation; `scripts/smoke_coding.py` runs a fixed coding task with an
+independent workspace/test oracle. Feature smokes include terminal, RPC, MCP,
+fork, resources and images; `.github/workflows/ci.yml` owns the required set. Add
+focused faults for changed storage, provider, framing or cancellation contracts.
+Reuse valid evidence for unchanged inputs; measure relevant harness costs before
+performance claims. Prefer extending an existing test/smoke owner over adding a
+generic qualification framework; the M2 matrix is a named set of existing
+scenario owners plus the fixed coding smoke.
 Isolate test HOME/XDG/TMPDIR state and credentials where practical; verify owned
 process/temp cleanup. Prefer integration tests at the real client entry point for
 agent, turn, recovery and terminal changes; use focused unit tests for pure policy.

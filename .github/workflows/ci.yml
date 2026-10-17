@@ -44,6 +44,8 @@ jobs:
         run: sudo apt-get update && sudo apt-get install -y tmux
       - name: Headless coding and recovery smoke
         run: bash scripts/smoke.sh && python3 scripts/smoke_headless.py
+      - name: Fixed coding qualification smoke
+        run: python3 scripts/smoke_coding.py
       - name: Native file boundary smoke
         run: python3 scripts/smoke_file_io.py
       - name: Terminal PTY smoke
