@@ -76,6 +76,7 @@ enum ThinkingSource {
 }
 
 pub(super) struct ChatState {
+    pub(super) budget: ResponseBudget,
     text: String,
     thinking_source: Option<ThinkingSource>,
     // Stream one readable channel so dual fields cannot duplicate provisional
@@ -93,6 +94,7 @@ pub(super) struct ChatState {
 impl Default for ChatState {
     fn default() -> Self {
         Self {
+            budget: ResponseBudget::default(),
             text: String::new(),
             thinking_source: None,
             thinking_entry: None,
@@ -129,7 +131,10 @@ impl ChatState {
             if self.model.as_deref().is_some_and(|old| old != model) {
                 return Err(invalid("returned model changed within one response"));
             }
-            self.model = Some(model.into());
+            if self.model.is_none() {
+                self.budget.retain(model.len())?;
+                self.model = Some(model.into());
+            }
         }
         let mut events = Vec::new();
         if let Some(usage) = value.get("usage").filter(|v| !v.is_null()) {
@@ -187,7 +192,11 @@ impl ChatState {
                 return Err(unsupported("structured reasoning replay is unsupported"));
             }
             for detail in details {
-                let index = append_openrouter_detail(&mut self.reasoning_details, detail)?;
+                let index = append_openrouter_detail(
+                    &mut self.reasoning_details,
+                    detail,
+                    &mut self.budget,
+                )?;
                 if openrouter_human_text(detail).is_none() {
                     events.push(ModelStreamEvent::OutputObserved);
                 }
@@ -201,6 +210,7 @@ impl ChatState {
             }
         }
         if let Some(reasoning) = chat_reasoning_delta(delta, self.wire)? {
+            self.budget.retain(reasoning.len())?;
             self.reasoning_content.push_str(reasoning);
             self.thinking_source.get_or_insert(ThinkingSource::Plain);
             if self.thinking_source == Some(ThinkingSource::Plain) {
@@ -208,6 +218,7 @@ impl ChatState {
             }
         }
         if let Some(part) = optional_string(delta, "content")?.filter(|s| !s.is_empty()) {
+            self.budget.retain(part.len())?;
             self.text.push_str(part);
             events.push(ModelStreamEvent::TextDelta(part.into()));
         }
@@ -231,10 +242,22 @@ impl ChatState {
                 if !function.is_null() && !function.is_object() {
                     return Err(invalid("invalid tool function delta"));
                 }
+                if !self.calls.contains_key(&index) {
+                    self.budget.retain(std::mem::size_of::<ChatCall>())?;
+                }
                 let call = self.calls.entry(index).or_default();
-                merge_call_metadata(&mut call.id, optional_string(fragment, "id")?)?;
-                merge_call_metadata(&mut call.name, optional_string(function, "name")?)?;
+                merge_call_metadata(
+                    &mut call.id,
+                    optional_string(fragment, "id")?,
+                    &mut self.budget,
+                )?;
+                merge_call_metadata(
+                    &mut call.name,
+                    optional_string(function, "name")?,
+                    &mut self.budget,
+                )?;
                 if let Some(args) = optional_string(function, "arguments")? {
+                    self.budget.retain(args.len())?;
                     call.arguments.push_str(args);
                 }
             }
@@ -373,9 +396,14 @@ fn optional_string<'a>(value: &'a Value, key: &str) -> Result<Option<&'a str>, P
         .transpose()
 }
 
-fn merge_call_metadata(target: &mut String, part: Option<&str>) -> Result<(), ProviderError> {
+fn merge_call_metadata(
+    target: &mut String,
+    part: Option<&str>,
+    budget: &mut ResponseBudget,
+) -> Result<(), ProviderError> {
     if let Some(part) = part.filter(|part| !part.is_empty()) {
         if target.is_empty() {
+            budget.retain(part.len())?;
             target.push_str(part);
         } else if target != part {
             return Err(invalid("tool call metadata changed within one response"));
@@ -384,9 +412,10 @@ fn merge_call_metadata(target: &mut String, part: Option<&str>) -> Result<(), Pr
     Ok(())
 }
 
-pub(super) fn append_openrouter_detail(
+fn append_openrouter_detail(
     details: &mut Vec<Value>,
     fragment: &Value,
+    budget: &mut ResponseBudget,
 ) -> Result<usize, ProviderError> {
     if !valid_openrouter_detail(fragment) {
         return Err(invalid("invalid OpenRouter reasoning detail"));
@@ -396,6 +425,8 @@ pub(super) fn append_openrouter_detail(
         "reasoning.text" => "text",
         "reasoning.summary" => "summary",
         _ => {
+            budget.retain(std::mem::size_of::<Value>())?;
+            budget.retain_value(fragment)?;
             details.push(fragment.clone());
             return Ok(details.len() - 1);
         }
@@ -415,6 +446,7 @@ pub(super) fn append_openrouter_detail(
         if compatible {
             let suffix = fragment.get(payload).and_then(Value::as_str).unwrap_or("");
             if !suffix.is_empty() {
+                budget.retain(suffix.len())?;
                 if let Some(Value::String(text)) = last_fields.get_mut(payload) {
                     text.push_str(suffix);
                 } else {
@@ -425,6 +457,8 @@ pub(super) fn append_openrouter_detail(
                 if key != "type" && key != payload && !value.is_null() {
                     let slot = last_fields.entry(key).or_insert(Value::Null);
                     if slot.is_null() {
+                        budget.retain(key.len())?;
+                        budget.retain_value(value)?;
                         *slot = value.clone();
                     }
                 }
@@ -432,6 +466,8 @@ pub(super) fn append_openrouter_detail(
             return Ok(details.len() - 1);
         }
     }
+    budget.retain(std::mem::size_of::<Value>())?;
+    budget.retain_value(fragment)?;
     details.push(fragment.clone());
     Ok(details.len() - 1)
 }

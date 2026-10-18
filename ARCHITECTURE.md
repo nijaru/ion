@@ -340,7 +340,11 @@ previous binding usable; active operations retain captured configuration. Logica
 selection, effective model, returned identity and usage remain distinct. Model
 epochs survive reopen, including A → B → A; routing policy is not correctness state.
 
-Adapters own framing, errors and opaque provider continuation. Human-readable
+Adapters own framing, errors and opaque provider continuation. Bound transport/
+framing work separately from newly retained decoded output and replay; comments,
+repeated snapshots and accounting alone do not replenish progress allowance.
+Preserve or reject opaque data explicitly rather than truncating it to fit.
+Human-readable
 thinking differs from signatures/encrypted replay and returns to providers only
 through adapter-owned replay. It counts as observed output whether displayed or
 not. Preserve signed prefixes or report reset/incompatibility; never reset inside

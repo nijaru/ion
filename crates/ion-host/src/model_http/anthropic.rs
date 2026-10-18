@@ -363,6 +363,7 @@ enum AnthropicBlock {
 }
 #[derive(Default)]
 pub(super) struct AnthropicState {
+    pub(super) budget: ResponseBudget,
     model: Option<String>,
     pub(super) prefix_digest: Option<String>,
     blocks: Vec<AnthropicBlock>,
@@ -420,6 +421,16 @@ impl AnthropicState {
             prefix_digest,
             ..Self::default()
         }
+    }
+
+    fn update_transformations(&mut self, value: Option<&Value>) -> Result<(), ProviderError> {
+        if let Some(value) = value.filter(|value| value.is_array())
+            && self.input_transformations.as_ref() != Some(value)
+        {
+            self.budget.retain_value(value)?;
+            self.input_transformations = Some(value.clone());
+        }
+        Ok(())
     }
 
     pub(super) fn usage(&self) -> Result<Usage, ProviderError> {
@@ -516,11 +527,9 @@ impl AnthropicState {
                 .as_str()
                 .filter(|s| !s.is_empty())
                 .ok_or_else(|| invalid("missing Anthropic model"))?;
+            self.budget.retain(model.len())?;
             self.model = Some(model.into());
-            self.input_transformations = value["message"]
-                .get("input_transformations")
-                .filter(|items| items.is_array())
-                .cloned();
+            self.update_transformations(value["message"].get("input_transformations"))?;
             self.update_usage(&value["message"]["usage"], true)?;
             return Ok(vec![ModelStreamEvent::Usage(self.usage()?)]);
         }
@@ -550,6 +559,8 @@ impl AnthropicState {
                 if !block.is_object() {
                     return Err(invalid("invalid Anthropic content block"));
                 }
+                self.budget.retain(std::mem::size_of::<AnthropicBlock>())?;
+                self.budget.retain_value(block)?;
                 let event = match block["type"].as_str() {
                     Some("text") => {
                         if block.get("citations").is_some_and(|v| {
@@ -652,17 +663,13 @@ impl AnthropicState {
                     .blocks
                     .get_mut(index)
                     .ok_or_else(|| invalid("delta for unknown block"))?;
-                let wire = self
-                    .wire_blocks
-                    .get_mut(index)
-                    .ok_or_else(|| invalid("missing Anthropic replay block"))?;
                 match (block, value["delta"]["type"].as_str()) {
                     (AnthropicBlock::Text(text), Some("text_delta")) => {
                         let part = value["delta"]["text"]
                             .as_str()
                             .ok_or_else(|| invalid("invalid text delta"))?;
+                        self.budget.retain(part.len())?;
                         text.push_str(part);
-                        wire["text"] = json!(text);
                         Ok(if part.is_empty() {
                             Vec::new()
                         } else {
@@ -678,8 +685,8 @@ impl AnthropicState {
                         let part = value["delta"]["thinking"]
                             .as_str()
                             .ok_or_else(|| invalid("invalid thinking delta"))?;
+                        self.budget.retain(part.len())?;
                         text.push_str(part);
-                        wire["thinking"] = json!(text);
                         Ok(if part.is_empty() {
                             Vec::new()
                         } else {
@@ -699,8 +706,8 @@ impl AnthropicState {
                             .as_str()
                             .filter(|s| !s.is_empty())
                             .ok_or_else(|| invalid("invalid signature delta"))?;
+                        self.budget.retain(part.len())?;
                         signature.push_str(part);
-                        wire["signature"] = json!(signature);
                         Ok(vec![ModelStreamEvent::OutputObserved])
                     }
                     (
@@ -715,6 +722,7 @@ impl AnthropicState {
                         let part = value["delta"]["partial_json"]
                             .as_str()
                             .ok_or_else(|| invalid("invalid tool input delta"))?;
+                        self.budget.retain(part.len())?;
                         fragments.get_or_insert_default().push_str(part);
                         Ok(if part.is_empty() {
                             Vec::new()
@@ -741,6 +749,7 @@ impl AnthropicState {
                 let content = match block {
                     AnthropicBlock::Text(text) => {
                         let text = std::mem::take(text);
+                        wire["text"] = json!(&text);
                         Some(Content::Text(text))
                     }
                     AnthropicBlock::Thinking {
@@ -829,12 +838,7 @@ impl AnthropicState {
                     self.finish = Some(reason.into());
                 }
                 self.in_message_delta = true;
-                if let Some(transformations) = value
-                    .get("input_transformations")
-                    .filter(|items| items.is_array())
-                {
-                    self.input_transformations = Some(transformations.clone());
-                }
+                self.update_transformations(value.get("input_transformations"))?;
                 self.update_usage(&value["usage"], false)?;
                 Ok(vec![ModelStreamEvent::Usage(self.usage()?)])
             }

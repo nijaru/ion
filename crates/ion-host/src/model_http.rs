@@ -27,6 +27,7 @@ use crate::{CredentialResolver, catalog::ModelCapabilities};
 mod anthropic;
 mod chat;
 mod controls;
+mod limits;
 #[cfg(test)]
 use anthropic::anthropic_body;
 #[cfg(test)]
@@ -37,10 +38,10 @@ use anthropic::{
 };
 use chat::{ChatState, chat_body};
 use controls::control_fields;
+use limits::{ResponseBudget, StreamBudget};
 
 const MAX_FRAME: usize = 256 * 1024;
 const MAX_ERROR_BODY: usize = 16 * 1024;
-const MAX_RESPONSE: usize = 8 * 1024 * 1024;
 const PROVIDER_IDLE_TIMEOUT: Duration = Duration::from_secs(300);
 const CHAT_REASONING_CONTENT_REPLAY: &str = "chat_reasoning_content";
 const OPENROUTER_PLAIN_REASONING_REPLAY: &str = "openrouter_plain_reasoning";
@@ -321,25 +322,24 @@ impl ModelService for HttpModelService {
             let stream: ModelStream = Box::pin(try_stream! {
                 let mut bytes = response.bytes_stream();
                 let mut frame = Vec::new();
-                let mut total = 0usize;
+                let mut budget = StreamBudget::default();
                 let mut decoder = if wire.is_chat() { Decoder::Chat(ChatState::new(wire)) } else { Decoder::Anthropic(AnthropicState::new(anthropic_prefix)) };
                 while let Some(next) = tokio::time::timeout(PROVIDER_IDLE_TIMEOUT, bytes.next())
                     .await
                     .map_err(|_| error(ProviderErrorKind::Timeout, "provider stream idle timeout"))? {
                     let chunk = next.map_err(|_| transport("provider stream transport failed"))?;
                     for byte in chunk {
-                        if total == MAX_RESPONSE { Err(invalid("provider stream exceeded byte limit"))?; }
-                        total += 1;
+                        budget.byte()?;
                         if frame.len() == MAX_FRAME { Err(invalid("provider SSE frame exceeded byte limit"))?; }
                         frame.push(byte);
                         // SSE ignores exactly one initial UTF-8 BOM. The absolute
                         // byte count recognizes it even across transport chunks.
-                        if total == 3 && frame.as_slice() == b"\xef\xbb\xbf" {
+                        if budget.wire_bytes == 3 && frame.as_slice() == b"\xef\xbb\xbf" {
                             frame.clear();
                             continue;
                         }
                         if !has_sse_event_boundary(&frame) { continue; }
-                        let events = decode_frame(&frame, &mut decoder, &request, wire)?;
+                        let events = decode_stream_frame(&frame, &mut decoder, &request, wire, &mut budget)?;
                         frame.clear();
                         for event in events {
                             let event = normalize_capacity(event, wire, context_window_tokens);
@@ -353,7 +353,7 @@ impl ModelService for HttpModelService {
                 // Chat Completions servers also close after finish_reason rather
                 // than sending a separate [DONE] sentinel.
                 if !frame.is_empty() {
-                    for event in decode_frame(&frame, &mut decoder, &request, wire)? {
+                    for event in decode_stream_frame(&frame, &mut decoder, &request, wire, &mut budget)? {
                         let event = normalize_capacity(event, wire, context_window_tokens);
                         let terminal = matches!(event, ModelStreamEvent::Completed(_));
                         yield event;
@@ -568,6 +568,23 @@ struct SseFrame {
     event: Option<String>,
     data: String,
 }
+fn decode_stream_frame(
+    frame: &[u8],
+    decoder: &mut Decoder,
+    request: &ModelRequest,
+    wire: HttpWire,
+    budget: &mut StreamBudget,
+) -> Result<Vec<ModelStreamEvent>, ProviderError> {
+    let before = decoder.retained_bytes();
+    let events = decode_frame(frame, decoder, request, wire)?;
+    let progress = decoder.retained_bytes() > before
+        || events
+            .iter()
+            .any(|event| matches!(event, ModelStreamEvent::Completed(_)));
+    budget.frame(frame.len(), progress)?;
+    Ok(events)
+}
+
 fn decode_frame(
     frame: &[u8],
     decoder: &mut Decoder,
@@ -997,6 +1014,13 @@ enum Decoder {
     Anthropic(AnthropicState),
 }
 impl Decoder {
+    fn retained_bytes(&self) -> usize {
+        match self {
+            Self::Chat(state) => state.budget.used,
+            Self::Anthropic(state) => state.budget.used,
+        }
+    }
+
     fn accept(
         &mut self,
         value: &Value,
@@ -1055,6 +1079,8 @@ fn valid_openrouter_details(value: &Value) -> bool {
 
 #[cfg(test)]
 mod tests {
+    mod stream_limits;
+
     use super::*;
     use ion_ai::{
         GenerationControls, ModelContextChange, ModelContextState, ModelContextTimeline, ModelRef,
