@@ -323,7 +323,11 @@ Context projection, branching and compaction have one owner. Compaction changes
 context, not history; commit complete call/result cuts atomically and retain the
 old projection when cancelled before commit. Preserve retrieval coordinates without
 replay or implicit evidence injection. Measure continuation quality, not compression
-alone. Context bounds do not imply bounded resident history or artifact retention.
+alone. Neutral prompt estimates count text/tool content once, excluding opaque
+provider replay; retained request-representation byte bounds still include it.
+These estimates are neither provider-token counts nor transport-wire bounds:
+provider-only continuation and reported usage remain separate concerns. Context
+bounds do not imply bounded resident history or artifact retention.
 
 Prepare wire declarations and durable context from the same catalogue. Admit
 model/context changes atomically before issuance. Pre-output retries retain that

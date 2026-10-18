@@ -489,9 +489,11 @@ impl Agent {
             return Err(AgentError::Cancelled);
         }
         self.validate_reasoning(session.reasoning()?)?;
-        let keep_bytes = self
-            .keep_bytes()
-            .min(serde_json::to_vec(&session.context_messages()?)?.len() / 2);
+        let keep_bytes = self.keep_bytes().min(
+            crate::json_size::encoded_len(&crate::prompt_size::NeutralMessages(
+                &session.context_messages()?,
+            ))? / 2,
+        );
         let mut changed = false;
         loop {
             match self
@@ -1737,10 +1739,24 @@ mod tests {
             })],
             provider_replay: None,
         });
+        request.messages[1].provider_replay = Some(ion_ai::ProviderReplay::new(
+            model().provider,
+            "opaque",
+            serde_json::json!("x".repeat(32_768)),
+        ));
         let mut reference = request.clone();
         reference.context_timeline = None;
+        // The representation limit includes retained replay; the neutral token
+        // estimate does not charge its duplicate payload or opaque metadata.
         let bytes = serde_json::to_vec(&reference).unwrap().len();
-        let input = bytes.saturating_sub(2 * image.data().len()).div_ceil(3) as u64 + 2 * 16_384;
+        for message in &mut reference.messages {
+            message.provider_replay = None;
+        }
+        let neutral_bytes = serde_json::to_vec(&reference).unwrap().len();
+        let input = neutral_bytes
+            .saturating_sub(2 * image.data().len())
+            .div_ceil(3) as u64
+            + 2 * 16_384;
         let limits = AgentLimits {
             max_request_bytes: bytes,
             context_window_tokens: Some(50_000),
@@ -2250,6 +2266,74 @@ mod tests {
         );
         drop(session);
         std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[tokio::test]
+    async fn signed_tool_continuation_counts_neutral_content_once() {
+        let root = std::env::temp_dir().join(format!("ion-replay-budget-{}", uuid::Uuid::now_v7()));
+        std::fs::create_dir(&root).unwrap();
+        std::fs::write(root.join("file.txt"), "content").unwrap();
+        let session =
+            Arc::new(CodingSession::create(root.join("session.sqlite"), Some(&root)).unwrap());
+        let content = vec![
+            Content::Text("x".repeat(5_000)),
+            Content::ToolCall(ToolCall {
+                id: "call_1".into(),
+                name: "read".into(),
+                arguments: serde_json::json!({"path":"file.txt"}),
+                raw_arguments: None,
+            }),
+        ];
+        let replay = ion_ai::ProviderReplay::new(
+            model().provider,
+            "opaque",
+            serde_json::to_value(&content).unwrap(),
+        )
+        .with_prefix_binding(true);
+        let service = Arc::new(ScriptedModelService::new([
+            Script::Stream(vec![ModelStreamEvent::Completed(ModelResponse {
+                message: Message {
+                    role: Role::Assistant,
+                    content,
+                    provider_replay: Some(replay.clone()),
+                },
+                usage: Usage::unknown(),
+                termination: ResponseTermination::Completed,
+                returned_model: Some("test".into()),
+            })]),
+            response(vec![Content::Text("done".into())]),
+        ]));
+        let agent = Agent::new(service.clone(), Arc::new(TestTools::new(&root)), model())
+            .with_limits(AgentLimits {
+                context_window_tokens: Some(11_800),
+                max_output_tokens: 256,
+                ..AgentLimits::default()
+            });
+        let result = agent
+            .submit(
+                session.clone(),
+                "read file".into(),
+                "instructions".into(),
+                CancellationToken::new(),
+                |_| {},
+            )
+            .await;
+        let requests = service.requests();
+        let view = session.view().unwrap();
+        drop((agent, session));
+        std::fs::remove_dir_all(root).unwrap();
+        assert_eq!(result.unwrap(), "done");
+        assert_eq!(requests.len(), 2);
+        assert_eq!(requests[1].controls.max_output_tokens, 256);
+        assert_eq!(
+            requests[1].messages[1].provider_replay.as_ref(),
+            Some(&replay)
+        );
+        assert!(!view.entries.iter().any(|entry| matches!(
+            entry,
+            crate::SessionEntry::Compacted { .. }
+                | crate::SessionEntry::ProviderReplayRebased { .. }
+        )));
     }
 
     #[tokio::test]

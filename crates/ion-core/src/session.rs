@@ -4657,6 +4657,62 @@ mod tests {
     }
 
     #[test]
+    fn compaction_suffix_budget_does_not_charge_opaque_replay() {
+        let (root, path) = fixture();
+        let session = Session::create(&path, Some(&root)).unwrap();
+        let model = ModelRef {
+            provider: "test".into(),
+            model: "test".into(),
+        };
+        for text in ["old", "recent"] {
+            let (turn, _) = session.begin_turn(text.into(), model.clone()).unwrap();
+            session
+                .record_assistant(
+                    turn,
+                    Message {
+                        role: Role::Assistant,
+                        content: vec![Content::Text(text.into())],
+                        provider_replay: Some(ion_ai::ProviderReplay::new(
+                            "test",
+                            "opaque",
+                            serde_json::json!("x".repeat(4_096)),
+                        )),
+                    },
+                    Usage::unknown(),
+                    false,
+                )
+                .unwrap();
+        }
+        let plan = session
+            .compaction_plan(1_000, usize::MAX, true, u64::MAX)
+            .unwrap()
+            .unwrap();
+        let summarized = plan.messages.len();
+        session
+            .record_compaction(
+                plan.through_entry,
+                "old summary".into(),
+                test_execution(),
+                Usage::unknown(),
+            )
+            .unwrap();
+        let context = session.context_messages().unwrap();
+        drop(session);
+        fs::remove_dir_all(root).unwrap();
+        assert_eq!(
+            summarized, 2,
+            "the recent turn fits the neutral suffix budget"
+        );
+        assert_eq!(context.len(), 3);
+        assert_eq!(context[2].content, vec![Content::Text("recent".into())]);
+        assert_eq!(
+            context[2].provider_replay.as_ref().unwrap().data,
+            serde_json::json!("x".repeat(4_096)),
+            "sizing must not discard retained continuation data"
+        );
+    }
+
+    #[test]
     fn compaction_never_cuts_between_parallel_tool_results() {
         let (root, path) = fixture();
         let session = Session::create(&path, Some(&root)).unwrap();

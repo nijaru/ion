@@ -2,7 +2,7 @@
 use std::sync::Arc;
 
 use ion_ai::{
-    Content, GenerationControls, Message, ModelRef, ModelRequest, ModelRoute, ModelRouteReason,
+    Content, GenerationControls, ModelRef, ModelRequest, ModelRoute, ModelRouteReason,
     ModelService, PromptCacheIntent, Reasoning, ToolChoice, ToolSpec,
 };
 use serde::Serialize;
@@ -12,6 +12,7 @@ use crate::{
     agent::{AgentError, AgentEvent, AgentLimits},
     generation::{GeneratedResponse, generate_with_retry},
     json_size::encoded_len,
+    prompt_size::NeutralMessages,
     session::{AuthorityScope, ModelContextSnapshot, RecoveryBinding, Session, SessionError},
     tool_set::{ToolCatalog, ToolSet},
 };
@@ -218,11 +219,11 @@ impl AgentLimits {
         // historical loadouts just to discard them. Exhaustive destructuring
         // makes new request fields require an explicit sizing decision.
         #[derive(Serialize)]
-        struct LatestRequest<'a> {
+        struct LatestRequest<'a, M> {
             route: &'a ModelRoute,
             provider_session_id: &'a Option<String>,
             instructions: &'a Option<String>,
-            messages: &'a [Message],
+            messages: M,
             tools: &'a [ToolSpec],
             context_timeline: Option<()>,
             prompt_cache: &'a PromptCacheIntent,
@@ -238,7 +239,7 @@ impl AgentLimits {
             prompt_cache,
             controls,
         } = request;
-        let bytes = encoded_len(&LatestRequest {
+        let latest = LatestRequest {
             route,
             provider_session_id,
             instructions,
@@ -247,7 +248,30 @@ impl AgentLimits {
             context_timeline: None,
             prompt_cache,
             controls,
-        })?;
+        };
+        // Bound the retained representation, including opaque continuation, even
+        // though it is not an additive part of the neutral token estimate.
+        let bytes = encoded_len(&latest)?;
+        if bytes > self.max_request_bytes {
+            return Ok(None);
+        }
+        let neutral_bytes = if messages
+            .iter()
+            .any(|message| message.provider_replay.is_some())
+        {
+            encoded_len(&LatestRequest {
+                route,
+                provider_session_id,
+                instructions,
+                messages: NeutralMessages(messages),
+                tools,
+                context_timeline: None,
+                prompt_cache,
+                controls,
+            })?
+        } else {
+            bytes
+        };
         let (encoded_images, image_count) = request
             .messages
             .iter()
@@ -265,7 +289,7 @@ impl AgentLimits {
         // Base64 is transport data, not prompt text. Reserve visual tokens until
         // observed provider usage supplies a more precise count.
         let estimated_input =
-            bytes.saturating_sub(encoded_images).div_ceil(3) as u64 + image_count * 16_384;
+            neutral_bytes.saturating_sub(encoded_images).div_ceil(3) as u64 + image_count * 16_384;
         Ok(self.output_budget(bytes, estimated_input, ceiling))
     }
 }

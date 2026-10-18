@@ -538,7 +538,11 @@ context advances, and is capped to one hour of active work. Refresh usage is
 stored as a cache_warm Session accounting fact but never enters model context
 or normal transcript/export output. Idle cache warming is not implemented.
 Ion avoids compaction during a signed tool continuation; if its prefix changes
-or cannot fit, the Turn fails without repeating a tool effect.
+or cannot fit, the Turn fails without repeating a tool effect. Context-window
+estimates count neutral content once rather than adding duplicate opaque replay.
+The encoded request bound still includes retained replay. Neither is an exact
+provider-token count or wire-size limit, and provider-only reasoning can make
+actual usage differ from the neutral estimate.
 For a llama.cpp server whose model emits unreplayable reasoning, use
 `--wire llama-cpp-no-thinking` to disable it on each request. Custom HTTP or
 HTTPS endpoints can run without a key. Pass `--api-key-env NAME` or run

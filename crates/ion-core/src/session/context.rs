@@ -97,7 +97,9 @@ impl Session {
         for &boundary in store.settled.range((previous + 1)..).rev() {
             while let Some(record) = suffix.next_if(|record| record.entry > boundary) {
                 suffix_bytes = suffix_bytes
-                    .saturating_add(crate::json_size::encoded_len(&record.message)?)
+                    .saturating_add(crate::json_size::encoded_len(
+                        &crate::prompt_size::NeutralMessage::from(&record.message),
+                    )?)
                     .saturating_add(1);
             }
             if suffix_bytes <= suffix_budget {
