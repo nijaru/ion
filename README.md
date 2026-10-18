@@ -893,7 +893,8 @@ completion claim and survives parent stop, parent-Session switch and reload, but
 not application shutdown. `list` and `status` inspect retained application jobs;
 `wait` waits for one joined report without consuming it; `cancel` explicitly
 stops one child; `acknowledge` releases one joined result's capacity without
-deleting its committed facts. A cancelled wait does not stop a background child.
+deleting its committed facts. A cancelled wait does not stop a background child
+or prevent other waiters from observing its joined report.
 
 A joined answer is the child's actual original final visible text, retained after
 full Host/Core joining of the requested completed Turn. It is not reconstructed

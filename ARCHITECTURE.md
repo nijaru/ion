@@ -251,7 +251,9 @@ implied.
 Model-facing coding actions are start/list/status/wait/cancel/acknowledge. A
 background start receipt means committed responsibility transfer, not completion.
 Wait and status return retained typed outcomes without consuming them;
-acknowledgement releases only joined capacity. A child's original visible answer
+concurrent waiters have independent notification subscriptions, and cancelling
+one does not strand another or relinquish operation custody. Acknowledgement
+releases only joined capacity. A child's original visible answer
 is retained only when its requested Turn completed and full Host/Core joining
 succeeded. Failure clears it; it is never reconstructed by reopening storage.
 Notifications are invalidations, not result delivery or completion proof.

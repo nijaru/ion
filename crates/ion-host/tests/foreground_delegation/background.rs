@@ -405,63 +405,83 @@ async fn cancelling_the_active_parent_after_transfer_does_not_cancel_the_child()
 }
 
 #[tokio::test]
-async fn concurrent_maintenance_waiters_both_observe_the_join() {
-    let owner = Arc::new(BackgroundOwner::new(1).unwrap());
-    let mut f = Fixture::with_owner(
-        Wait::Join,
-        true,
-        false,
-        DelegationContext::Fresh,
-        Some(owner.clone()),
-    );
-    f.start();
-    drain(&mut f.control).await;
-    let mut started = f.effect.started.subscribe();
-    started.wait_for(|started| *started).await.unwrap();
-    let (finished, mut completions) = watch::channel(0);
-    let mut tasks = Vec::new();
-    let mut ready = Vec::new();
-    for _ in 0..2 {
-        let owner = owner.clone();
-        let finished = finished.clone();
-        let (send, receive) = tokio::sync::oneshot::channel();
-        ready.push(receive);
-        tasks.push(tokio::spawn(async move {
-            let wait = owner.maintain();
-            tokio::pin!(wait);
-            let mut send = Some(send);
-            std::future::poll_fn(|cx| {
-                let result = std::future::Future::poll(wait.as_mut(), cx);
-                if result.is_pending()
-                    && let Some(send) = send.take()
-                {
-                    let _ = send.send(());
-                }
-                result
-            })
-            .await;
-            finished.send_modify(|count| *count += 1);
-        }));
+async fn background_waiters_keep_completion_when_the_last_waiter_is_cancelled() {
+    for cancel_last in [false, true] {
+        let owner = Arc::new(BackgroundOwner::new(1).unwrap());
+        let mut f = Fixture::with_owner(
+            Wait::Join,
+            true,
+            false,
+            DelegationContext::Fresh,
+            Some(owner.clone()),
+        );
+        f.start();
+        drain(&mut f.control).await;
+        let mut started = f.effect.started.subscribe();
+        started.wait_for(|started| *started).await.unwrap();
+        let child = f.session.view().unwrap().delegations()[0].record.child;
+        let (finished, mut completions) = watch::channel(0);
+        let mut tasks = Vec::new();
+        for _ in 0..2 {
+            let owner = owner.clone();
+            let finished = finished.clone();
+            let (send, receive) = tokio::sync::oneshot::channel();
+            tasks.push(tokio::spawn(async move {
+                let wait = owner.wait(child);
+                tokio::pin!(wait);
+                let mut send = Some(send);
+                let joined = std::future::poll_fn(|cx| {
+                    let result = std::future::Future::poll(wait.as_mut(), cx);
+                    if result.is_pending()
+                        && let Some(send) = send.take()
+                    {
+                        let _ = send.send(());
+                    }
+                    result
+                })
+                .await
+                .unwrap();
+                assert!(joined.joined);
+                assert!(matches!(
+                    joined.receipt.outcome,
+                    Some(DelegationOutcome::Joined { answer: Some(ref answer), .. })
+                        if answer == "two"
+                ));
+                finished.send_modify(|count| *count += 1);
+            }));
+            // Establish polling order without sleeps, before releasing the child.
+            receive.await.unwrap();
+        }
+        if cancel_last {
+            let last = tasks.pop().unwrap();
+            last.abort();
+            assert!(last.await.unwrap_err().is_cancelled());
+        }
+        let expected = tasks.len();
+        f.effect.release.notify_one();
+        let joined = tokio::time::timeout(
+            Duration::from_secs(5),
+            completions.wait_for(|count| *count == expected),
+        )
+        .await
+        .is_ok();
+        // Recover custody even on regression failure before removing the fixture.
+        owner.join_shutdown().await.unwrap();
+        for task in tasks {
+            task.await.unwrap();
+        }
+        let receipt = owner.take(child).unwrap().unwrap();
+        assert!(matches!(
+            receipt.outcome,
+            Some(DelegationOutcome::Joined { answer: Some(ref answer), .. })
+                if answer == "two"
+        ));
+        let root = f.root.clone();
+        drop((f, owner));
+        std::fs::remove_dir_all(root).unwrap();
+        assert!(
+            joined,
+            "all surviving waiters must observe the original join; cancel_last={cancel_last}"
+        );
     }
-    for ready in ready {
-        ready.await.unwrap();
-    }
-    f.effect.release.notify_one();
-    let joined = tokio::time::timeout(
-        Duration::from_millis(500),
-        completions.wait_for(|count| *count == 2),
-    )
-    .await
-    .is_ok();
-    owner.join_shutdown().await.unwrap();
-    for task in tasks {
-        task.await.unwrap();
-    }
-    let root = f.root.clone();
-    drop((f, owner));
-    std::fs::remove_dir_all(root).unwrap();
-    assert!(
-        joined,
-        "completion must wake every custody waiter, not just the operation's last poller"
-    );
 }

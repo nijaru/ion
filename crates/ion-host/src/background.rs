@@ -8,7 +8,7 @@ use std::{
         Arc, Mutex, MutexGuard, Weak,
         atomic::{AtomicBool, AtomicU64, Ordering},
     },
-    task::Poll,
+    task::{Context, Poll, Wake, Waker},
 };
 
 use anyhow::{Result, ensure};
@@ -34,8 +34,22 @@ struct Shared {
     failed: AtomicBool,
     revision: AtomicU64,
     stop: CancellationToken,
-    changed: Notify,
+    changed: Arc<Notify>,
+    completion_waker: Waker,
 }
+
+// Retain only the notification source, not Shared: Operations store this waker,
+// so retaining Shared here would create a cycle through its children.
+struct CompletionWake(Arc<Notify>);
+impl Wake for CompletionWake {
+    fn wake(self: Arc<Self>) {
+        self.0.notify_waiters();
+    }
+    fn wake_by_ref(self: &Arc<Self>) {
+        self.0.notify_waiters();
+    }
+}
+
 #[derive(Default)]
 struct State {
     reserved: usize,
@@ -111,6 +125,7 @@ impl BackgroundOwner {
             (1..=64).contains(&capacity),
             "background capacity must be 1..=64"
         );
+        let changed = Arc::new(Notify::new());
         Ok(Self {
             shared: Arc::new(Shared {
                 id: uuid::Uuid::new_v4(),
@@ -120,7 +135,8 @@ impl BackgroundOwner {
                 failed: AtomicBool::new(false),
                 revision: AtomicU64::new(0),
                 stop: CancellationToken::new(),
-                changed: Notify::new(),
+                completion_waker: Waker::from(Arc::new(CompletionWake(changed.clone()))),
+                changed,
             }),
         })
     }
@@ -269,20 +285,22 @@ impl BackgroundOwner {
             }
         }
     }
-    /// Drive joins, retaining original outcomes before yielding. Several borrowed
-    /// waiters can drive this owner without transferring or cancelling custody.
+    /// Drive joins, retaining original outcomes before yielding. Operations wake
+    /// the owner's notification source, never an individual caller. Each borrowed
+    /// waiter registers independently, so cancelling one cannot strand the rest.
     pub async fn maintain(&self) {
         let notified = self.shared.changed.notified();
         tokio::pin!(notified);
         notified.as_mut().enable();
         poll_fn(|cx| {
+            let mut operation_context = Context::from_waker(&self.shared.completion_waker);
             let mut state = self.shared.lock();
             let mut completed = false;
             let mut busy = false;
             let mut failures = Vec::new();
             for child in state.children.values_mut() {
                 if let Some(operation) = &mut child.operation {
-                    match Pin::new(operation).poll(cx) {
+                    match Pin::new(operation).poll(&mut operation_context) {
                         Poll::Pending => busy = true,
                         Poll::Ready(result) => {
                             if let Err(error) = &result {
