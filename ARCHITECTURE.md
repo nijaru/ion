@@ -35,6 +35,8 @@ recognizable behavior and complete workflows, not matching language-level APIs o
 copying their internal layering. State-of-the-art is a quality target, not a claim
 established by feature count: understandable control, dependable effects/recovery,
 useful context, responsive interaction and replaceable model/tool integrations.
+The product target is comparable workflow completeness, reliability and polish
+to Pi and fx; architectural similarity and passing tests alone do not reach it.
 
 | Concern | Reference semantics | Ion adaptation |
 | --- | --- | --- |
