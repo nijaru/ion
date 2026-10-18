@@ -109,7 +109,7 @@ impl McpExecutor {
             response = &mut handle.rx => response,
             () = self.server.retiring.cancelled() => {
                 drop(client);
-                let cleanup = self.server.retire().await;
+                let cleanup = self.server.shutdown().await;
                 let _ = sent.await;
                 cleanup.map_err(|cleanup| self.failed(cleanup))?;
                 return Err(self.failed("connection retired; effects may be unknown"));
@@ -125,13 +125,13 @@ impl McpExecutor {
                 match tokio::time::timeout(Duration::from_secs(3), &mut stopping).await {
                     Ok((_, Ok(()))) => {}
                     Ok((_, Err(error))) => {
-                        self.server.retire().await.map_err(|cleanup| self.failed(cleanup))?;
+                        self.server.shutdown().await.map_err(|cleanup| self.failed(cleanup))?;
                         return Err(self.failed(error));
                     }
                     Err(_) => {
                         // A partial native frame or pending HTTP POST cannot be
                         // abandoned while keeping its connection usable.
-                        let cleanup = self.server.retire().await;
+                        let cleanup = self.server.shutdown().await;
                         let _ = stopping.await;
                         cleanup.map_err(|cleanup| self.failed(cleanup))?;
                     }
@@ -154,7 +154,7 @@ impl McpExecutor {
             biased;
             _ = &mut sent => None,
             () = closing => {
-                let cleanup = self.server.retire().await;
+                let cleanup = self.server.shutdown().await;
                 let _ = sent.await;
                 cleanup.err().map(|error| format!("{error:#}"))
             }

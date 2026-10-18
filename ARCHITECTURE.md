@@ -307,7 +307,12 @@ file digest; editing the file invalidates trust. Untrusted entries are not
 connected, trusted project entries may override user entries by name, and trust is
 not sandboxing. MCP discovery isolates server failures and refreshes at later
 request boundaries; possibly effectful invocations are never transparently
-retried. MCP resources are bounded read-only context operations:
+retried. MCP shutdown retires every peer before joining connection cleanup;
+in-flight requests release read leases without requiring a remote response or
+caller cancellation. Concurrent closers join the same cleanup. Unanswered effects
+remain unknown; already observed results retain their original outcome through
+local conversion, separately owned by the calling operation.
+MCP resources are bounded read-only context operations:
 listings use frozen server identity, reads use the ordinary image or private-file
 path rather than model-visible base64, and an observation grants no effect,
 settlement or replay authority. Dynamic extension loading is not implied:

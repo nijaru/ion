@@ -612,7 +612,7 @@ async fn read_only_request(
         response = &mut handle.rx => response,
         () = server.retiring.cancelled() => {
             drop(client);
-            let cleanup = server.retire().await;
+            let cleanup = server.shutdown().await;
             let _ = sent.await;
             cleanup.map_err(|cleanup| failed(server, cleanup))?;
             return Err(failed(server, "connection retired; the resource read is unknown"));
@@ -626,11 +626,11 @@ async fn read_only_request(
             match tokio::time::timeout(Duration::from_secs(3), &mut stopping).await {
                 Ok((_, Ok(()))) => {}
                 Ok((_, Err(error))) => {
-                    server.retire().await.map_err(|cleanup| failed(server, cleanup))?;
+                    server.shutdown().await.map_err(|cleanup| failed(server, cleanup))?;
                     return Err(failed(server, error));
                 }
                 Err(_) => {
-                    let cleanup = server.retire().await;
+                    let cleanup = server.shutdown().await;
                     let _ = stopping.await;
                     cleanup.map_err(|cleanup| failed(server, cleanup))?;
                 }
@@ -650,7 +650,7 @@ async fn read_only_request(
         biased;
         _ = &mut sent => None,
         () = closing => {
-            let cleanup = server.retire().await;
+            let cleanup = server.shutdown().await;
             let _ = sent.await;
             cleanup.err().map(|error| format!("{error:#}"))
         }

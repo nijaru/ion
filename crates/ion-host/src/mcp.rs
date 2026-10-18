@@ -210,9 +210,14 @@ impl McpTools {
         diagnostics
     }
 
-    /// Join services and reap owned root processes before the runtime exits.
+    /// Retire admission, join services and reap owned root processes.
+    /// Outstanding requests need not receive a remote response or caller stop.
     /// Callers must await this on controlled exit, including failed setup.
     pub async fn shutdown(&self) -> Result<()> {
+        // Signal every peer before waiting on any connection's read leases.
+        for server in &self.servers {
+            server.retire();
+        }
         let results = join_all(self.servers.iter().map(|server| server.shutdown())).await;
         let errors: Vec<_> = results.into_iter().filter_map(Result::err).collect();
         ensure!(
@@ -229,12 +234,14 @@ impl McpTools {
 }
 
 impl Server {
-    async fn retire(&self) -> Result<()> {
+    fn retire(&self) {
         self.retiring.cancel();
-        self.shutdown().await
     }
 
     async fn shutdown(&self) -> Result<()> {
+        // Direct failure/cancellation paths use the same retirement boundary.
+        // A request must release its read lease before joining this close.
+        self.retire();
         // Concurrent callers join the same retirement, including a tool whose
         // protocol cancellation could not flush. Taking the client alone is
         // not evidence that another caller has finished closing it.
@@ -532,7 +539,7 @@ for line in sys.stdin:
     method = request["method"]
     if method == "initialize":
         result = {"protocolVersion": request["params"]["protocolVersion"],
-                  "capabilities": {"tools": {}}, "serverInfo": {"name": "settlement", "version": "1"}}
+                  "capabilities": {"tools": {"listChanged": True}}, "serverInfo": {"name": "settlement", "version": "1"}}
     elif method == "tools/list":
         result = {"tools": [{"name": "probe", "inputSchema": {"type": "object"}}]}
     elif method == "tools/call":
@@ -543,6 +550,8 @@ for line in sys.stdin:
     else:
         continue
     print(json.dumps({"jsonrpc": "2.0", "id": request["id"], "result": result}), flush=True)
+    if method == "tools/call":
+        print(json.dumps({"jsonrpc": "2.0", "method": "notifications/tools/list_changed"}), flush=True)
 "#;
             config.add("settlement", McpServer::Stdio(McpStdioServer {
                 command: "python3".into(), args: vec!["-c".into(), server.into()],
@@ -567,20 +576,33 @@ for line in sys.stdin:
                     arguments: json!({}), raw_arguments: None,
                 }, task_stop).await
             });
-            // An actual server effect precedes its response. Shutdown waits for
-            // network consumption, but must not wait for local result work.
-            let effect = tokio::time::timeout(Duration::from_secs(2), async {
-                while !root.join("effects").exists() {
+            // The effect file precedes the response and cannot prove local
+            // observation. This ordered notification is handled only after the
+            // peer has routed that response to its request handle. Shutdown may
+            // interrupt unanswered calls, but must retain this observed result
+            // and must not wait for its queued local conversion worker.
+            let observed = tokio::time::timeout(Duration::from_secs(2), async {
+                while source.servers[0].tool_list_version.load(Ordering::Acquire) == 0 {
                     tokio::time::sleep(Duration::from_millis(5)).await;
                 }
             }).await;
-            let closed = tokio::time::timeout(Duration::from_secs(4), source.shutdown()).await;
+            let closing = source.shutdown();
+            tokio::pin!(closing);
+            let closed = tokio::time::timeout(Duration::from_secs(4), &mut closing).await;
+            let independent = closed.is_ok();
             let early = tokio::time::timeout(Duration::from_millis(10), &mut work).await;
             let pending = early.is_err();
             stop.cancel();
             let still_pending = !work.is_finished();
             drop(release);
             blocker.await.unwrap();
+            // If the early close probe failed, release conversion before
+            // rescuing its retained cleanup future; never drop a partial join.
+            let cleanup = match closed {
+                Ok(result) => result,
+                Err(_) => tokio::time::timeout(Duration::from_secs(4), &mut closing)
+                    .await.expect("conversion release did not unblock cleanup"),
+            };
             let output = match early {
                 Ok(output) => output.unwrap(),
                 Err(_) => work.await.unwrap(),
@@ -590,8 +612,9 @@ for line in sys.stdin:
             let path = output.value["full_output_path"].as_str().unwrap();
             let saved: Value = serde_json::from_slice(&fs::read(path).unwrap()).unwrap();
             fs::remove_file(path).unwrap();
-            assert!(effect.is_ok(), "server effect not observed");
-            closed.expect("conversion held the MCP connection").unwrap();
+            assert!(observed.is_ok(), "peer did not observe the ordered response");
+            cleanup.unwrap();
+            assert!(independent, "conversion held the MCP connection");
             assert!(pending && still_pending, "MCP result bypassed owned blocking dispatch");
             assert_eq!(effects, "ONCE\n");
             assert!(output.is_error, "original server error must survive cancellation");

@@ -1289,7 +1289,12 @@ and reconcile committed Session facts, rather than joining a surviving suffix to
 old deltas. Reader detachment does not cancel execution; a service can retain
 control while clients detach. This is a progress stream, not a complete
 snapshot API by itself. Foreground clients explicitly stop/join on I/O loss.
-MCP connection cleanup remains a separate `McpTools::shutdown()` obligation.
+MCP connection cleanup remains a separate `McpTools::shutdown()` obligation;
+await it to completion. It retires all peers before joining services and owned
+root processes, so unanswered calls do not require caller cancellation to close.
+Unanswered effects remain unknown, never replayed. Already observed results remain
+owned by their calling operations, including queued conversion work; connection
+shutdown does not replace the operation stop/join obligation.
 
 For a service, retain `SessionControl` outside connection scope and drive
 `maintain()` while busy. It advances the same preparation, joining and follow-ups

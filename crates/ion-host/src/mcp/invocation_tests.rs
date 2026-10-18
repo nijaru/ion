@@ -17,10 +17,17 @@ for line in sys.stdin:
         continue
     method = request['method']
     if method == 'initialize':
+        capabilities = {'tools': {}}
+        if mode == 'shutdown':
+            capabilities['resources'] = {}
         result = {'protocolVersion': request['params']['protocolVersion'],
-                  'capabilities': {'tools': {}}, 'serverInfo': {'name': 'custody', 'version': '1'}}
+                  'capabilities': capabilities, 'serverInfo': {'name': 'custody', 'version': '1'}}
     elif method == 'tools/list':
         result = {'tools': [{'name': 'probe', 'inputSchema': {'type': 'object'}}]}
+    elif method == 'resources/read':
+        with Path('calls').open('a') as observed:
+            observed.write(json.dumps(request) + '\n')
+        continue
     elif method == 'tools/call':
         calls += 1
         with Path('calls').open('a') as observed:
@@ -131,6 +138,102 @@ async fn cancellation_notifies_the_issued_request_and_keeps_a_healthy_connection
         cancelled.expect("issued request was not cancelled")["requestId"],
         requests[0]["id"]
     );
+}
+
+#[tokio::test]
+async fn public_shutdown_retires_unanswered_tools_and_resources_without_caller_cancellation() {
+    for resource in [false, true] {
+        let (root, source, tools) = fixture("shutdown").await;
+        let call = ToolCall {
+            id: "unanswered".into(),
+            name: if resource {
+                "read_mcp_resource".into()
+            } else {
+                "mcp__7_custody__probe".into()
+            },
+            arguments: if resource {
+                json!({"server":"custody", "uri":"fixture://unanswered"})
+            } else {
+                json!({"wait":true})
+            },
+            raw_arguments: None,
+        };
+        let issued = tools.snapshot();
+        let late_issued = tools.snapshot();
+        let work_call = call.clone();
+        let stop = CancellationToken::new();
+        let work_stop = stop.clone();
+        let mut work =
+            tokio::spawn(async move { issued.execute_untracked(&work_call, work_stop).await });
+        let entered = tokio::time::timeout(Duration::from_secs(2), async {
+            while !root.join("calls").exists() {
+                tokio::time::sleep(Duration::from_millis(5)).await;
+            }
+        })
+        .await;
+        // Retain both closing futures on timeout. Dropping shutdown mid-cleanup
+        // would itself abandon its owned join; cancellation here is only rescue
+        // for the old deadlock, not part of the successful contract.
+        let closing = async { tokio::join!(source.shutdown(), source.shutdown()) };
+        tokio::pin!(closing);
+        let early = tokio::time::timeout(Duration::from_secs(2), &mut closing).await;
+        let independent = early.is_ok();
+        let closed = match early {
+            Ok(result) => result,
+            Err(_) => {
+                stop.cancel();
+                tokio::time::timeout(Duration::from_secs(5), &mut closing)
+                    .await
+                    .expect("cancelled invocation did not release shutdown")
+            }
+        };
+        let joined = tokio::time::timeout(Duration::from_secs(2), &mut work).await;
+        if joined.is_err() {
+            work.abort();
+            let _ = work.await;
+        }
+        let late = late_issued
+            .execute_untracked(&call, CancellationToken::new())
+            .await;
+        let requests = fs::read_to_string(root.join("calls")).unwrap();
+        let pid = fs::read_to_string(root.join("pid")).unwrap();
+        let process = tokio::process::Command::new("ps")
+            .args(["-p", &pid, "-o", "pid="])
+            .output()
+            .await
+            .unwrap();
+        fs::remove_dir_all(root).unwrap();
+
+        entered.expect("request did not reach the real server");
+        closed.0.unwrap();
+        closed.1.unwrap();
+        let output = joined.expect("invocation outlived shutdown").unwrap();
+        assert!(process.stderr.is_empty(), "ps failed: {process:?}");
+        assert!(
+            process.stdout.is_empty(),
+            "MCP root PID {pid} was not reaped"
+        );
+        assert!(
+            independent,
+            "public shutdown waited for caller cancellation (resource: {resource})"
+        );
+        assert!(!stop.is_cancelled());
+        assert!(
+            output.is_error && output.value["error"].as_str().unwrap().contains("unknown"),
+            "{}",
+            output.value
+        );
+        assert!(
+            late.is_error && late.value["error"].as_str().unwrap().contains("is closed"),
+            "{}",
+            late.value
+        );
+        assert_eq!(
+            requests.lines().count(),
+            1,
+            "shutdown or a stale capability reissued the request"
+        );
+    }
 }
 
 #[tokio::test]
