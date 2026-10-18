@@ -1062,8 +1062,12 @@ A failed result commit blocks dependent consumption; interrupted children are
 recorded as unknown before their parent is recovered. Reopening never reruns
 the script. `Promise.all` does not roll back writes or external calls.
 
-QuickJS runs on a separate blocking worker without ambient filesystem, network,
-module or timer APIs. Default limits are a cumulative 30-second runnable guest
+Each QuickJS invocation owns a separate native thread, not a slot in the host
+blocking pool its tool calls need. The operation retains the VM join through
+teardown; receiving a result is not join completion. Admission therefore costs
+one VM thread per concurrent invocation, with native stack space beyond its
+checked guest stack. There are no ambient filesystem, network, module or timer
+APIs. Default limits are a cumulative 30-second runnable guest
 budget, 64 bridge requests, four concurrent calls, a 64 MiB JS heap,
 512 KiB stack, 64 KiB source and 1 MiB per JSON value. The callable-name manifest
 and cumulative JSON reply data share an 8 MiB host-delivery budget. A separate

@@ -1,13 +1,10 @@
 //! Confined program protocol. Session authority never crosses this boundary.
 use std::time::Duration;
 
-use ion_ai::{ToolCall, ToolSpec};
+use ion_ai::{BoxFuture, ToolCall, ToolSpec};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
-use tokio::{
-    sync::{mpsc, oneshot},
-    task::JoinHandle,
-};
+use tokio::sync::{mpsc, oneshot};
 use tokio_util::sync::CancellationToken;
 
 use crate::{
@@ -91,14 +88,17 @@ pub struct CodeRequest {
 /// Close the request sender when the worker exits. Guest failure cancels `stop`;
 /// successful return leaves transferred work alive. No Session or executable
 /// catalogue enters the worker. The coding operation retains this task until it joins.
+/// `result` owns that join and completes only after worker teardown, not merely
+/// after receiving a guest result. Cancelling an await must retain this future.
 pub struct CodeTask {
     pub requests: mpsc::Receiver<CodeRequest>,
-    pub result: JoinHandle<CodeResult>,
+    pub result: BoxFuture<'static, Result<CodeResult, String>>,
 }
 /// Owns guest budget enforcement and cancellation responsiveness. Charge all
 /// runnable guest work cumulatively, including reply resolution/serialization;
 /// only idle bridge waits may be excluded. Signal failure before closing the
 /// sender, and do not cancel transferred effects on successful guest return.
+/// A waiting guest must not occupy capacity required by its host bridge work.
 /// `tools_json` is the complete bounded JSON array of exact callable names from
 /// the frozen catalogue, not executable authority. Its bytes are charged against
 /// the same JSON-delivery budget as replies; publish no partial namespace.

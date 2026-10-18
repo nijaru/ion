@@ -454,7 +454,10 @@ code, limits and a bounded bridge; Core retains Session/catalogue authority. It 
 not another agent loop or a durable JavaScript runtime. Pi is the model-facing
 authoring reference: named discoverable calls, useful declarations, selected
 structured/text/image output and actionable errors. README states the implemented
-subset; no comparative speedup is assumed.
+subset; no comparative speedup is assumed. VM execution capacity must be independent
+of host work awaited through its bridge. Core retains an owned join future until
+actual worker exit, not just receipt of a guest result; VM teardown precedes that
+completion. Cancellation does not detach either the VM or its started host work.
 
 Identify a parent by committed assistant-entry sequence and call ordinal, not a
 reusable provider ID. Commit nested tool intent before dispatch and observation

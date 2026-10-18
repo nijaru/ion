@@ -21,7 +21,7 @@ use tokio_util::sync::CancellationToken;
 
 mod output;
 
-/// A fresh, isolated VM on a blocking worker for each async JavaScript body.
+/// A fresh, isolated VM on an owned thread for each async JavaScript body.
 /// Only owned code and callable-name data enter it, never a Session or executable
 /// catalogue. No module loader, filesystem, network or timers are available.
 #[derive(Debug, Default, Clone, Copy)]
@@ -37,22 +37,40 @@ impl CodeRuntime for QuickJs {
     ) -> Result<CodeTask, String> {
         let setup = (|| {
             validate(&code, &tools_json, limits)?;
-            let handle = tokio::runtime::Handle::try_current()
-                .map_err(|_| "QuickJS requires a Tokio runtime")?;
             let (sender, requests) = mpsc::channel(limits.max_calls);
+            let (completed, completion) = oneshot::channel();
             let worker_stop = stop.clone();
-            let result = handle.spawn_blocking(move || {
-                let result = catch_unwind(AssertUnwindSafe(|| {
-                    execute(code, tools_json, limits, sender, &worker_stop)
-                }))
-                .unwrap_or_else(|_| CodeResult {
-                    result: Err("QuickJS worker panicked".into()),
-                    output: Vec::new(),
-                });
-                if result.result.is_err() {
-                    worker_stop.cancel();
-                }
-                result
+            // A guest awaiting native/MCP work must not reserve one of that
+            // work's blocking-pool slots. The admitted invocation owns its VM
+            // thread; no pool or detached result task sits between it and Core.
+            let worker = thread::Builder::new()
+                .name("ion-code-vm".into())
+                // Preserve room for Rust/bootstrap frames beyond the checked
+                // guest stack, including callers choosing above-default limits.
+                .stack_size(limits.stack_bytes + 2 * 1024 * 1024)
+                .spawn(move || {
+                    let result = catch_unwind(AssertUnwindSafe(|| {
+                        execute(code, tools_json, limits, sender, &worker_stop)
+                    }))
+                    .unwrap_or_else(|_| CodeResult {
+                        result: Err("QuickJS worker panicked".into()),
+                        output: Vec::new(),
+                    });
+                    if result.result.is_err() {
+                        worker_stop.cancel();
+                    }
+                    let _ = completed.send(result);
+                })
+                .map_err(|error| format!("cannot start QuickJS worker: {error}"))?;
+            let result = Box::pin(async move {
+                let result = completion.await;
+                // execute has already destroyed the VM, bridge and output
+                // owner before signalling. Only thread exit remains; no host
+                // work or guest teardown can block this join.
+                worker
+                    .join()
+                    .map_err(|_| "QuickJS worker panicked".to_owned())?;
+                result.map_err(|_| "QuickJS worker exited without a result".into())
             });
             Ok(CodeTask { requests, result })
         })();
@@ -449,8 +467,8 @@ fn run_guest(
     if stop.is_cancelled() {
         return Err("JavaScript cancelled".into());
     }
-    // Blocking-pool queue time is not guest execution. The clock starts only
-    // once this worker begins; cancellation still precedes VM construction.
+    // Worker startup time is not guest execution. The clock starts only once
+    // this worker begins; cancellation still precedes VM construction.
     let budget = Rc::new(GuestBudget::new(limits.execution_budget)?);
     let runtime = Runtime::new().map_err(|e| e.to_string())?;
     runtime.set_memory_limit(limits.heap_bytes);
@@ -608,6 +626,25 @@ mod tests {
             .await
             .expect("bridge must not block")
             .expect("request expected")
+    }
+
+    #[tokio::test]
+    async fn checked_guest_stack_can_exceed_the_default_native_thread_stack() {
+        let (mut task, stop) = start(
+            "function recurse() { return 1 + recurse(); } return recurse();",
+            CodeLimits {
+                heap_bytes: 64 * 1024 * 1024,
+                stack_bytes: 4 * 1024 * 1024,
+                ..limits()
+            },
+        );
+        let error = finish(&mut task).await.unwrap_err();
+        assert!(error.to_ascii_lowercase().contains("stack"), "{error}");
+        assert!(stop.is_cancelled());
+        assert!(task.requests.recv().await.is_none());
+        let (mut next, stop) = start("return 7;", limits());
+        assert_eq!(finish(&mut next).await.unwrap(), "7");
+        assert!(!stop.is_cancelled());
     }
 
     #[tokio::test]

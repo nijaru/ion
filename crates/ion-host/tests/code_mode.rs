@@ -82,6 +82,106 @@ async fn wait_file(path: &Path) {
     .unwrap();
 }
 
+#[test]
+fn guest_and_native_effects_progress_with_one_host_blocking_worker() {
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .max_blocking_threads(1)
+        .build()
+        .unwrap();
+    runtime.block_on(async {
+        let root = Workspace::new();
+        fs::write(root.0.join("input.txt"), "original\n").unwrap();
+        let session = root.session();
+        let (agent, model) = make_agent(
+            &root.0,
+            [
+                response(vec![code(
+                    "capacity",
+                    r#"
+                    const before = await tools.read({path:'input.txt'});
+                    if (before.is_error) throw new Error(JSON.stringify(before.value));
+                    const content = before.value.content + 'completed\n';
+                    const written = await tools.write({path:'result.txt',content});
+                    if (written.is_error) throw new Error(JSON.stringify(written.value));
+                    const after = await tools.read({path:'result.txt'});
+                    if (after.is_error) throw new Error(JSON.stringify(after.value));
+                    return after.value.content;
+                "#,
+                )]),
+                response(vec![Content::Text("complete".into())]),
+            ],
+            CodeLimits::default(),
+        );
+        let stop = CancellationToken::new();
+        let submission = agent.submit(
+            session.clone(),
+            "compose".into(),
+            String::new(),
+            stop.clone(),
+            |_| {},
+        );
+        tokio::pin!(submission);
+        let early = tokio::time::timeout(Duration::from_secs(5), &mut submission).await;
+        let progressed = early.is_ok();
+        let outcome = match early {
+            Ok(outcome) => outcome,
+            Err(_) => {
+                // The old capacity cycle is rescued only after the probe. Keep
+                // the real operation alive until its VM and native work join.
+                stop.cancel();
+                tokio::time::timeout(Duration::from_secs(5), &mut submission)
+                    .await
+                    .expect("cancelled capacity probe failed to join")
+            }
+        };
+        session.ensure_idle().unwrap();
+        assert!(
+            progressed,
+            "VM occupied the capacity needed by its native child"
+        );
+        outcome.unwrap();
+        assert!(!stop.is_cancelled());
+        let view = session.view().unwrap();
+        let parent = view
+            .entries
+            .iter()
+            .find_map(|entry| match entry {
+                SessionEntry::ToolResult { result, .. } if result.name == "code_mode" => {
+                    match &result.outcome {
+                        ion_core::ToolOutcome::Observed { output, .. } => Some(output),
+                        _ => None,
+                    }
+                }
+                _ => None,
+            })
+            .unwrap();
+        assert!(!parent.is_error, "{}", parent.value);
+        assert_eq!(parent.value["result"], "original\ncompleted\n");
+        assert_eq!(
+            fs::read_to_string(root.0.join("input.txt")).unwrap(),
+            "original\n"
+        );
+        assert_eq!(
+            fs::read_to_string(root.0.join("result.txt")).unwrap(),
+            "original\ncompleted\n"
+        );
+        let children: Vec<_> = view
+            .entries
+            .iter()
+            .filter_map(|entry| match entry {
+                SessionEntry::ChildToolResult { outcome, .. } => Some(outcome),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(children.len(), 3);
+        assert!(children.iter().all(
+            |outcome| matches!(outcome, ChildOutcome::Observed { output } if !output.is_error)
+        ));
+        assert_eq!(model.requests().len(), 2);
+    });
+}
+
 #[derive(Default)]
 struct DiscoverySource {
     pending: std::sync::atomic::AtomicBool,

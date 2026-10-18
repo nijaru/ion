@@ -77,8 +77,8 @@ impl CodeRuntime for Guest {
         let (sender, requests) = mpsc::channel(1);
         let await_reply = self.await_reply;
         let runtime = tokio::runtime::Handle::current();
-        // Like QuickJS, the guest retains a blocking-pool thread while awaiting
-        // its bridge. Inspection must not need another thread from that pool.
+        // An embedding runtime can retain a blocking-pool thread while awaiting
+        // inspection. Core's reader must not need another thread from that pool.
         let result = tokio::task::spawn_blocking(move || {
             let result = runtime.block_on(async move {
                 let (reply, receive) = oneshot::channel();
@@ -104,7 +104,10 @@ impl CodeRuntime for Guest {
                 output: Vec::new(),
             }
         });
-        Ok(CodeTask { requests, result })
+        Ok(CodeTask {
+            requests,
+            result: Box::pin(async move { result.await.map_err(|error| error.to_string()) }),
+        })
     }
 }
 
@@ -262,7 +265,10 @@ async fn namespace_and_replies_share_one_delivery_budget() {
                     output: Vec::new(),
                 }
             });
-            Ok(CodeTask { requests, result })
+            Ok(CodeTask {
+                requests,
+                result: Box::pin(async move { result.await.map_err(|error| error.to_string()) }),
+            })
         }
     }
     // Empty namespace is two encoded bytes; the missing description is `null`
