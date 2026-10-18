@@ -469,8 +469,11 @@ scroll. Results retain their full stored content, including capture paths.
 `/tools` lists calls, `/tool` opens the latest and `/tool N` selects one. Esc or Ctrl-O
 closes details and restores the selected chat renderer. Input not yet accepted
 by the Session returns to the editor if the turn fails or is cancelled.
-A history refresh failure reports a notice and returns queued input; it never
-replays input already accepted by the Session.
+If history cannot be read, Ion displays the error and retains the last readable
+view. Shared control continues: follow-ups may already be running and are not
+returned to the editor. Normal stop/failure rules still return unaccepted input.
+Do not resubmit a prompt to repair the display; inspect the Session and effects
+first.
 Ctrl-G edits the current draft in `$VISUAL`, then `$EDITOR`, falling back to
 `vi`; Ion keeps the original draft if the editor fails. Ctrl-X or `/copy`
 copies the last committed assistant answer to the system clipboard when one
