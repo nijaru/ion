@@ -235,14 +235,15 @@ async fn asynchronous_preparation_return_retains_raw_source_and_other_edits() {
     ui.recover_draft();
     assert_eq!((ui.draft.as_str(), ui.cursor), (literal, 2));
     assert!(matches!(&ui.images[0], ImageSource::Path(path) if path.ends_with("missing.png")));
+    // A path may cross a display-row boundary (notably with /tmp on Linux).
+    let notice = ui
+        .pending_history_rows(120)
+        .iter()
+        .map(ToString::to_string)
+        .collect::<String>();
     assert!(
-        ui.pending_history_rows(120)
-            .iter()
-            .any(|row| row.to_string().contains("preparation failed"))
-            && ui
-                .pending_history_rows(120)
-                .iter()
-                .any(|row| row.to_string().contains("missing.png"))
+        notice.contains("preparation failed") && notice.contains("missing.png"),
+        "{notice}"
     );
     // Recovery is passive: an empty Host stays empty until explicit resubmission.
     assert!(matches!(fixture.control.next().await, ControlUpdate::Idle));
