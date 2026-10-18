@@ -802,12 +802,24 @@ is not a valid integer or string option. Output metadata may still contain `null
 `read` uses one-based line `offset` and a line-count `limit` (default and
 maximum 2000), returning complete original lines within a 64 KiB text bound.
 `start_line` and `next_line` identify the recorded range; when `has_more` is true,
-pass `next_line` as `offset` to continue. An oversized first line requires an
-explicitly bounded `exec` read; it is never silently clipped or skipped. Empty
-files and exactly one line past EOF return an empty page; larger offsets reject.
+pass `next_line` as `offset` to continue. Oversized lines are never silently
+clipped or skipped. Empty files and exactly one line past EOF return an empty
+page; larger line offsets reject.
+
+For oversized lines or saved JSON observations, use zero-based `byte_offset`
+and `byte_limit` instead of line selectors. The byte limit defaults to 65536 and
+accepts 4–65536 bytes. Pages preserve UTF-8; the endpoint may round backward, so
+continue at the returned `next_byte`, not the requested offset plus limit.
+`start_byte` identifies the requested start; starts inside a character reject.
+An offset exactly at EOF returns an empty page; offsets beyond EOF reject.
+Line/byte selectors cannot be mixed, and neither applies to images. Pages are
+raw text fragments, not necessarily individually valid JSON.
+
 Continue reading when a complete file is needed; a partial window is not safe
-full-file replacement content. For files within its 8 MiB text-edit bound, `read.base_digest` covers
-the full file, not that window, and can guard a later `edit` or `write`.
+full-file replacement content. For files within its 8 MiB text-edit bound,
+`read` still reads the full file to compute `base_digest`, even for a byte page;
+64 KiB bounds returned text, not total file I/O. The digest covers the full
+file, not that window, and can guard a later `edit` or `write`.
 `edit` requires `base_digest` from a read of the complete current file; missing
 or stale digests reject before replacement. `write` requires the same guard to
 replace an existing file, while creation needs neither field and creates missing

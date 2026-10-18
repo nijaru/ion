@@ -265,7 +265,7 @@ pub(super) fn convert_tool_result(name: &str, result: CallToolResult) -> CodingT
         let suffix_start = floor_char_boundary(&encoded, encoded.len() - 10 * 1024);
         json!({
             "content": format!(
-                "MCP result truncated from {} bytes. Read full_output_path with read or exec when available.\n{}\n[... omitted middle ...]\n{}",
+                "MCP result truncated from {} bytes. Read full_output_path with read using byte_offset=0, continuing at next_byte, or bounded exec when available.\n{}\n[... omitted middle ...]\n{}",
                 encoded.len(), &encoded[..prefix_end], &encoded[suffix_start..]
             ),
             "truncated": true,

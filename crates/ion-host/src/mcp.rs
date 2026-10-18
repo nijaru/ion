@@ -397,6 +397,42 @@ fn tool_error(message: String) -> CodingToolOutput {
 }
 
 #[cfg(test)]
+async fn read_native_snapshot(path: &str) -> Value {
+    let source: Arc<dyn CodingToolSource> =
+        Arc::new(crate::local_tools::LocalTools::new(std::env::temp_dir()).unwrap());
+    let catalog = ion_core::ToolSet::new([source])
+        .with_selection(ion_core::ToolSelection::include(["read".into()]))
+        .snapshot();
+    let mut encoded = String::new();
+    let mut offset = 0;
+    loop {
+        let call = ion_ai::ToolCall {
+            id: "snapshot-page".into(),
+            name: "read".into(),
+            arguments: json!({"path":path,"byte_offset":offset}),
+            raw_arguments: None,
+        };
+        let output = catalog
+            .execute_untracked(&call, CancellationToken::new())
+            .await;
+        if output.is_error {
+            fs::remove_file(path).unwrap();
+        }
+        assert!(!output.is_error, "{}", output.value);
+        let content = output.value["content"].as_str().unwrap();
+        assert!(content.len() <= 64 * 1024);
+        encoded.push_str(content);
+        if !output.value["has_more"].as_bool().unwrap() {
+            break;
+        }
+        let next = output.value["next_byte"].as_u64().unwrap();
+        assert!(next > offset, "pagination must make progress");
+        offset = next;
+    }
+    serde_json::from_str(&encoded).unwrap()
+}
+
+#[cfg(test)]
 mod tests {
     use super::*;
     use invocation::convert_tool_result;
@@ -627,9 +663,9 @@ for line in sys.stdin:
         );
     }
 
-    #[test]
-    fn large_mcp_result_remains_readable_without_entering_model_context() {
-        let full_text = "important start\n".to_owned() + &"x".repeat(70 * 1024) + "\nimportant end";
+    #[tokio::test]
+    async fn large_mcp_result_remains_readable_without_entering_model_context() {
+        let full_text = "important start\n".to_owned() + &"é".repeat(40 * 1024) + "\nimportant end";
         let output = convert_tool_result(
             "report",
             CallToolResult::success(vec![ContentBlock::text(full_text.clone())]),
@@ -638,7 +674,7 @@ for line in sys.stdin:
         assert_eq!(output.value["truncated"], true);
         assert!(output.value["content"].as_str().unwrap().len() < 64 * 1024);
         let path = output.value["full_output_path"].as_str().unwrap();
-        let saved: Value = serde_json::from_slice(&fs::read(path).unwrap()).unwrap();
+        let saved = read_native_snapshot(path).await;
         assert_eq!(saved["content"], full_text);
         #[cfg(unix)]
         assert_eq!(

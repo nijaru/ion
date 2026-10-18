@@ -118,7 +118,7 @@ class Provider(BaseHTTPRequestHandler):
             ]
         elif len(requests) == 16:
             names = {tool["function"]["name"] for tool in body["tools"]}
-            assert "mcp__4_demo__large_report" in names, names
+            assert names == {"read", "mcp__4_demo__large_report"}, names
             changes = [
                 {"id": "mcp", "choices": [{"index": 0, "delta": {"tool_calls": [{"index": 0, "id": "call-large", "type": "function", "function": {"name": "mcp__4_demo__large_report", "arguments": "{}"}}]}, "finish_reason": None}]},
                 {"id": "mcp", "choices": [{"index": 0, "delta": {}, "finish_reason": "tool_calls"}]},
@@ -131,32 +131,54 @@ class Provider(BaseHTTPRequestHandler):
             path = Path(result["full_output_path"])
             full = json.loads(path.read_text())
             assert full["content"].startswith("START_MARKER\n") and full["content"].endswith("\nEND_MARKER"), full
-            path.unlink()
+            changes = [
+                {"id": "mcp", "choices": [{"index": 0, "delta": {"tool_calls": [{"index": 0, "id": "read-head", "type": "function", "function": {"name": "read", "arguments": json.dumps({"path": str(path), "byte_offset": 0, "byte_limit": 4096})}}]}, "finish_reason": None}]},
+                {"id": "mcp", "choices": [{"index": 0, "delta": {}, "finish_reason": "tool_calls"}]},
+            ]
+        elif len(requests) == 18:
+            envelope = json.loads(body["messages"][-1]["content"])
+            assert envelope["is_error"] is False, envelope
+            page = envelope["result"]
+            assert "START_MARKER\\n" in page["content"], page
+            assert page["start_byte"] == 0 and page["has_more"], page
+            assert page["next_byte"] == len(page["content"].encode()) <= 4096, page
+            changes = [
+                {"id": "mcp", "choices": [{"index": 0, "delta": {"tool_calls": [{"index": 0, "id": "read-middle", "type": "function", "function": {"name": "read", "arguments": json.dumps({"path": page["path"], "byte_offset": 32768, "byte_limit": 4096})}}]}, "finish_reason": None}]},
+                {"id": "mcp", "choices": [{"index": 0, "delta": {}, "finish_reason": "tool_calls"}]},
+            ]
+        elif len(requests) == 19:
+            envelope = json.loads(body["messages"][-1]["content"])
+            assert envelope["is_error"] is False, envelope
+            page = envelope["result"]
+            assert "MIDDLE_MARKER" in page["content"], page
+            assert page["start_byte"] == 32768 and page["has_more"], page
+            assert page["next_byte"] == 32768 + len(page["content"].encode()) <= 32768 + 4096, page
+            Path(page["path"]).unlink()
             changes = [
                 {"id": "mcp", "choices": [{"index": 0, "delta": {"content": "MCP_LARGE_OK"}, "finish_reason": None}]},
                 {"id": "mcp", "choices": [{"index": 0, "delta": {}, "finish_reason": "stop"}]},
             ]
-        elif len(requests) == 18:
+        elif len(requests) == 20:
             names = {tool["function"]["name"] for tool in body["tools"]}
             assert {"list_mcp_resources", "list_mcp_resource_templates", "read_mcp_resource"} <= names, names
             changes = [
                 {"id": "mcp", "choices": [{"index": 0, "delta": {"tool_calls": [{"index": 0, "id": "call-resource", "type": "function", "function": {"name": "read_mcp_resource", "arguments": '{"server":"demo","uri":"mem://guide"}'}}]}, "finish_reason": None}]},
                 {"id": "mcp", "choices": [{"index": 0, "delta": {}, "finish_reason": "tool_calls"}]},
             ]
-        elif len(requests) == 19:
+        elif len(requests) == 21:
             assert body["messages"][-1]["role"] == "tool" and "RESOURCE_OK" in body["messages"][-1]["content"], body
             changes = [
                 {"id": "mcp", "choices": [{"index": 0, "delta": {"content": "MCP_RESOURCE_OK"}, "finish_reason": None}]},
                 {"id": "mcp", "choices": [{"index": 0, "delta": {}, "finish_reason": "stop"}]},
             ]
-        elif len(requests) == 20:
+        elif len(requests) == 22:
             names = {tool["function"]["name"] for tool in body["tools"]}
             assert names == {"read", "list_mcp_resources", "list_mcp_resource_templates", "read_mcp_resource"}, names
             changes = [
                 {"id": "mcp", "choices": [{"index": 0, "delta": {"content": "READ_ONLY_OK"}, "finish_reason": None}]},
                 {"id": "mcp", "choices": [{"index": 0, "delta": {}, "finish_reason": "stop"}]},
             ]
-        elif len(requests) == 21:
+        elif len(requests) == 23:
             names = {tool["function"]["name"] for tool in body["tools"]}
             assert names == {"read", "write"}, names
             changes = [
@@ -292,7 +314,7 @@ for line in sys.stdin.buffer:
             with log.open('a') as output: output.write('called:picture\\n')
             result = {'content': [{'type': 'text', 'text': 'A tiny picture'}, {'type': 'image', 'mimeType': 'image/png', 'data': 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGP4z8DwHwAFAAH/iZk9HQAAAABJRU5ErkJggg=='}], 'isError': False}
         elif request['params']['name'] == 'large_report':
-            result = {'content': [{'type': 'text', 'text': 'START_MARKER\\n' + 'x' * (70 * 1024) + '\\nEND_MARKER'}], 'isError': False}
+            result = {'content': [{'type': 'text', 'text': 'START_MARKER\\n' + 'x' * (32 * 1024) + '\\nMIDDLE_MARKER\\n' + 'x' * (40 * 1024) + '\\nEND_MARKER'}], 'isError': False}
         else:
             raise AssertionError(request['params']['name'])
     elif method == 'ping':
@@ -481,7 +503,9 @@ with tempfile.TemporaryDirectory(prefix="ion-mcp-") as temporary:
     paired_script.write_text(paired_source)
     changing_script = work / "changing.py"
     changing_script.write_text(changing_source)
-    env = {**os.environ, "XDG_CONFIG_HOME": str(work / "config"), "XDG_STATE_HOME": str(work / "state"), "REMOTE_MCP_TOKEN": "test-token"}
+    for directory in ("home", "tmp", "cache"):
+        (work / directory).mkdir()
+    env = {**os.environ, "HOME": str(work / "home"), "TMPDIR": str(work / "tmp"), "XDG_CACHE_HOME": str(work / "cache"), "XDG_CONFIG_HOME": str(work / "config"), "XDG_STATE_HOME": str(work / "state"), "REMOTE_MCP_TOKEN": "test-token"}
     server = ThreadingHTTPServer(("127.0.0.1", 0), Provider)
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
@@ -565,7 +589,7 @@ with tempfile.TemporaryDirectory(prefix="ion-mcp-") as temporary:
         http_changed = subprocess.run([binary, "--cwd", workspace, "run", "Call the remote changing tools."], env=env, check=True, capture_output=True, text=True)
         assert http_changed.stdout.strip() == "MCP_HTTP_REFRESH_OK", http_changed
         assert len(remote_calls) == 4 and remote_calls[-1]["params"]["name"] == "lowercase", remote_calls
-        large = subprocess.run([binary, "--cwd", workspace, "run", "Read the large MCP report."], env=env, check=True, capture_output=True, text=True)
+        large = subprocess.run([binary, "--cwd", workspace, "--tools", "read,mcp__4_demo__large_report", "run", "Read the large MCP report, including its omitted middle."], env=env, check=True, capture_output=True, text=True, timeout=30)
         assert large.stdout.strip() == "MCP_LARGE_OK", large
         resource = subprocess.run([binary, "--cwd", workspace, "run", "Read the MCP guide resource."], env=env, check=True, capture_output=True, text=True)
         assert resource.stdout.strip() == "MCP_RESOURCE_OK", resource

@@ -31,7 +31,40 @@ struct ReadInput {
     offset: Option<u64>,
     #[serde(default, deserialize_with = "present_input")]
     limit: Option<usize>,
+    #[serde(default, deserialize_with = "present_input")]
+    byte_offset: Option<u64>,
+    #[serde(default, deserialize_with = "present_input")]
+    byte_limit: Option<usize>,
 }
+
+impl ReadInput {
+    fn range(&self) -> Result<text_read::Range, String> {
+        if self.byte_offset.is_some() || self.byte_limit.is_some() {
+            if self.offset.is_some() || self.limit.is_some() {
+                return Err("read byte ranges cannot be combined with line offset or limit".into());
+            }
+            let limit = self.byte_limit.unwrap_or(text_read::MAX_BYTES);
+            if !(4..=text_read::MAX_BYTES).contains(&limit) {
+                return Err("read byte_limit must be between 4 and 65536 bytes".into());
+            }
+            Ok(text_read::Range::Bytes {
+                offset: self.byte_offset.unwrap_or(0),
+                limit,
+            })
+        } else {
+            let offset = self.offset.unwrap_or(1);
+            let limit = self.limit.unwrap_or(text_read::MAX_LINES);
+            if offset == 0 {
+                return Err("read offset must be a one-based line number".into());
+            }
+            if !(1..=text_read::MAX_LINES).contains(&limit) {
+                return Err("read limit must be between 1 and 2000 lines".into());
+            }
+            Ok(text_read::Range::Lines { offset, limit })
+        }
+    }
+}
+
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct EditInput {
@@ -62,14 +95,10 @@ pub(super) fn read(cwd: &Path, args: &Value, stop: &CancellationToken) -> ToolOu
         Ok(value) => value,
         Err(e) => return error(format!("invalid read arguments: {e}")),
     };
-    let limit = input.limit.unwrap_or(text_read::MAX_LINES);
-    let offset = input.offset.unwrap_or(1);
-    if offset == 0 {
-        return error("read offset must be a one-based line number");
-    }
-    if !(1..=text_read::MAX_LINES).contains(&limit) {
-        return error("read limit must be between 1 and 2000 lines");
-    }
+    let range = match input.range() {
+        Ok(range) => range,
+        Err(message) => return error(message),
+    };
     let path = match path(cwd, &input.path) {
         Ok(path) => path,
         Err(e) => return error(e),
@@ -98,8 +127,12 @@ pub(super) fn read(cwd: &Path, args: &Value, stop: &CancellationToken) -> ToolOu
             )
         });
     if image_extension || ImageMime::detect(&header[..header_len]).is_some() {
-        if input.offset.is_some() || input.limit.is_some() {
-            return error("image read does not accept offset or limit");
+        if input.offset.is_some()
+            || input.limit.is_some()
+            || input.byte_offset.is_some()
+            || input.byte_limit.is_some()
+        {
+            return error("image read does not accept line or byte ranges");
         }
         if size > MAX_SOURCE_BYTES as u64 {
             return error("image exceeds 32 MiB source bound");
@@ -124,7 +157,7 @@ pub(super) fn read(cwd: &Path, args: &Value, stop: &CancellationToken) -> ToolOu
             is_error: false,
         };
     }
-    match text_read::read(file, size, &input.path, offset, limit, stop) {
+    match text_read::read(file, size, &input.path, range, stop) {
         Ok(value) => success(value),
         Err(message) => error(message),
     }
@@ -648,6 +681,15 @@ mod tests {
         assert!(!read.is_error, "{}", read.value);
         let digest = read.value["base_digest"].as_str().unwrap();
         assert_eq!(digest, hex_digest(&fs::read(&path).unwrap()));
+        let bytes = super::read(
+            &tools.cwd,
+            &json!({"path":"file.txt","byte_offset":0,"byte_limit":4}),
+            &CancellationToken::new(),
+        );
+        assert!(!bytes.is_error, "{}", bytes.value);
+        assert_eq!(bytes.value["content"], "alph");
+        assert_eq!(bytes.value["base_digest"], digest);
+        let digest = bytes.value["base_digest"].as_str().unwrap();
         let edit = edit(
             &tools.cwd,
             &json!({
@@ -752,13 +794,34 @@ mod tests {
         assert_eq!(output.value["next_line"], 3);
         assert_eq!(output.value["base_digest"], Value::Null);
         assert_eq!(output.value["has_more"], false);
+        let bytes = read(
+            &tools.cwd,
+            &json!({"path":"file.txt","byte_offset":MAX_FILE_BYTES + 2}),
+            &CancellationToken::new(),
+        );
+        assert!(!bytes.is_error, "{}", bytes.value);
+        assert_eq!(bytes.value["content"], "TAIL\n");
+        assert_eq!(bytes.value["base_digest"], Value::Null);
+        assert_eq!(bytes.value["has_more"], false);
         let stop = CancellationToken::new();
         stop.cancel();
-        assert!(read(&tools.cwd, &json!({"path":"file.txt","offset":2}), &stop).is_error);
+        for args in [
+            json!({"path":"file.txt","offset":2}),
+            json!({"path":"file.txt","byte_offset":MAX_FILE_BYTES + 2}),
+        ] {
+            assert!(read(&tools.cwd, &args, &stop).is_error);
+        }
         for args in [
             json!({"path":"file.txt","offset":0}),
             json!({"path":"file.txt","limit":0}),
             json!({"path":"file.txt","limit":2001}),
+            json!({"path":"file.txt","byte_limit":3}),
+            json!({"path":"file.txt","byte_limit":65537}),
+            json!({"path":"file.txt","byte_offset":-1}),
+            json!({"path":"file.txt","byte_offset":null}),
+            json!({"path":"file.txt","byte_limit":null}),
+            json!({"path":"file.txt","byte_offset":0,"limit":1}),
+            json!({"path":"file.txt","byte_limit":4,"offset":1}),
         ] {
             assert!(read(&tools.cwd, &args, &CancellationToken::new()).is_error);
         }
@@ -786,14 +849,12 @@ mod tests {
         assert_eq!(output.images.len(), 1);
         assert_eq!(output.images[0].mime_type().as_str(), "image/png");
         assert_eq!(output.value["path"], "picture.png");
-        assert!(
-            read(
-                &tools.cwd,
-                &json!({"path":"picture.png","offset":1}),
-                &CancellationToken::new()
-            )
-            .is_error
-        );
+        for args in [
+            json!({"path":"picture.png","offset":1}),
+            json!({"path":"picture.png","byte_offset":0}),
+        ] {
+            assert!(read(&tools.cwd, &args, &CancellationToken::new()).is_error);
+        }
         fs::remove_dir_all(root).unwrap();
     }
 }

@@ -741,7 +741,7 @@ fn bound_read_result(value: Value, images: Vec<ImageContent>, failed: bool) -> C
             Some(path),
             None,
             format!(
-                "MCP resource output exceeded the {MAX_INLINE_RESULT_BYTES}-byte inline bound. Read full_output_path with read or exec; the file is a private JSON snapshot of the observation."
+                "MCP resource output exceeded the {MAX_INLINE_RESULT_BYTES}-byte inline bound. Read full_output_path with read using byte_offset=0, continuing at next_byte, or bounded exec when available; the file is a private JSON snapshot of the observation."
             ),
         ),
         Err(error) => (

@@ -286,7 +286,7 @@ async fn resources_list_templates_read_and_capability_gating() {
         .as_str()
         .expect("large resource full output path")
         .to_owned();
-    let full: Value = serde_json::from_slice(&fs::read(&full_path).unwrap()).unwrap();
+    let full = super::read_native_snapshot(&full_path).await;
     assert_eq!(full["contents"][0]["text"].as_str().unwrap().len(), 70000);
     fs::remove_file(&full_path).unwrap();
 

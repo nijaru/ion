@@ -285,7 +285,11 @@ Selection is application configuration for its managed children, not a session
 guarantee, authority grant or sandbox. Tool visibility is not a permission system
 or sandbox.
 
-Host validates untrusted arguments/content. Native exact edits require the
+Host validates untrusted arguments/content. Native UTF-8 reads return complete
+lines by default; explicit byte pages use actual character-boundary continuations
+without clipping or skipping source bytes. The same bounded reader retrieves
+raw saved observations even when a physical line exceeds the page allowance.
+Native exact edits require the
 complete-file digest returned by read and validate disjoint replacements against
 one original snapshot; write replacements require that digest unless the caller
 explicitly opts into unconditional replacement. Creation remains unguarded.
