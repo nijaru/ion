@@ -10,6 +10,9 @@ use tokio_util::sync::CancellationToken;
 
 use crate::agent::{AgentError, AgentEvent};
 
+#[cfg(test)]
+mod tests;
+
 #[derive(Debug)]
 pub(crate) struct GeneratedResponse {
     pub response: ModelResponse,
@@ -34,10 +37,10 @@ where
             attempt_request.route.reason = ModelRouteReason::Retry;
         }
         let route = attempt_request.route.clone();
-        let (result, observed) = generate_once(model, attempt_request, stop, observe).await;
+        let (result, output_observed) = generate_once(model, attempt_request, stop, observe).await;
         match result {
             Err(AgentError::Provider(error))
-                if !observed && attempt < 2 && retryable_provider_error(&error) =>
+                if !output_observed && attempt < 2 && retryable_provider_error(&error) =>
             {
                 // A server's pacing takes precedence over local backoff.
                 // Leave long waits to the caller instead of holding a Turn
@@ -84,40 +87,39 @@ where
         () = stop.cancelled() => return (Err(AgentError::Cancelled), false),
     };
     tokio::pin!(stream);
-    let mut observed = false;
     let mut output_observed = false;
     loop {
         let event = tokio::select! {
             item = stream.next() => item,
-            () = stop.cancelled() => return (Err(AgentError::Cancelled), observed),
+            () = stop.cancelled() => return (Err(AgentError::Cancelled), output_observed),
         };
         match event {
-            Some(Ok(ModelStreamEvent::TextDelta(text))) => {
-                observed = true;
+            Some(Ok(ModelStreamEvent::TextDelta(text))) if !text.is_empty() => {
                 output_observed = true;
                 observe(AgentEvent::TextDelta(text));
             }
-            Some(Ok(ModelStreamEvent::ThinkingDelta { block, text })) => {
-                observed = true;
+            Some(Ok(ModelStreamEvent::ThinkingDelta { block, text })) if !text.is_empty() => {
                 output_observed = true;
                 observe(AgentEvent::ThinkingDelta { block, text });
             }
             Some(Ok(ModelStreamEvent::OutputObserved | ModelStreamEvent::ToolCall(_))) => {
-                observed = true;
                 if !output_observed {
                     output_observed = true;
                     observe(AgentEvent::ModelOutputObserved);
                 }
             }
-            Some(Ok(ModelStreamEvent::Usage(_))) => {
-                observed = true;
-            }
+            // Accounting and empty deltas do not establish generated-output
+            // custody. In particular, Anthropic reports input usage at start.
+            Some(Ok(
+                ModelStreamEvent::Usage(_)
+                | ModelStreamEvent::TextDelta(_)
+                | ModelStreamEvent::ThinkingDelta { .. },
+            )) => {}
             Some(Ok(ModelStreamEvent::ProviderReplayNotice {
                 action,
                 reason,
                 count,
             })) => {
-                observed = true;
                 observe(AgentEvent::ProviderReplayNotice {
                     action,
                     reason,
@@ -132,16 +134,14 @@ where
                         Content::Text(text) | Content::Thinking(text) => !text.is_empty(),
                         _ => true,
                     });
-                if generated {
-                    observed = true;
-                    if !output_observed {
-                        observe(AgentEvent::ModelOutputObserved);
-                    }
+                if generated && !output_observed {
+                    output_observed = true;
+                    observe(AgentEvent::ModelOutputObserved);
                 }
-                return (Ok(response), observed);
+                return (Ok(response), output_observed);
             }
-            Some(Err(error)) => return (Err(AgentError::Provider(error)), observed),
-            None => return (Err(AgentError::IncompleteModelResponse), observed),
+            Some(Err(error)) => return (Err(AgentError::Provider(error)), output_observed),
+            None => return (Err(AgentError::IncompleteModelResponse), output_observed),
         }
         // A buffered provider stream can otherwise emit an entire SSE batch in
         // one poll. Let clients publish progress and process controls between

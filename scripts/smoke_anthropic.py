@@ -13,6 +13,7 @@ root = Path(__file__).resolve().parent.parent
 binary = Path(os.environ.get("ION_SMOKE_BIN", root / "target/debug/ion"))
 requests = []
 summary_requests = []
+retry_requests = []
 
 
 def event(kind, **fields):
@@ -20,7 +21,7 @@ def event(kind, **fields):
     return f"event: {kind}\ndata: {json.dumps(value)}\n\n".encode()
 
 
-def response(index):
+def response(index, *, overloaded=False):
     frames = [
         event(
             "message_start",
@@ -34,6 +35,10 @@ def response(index):
             },
         )
     ]
+    if overloaded:
+        return b"".join(frames) + event(
+            "error", error={"type": "overloaded_error", "message": "busy"}
+        )
     if 0 < index <= 4:
         frames.extend(
             [
@@ -95,7 +100,10 @@ def response(index):
 class Handler(BaseHTTPRequestHandler):
     def do_POST(self):
         body = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
-        if str(body.get("system", "")).startswith("Summarize the coding conversation"):
+        if self.path == "/retry/v1/messages":
+            retry_requests.append(body)
+            payload = response(0, overloaded=len(retry_requests) == 1)
+        elif str(body.get("system", "")).startswith("Summarize the coding conversation"):
             summary_requests.append(body)
             payload = response(0)
         else:
@@ -112,7 +120,9 @@ class Handler(BaseHTTPRequestHandler):
 
 
 def run(binary, env, *args):
-    result = subprocess.run([binary, *map(str, args)], env=env, capture_output=True, text=True)
+    result = subprocess.run(
+        [binary, *map(str, args)], env=env, capture_output=True, text=True, timeout=20
+    )
     assert result.returncode == 0, (result.args, result.stdout, result.stderr)
     return [json.loads(line) for line in result.stdout.splitlines()] if "--json" in args else []
 
@@ -124,8 +134,16 @@ with tempfile.TemporaryDirectory(prefix="ion-anthropic-") as temporary:
     (workspace / "data.txt").write_text("data\n")
     instructions = workspace / "AGENTS.md"
     instructions.write_text("PROJECT_ALPHA\n")
-    env = os.environ.copy()
-    env.update(XDG_CONFIG_HOME=str(work / "config"), XDG_STATE_HOME=str(work / "state"))
+    home = work / "home"
+    home.mkdir()
+    temporary_files = work / "tmp"
+    temporary_files.mkdir()
+    env = {key: os.environ[key] for key in ("PATH", "SHELL") if key in os.environ}
+    env.update(
+        HOME=str(home), XDG_CONFIG_HOME=str(work / "config"),
+        XDG_STATE_HOME=str(work / "state"), XDG_DATA_HOME=str(work / "data"),
+        TMPDIR=str(temporary_files),
+    )
     server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
@@ -181,9 +199,22 @@ with tempfile.TemporaryDirectory(prefix="ion-anthropic-") as temporary:
             entry["kind"] == "assistant" and entry["data"]["message"]["provider_replay"] is not None
             for entry in entries
         ) >= 2
+
+        retry_endpoint = f"http://127.0.0.1:{server.server_port}/retry/v1/messages"
+        run(binary, env, "use", "smoke", "mock", "--endpoint", retry_endpoint, "--wire", "anthropic-messages")
+        retried = run(binary, env, "--json", "--cwd", workspace, "run", "Retry before output")
+        assert retried[-1] == {"type": "run_end", "status": "completed"}, retried
+        retries = [i for i, item in enumerate(retried) if item["type"] == "provider_retry"]
+        assert len(retries) == 1, retried
+        assert not any(
+            item["type"] in ("text_delta", "thinking_delta", "model_output_observed")
+            for item in retried[:retries[0]]
+        ), retried
+        assert len(retry_requests) == 2, retry_requests
+        assert retry_requests[0] == retry_requests[1], "retry changed the prepared request"
     finally:
         server.shutdown()
         server.server_close()
         thread.join(timeout=2)
 
-print("Anthropic signed headless continuation, compaction and resource rebase: ok")
+print("Anthropic signed continuation, compaction/rebase and usage-only stream retry: ok")

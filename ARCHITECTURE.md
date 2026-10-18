@@ -349,7 +349,8 @@ an outstanding signed exchange. Core must not branch on provider names.
 Caching/affinity are optimizations, not authority. Affinity survives reopen and
 changes on fork/clone. Warming is bounded, separately accounted and subordinate
 to settlement. Transient provider retries are bounded, cancellable and allowed
-only before observed output, without repeating completed tools.
+only before observed output, without repeating completed tools. Accounting,
+input-transformation notices and empty deltas do not establish output custody.
 
 ## Clients and extension boundaries
 

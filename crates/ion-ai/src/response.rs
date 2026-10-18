@@ -50,9 +50,11 @@ pub enum ModelStreamEvent {
         text: String,
     },
     ToolCall(ToolCall),
+    /// Accounting only; may arrive before generation and does not bar pre-output retry.
     Usage(Usage),
     /// A provider reported that saved opaque reasoning was dropped or that a
-    /// prefix mismatch was allowed for this response.
+    /// prefix mismatch was allowed for this response. This input-transformation
+    /// notice does not establish generated-output custody.
     ProviderReplayNotice {
         action: String,
         reason: String,
