@@ -209,8 +209,12 @@ Inline remains the default, but persistent fullscreen is also available with
 inside chat. The interactive terminal publishes an OSC 7501 root record with
 `app=ion` on state changes: `idle`, `working`, `done`, `error`, or `blocked`
 with `kind=auth` while the masked credential prompt is waiting. `done` and
-`error` remain until replaced; `working` is not re-sent as a heartbeat. The
-sequence is emitted only by the interactive terminal's physical output owner,
+`error` remain until replaced by a later outcome. Live foreground control,
+including input preparation, temporarily reports `working`; preparation that
+returns a draft without starting an operation restores the retained outcome
+(or `idle` if none exists). Credential entry is also a temporary overlay.
+An observed failed shell command reports `error`; cancellation reports `idle`.
+`working` is not re-sent as a heartbeat. The sequence is emitted only by the interactive terminal's physical output owner,
 never by headless, RPC or redirected output. Reports omit optional task messages,
 titles and percentages. Ion currently has no approval/question interaction, so it
 does not invent corresponding blocked states. Feature detection is optional in

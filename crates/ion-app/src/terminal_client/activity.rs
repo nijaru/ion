@@ -186,6 +186,7 @@ impl Activity {
                 } else {
                     ui.return_draft(returned.metadata, images);
                 }
+                ui.status = "Draft returned".into();
                 let fault = returned
                     .preparation_error
                     .map(|error| format!("; preparation also failed: {error:#}"))

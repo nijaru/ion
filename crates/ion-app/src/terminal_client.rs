@@ -49,17 +49,35 @@ const RESUME_ENTRY_LIMIT_WITHOUT_TURNS: usize = 32;
 
 #[derive(Default)]
 pub(super) struct ProgramStatusState {
-    current: Option<ProgramStatus>,
+    // Preparation and modal activity overlay this result; neither consumes it.
+    settled: Option<ProgramStatus>,
+    blocked_auth: bool,
     published: Option<ProgramStatus>,
 }
 
 impl ProgramStatusState {
-    fn set(&mut self, status: ProgramStatus) {
-        self.current = Some(status);
+    fn settle(&mut self, status: ProgramStatus) {
+        self.settled = Some(status);
     }
 
-    fn publish(&mut self, terminal: &mut TerminalSession) -> Result<()> {
-        let status = self.current.unwrap_or(ProgramStatus::Idle);
+    fn observe<M>(&mut self, update: &ion_host::ControlUpdate<M>) {
+        if let ion_host::ControlUpdate::Settled(settlement) = update {
+            self.settle(settlement_program_status(&settlement.outcome));
+        }
+    }
+
+    fn status(&self, busy: bool) -> ProgramStatus {
+        if self.blocked_auth {
+            ProgramStatus::BlockedAuth
+        } else if busy {
+            ProgramStatus::Working
+        } else {
+            self.settled.unwrap_or(ProgramStatus::Idle)
+        }
+    }
+
+    fn publish(&mut self, terminal: &mut TerminalSession, busy: bool) -> Result<()> {
+        let status = self.status(busy);
         if self.published == Some(status) {
             return Ok(());
         }
@@ -223,7 +241,7 @@ pub async fn chat(init: ChatInit) -> Result<()> {
         let mut poll_control = true;
         loop {
             terminal.check_active().context("terminal lifecycle failed")?;
-            program.publish(terminal)?;
+            program.publish(terminal, runtime.is_busy())?;
             draw(terminal, screen, &mut ui, activity.live(), activity.view(&runtime)).await?;
             #[cfg(debug_assertions)]
             if std::env::var_os("ION_SMOKE_PANIC_AFTER_FIRST_DRAW").is_some() {
@@ -235,9 +253,7 @@ pub async fn chat(init: ChatInit) -> Result<()> {
                 // can have produced work or reliable updates.
                 update = runtime.next(), if poll_control => {
                     poll_control = !matches!(update, ion_host::ControlUpdate::Idle);
-                    if let Some(status) = update_program_status(&update) {
-                        program.set(status);
-                    }
+                    program.observe(&update);
                     let _visible_settlement_error = activity.update(&mut ui, &runtime, update)?;
                     continue;
                 },
@@ -270,7 +286,6 @@ pub async fn chat(init: ChatInit) -> Result<()> {
                         && (runtime.is_busy() || activity.view(&runtime).is_some())
                     {
                         runtime.request_stop();
-                        program.set(ProgramStatus::Working);
                         poll_control = true;
                         continue;
                     }
@@ -299,11 +314,10 @@ pub async fn chat(init: ChatInit) -> Result<()> {
                         Action::Shell { command, exclude_from_context, source } => {
                             match runtime.shell(command, exclude_from_context, source) {
                                 Ok(_) => {
-                                    program.set(ProgramStatus::Working);
                                     ui.status.clear();
                                 }
                                 Err((source, error)) => {
-                                    program.set(ProgramStatus::Error);
+                                    program.settle(ProgramStatus::Error);
                                     ui.restore_editor(source);
                                     ui.status = format!("Shell was not started: {error:#}");
                                 }
@@ -428,15 +442,16 @@ async fn login_in_terminal(
     program: &mut ProgramStatusState,
 ) -> Result<Result<()>> {
     anyhow::ensure!(!provider.is_empty(), "use /login PROVIDER");
-    program.set(ProgramStatus::BlockedAuth);
-    program.publish(terminal)?;
+    // Command admission allows credential entry only while foreground control is idle.
+    program.blocked_auth = true;
+    program.publish(terminal, false)?;
     let result = match terminal.read_secret(&format!("{provider} API key: ")).await {
         Ok(key) => credentials.save_api_key(provider, &key),
         Err(error) => Err(error).context("read login credential"),
     };
     let restored = new_inline_screen(terminal).await;
-    program.set(ProgramStatus::Idle);
-    program.publish(terminal)?;
+    program.blocked_auth = false;
+    program.publish(terminal, false)?;
     *screen = restored.context("restore inline chat after login")?;
     Ok(result)
 }
@@ -1603,19 +1618,6 @@ fn draw_prepared(
     Ok(())
 }
 
-fn update_program_status<M>(update: &ion_host::ControlUpdate<M>) -> Option<ProgramStatus> {
-    match update {
-        ion_host::ControlUpdate::Input { .. }
-        | ion_host::ControlUpdate::Dispatched { .. }
-        | ion_host::ControlUpdate::Accepted { .. }
-        | ion_host::ControlUpdate::Activity(_) => Some(ProgramStatus::Working),
-        ion_host::ControlUpdate::Settled(settlement) => {
-            Some(settlement_program_status(&settlement.outcome))
-        }
-        ion_host::ControlUpdate::Returned(_) | ion_host::ControlUpdate::Idle => None,
-    }
-}
-
 fn settlement_program_status(outcome: &ion_host::OperationOutcome) -> ProgramStatus {
     use ion_host::OperationOutcome;
     match outcome {
@@ -1626,6 +1628,7 @@ fn settlement_program_status(outcome: &ion_host::OperationOutcome) -> ProgramSta
         OperationOutcome::Shell(Ok(output)) if output.value["cancelled"] == true => {
             ProgramStatus::Idle
         }
+        OperationOutcome::Shell(Ok(output)) if output.is_error => ProgramStatus::Error,
         OperationOutcome::Turn(Err(_))
         | OperationOutcome::Compact(Err(_))
         | OperationOutcome::Shell(Err(_)) => ProgramStatus::Error,

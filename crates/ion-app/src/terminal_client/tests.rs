@@ -29,6 +29,80 @@ fn settlement_program_status_distinguishes_done_and_cancelled() {
         ))),
         ProgramStatus::Error
     );
+    for (is_error, cancelled, expected) in [
+        (false, false, ProgramStatus::Done),
+        (true, false, ProgramStatus::Error),
+        (true, true, ProgramStatus::Idle),
+    ] {
+        let output = ion_core::CodingToolOutput {
+            value: serde_json::json!({"cancelled": cancelled}),
+            images: vec![],
+            is_error,
+        };
+        assert_eq!(
+            settlement_program_status(&OperationOutcome::Shell(Ok(output))),
+            expected
+        );
+    }
+}
+
+#[tokio::test]
+async fn preparation_without_an_operation_restores_the_retained_status() {
+    let mut fixture = Fixture::new();
+    for resting in [
+        ProgramStatus::Idle,
+        ProgramStatus::Done,
+        ProgramStatus::Error,
+    ] {
+        let mut program = ProgramStatusState::default();
+        program.settle(resting);
+        let mut ui = Frontend {
+            images: vec![ImageSource::Path(fixture.root.join("missing.png"))],
+            ..Frontend::default()
+        };
+        submit_editor(
+            &mut fixture.control,
+            &mut ui,
+            Delivery::Start,
+            EditorDraft::at_end("prepare image".into()),
+        );
+        assert_eq!(
+            program.status(fixture.control.is_busy()),
+            ProgramStatus::Working
+        );
+        let mut activity = Activity::default();
+        tokio::time::timeout(Duration::from_secs(5), async {
+            loop {
+                let update = fixture.control.next().await;
+                assert!(
+                    !matches!(update, ControlUpdate::Settled(_)),
+                    "no operation should start"
+                );
+                let idle = matches!(update, ControlUpdate::Idle);
+                program.observe(&update);
+                assert!(
+                    activity
+                        .update(&mut ui, &fixture.control, update)
+                        .unwrap()
+                        .is_none()
+                );
+                if idle {
+                    break;
+                }
+            }
+        })
+        .await
+        .unwrap();
+        assert!(!fixture.control.is_busy());
+        assert_eq!(program.status(fixture.control.is_busy()), resting);
+        program.blocked_auth = true;
+        assert_eq!(program.status(false), ProgramStatus::BlockedAuth);
+        program.blocked_auth = false;
+        assert_eq!(program.status(false), resting);
+        assert_eq!(ui.draft, "prepare image");
+        assert_eq!(ui.status, "Draft returned");
+    }
+    fixture.control.shutdown().await;
 }
 
 pub(super) struct Fixture {

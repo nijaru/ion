@@ -408,7 +408,11 @@ semantics. OSC 7501 root status is derived from typed operation/client state and
 emitted by the physical publication owner; a report replaces the root record,
 repeats stable application identity, and contains no task text, guessed progress
 or invented blocked state; an actual masked credential prompt publishes
-`blocked` with `kind=auth`. Interactive terminal publication only; headless, RPC
+`blocked` with `kind=auth`. Derive activity from current foreground control,
+including preparation, separately from retained settled outcomes. Returning
+unadmitted input or closing credential entry restores that outcome (initially
+idle), not stale working state; observed shell errors are errors, cancellation
+is idle. Interactive terminal publication only; headless, RPC
 and redirected output never carry these reports. Prefer restrained fx-like
 hierarchy and progressive disclosure to tool
 cards or a flat stream. Prompts, prose, activity, mutations and notices must remain

@@ -289,7 +289,7 @@ with tempfile.TemporaryDirectory(prefix="ion-terminal-") as temporary:
         while not port_file.exists():
             assert time.monotonic() < deadline, "mock provider did not start"
             time.sleep(0.02)
-        subprocess.run([binary, "use", "smoke", "smoke-model", "--endpoint", f"http://127.0.0.1:{port_file.read_text()}/v1/chat/completions", "--wire", "chat-completions"], env=env, check=True, capture_output=True)
+        subprocess.run([binary, "use", "smoke", "smoke-model", "--endpoint", f"http://127.0.0.1:{port_file.read_text()}/v1/chat/completions", "--wire", "chat-completions", "--images"], env=env, check=True, capture_output=True)
         master, slave = pty.openpty()
         fcntl.ioctl(slave, termios.TIOCSWINSZ, struct.pack("HHHH", 30, 100, 0, 0))
         def attach_controlling_terminal():
@@ -303,8 +303,9 @@ with tempfile.TemporaryDirectory(prefix="ion-terminal-") as temporary:
         file_query_sent = False
         sent_file_start = selected_file = sent_first = sent_steering = sent_second = resized = sent_tool = closed_tool = sent_compact = sent_clone = sent_controls = sent_login = sent_key = sent_logout = sent_copy = sent_quit = False
         saw_inline_start = False
-        sent_help = False
-        help_start = 0
+        sent_help = sent_preparation = False
+        help_start = preparation_start = 0
+        preparation_requests = None
         opened_active = closed_active = False
         sent_selected = closed_selected = False
         active_start = tool_start = selected_start = 0
@@ -381,7 +382,15 @@ with tempfile.TemporaryDirectory(prefix="ion-terminal-") as temporary:
                     time.sleep(0.2)
                     os.write(master, b"/compact\r")
                     sent_compact = True
-                if sent_compact and b"Context summarized; raw history retained" in output and not sent_clone:
+                if sent_compact and b"Context summarized; raw history retained" in output and not sent_preparation:
+                    preparation_start = len(output)
+                    preparation_requests = trace.read_bytes()
+                    os.write(master, b"/image missing.png\rstatus probe\r")
+                    sent_preparation = True
+                if sent_preparation and b"Prompt returned: preparation failed" in output[preparation_start:] and b"\x1b]7501;state=done:app=ion\x1b\\" in output[preparation_start:] and not sent_clone:
+                    assert trace.read_bytes() == preparation_requests, "failed preparation reached the model"
+                    # Clear the recovered literal; commands remain UI-only.
+                    os.write(master, b"\x03")
                     snapshot = subprocess.run([binary, "--cwd", workspace, "--continue", "inspect"], env=env, check=True, capture_output=True)
                     source_before_clone = json.loads(snapshot.stdout)["entries"]
                     os.write(master, b"/clone\r")
@@ -439,7 +448,7 @@ with tempfile.TemporaryDirectory(prefix="ion-terminal-") as temporary:
             assert b"+created by ion" in plain_output, "actual write patch was not rendered"
             assert "• ".encode() in output, "semantic activity group header was not rendered"
             assert b"\xe2\x94\x9c " in output or b"\xe2\x94\x94 " in output, "grouped tool tree was not rendered"
-            assert sent_file_start and selected_file and sent_first and sent_steering and sent_second and resized and sent_tool and closed_tool and sent_compact and sent_clone and sent_controls and sent_key and sent_logout and sent_copy and sent_quit, "terminal did not complete the session/model/login workflow"
+            assert sent_file_start and selected_file and sent_first and sent_steering and sent_second and resized and sent_tool and closed_tool and sent_compact and sent_preparation and sent_clone and sent_controls and sent_key and sent_logout and sent_copy and sent_quit, "terminal did not complete the session/model/login workflow"
             assert "RESUMED" in copy_file.read_text(), "copy did not use the committed assistant answer"
             assert b"disposable-smoke-key" not in output, "masked key leaked to terminal output"
             assert (workspace / "data.txt").read_text() == "sample data updated\nsecond token updated\n"
