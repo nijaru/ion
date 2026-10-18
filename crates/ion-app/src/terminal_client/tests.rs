@@ -222,6 +222,57 @@ async fn asynchronous_preparation_return_retains_raw_source_and_other_edits() {
 }
 
 #[tokio::test]
+async fn withdrawn_preparation_replaces_draft_and_invalidates_file_completion() {
+    for literal in ["é queued input", "ASCII queued input"] {
+        let mut fixture = Fixture::new();
+        fs::write(fixture.root.join("file.rs"), "owned fixture").unwrap();
+        let mut ui = Frontend {
+            cwd: fixture.root.clone(),
+            images: vec![ImageSource::Path(fixture.root.join("absent.png"))],
+            ..Frontend::default()
+        };
+        submit_editor(
+            &mut fixture.control,
+            &mut ui,
+            Delivery::FollowUp,
+            EditorDraft::at_end(literal.into()),
+        );
+        assert!(fixture.control.state().preparing_input);
+        assert!(fixture.control.withdraw_last_follow_up().is_some());
+        ui.key(KeyEvent::new(KeyCode::Char('x'), Modifiers::NONE), None);
+        ui.key(KeyEvent::new(KeyCode::Char('@'), Modifiers::NONE), None);
+        assert!(ui.pickers.active().is_some());
+
+        let mut activity = Activity::default();
+        drain(&mut fixture.control, &mut ui, &mut activity).await;
+        assert_eq!((ui.draft.as_str(), ui.cursor), (literal, literal.len()));
+        assert!(
+            matches!(&ui.images[..], [ImageSource::Path(path)] if path.ends_with("absent.png"))
+        );
+        assert!(
+            ui.pickers.active().is_none(),
+            "returned input must invalidate the old draft's completion range"
+        );
+        while ui.pickers.has_job() {
+            ui.pickers.complete().await;
+        }
+        assert!(
+            ui.pickers.active().is_none(),
+            "late discovery must not reopen the old picker"
+        );
+
+        ui.recover_draft();
+        assert_eq!((ui.draft.as_str(), ui.cursor), ("x@", 2));
+        assert!(ui.images.is_empty());
+        assert!(
+            matches!(ui.key(KeyEvent::new(KeyCode::Enter, Modifiers::NONE), None), Action::Submit(text) if text == "x@")
+        );
+        fixture.control.shutdown().await;
+        ui.pickers.shutdown().await.unwrap();
+    }
+}
+
+#[tokio::test]
 async fn settled_shell_is_reconciled_and_shutdown_errors_remain_visible() {
     let mut fixture = Fixture::new();
     fixture

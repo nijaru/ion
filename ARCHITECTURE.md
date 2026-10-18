@@ -400,8 +400,9 @@ legible without color. Nested activity uses recorded parentage, not an invented
 process tree. Queued is not running or successful.
 
 Keep drafts editable during work: multiline/history, paste/images, external editor,
-steering and follow-ups. Commands/pickers retain unsent input. Budget activity and
-composer together; keep state/exceptions visible with honest omission/inspection.
+steering and follow-ups. Commands/pickers retain unsent input. Draft replacement
+invalidates draft-bound completion ranges and cancels their discovery without
+abandoning the worker's join. Budget activity and composer together; keep state/exceptions visible with honest omission/inspection.
 Coalesce benign repetition, not mutations/failures. Details retain arguments,
 observations, capture paths and delivery notices.
 

@@ -442,6 +442,9 @@ Discovery runs off the client event loop, so you can filter or dismiss the picke
 while it scans. Limits and traversal errors are reported rather than hidden.
 Closing the picker cancels further traversal and prevents stale results from
 reopening it; exit still waits for any filesystem call already underway.
+Restoring or replacing a draft also closes its old completion picker. Returned
+input keeps its cursor and attachments; a displaced unsent draft remains
+recoverable with Alt-Up.
 Type `/` to discover terminal commands, prompt templates and `/skill:NAME`.
 Up/Down selects a suggestion; Tab or Enter inserts it without executing it.
 Submit the completed draft separately. Esc closes discovery without discarding

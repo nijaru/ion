@@ -31,6 +31,7 @@ use tokio_util::sync::CancellationToken;
 mod activity;
 mod clipboard_input;
 mod composer;
+mod draft;
 mod editing;
 mod interaction;
 mod picker;
@@ -926,18 +927,6 @@ enum Action {
 }
 
 impl Frontend {
-    fn restore_input(&mut self, input: Message) -> Result<(), &'static str> {
-        let (draft, images) = split_editor_input(input)?;
-        if draft.len() > MAX_DRAFT {
-            return Err("selected input exceeds editor limit");
-        }
-        self.show_draft(RecoveredDraft {
-            source: EditorDraft::at_end(draft),
-            images: images.into_iter().map(Into::into).collect(),
-        });
-        Ok(())
-    }
-
     fn attach_image(&mut self, image: ImageSource) {
         self.images.push(image);
         self.status = format!("{} image(s) attached to the next prompt", self.images.len());
@@ -1023,29 +1012,6 @@ impl Frontend {
             })
             .collect();
         self.replace_prompt_history(prompt_history, same_session);
-    }
-
-    fn replace_prompt_history(&mut self, prompts: Vec<String>, same_session: bool) {
-        if self.browsing.as_ref().is_some_and(|browse| {
-            !same_session || !prompts.starts_with(&self.prompt_history[..browse.end])
-        }) {
-            self.restore_browsed_draft();
-        }
-        self.prompt_history = prompts;
-    }
-
-    fn restore_browsed_draft(&mut self) {
-        if let Some(browse) = self.browsing.take() {
-            self.draft = browse.draft;
-            self.cursor = browse.cursor;
-        }
-    }
-
-    fn replace_draft(&mut self, draft: String) {
-        self.pickers.close();
-        self.browsing = None;
-        self.draft = draft;
-        self.cursor = self.draft.len();
     }
 
     fn defer_unsettled_publication(&mut self, view: &SessionView) {
@@ -1317,8 +1283,10 @@ impl Frontend {
                     Action::Command(syntax.to_owned())
                 } else if let Some(command) = syntax.strip_prefix("!!") {
                     if command.trim().is_empty() {
-                        self.draft = prompt;
-                        self.cursor = cursor;
+                        self.restore_editor(EditorDraft {
+                            literal: prompt,
+                            cursor,
+                        });
                         self.status = "Type a shell command after !!".into();
                         Action::None
                     } else {
@@ -1333,8 +1301,10 @@ impl Frontend {
                     }
                 } else if let Some(command) = syntax.strip_prefix('!') {
                     if command.trim().is_empty() {
-                        self.draft = prompt;
-                        self.cursor = cursor;
+                        self.restore_editor(EditorDraft {
+                            literal: prompt,
+                            cursor,
+                        });
                         self.status = "Type a shell command after !".into();
                         Action::None
                     } else {
@@ -1458,23 +1428,6 @@ impl Frontend {
         self.details = Some(DetailView::new(selected));
     }
 
-    fn insert_file(&mut self, path: String, start: usize, end: usize) {
-        if end > self.draft.len() || start > end {
-            return;
-        }
-        let mention = if path.chars().any(char::is_whitespace) {
-            format!("@\"{path}\"")
-        } else {
-            format!("@{path}")
-        };
-        if self.draft.len() - (end - start) + mention.len() > MAX_DRAFT {
-            self.status = format!("Prompt is limited to {MAX_DRAFT} bytes");
-            return;
-        }
-        self.draft.replace_range(start..end, &mention);
-        self.cursor = start + mention.len();
-        self.browsing = None;
-    }
     fn insert(&mut self, text: &str) {
         self.completion.clear();
         if self.pickers.insert(text) {
@@ -1495,77 +1448,6 @@ impl Frontend {
         self.browsing = None;
         self.draft.insert_str(self.cursor, &clean);
         self.cursor += clean.len();
-    }
-
-    fn history_previous(&mut self) {
-        if self.prompt_history.is_empty() {
-            return;
-        }
-        let browse = self.browsing.get_or_insert_with(|| PromptBrowse {
-            index: self.prompt_history.len(),
-            end: self.prompt_history.len(),
-            draft: self.draft.clone(),
-            cursor: self.cursor,
-        });
-        browse.index = browse.index.saturating_sub(1);
-        self.draft = self.prompt_history[browse.index].clone();
-        self.cursor = self.draft.len();
-    }
-
-    fn history_next(&mut self) {
-        let Some(browse) = &mut self.browsing else {
-            return;
-        };
-        if browse.index + 1 < browse.end {
-            browse.index += 1;
-            self.draft = self.prompt_history[browse.index].clone();
-            self.cursor = self.draft.len();
-        } else {
-            self.restore_browsed_draft();
-        }
-    }
-
-    fn restore_editor(&mut self, source: EditorDraft) {
-        self.browsing = None;
-        self.completion.clear();
-        self.draft = source.literal;
-        self.cursor = source.cursor;
-    }
-
-    fn return_draft(&mut self, source: EditorDraft, images: Vec<ImageSource>) {
-        self.restore_browsed_draft();
-        if self.draft.is_empty() && self.images.is_empty() {
-            self.restore_editor(source);
-            self.images = images;
-        } else {
-            self.recovered.push_back(RecoveredDraft { source, images });
-        }
-    }
-
-    fn show_draft(&mut self, recovered: RecoveredDraft) {
-        self.restore_browsed_draft();
-        if !self.draft.is_empty() || !self.images.is_empty() {
-            self.recovered.push_back(RecoveredDraft {
-                source: EditorDraft {
-                    literal: std::mem::take(&mut self.draft),
-                    cursor: self.cursor,
-                },
-                images: std::mem::take(&mut self.images),
-            });
-        }
-        self.restore_editor(recovered.source);
-        self.images = recovered.images;
-    }
-
-    fn recover_draft(&mut self) {
-        self.restore_browsed_draft();
-        if let Some(recovered) = self.recovered.pop_front() {
-            self.show_draft(recovered);
-        }
-        self.status = format!(
-            "{} recovered draft(s) · Alt-Up cycles drafts",
-            self.recovered.len()
-        );
     }
 }
 
