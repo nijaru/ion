@@ -203,9 +203,10 @@ inside chat. The interactive terminal publishes an OSC 7501 root record with
 with `kind=auth` while the masked credential prompt is waiting. `done` and
 `error` remain until replaced; `working` is not re-sent as a heartbeat. The
 sequence is emitted only by the interactive terminal's physical output owner,
-never by headless, RPC or redirected output. Message/title/progress and the
-permission/question blocked kinds are not emitted yet, so there is no invented
-approval or question state.
+never by headless, RPC or redirected output. Reports omit optional task messages,
+titles and percentages. Ion currently has no approval/question interaction, so it
+does not invent corresponding blocked states. Feature detection is optional in
+the protocol; Ion sends reports without adding a startup query.
 Fullscreen owns the transcript viewport and scrolling while using
 the same Session, agent loop and semantic transcript projection. File/model/
 session pickers and Ctrl-O conversation detail use alternate-screen views in either

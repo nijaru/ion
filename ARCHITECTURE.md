@@ -27,6 +27,43 @@ Claude Code's documented contracts provide secondary workflow/SDK evidence. Insp
 relevant source; distinguish established behavior, experiments and vendor claims.
 Adapt semantics to Rust, not entire runtimes or feature inventories.
 
+### Reference-derived design
+
+Use Pi's composable agent/session and coding workflows, and fx's reusable engine,
+managed sessions and inline interaction as the primary baselines. Similarity means
+recognizable behavior and complete workflows, not matching language-level APIs or
+copying their internal layering. State-of-the-art is a quality target, not a claim
+established by feature count: understandable control, dependable effects/recovery,
+useful context, responsive interaction and replaceable model/tool integrations.
+
+| Concern | Reference semantics | Ion adaptation |
+| --- | --- | --- |
+| Application composition | Pi's session factory assembles model, tools and resources; fx runs configured engines behind session control. | A complete Host application recipe feeds shared control. Coding is a preset; restricted applications use the same lifecycle without ambient coding authority. |
+| Interaction | Pi separates steering from later follow-ups; fx keeps inline input and activity tied to actual work. | Typed input custody, one control owner and separate terminal presentation. UI/protocol adapters do not recreate queues, the loop or settlement. |
+| Durable hosting | fx persists accepted inputs and step results, fences superseded workers and separates storage/scheduling adapters. | Admission and execution facts stay in the Session history. Host reconstructs validated authority and supervises work; future hosting adapters must reuse these owners rather than wrap them in a competing durable runtime. |
+| Tool recovery | fx explicitly distinguishes replay-safe tools from calls that may have partly run. | Unknown effects remain unknown by default. Re-execution needs an explicit tool-specific reconciliation/idempotency contract and stable occurrence identity; a read-only label or unchanged schema is not enough. |
+| Context and clients | Pi separates agent messages, provider conversion and session/UI behavior; fx exposes the same agent across hosts. | Durable facts, model projection and human transcript are distinct. Provider quirks stay in adapters; terminal, headless, RPC and library callers share control. |
+
+Rust boundaries use typed states and errors, explicit owned work, narrow traits for
+replaceable providers/tools/applications, and asynchronous stop/join. Persist data,
+not tasks, trait objects or credentials. Keep policy in the application rather than
+encoding one host's defaults in Core. Introduce an abstraction for an actual
+variation; do not build a generic workflow system or storage-plugin surface merely
+to resemble a reference SDK. A shared lifecycle API does not make all hosts'
+guarantees identical: volatile input custody, committed admission and restart-safe
+queued custody remain distinct promises, explicit at acknowledgement.
+
+Source landmarks: Pi's
+[`agent-loop.ts`](https://github.com/earendil-works/pi/blob/6fb2e7815167e6b19006fc526d1a5d0f5f998787/packages/agent/src/agent-loop.ts),
+[`sdk.ts`](https://github.com/earendil-works/pi/blob/6fb2e7815167e6b19006fc526d1a5d0f5f998787/packages/coding-agent/src/core/sdk.ts)
+and [`agent-session.ts`](https://github.com/earendil-works/pi/blob/6fb2e7815167e6b19006fc526d1a5d0f5f998787/packages/coding-agent/src/core/agent-session.ts);
+fx v0.0.14's
+[`durable.js`](https://github.com/vercel-labs/fx/blob/1a070af32cdfaf8cd0da6de3dc7f053302828b17/sdk/durable.js),
+[`fx-harness.js`](https://github.com/vercel-labs/fx/blob/1a070af32cdfaf8cd0da6de3dc7f053302828b17/sdk/fx-harness.js)
+and [`app_worker_runtime.zig`](https://github.com/vercel-labs/fx/blob/1a070af32cdfaf8cd0da6de3dc7f053302828b17/src/core/app/app_worker_runtime.zig).
+These are inspected snapshots, not automatic parity or correctness evidence;
+refresh the relevant implementation when its behavior changes.
+
 The first completion target is the coding daily driver. Dynamic extension
 ecosystems, virtual routers, session trees, authenticated services, multi-tenant
 sandboxing and durable queues are post-v1 choices unless a concrete daily-driver
