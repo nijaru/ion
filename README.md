@@ -126,6 +126,14 @@ six turns into scrollback and labels omitted earlier history as retained; the
 complete Session remains available through inspect/export and tool detail.
 Publication uses available terminal rows before scrolling. Ordinary redraw and
 resize do not publish live rows; terminal-native reflow remains emulator-owned.
+Command responses (`/help`, `/skills`, `/tools`, `/tasks result`, etc.) and
+client diagnostics also publish their complete wrapped content, not a clipped
+composer preview. They remain in a terminal-local display log interleaved with
+Session history for fullscreen scrolling. This log lasts until Session replacement
+or client exit; it is not durable Session history or model input. Explicit repeated
+commands produce fresh responses; identical consecutive diagnostics at the same
+history boundary coalesce. Unfinished recalled or resynchronized facts stay in a
+mutable preview rather than being irreversibly published.
 Inline paint waits 300 ms after resize notifications while input and coding work
 remain live, then measures the restored primary cursor before reclaiming mutable
 rows. It cannot remove live text the emulator has already moved into native history;

@@ -424,8 +424,16 @@ observations, capture paths and delivery notices.
 
 Use one control-safe grapheme/display-width policy for content; composer byte/cursor
 mapping is separate. Semantic styles survive redraw and irreversible publication.
-Publish settled content once. A closed group need not be final. Native reflow belongs
-to the emulator; resume publishes a bounded recent tail with earlier facts inspectable.
+Publish settled content once. Terminal-local command output and diagnostics share
+an ordered presentation log anchored to stable Session prefixes, not a clipped
+composer surface or synthetic Session/model facts. Inline publication acknowledges
+that log only after successful physical paint; fullscreen renders the same order.
+Explicit command responses repeat on request; only consecutive identical diagnostics
+at an unchanged boundary coalesce. Retain this display log until Session replacement
+or client exit. Initial inspection and later reconciliation use the same stable
+prefix; unfinished facts remain mutable previews, not publication anchors.
+A closed group need not be final. Native reflow belongs to the emulator; resume
+publishes a bounded recent tail with earlier facts inspectable.
 Resize, scrolling, viewport changes and exit preserve composer/terminal custody.
 I/O failure stops input/redraw and awaits settlement before reporting; panic/crash
 cannot promise that. Physical publication is never execution authority.

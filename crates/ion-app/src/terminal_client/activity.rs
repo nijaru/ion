@@ -297,10 +297,6 @@ fn reconcile(ui: &mut Frontend, control: &SessionControl<EditorDraft>) -> Result
         .context("Session history refresh failed")
         .inspect_err(|error| ui.status = format!("{error:#}"))?;
     ui.load_history(control.session(), &view);
-    // A next Turn can already be running, or storage/panic failure can leave
-    // incomplete facts after the operation settled. Neither is immutable native
-    // history: later observations/recovery can change those same projection rows.
-    ui.defer_unsettled_publication(&view);
     ui.scroll = 0;
     Ok(())
 }

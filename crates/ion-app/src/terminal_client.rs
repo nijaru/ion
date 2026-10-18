@@ -34,6 +34,7 @@ mod composer;
 mod draft;
 mod editing;
 mod interaction;
+mod output;
 mod picker;
 use clipboard_input::*;
 use composer::input_window;
@@ -107,12 +108,11 @@ struct Frontend {
     cursor: usize,
     history_session: Option<PathBuf>,
     history_published_items: usize,
-    pending_history_items: Vec<TranscriptItem>,
     pending_history_target: usize,
     pending_history_banner: Option<String>,
     scroll: usize,
     status: String,
-    notices: Vec<String>,
+    output: output::Output,
     pickers: Pickers,
     completion: Completion,
     recovered: VecDeque<RecoveredDraft>,
@@ -535,11 +535,11 @@ fn handle_command(
         .unwrap_or((command, ""));
     let args = args.trim();
     match Builtin::parse(name) {
-        Some(Builtin::Help) => ui.note(Builtin::help()),
+        Some(Builtin::Help) => ui.print(Builtin::help()),
         Some(Builtin::Settings) => ui.output_settings(args)?,
         Some(Builtin::Reasoning) => {
             if args.is_empty() {
-                ui.note(format!("Generation effort: {}. Use /reasoning default|off|low|medium|high|budget:TOKENS; route support varies", runtime.session().reasoning()?));
+                ui.print(format!("Generation effort: {}. Use /reasoning default|off|low|medium|high|budget:TOKENS; route support varies", runtime.session().reasoning()?));
             } else {
                 let reasoning = args
                     .parse::<ion_ai::Reasoning>()
@@ -549,7 +549,7 @@ fn handle_command(
             }
         }
         Some(Builtin::Tui) => match args {
-            "" => ui.note(format!(
+            "" => ui.print(format!(
                 "TUI mode: {}. Use /tui inline or /tui fullscreen",
                 ui.mode.label()
             )),
@@ -574,7 +574,7 @@ fn handle_command(
             )?;
             ui.attach_image(ImageSource::Path(PathBuf::from(args)));
         }
-        Some(Builtin::Skills) => ui.note(
+        Some(Builtin::Skills) => ui.print(
             runtime
                 .resources()
                 .skills()
@@ -582,7 +582,7 @@ fn handle_command(
                 .collect::<Vec<_>>()
                 .join("\n"),
         ),
-        Some(Builtin::Prompts) => ui.note(
+        Some(Builtin::Prompts) => ui.print(
             runtime
                 .resources()
                 .templates()
@@ -592,14 +592,14 @@ fn handle_command(
         ),
         Some(Builtin::Reload) => {
             runtime.reload_resources()?;
-            ui.note(format!(
+            ui.print(format!(
                 "Reloaded resources ({} diagnostic(s))",
                 runtime.resources().diagnostics().len()
             ));
         }
         Some(Builtin::Session) => {
             let view = runtime.session().view()?;
-            ui.note(format!(
+            ui.print(format!(
                 "Session {} · {} turn(s) · {} · {}",
                 runtime.session().path().display(),
                 view.entries
@@ -628,12 +628,12 @@ fn handle_command(
         Some(Builtin::New) => {
             runtime.new_session()?;
             ui.refresh_session(runtime.session())?;
-            ui.note("Started a new session".into());
+            ui.print("Started a new session".into());
         }
         Some(Builtin::Clone) => {
             let id = runtime.clone_session()?;
             ui.refresh_session(runtime.session())?;
-            ui.note(format!(
+            ui.print(format!(
                 "Cloned conversation as {id}; both sessions use the same working directory"
             ));
         }
@@ -699,7 +699,7 @@ fn handle_command(
         }
         Some(Builtin::Name) => {
             if args.is_empty() {
-                ui.note(
+                ui.print(
                     runtime
                         .session()
                         .view()?
@@ -763,10 +763,10 @@ fn handle_command(
             if args.is_empty() {
                 let jobs = owner.jobs();
                 if jobs.is_empty() {
-                    ui.note("No retained background tasks".into());
+                    ui.print("No retained background tasks".into());
                 }
                 for job in jobs {
-                    ui.note(format!(
+                    ui.print(format!(
                         "{} · {} · parent {} · {:?}{} · {}",
                         job.child,
                         if job.joined { "joined" } else { "unjoined" },
@@ -793,7 +793,7 @@ fn handle_command(
                             .receipt
                             .outcome
                             .context("joined without a committed outcome; inspect Session facts")?;
-                        ui.note(format!(
+                        ui.print(format!(
                             "Child {child} · observed outcome\n{}",
                             serde_json::to_string_pretty(&outcome)?
                         ));
@@ -804,7 +804,7 @@ fn handle_command(
                     }
                     "acknowledge" => {
                         let receipt = owner.take(child).context("no joined result to acknowledge (running, unknown or already acknowledged)")??;
-                        ui.note(format!(
+                        ui.print(format!(
                             "Acknowledged {child}; committed facts remain at {}",
                             receipt.record.path.display()
                         ));
@@ -938,14 +938,13 @@ impl Frontend {
         let view = session.view()?;
         self.load_history(session, &view);
         self.details = None;
-        self.notices.clear();
         self.scroll = 0;
         self.cwd = session
             .cwd()
             .context("terminal coding requires a working directory")?
             .to_path_buf();
-        if view.unfinished_turn.is_some() {
-            self.status = "Previous turn interrupted; tool effects may be unknown".into();
+        if view.unfinished_turn.is_some() || view.unfinished_user_shell.is_some() {
+            self.status = "Previous operation interrupted; effects may be unknown".into();
         }
         Ok(())
     }
@@ -955,6 +954,7 @@ impl Frontend {
         let session_path = session.path().to_path_buf();
         let same_session = self.history_session.as_ref() == Some(&session_path);
         if !same_session {
+            self.output = output::Output::default();
             let had_previous_session = self.history_session.is_some();
             let label = session.id().to_string();
             let tail = resume_history_tail(&history.items);
@@ -984,8 +984,6 @@ impl Frontend {
                 None
             };
         }
-        let start = self.history_published_items.min(history.items.len());
-        self.pending_history_items = history.items[start..].to_vec();
         self.pending_history_target = history.items.len();
         self.history_session = Some(session_path);
         self.history = history;
@@ -1012,8 +1010,12 @@ impl Frontend {
             })
             .collect();
         self.replace_prompt_history(prompt_history, same_session);
+        self.defer_unsettled_publication(view);
     }
 
+    // Inspection may include a running next operation or interrupted work.
+    // Recovery can still change those rows: keep them as mutable previews on
+    // initial load as well as resync, never as anchors for local output.
     fn defer_unsettled_publication(&mut self, view: &SessionView) {
         let unfinished = view
             .unfinished_turn
@@ -1033,8 +1035,6 @@ impl Frontend {
             });
         if let Some(end) = unfinished {
             let end = end.max(self.history_published_items);
-            self.pending_history_items
-                .truncate(end.saturating_sub(self.history_published_items));
             self.pending_history_target = end;
         }
     }
@@ -1045,31 +1045,34 @@ impl Frontend {
             rows.push(Line::default());
             rows.extend(notice_rows(banner, width));
             rows.push(Line::default());
-        } else if self.history_published_items > 0 && !self.pending_history_items.is_empty() {
+        }
+        let content = self.output.rows(
+            &self.history.items,
+            self.history_published_items..self.pending_history_target,
+            true,
+            width.saturating_sub(1).max(1),
+            self.output_detail,
+            self.thinking_visibility,
+        );
+        if self.pending_history_banner.is_none()
+            && self.history_published_items > 0
+            && !content.is_empty()
+        {
             rows.push(Line::default());
         }
-        if !self.pending_history_items.is_empty() {
-            rows.extend(crate::transcript_render::rows(
-                &TranscriptProjection {
-                    items: self.pending_history_items.clone(),
-                },
-                width.saturating_sub(1).max(1),
-                self.output_detail,
-                self.thinking_visibility,
-            ));
-        }
+        rows.extend(content);
         rows
     }
 
     fn finish_history_commit(&mut self) {
         self.history_published_items = self.pending_history_target;
-        self.pending_history_items.clear();
+        self.output.finish_commit(self.pending_history_target);
         self.pending_history_banner = None;
     }
 
     fn output_settings(&mut self, args: &str) -> Result<()> {
         match args {
-            "" => self.note(format!("Tool output: {}. Use /settings compact or /settings expanded.\nThinking: {}. Use /settings thinking show or /settings thinking hide; independent of generation effort.\nTerminal-local: affects fullscreen and future publication, not existing native scrollback. Inline progress stays compact. Ctrl-O always inspects recorded source.", self.output_detail.label(), self.thinking_visibility.label())),
+            "" => self.print(format!("Tool output: {}. Use /settings compact or /settings expanded.\nThinking: {}. Use /settings thinking show or /settings thinking hide; independent of generation effort.\nTerminal-local: affects fullscreen and future publication, not existing native scrollback. Inline progress stays compact. Ctrl-O always inspects recorded source.", self.output_detail.label(), self.thinking_visibility.label())),
             "compact" | "expanded" => {
                 self.output_detail = if args == "compact" { crate::tool_output::OutputDetail::Compact } else { crate::tool_output::OutputDetail::Expanded };
                 self.scroll = 0;
@@ -1087,14 +1090,14 @@ impl Frontend {
         Ok(())
     }
 
+    fn print(&mut self, message: String) {
+        self.output
+            .push(message, self.pending_history_target, false);
+        self.scroll = 0;
+    }
+
     fn note(&mut self, message: String) {
-        if self.notices.last() == Some(&message) {
-            return;
-        }
-        self.notices.push(message);
-        if self.notices.len() > 16 {
-            self.notices.remove(0);
-        }
+        self.output.push(message, self.pending_history_target, true);
         self.scroll = 0;
     }
 
@@ -1403,7 +1406,7 @@ impl Frontend {
                 )
             })
             .collect::<Vec<_>>();
-        self.note(if names.is_empty() {
+        self.print(if names.is_empty() {
             "No tools in this session".into()
         } else {
             format!("Tools: {}", names.join(" · "))
@@ -1509,14 +1512,8 @@ fn draw_prepared(
     let row_budget = LIVE_REGION_MAX_ROWS.min(height.max(1) as usize);
     let mut chrome = Vec::new();
     let notices = progress.map_or(&[][..], LiveTranscript::notices);
-    if operation.is_none() {
-        // Idle command output (help, resources, diagnostics) is content, not
-        // busy chrome. Keep its wrapped rows rather than a one-line preview.
-        for notice in &ui.notices {
-            push_wrapped(&mut chrome, notice, width);
-        }
-    } else if let Some(notice) = notices.last().or(ui.notices.last()) {
-        let count = notices.len() + ui.notices.len();
+    if let Some(notice) = notices.last() {
+        let count = notices.len();
         let label = if count == 1 {
             "Notice".into()
         } else {
@@ -1558,14 +1555,18 @@ fn draw_prepared(
     }
     chrome.extend(completions);
     let content_budget = row_budget.saturating_sub(composer_height + chrome.len());
-    let mut live_rows: Vec<Line<'_>> = progress.map_or_else(Vec::new, |progress| {
-        crate::transcript_render::live_rows(
-            progress.projection(),
-            width,
-            content_budget,
-            ui.thinking_visibility,
-        )
-    });
+    // Reopened or resynchronized unfinished facts stay visible as mutable
+    // previews. They are not stable output anchors or irreversible scrollback.
+    let live_items = progress.map_or_else(
+        || &ui.history.items[ui.pending_history_target..],
+        |progress| progress.projection().items.as_slice(),
+    );
+    let mut live_rows = crate::transcript_render::live_rows(
+        live_items,
+        width,
+        content_budget,
+        ui.thinking_visibility,
+    );
     live_rows.extend(chrome.into_iter().map(Line::raw));
     let composer_offset = live_rows.len();
     for line in &composer.lines {
@@ -1596,7 +1597,7 @@ fn draw_prepared(
             },
         )
     })?;
-    if painted && (!ui.pending_history_items.is_empty() || ui.pending_history_banner.is_some()) {
+    if painted {
         ui.finish_history_commit();
     }
     Ok(())
@@ -1688,22 +1689,17 @@ fn draw_chat_fullscreen(
 ) -> Result<()> {
     let width = width.max(1) as usize;
     let height = height.max(1) as usize;
-    let mut content = crate::transcript_render::rows(
-        &ui.history,
+    let mut content = ui.output.rows(
+        &ui.history.items,
+        0..ui.history.items.len(),
+        false,
         width,
         ui.output_detail,
         ui.thinking_visibility,
     );
-
-    for notice in &ui.notices {
-        if !content.is_empty() && content.last().is_some_and(|row| row.width() > 0) {
-            content.push(Line::default());
-        }
-        content.extend(notice_rows(notice, width));
-    }
     if let Some(progress) = progress {
         let live = crate::transcript_render::rows(
-            progress.projection(),
+            &progress.projection().items,
             width,
             ui.output_detail,
             ui.thinking_visibility,

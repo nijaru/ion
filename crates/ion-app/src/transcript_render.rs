@@ -6,13 +6,15 @@ use crate::{
 };
 use ion_core::{
     ActivityGroup, ActivityResult, ActivityState, ToolActivityKind, TranscriptActivity,
-    TranscriptItem, TranscriptMessage, TranscriptPart, TranscriptProjection, UserShellActivity,
+    TranscriptItem, TranscriptMessage, TranscriptPart, UserShellActivity,
 };
 use ratatui::{
     style::Style,
     text::{Line, Span},
 };
 
+#[cfg(test)]
+use ion_core::TranscriptProjection;
 #[cfg(test)]
 use ratatui::style::{Color, Modifier};
 
@@ -62,14 +64,14 @@ impl ThinkingVisibility {
 const MAX_COALESCED_SUBJECTS: usize = 3;
 
 pub fn rows(
-    projection: &TranscriptProjection,
+    items: &[TranscriptItem],
     width: usize,
     detail: OutputDetail,
     thinking: ThinkingVisibility,
 ) -> Vec<Line<'static>> {
     let width = width.max(1);
     let mut rows = Vec::new();
-    for item in &projection.items {
+    for item in items {
         if hidden_thinking(item, thinking) {
             continue;
         }
@@ -101,7 +103,7 @@ fn hidden_thinking(item: &TranscriptItem, thinking: ThinkingVisibility) -> bool 
 /// Select a semantic focus before rendering its children. Never take a suffix
 /// of the flattened conversation: that can detach branches from their root.
 pub(super) fn live_rows(
-    projection: &TranscriptProjection,
+    items: &[TranscriptItem],
     width: usize,
     budget: usize,
     thinking: ThinkingVisibility,
@@ -111,25 +113,21 @@ pub(super) fn live_rows(
     }
     // Expanded capture is for publication/fullscreen. Inline progress stays a
     // compact semantic preview instead of allocating a whole capture each tick.
-    let rendered = rows(projection, width, OutputDetail::Compact, thinking);
+    let rendered = rows(items, width, OutputDetail::Compact, thinking);
     if rendered.len() <= budget {
         return rendered;
     }
     let activities = || {
-        projection
-            .items
-            .iter()
-            .enumerate()
-            .flat_map(|(item_index, item)| {
-                let activities = match item {
-                    TranscriptItem::ActivityGroup(group) => group.activities.as_slice(),
-                    _ => &[],
-                };
-                activities
-                    .iter()
-                    .enumerate()
-                    .map(move |(activity_index, activity)| (item_index, activity_index, activity))
-            })
+        items.iter().enumerate().flat_map(|(item_index, item)| {
+            let activities = match item {
+                TranscriptItem::ActivityGroup(group) => group.activities.as_slice(),
+                _ => &[],
+            };
+            activities
+                .iter()
+                .enumerate()
+                .map(move |(activity_index, activity)| (item_index, activity_index, activity))
+        })
     };
     let mut selected = Vec::new();
     let mut pinned = None;
@@ -179,9 +177,9 @@ pub(super) fn live_rows(
         ));
     }
     let remaining = budget.saturating_sub(selected.len());
-    let focus = projection.items.iter().enumerate().rfind(|(_, item)| {
+    let focus = items.iter().enumerate().rfind(|(_, item)| {
         matches!(item, TranscriptItem::ActivityGroup(group) if group.activities.iter().any(|a| a.state == ActivityState::Running))
-    }).or_else(|| projection.items.iter().enumerate().rfind(|(_, item)| !hidden_thinking(item, thinking)));
+    }).or_else(|| items.iter().enumerate().rfind(|(_, item)| !hidden_thinking(item, thinking)));
     if remaining > 0
         && let Some((item_index, focus)) = focus
     {
@@ -1116,7 +1114,7 @@ mod tests {
         };
         for width in [1, 8, 24, 80] {
             let hidden = rows(
-                &projection,
+                &projection.items,
                 width,
                 OutputDetail::Expanded,
                 ThinkingVisibility::Hidden,
@@ -1127,18 +1125,11 @@ mod tests {
                     .any(|line| line.to_string().contains("thought"))
             );
             assert_eq!(
-                live_rows(&projection, width, 3, ThinkingVisibility::Hidden),
-                live_rows(
-                    &TranscriptProjection {
-                        items: projection.items[..1].to_vec()
-                    },
-                    width,
-                    3,
-                    ThinkingVisibility::Hidden
-                )
+                live_rows(&projection.items, width, 3, ThinkingVisibility::Hidden),
+                live_rows(&projection.items[..1], width, 3, ThinkingVisibility::Hidden)
             );
             let visible = rows(
-                &projection,
+                &projection.items,
                 width,
                 OutputDetail::Compact,
                 ThinkingVisibility::Visible,
@@ -1150,7 +1141,7 @@ mod tests {
             );
         }
         let shown = rows(
-            &projection,
+            &projection.items,
             80,
             OutputDetail::Compact,
             ThinkingVisibility::Visible,
@@ -1175,7 +1166,7 @@ mod tests {
                 parts: vec![TranscriptPart::Thinking("long thought\n".repeat(20))],
             })],
         };
-        let preview = live_rows(&long, 80, 3, ThinkingVisibility::Visible);
+        let preview = live_rows(&long.items, 80, 3, ThinkingVisibility::Visible);
         assert_eq!(preview.len(), 3);
         assert!(
             preview
@@ -1196,7 +1187,7 @@ mod tests {
 
     fn plain_rows(projection: &TranscriptProjection, width: usize) -> Vec<String> {
         super::rows(
-            projection,
+            &projection.items,
             width,
             OutputDetail::Compact,
             ThinkingVisibility::Hidden,
@@ -1210,7 +1201,7 @@ mod tests {
         width: usize,
         budget: usize,
     ) -> Vec<String> {
-        super::live_rows(projection, width, budget, ThinkingVisibility::Hidden)
+        super::live_rows(&projection.items, width, budget, ThinkingVisibility::Hidden)
             .iter()
             .map(ToString::to_string)
             .collect()
@@ -1256,7 +1247,7 @@ mod tests {
             })],
         };
         let compact_rows = rows(
-            &single,
+            &single.items,
             120,
             OutputDetail::Compact,
             ThinkingVisibility::Hidden,
@@ -1319,7 +1310,7 @@ mod tests {
         );
         for width in [1, 8, 24, 120] {
             let expanded = rows(
-                &grouped,
+                &grouped.items,
                 width,
                 OutputDetail::Expanded,
                 ThinkingVisibility::Hidden,
@@ -1332,7 +1323,7 @@ mod tests {
             );
         }
         let expanded = rows(
-            &grouped,
+            &grouped.items,
             120,
             OutputDetail::Expanded,
             ThinkingVisibility::Hidden,
@@ -1380,7 +1371,7 @@ mod tests {
             })],
         };
         let rows = super::rows(
-            &projection,
+            &projection.items,
             24,
             OutputDetail::Compact,
             ThinkingVisibility::Hidden,
@@ -1407,7 +1398,7 @@ mod tests {
             .collect::<String>();
         assert!(retained.contains(subject));
         assert!(rows.iter().all(|row| row.width() <= 24));
-        let live = super::live_rows(&projection, 24, 6, ThinkingVisibility::Hidden);
+        let live = super::live_rows(&projection.items, 24, 6, ThinkingVisibility::Hidden);
         assert!(live.iter().any(|row| row.style.fg == Some(Color::Red)));
         assert!(live.iter().any(|row| row.style.fg == Some(Color::Cyan)));
     }
@@ -1427,12 +1418,12 @@ mod tests {
             };
             for narrow in 1..=width {
                 assert!(
-                    super::live_rows(&projection, narrow, 3, ThinkingVisibility::Hidden)
+                    super::live_rows(&projection.items, narrow, 3, ThinkingVisibility::Hidden)
                         .iter()
                         .all(|row| row.width() <= narrow)
                 );
             }
-            let rows = super::live_rows(&projection, width, 3, ThinkingVisibility::Hidden);
+            let rows = super::live_rows(&projection.items, width, 3, ThinkingVisibility::Hidden);
             let first = &rows[1];
             if source.starts_with("**") {
                 assert!(

@@ -5,10 +5,83 @@ fn consecutive_notes_are_coalesced_without_hiding_distinct_messages() {
     let mut ui = Frontend::default();
     ui.note("same".into());
     ui.note("same".into());
-    assert_eq!(ui.notices, ["same"]);
+    let text = |ui: &Frontend| {
+        ui.pending_history_rows(80)
+            .iter()
+            .map(ToString::to_string)
+            .filter(|row| !row.is_empty())
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(text(&ui), ["same"]);
     ui.note("different".into());
     ui.note("same".into());
-    assert_eq!(ui.notices, ["same", "different", "same"]);
+    assert_eq!(text(&ui), ["same", "different", "same"]);
+}
+
+#[test]
+fn local_output_keeps_history_order_across_publication_and_reflow() {
+    let item = |turn, text: &str| {
+        TranscriptItem::User(ion_core::TranscriptMessage {
+            turn: Some(turn),
+            steering: false,
+            parts: vec![ion_core::TranscriptPart::Text(text.into())],
+        })
+    };
+    let mut ui = Frontend::default();
+    ui.print("before".into());
+    ui.history.items.push(item(1, "first"));
+    ui.pending_history_target = 1;
+    ui.print("middle".into());
+    let first = ui
+        .pending_history_rows(24)
+        .iter()
+        .map(ToString::to_string)
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(first.find("before").unwrap() < first.find("first").unwrap());
+    assert!(first.find("first").unwrap() < first.find("middle").unwrap());
+    ui.finish_history_commit();
+    ui.history.items.push(item(2, "second"));
+    ui.pending_history_target = 2;
+    ui.print("after".into());
+    // More than the former 16-entry chrome cap must not drop unpublished output.
+    for index in 0..17 {
+        ui.note(format!("diag {index}"));
+    }
+    let pending = ui
+        .pending_history_rows(24)
+        .iter()
+        .map(ToString::to_string)
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(
+        !pending.contains("before") && !pending.contains("first") && !pending.contains("middle")
+    );
+    for text in ["second", "after", "diag 0", "diag 16"] {
+        assert!(pending.contains(text));
+    }
+    ui.finish_history_commit();
+    assert!(ui.pending_history_rows(24).is_empty());
+    // Fullscreen uses the same source order, including already-published output.
+    for width in [8, 80] {
+        let rows = ui.output.rows(
+            &ui.history.items,
+            0..2,
+            false,
+            width,
+            ui.output_detail,
+            ui.thinking_visibility,
+        );
+        assert!(rows.iter().all(|row| row.width() <= width));
+        let text = rows
+            .iter()
+            .map(ToString::to_string)
+            .collect::<Vec<_>>()
+            .join("\n");
+        let positions =
+            ["before", "first", "middle", "second", "after"].map(|key| text.find(key).unwrap());
+        assert!(positions.windows(2).all(|pair| pair[0] < pair[1]));
+    }
 }
 
 #[test]

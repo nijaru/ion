@@ -34,6 +34,7 @@ fn settlement_program_status_distinguishes_done_and_cancelled() {
 pub(super) struct Fixture {
     pub(super) root: PathBuf,
     pub(super) control: SessionControl<EditorDraft>,
+    pub(super) host: Arc<Host>,
 }
 
 impl Fixture {
@@ -55,12 +56,13 @@ impl Fixture {
             .unwrap();
         let session =
             Arc::new(CodingSession::create(root.join("session.sqlite"), Some(&root)).unwrap());
-        let setup = ion_host::CodingApplication::new(host, None)
+        let setup = ion_host::CodingApplication::new(host.clone(), None)
             .setup(session, selected, None)
             .unwrap();
         Self {
             root,
             control: setup.into_control(),
+            host,
         }
     }
 }
@@ -68,6 +70,28 @@ impl Drop for Fixture {
     fn drop(&mut self) {
         let _ = fs::remove_dir_all(&self.root);
     }
+}
+
+#[tokio::test]
+async fn help_output_is_complete_publication_not_clipped_composer_chrome() {
+    let mut fixture = Fixture::new();
+    let mut ui = Frontend::default();
+    ui.refresh_session(fixture.control.session()).unwrap();
+    let expected = notice_rows(&Builtin::help(), 39);
+    assert!(expected.len() > LIVE_REGION_MAX_ROWS);
+    for _ in 0..2 {
+        assert!(!handle_command(&mut fixture.control, &fixture.host, &mut ui, "/help").unwrap());
+        let pending = ui.pending_history_rows(40);
+        assert!(
+            pending.windows(expected.len()).any(|rows| rows == expected),
+            "every help row must reach native publication, even for repeated explicit requests"
+        );
+        // Only successful physical publication acknowledges these rows.
+        assert_eq!(ui.pending_history_rows(40), pending);
+        ui.finish_history_commit();
+        assert!(ui.pending_history_rows(40).is_empty());
+    }
+    fixture.control.shutdown().await;
 }
 
 async fn drain(
@@ -212,9 +236,13 @@ async fn asynchronous_preparation_return_retains_raw_source_and_other_edits() {
     assert_eq!((ui.draft.as_str(), ui.cursor), (literal, 2));
     assert!(matches!(&ui.images[0], ImageSource::Path(path) if path.ends_with("missing.png")));
     assert!(
-        ui.notices
+        ui.pending_history_rows(120)
             .iter()
-            .any(|notice| notice.contains("preparation failed") && notice.contains("missing.png"))
+            .any(|row| row.to_string().contains("preparation failed"))
+            && ui
+                .pending_history_rows(120)
+                .iter()
+                .any(|row| row.to_string().contains("missing.png"))
     );
     // Recovery is passive: an empty Host stays empty until explicit resubmission.
     assert!(matches!(fixture.control.next().await, ControlUpdate::Idle));
@@ -315,45 +343,70 @@ async fn settled_shell_is_reconciled_and_shutdown_errors_remain_visible() {
 }
 
 #[tokio::test]
-async fn unfinished_resync_facts_remain_inspectable_but_not_irreversibly_published() {
+async fn unfinished_history_anchors_are_stable_on_initial_load_and_reinspection() {
     let mut fixture = Fixture::new();
-    let item = |turn| {
-        TranscriptItem::User(ion_core::TranscriptMessage {
-            turn: Some(turn),
-            steering: false,
-            parts: Vec::new(),
-        })
+    let started = |turn, text: &str| SessionEntry::TurnStarted {
+        turn,
+        input: Message::user_input(text.into(), []),
+        model: ModelRef {
+            provider: "fixture".into(),
+            model: "fixture".into(),
+        },
+        request: None,
+        recovery: None,
     };
     for shell in [false, true] {
         let mut view = fixture.control.session().view().unwrap();
-        let active = if shell {
-            view.unfinished_user_shell = Some(ion_core::UnobservedUserShell { admission_entry: 2 });
-            TranscriptItem::UserShell(ion_core::UserShellActivity {
-                command: "pending".into(),
+        view.entries = vec![
+            started(1, "closed"),
+            SessionEntry::TurnEnded {
+                turn: 1,
+                reason: TurnEndReason::Cancelled,
+            },
+        ];
+        if shell {
+            view.unfinished_user_shell = Some(ion_core::UnobservedUserShell { admission_entry: 3 });
+            view.entries.push(SessionEntry::UserShellAdmitted {
+                command: "UNFINISHED_VISIBLE".into(),
                 exclude_from_context: false,
-                outcome: ion_core::UserShellOutcome::Unknown,
-            })
+            });
         } else {
             view.unfinished_turn = Some(2);
-            item(2)
-        };
-        let mut ui = Frontend {
-            history: TranscriptProjection {
-                items: vec![item(1), active.clone()],
-            },
-            history_published_items: 1,
-            pending_history_target: 2,
-            pending_history_items: vec![active],
-            ..Frontend::default()
-        };
-        ui.defer_unsettled_publication(&view);
-        assert_eq!(ui.history.items.len(), 2);
-        assert_eq!(ui.pending_history_target, 1);
-        assert!(ui.pending_history_items.is_empty());
-        // A passive reopened unknown-effect row already in native history may
-        // not be rewound merely because new preparation has operation identity.
+            view.entries.push(started(2, "UNFINISHED_VISIBLE"));
+        }
+        let mut ui = Frontend::default();
+        // Initial refresh and later reconciliation must use the same stable
+        // prefix, even before anything has been physically published.
+        for _ in 0..2 {
+            ui.load_history(fixture.control.session(), &view);
+            assert_eq!(ui.history.items.len(), 2);
+            assert_eq!(ui.pending_history_target, 1);
+            ui.print(Builtin::help());
+        }
+        let pending = ui.pending_history_rows(80);
+        assert!(
+            !pending
+                .iter()
+                .any(|row| row.to_string().contains("UNFINISHED_VISIBLE"))
+        );
+        let fullscreen = ui.output.rows(
+            &ui.history.items,
+            0..2,
+            false,
+            80,
+            ui.output_detail,
+            ui.thinking_visibility,
+        );
+        assert!(
+            fullscreen
+                .iter()
+                .any(|row| row.to_string().contains("UNFINISHED_VISIBLE"))
+        );
+        ui.finish_history_commit();
+        assert!(ui.pending_history_rows(80).is_empty());
+        // Do not rewind an unknown-effect row already in physical history.
         ui.history_published_items = 2;
-        ui.defer_unsettled_publication(&view);
+        ui.load_history(fixture.control.session(), &view);
         assert_eq!(ui.pending_history_target, 2);
     }
     fixture.control.shutdown().await;
@@ -459,11 +512,7 @@ fn shell_syntax_and_output_settings_remain_editor_operations() {
             matches!(ui.key(KeyEvent::new(KeyCode::Enter, Modifiers::NONE), None), Action::Shell { exclude_from_context, source, .. } if exclude_from_context == excluded && source.literal == literal && source.cursor == 1)
         );
     }
-    let mut ui = Frontend {
-        history_published_items: 7,
-        pending_history_target: 7,
-        ..Frontend::default()
-    };
+    let mut ui = Frontend::default();
     ui.output_settings("expanded").unwrap();
     ui.output_settings("thinking show").unwrap();
     assert_eq!(ui.output_detail, crate::tool_output::OutputDetail::Expanded);
@@ -472,9 +521,4 @@ fn shell_syntax_and_output_settings_remain_editor_operations() {
         crate::transcript_render::ThinkingVisibility::Visible
     );
     assert!(ui.output_settings("thinking sometimes").is_err());
-    assert_eq!(
-        (ui.history_published_items, ui.pending_history_target),
-        (7, 7)
-    );
-    assert!(ui.pending_history_items.is_empty() && ui.recovered.is_empty());
 }

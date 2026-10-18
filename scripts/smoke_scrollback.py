@@ -251,6 +251,33 @@ with tempfile.TemporaryDirectory(prefix="ion-scrollback-") as temporary:
         tmux("resize-window", "-t", "ion", "-x", "60", "-y", "20")
         time.sleep(0.15)
         check_history()
+        # Command output belongs in publication, not the 12-row composer region.
+        # At 40 columns the help response is longer than that entire region.
+        tmux("resize-window", "-t", "ion", "-x", "40", "-y", "12")
+        time.sleep(0.4)
+        head, tail = "/help/new/clone/fork[TURN]", "excludesitfrommodelcontext"
+
+        def help_counts():
+            text = "".join(tmux("capture-pane", "-p", "-t", "ion", "-S", "-").split())
+            return text.count(head), text.count(tail)
+
+        for count in (1, 2):
+            tmux("send-keys", "-t", "ion", "-l", "/help")
+            tmux("send-keys", "-t", "ion", "Enter")
+            deadline = time.monotonic() + 5
+            while help_counts() < (count, count):
+                assert time.monotonic() < deadline, f"command output missing from native history: {help_counts()}"
+                time.sleep(0.02)
+            assert help_counts() == (count, count), "explicit output lost or duplicated"
+        tmux("resize-window", "-t", "ion", "-x", "40", "-y", "60")
+        time.sleep(0.4)
+        command("/tui fullscreen", "Fullscreen TUI")
+        view = "".join(tmux("capture-pane", "-p", "-t", "ion").split())
+        assert view.count(head) == view.count(tail) == 2, "fullscreen lost command output"
+        command("/tui inline", "native terminal scrollback")
+        assert help_counts() == (2, 2), "viewport change republished local output"
+        check_history()
+        assert len(requests) == 4, "terminal-local output reached the model"
         for mode in ("inline", "fullscreen"):
             target = f"tiny-{mode}"
             tiny_exit = work / f"{target}.exit"
