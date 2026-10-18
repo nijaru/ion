@@ -1130,7 +1130,9 @@ the coding preset. It loads coding instructions/resources and native tools; the
 optional `tools` source adds or overrides registrations, not a complete allowlist.
 `with_tool_selection(ToolSelection::include(...).with_exclude(...))` narrows the
 model-visible loadout; `with_read_only_tools()` selects the read-only preset.
-Both filter model declarations, discovery and the Code Mode namespace, and
+`ToolSelection::include([])` selects no tools; `ToolSelection::all()` leaves
+inclusion unrestricted. Selection filters model declarations, discovery and the
+Code Mode namespace, and
 managed children inherit the parent selection. They are application loadout
 policies, not OS sandboxes or authority grants.
 Consume the setup with `into_control::<M>()` to create `SessionControl<M>`, the same

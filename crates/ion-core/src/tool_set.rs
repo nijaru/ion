@@ -116,10 +116,11 @@ impl ToolSelection {
         Self::default()
     }
 
+    /// Allow only matching tools. An empty inclusion allows no tools; use
+    /// `all()` to leave inclusion unrestricted.
     pub fn include(patterns: impl IntoIterator<Item = String>) -> Self {
-        let patterns = patterns.into_iter().collect::<Vec<_>>();
         Self {
-            include: (!patterns.is_empty()).then_some(patterns),
+            include: Some(patterns.into_iter().collect()),
             exclude: Vec::new(),
         }
     }

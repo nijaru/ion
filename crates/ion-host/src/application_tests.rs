@@ -271,23 +271,26 @@ async fn coding_application_selection_and_read_only_narrow_the_model_loadout() {
         })
         .unwrap();
 
-    let session = Arc::new(
-        CodingSession::create(host.sessions(cwd.clone()).new_path().unwrap(), Some(&cwd)).unwrap(),
-    );
-    let application = crate::CodingApplication::new(host.clone(), None).with_tool_selection(
-        ion_core::ToolSelection::include(["read".into(), "write".into()]),
-    );
-    let control = application
-        .setup(session.clone(), selected.clone(), None)
-        .unwrap()
-        .into_control::<()>();
-    let catalog = control.agent().tool_catalog();
-    assert!(catalog.is_declared("read") && catalog.is_declared("write"));
-    assert!(!catalog.is_declared("edit"));
-    assert!(!catalog.is_declared("exec"));
-    assert!(!catalog.is_declared("subagent"));
-    drop(control);
-    drop(session);
+    for names in [vec!["read", "write"], Vec::new()] {
+        let session = Arc::new(
+            CodingSession::create(host.sessions(cwd.clone()).new_path().unwrap(), Some(&cwd))
+                .unwrap(),
+        );
+        let application = crate::CodingApplication::new(host.clone(), None).with_tool_selection(
+            ion_core::ToolSelection::include(names.iter().map(|name| (*name).into())),
+        );
+        let control = application
+            .setup(session.clone(), selected.clone(), None)
+            .unwrap()
+            .into_control::<()>();
+        let catalog = control.agent().tool_catalog();
+        assert_eq!(catalog.specs().len(), names.len());
+        for name in ["read", "write", "edit", "exec", "subagent"] {
+            assert_eq!(catalog.is_declared(name), names.contains(&name), "{name}");
+        }
+        drop(control);
+        drop(session);
+    }
 
     let session = Arc::new(
         CodingSession::create(host.sessions(cwd.clone()).new_path().unwrap(), Some(&cwd)).unwrap(),
