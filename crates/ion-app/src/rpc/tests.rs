@@ -323,11 +323,30 @@ async fn stalled_inspection_does_not_block_abort_or_eof_join() {
         if abort {
             commands.shutdown().await.unwrap();
         }
-        tokio::time::timeout(Duration::from_secs(5), reader.read_to_end(&mut bytes))
-            .await
+        // The pressure proof is complete. Schedule both ends as tasks: driving
+        // a seven-byte pipe from the runtime root adds driver-yield overhead to
+        // every exchange and makes this deadline depend on scheduler throughput.
+        let mut draining =
+            tokio::spawn(async move { reader.read_to_end(&mut bytes).await.map(|_| bytes) });
+        let drained = tokio::time::timeout(Duration::from_secs(5), &mut draining).await;
+        if drained.is_err() {
+            draining.abort();
+            let _ = draining.await;
+        }
+        let mut running = running;
+        let joined = tokio::time::timeout(Duration::from_secs(5), &mut running).await;
+        if joined.is_err() {
+            running.abort();
+            let _ = running.await;
+        }
+        let bytes = drained
+            .expect("RPC publication did not drain")
             .unwrap()
             .unwrap();
-        running.await.unwrap().unwrap();
+        joined
+            .expect("RPC connection did not join")
+            .unwrap()
+            .unwrap();
         let records = records(&bytes);
         assert_eq!(
             records[0], large,
