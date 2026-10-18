@@ -69,6 +69,7 @@ def exercise(mode, supported=True, panic=False, editor_fault=None):
     with tempfile.TemporaryDirectory(prefix="ion-keyboard-") as temporary:
         work = Path(temporary)
         requests = []
+        release_completion = threading.Event()
 
         class Provider(http.server.BaseHTTPRequestHandler):
             def log_message(self, *_):
@@ -76,12 +77,19 @@ def exercise(mode, supported=True, panic=False, editor_fault=None):
 
             def do_POST(self):
                 requests.append(json.loads(self.rfile.read(int(self.headers["Content-Length"]))))
-                body = b'data: {"choices":[{"index":0,"delta":{"content":"done"},"finish_reason":"stop"}]}\n\ndata: [DONE]\n\n'
+                head = b'data: {"choices":[{"index":0,"delta":{"content":"done"},"finish_reason":null}]}\n\n'
+                tail = b'data: {"choices":[{"index":0,"delta":{},"finish_reason":"stop"}]}\n\ndata: [DONE]\n\n'
                 self.send_response(200)
                 self.send_header("Content-Type", "text/event-stream")
-                self.send_header("Content-Length", str(len(body)))
+                self.send_header("Content-Length", str(len(head) + len(tail)))
                 self.end_headers()
-                self.wfile.write(body)
+                self.wfile.write(head)
+                self.wfile.flush()
+                if len(requests) == 1:
+                    # Make answer visibility observably precede settlement;
+                    # external-editor admission requires the latter.
+                    assert release_completion.wait(8), "response completion was not released"
+                self.wfile.write(tail)
 
         server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Provider)
         thread = threading.Thread(target=server.serve_forever)
@@ -166,7 +174,10 @@ def exercise(mode, supported=True, panic=False, editor_fault=None):
                     assert not requests, "Shift-Enter admitted a Turn instead of a draft newline"
                     os.write(master, b"\r")
                     until(lambda: len(requests) == 1 and b"done" in output)
-                    drain()
+                    settled = b"\x1b]7501;state=done:app=ion\x1b\\"
+                    assert settled not in output, "partial answer settled an unfinished response"
+                    release_completion.set()
+                    until(lambda: settled in output)
                     users = [message for message in requests[0]["messages"] if message["role"] == "user"]
                     assert users[-1]["content"] == "START_first\nsecond", users[-1]
                     if editor_fault:
@@ -204,6 +215,7 @@ def exercise(mode, supported=True, panic=False, editor_fault=None):
             outcome = editor_fault or ('panic' if panic else 'draft/editor/modal/exit')
             print(f"Ion {mode} {'supported' if supported else 'unsupported'} keyboard custody {outcome}: OK")
         finally:
+            release_completion.set()
             if child is not None and child.poll() is None:
                 child.kill()
             if slave is not None:
