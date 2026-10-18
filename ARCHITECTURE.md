@@ -358,7 +358,11 @@ Human-readable
 thinking differs from signatures/encrypted replay and returns to providers only
 through adapter-owned replay. It counts as observed output whether displayed or
 not. Preserve signed prefixes or report reset/incompatibility; never reset inside
-an outstanding signed exchange. Core must not branch on provider names.
+an outstanding signed exchange. Destination adapters may alias unsigned migrated
+tool IDs, pairing calls/results through their original identities without changing
+committed facts. Allocate collision-free aliases without rebinding earlier encoded
+prefixes; retained native identities remain opaque and fixed, or fail explicitly
+on an unresolvable collision. Core must not branch on provider names.
 
 Caching/affinity are optimizations, not authority. Affinity survives reopen and
 changes on fork/clone. Warming is bounded, separately accounted and subordinate

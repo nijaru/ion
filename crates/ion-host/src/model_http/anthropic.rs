@@ -636,7 +636,7 @@ impl AnthropicState {
                             .ok_or_else(|| invalid("missing tool ID"))?;
                         let name = block["name"]
                             .as_str()
-                            .filter(|s| valid_name(s))
+                            .filter(|s| valid_identifier(s))
                             .ok_or_else(|| invalid("invalid tool name"))?;
                         if !self.ids.insert(id.into()) || !block["input"].is_object() {
                             return Err(invalid("invalid or duplicate tool_use"));

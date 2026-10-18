@@ -525,6 +525,11 @@ identity and any provider-returned model identifier. Effective physical model
 changes advance replay epochs independently of logical selection, so a future
 virtual route cannot switch A → B → A and accidentally revive stale opaque
 reasoning. Ion does not yet provide a virtual-model registry or router.
+Anthropic encoding aliases unsigned migrated tool IDs when their format or a
+collision requires it, keeping each call paired with its result. Aliases are
+wire-only: committed IDs, other chat wires and retained native replay are
+unchanged. Appending history does not rebind an earlier encoded prefix; a collision
+that would require renaming retained replay reports an incompatibility instead.
 OpenRouter requests include a persisted opaque conversation ID for best-effort
 provider/cache affinity, independent of opening messages that resource reload or
 compaction may change. Reopen retains it; clone/fork gets a fresh ID. Other

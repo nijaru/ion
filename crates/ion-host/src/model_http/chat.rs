@@ -334,7 +334,10 @@ impl ChatState {
         ) {
             let mut ids = BTreeSet::new();
             for (_, call) in self.calls {
-                if call.id.is_empty() || !ids.insert(call.id.clone()) || !valid_name(&call.name) {
+                if call.id.is_empty()
+                    || !ids.insert(call.id.clone())
+                    || !valid_identifier(&call.name)
+                {
                     return Err(invalid("incomplete or duplicate streamed function call"));
                 }
                 let (arguments, raw_arguments) = parse_tool_arguments(call.arguments);

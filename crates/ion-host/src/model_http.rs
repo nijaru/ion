@@ -1,5 +1,6 @@
 //! HTTP model transports. Provider wire formats stay outside Session state.
 use std::{
+    borrow::Cow,
     collections::{BTreeMap, BTreeSet},
     sync::Arc,
     time::Duration,
@@ -28,6 +29,7 @@ mod anthropic;
 mod chat;
 mod controls;
 mod limits;
+mod tool_ids;
 #[cfg(test)]
 use anthropic::anthropic_body;
 #[cfg(test)]
@@ -39,6 +41,7 @@ use anthropic::{
 use chat::{ChatState, chat_body};
 use controls::control_fields;
 use limits::{ResponseBudget, StreamBudget};
+use tool_ids::ToolIds;
 
 const MAX_FRAME: usize = 256 * 1024;
 const MAX_ERROR_BODY: usize = 16 * 1024;
@@ -701,7 +704,7 @@ fn validate_request(request: &ModelRequest) -> Result<(), ProviderError> {
 fn validate_tool_specs(tools: &[ToolSpec]) -> Result<(), ProviderError> {
     let mut names = BTreeSet::new();
     for tool in tools {
-        if !valid_name(&tool.name)
+        if !valid_identifier(&tool.name)
             || !names.insert(&tool.name)
             || tool.input_schema.get("type").and_then(Value::as_str) != Some("object")
         {
@@ -711,7 +714,7 @@ fn validate_tool_specs(tools: &[ToolSpec]) -> Result<(), ProviderError> {
     Ok(())
 }
 
-fn valid_name(name: &str) -> bool {
+fn valid_identifier(name: &str) -> bool {
     !name.is_empty()
         && name.len() <= 64
         && name
@@ -738,7 +741,8 @@ fn wire_messages_with_anthropic_context(
 ) -> Result<Vec<Value>, ProviderError> {
     let anthropic = !wire.is_chat();
     let mut messages = Vec::new();
-    let mut pending = BTreeMap::<String, String>::new();
+    let mut pending = BTreeMap::new();
+    let mut ids = ToolIds::default();
     let mut tool_images = Vec::new();
     for (message_index, message) in request.messages.iter().enumerate() {
         let reasoning_content = match &message.provider_replay {
@@ -836,22 +840,27 @@ fn wire_messages_with_anthropic_context(
                     }
                 }
                 (Role::Assistant, Content::ToolCall(call)) => {
-                    if !valid_name(&call.name)
+                    if !valid_identifier(&call.name)
                         || !call.arguments.is_object()
                         || call.id.is_empty()
-                        || pending.contains_key(&call.id)
+                        || pending.contains_key(call.id.as_str())
                     {
                         return Err(invalid("invalid or duplicate tool call"));
                     }
-                    pending.insert(call.id.clone(), call.name.clone());
-                    if anthropic {
-                        blocks.push(json!({"type":"tool_use","id":call.id,"name":call.name,"input":call.arguments}));
+                    let wire_id = if anthropic {
+                        ids.for_call(&call.id, message.provider_replay.is_some())?
                     } else {
-                        calls.push(json!({"id":call.id,"type":"function","function":{"name":call.name,"arguments":call.arguments.to_string()}}));
+                        Cow::Borrowed(call.id.as_str())
+                    };
+                    if anthropic {
+                        blocks.push(json!({"type":"tool_use","id":wire_id,"name":call.name,"input":call.arguments}));
+                    } else {
+                        calls.push(json!({"id":wire_id,"type":"function","function":{"name":call.name,"arguments":call.arguments.to_string()}}));
                     }
+                    pending.insert(call.id.as_str(), (call.name.as_str(), wire_id));
                 }
                 (Role::Tool, Content::ToolResult(result)) => {
-                    let Some(name) = pending.remove(&result.call_id) else {
+                    let Some((name, wire_id)) = pending.remove(result.call_id.as_str()) else {
                         return Err(invalid("orphan or duplicate tool result"));
                     };
                     if result.name != name {
@@ -868,9 +877,9 @@ fn wire_messages_with_anthropic_context(
                                 "type":"base64","media_type":image.mime_type().as_str(),"data":image.data()
                             }}));
                         }
-                        blocks.push(json!({"type":"tool_result","tool_use_id":result.call_id,"content":content,"is_error":result.is_error}));
+                        blocks.push(json!({"type":"tool_result","tool_use_id":wire_id,"content":content,"is_error":result.is_error}));
                     } else {
-                        results.push(json!({"role":"tool","tool_call_id":result.call_id,"content":chat::tool_result_content(result)?}));
+                        results.push(json!({"role":"tool","tool_call_id":wire_id,"content":chat::tool_result_content(result)?}));
                         for image in &result.images {
                             image
                                 .validate()
@@ -1080,6 +1089,7 @@ fn valid_openrouter_details(value: &Value) -> bool {
 #[cfg(test)]
 mod tests {
     mod stream_limits;
+    mod tool_ids;
 
     use super::*;
     use ion_ai::{

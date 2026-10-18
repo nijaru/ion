@@ -14,6 +14,8 @@ binary = Path(os.environ.get("ION_SMOKE_BIN", root / "target/debug/ion"))
 requests = []
 summary_requests = []
 retry_requests = []
+legacy_requests = []
+migration_requests = []
 
 
 def event(kind, **fields):
@@ -100,7 +102,21 @@ def response(index, *, overloaded=False):
 class Handler(BaseHTTPRequestHandler):
     def do_POST(self):
         body = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
-        if self.path == "/retry/v1/messages":
+        if self.path == "/migration-chat/v1/chat/completions":
+            legacy_requests.append(body)
+            calls = len(legacy_requests) == 1
+            delta = {"tool_calls": [
+                {"index": index, "id": identity, "type": "function", "function": {
+                    "name": "read", "arguments": json.dumps({"path": "data.txt"}),
+                }} for index, identity in enumerate(["functions.echo:0", "ion_0"])
+            ]} if calls else {"content": "LEGACY_DONE"}
+            chunk = {"model": "legacy", "choices": [{"index": 0, "delta": delta,
+                "finish_reason": "tool_calls" if calls else "stop"}]}
+            payload = f"data: {json.dumps(chunk)}\n\ndata: [DONE]\n\n".encode()
+        elif self.path == "/migration/v1/messages":
+            migration_requests.append(body)
+            payload = response(len(migration_requests))
+        elif self.path == "/retry/v1/messages":
             retry_requests.append(body)
             payload = response(0, overloaded=len(retry_requests) == 1)
         elif str(body.get("system", "")).startswith("Summarize the coding conversation"):
@@ -212,9 +228,52 @@ with tempfile.TemporaryDirectory(prefix="ion-anthropic-") as temporary:
         ), retried
         assert len(retry_requests) == 2, retry_requests
         assert retry_requests[0] == retry_requests[1], "retry changed the prepared request"
+
+        migration = work / "migration.sqlite"
+        base = f"http://127.0.0.1:{server.server_port}"
+        run(binary, env, "use", "smoke", "legacy", "--endpoint", f"{base}/migration-chat/v1/chat/completions", "--wire", "chat-completions")
+        legacy = run(binary, env, "--json", "--cwd", workspace, "--session", migration, "run", "Legacy reads")
+        assert legacy[-1] == {"type": "run_end", "status": "completed"}, legacy
+        assert len(legacy_requests) == 2, legacy_requests
+
+        def migration_view():
+            inspected = subprocess.run(
+                [binary, "--cwd", workspace, "--session", migration, "inspect"],
+                env=env, check=True, capture_output=True, text=True, timeout=20,
+            )
+            return json.loads(inspected.stdout)
+
+        original_entries = migration_view()["entries"]
+        raw_ids = [part["ToolCall"]["id"]
+            for entry in original_entries if entry["kind"] == "assistant"
+            for part in entry["data"]["message"]["content"] if "ToolCall" in part]
+        assert raw_ids == ["functions.echo:0", "ion_0"], raw_ids
+        run(binary, env, "use", "smoke", "mock", "--endpoint", f"{base}/migration/v1/messages", "--wire", "anthropic-messages")
+        migrated = run(binary, env, "--json", "--cwd", workspace, "--session", migration, "--provider", "smoke", "--model", "mock", "run", "Native continuation")
+        assert migrated[-1] == {"type": "run_end", "status": "completed"}, migrated
+        reopened = run(binary, env, "--json", "--cwd", workspace, "--session", migration, "run", "Reopen signed continuation")
+        assert reopened[-1] == {"type": "run_end", "status": "completed"}, reopened
+        assert len(migration_requests) == 3, migration_requests
+        assert not any(item["type"] == "provider_replay_rebased" for item in reopened), reopened
+        first_wire = migration_requests[0]["messages"]
+        migrated_ids = [block["id"] for message in first_wire for block in message["content"] if block["type"] == "tool_use"]
+        assert len(set(migrated_ids)) == len(raw_ids), migrated_ids
+        assert all(identity and len(identity) <= 64 and identity.isascii()
+            and all(c.isalnum() or c in "_-" for c in identity) for identity in migrated_ids), migrated_ids
+        result_ids = [block["tool_use_id"] for message in first_wire for block in message["content"] if block["type"] == "tool_result"]
+        assert set(result_ids) == set(migrated_ids), (migrated_ids, result_ids)
+        for body in migration_requests[1:]:
+            assert body["messages"][:len(first_wire)] == first_wire, "migration changed an encoded prefix"
+            signed = next(message for message in body["messages"]
+                if any(block.get("id") == "tool_1" for block in message["content"]))
+            assert signed["content"][0] == {"type":"thinking", "thinking":"", "signature":"signed-1"}, signed
+            assert signed["content"][1]["id"] == "tool_1", signed
+            assert any(block.get("tool_use_id") == "tool_1"
+                for message in body["messages"] for block in message["content"]), body
+        assert migration_view()["entries"][:len(original_entries)] == original_entries, "migration rewrote committed history"
     finally:
         server.shutdown()
         server.server_close()
         thread.join(timeout=2)
 
-print("Anthropic signed continuation, compaction/rebase and usage-only stream retry: ok")
+print("Anthropic signed continuation, compaction/rebase, pre-output retry and reopened tool-ID migration: ok")
