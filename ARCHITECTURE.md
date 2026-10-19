@@ -516,7 +516,33 @@ Context projection, branching and compaction have one owner. Compaction changes
 context, not history; commit complete call/result cuts atomically and retain the
 old projection when cancelled before commit. Preserve retrieval coordinates without
 replay or implicit evidence injection. Measure continuation quality, not compression
-alone. Neutral prompt estimates count text/tool content once, excluding opaque
+alone.
+
+The coding application supplies a read-only `history` tool for recovering committed
+evidence after compaction or withheld output. Other applications opt in explicitly;
+ordinary frozen catalogue selection applies. Core resolves reads against the live
+invocation's Session, never a model-supplied database path or foreign Session ID.
+Search/list returns stable one-based coordinates in the full committed entry
+sequence and bounded previews; omitted entries can leave gaps. This does not hide
+the existence or count of omitted records. Private commands and output remain
+excluded. Read-by-entry returns UTF-8 byte pages with explicit continuation. Provider call
+IDs are metadata, not unique retrieval identity. Search work and returned bytes
+are independently bounded, with progress coordinates rather than a false complete
+result when a scan stops early. Reads use a committed upper bound, preserve
+observed success/error versus unknown/not-dispatched outcomes, and never dispatch
+historical calls.
+
+Retrievable records contain historical conversation text and tool evidence, not
+provider replay, human thinking, image bytes, private direct-shell commands/output
+or application/context configuration. Omitted media are identified, not encoded
+into text. Compaction identifies its exact covered entry range; withheld output
+has a stable locator. Guidance names `history` only when the frozen loadout makes
+it available. Reopen and copies use their actual committed history; inherited
+coordinates confer no execution authority. Historical observations and summaries
+are not proof of the current workspace, semantic fidelity or permission to repeat
+an effect. This uses the existing Session store, not another result ledger.
+
+Neutral prompt estimates count text/tool content once, excluding opaque
 provider replay; retained request-representation byte bounds still include it.
 These estimates are neither provider-token counts nor transport-wire bounds.
 Use compatible observed input usage to inform later estimates; do not reuse a
