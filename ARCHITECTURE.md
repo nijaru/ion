@@ -418,6 +418,28 @@ incomplete EOF. Full artifacts have a separate disk
 lifecycle, not an aggregate quota or retention guarantee. Images have one bounded
 normalization owner across user/native/MCP inputs; unsupported content is explicit.
 
+The coding application includes native `ls`, `find` and `grep` for repository
+exploration without shell authority. Explicit selection and the read-only loadout
+apply to direct and composed calls alike. Paths resolve against the captured
+working directory; absolute paths are allowed with host permissions, not confined
+to a repository. `ls` exposes immediate entries including hidden names; recursive
+file discovery and text search respect ignore rules, include non-ignored hidden
+files, exclude `.git` traversal and do not follow discovered symlinks. An explicit
+root may resolve a symlink as native reads do. Glob matching, regex versus literal
+search and line/byte locations are declared tool contracts, not shell syntax.
+
+Bound inspected entries, text bytes, pattern compilation, output and diagnostics.
+Search results identify their root and source locations so `read` can retrieve
+actual evidence. Report omissions, traversal/read errors and budget exhaustion;
+an empty partial search does not establish absence. Oversized, non-text and
+unrepresentable paths must not become plausible-looking empty or renamed files.
+Results describe a live scan, not an atomic filesystem snapshot. After a limit,
+callers refine the root/filter; no cursor may falsely promise a stable restart.
+Filesystem workers remain owned through cancellation and settlement, including
+uninterruptible native syscalls. These tools grant neither mutation nor automatic
+replay authority and do not replace the existing command workflow for builds and
+verification.
+
 Resources do not execute repository text or start unconfigured servers. Instructions,
 skills/templates and results are lower-trust data. Report failures/omissions with
 provenance, not silent rule truncation. Project-scoped MCP configuration is inert
