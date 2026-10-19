@@ -554,9 +554,12 @@ use economical streaming cache warming: shortly before the verified cache
 lifetime expires, Ion may replay the exact last model request with a one-token
 output ceiling when the expected avoided cache miss is at least $0.05. The
 timer starts from that request's dispatch time, stops when the tool batch or
-context advances, and is capped to one hour of active work. Refresh usage is
-stored as a cache_warm Session accounting fact but never enters model context
-or normal transcript/export output. Idle cache warming is not implemented.
+context advances, and is capped to one hour of active work. Policies without a
+positive refresh point inside that hour—including cache lifetimes of ten seconds
+or less—do not warm. Expired cache windows and elapsed active horizons never
+restart warming after a delayed response. Refresh usage is stored as a cache_warm
+Session accounting fact but never enters model context or normal transcript/export
+output. Idle cache warming is not implemented.
 Ion avoids compaction during a signed tool continuation; if its prefix changes
 or cannot fit, the Turn fails without repeating a tool effect. Context-window
 estimates count neutral content once rather than adding duplicate opaque replay.

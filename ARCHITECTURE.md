@@ -366,8 +366,11 @@ on an unresolvable collision. Core must not branch on provider names.
 
 Caching/affinity are optimizations, not authority. Affinity survives reopen and
 changes on fork/clone. Warming is bounded, separately accounted and subordinate
-to settlement. Transient provider retries are bounded, cancellable and allowed
-only before observed output, without repeating completed tools. Accounting,
+to settlement. Schedule only positive refresh deadlines within the active horizon;
+ineligible policies disable warming rather than issuing immediate requests.
+Do not dispatch refreshes after cache expiry or the active horizon, even when
+model responses or earlier refreshes arrive late. Transient provider retries are
+bounded, cancellable and allowed only before observed output, without repeating completed tools. Accounting,
 input-transformation notices and empty deltas do not establish output custody.
 
 ## Clients and extension boundaries

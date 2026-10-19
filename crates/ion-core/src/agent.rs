@@ -209,6 +209,8 @@ fn validate_steering<M>(
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
 pub struct PromptCacheWarmingPolicy {
+    /// Cache lifetime. Warming is disabled when the ten-second safety margin
+    /// leaves no positive refresh point within the one-hour active horizon.
     pub lifetime_seconds: u64,
     /// Micro-US-dollars per million tokens.
     pub cache_write_microusd_per_million: u64,
@@ -250,10 +252,13 @@ impl PromptCacheWarmingPolicy {
             .is_some_and(|net| net >= self.minimum_savings_microusd)
     }
 
-    fn refresh_after(self) -> std::time::Duration {
+    /// No immediate refresh: a lifetime within the safety margin cannot be
+    /// extended economically and must not create a zero-delay request loop.
+    fn refresh_after(self) -> Option<std::time::Duration> {
         let ninety_percent = self.lifetime_seconds.saturating_mul(9) / 10;
-        let ten_second_margin = self.lifetime_seconds.saturating_sub(10);
-        std::time::Duration::from_secs(ninety_percent.min(ten_second_margin))
+        let ten_second_margin = self.lifetime_seconds.checked_sub(10)?;
+        (ten_second_margin > 0)
+            .then(|| std::time::Duration::from_secs(ninety_percent.min(ten_second_margin)))
     }
 }
 
@@ -262,7 +267,9 @@ const ACTIVE_CACHE_WARMING_LIMIT: std::time::Duration = std::time::Duration::fro
 struct PromptCacheWarmer {
     request: ModelRequest,
     policy: PromptCacheWarmingPolicy,
+    refresh_after: std::time::Duration,
     next_refresh: tokio::time::Instant,
+    expires_at: tokio::time::Instant,
     stop_at: tokio::time::Instant,
 }
 
@@ -276,12 +283,20 @@ impl PromptCacheWarmer {
         if !policy.should_warm(usage) {
             return None;
         }
-        let next_refresh = request_started + policy.refresh_after();
+        let refresh_after = policy.refresh_after()?;
+        // Discard ineligible delays before constructing their deadlines.
+        if refresh_after >= ACTIVE_CACHE_WARMING_LIMIT {
+            return None;
+        }
+        let next_refresh = request_started + refresh_after;
+        let expires_at = request_started + std::time::Duration::from_secs(policy.lifetime_seconds);
         let stop_at = request_started + ACTIVE_CACHE_WARMING_LIMIT;
-        (next_refresh < stop_at).then(|| Self {
+        Some(Self {
             request: request.clone(),
             policy,
+            refresh_after,
             next_refresh,
+            expires_at,
             stop_at,
         })
     }
@@ -290,7 +305,9 @@ impl PromptCacheWarmer {
         if !self.policy.should_warm(usage) {
             return false;
         }
-        self.next_refresh = refresh_started + self.policy.refresh_after();
+        self.next_refresh = refresh_started + self.refresh_after;
+        self.expires_at =
+            refresh_started + std::time::Duration::from_secs(self.policy.lifetime_seconds);
         self.next_refresh < self.stop_at
     }
 }
@@ -413,15 +430,17 @@ impl Agent {
             let Some(state) = warmer.as_ref() else {
                 return tool.await;
             };
-            if state.next_refresh >= state.stop_at {
-                *warmer = None;
-                continue;
-            }
             let deadline = state.next_refresh;
+            let valid_until = state.expires_at.min(state.stop_at);
             let request = state.request.clone();
             let refresh = async {
                 tokio::time::sleep_until(deadline).await;
                 let started = tokio::time::Instant::now();
+                // Check at dispatch, not before sleeping: a slow response,
+                // refresh, or delayed timer must not restart an expired window.
+                if started >= valid_until {
+                    return (started, None);
+                }
                 let refreshed = refresh_prompt_cache(&self.service, request, stop).await;
                 (started, refreshed)
             };
@@ -1972,50 +1991,47 @@ mod tests {
         std::fs::remove_dir_all(root).unwrap();
     }
 
-    #[tokio::test]
+    struct SlowRead;
+
+    impl ToolSource for SlowRead {
+        fn registrations(self: Arc<Self>) -> Vec<ToolRegistration> {
+            vec![ToolRegistration::new(
+                ToolDefinition {
+                    spec: ToolSpec {
+                        name: "read".into(),
+                        description: "slow read".into(),
+                        input_schema: serde_json::json!({
+                            "type":"object",
+                            "additionalProperties":false,
+                            "properties":{}
+                        }),
+                    },
+                    presentation: ToolPresentation::argument(ToolActivityKind::Read, "path"),
+                    exposure: ToolExposure::Direct,
+                },
+                self.clone(),
+            )]
+        }
+    }
+
+    impl ToolExecutor for SlowRead {
+        fn execute<'a>(
+            &'a self,
+            _invocation: crate::ToolInvocation<'a>,
+        ) -> BoxFuture<'a, ToolOutput> {
+            Box::pin(async {
+                tokio::time::sleep(std::time::Duration::from_secs(30)).await;
+                ToolOutput {
+                    value: serde_json::json!({"content":"ok"}),
+                    images: Vec::new(),
+                    is_error: false,
+                }
+            })
+        }
+    }
+
+    #[tokio::test(start_paused = true)]
     async fn streaming_cache_warm_replays_request_without_entering_model_context() {
-        struct SlowRead;
-
-        impl ToolSource for SlowRead {
-            fn registrations(self: Arc<Self>) -> Vec<ToolRegistration> {
-                let definitions = {
-                    vec![ToolDefinition {
-                        spec: ToolSpec {
-                            name: "read".into(),
-                            description: "slow read".into(),
-                            input_schema: serde_json::json!({
-                                "type":"object",
-                                "additionalProperties":false,
-                                "properties":{}
-                            }),
-                        },
-                        presentation: ToolPresentation::argument(ToolActivityKind::Read, "path"),
-                        exposure: ToolExposure::Direct,
-                    }]
-                };
-                definitions
-                    .into_iter()
-                    .map(|definition| ToolRegistration::new(definition, self.clone()))
-                    .collect()
-            }
-        }
-
-        impl ToolExecutor for SlowRead {
-            fn execute<'a>(
-                &'a self,
-                _invocation: crate::ToolInvocation<'a>,
-            ) -> BoxFuture<'a, ToolOutput> {
-                Box::pin(async {
-                    tokio::time::sleep(std::time::Duration::from_millis(30)).await;
-                    ToolOutput {
-                        value: serde_json::json!({"content":"ok"}),
-                        images: Vec::new(),
-                        is_error: false,
-                    }
-                })
-            }
-        }
-
         let root = std::env::temp_dir().join(format!("ion-cache-warm-{}", uuid::Uuid::now_v7()));
         std::fs::create_dir(&root).unwrap();
         let session =
@@ -2053,7 +2069,9 @@ mod tests {
         let agent =
             Agent::new(service.clone(), Arc::new(SlowRead), model()).with_limits(AgentLimits {
                 prompt_cache_warming: Some(PromptCacheWarmingPolicy {
-                    lifetime_seconds: 0,
+                    // The shortest lifetime with a usable refresh point; the
+                    // warm entry lands one second into the tool call.
+                    lifetime_seconds: 11,
                     cache_write_microusd_per_million: 5_000_000,
                     cache_read_microusd_per_million: 200_000,
                     output_microusd_per_million: 20_000_000,
@@ -2108,6 +2126,124 @@ mod tests {
 
         drop(session);
         std::fs::remove_dir_all(root).unwrap();
+    }
+
+    struct DelayedInitialResponse {
+        inner: Arc<ScriptedModelService>,
+        delay: std::time::Duration,
+    }
+
+    impl ModelService for DelayedInitialResponse {
+        fn stream<'a>(
+            &'a self,
+            request: ModelRequest,
+        ) -> BoxFuture<'a, Result<ion_ai::ModelStream, ion_ai::ProviderError>> {
+            Box::pin(async move {
+                if self.inner.requests().is_empty() {
+                    tokio::time::sleep(self.delay).await;
+                }
+                self.inner.stream(request).await
+            })
+        }
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn cache_warming_requires_a_usable_refresh_point() {
+        // A deadline must be positive and inside the active horizon. Neither
+        // the cache lifetime nor that horizon may elapse awaiting the response.
+        for (lifetime_seconds, delay_seconds) in [
+            (0, 0),
+            (10, 0),
+            (4_000, 0),
+            (u64::MAX, 0),
+            (300, 300),
+            (3_999, 3_600),
+        ] {
+            let root = std::env::temp_dir().join(format!(
+                "ion-cache-short-{lifetime_seconds}-{}",
+                uuid::Uuid::now_v7()
+            ));
+            std::fs::create_dir(&root).unwrap();
+            let session =
+                Arc::new(CodingSession::create(root.join("session.sqlite"), Some(&root)).unwrap());
+            let service = Arc::new(ScriptedModelService::new([
+                Script::Stream(vec![ModelStreamEvent::Completed(ModelResponse {
+                    message: Message {
+                        role: Role::Assistant,
+                        content: vec![Content::ToolCall(ToolCall {
+                            id: "read-1".into(),
+                            name: "read".into(),
+                            arguments: serde_json::json!({}),
+                            raw_arguments: None,
+                        })],
+                        provider_replay: None,
+                    },
+                    usage: Usage::known_with_cache(100_000, 4, 100_000, 0),
+                    termination: ResponseTermination::Completed,
+                    returned_model: Some("test".into()),
+                })]),
+                // Baseline ignores the lifetime and refreshes at once, consuming
+                // the answer script as its refresh reply; the spare keeps that
+                // continuation valid so the pre-fix signal is the request count
+                // below, not script exhaustion or a different answer.
+                response(vec![Content::Text("done".into())]),
+                response(vec![Content::Text("ignored refresh output".into())]),
+            ]));
+            let delayed = Arc::new(DelayedInitialResponse {
+                inner: service.clone(),
+                delay: std::time::Duration::from_secs(delay_seconds),
+            });
+            let agent = Agent::new(delayed, Arc::new(SlowRead), model()).with_limits(AgentLimits {
+                prompt_cache_warming: Some(PromptCacheWarmingPolicy {
+                    lifetime_seconds,
+                    cache_write_microusd_per_million: 5_000_000,
+                    cache_read_microusd_per_million: 200_000,
+                    output_microusd_per_million: 20_000_000,
+                    minimum_savings_microusd: 0,
+                }),
+                ..AgentLimits::default()
+            });
+            let result = agent
+                .submit(
+                    session.clone(),
+                    "inspect".into(),
+                    "test".into(),
+                    CancellationToken::new(),
+                    |_| {},
+                )
+                .await;
+
+            let requests = service.requests();
+            assert_eq!(
+                requests.len(),
+                2,
+                "lifetime {lifetime_seconds}s after a {delay_seconds}s response scheduled a refresh"
+            );
+            assert!(
+                requests
+                    .iter()
+                    .all(|request| request.route.reason != ModelRouteReason::Auxiliary)
+            );
+            let entries = session.view().unwrap().entries;
+            assert!(
+                !entries
+                    .iter()
+                    .any(|entry| matches!(entry, crate::session::SessionEntry::CacheWarm { .. }))
+            );
+            assert_eq!(
+                entries
+                    .iter()
+                    .filter(|entry| matches!(
+                        entry,
+                        crate::session::SessionEntry::ToolResult { .. }
+                    ))
+                    .count(),
+                1
+            );
+            assert_eq!(result.unwrap(), "done");
+            drop(session);
+            std::fs::remove_dir_all(root).unwrap();
+        }
     }
 
     #[tokio::test]
