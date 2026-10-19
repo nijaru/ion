@@ -355,53 +355,100 @@ fn search_metadata_is_bounded_while_entry_coordinates_stay_authoritative() {
     let (turn, _) = session
         .begin_turn("bounded metadata".into(), model())
         .unwrap();
-    let call_id = format!("CALL_PREFIX{}", "x".repeat(1_024));
+    let long_call_id = format!(
+        "CALL_PREFIX{}雪{}",
+        "x".repeat(super::MAX_METADATA_BYTES - "CALL_PREFIX".len() - 1),
+        "y".repeat(1_024)
+    );
+    let long_name = format!("exec{}", "n".repeat(1_024));
+    let exact_call_id = format!(
+        "EXACT{}",
+        "z".repeat(super::MAX_METADATA_BYTES - "EXACT".len())
+    );
+    let exact_name = format!(
+        "name{}",
+        "z".repeat(super::MAX_METADATA_BYTES - "name".len())
+    );
     session
         .record_assistant(
             turn,
             Message {
                 role: Role::Assistant,
-                content: vec![Content::ToolCall(ToolCall {
-                    id: call_id.clone(),
-                    name: "exec".into(),
-                    arguments: json!({}),
-                    raw_arguments: None,
-                })],
+                content: vec![
+                    Content::ToolCall(ToolCall {
+                        id: long_call_id.clone(),
+                        name: long_name.clone(),
+                        arguments: json!({}),
+                        raw_arguments: None,
+                    }),
+                    Content::ToolCall(ToolCall {
+                        id: exact_call_id.clone(),
+                        name: exact_name.clone(),
+                        arguments: json!({}),
+                        raw_arguments: None,
+                    }),
+                ],
                 provider_replay: None,
             },
             Usage::unknown(),
             false,
         )
         .unwrap();
-    session
-        .record_tool_result(
-            turn,
-            ToolResult {
-                call_id,
-                name: "exec".into(),
-                result: json!({"ok":true}),
-                images: Vec::new(),
-                is_error: false,
-            },
-        )
-        .unwrap();
+    for (call_id, name) in [
+        (long_call_id.clone(), long_name.clone()),
+        (exact_call_id.clone(), exact_name.clone()),
+    ] {
+        session
+            .record_tool_result(
+                turn,
+                ToolResult {
+                    call_id,
+                    name,
+                    result: json!({"ok":true}),
+                    images: Vec::new(),
+                    is_error: false,
+                },
+            )
+            .unwrap();
+    }
     let view = session.view().unwrap();
-    let entry = view
+    let long_entry = view
         .entries
         .iter()
-        .position(|entry| matches!(entry, SessionEntry::ToolResult { .. }))
+        .position(|entry| matches!(entry, SessionEntry::ToolResult { result, .. } if result.call_id == long_call_id))
         .unwrap() as u64
         + 1;
     let found = history_query(&session, json!({"action":"search","query":"CALL_PREFIX"})).unwrap();
+    assert_eq!(found["entries"].as_array().unwrap().len(), 1, "{found}");
     let hit = &found["entries"][0];
-    assert_eq!(hit["entry"], entry);
+    assert_eq!(hit["entry"], long_entry);
     assert_eq!(hit["tool_truncated"], true);
-    assert!(hit["tool"]["call_id"].as_str().unwrap().len() <= 128);
+    let expected_call_id = &long_call_id[..super::MAX_METADATA_BYTES - 1];
+    let expected_name = &long_name[..super::MAX_METADATA_BYTES];
+    assert_eq!(hit["tool"]["call_id"], expected_call_id);
+    assert_eq!(hit["tool"]["name"], expected_name);
+    let read = history_query(&session, json!({"action":"read","entry":long_entry})).unwrap();
+    let metadata = &read["entry"];
+    assert_eq!(metadata["tool_truncated"], true);
+    assert_eq!(metadata["tool"]["call_id"], expected_call_id);
+    assert_eq!(metadata["tool"]["name"], expected_name);
     assert!(
-        read_all(&session, entry, 64)
+        read_all(&session, long_entry, 64)
             .unwrap()
             .contains("{\"ok\":true}")
     );
+
+    let exact = history_query(&session, json!({"action":"search","query":"EXACT"})).unwrap();
+    assert_eq!(exact["entries"].as_array().unwrap().len(), 1, "{exact}");
+    let exact_hit = &exact["entries"][0];
+    assert!(exact_hit.get("tool_truncated").is_none());
+    assert_eq!(exact_hit["tool"]["call_id"], exact_call_id);
+    assert_eq!(exact_hit["tool"]["name"], exact_name);
+    let exact_entry = exact_hit["entry"].as_u64().unwrap();
+    let exact_read = history_query(&session, json!({"action":"read","entry":exact_entry})).unwrap();
+    assert!(exact_read["entry"].get("tool_truncated").is_none());
+    assert_eq!(exact_read["entry"]["tool"]["call_id"], exact_call_id);
+    assert_eq!(exact_read["entry"]["tool"]["name"], exact_name);
     drop(session);
     fs::remove_dir_all(root).unwrap();
 }
@@ -614,6 +661,15 @@ fn search_cursor_scan_bound_and_committed_upper_snapshot_are_truthful() {
             .prepare_history(&json!({"action":"list","limit":0}).to_string())
             .is_err()
     );
+    for invalid in [
+        json!({"action":"search","query":"x","before":null}),
+        json!({"action":"list","before":null}),
+    ] {
+        assert!(
+            session.prepare_history(&invalid.to_string()).is_err(),
+            "{invalid}"
+        );
+    }
     drop(session);
     fs::remove_dir_all(root).unwrap();
 }

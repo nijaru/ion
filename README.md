@@ -945,12 +945,15 @@ observed/not-dispatched/unknown state and error flag. Other entries return a saf
 committed record projection. Historical reads are evidence, not current workspace
 state, and never authorize rerunning a tool or repeating an effect. Search
 examines at most 256 physical entries and normally 8 MiB of stored entry bodies
-per call; a single larger entry may be inspected alone and is reported as
-`oversized_entry`, so scanning progresses without skipping records. Thinking,
-provider replay, typed image bytes, context/configuration snapshots and private
-`!!` shell records are excluded from both search and read. Image attachments are
-reported as counts only and are never returned as text pages. These exclusions
-are structural, not a general secret scrubber for ordinary user or tool text.
+per call; a single larger record may be inspected alone and is reported as
+`oversized_entry`, so scanning progresses without skipping records. A logical
+shell record includes both its admission and settlement bodies, so that
+exception can inspect up to 128 MiB for that pair; it is not an 8 MiB hard cap.
+Thinking, provider replay, typed image bytes, context/configuration snapshots
+and private `!!` shell records are excluded from both search and read. Image
+attachments are reported only as metadata and are never returned as text pages.
+These exclusions are structural, not a general secret scrubber for ordinary user
+or tool text.
 Tool results that individually exceed the route's
 request bound, or return images to a text-only route, give the model a bounded
 explanation naming their stable committed entry coordinate. Their observed output

@@ -47,18 +47,28 @@ fn read_limit() -> usize {
     READ_DEFAULT_LIMIT
 }
 
+// Omission selects defaults; a present field must have its declared type.
+// Option's usual null-as-None decoding would silently discard invalid inputs.
+fn present_input<'de, D, T>(deserializer: D) -> Result<Option<T>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+    T: Deserialize<'de>,
+{
+    T::deserialize(deserializer).map(Some)
+}
+
 #[derive(Deserialize)]
 #[serde(tag = "action", rename_all = "snake_case", deny_unknown_fields)]
 enum Input {
     Search {
         query: String,
-        #[serde(default)]
+        #[serde(default, deserialize_with = "present_input")]
         before: Option<u64>,
         #[serde(default = "search_limit")]
         limit: usize,
     },
     List {
-        #[serde(default)]
+        #[serde(default, deserialize_with = "present_input")]
         before: Option<u64>,
         #[serde(default = "list_limit")]
         limit: usize,
@@ -128,7 +138,7 @@ pub(crate) fn definition() -> ToolDefinition {
                 "Read takes entry, a zero-based UTF-8 byte offset (default 0) and limit (4..16384, default 8192). Content is a UTF-8 JSON text fragment that may end before limit and may not parse as JSON by itself; continue at next_offset until it is null. ",
                 "A tool_result document is the original observed output JSON text, or its not_dispatched/unknown state record, even when the result was withheld from model context. Other documents are safe committed record JSON. ",
                 "Thinking, provider replay, typed image bytes, context/configuration snapshots and private !! shell records are excluded from search and read; images are reported only as metadata. ",
-                "Search examines at most 256 physical entries and normally at most 8 MiB of stored entry bodies per call. A single larger entry may be inspected alone and is reported as oversized_entry so scanning makes progress without skipping records; use next_before for older history."
+                "Search examines at most 256 physical entries and normally at most 8 MiB of stored entry bodies per call. A single larger record may be inspected alone and is reported as oversized_entry so scanning makes progress without skipping records; one logical shell record includes its admission and settlement bodies, so that exception can inspect up to 128 MiB. Use next_before for older history."
             )
             .into(),
             input_schema: json!({
@@ -459,8 +469,10 @@ impl HistoryRead {
             r#"WITH source AS (
                 SELECT
                     json_extract(body,'$.data.turn') AS turn,
-                    json_extract(body,'$.data.result.call_id') AS call_id,
-                    json_extract(body,'$.data.result.name') AS name,
+                    substr(json_extract(body,'$.data.result.call_id'),1,?4) AS call_id,
+                    length(CAST(json_extract(body,'$.data.result.call_id') AS BLOB)) AS call_id_bytes,
+                    substr(json_extract(body,'$.data.result.name'),1,?4) AS name,
+                    length(CAST(json_extract(body,'$.data.result.name') AS BLOB)) AS name_bytes,
                     json_extract(body,'$.data.result.outcome.state') AS state,
                     json_extract(body,'$.data.result.outcome.output.is_error') AS is_error,
                     json_array_length(json_extract(body,'$.data.result.outcome.output.images')) AS image_count,
@@ -471,7 +483,7 @@ impl HistoryRead {
                     END AS document
                 FROM entries WHERE seq=?1
             )
-            SELECT turn,call_id,name,state,is_error,image_count,
+            SELECT turn,call_id,call_id_bytes,name,name_bytes,state,is_error,image_count,
                    length(CAST(document AS BLOB)),
                    substr(CAST(document AS BLOB),?2+1,?3)
             FROM source"#,
@@ -479,28 +491,44 @@ impl HistoryRead {
                 i64::try_from(entry).map_err(|_| SessionError::InvalidHistory)?,
                 i64::try_from(offset).map_err(|_| SessionError::InvalidHistory)?,
                 i64::try_from(limit.saturating_add(4)).map_err(|_| SessionError::InvalidHistory)?,
+                i64::try_from(MAX_METADATA_BYTES).map_err(|_| SessionError::InvalidHistory)?,
             ],
             |row| {
                 Ok((
                     row.get::<_, Option<i64>>(0)?,
                     row.get::<_, Option<String>>(1)?,
-                    row.get::<_, Option<String>>(2)?,
-                    row.get::<_, String>(3)?,
-                    row.get::<_, Option<bool>>(4)?,
-                    row.get::<_, Option<i64>>(5)?,
-                    row.get::<_, i64>(6)?,
-                    row.get::<_, Option<Vec<u8>>>(7)?,
+                    row.get::<_, Option<i64>>(2)?,
+                    row.get::<_, Option<String>>(3)?,
+                    row.get::<_, Option<i64>>(4)?,
+                    row.get::<_, String>(5)?,
+                    row.get::<_, Option<bool>>(6)?,
+                    row.get::<_, Option<i64>>(7)?,
+                    row.get::<_, i64>(8)?,
+                    row.get::<_, Option<Vec<u8>>>(9)?,
                 ))
             },
         )?;
-        let (turn, call_id, name, state, is_error, image_count, total, bytes) = row;
+        let (
+            turn,
+            call_id,
+            call_id_bytes,
+            name,
+            name_bytes,
+            state,
+            is_error,
+            image_count,
+            total,
+            bytes,
+        ) = row;
         let mut metadata = json!({
             "entry":entry,"kind":"tool_result","turn":turn,
             "encoding":"json","document":"original_tool_result_output"
         });
-        if let (Some(call_id), Some(name)) = (call_id, name) {
-            let (call_id, call_id_truncated) = bounded_metadata(call_id);
-            let (name, name_truncated) = bounded_metadata(name);
+        if let (Some(call_id), Some(call_id_bytes), Some(name), Some(name_bytes)) =
+            (call_id, call_id_bytes, name, name_bytes)
+        {
+            let (call_id, call_id_truncated) = bounded_metadata(call_id, call_id_bytes)?;
+            let (name, name_truncated) = bounded_metadata(name, name_bytes)?;
             metadata["tool"] = json!({"call_id":call_id,"name":name});
             if call_id_truncated || name_truncated {
                 metadata["tool_truncated"] = json!(true);
@@ -651,7 +679,6 @@ impl HistoryRead {
         let row = connection.query_row(
             r#"WITH source AS (
                 SELECT
-                    json_extract(e.body,'$.data.command') AS command,
                     COALESCE(json_extract(s.body,'$.data.outcome.kind'),'unknown') AS state,
                     json_extract(s.body,'$.data.outcome.is_error') AS is_error,
                     json_object(
@@ -674,7 +701,7 @@ impl HistoryRead {
                     AND json_extract(s.body,'$.kind')='user_shell_settled'
                 WHERE e.seq=?1 AND json_extract(e.body,'$.data.exclude_from_context')=0
             )
-            SELECT command,state,is_error,length(CAST(document AS BLOB)),
+            SELECT state,is_error,length(CAST(document AS BLOB)),
                    substr(CAST(document AS BLOB),?2+1,?3)
             FROM source"#,
             params![
@@ -686,14 +713,13 @@ impl HistoryRead {
             |row| {
                 Ok((
                     row.get::<_, String>(0)?,
-                    row.get::<_, String>(1)?,
-                    row.get::<_, Option<bool>>(2)?,
-                    row.get::<_, i64>(3)?,
-                    row.get::<_, Option<Vec<u8>>>(4)?,
+                    row.get::<_, Option<bool>>(1)?,
+                    row.get::<_, i64>(2)?,
+                    row.get::<_, Option<Vec<u8>>>(3)?,
                 ))
             },
         )?;
-        let (_command, state, is_error, total, bytes) = row;
+        let (state, is_error, total, bytes) = row;
         let mut metadata = json!({
             "entry":entry,"kind":"user_shell_admitted","role":"user",
             "state":state,"encoding":"json","document":"committed_record"
@@ -807,8 +833,10 @@ fn hit(
             let row = connection.query_row(
                 r#"SELECT
                     json_extract(body,'$.data.turn'),
-                    json_extract(body,'$.data.result.call_id'),
-                    json_extract(body,'$.data.result.name'),
+                    substr(json_extract(body,'$.data.result.call_id'),1,?4),
+                    length(CAST(json_extract(body,'$.data.result.call_id') AS BLOB)),
+                    substr(json_extract(body,'$.data.result.name'),1,?4),
+                    length(CAST(json_extract(body,'$.data.result.name') AS BLOB)),
                     json_extract(body,'$.data.result.outcome.state'),
                     json_extract(body,'$.data.result.outcome.output.is_error'),
                     json_array_length(json_extract(body,'$.data.result.outcome.output.images')),
@@ -827,23 +855,41 @@ fn hit(
                         json_extract(body,'$.data.result.outcome.reason'),''
                     ) AS BLOB))
                 FROM entries WHERE seq=?3"#,
-                params![query, preview_limit, seq],
+                params![
+                    query,
+                    preview_limit,
+                    seq,
+                    i64::try_from(MAX_METADATA_BYTES).map_err(|_| SessionError::InvalidHistory)?
+                ],
                 |row| {
                     Ok((
                         row.get::<_, Option<i64>>(0)?,
                         row.get::<_, Option<String>>(1)?,
-                        row.get::<_, Option<String>>(2)?,
-                        row.get::<_, String>(3)?,
-                        row.get::<_, Option<bool>>(4)?,
-                        row.get::<_, Option<i64>>(5)?,
-                        row.get::<_, i64>(6)?,
-                        row.get::<_, Option<Vec<u8>>>(7)?,
-                        row.get::<_, Option<i64>>(8)?,
+                        row.get::<_, Option<i64>>(2)?,
+                        row.get::<_, Option<String>>(3)?,
+                        row.get::<_, Option<i64>>(4)?,
+                        row.get::<_, String>(5)?,
+                        row.get::<_, Option<bool>>(6)?,
+                        row.get::<_, Option<i64>>(7)?,
+                        row.get::<_, i64>(8)?,
+                        row.get::<_, Option<Vec<u8>>>(9)?,
+                        row.get::<_, Option<i64>>(10)?,
                     ))
                 },
             )?;
-            let (turn, call_id, name, state, is_error, image_count, matched, preview_bytes, total) =
-                row;
+            let (
+                turn,
+                call_id,
+                call_id_bytes,
+                name,
+                name_bytes,
+                state,
+                is_error,
+                image_count,
+                matched,
+                preview_bytes,
+                total,
+            ) = row;
             if matched == 0 {
                 return Ok(None);
             }
@@ -852,9 +898,11 @@ fn hit(
                 "entry":entry,"kind":"tool_result","turn":turn,"state":state,
                 "preview":preview,"preview_truncated":truncated
             });
-            if let (Some(call_id), Some(name)) = (call_id, name) {
-                let (call_id, call_id_truncated) = bounded_metadata(call_id);
-                let (name, name_truncated) = bounded_metadata(name);
+            if let (Some(call_id), Some(call_id_bytes), Some(name), Some(name_bytes)) =
+                (call_id, call_id_bytes, name, name_bytes)
+            {
+                let (call_id, call_id_truncated) = bounded_metadata(call_id, call_id_bytes)?;
+                let (name, name_truncated) = bounded_metadata(name, name_bytes)?;
                 value["tool"] = json!({"call_id":call_id,"name":name});
                 if call_id_truncated || name_truncated {
                     value["tool_truncated"] = json!(true);
@@ -1016,13 +1064,17 @@ fn hit(
     }
 }
 
-fn bounded_metadata(value: String) -> (String, bool) {
-    let mut end = value.len().min(MAX_METADATA_BYTES);
-    while !value.is_char_boundary(end) {
+/// The SQL prefix is character-bounded to stay UTF-8 safe; this trims it to the
+/// byte bound. The source field's full byte length reports truncation even when
+/// the prefix was cut by characters, so the returned string never exceeds the
+/// byte limit.
+fn bounded_metadata(prefix: String, total_bytes: i64) -> Result<(String, bool), SessionError> {
+    let total = usize::try_from(total_bytes).map_err(|_| SessionError::InvalidHistory)?;
+    let mut end = prefix.len().min(MAX_METADATA_BYTES);
+    while !prefix.is_char_boundary(end) {
         end -= 1;
     }
-    let truncated = end < value.len();
-    (value[..end].to_owned(), truncated)
+    Ok((prefix[..end].to_owned(), total > end))
 }
 
 fn preview(bytes: Option<Vec<u8>>, total: Option<i64>) -> (String, bool) {
