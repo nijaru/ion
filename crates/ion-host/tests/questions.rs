@@ -18,8 +18,8 @@ use ion_core::{
     ToolInvocation, ToolSet,
 };
 use ion_host::{
-    Application, ApplicationRuntime, ControlUpdate, Delivery, QuestionAnswer, QuestionCustody,
-    QuestionTools, Resources, SessionCatalog, SessionSetup, UserInput,
+    Application, ApplicationRuntime, ControlUpdate, Delivery, PendingQuestion, QuestionAnswer,
+    QuestionCustody, QuestionTools, Resources, SessionCatalog, SessionSetup, Settlement, UserInput,
 };
 use serde_json::json;
 
@@ -180,6 +180,31 @@ fn effect_call() -> Content {
     })
 }
 
+async fn wait_for_pending(fixture: &mut Fixture) -> PendingQuestion {
+    loop {
+        match fixture.control.next().await {
+            ControlUpdate::QuestionChanged => {
+                if let Some(pending) = fixture.responder.as_ref().unwrap().pending().unwrap() {
+                    return pending;
+                }
+            }
+            ControlUpdate::Settled(_) => panic!("question Turn settled before a pending request"),
+            ControlUpdate::Idle => panic!("question Turn went idle before a pending request"),
+            _ => {}
+        }
+    }
+}
+
+async fn wait_for_settlement(fixture: &mut Fixture) -> Settlement<()> {
+    loop {
+        match fixture.control.next().await {
+            ControlUpdate::Settled(settlement) => return settlement,
+            ControlUpdate::Idle => panic!("Turn ended without settlement"),
+            _ => {}
+        }
+    }
+}
+
 #[tokio::test]
 async fn answer_resumes_the_same_turn_and_dispatches_dependent_effect_once() {
     let mut fixture = fixture(
@@ -201,52 +226,39 @@ async fn answer_resumes_the_same_turn_and_dispatches_dependent_effect_once() {
             (),
         )
         .unwrap();
-    let mut answered = false;
-    let settlement = loop {
-        match fixture.control.next().await {
-            ControlUpdate::QuestionChanged => {
-                let pending = fixture.responder.as_ref().unwrap().pending().unwrap();
-                if let Some(pending) = pending {
-                    assert_eq!(pending.origin.session(), fixture.control.session().id());
-                    assert!(pending.origin.turn() > 0);
-                    assert!(pending.origin.occurrence().assistant_entry > 0);
-                    assert_eq!(
-                        fixture
-                            .control
-                            .snapshot(|_| ())
-                            .unwrap()
-                            .pending_question
-                            .unwrap()
-                            .origin,
-                        pending.origin
-                    );
-                    fixture
-                        .responder
-                        .as_ref()
-                        .unwrap()
-                        .answer(pending.request, vec![QuestionAnswer::Option { index: 1 }])
-                        .unwrap();
-                    assert!(matches!(
-                        fixture
-                            .responder
-                            .as_ref()
-                            .unwrap()
-                            .answer(pending.request, vec![QuestionAnswer::Option { index: 0 }]),
-                        Err(ion_host::QuestionError::StaleRequest)
-                    ));
-                    answered = true;
-                }
-            }
-            ControlUpdate::Settled(settlement) => break settlement,
-            ControlUpdate::Idle => panic!("question Turn ended without settlement"),
-            _ => {}
-        }
-    };
+    let pending = wait_for_pending(&mut fixture).await;
+    assert_eq!(pending.origin.session(), fixture.control.session().id());
+    assert!(pending.origin.turn() > 0);
+    assert!(pending.origin.occurrence().assistant_entry > 0);
+    assert_eq!(
+        fixture
+            .control
+            .snapshot(|_| ())
+            .unwrap()
+            .pending_question
+            .unwrap()
+            .origin,
+        pending.origin
+    );
+    fixture
+        .responder
+        .as_ref()
+        .unwrap()
+        .answer(pending.request, vec![QuestionAnswer::Option { index: 1 }])
+        .unwrap();
+    assert!(matches!(
+        fixture
+            .responder
+            .as_ref()
+            .unwrap()
+            .answer(pending.request, vec![QuestionAnswer::Option { index: 0 }]),
+        Err(ion_host::QuestionError::StaleRequest)
+    ));
+    let settlement = wait_for_settlement(&mut fixture).await;
     assert!(matches!(
         settlement.outcome,
         ion_host::OperationOutcome::Turn(Ok(ref text)) if text == "done"
     ));
-    assert!(answered);
     assert_eq!(fixture.calls.load(Ordering::SeqCst), 1);
     assert_eq!(fs::read_to_string(&fixture.effect).unwrap(), "chosen once");
     let requests = fixture.service.requests();
@@ -284,21 +296,9 @@ async fn responder_loss_stops_before_dependent_dispatch() {
             (),
         )
         .unwrap();
-    loop {
-        match fixture.control.next().await {
-            ControlUpdate::QuestionChanged => break,
-            ControlUpdate::Settled(_) => panic!("question was not pending"),
-            _ => {}
-        }
-    }
+    let _pending = wait_for_pending(&mut fixture).await;
     drop(fixture.responder.take());
-    let settlement = loop {
-        match fixture.control.next().await {
-            ControlUpdate::Settled(settlement) => break settlement,
-            ControlUpdate::Idle => panic!("turn did not settle after consumer loss"),
-            _ => {}
-        }
-    };
+    let settlement = wait_for_settlement(&mut fixture).await;
     match settlement.outcome {
         ion_host::OperationOutcome::Turn(Err(ion_core::CodingAgentError::Cancelled)) => {}
         ion_host::OperationOutcome::Turn(other) => panic!("unexpected Turn outcome: {other:?}"),
@@ -333,32 +333,9 @@ async fn control_stop_before_answer_prevents_dependent_dispatch() {
             (),
         )
         .unwrap();
-    loop {
-        match fixture.control.next().await {
-            ControlUpdate::QuestionChanged => {
-                if fixture
-                    .responder
-                    .as_ref()
-                    .unwrap()
-                    .pending()
-                    .unwrap()
-                    .is_some()
-                {
-                    break;
-                }
-            }
-            ControlUpdate::Settled(_) => panic!("question was not pending"),
-            _ => {}
-        }
-    }
+    let _pending = wait_for_pending(&mut fixture).await;
     fixture.control.request_stop();
-    let settlement = loop {
-        match fixture.control.next().await {
-            ControlUpdate::Settled(settlement) => break settlement,
-            ControlUpdate::Idle => panic!("stopped turn did not settle"),
-            _ => {}
-        }
-    };
+    let settlement = wait_for_settlement(&mut fixture).await;
     assert!(matches!(
         settlement.outcome,
         ion_host::OperationOutcome::Turn(Err(ion_core::CodingAgentError::Cancelled))
@@ -368,6 +345,162 @@ async fn control_stop_before_answer_prevents_dependent_dispatch() {
     assert_eq!(fixture.service.requests().len(), 1);
     drop(fixture.responder);
     let _ = fixture.control.shutdown().await;
+    drop(fixture.control);
+    fs::remove_dir_all(fixture.root).unwrap();
+}
+
+#[tokio::test]
+async fn replacement_rebinds_custody_and_shutdown_revokes_saved_responder() {
+    let mut fixture = fixture(
+        vec![
+            response(vec![question_call()]),
+            response(vec![Content::Text("first done".into())]),
+            response(vec![question_call()]),
+            response(vec![effect_call()]),
+            response(vec![Content::Text("must not run".into())]),
+        ],
+        true,
+    );
+    fixture
+        .control
+        .submit(
+            Delivery::Start,
+            UserInput::Prompt {
+                text: "first ask".into(),
+                images: Vec::new(),
+            },
+            (),
+        )
+        .unwrap();
+    let first = wait_for_pending(&mut fixture).await;
+    let first_session = first.origin.session();
+    let old_request = first.request;
+    fixture
+        .responder
+        .as_ref()
+        .unwrap()
+        .answer(old_request, vec![QuestionAnswer::Option { index: 1 }])
+        .unwrap();
+    let settlement = wait_for_settlement(&mut fixture).await;
+    assert!(matches!(
+        settlement.outcome,
+        ion_host::OperationOutcome::Turn(Ok(ref text)) if text == "first done"
+    ));
+    assert_eq!(fixture.service.requests().len(), 2);
+    assert_eq!(fixture.calls.load(Ordering::SeqCst), 0);
+
+    fixture.control.select_model(model()).unwrap();
+    let cloned = fixture.control.clone_session().unwrap();
+    assert_eq!(fixture.control.session_id(), cloned);
+    fixture.control.new_session().unwrap();
+    assert_ne!(fixture.control.session_id(), cloned);
+    assert_ne!(fixture.control.session().id(), first_session);
+    assert!(
+        fixture
+            .responder
+            .as_ref()
+            .unwrap()
+            .pending()
+            .unwrap()
+            .is_none()
+    );
+
+    fixture
+        .control
+        .submit(
+            Delivery::Start,
+            UserInput::Prompt {
+                text: "second ask".into(),
+                images: Vec::new(),
+            },
+            (),
+        )
+        .unwrap();
+    let second = wait_for_pending(&mut fixture).await;
+    assert_ne!(second.request, old_request);
+    assert_ne!(second.origin.session(), first_session);
+    assert_eq!(second.origin.session(), fixture.control.session().id());
+    assert_eq!(
+        fixture
+            .control
+            .pending_question()
+            .expect("live request is published")
+            .request,
+        second.request
+    );
+    assert!(matches!(
+        fixture
+            .responder
+            .as_ref()
+            .unwrap()
+            .answer(old_request, vec![QuestionAnswer::Option { index: 0 }]),
+        Err(ion_host::QuestionError::StaleRequest)
+    ));
+    let retained = fixture
+        .responder
+        .as_ref()
+        .unwrap()
+        .pending()
+        .unwrap()
+        .expect("new request survives stale answer");
+    assert_eq!(retained.request, second.request);
+    assert_eq!(retained.origin, second.origin);
+
+    let requests_before_shutdown = fixture.service.requests().len();
+    fixture.control.request_shutdown();
+    assert!(fixture.control.pending_question().is_none());
+    assert!(matches!(
+        fixture.control.attach_question_responder(),
+        Err(ion_host::QuestionError::Closed)
+    ));
+    assert!(matches!(
+        fixture.responder.as_ref().unwrap().pending(),
+        Err(ion_host::QuestionError::ForeignResponder)
+    ));
+    assert!(matches!(
+        fixture
+            .responder
+            .as_ref()
+            .unwrap()
+            .answer(second.request, vec![QuestionAnswer::Option { index: 0 }]),
+        Err(ion_host::QuestionError::ForeignResponder)
+    ));
+
+    let report = fixture.control.shutdown().await;
+    assert!(report.cleanup_errors.is_empty());
+    let settlement = report
+        .updates
+        .into_iter()
+        .find_map(|update| match update {
+            ControlUpdate::Settled(settlement) => Some(settlement),
+            _ => None,
+        })
+        .expect("pending question Turn settles during shutdown");
+    assert!(matches!(
+        settlement.outcome,
+        ion_host::OperationOutcome::Turn(Err(ion_core::CodingAgentError::Cancelled))
+    ));
+    assert!(
+        fixture
+            .control
+            .session()
+            .view()
+            .unwrap()
+            .entries
+            .iter()
+            .any(|entry| matches!(
+                entry,
+                ion_core::SessionEntry::TurnEnded {
+                    reason: ion_core::TurnEndReason::Cancelled,
+                    ..
+                }
+            ))
+    );
+    assert_eq!(fixture.service.requests().len(), requests_before_shutdown);
+    assert_eq!(fixture.calls.load(Ordering::SeqCst), 0);
+    assert!(!fixture.effect.exists());
+
+    drop(fixture.responder.take());
     drop(fixture.control);
     fs::remove_dir_all(fixture.root).unwrap();
 }
