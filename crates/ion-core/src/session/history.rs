@@ -213,11 +213,6 @@ impl Session {
                         "history read limit must be {READ_MIN_LIMIT}..{READ_MAX_LIMIT} bytes"
                     )));
                 }
-                if offset > super::MAX_ENTRY_BYTES {
-                    return Err(HistoryError::request(
-                        "history read offset exceeds the stored entry bound",
-                    ));
-                }
                 Selection::Read {
                     entry,
                     offset,

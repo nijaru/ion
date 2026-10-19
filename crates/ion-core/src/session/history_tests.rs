@@ -675,6 +675,42 @@ fn search_cursor_scan_bound_and_committed_upper_snapshot_are_truthful() {
 }
 
 #[test]
+fn read_offset_is_bounded_by_projected_document_size_not_stored_entry_bytes() {
+    let (root, path) = fixture();
+    let session = Session::create(&path, Some(&root)).unwrap();
+    let (turn, _) = session
+        .begin_turn("short projected document".into(), model())
+        .unwrap();
+    let entry = session
+        .view()
+        .unwrap()
+        .entries
+        .iter()
+        .position(|entry| {
+            matches!(entry, SessionEntry::TurnStarted { turn: candidate, .. } if *candidate == turn)
+        })
+        .unwrap() as u64
+        + 1;
+    let total = history_query(&session, json!({"action":"read","entry":entry}))
+        .unwrap()["entry"]["total_bytes"]
+        .as_u64()
+        .unwrap();
+    let offset = crate::session::MAX_ENTRY_BYTES + 1;
+    assert!(u64::try_from(offset).unwrap() > total);
+
+    let prepared = session
+        .prepare_history(&json!({"action":"read","entry":entry,"offset":offset}).to_string())
+        .unwrap();
+    let error = prepared.read(&CancellationToken::new()).unwrap_err();
+    assert_eq!(
+        error.to_string(),
+        format!("history read offset {offset} exceeds document size {total}")
+    );
+    drop(session);
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
 fn prepared_history_does_not_join_shell_settlement_committed_after_its_bound() {
     let (root, path) = fixture();
     let session = Session::create(&path, Some(&root)).unwrap();
