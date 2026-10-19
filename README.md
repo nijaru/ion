@@ -70,8 +70,8 @@ or automatically retried.
 `--tools LIST` limits the model-visible tools to comma-separated exact names or
 `*` patterns; `--exclude-tools LIST` removes matches after inclusion. Exclusions
 win, and both apply to native tools, MCP tools and Code Mode's callable namespace.
-`--read-only` is an allowlist preset for `read`, `history`, MCP resource
-inspection and Code Mode when enabled; it excludes native mutations, direct shell
+`--read-only` is an allowlist preset for `read`, `ls`, `find`, `grep`, `history`,
+MCP resource inspection and Code Mode when enabled; it excludes native mutations, direct shell
 execution and managed children. These flags are model-loadout policies for the invocation, not
 OS sandboxes or credential boundaries: user `!` shell commands and host-side
 application effects remain separate. A managed child inherits the initiating
@@ -861,6 +861,39 @@ process-group stop and stops acquiring output, then awaits started capture I/O.
 This is not a hard wall-clock or all-descendant termination guarantee.
 Omit optional native input fields to use their defaults; explicit JSON `null`
 is not a valid integer or string option. Output metadata may still contain `null`.
+The coding preset includes native discovery without requiring fd, ripgrep or a
+shell. These are model tools, available directly and through enabled Code Mode:
+
+| Tool | Arguments and results |
+| --- | --- |
+| `ls` | Optional `path` and `limit` (default 500, maximum 1000). Lists immediate entries, including hidden names, with `name` and `type`: `file`, `dir`, `symlink` or `other`. Returned names are sorted; a work-limited subset is not a complete alphabetical listing. |
+| `find` | Required `pattern`, optional `path` and `limit` (default/maximum 1000). Returns regular-file paths relative to `root`. A glob without `/`, such as `*.rs`, matches basenames at any depth; `src/**/*.rs` matches relative paths recursively. |
+| `grep` | Required `pattern`, optional `path`, `glob`, `ignore_case`, `literal` and `limit` (default 100, maximum 1000). Regex is the default; `literal: true` searches exact text. Returns one item per matching line with `path`, one-based `line`, first-match zero-based `byte_offset`, and a UTF-8-safe snippet up to 1024 bytes. `truncated` marks omitted line content. |
+
+Paths default to `.` relative to the captured working directory; absolute paths
+are allowed with the host user's permissions. Results identify the canonical
+`root`. For `grep`, `root_kind: "directory"` means join the relative match path
+to `root`; `root_kind: "file"` means read `root` itself. Pass a match's
+`byte_offset` to `read` to inspect that area, including matches in long lines.
+Globs use gitignore-style syntax, with leading `#` and `!` treated as literal name
+characters rather than comments or negation. Recursive scans respect `.gitignore`
+and `.ignore`, include non-ignored hidden files, exclude discovered `.git` trees
+and do not follow discovered symlinks. An explicit root may resolve a symlink.
+Ignore rules are convenience, not a confidentiality boundary.
+
+Discovery returns at most 64 KiB of serialized result data, inspects up to 20,000
+visible walker entries, and descends at most nine levels from the selected root.
+`grep` inspects at most 8 MiB per file and 32 MiB total, with a charged one-byte
+growth probe; regex compilation and DFA cache each have a 1 MiB bound. Patterns,
+globs and input paths are limited to 4096 UTF-8 bytes. Binary/invalid UTF-8 files,
+oversized files, unrepresentable paths, ignore-file errors and filesystem failures
+are reported rather than silently turned into no matches. Check `exhaustive`,
+`skipped`, `omissions` and bounded diagnostics before inferring absence. Refine the
+root or filter after a limit: results are a live scan, not a snapshot or stable
+restart cursor. Ignore-file parsing remains library-owned; entry limits are not a
+universal syscall or memory quota. Cancellation joins the filesystem worker and
+cannot interrupt an in-flight native syscall.
+
 `read` uses one-based line `offset` and a line-count `limit` (default and
 maximum 2000), returning complete original lines within a 64 KiB text bound.
 `start_line` and `next_line` identify the recorded range; when `has_more` is true,

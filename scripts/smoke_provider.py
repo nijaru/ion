@@ -152,7 +152,12 @@ class Handler(BaseHTTPRequestHandler):
             last = body["messages"][-1]
             assert last["role"] == "tool" and last["tool_call_id"] == "discovery-grep", last
             assert "nested/note.txt" in last["content"] and "needle here" in last["content"], last
-            calls = [("discovery-read", "read", {"path": "nested/note.txt"})]
+            result = json.loads(last["content"])["result"]
+            match = result["matches"][0]
+            path = Path(result["root"])
+            if result["root_kind"] == "directory":
+                path /= match["path"]
+            calls = [("discovery-read", "read", {"path": str(path), "byte_offset": match["byte_offset"], "byte_limit": 4096})]
         elif step == 4:
             last = body["messages"][-1]
             assert last["role"] == "tool" and last["tool_call_id"] == "discovery-read", last

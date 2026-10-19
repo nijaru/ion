@@ -204,7 +204,9 @@ async fn read_only_discovery_is_callable_from_code_mode_without_mutation_authori
             if (found.is_error) throw new Error(JSON.stringify(found.value));
             const grepped = await tools.grep({pattern:'needle'});
             if (grepped.is_error) throw new Error(JSON.stringify(grepped.value));
-            const read = await tools.read({path:'nested/note.txt'});
+            const match = grepped.value.matches[0];
+            const path = grepped.value.root + '/' + match.path;
+            const read = await tools.read({path, byte_offset:match.byte_offset, byte_limit:4096});
             if (read.is_error) throw new Error(JSON.stringify(read.value));
             return {
                 names: listing.value.entries.map(entry => entry.name),
@@ -276,7 +278,7 @@ async fn read_only_discovery_is_callable_from_code_mode_without_mutation_authori
     );
     assert_eq!(result["match"]["path"], "nested/note.txt");
     assert_eq!(result["match"]["line"], 2);
-    assert_eq!(result["content"], "note without\nneedle here\n");
+    assert_eq!(result["content"], "needle here\n");
     assert_eq!(result["exec"], "undefined");
     assert_eq!(result["edit"], "undefined");
     assert_eq!(result["write"], "undefined");
@@ -284,7 +286,6 @@ async fn read_only_discovery_is_callable_from_code_mode_without_mutation_authori
         fs::read_to_string(root.0.join("data.txt")).unwrap(),
         "alpha\nbeta\n"
     );
-    assert!(!root.0.join("changed").exists());
 }
 
 #[tokio::test]

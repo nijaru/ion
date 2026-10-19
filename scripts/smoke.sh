@@ -124,8 +124,9 @@ assert len(grepped["matches"]) == 1, grepped
 match = grepped["matches"][0]
 assert match["path"] == "nested/note.txt" and match["line"] == 2 and "needle here" in match["text"], match
 assert match["byte_offset"] == len("note without\n"), match
-assert read["content"] == "note without\nneedle here\n", read
+assert read["content"] == "needle here\n" and read["start_byte"] == match["byte_offset"], read
 workspace = pathlib.Path(sys.argv[2])
+assert {path.relative_to(workspace).as_posix() for path in workspace.rglob("*")} == {"data.txt", "nested", "nested/note.txt"}
 assert (workspace / "data.txt").read_text() == "alpha\nbeta\n"
 assert (workspace / "nested/note.txt").read_text() == "note without\nneedle here\n"
 PY
