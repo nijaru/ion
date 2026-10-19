@@ -103,9 +103,9 @@ native-emulator runs, live coding and human polish review are different evidence
 
 Use live coding qualification when the changed contract needs model interaction
 or broader workflow acceptance, not as a gate between every implementation slice.
-Read knowledge `preferred-models.md` when selecting development agents or live
-Ion test models; these are separate choices with separate preferences. Use
-bounded isolated Ion tests and explicitly approved models/routes; paid tests
+Read knowledge `preferred-models.md` before live Ion model tests; it selects
+models invoked by Ion, not the agents developing it. Use bounded isolated
+Ion tests and explicitly approved models/routes; paid tests
 require authorization and cost disclosure. Judge actual requests, committed
 facts and independent host effects, including after cancellation/cuts/reopen.
 Do not hide failures with canned summaries, fixture-specific suppression or
