@@ -25,6 +25,7 @@ require_steering = os.environ.get("ION_SMOKE_STEERING") == "1"
 partial_failure = os.environ.get("ION_SMOKE_PARTIAL_FAILURE") == "1"
 stream_error = os.environ.get("ION_SMOKE_STREAM_ERROR") == "1"
 salience = os.environ.get("ION_SMOKE_SALIENCE") == "1"
+discovery = os.environ.get("ION_SMOKE_DISCOVERY") == "1"
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -37,6 +38,10 @@ class Handler(BaseHTTPRequestHandler):
             with requests_file.open("a") as trace:
                 trace.write(json.dumps(body) + "\n")
             assert body["stream"] is True
+            if discovery:
+                self.discovery_step(count, body)
+                count += 1
+                return
             if partial_failure:
                 assert count == 0
                 count += 1
@@ -64,8 +69,8 @@ class Handler(BaseHTTPRequestHandler):
             if count == 6 and require_steering:
                 assert "tools" not in body
             else:
-                assert len(body["tools"]) == 7
-                assert {tool["function"]["name"] for tool in body["tools"]} == {"read", "edit", "write", "exec", "process", "subagent", "history"}
+                assert len(body["tools"]) == 10
+                assert {tool["function"]["name"] for tool in body["tools"]} == {"read", "edit", "write", "exec", "process", "subagent", "history", "ls", "find", "grep"}
             if salience:
                 if count == 0:
                     calls = [("exec", {"command": "printf 'FAILURE_MARKER\\n'; exit 7"})]
@@ -127,6 +132,52 @@ class Handler(BaseHTTPRequestHandler):
         except Exception as error:
             print(f"mock provider request {count} failed: {error!r}", file=sys.stderr, flush=True)
             self.send_error(500, str(error))
+
+    def discovery_step(self, step, body):
+        names = {tool["function"]["name"] for tool in body["tools"]}
+        assert names == {"read", "ls", "find", "grep", "history"}, names
+        if step == 0:
+            calls = [("discovery-ls", "ls", {"path": "."})]
+        elif step == 1:
+            last = body["messages"][-1]
+            assert last["role"] == "tool" and last["tool_call_id"] == "discovery-ls", last
+            assert "data.txt" in last["content"] and "nested" in last["content"], last
+            calls = [("discovery-find", "find", {"path": ".", "pattern": "*.txt"})]
+        elif step == 2:
+            last = body["messages"][-1]
+            assert last["role"] == "tool" and last["tool_call_id"] == "discovery-find", last
+            assert "data.txt" in last["content"] and "nested/note.txt" in last["content"], last
+            calls = [("discovery-grep", "grep", {"path": ".", "pattern": "needle"})]
+        elif step == 3:
+            last = body["messages"][-1]
+            assert last["role"] == "tool" and last["tool_call_id"] == "discovery-grep", last
+            assert "nested/note.txt" in last["content"] and "needle here" in last["content"], last
+            calls = [("discovery-read", "read", {"path": "nested/note.txt"})]
+        elif step == 4:
+            last = body["messages"][-1]
+            assert last["role"] == "tool" and last["tool_call_id"] == "discovery-read", last
+            assert "needle here" in last["content"], last
+            calls = []
+        else:
+            raise AssertionError("unexpected discovery request")
+        if step == 4:
+            delta, finish = {"content": "DISCOVERY_SMOKE_OK"}, "stop"
+        else:
+            delta = {"tool_calls": [
+                {"index": index, "id": call_id, "type": "function", "function": {"name": name, "arguments": json.dumps(arguments)}}
+                for index, (call_id, name, arguments) in enumerate(calls)
+            ]}
+            finish = "tool_calls"
+        events = [
+            {"id": "smoke", "model": "smoke-model", "choices": [{"index": 0, "delta": delta, "finish_reason": None}]},
+            {"id": "smoke", "choices": [{"index": 0, "delta": {}, "finish_reason": finish}]},
+        ]
+        payload = b"".join(b"data: " + json.dumps(event).encode() + b"\n\n" for event in events) + b"data: [DONE]\n\n"
+        self.send_response(200)
+        self.send_header("Content-Type", "text/event-stream")
+        self.send_header("Content-Length", str(len(payload)))
+        self.end_headers()
+        self.wfile.write(payload)
 
     def log_message(self, format, *args):
         pass

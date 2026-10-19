@@ -93,6 +93,45 @@ cmp "$WORK/second.json" "$WORK/source-after-clone.json"
 kill "$server_pid" 2>/dev/null || true
 wait "$server_pid" 2>/dev/null || true
 server_pid=
+
+# Read-only discovery is a native loadout, not shell authority. The mock
+# provider drives ls/find/grep/read; the host-side oracle below checks the
+# committed tool results and that the workspace was not mutated.
+mkdir -p "$WORK/discovery-workspace/nested"
+printf 'alpha\nbeta\n' > "$WORK/discovery-workspace/data.txt"
+printf 'note without\nneedle here\n' > "$WORK/discovery-workspace/nested/note.txt"
+ION_SMOKE_DISCOVERY=1 python3 "$ROOT/scripts/smoke_provider.py" "$WORK/discovery-port" "$WORK/discovery-requests" > "$WORK/discovery-server.out" 2> "$WORK/discovery-server.err" &
+server_pid=$!
+for _ in {1..100}; do [[ -s "$WORK/discovery-port" ]] && break; sleep 0.05; done
+[[ -s "$WORK/discovery-port" ]] || { cat "$WORK/discovery-server.err" >&2; echo 'discovery mock provider did not start' >&2; exit 1; }
+"$BIN" use smoke smoke-model --endpoint "http://127.0.0.1:$(cat "$WORK/discovery-port")/v1" --wire chat-completions > "$WORK/discovery-use.out"
+"$BIN" --cwd "$WORK/discovery-workspace" --read-only run 'List, find, grep and read the workspace without mutations.' > "$WORK/discovery.out" 2> "$WORK/discovery.err"
+grep -q 'DISCOVERY_SMOKE_OK' "$WORK/discovery.out"
+python3 - "$WORK/discovery-requests" "$WORK/discovery-workspace" <<'PY'
+import json, pathlib, sys
+requests = [json.loads(line) for line in open(sys.argv[1])]
+assert len(requests) == 5, len(requests)
+expected_tools = {"read", "ls", "find", "grep", "history"}
+for request in requests:
+    assert {tool["function"]["name"] for tool in request["tools"]} == expected_tools
+messages = requests[-1]["messages"]
+results = [json.loads(message["content"]) for message in messages if message["role"] == "tool"]
+assert len(results) == 4 and all(result["is_error"] is False for result in results), results
+listing, found, grepped, read = (result["result"] for result in results)
+assert {"data.txt", "nested"} <= {entry["name"] for entry in listing["entries"]}, listing
+assert set(found["files"]) == {"data.txt", "nested/note.txt"}, found
+assert len(grepped["matches"]) == 1, grepped
+match = grepped["matches"][0]
+assert match["path"] == "nested/note.txt" and match["line"] == 2 and "needle here" in match["text"], match
+assert match["byte_offset"] == len("note without\n"), match
+assert read["content"] == "note without\nneedle here\n", read
+workspace = pathlib.Path(sys.argv[2])
+assert (workspace / "data.txt").read_text() == "alpha\nbeta\n"
+assert (workspace / "nested/note.txt").read_text() == "note without\nneedle here\n"
+PY
+kill "$server_pid" 2>/dev/null || true
+wait "$server_pid" 2>/dev/null || true
+server_pid=
 python3 "$ROOT/scripts/smoke_provider.py" "$WORK/json-port" "$WORK/json-requests" > "$WORK/json-server.out" 2> "$WORK/json-server.err" &
 server_pid=$!
 for _ in {1..100}; do [[ -s "$WORK/json-port" ]] && break; sleep 0.05; done
