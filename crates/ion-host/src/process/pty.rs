@@ -16,6 +16,7 @@ use tokio_util::sync::CancellationToken;
 use super::{
     Capture,
     driver::{InputAck, InputRequest, ProcessState, ResizeRequest, StartReceipt},
+    lease::{LeaseRequest, attachment_input},
     screen::{Dimensions, Terminal},
 };
 use crate::local_tools::command;
@@ -111,8 +112,10 @@ pub(super) async fn run(
     let reader_exit = CancellationToken::new();
     let (input_tx, input_rx) = mpsc::channel(super::driver::INPUT_QUEUE);
     let (resize_tx, resize_rx) = mpsc::channel(super::driver::INPUT_QUEUE);
+    let (lease_tx, lease_rx) = mpsc::channel(super::driver::INPUT_QUEUE);
     state.set_input(input_tx);
     state.set_resize(resize_tx);
+    state.set_lease_control(lease_tx);
     let _ = receipt.send(StartReceipt::Started);
 
     let io_exit = reader_exit.clone();
@@ -121,9 +124,11 @@ pub(super) async fn run(
         master,
         screen.clone(),
         raw.clone(),
+        state.clone(),
         IoControl {
             input: input_rx,
             resize: resize_rx,
+            lease: lease_rx,
             input_stop: state.input_stop.clone(),
             exited: io_exit,
             process_stop: state.stop.clone(),
@@ -132,6 +137,8 @@ pub(super) async fn run(
     let ((), io_result) = tokio::join!(supervision, io);
     state.clear_input();
     state.clear_resize();
+    state.clear_lease_control();
+    state.set_lease(None);
     let mut failures = Vec::new();
     if let Some(error) = state.status().exit.and_then(|exit| exit.wait_error) {
         failures.push(error);
@@ -400,6 +407,7 @@ impl WriteQueue {
 struct IoControl {
     input: mpsc::Receiver<InputRequest>,
     resize: mpsc::Receiver<ResizeRequest>,
+    lease: mpsc::Receiver<LeaseRequest>,
     input_stop: CancellationToken,
     exited: CancellationToken,
     process_stop: CancellationToken,
@@ -409,11 +417,13 @@ async fn drive(
     master: tokio::io::unix::AsyncFd<OwnedFd>,
     terminal: std::sync::Arc<Terminal>,
     raw: std::sync::Arc<super::ring::Ring>,
+    state: std::sync::Arc<ProcessState>,
     control: IoControl,
 ) -> Result<(), String> {
     let IoControl {
         mut input,
         mut resize,
+        mut lease,
         input_stop,
         exited,
         process_stop,
@@ -424,6 +434,7 @@ async fn drive(
     let mut resize_open = true;
     let mut active_stop: Option<CancellationToken> = None;
     let mut draining: Option<tokio::time::Instant> = None;
+    let mut lease_token: Option<uuid::Uuid> = None;
 
     let outcome = loop {
         if input_open && input_stop.is_cancelled() {
@@ -510,8 +521,89 @@ async fn drive(
                 active_stop = None;
             }
             () = idle, if draining.is_some() => continue,
+            request = lease.recv() => {
+                match request {
+                    Some(LeaseRequest::Acquire { token, reply }) => {
+                        let live = draining.is_none() && !exited.is_cancelled() && !process_stop.is_cancelled();
+                        if !live {
+                            let _ = reply.send(Err("process terminal is not live".into()));
+                        } else if lease_token.is_some() {
+                            let _ = reply.send(Err("terminal already has an attached human".into()));
+                        } else {
+                            // Serialize with the writer: keep the delivered prefix,
+                            // reject the remainder and every queued request.
+                            transfer_to_lease(&mut queue, &mut input);
+                            active_stop = None;
+                            lease_token = Some(token);
+                            state.set_lease(Some(token));
+                            let _ = reply.send(Ok(()));
+                        }
+                    }
+                    Some(LeaseRequest::Write { token, data, reply }) => {
+                        let live = draining.is_none() && !exited.is_cancelled() && !process_stop.is_cancelled();
+                        if lease_token != Some(token) {
+                            let _ = reply.send(InputAck {
+                                bytes_written: 0,
+                                error: Some("attachment lease is stale".into()),
+                                cancelled: false,
+                            });
+                        } else if !live {
+                            let _ = reply.send(InputAck {
+                                bytes_written: 0,
+                                error: Some("process terminal is not live".into()),
+                                cancelled: false,
+                            });
+                        } else if queue.pending.is_some() {
+                            let _ = reply.send(InputAck {
+                                bytes_written: 0,
+                                error: Some("terminal is still delivering an earlier write".into()),
+                                cancelled: false,
+                            });
+                        } else {
+                            match PendingInput::new(attachment_input(data, reply)) {
+                                Ok(pending) => {
+                                    active_stop = Some(pending.request.stop.clone());
+                                    queue.pending = Some(pending);
+                                }
+                                Err((reply, ack)) => {
+                                    let _ = reply.send(ack);
+                                }
+                            }
+                        }
+                    }
+                    Some(LeaseRequest::Resize { token, dimensions, reply }) => {
+                        let result = if lease_token != Some(token) {
+                            Err("attachment lease is stale".into())
+                        } else if draining.is_some() || !input_open || process_stop.is_cancelled() {
+                            Err("process is not live".into())
+                        } else {
+                            terminal.resize(master.get_ref(), dimensions)
+                        };
+                        let _ = reply.send(result);
+                    }
+                    Some(LeaseRequest::Release { token, reply }) => {
+                        if lease_token == Some(token) {
+                            lease_token = None;
+                            state.set_lease(None);
+                            queue.fail_input("attachment detached before the write completed", false);
+                            active_stop = None;
+                        }
+                        if let Some(reply) = reply {
+                            let _ = reply.send(());
+                        }
+                    }
+                    None => {}
+                }
+            }
             request = input.recv(), if input_open && queue.pending.is_none() => {
                 match request {
+                    Some(request) if lease_token.is_some() => {
+                        let _ = request.reply.send(InputAck {
+                            bytes_written: 0,
+                            error: Some("terminal input is owned by an attached human".into()),
+                            cancelled: request.stop.is_cancelled(),
+                        });
+                    }
                     Some(request) => {
                         match PendingInput::new(request) {
                             Ok(request) => {
@@ -550,7 +642,9 @@ async fn drive(
             request = resize.recv(), if resize_open => {
                 match request {
                     Some(request) => {
-                        let result = if draining.is_some()
+                        let result = if lease_token.is_some() {
+                            Err("terminal resize is owned by an attached human".into())
+                        } else if draining.is_some()
                             || !input_open
                             || process_stop.is_cancelled()
                         {
@@ -625,6 +719,7 @@ async fn drive(
             }
         }
     };
+    state.set_lease(None);
     let reason = outcome
         .as_ref()
         .err()
@@ -636,6 +731,25 @@ async fn drive(
     close_input_queue(&mut input, reason);
     drop(master);
     outcome
+}
+
+/// Acquire is serialized with the writer: the in-flight request reports its
+/// actual delivered prefix, every queued request is rejected, and later model
+/// requests are refused by the lease branch until release.
+fn transfer_to_lease(queue: &mut WriteQueue, input: &mut mpsc::Receiver<InputRequest>) {
+    queue.fail_input(
+        "human terminal lease acquired; remaining input was not delivered",
+        false,
+    );
+    while let Ok(queued) = input.try_recv() {
+        let _ = queued.reply.send(InputAck {
+            bytes_written: 0,
+            error: Some(
+                "human terminal lease acquired; queued model input was not delivered".into(),
+            ),
+            cancelled: false,
+        });
+    }
 }
 
 fn close_input_queue(input: &mut mpsc::Receiver<InputRequest>, reason: &str) {
@@ -742,6 +856,53 @@ mod tests {
         assert_eq!(partial.error.as_deref(), Some("terminal read failed"));
         assert_eq!(queued.await.unwrap().bytes_written, 0);
         assert!(sender.is_closed());
+    }
+
+    #[tokio::test]
+    async fn lease_acquisition_keeps_delivered_prefix_and_rejects_queued_input() {
+        let (sender, mut input) = mpsc::channel(4);
+        let (reply, ack) = oneshot::channel();
+        let mut queue = WriteQueue::new();
+        queue.pending = Some(PendingInput {
+            request: InputRequest {
+                data: Some(b"abcdef".to_vec()),
+                stop: CancellationToken::new(),
+                reply,
+            },
+            data: b"abcdef".to_vec(),
+            written: 3,
+        });
+        let (queued_reply, queued_ack) = oneshot::channel();
+        sender
+            .send(InputRequest {
+                data: Some(b"later".to_vec()),
+                stop: CancellationToken::new(),
+                reply: queued_reply,
+            })
+            .await
+            .unwrap();
+        transfer_to_lease(&mut queue, &mut input);
+        let partial = ack.await.unwrap();
+        assert_eq!(partial.bytes_written, 3);
+        assert!(!partial.cancelled);
+        assert!(
+            partial
+                .error
+                .as_deref()
+                .is_some_and(|error| error.contains("human terminal lease")),
+            "{partial:?}"
+        );
+        let queued = queued_ack.await.unwrap();
+        assert_eq!(queued.bytes_written, 0);
+        assert!(
+            queued
+                .error
+                .as_deref()
+                .is_some_and(|error| error.contains("queued model input")),
+            "{queued:?}"
+        );
+        assert!(queue.pending.is_none());
+        assert!(queue.replies.is_empty());
     }
 
     #[test]

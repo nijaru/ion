@@ -53,7 +53,7 @@ impl CodingToolSource for ProcessTools {
             ToolDefinition {
                 spec: ion_ai::ToolSpec {
                     name: "process".into(),
-                    description: "Application-owned native programs, pipe-backed by default or PTY-backed when requested. start returns promptly after an actual shell spawn and survives this Turn; it is not a shell-ready receipt, durable job or human-attached terminal. Commands run in the captured working directory with host permissions. Pipe programs expose separate stdout/stderr streams and line-oriented stdin. PTY programs get a fresh OS session, controlling terminal and foreground process group; stdout/stderr merge into one raw terminal stream and a bounded screen projection with cursor/input-mode metadata. PTY EOF is terminal input interpreted by the line discipline, not eof; write Ctrl-D (0x04) for end-of-file where appropriate. resize changes the owned tty and projection together and fails if the terminal is not live. Automatic cursor/device-status replies are bounded and serialized before model input; clipboard/title effects are not exposed. Daemonized/background descendants are not contained and no input is accepted from a concurrent human writer. Coding child jobs close and release their own programs before settling; handles do not transfer to the parent. Handles are owner UUIDs, never PIDs, and controls only work from the invoking Session and captured cwd in this application. list/inspect observe scoped slots and declare the backend and streams actually present. wait joins the real driver without killing or consuming the slot; timeout is an observation, not a process deadline. read returns bounded raw rolling windows (64 KiB per stream) with monotonic cursors, gaps and observed-EOF completeness; it is not a whole-output artifact. Screen reads are paged projections with source-byte and revision cursors, not replay or durable resurrection. write/eof serialize through a bounded input queue and report actual delivered bytes and partial progress. close requests a process-group stop and joins; acknowledge frees one actually joined retained slot. Unknown, foreign and previous-owner IDs are unavailable and are never restarted or replayed.".into(),
+                    description: "Application-owned native programs, pipe-backed by default or PTY-backed when requested. start returns promptly after an actual shell spawn and survives this Turn; it is not a shell-ready receipt, durable job or human-attached terminal. Commands run in the captured working directory with host permissions. Pipe programs expose separate stdout/stderr streams and line-oriented stdin. PTY programs get a fresh OS session, controlling terminal and foreground process group; stdout/stderr merge into one raw terminal stream and a bounded screen projection with cursor/input-mode metadata. PTY EOF is terminal input interpreted by the line discipline, not eof; write Ctrl-D (0x04) for end-of-file where appropriate. resize changes the owned tty and projection together and fails if the terminal is not live. Automatic cursor/device-status replies are bounded and serialized before model input; clipboard/title effects are not exposed. Daemonized/background descendants are not contained. A live human attachment lease rejects model writes and resize until detach; model reads and observation remain available. Attachment is an application interaction, not a model action. Coding child jobs close and release their own programs before settling; handles do not transfer to the parent. Handles are owner UUIDs, never PIDs, and controls only work from the invoking Session and captured cwd in this application. list/inspect observe scoped slots and declare the backend and streams actually present. wait joins the real driver without killing or consuming the slot; timeout is an observation, not a process deadline. read returns bounded raw rolling windows (64 KiB per stream) with monotonic cursors, gaps and observed-EOF completeness; it is not a whole-output artifact. Screen reads are paged projections with source-byte and revision cursors, not replay or durable resurrection. write/eof serialize through a bounded input queue and report actual delivered bytes and partial progress. close requests a process-group stop and joins; acknowledge frees one actually joined retained slot. Unknown, foreign and previous-owner IDs are unavailable and are never restarted or replayed.".into(),
                     input_schema: json!({"type":"object","oneOf":[
                         {"type":"object","additionalProperties":false,"required":["action","command"],"properties":{"action":{"const":"start"},"command":{"type":"string","minLength":1,"maxLength":65536},"backend":{"enum":["pipe","pty"]},"rows":{"type":"integer","minimum":1,"maximum":200},"columns":{"type":"integer","minimum":1,"maximum":400}}},
                         {"type":"object","additionalProperties":false,"required":["action"],"properties":{"action":{"const":"list"}}},
@@ -451,6 +451,11 @@ impl ProcessTools {
         if entry.state.backend != Backend::Pty {
             return error("terminal resize is only available for PTY programs");
         }
+        if entry.state.lease_owner().is_some() {
+            return error(
+                "terminal resize is owned by an attached human; detach the view before model resize",
+            );
+        }
         let Some(sender) = entry.state.resize() else {
             return error("process terminal is not live");
         };
@@ -526,6 +531,11 @@ impl ProcessTools {
             Ok(entry) => entry,
             Err(failure) => return error(failure),
         };
+        if entry.state.lease_owner().is_some() {
+            return error(
+                "terminal input is owned by an attached human; detach the view before model writes",
+            );
+        }
         let Some(sender) = entry.state.input() else {
             return error("process input is not available (not started or already joined)");
         };
@@ -637,6 +647,7 @@ fn snapshot(state: &ProcessState, gate: &JoinGate) -> Value {
         "id": state.id,
         "backend": match state.backend { Backend::Pipe => "pipe", Backend::Pty => "pty" },
         "joined": joined,
+        "human_attached": state.lease_owner().is_some(),
         "started": status.started,
         "running": status.started && status.exit.is_none() && !joined,
         "start_error": status.start_error,

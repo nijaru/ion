@@ -8,6 +8,7 @@
 //! UUIDs, never PIDs. Startup is registered before spawn; explicit close and
 //! application shutdown request a process-group stop and join the real driver.
 mod driver;
+mod lease;
 mod pty;
 mod ring;
 mod screen;
@@ -29,6 +30,9 @@ use tokio_util::sync::CancellationToken;
 use uuid::Uuid;
 
 use driver::ProcessState;
+pub use lease::{
+    AttachmentPage, AttachmentScreen, AttachmentWrite, TerminalAttachment, TerminalSummary,
+};
 use ring::Ring;
 
 /// One application-lifetime live supervisor. It is not a daemon, durable job

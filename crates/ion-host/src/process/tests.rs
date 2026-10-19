@@ -1484,3 +1484,301 @@ async fn interactive_bash_reads_a_command_and_exits_in_the_owned_session() {
     session.shutdown().await.unwrap();
     std::fs::remove_dir_all(root).unwrap();
 }
+
+async fn wait_for_attachment_text(lease: &TerminalAttachment, needle: &str) {
+    let deadline = Instant::now() + Duration::from_secs(5);
+    loop {
+        let page = lease.page(0, 64).expect("attachment page");
+        if page.text.contains(needle) {
+            return;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "attachment screen did not contain {needle:?}: {}",
+            page.text
+        );
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+}
+
+#[tokio::test]
+async fn human_attachment_owns_terminal_input_until_detach() {
+    let root = std::env::temp_dir().join(format!("ion-pty-attach-{}", Uuid::now_v7()));
+    std::fs::create_dir(&root).unwrap();
+    let owner = Arc::new(ProcessOwner::new(1).unwrap());
+    let session =
+        Arc::new(CodingSession::create(root.join("session.sqlite"), Some(&root)).unwrap());
+    let runner = agent(
+        model(turn(
+            vec![call(
+                "start",
+                json!({"action":"start","backend":"pty","command":"cat"}),
+            )],
+            "started",
+        )),
+        Arc::new(ProcessTools::new(&root, owner.clone()).unwrap()),
+    );
+    submit(&runner, &session, "start").await.unwrap();
+    let start = process_outputs(&session)[0].clone();
+    let id = started_id(&start);
+    let lease = tokio::time::timeout(
+        Duration::from_secs(5),
+        owner.attach_terminal(session.id(), &root, id),
+    )
+    .await
+    .expect("attachment acquire did not answer")
+    .expect("attachment lease");
+    assert!(lease.is_attached(), "{}", start);
+    let summaries = owner.list_terminals(session.id(), &root).await;
+    assert_eq!(summaries.len(), 1);
+    assert!(summaries[0].attached);
+
+    let observer = agent(
+        model(turn(
+            vec![
+                call("write", json!({"action":"write","id":id,"data":"model\n"})),
+                call(
+                    "resize",
+                    json!({"action":"resize","id":id,"rows":30,"columns":100}),
+                ),
+                call("screen", json!({"action":"screen","id":id,"rows":5})),
+                call("inspect", json!({"action":"inspect","id":id})),
+            ],
+            "observed",
+        )),
+        Arc::new(ProcessTools::new(&root, owner.clone()).unwrap()),
+    );
+    submit(&observer, &session, "observe").await.unwrap();
+    let outputs = process_outputs(&session);
+
+    let ack = lease.write(b"human\r".to_vec()).await;
+    assert_eq!(ack.bytes_written, 6, "{ack:?}");
+    assert!(ack.error.is_none(), "{ack:?}");
+    wait_for_attachment_text(&lease, "human").await;
+    lease.resize(30, 100).await.unwrap();
+    let page = lease.page(0, 64).expect("resized attachment page");
+    assert_eq!(page.screen.rows, 30, "{page:?}");
+    assert_eq!(page.screen.columns, 100, "{page:?}");
+    lease.release().await;
+    assert!(!owner.list_terminals(session.id(), &root).await[0].attached);
+
+    let follower = agent(
+        model(turn(
+            vec![call(
+                "write",
+                json!({"action":"write","id":id,"data":"after\r"}),
+            )],
+            "followed",
+        )),
+        Arc::new(ProcessTools::new(&root, owner.clone()).unwrap()),
+    );
+    submit(&follower, &session, "follow").await.unwrap();
+    // A write acknowledgement covers delivery to the master, not projection
+    // latency; reattach and observe the echoed bytes before closing.
+    let after = owner
+        .attach_terminal(session.id(), &root, id)
+        .await
+        .expect("reattach after detach");
+    wait_for_attachment_text(&after, "after").await;
+    after.release().await;
+    let closer = agent(
+        model(turn(
+            vec![
+                call("close", json!({"action":"close","id":id})),
+                call("ack", json!({"action":"acknowledge","id":id})),
+            ],
+            "closed",
+        )),
+        Arc::new(ProcessTools::new(&root, owner.clone()).unwrap()),
+    );
+    submit(&closer, &session, "close").await.unwrap();
+    let followed = process_outputs(&session);
+    owner.join_shutdown().await.unwrap();
+    session.shutdown().await.unwrap();
+    std::fs::remove_dir_all(root).unwrap();
+
+    let expected = "attached human";
+    let write = &outputs[1];
+    assert!(
+        write["error"].as_str().unwrap().contains(expected),
+        "{write}"
+    );
+    let resize = &outputs[2];
+    assert!(
+        resize["error"].as_str().unwrap().contains(expected),
+        "{resize}"
+    );
+    assert_eq!(outputs[3]["visible_rows"], 5, "{}", outputs[3]);
+    assert_eq!(outputs[4]["human_attached"], true, "{}", outputs[4]);
+
+    let write = &followed[5];
+    assert!(write.get("error").is_none(), "{write}");
+    assert_eq!(write["bytes_written"], 6, "{write}");
+    assert_eq!(followed[6]["cancelled"], false, "{}", followed[6]);
+    assert_eq!(followed[7]["acknowledged"], true, "{}", followed[7]);
+}
+
+#[tokio::test]
+async fn attachment_scope_rejects_foreign_pipe_and_double_attach() {
+    let root = std::env::temp_dir().join(format!("ion-pty-attach-scope-{}", Uuid::now_v7()));
+    std::fs::create_dir(&root).unwrap();
+    let other = root.join("other");
+    std::fs::create_dir(&other).unwrap();
+    let owner = Arc::new(ProcessOwner::new(2).unwrap());
+    let session =
+        Arc::new(CodingSession::create(root.join("session.sqlite"), Some(&root)).unwrap());
+    let runner = agent(
+        model(turn(
+            vec![
+                call(
+                    "pty",
+                    json!({"action":"start","backend":"pty","command":"exec sleep 30"}),
+                ),
+                call("pipe", json!({"action":"start","command":"exec sleep 30"})),
+            ],
+            "started",
+        )),
+        Arc::new(ProcessTools::new(&root, owner.clone()).unwrap()),
+    );
+    submit(&runner, &session, "start").await.unwrap();
+    let outputs = process_outputs(&session);
+    let pty = started_id(&outputs[0]);
+    let pipe = started_id(&outputs[1]);
+    let lease = owner
+        .attach_terminal(session.id(), &root, pty)
+        .await
+        .expect("attach live PTY");
+    let double = owner.attach_terminal(session.id(), &root, pty).await.err();
+    let foreign = owner
+        .attach_terminal(Uuid::now_v7(), &root, pty)
+        .await
+        .err();
+    let cwd = owner.attach_terminal(session.id(), &other, pty).await.err();
+    let pipe = owner.attach_terminal(session.id(), &root, pipe).await.err();
+    lease.release().await;
+    owner.join_shutdown().await.unwrap();
+    session.shutdown().await.unwrap();
+    std::fs::remove_dir_all(root).unwrap();
+
+    assert!(
+        double
+            .as_ref()
+            .is_some_and(|error| error.contains("already has an attached human")),
+        "{double:?}"
+    );
+    assert!(
+        foreign
+            .as_ref()
+            .is_some_and(|error| error.contains("unavailable")),
+        "{foreign:?}"
+    );
+    assert!(
+        cwd.as_ref()
+            .is_some_and(|error| error.contains("unavailable")),
+        "{cwd:?}"
+    );
+    assert!(
+        pipe.as_ref()
+            .is_some_and(|error| error.contains("requires a PTY")),
+        "{pipe:?}"
+    );
+}
+
+#[tokio::test]
+async fn attachment_view_ends_when_the_program_exits() {
+    let root = std::env::temp_dir().join(format!("ion-pty-attach-exit-{}", Uuid::now_v7()));
+    std::fs::create_dir(&root).unwrap();
+    let owner = Arc::new(ProcessOwner::new(1).unwrap());
+    let session =
+        Arc::new(CodingSession::create(root.join("session.sqlite"), Some(&root)).unwrap());
+    let runner = agent(
+        model(turn(
+            vec![call(
+                "start",
+                json!({"action":"start","backend":"pty","command":"printf done; exec sleep 0.2"}),
+            )],
+            "started",
+        )),
+        Arc::new(ProcessTools::new(&root, owner.clone()).unwrap()),
+    );
+    submit(&runner, &session, "start").await.unwrap();
+    let id = started_id(&process_outputs(&session)[0]);
+    let lease = owner
+        .attach_terminal(session.id(), &root, id)
+        .await
+        .expect("attach live PTY");
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while lease.is_live() {
+        assert!(Instant::now() < deadline, "program did not exit");
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    let write = lease.write(b"late".to_vec()).await;
+    let page = lease.page(0, 24).expect("screen survives exit until ack");
+    lease.release().await;
+    let joiner = agent(
+        model(turn(
+            vec![
+                call("wait", json!({"action":"wait","id":id,"timeout_ms":5000})),
+                call("ack", json!({"action":"acknowledge","id":id})),
+            ],
+            "joined",
+        )),
+        Arc::new(ProcessTools::new(&root, owner.clone()).unwrap()),
+    );
+    submit(&joiner, &session, "join").await.unwrap();
+    let outputs = process_outputs(&session);
+    owner.join_shutdown().await.unwrap();
+    session.shutdown().await.unwrap();
+    std::fs::remove_dir_all(root).unwrap();
+
+    assert!(write.error.is_some(), "{write:?}");
+    assert_eq!(write.bytes_written, 0, "{write:?}");
+    assert!(page.text.contains("done"), "{page:?}");
+    assert_eq!(outputs[1]["timed_out"], false, "{}", outputs[1]);
+    assert_eq!(outputs[1]["exit"]["exit_code"], 0, "{}", outputs[1]);
+    assert_eq!(outputs[2]["acknowledged"], true, "{}", outputs[2]);
+}
+
+#[tokio::test]
+async fn stale_attachment_cannot_release_a_newer_lease() {
+    let root = std::env::temp_dir().join(format!("ion-pty-attach-stale-{}", Uuid::now_v7()));
+    std::fs::create_dir(&root).unwrap();
+    let owner = Arc::new(ProcessOwner::new(1).unwrap());
+    let session =
+        Arc::new(CodingSession::create(root.join("session.sqlite"), Some(&root)).unwrap());
+    let runner = agent(
+        model(turn(
+            vec![call(
+                "start",
+                json!({"action":"start","backend":"pty","command":"exec sleep 30"}),
+            )],
+            "started",
+        )),
+        Arc::new(ProcessTools::new(&root, owner.clone()).unwrap()),
+    );
+    submit(&runner, &session, "start").await.unwrap();
+    let id = started_id(&process_outputs(&session)[0]);
+    let lease = owner
+        .attach_terminal(session.id(), &root, id)
+        .await
+        .expect("attach live PTY");
+    let stale = lease.stale_view();
+    let stale_write = stale.write(b"stale".to_vec()).await;
+    stale.release().await;
+    let still_attached =
+        lease.is_attached() && owner.list_terminals(session.id(), &root).await[0].attached;
+    let write = lease.write(b"live".to_vec()).await;
+    lease.release().await;
+    owner.join_shutdown().await.unwrap();
+    session.shutdown().await.unwrap();
+    std::fs::remove_dir_all(root).unwrap();
+
+    assert!(stale_write.error.is_some(), "{stale_write:?}");
+    assert_eq!(stale_write.bytes_written, 0, "{stale_write:?}");
+    assert!(
+        still_attached,
+        "a stale token released the live attachment lease"
+    );
+    assert!(write.error.is_none(), "{write:?}");
+    assert_eq!(write.bytes_written, 4, "{write:?}");
+}

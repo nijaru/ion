@@ -56,6 +56,8 @@ pub(super) struct ProcessState {
     pub capture: Capture,
     input: StdMutex<Option<mpsc::Sender<InputRequest>>>,
     resize: StdMutex<Option<mpsc::Sender<ResizeRequest>>>,
+    lease: StdMutex<Option<uuid::Uuid>>,
+    lease_control: StdMutex<Option<mpsc::Sender<super::lease::LeaseRequest>>>,
     status: StdMutex<Status>,
 }
 
@@ -66,6 +68,7 @@ pub(super) struct InputRequest {
     pub reply: oneshot::Sender<InputAck>,
 }
 
+#[derive(Debug)]
 pub(super) struct InputAck {
     pub bytes_written: usize,
     pub error: Option<String>,
@@ -115,6 +118,8 @@ impl ProcessState {
             capture,
             input: StdMutex::new(None),
             resize: StdMutex::new(None),
+            lease: StdMutex::new(None),
+            lease_control: StdMutex::new(None),
             status: StdMutex::new(Status::default()),
         }
     }
@@ -193,6 +198,35 @@ impl ProcessState {
     pub(super) fn clear_resize(&self) {
         if let Ok(mut resize) = self.resize.lock() {
             *resize = None;
+        }
+    }
+
+    pub(super) fn set_lease_control(&self, sender: mpsc::Sender<super::lease::LeaseRequest>) {
+        if let Ok(mut control) = self.lease_control.lock() {
+            *control = Some(sender);
+        }
+    }
+
+    pub(super) fn lease_control(&self) -> Option<mpsc::Sender<super::lease::LeaseRequest>> {
+        self.lease_control
+            .lock()
+            .ok()
+            .and_then(|control| control.clone())
+    }
+
+    pub(super) fn clear_lease_control(&self) {
+        if let Ok(mut control) = self.lease_control.lock() {
+            *control = None;
+        }
+    }
+
+    pub(super) fn lease_owner(&self) -> Option<uuid::Uuid> {
+        self.lease.lock().ok().and_then(|lease| *lease)
+    }
+
+    pub(super) fn set_lease(&self, token: Option<uuid::Uuid>) {
+        if let Ok(mut lease) = self.lease.lock() {
+            *lease = token;
         }
     }
 

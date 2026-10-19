@@ -58,7 +58,10 @@ pub use mcp::{
 };
 pub use model_http::{HttpModelService, HttpWire};
 pub use model_setup::{ModelChoice, ModelStore, SavedSelection, Selection, Wire};
-pub use process::{ProcessOwner, ProcessTools};
+pub use process::{
+    AttachmentPage, AttachmentScreen, AttachmentWrite, ProcessOwner, ProcessTools,
+    TerminalAttachment, TerminalSummary,
+};
 pub use resources::{PromptTemplate, ResourceDiagnostic, Resources, Skill};
 pub use session_catalog::{SessionCatalog, SessionSummary};
 
