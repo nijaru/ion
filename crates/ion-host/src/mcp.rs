@@ -699,7 +699,7 @@ for line in sys.stdin:
     }
 
     #[test]
-    fn mcp_image_result_is_typed_and_mime_mismatch_is_a_visible_error() {
+    fn mcp_image_result_is_typed_and_mime_mismatch_omits_the_image_with_a_notice() {
         let data = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGP4z8DwHwAFAAH/iZk9HQAAAABJRU5ErkJggg==";
         let result = convert_tool_result(
             "picture",
@@ -716,18 +716,25 @@ for line in sys.stdin:
                 .unwrap()
                 .contains("[image: image/png]")
         );
+        assert!(result.value.get("raw_result_path").is_none());
         let mismatch = convert_tool_result(
             "picture",
             CallToolResult::success(vec![ContentBlock::image(data, "image/jpeg")]),
         );
-        assert!(mismatch.is_error);
+        // Validation still withholds the mismatched image; the server's
+        // success survives with an indexed conversion notice instead of a
+        // replacement execution failure.
+        assert!(!mismatch.is_error, "{}", mismatch.value);
         assert!(mismatch.images.is_empty());
-        assert!(
-            mismatch.value["error"]
-                .as_str()
-                .unwrap()
-                .contains("MIME type")
-        );
+        let notice = mismatch.value["conversion_notices"][0].as_str().unwrap();
+        assert!(notice.contains("block 0"), "{notice}");
+        assert!(notice.contains("MIME type"), "{notice}");
+        assert_eq!(mismatch.value["omitted_blocks"], 1);
+        let raw = mismatch.value["raw_result_path"].as_str().unwrap();
+        assert!(mismatch.value["raw_result_error"].is_null());
+        let saved: Value = serde_json::from_slice(&fs::read(raw).unwrap()).unwrap();
+        assert_eq!(saved["content"].as_array().unwrap().len(), 1);
+        fs::remove_file(raw).unwrap();
     }
 
     #[tokio::test]

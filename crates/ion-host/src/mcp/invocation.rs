@@ -1,7 +1,7 @@
 //! One request-bound invocation, its local send, cancellation and observation.
 use std::{
     fs::{self, OpenOptions},
-    io::Write,
+    io::{BufWriter, Write},
     os::unix::fs::OpenOptionsExt,
     path::PathBuf,
     sync::Arc,
@@ -10,7 +10,9 @@ use std::{
 
 use anyhow::Result as AnyResult;
 use base64::{Engine, engine::general_purpose::STANDARD};
-use ion_ai::{BoxFuture, ImageMime, MAX_SOURCE_BYTES, ToolCall, normalize_image};
+use ion_ai::{
+    BoxFuture, ImageContent, ImageMime, LoadedImage, MAX_SOURCE_BYTES, ToolCall, normalize_image,
+};
 use ion_core::{CodingToolOutput, ToolExecutor};
 use rmcp::{
     model::{
@@ -196,85 +198,91 @@ impl McpExecutor {
     }
 }
 
+/// Inline conversion notices stay bounded so a result with many tiny
+/// unsupported blocks cannot expand into one warning per block.
+const MAX_INLINE_NOTICES: usize = 8;
+const MAX_NOTICE_CHARS: usize = 256;
 pub(super) fn convert_tool_result(name: &str, result: CallToolResult) -> CodingToolOutput {
+    // The remote error/success flag is the observed outcome. Local conversion
+    // preserves it exactly and reports its own delivery failures beside it,
+    // never as a replacement execution error.
+    let is_error = result.is_error.unwrap_or(false);
     let mut content = Vec::new();
     let mut images = Vec::new();
-    for part in result.content {
-        match part {
-            ContentBlock::Text(text) => content.push(text.text),
-            ContentBlock::Image(image) => {
-                if image.data.len() > MAX_SOURCE_BYTES.div_ceil(3) * 4 {
-                    return tool_error(format!(
-                        "MCP tool {name} image exceeds 32 MiB source bound"
-                    ));
-                }
-                let bytes = match STANDARD.decode(&image.data) {
-                    Ok(bytes) => bytes,
-                    Err(_) => {
-                        return tool_error(format!(
-                            "MCP tool {name} returned invalid base64 image data"
-                        ));
-                    }
-                };
-                let Some(mime) = ImageMime::detect(&bytes) else {
-                    return tool_error(format!(
-                        "MCP tool {name} returned an unsupported image format"
-                    ));
-                };
-                if mime.as_str() != image.mime_type {
-                    return tool_error(format!(
-                        "MCP tool {name} image MIME type does not match its data"
-                    ));
-                }
-                let loaded = match normalize_image(&bytes) {
-                    Ok(image) => image,
-                    Err(error) => {
-                        return tool_error(format!(
-                            "MCP tool {name} returned an invalid image: {error}"
-                        ));
-                    }
-                };
-                content.push(format!("[image: {}]", loaded.content.mime_type().as_str()));
-                if let Some(note) = loaded.note {
-                    content.push(note);
-                }
-                images.push(loaded.content);
+    let mut notices = Vec::new();
+    let mut retained_blocks = 0usize;
+    let mut omitted_blocks = 0usize;
+    for (index, part) in result.content.iter().enumerate() {
+        match convert_block(name, part) {
+            Ok((pieces, image)) => {
+                retained_blocks += 1;
+                content.extend(pieces);
+                images.extend(image);
             }
-            _ => {
-                return tool_error(format!(
-                    "MCP tool {name} returned unsupported non-image media or resource content"
-                ));
+            Err(reason) => {
+                omitted_blocks += 1;
+                if notices.len() < MAX_INLINE_NOTICES {
+                    notices.push(bound_notice(format!(
+                        "content block {index} omitted: {reason}"
+                    )));
+                }
             }
         }
     }
-    let is_error = result.is_error.unwrap_or(false);
-    let value =
-        json!({"content":content.join("\n"),"structured_content":result.structured_content});
-    let encoded = match serde_json::to_string(&value) {
-        Ok(encoded) => encoded,
-        Err(error) => {
-            return tool_error(format!("MCP tool {name} result cannot be encoded: {error}"));
-        }
-    };
-    let value = if encoded.len() <= 64 * 1024 {
-        value
-    } else {
-        let (full_output_path, full_output_error) = match save_full_mcp_output(encoded.as_bytes()) {
+    if omitted_blocks > notices.len() {
+        notices.push(format!(
+            "{} further omitted content blocks",
+            omitted_blocks - notices.len()
+        ));
+    }
+    // Retain the original full response privately whenever conversion omitted
+    // content. Its JSON streams into the artifact; only the retrieval
+    // reference enters the model context.
+    let (raw_result_path, raw_result_error) = if omitted_blocks > 0 {
+        match save_raw_mcp_result(&result) {
             Ok(path) => (Some(path), None),
-            Err(error) => (None, Some(error.to_string())),
-        };
-        let prefix_end = floor_char_boundary(&encoded, 10 * 1024);
-        let suffix_start = floor_char_boundary(&encoded, encoded.len() - 10 * 1024);
-        json!({
-            "content": format!(
-                "MCP result truncated from {} bytes. Read full_output_path with read using byte_offset=0, continuing at next_byte, or bounded exec when available.\n{}\n[... omitted middle ...]\n{}",
-                encoded.len(), &encoded[..prefix_end], &encoded[suffix_start..]
-            ),
-            "truncated": true,
-            "full_output_path": full_output_path,
-            "full_output_error": full_output_error,
-        })
+            Err(error) => (None, Some(format!("{error:#}"))),
+        }
+    } else {
+        (None, None)
     };
+    let mut value = json!({
+        "content": content.join("\n"),
+        "structured_content": result.structured_content,
+        "is_error": is_error,
+    });
+    if omitted_blocks > 0 {
+        value["conversion_notices"] = json!(notices);
+        value["retained_blocks"] = json!(retained_blocks);
+        value["omitted_blocks"] = json!(omitted_blocks);
+        value["raw_result_path"] = json!(raw_result_path);
+        value["raw_result_error"] = json!(raw_result_error);
+    }
+    let encoded = serde_json::to_string(&value).expect("a JSON value always encodes");
+    if encoded.len() <= 64 * 1024 {
+        return CodingToolOutput {
+            value,
+            images,
+            is_error,
+        };
+    }
+    let (full_output_path, full_output_error) = match save_full_mcp_output(encoded.as_bytes()) {
+        Ok(path) => (Some(path), None),
+        Err(error) => (None, Some(error.to_string())),
+    };
+    let prefix_end = floor_char_boundary(&encoded, 10 * 1024);
+    let suffix_start = floor_char_boundary(&encoded, encoded.len() - 10 * 1024);
+    // Truncation replaces only the inline content preview: the outcome flag,
+    // conversion notices and retrieval references stay top-level.
+    value["content"] = json!(format!(
+        "MCP result truncated from {} bytes. Read full_output_path with read using byte_offset=0, continuing at next_byte, or bounded exec when available.\n{}\n[... omitted middle ...]\n{}",
+        encoded.len(),
+        &encoded[..prefix_end],
+        &encoded[suffix_start..]
+    ));
+    value["truncated"] = json!(true);
+    value["full_output_path"] = json!(full_output_path);
+    value["full_output_error"] = json!(full_output_error);
     CodingToolOutput {
         value,
         images,
@@ -282,6 +290,66 @@ pub(super) fn convert_tool_result(name: &str, result: CallToolResult) -> CodingT
     }
 }
 
+/// One block's local delivery. The error describes an undeliverable block; it
+/// never replaces the server's observed outcome.
+fn convert_block(
+    name: &str,
+    part: &ContentBlock,
+) -> Result<(Vec<String>, Option<ImageContent>), String> {
+    match part {
+        ContentBlock::Text(text) => Ok((vec![text.text.clone()], None)),
+        ContentBlock::Image(image) => {
+            let loaded = convert_image(name, &image.data, &image.mime_type)?;
+            let mut pieces = vec![format!("[image: {}]", loaded.content.mime_type().as_str())];
+            if let Some(note) = loaded.note {
+                pieces.push(note);
+            }
+            Ok((pieces, Some(loaded.content)))
+        }
+        ContentBlock::Audio(audio) => Err(format!(
+            "MCP tool {name} returned unsupported audio media ({}; not delivered)",
+            audio.mime_type
+        )),
+        ContentBlock::Resource(_) => Err(format!(
+            "MCP tool {name} returned unsupported embedded resource content (not delivered)"
+        )),
+        // Resource-link metadata is lower-trust data: never fetched and never
+        // assumed to name a local file.
+        ContentBlock::ResourceLink(link) => Err(format!(
+            "MCP tool {name} returned an unsupported resource link (name={}, uri={}; metadata only, not fetched)",
+            link.name, link.uri
+        )),
+        _ => Err(format!(
+            "MCP tool {name} returned unsupported non-image media or resource content (not delivered)"
+        )),
+    }
+}
+
+fn convert_image(name: &str, data: &str, mime_type: &str) -> Result<LoadedImage, String> {
+    if data.len() > MAX_SOURCE_BYTES.div_ceil(3) * 4 {
+        return Err(format!("MCP tool {name} image exceeds 32 MiB source bound"));
+    }
+    let bytes = STANDARD
+        .decode(data)
+        .map_err(|_| format!("MCP tool {name} returned invalid base64 image data"))?;
+    let mime = ImageMime::detect(&bytes)
+        .ok_or_else(|| format!("MCP tool {name} returned an unsupported image format"))?;
+    if mime.as_str() != mime_type {
+        return Err(format!(
+            "MCP tool {name} image MIME type does not match its data"
+        ));
+    }
+    normalize_image(&bytes)
+        .map_err(|error| format!("MCP tool {name} returned an invalid image: {error}"))
+}
+
+fn bound_notice(notice: String) -> String {
+    if notice.len() <= MAX_NOTICE_CHARS {
+        return notice;
+    }
+    let end = floor_char_boundary(&notice, MAX_NOTICE_CHARS);
+    format!("{}\u{2026}", &notice[..end])
+}
 fn floor_char_boundary(text: &str, mut offset: usize) -> usize {
     while !text.is_char_boundary(offset) {
         offset -= 1;
@@ -289,23 +357,52 @@ fn floor_char_boundary(text: &str, mut offset: usize) -> usize {
     offset
 }
 
+/// The original wire response, streamed to a private artifact. Nothing is
+/// cloned or base64-copied into the model context.
+pub(super) fn save_raw_mcp_result(result: &CallToolResult) -> AnyResult<PathBuf> {
+    write_private_artifact(
+        private_artifact_path("ion-mcp-raw-result", ".json")?,
+        |file| {
+            let mut writer = BufWriter::new(file);
+            serde_json::to_writer(&mut writer, result)?;
+            writer.flush()?;
+            Ok(())
+        },
+    )
+}
 pub(super) fn save_full_mcp_output(bytes: &[u8]) -> AnyResult<PathBuf> {
+    write_private_artifact(private_artifact_path("ion-mcp-output", ".json")?, |file| {
+        file.write_all(bytes)?;
+        Ok(())
+    })
+}
+
+fn private_artifact_path(prefix: &str, extension: &str) -> AnyResult<PathBuf> {
     let mut nonce = [0u8; 16];
     getrandom::fill(&mut nonce)
-        .map_err(|error| anyhow::anyhow!("cannot name MCP output: {error}"))?;
-    let path = std::env::temp_dir().join(format!(
-        "ion-mcp-output-{}-{:032x}.json",
-        std::process::id(),
-        u128::from_ne_bytes(nonce)
-    ));
+        .map_err(|error| anyhow::anyhow!("cannot name MCP artifact: {error}"))?;
+    let serial = u128::from_ne_bytes(nonce);
+    Ok(std::env::temp_dir().join(format!(
+        "{prefix}-{}-{serial:032x}{extension}",
+        std::process::id()
+    )))
+}
+
+/// A private 0600 artifact. A failed write removes its partial file instead of
+/// leaving untrustworthy evidence, and reports the real error.
+pub(super) fn write_private_artifact(
+    path: PathBuf,
+    write: impl FnOnce(&mut fs::File) -> AnyResult<()>,
+) -> AnyResult<PathBuf> {
     let mut file = OpenOptions::new()
         .write(true)
         .create_new(true)
         .mode(0o600)
         .open(&path)?;
-    if let Err(error) = file.write_all(bytes) {
-        let _ = fs::remove_file(path);
-        return Err(error.into());
+    if let Err(error) = write(&mut file) {
+        drop(file);
+        let _ = fs::remove_file(&path);
+        return Err(error);
     }
     Ok(path)
 }
