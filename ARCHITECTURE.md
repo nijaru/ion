@@ -674,6 +674,32 @@ dispatch. Answers are untrusted data, never steering, credentials or permission.
 Without a responder, omit the capability or return explicit unavailability; do not
 auto-answer. RPC needs a real typed request/reply consumer before advertising it.
 
+`ask_user_question` accepts one batch of 1–4 single-select questions, each with
+2–6 labeled options and optional descriptions; the responder supplies a separate
+free-text choice. Bound request, option and answer sizes, validate replies against
+the exact live request, and accept the whole batch atomically. Only one batch may
+wait on a control owner; concurrent asks fail explicitly rather than queue behind
+an unseen dialog. A non-clone responder lease and request nonce authorize the
+reply; display coordinates or copied origins alone do not. The optional question
+port is supplied by application configuration and retained across idle binding
+replacement, never implicitly inherited by managed children. A new binding
+invalidates old request identities. Headless and current RPC coding do not declare
+the tool; terminal coding connects the actual responder before admission.
+
+Esc cancels the questionnaire with an explicit ordinary tool observation; it need
+not stop the Turn. Ctrl-C stops the Turn. Losing a responder while a request waits
+requests Turn stop before releasing its answer waiter. Stop, shutdown and control
+loss revoke pending requests independently of a retained UI handle. Answers become
+only committed tool observations, not new user/steering messages. Pending request
+state is live Host custody, included in complete authorized pull inspection but
+not a durable Session ledger; change notifications only invalidate that view.
+
+The question view preserves the draft and defers to an existing picker, detail
+view or attached PTY until that owner releases input. Its selected choice or text
+editor stays visible in the actual viewport. A real displayed question may publish
+blocked/question status without embedding its text; closing it restores the
+underlying operation/outcome status. No approval state is implied.
+
 An optional approval policy decides a specific validated, admitted invocation
 before its executor's effect dispatch. Denial starts no effect and records that
 outcome; cancellation or loss of the decision channel fails closed. Approval
