@@ -285,7 +285,7 @@ async fn coding_application_selection_and_read_only_narrow_the_model_loadout() {
             .into_control::<()>();
         let catalog = control.agent().tool_catalog();
         assert_eq!(catalog.specs().len(), names.len());
-        for name in ["read", "write", "edit", "exec", "subagent"] {
+        for name in ["read", "write", "edit", "exec", "process", "subagent"] {
             assert_eq!(catalog.is_declared(name), names.contains(&name), "{name}");
         }
         drop(control);
@@ -302,7 +302,7 @@ async fn coding_application_selection_and_read_only_narrow_the_model_loadout() {
         .into_control::<()>();
     let catalog = control.agent().tool_catalog();
     assert!(catalog.is_declared("read"));
-    for excluded in ["edit", "write", "exec", "subagent"] {
+    for excluded in ["edit", "write", "exec", "process", "subagent"] {
         assert!(!catalog.is_declared(excluded), "{excluded}");
     }
     drop(control);

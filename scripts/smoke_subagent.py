@@ -1,4 +1,4 @@
-"""Offline built-client qualification of managed coding Sessions and custody."""
+"""Offline built-client qualification of managed work and application custody."""
 import json
 import os
 import queue
@@ -73,6 +73,7 @@ class Rpc:
         self.process = subprocess.Popen([binary, "--cwd", workspace, "rpc"], env=env, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
         self.queue = queue.Queue()
         self.records = []
+        self.session_records = 0
         self.number = 0
         def read():
             for line in self.process.stdout:
@@ -100,14 +101,18 @@ class Rpc:
 
     def settled(self, turn, status):
         predicate = lambda record: record.get("type") == "turn_end" and record.get("turn") == turn
-        record = next((record for record in self.records if predicate(record)), None)
+        record = next((record for record in self.records[self.session_records:] if predicate(record)), None)
         record = record if record is not None else self.wait(predicate)
         assert record["status"] == status, record
         return record
 
     def request(self, kind, **fields):
         identity = self.send(kind, **fields)
-        return self.wait(lambda record: record.get("type") == "response" and record.get("id") == identity)
+        record = self.wait(lambda record: record.get("type") == "response" and record.get("id") == identity)
+        if record.get("success") and kind in ("new_session", "switch_session", "clone_session", "fork_session"):
+            # Turn numbers belong to a Session, not this RPC connection.
+            self.session_records = len(self.records)
+        return record
 
     def close(self):
         if self.process.stdin is not None:
@@ -134,6 +139,7 @@ with tempfile.TemporaryDirectory(prefix="ion-coding-subagent-") as temporary:
     env.update(HOME=str(work / "home"), XDG_CONFIG_HOME=str(work / "config"), XDG_STATE_HOME=str(work / "state"), TERM="xterm-256color")
     Path(env["HOME"]).mkdir()
     requests, failures, changed_route = [], [], set()
+    managed = {}
     processes, rpcs, pids = [], [], []
 
     def histories():
@@ -165,7 +171,33 @@ with tempfile.TemporaryDirectory(prefix="ion-coding-subagent-") as temporary:
                 effort = {"PARENT_DIRECT":"high", "CHILD_DIRECT":"high", "PARENT_COMPOSED":"low", "CHILD_COMPOSED":"low", "PARENT_CANCEL":"medium", "CHILD_CANCEL":"medium", "PARENT_FORK":"high", "CHILD_FORK":"high"}.get(user)
                 if effort:
                     assert body.get("reasoning_effort") == effort, body
-                if user == "PARENT_DEFAULT":
+                if user in ("PROCESS_HEADLESS", "PROCESS_HEADLESS_BLOCKED"):
+                    assert "process" in tools
+                    if fresh:
+                        delta = call("process", {"action":"start", "command":f"printf '%s' $$ > {user}.pid; touch {user}.ready; exec sleep 30"})
+                    else:
+                        until(lambda: (workspace / (user + ".ready")).exists(), "managed program did not execute")
+                        delta = {"content":"x" * 200000 if user.endswith("BLOCKED") else "PROCESS_STARTED"}
+                elif user.startswith("PROCESS_SCOPE_"):
+                    assert "process" in tools
+                    if fresh:
+                        if user == "PROCESS_SCOPE_START":
+                            arguments = {"action":"start", "command":"printf '%s' $$ > PROCESS_SCOPE.pid; printf 'MANAGED_OUTPUT'; touch PROCESS_SCOPE.ready; exec sleep 30"}
+                        else:
+                            arguments = {"action":"inspect" if user.endswith("FOREIGN") else "read", "id":managed["scope"]}
+                        delta = call("process", arguments)
+                    else:
+                        envelope = json.loads(body["messages"][-1]["content"])
+                        result = envelope["result"]
+                        if user == "PROCESS_SCOPE_START":
+                            managed["scope"] = result["id"]
+                            until(lambda: (workspace / "PROCESS_SCOPE.ready").exists(), "scoped program did not execute")
+                        elif user.endswith("FOREIGN"):
+                            assert envelope["is_error"] and "error" in result, envelope
+                        else:
+                            assert "MANAGED_OUTPUT" in json.dumps(result), result
+                        delta = {"content":"PROCESS_SCOPE_OK"}
+                elif user == "PARENT_DEFAULT":
                     assert "subagent" in tools
                     delta = {"content": "DEFAULT_OK"}
                 elif user == "SEED":
@@ -195,8 +227,15 @@ with tempfile.TemporaryDirectory(prefix="ion-coding-subagent-") as temporary:
                             delta = call("code_mode", {"code":"const r=await tools.subagent(" + json.dumps(arguments) + "); return r.value;"})
                         else:
                             delta = call("subagent", arguments)
+                            if user == "PARENT_BG_EOF":
+                                native = call("process", {"action":"start", "command":"printf '%s' $$ > PROCESS_EOF.pid; touch PROCESS_EOF.ready; exec sleep 30"})["tool_calls"][0]
+                                native["index"] = 1
+                                delta["tool_calls"].append(native)
                     else:
                         assert "PRIVATE_CHILD_TOOL" not in json.dumps(body)
+                        if user == "PARENT_PROCESS_RESOURCE":
+                            pid = marker_pid("CHILD_PROCESS_RESOURCE")
+                            assert dead(pid), "child answer was released before its process scope joined"
                         if not user.startswith("PARENT_BG_") or user == "PARENT_BG_WAIT":
                             assert "CHILD_ANSWER" in json.dumps(body)
                         delta = {"content": "BACKGROUND_ACCEPTED" if user.startswith("PARENT_BG_") else "PARENT_OK"}
@@ -208,7 +247,9 @@ with tempfile.TemporaryDirectory(prefix="ion-coding-subagent-") as temporary:
                     assert "PARENT_" not in json.dumps(body), "active parent conversation leaked"
                     assert ("SEEDED_CONTEXT" in json.dumps(body)) == (user == "CHILD_FORK"), "incorrect fork prefix"
                     if fresh:
-                        if user == "CHILD_CANCEL":
+                        if user == "CHILD_PROCESS_RESOURCE":
+                            delta = call("process", {"action":"start", "command":"printf '%s' $$ > CHILD_PROCESS_RESOURCE.pid; touch CHILD_PROCESS_RESOURCE.ready; exec sleep 30"})
+                        elif user == "CHILD_CANCEL":
                             delta = call("exec", {"command":"printf '%s' $$ > CHILD_CANCEL.pid; touch CHILD_CANCEL.ready; exec sleep 30", "timeout_ms":120000})
                         elif user.startswith("CHILD_BG_"):
                             release = "parent.work" if user == "CHILD_BG_WAIT" else user + ".release"
@@ -225,7 +266,9 @@ with tempfile.TemporaryDirectory(prefix="ion-coding-subagent-") as temporary:
                                 second["index"] = 1
                                 delta = {"tool_calls":[first, second]}
                     else:
-                        if not user.startswith("CHILD_BG_"):
+                        if user == "CHILD_PROCESS_RESOURCE":
+                            until(lambda: (workspace / "CHILD_PROCESS_RESOURCE.ready").exists(), "child managed program did not execute")
+                        elif not user.startswith("CHILD_BG_"):
                             assert "PRIVATE_CHILD_TOOL" in json.dumps(body)
                         delta = {"content":"CHILD_ANSWER_" + user}
                 reason = "tool_calls" if "tool_calls" in delta else "stop"
@@ -254,6 +297,45 @@ with tempfile.TemporaryDirectory(prefix="ion-coding-subagent-") as temporary:
     try:
         configure(env, endpoint)
         assert command(env, workspace, "run", "PARENT_DEFAULT").stdout.strip() == "DEFAULT_OK"
+        assert command(env, workspace, "run", "PARENT_PROCESS_RESOURCE").stdout.strip() == "PARENT_OK"
+        # A background server must not keep a completed one-shot caller alive.
+        # Its observed start stays in history, while application exit joins it.
+        before = {path for path, _header, _entries in histories()}
+        assert command(env, workspace, "run", "PROCESS_HEADLESS").stdout.strip() == "PROCESS_STARTED"
+        pid = marker_pid("PROCESS_HEADLESS")
+        assert dead(pid), "headless completion abandoned its managed program"
+        path = ({path for path, _header, _entries in histories()} - before).pop()
+        entries = facts(path)[1]
+        result = next(entry["data"]["result"] for entry in entries if entry["kind"] == "tool_result")
+        assert result["outcome"]["state"] == "observed" and not result["outcome"]["output"]["is_error"], result
+        assert next(entry["data"]["reason"] for entry in entries if entry["kind"] == "turn_ended") == "completed"
+        # Resource joining cannot wait for a reader of the final answer.
+        process = subprocess.Popen([binary, "--cwd", workspace, "run", "PROCESS_HEADLESS_BLOCKED"], env=env, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        processes.append(process)
+        pid = marker_pid("PROCESS_HEADLESS_BLOCKED")
+        until(lambda: dead(pid), "blocked headless output prevented managed-program stop/join")
+        output, error = process.communicate(timeout=10)
+        assert process.returncode == 0 and output.rstrip().endswith("x" * 200000), (len(output), error)
+        # A replacement Session gets no handle grant; the original Session can
+        # regain its own live process through the retained application recipe.
+        rpc = Rpc(env, workspace)
+        rpcs.append(rpc)
+        rpc.send("prompt", message="PROCESS_SCOPE_START")
+        assert rpc.settled(1, "completed")["text"] == "PROCESS_SCOPE_OK"
+        pid = marker_pid("PROCESS_SCOPE")
+        original = parent_for(rpc.ready["session"])
+        refused = rpc.request("abort")
+        assert not refused["success"] and not dead(pid), ("idle abort must refuse without killing managed work", refused)
+        assert rpc.request("new_session")["success"]
+        rpc.send("prompt", message="PROCESS_SCOPE_FOREIGN")
+        assert rpc.settled(1, "completed")["text"] == "PROCESS_SCOPE_OK"
+        assert not dead(pid)
+        switched = rpc.request("switch_session", session=str(original))
+        assert switched["success"], switched
+        rpc.send("prompt", message="PROCESS_SCOPE_READ")
+        assert rpc.settled(2, "completed")["text"] == "PROCESS_SCOPE_OK"
+        error = rpc.close()
+        assert rpc.process.returncode == 0 and dead(pid), error
         for composed in (False, True):
             configure(env, endpoint)
             before = {path for path, _header, _entries in histories()}
@@ -409,6 +491,7 @@ with tempfile.TemporaryDirectory(prefix="ion-coding-subagent-") as temporary:
         process.stdin.write(json.dumps({"type":"prompt","id":"start","message":"PARENT_BG_EOF"}) + "\n")
         process.stdin.flush()
         pid = marker_pid("CHILD_BG_EOF")
+        native_pid = marker_pid("PROCESS_EOF")
         parent_path = parent_for(ready["session"])
         until(lambda: root_ended(parent_path), "EOF parent did not finish")
         process.stdin.write(json.dumps({"type":"inspect","id":"large"}) + "\n")
@@ -417,7 +500,7 @@ with tempfile.TemporaryDirectory(prefix="ion-coding-subagent-") as temporary:
         process.stdin.flush()
         process.stdin.close()
         process.stdin = None
-        until(lambda: dead(pid), "blocked RPC output prevented background stop/join")
+        until(lambda: dead(pid) and dead(native_pid), "blocked RPC output prevented application stop/join")
         output, error = process.communicate(timeout=10)
         assert process.returncode == 0, (output[-1000:], error)
         outcome = next(entry["data"]["outcome"] for entry in facts(parent_path)[1] if entry["kind"] == "delegation_settled")
@@ -458,6 +541,8 @@ with tempfile.TemporaryDirectory(prefix="ion-coding-subagent-") as temporary:
         passed = True
         print("coding delegation: inherited routes/controls, fresh/fork, foreground/background, joined reports, Session rebinding, independent abort, idle completion/failure, headless drain/interrupt and blocked-output EOF passed")
     finally:
+        if failures and not passed:
+            print("fixture provider failures:", failures, file=sys.stderr)
         for rpc in rpcs:
             rpc.cleanup()
         for process in processes:

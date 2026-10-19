@@ -8,7 +8,10 @@ use tokio_util::sync::CancellationToken;
 
 use crate::{Host, LocalTools, Resources, Selection, SessionSetup};
 
+mod owner;
 mod subagent;
+
+pub use owner::ApplicationOwner;
 
 /// Retained recipe used for initial assembly, reload and idle replacement.
 /// Implementations select the complete model/tool environment, not additions to
@@ -16,9 +19,10 @@ mod subagent;
 pub trait Application: Send + Sync {
     fn resources(&self, cwd: Option<&Path>) -> Result<Resources>;
     fn runtime(&self, cwd: Option<&Path>, model: Option<&ModelRef>) -> Result<ApplicationRuntime>;
-    /// Optional application-lifetime custody, independent of any Session's
-    /// shutdown or binding. The outer application explicitly closes/joins it.
-    fn background(&self) -> Option<Arc<crate::BackgroundOwner>> {
+    /// Stable application-lifetime custody, independent of any Session's
+    /// shutdown or binding. Return the same retained owner on every call;
+    /// the outer application explicitly closes/joins it before its environment.
+    fn owner(&self) -> Option<Arc<ApplicationOwner>> {
         None
     }
 }
@@ -40,6 +44,9 @@ pub struct ApplicationRuntime {
     /// Allow trusted client input to read local image paths. This is not an OS
     /// sandbox or a path allowlist. Encoded/normalized images need no file access.
     pub local_images: bool,
+    /// Process supervision captured by this runtime, not a tool grant. Managed
+    /// delegation joins/releases this child's scope before returning its result.
+    pub processes: Option<Arc<crate::ProcessOwner>>,
 }
 
 impl ApplicationRuntime {
@@ -49,13 +56,14 @@ impl ApplicationRuntime {
             agent,
             shell: None,
             local_images: false,
+            processes: None,
         }
     }
 }
 
 #[derive(Clone)]
 enum CodingRole {
-    Main(Arc<crate::BackgroundOwner>),
+    Main(Arc<ApplicationOwner>),
     Subagent,
 }
 
@@ -68,6 +76,7 @@ pub struct CodingApplication {
     code_mode: bool,
     selection: ToolSelection,
     role: CodingRole,
+    processes: Arc<crate::ProcessOwner>,
 }
 
 const READ_ONLY_TOOLS: &[&str] = &[
@@ -80,14 +89,18 @@ const READ_ONLY_TOOLS: &[&str] = &[
 
 impl CodingApplication {
     pub fn new(host: Arc<Host>, external_tools: Option<Arc<dyn CodingToolSource>>) -> Self {
+        let processes = Arc::new(crate::ProcessOwner::new(64).expect("supported process capacity"));
+        let owner = Arc::new(ApplicationOwner::new(
+            Arc::new(crate::BackgroundOwner::new(64).expect("supported custody capacity")),
+            processes.clone(),
+        ));
         Self {
             host,
             external_tools,
             code_mode: false,
             selection: ToolSelection::all(),
-            role: CodingRole::Main(Arc::new(
-                crate::BackgroundOwner::new(64).expect("supported custody capacity"),
-            )),
+            role: CodingRole::Main(owner),
+            processes,
         }
     }
 
@@ -144,13 +157,16 @@ impl CodingApplication {
         selected: &Selection,
     ) -> Result<ApplicationRuntime> {
         let native = Arc::new(LocalTools::new(cwd)?);
-        let mut sources: Vec<Arc<dyn CodingToolSource>> = vec![native.clone()];
+        let mut sources: Vec<Arc<dyn CodingToolSource>> = vec![
+            native.clone(),
+            Arc::new(crate::ProcessTools::new(cwd, self.processes.clone())?),
+        ];
         if let CodingRole::Main(owner) = &self.role {
             sources.push(Arc::new(subagent::Subagent::new(
                 self,
                 cwd,
                 selected,
-                owner.clone(),
+                owner.background().clone(),
             )));
         }
         sources.extend(self.external_tools.iter().cloned());
@@ -168,12 +184,13 @@ impl CodingApplication {
             agent,
             shell: Some(native),
             local_images: true,
+            processes: Some(self.processes.clone()),
         })
     }
 }
 
 impl Application for CodingApplication {
-    fn background(&self) -> Option<Arc<crate::BackgroundOwner>> {
+    fn owner(&self) -> Option<Arc<ApplicationOwner>> {
         match &self.role {
             CodingRole::Main(owner) => Some(owner.clone()),
             CodingRole::Subagent => None,

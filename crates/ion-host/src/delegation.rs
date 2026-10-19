@@ -63,6 +63,8 @@ impl SessionDelegation {
         let reasoning = self.reasoning;
         DelegationTask::new(spec, move |child, request, stop| {
             Box::pin(async move {
+                let child_id = child.id();
+                let processes = runtime.processes.clone();
                 let setup = SessionSetup::from_prepared(
                     child,
                     catalog,
@@ -88,6 +90,17 @@ impl SessionDelegation {
                 // Completion facts precede Host settlement. Always join the whole
                 // owner, even after admission refusal or a parent stop.
                 let report = control.shutdown().await;
+                // The child cannot transfer a process grant by returning its ID.
+                // Close this quiescent scope before releasing its answer, even
+                // when its Core Turn ended normally or its waiter was cancelled.
+                if let Some(processes) = processes
+                    && let Err(error) = processes.close_session(child_id).await
+                {
+                    retain_failure(
+                        &mut failure,
+                        DelegationFailure::Infrastructure(error.to_string()),
+                    );
+                }
                 let mut answer = None;
                 for update in report.updates {
                     if let ControlUpdate::Settled(settlement) = update

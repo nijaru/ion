@@ -30,11 +30,11 @@ mod background;
 struct App {
     agent: Arc<CodingAgent>,
     instructions: &'static str,
-    background: Option<Arc<ion_host::BackgroundOwner>>,
+    owner: Option<Arc<ion_host::ApplicationOwner>>,
 }
 impl Application for App {
-    fn background(&self) -> Option<Arc<ion_host::BackgroundOwner>> {
-        self.background.clone()
+    fn owner(&self) -> Option<Arc<ion_host::ApplicationOwner>> {
+        self.owner.clone()
     }
     fn resources(&self, _: Option<&std::path::Path>) -> anyhow::Result<Resources> {
         Ok(Resources::new(self.instructions.into()))
@@ -318,7 +318,7 @@ impl Fixture {
                 application: Arc::new(App {
                     agent: child_agent,
                     instructions: "child instructions",
-                    background: None,
+                    owner: None,
                 }),
                 model: None,
                 reasoning: ion_ai::Reasoning::ProviderDefault,
@@ -371,7 +371,7 @@ impl Fixture {
             Arc::new(App {
                 agent,
                 instructions: "parent instructions",
-                background: None,
+                owner: None,
             }),
             None,
             None,

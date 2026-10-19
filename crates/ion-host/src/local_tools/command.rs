@@ -27,7 +27,7 @@ use super::{ToolOutput, error};
 /// Bounded final bytes retained per stream before the private raw capture.
 const MAX_OUTPUT_BYTES: usize = 64 * 1024;
 /// Quiet-pipe allowance after the direct child exits or a stop is requested.
-const POST_EXIT_OUTPUT_IDLE: Duration = Duration::from_millis(100);
+pub(crate) const POST_EXIT_OUTPUT_IDLE: Duration = Duration::from_millis(100);
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -159,7 +159,7 @@ pub(super) async fn run(cwd: &Path, args: &Value, stop: CancellationToken) -> To
 }
 
 /// Prefer Bash when it is executable, then PATH, then the POSIX fallback.
-fn shell_program() -> PathBuf {
+pub(crate) fn shell_program() -> PathBuf {
     let primary = PathBuf::from("/bin/bash");
     if is_executable(&primary) {
         return primary;
@@ -180,7 +180,7 @@ fn is_executable(path: &Path) -> bool {
         .is_ok_and(|metadata| metadata.is_file() && metadata.permissions().mode() & 0o111 != 0)
 }
 
-async fn stop_child(
+pub(crate) async fn stop_child(
     child: &mut tokio::process::Child,
     pid: Option<Pid>,
 ) -> std::io::Result<std::process::ExitStatus> {

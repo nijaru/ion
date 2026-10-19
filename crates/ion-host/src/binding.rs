@@ -60,8 +60,12 @@ impl SessionSetup {
         })
     }
 
+    pub fn owner(&self) -> Option<Arc<crate::ApplicationOwner>> {
+        self.application.owner()
+    }
+
     pub fn background(&self) -> Option<Arc<crate::BackgroundOwner>> {
-        self.application.background()
+        self.owner().map(|owner| owner.background().clone())
     }
 
     pub fn catalog(&self) -> &SessionCatalog {
@@ -111,6 +115,10 @@ pub(crate) fn validate_model(
 }
 
 impl<M: Serialize + Send + 'static> SessionControl<M> {
+    pub fn owner(&self) -> Option<Arc<crate::ApplicationOwner>> {
+        self.setup.owner()
+    }
+
     pub fn background(&self) -> Option<Arc<crate::BackgroundOwner>> {
         self.setup.background()
     }

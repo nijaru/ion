@@ -83,7 +83,10 @@ async fn application_failure_stops_parent_without_a_host_result_reader() {
         Arc::new(App {
             agent: f.control.agent().clone(),
             instructions: "application root",
-            background: Some(owner.clone()),
+            owner: Some(Arc::new(ion_host::ApplicationOwner::new(
+                owner.clone(),
+                Arc::new(ion_host::ProcessOwner::new(1).unwrap()),
+            ))),
         }),
         None,
         None,

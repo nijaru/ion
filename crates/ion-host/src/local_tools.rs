@@ -14,7 +14,7 @@ use ion_core::{
     ToolDefinition, ToolExecutor, ToolExposure, ToolPresentation, ToolRegistration,
 };
 
-mod command;
+pub(crate) mod command;
 mod files;
 mod text_read;
 

@@ -24,6 +24,7 @@ pub mod mcp;
 mod model_http;
 pub mod model_setup;
 mod preparation;
+mod process;
 mod project_instructions;
 pub mod resources;
 pub mod session_catalog;
@@ -37,7 +38,7 @@ use anyhow::{Context, Result, ensure};
 use ion_core::{AgentLimits, CodingAgent, PromptCacheWarmingPolicy, ToolSet};
 
 pub use application::{
-    Application, ApplicationRuntime, CodingApplication, PreparedShell, UserShell,
+    Application, ApplicationOwner, ApplicationRuntime, CodingApplication, PreparedShell, UserShell,
 };
 pub use auth::{CredentialStatus, CredentialStore};
 pub use binding::SessionSetup;
@@ -57,6 +58,7 @@ pub use mcp::{
 };
 pub use model_http::{HttpModelService, HttpWire};
 pub use model_setup::{ModelChoice, ModelStore, SavedSelection, Selection, Wire};
+pub use process::{ProcessOwner, ProcessTools};
 pub use resources::{PromptTemplate, ResourceDiagnostic, Resources, Skill};
 pub use session_catalog::{SessionCatalog, SessionSummary};
 

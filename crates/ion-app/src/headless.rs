@@ -20,17 +20,17 @@ pub(super) enum Request {
 
 pub(super) async fn run(setup: SessionSetup, request: Request, json_output: bool) -> Result<()> {
     let mut control = setup.into_control::<()>();
-    let background = control.background();
+    let application_owner = control.owner();
     let result = foreground(&mut control, request, json_output).await;
-    if let Some(owner) = &background {
+    if let Some(owner) = &application_owner {
         owner.request_shutdown();
     }
     let report = control.shutdown().await;
     let mut result = result;
-    if let Some(owner) = &background {
+    if let Some(owner) = &application_owner {
         result = combine(
             result,
-            owner.join_shutdown().await.map_err(Into::into),
+            owner.join_shutdown().await,
             "application shutdown also failed",
         );
     }
@@ -92,6 +92,12 @@ async fn foreground(
     // Once this publisher loses a prefix, suppress the remaining provisional
     // stream. The reliable committed final below is the reconciliation boundary.
     let mut suppress_progress = false;
+    let application_owner = control.owner();
+    let request_shutdown = || {
+        if let Some(owner) = &application_owner {
+            owner.request_shutdown();
+        }
+    };
     let background = control.background();
     let mut background_revision = 0;
     let mut parent_result = None;
@@ -112,26 +118,26 @@ async fn foreground(
             _ = signal.recv(), if listening => {
                 listening = false;
                 control.request_stop();
-                if let Some(owner) = &background { owner.request_shutdown(); }
+                request_shutdown();
                 if parent_result.is_some() { parent_result = Some(Err(CodingAgentError::Cancelled.into())); }
             }
             published = output.advance(), if output.is_healthy() && output.has_pending() => {
                 if let Err(error) = published {
                     publication_error = Some(error);
                     control.request_stop();
-                    if let Some(owner) = &background { owner.request_shutdown(); }
+                    request_shutdown();
                 }
             }
             revision = async { background.as_ref().expect("guarded owner").changed(background_revision).await }, if background.is_some() => {
                 background_revision = revision;
                 let owner = background.as_ref().expect("guarded owner");
-                if owner.check().is_err() { control.request_stop(); owner.request_shutdown(); }
+                if owner.check().is_err() { control.request_stop(); request_shutdown(); }
                 // Invalidation only: actual results remain in bounded owner
                 // custody and committed facts, independent of this publisher.
                 if output.can_acquire() {
                     let record = if json_output { output.enqueue(json!({"type":"background_changed","revision":revision,"resync":"inspect"})) }
                         else { output.enqueue("[background task state changed; results remain inspectable]".to_owned()) };
-                    if let Err(error) = record { publication_error = Some(error); control.request_stop(); owner.request_shutdown(); }
+                    if let Err(error) = record { publication_error = Some(error); control.request_stop(); request_shutdown(); }
                 }
             }
             update = control.next(), if parent_result.is_none() => match update {
@@ -152,7 +158,7 @@ async fn foreground(
                     if let Err(error) = queued {
                         publication_error = Some(error);
                         control.request_stop();
-                        if let Some(owner) = &background { owner.request_shutdown(); }
+                        request_shutdown();
                     }
                 }
                 ControlUpdate::Activity(Observation::Gap { skipped }) => {
@@ -171,11 +177,11 @@ async fn foreground(
                 }
                 ControlUpdate::Settled(settlement) => {
                     let result = answer(settlement.outcome);
-                    if result.is_err() && let Some(owner) = &background { owner.request_shutdown(); }
+                    if result.is_err() { request_shutdown(); }
                     parent_result = Some(result);
                 }
                 ControlUpdate::Idle => {
-                    if let Some(owner) = &background { owner.request_shutdown(); }
+                    request_shutdown();
                     parent_result = Some(Err(rejected.take().unwrap_or_else(|| anyhow!("operation ended without settlement"))));
                 }
                 ControlUpdate::Input { .. } | ControlUpdate::Dispatched { .. } | ControlUpdate::Accepted { .. } => {}
@@ -183,8 +189,19 @@ async fn foreground(
         }
     };
 
-    // Owned work has settled before any potentially slow final pipe drain.
-    // No unaccounted deferred records or progress channel owns its lifetime.
+    // Delegated work has settled; managed servers must now stop as well.
+    // Final publication may block indefinitely on an otherwise healthy pipe.
+    let result = if let Some(owner) = &application_owner {
+        match (result, owner.join_shutdown().await) {
+            (result, Ok(())) => result,
+            (Ok(_), Err(error)) => Err(error),
+            (Err(error), Err(cleanup)) => {
+                Err(error.context(format!("application shutdown also failed: {cleanup:#}")))
+            }
+        }
+    } else {
+        result
+    };
     let mut publication = output.finish().await;
     if publication.is_ok() && output.is_healthy() {
         if suppress_progress {

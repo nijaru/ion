@@ -59,6 +59,7 @@ impl Subagent {
                     code_mode: parent.code_mode,
                     selection: parent.selection.clone(),
                     role: CodingRole::Subagent,
+                    processes: parent.processes.clone(),
                 },
                 selected: selected.clone(),
             }),

@@ -294,21 +294,13 @@ pub async fn run(setup: SessionSetup, services: Arc<ion_host::Host>) -> Result<(
     );
     let (input, writer) = match opened {
         Ok(io) => io,
-        Err(error) => {
-            let report = control.host.shutdown().await;
-            return connection::combine_errors(
-                Err(error.into()),
-                connection::cleanup_result(report.cleanup_errors),
-                "Host shutdown also failed",
-            );
-        }
+        Err(error) => return connection::startup_failure(&mut control, error.into()).await,
     };
     let mut output = Output::new(writer);
     // No effects have started, but even initial publication errors go through
     // the connection's shared shutdown path.
     if let Err(error) = output.enqueue(json!({"type":"ready","session":control.session_id(),"cwd":control.host.session().cwd(),"publication":{"reply_slots":connection::REPLY_SLOTS,"inspection_slots":1,"overflow":"commands_not_admitted","abort":"always_stops_reply_may_gap","progress":"gap_resync_inspect"}})) {
-        let report = control.host.shutdown().await;
-        return connection::combine_errors(Err(error), connection::cleanup_result(report.cleanup_errors), "Host shutdown also failed");
+        return connection::startup_failure(&mut control, error).await;
     }
     connection::connection(control, CommandReader::new(BufReader::new(input)), output).await
 }

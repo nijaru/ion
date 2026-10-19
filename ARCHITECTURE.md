@@ -119,7 +119,7 @@ provide alternate engines.
 | Live operation task, stop and joined outcome | Core operation owner, independent of waits and observers. |
 | Submitted but unaccepted inputs, preparation, follow-ups and replacement | Host shared control; clients retain only unsent drafts and presentation state. |
 | Resources, credentials, model/tool environment and application policy | Host application recipe and prepared binding; active work retains its captured binding. |
-| Live child supervision and transferred background work | Host owner; Core records durable Session relationships and observations. |
+| Live delegated agents and native programs | Host owners; Core records delegation relationships and tool observations, not live OS handles. |
 | Semantic transcript/activity projection | Core facts and live previews, rendered by App without turning previews into facts. |
 | Editor, pickers, local diagnostics and protocol correlation | App/client; local presentation is not model history. |
 | Physical paint, input modes and terminal restoration | Terminal publication/input owners. |
@@ -280,8 +280,8 @@ model arguments select only choices the application has authorized.
 
 Fresh context and foreground waiting are defaults; an explicit fork selects an
 eligible committed prefix, and background execution transfers to the coding
-application's managed owner. The owner is shared across runtime reload and
-binding replacement, not captured by child recipes. Parent cancellation,
+application's managed owner. The delegation destination is shared across runtime
+reload and binding replacement, not captured by child recipes. Parent cancellation,
 explicit child cancellation and application shutdown have distinct scopes.
 Parent Session shutdown does not stop transferred background children.
 Application shutdown stops and joins them. A one-shot headless host retains
@@ -304,6 +304,45 @@ notifications. Automatic root continuation must not silently select or adopt a
 managed child; explicit child selection remains available. Live-model adherence,
 service-scale delegation and native GUI visual acceptance remain qualification,
 not reasons to narrow the designed coding workflow.
+
+## Managed native programs
+
+A managed program is a Host-owned OS process, not an agent Session or another
+Core loop. Its model-facing start/control observations use normal committed tool
+intents and results. A start receipt observes creation and live custody, not
+command completion. Missing observations remain unknown; reopening a conversation
+never restarts a command or reconstructs a live grant from a saved PID.
+
+The coding application retains one live supervisor across Turns and binding
+changes. Programs are scoped to their initiating Core Session and captured working
+directory: a guessed handle, another Session or a conversation copy cannot control
+them. Application shutdown closes admission, requests stop for both managed
+programs and delegated agents, and joins both before releasing their environment.
+Dropping an observer or stopping a Turn does not terminate an already-started
+program. A start cancelled before its receipt stops and joins its admitted process;
+subsequent wait cancellation only ends observation. Explicit close stops and joins.
+This is in-process custody, not a daemon, OS sandbox or all-descendant containment.
+A coding child job stops, joins and releases its own program scope before its
+answer is released; it cannot transfer that grant by returning a handle to its
+parent. The retained application supervisor still guarantees cleanup if a child
+fails. Keeping a parent service alive requires parent-owned creation, not a leaked
+child resource.
+
+Separate process state, input ownership, raw capture and presentation. Pipe-backed
+programs support background servers and line-oriented stdin, not terminal control
+sequences or full-screen interaction. PTY programs require controlling-terminal,
+resize and derived screen semantics; human takeover additionally requires exclusive
+write custody. Those are extensions of the same process ownership/control contract,
+not a second runtime or a reason to claim pipes are terminals. Shell startup and
+environment capture are independent from process lifetime.
+
+Bound live slots, retained results, pending input and raw capture. Reads use explicit
+byte cursors and report evicted gaps, decoding loss and incomplete capture. Exit
+status and pipe EOF are distinct observations; a known direct-child exit must not
+silently certify complete output. Waits retain outcomes, close retains final evidence,
+and explicit acknowledgement releases joined capacity. Unknown or failed supervision
+must not become a fabricated successful exit. Raw bytes inform a screen projection;
+rendered text and returned windows are not a second execution log.
 
 ## Capabilities and trust
 

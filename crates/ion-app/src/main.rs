@@ -712,7 +712,7 @@ async fn run_cli(cli: Cli) -> Result<()> {
             } else {
                 application = application.with_tool_selection(tool_selection);
             }
-            let background = application.background();
+            let application_owner = application.owner();
             // Every fallible setup step after MCP startup belongs to the same
             // exit scope as the client, so preflight errors still join cleanup.
             let result = async {
@@ -809,11 +809,11 @@ async fn run_cli(cli: Cli) -> Result<()> {
             }
             .await;
             // Unconditional outer fallback, including preflight/client failure.
-            // Join children before releasing their captured MCP environment.
-            let result = if let Some(owner) = &background {
+            // Join children and programs before releasing their captured MCP environment.
+            let result = if let Some(owner) = &application_owner {
                 match (result, owner.join_shutdown().await) {
                     (result, Ok(())) => result,
-                    (Ok(()), Err(error)) => Err(error.into()),
+                    (Ok(()), Err(error)) => Err(error),
                     (Err(error), Err(cleanup)) => {
                         Err(error.context(format!("application shutdown also failed: {cleanup}")))
                     }

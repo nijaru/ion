@@ -824,10 +824,11 @@ across launches. An inherited pipe left open after output goes idle can produce
 an incomplete capture with no full-output path. Capture loss does not change a
 known command exit. Shared `!` shell context preserves the complete structured
 host observation, including these diagnostics; `!!` remains private.
-Commands use Bash when available, then fall back to POSIX sh, with closed stdin.
-They do not capture the user's login-shell environment or provide persistent
-interactive terminals or managed background process sessions. Managed subagents
-are separate agent Sessions, not process-session handles. Commands have no default
+`exec` and direct user shell commands use Bash when available, then fall back to
+POSIX sh, with closed stdin. They do not capture the user's login-shell environment.
+Use `process` for managed background or pipe-interactive programs; it is not a PTY
+or full-screen terminal. Managed subagents are separate agent Sessions, not
+process-session handles. Foreground commands have no default
 timeout; pass `timeout_ms` when a deadline is needed. The deadline
 covers output capture even after the direct shell exits. On timeout, Ion requests
 process-group stop and stops acquiring output, then awaits started capture I/O.
@@ -921,6 +922,47 @@ current context leaves less estimated room; there is no separate 16k app cap.
 A completed response with no answer or tool call fails the Turn; it does not
 save an empty assistant message that would break later provider replay.
 
+## Managed programs
+
+The coding preset includes `process` in run, chat and RPC, without an enabling
+flag. Use `start` with a foreground shell command to keep a server or line-oriented
+program alive across tool calls and Turns. Do not append `&` or daemonize it:
+Ion owns the live direct child and its process group, not arbitrary detached
+subsequent work. Environment and Bash/sh selection match `exec`; stdin is piped
+rather than closed. There is no PTY, terminal screen/resize, user takeover or
+login-shell environment snapshot in this implementation.
+
+`start` returns an observed process handle, not completion. `list` and `inspect`
+show retained state; bounded `wait` observes without consuming or killing it.
+`write` sends literal input and reports actual delivery, including partial writes;
+`eof` closes stdin. Cancelling a wait or input action does not kill an already
+started program. A start cancelled before returning its receipt stops and joins
+its admitted process. `close` explicitly stops and joins while retaining output;
+`acknowledge` releases a joined slot. Coding child jobs stop, join and release their
+own programs before returning their answer; parent services should be started by
+the parent, not left behind in an inaccessible child scope. Nonzero child exit
+and lost supervision are different observations, not interchangeable failures or
+permission to replay.
+
+`read` pages each raw stdout/stderr stream by byte offset. Its rolling retention
+is bounded; check gaps, decoding loss and EOF rather than assuming a page is
+complete history. Base64 reads preserve the selected bytes. After direct-child
+exit, capture has a 100 ms total drain bound rather than following an endlessly
+writing descendant. A ready final chunk/EOF is checked before closing; a known
+exit still does not certify that inherited output pipes reached EOF. Capture windows
+are not durable files or retention leases; only returned observations committed
+by Core remain in conversation history.
+
+The application retains the live supervisor through model/resource changes and
+Session replacement. Controls require the initiating Session and captured working
+directory; another Session, a fork or a guessed ID does not grant access. Returning
+to that Session in the same application can find its live programs. Reopen after
+application exit cannot reconnect or restart them. Application quit, RPC EOF and
+one-shot completion stop and join programs before releasing their environment;
+normal one-shot runs still drain delegated agents first, but do not wait forever
+for servers. This is process-local supervision, not a daemon, sandbox or guarantee
+that escaped descendants have stopped. `--read-only` excludes this capability.
+
 ## Coding subagents
 
 The main coding preset includes `subagent({...})` in run, chat and RPC. For
@@ -964,8 +1006,9 @@ Managed files live under the workspace catalog's `children/`, outside automatic
 one. The same workspace is not conflict isolation, and native tools retain host
 permissions. Parent stop and foreground client EOF stop/join their owned children;
 background children require explicit cancel or application shutdown. Cancellation
-does not roll back effects. Normal headless completion drains application-owned
-work, while interruption, RPC EOF and terminal quit stop and join it. These are
+does not roll back effects. Normal headless completion lets delegated agents
+finish, then stops and joins managed programs. Interruption, RPC EOF and terminal
+quit stop and join both. These are
 offline lifecycle guarantees; live-model adherence, service scale and native
 GUI visual acceptance remain open.
 
@@ -1124,6 +1167,7 @@ contracts are not all implemented:
 | Application setup | Caller-owned model/tool/instruction configuration, workspace-free Sessions and explicit shell/local-image authority. Opt-in continuation checks a saved authority reference and declarations. | Changed-authority reconciliation. Applications must reconstruct and attest live bindings on reopen; the reference is not a credential or sandbox. |
 | Durability | SQLite conversation/effect history, conservative recovery, restart-safe direct admission through the Rust SDK and keyed RPC literal text; explicit same-Turn continuation through the Rust SDK. | Durable pending queues, wire-protocol delivery IDs and automatic restart/continuation. Coding CLI/TUI/RPC submissions do not opt in to continuation. |
 | Delegation | Main coding preset exposes fresh/fork foreground and background Sessions with inherited route/reasoning, application-owned retained results, wait/status/cancel/acknowledge and joined original answers. SDK children use the same stable identity, complete environments and conservative recovery; Code Mode nested tools remain distinct. | Live-model/service-scale delegation qualification and native-app visual acceptance remain open. Model arguments never grant execution authority. |
+| Native programs | Scoped pipe-backed servers and stdin interaction, bounded raw capture, retained wait/close/release and shared application cleanup; child-job scope reclaimed before answer release. | PTY/control-terminal setup, resize/screen projection, human takeover, shell environment capture and restart attachment. |
 | Controls and trust | Model-loadout include/exclude selection, read-only model tools, MCP direct/deferred/hidden exposure, digest-bound project MCP trust and host-permission execution. | Per-call approval/consent, OS sandboxing, dynamic executable extensions, MCP OAuth and per-tool exposure patterns. Loadout selection and trust are not security boundaries. |
 | Remote use | Foreground stdio RPC, lossy progress and complete pull snapshots through shared control. A service embedding retains/drives the owner independently of connections. | No built-in authenticated network server, reliable activity replay or durable queue/metadata recovery. RPC EOF still stops/joins work. |
 
@@ -1312,6 +1356,18 @@ runtime, including on client errors: it closes admission, stops and joins
 preparation/Core work and returns remaining updates and cleanup errors. Cancelling
 that wait leaves it closed and joinable; Drop can request stop but cannot join.
 Drain returned inputs and settlements before replacing a Session or model.
+
+A coding setup also retains an `ApplicationOwner`, available through
+`control.owner()`. Closing one Session does not close this longer-lived owner:
+request its shutdown, join control, then join the application before releasing
+MCP or other captured services and before potentially blocking final output.
+It closes both delegated-agent and native-process admission paths before joining
+either family. `Application::owner()` must return the same retained owner, not a
+new owner on each lookup. Restricted recipes default to no application owner;
+`ApplicationRuntime::new` contains no process supervisor. A recipe installing
+`ProcessTools` must explicitly retain its supervisor in the runtime's `processes`
+field for delegated-job cleanup. Session history, cloned tool declarations and
+saved IDs cannot reconstruct these live resources.
 
 `observe()` is passive. Lag produces an explicit gap: discard the partial stream
 and reconcile committed Session facts, rather than joining a surviving suffix to

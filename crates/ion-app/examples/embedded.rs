@@ -70,17 +70,17 @@ async fn submit(args: Args, cwd: &Path, session: Arc<CodingSession>) -> Result<(
     // preference instead of overriding it. There is no client-owned agent loop.
     let setup = ion_host::CodingApplication::new(host, None).setup(session, selected, None)?;
     let mut control = setup.into_control::<()>();
-    let background = control.background();
+    let application_owner = control.owner();
     let mut outcome = prompt(&mut control, args.prompt).await;
-    if let Some(owner) = &background {
+    if let Some(owner) = &application_owner {
         owner.request_shutdown();
     }
     let report = control.shutdown().await;
-    if let Some(owner) = &background
+    if let Some(owner) = &application_owner
         && let Err(error) = owner.join_shutdown().await
     {
         outcome = Err(match outcome {
-            Ok(_) => error.into(),
+            Ok(_) => error,
             Err(primary) => primary.context(format!("application shutdown also failed: {error}")),
         });
     }
@@ -90,7 +90,7 @@ async fn submit(args: Args, cwd: &Path, session: Arc<CodingSession>) -> Result<(
             Err(primary) => Err(primary.context(format!("control shutdown also failed: {error}"))),
         };
     }
-    // No blocking publisher can delay joining application-owned children.
+    // No blocking publisher can delay joining application-owned work.
     let answer = outcome?;
     let mut output = std::io::stdout().lock();
     writeln!(output, "{answer}").context("publish committed answer")?;
@@ -134,7 +134,7 @@ async fn prompt(control: &mut SessionControl, text: String) -> Result<String> {
         }
     };
     if answer.is_ok()
-        && let Some(owner) = control.background()
+        && let Some(owner) = control.owner()
     {
         tokio::select! {
             _ = signal.recv(), if listening => {
@@ -142,7 +142,7 @@ async fn prompt(control: &mut SessionControl, text: String) -> Result<String> {
                 owner.join_shutdown().await?;
                 return Err(ion_core::CodingAgentError::Cancelled.into());
             }
-            result = owner.drain() => result?,
+            result = owner.background().drain() => result?,
         }
     }
     answer
