@@ -1473,6 +1473,7 @@ dependencies = [
  "tokio-util",
  "url",
  "uuid",
+ "vt100",
 ]
 
 [[package]]

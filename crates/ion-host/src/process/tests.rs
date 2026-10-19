@@ -113,6 +113,19 @@ async fn until(path: &Path) {
         tokio::time::sleep(Duration::from_millis(5)).await;
     }
 }
+async fn until_file(path: &Path, expected: &str) {
+    let deadline = Instant::now() + Duration::from_secs(5);
+    loop {
+        if std::fs::read_to_string(path).is_ok_and(|contents| contents.trim() == expected) {
+            return;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "file {path:?} did not contain {expected:?}"
+        );
+        tokio::time::sleep(Duration::from_millis(5)).await;
+    }
+}
 
 #[tokio::test]
 async fn core_workflow_survives_turns_and_exposes_actual_pipe_input_and_output() {
@@ -549,7 +562,8 @@ async fn ending_a_child_scope_joins_and_reclaims_capacity_for_the_parent() {
             vec![call(
                 "start",
                 json!({
-                    "action":"start", "command":"touch child-ready; exec sleep 30"
+                    "action":"start", "backend":"pty",
+                    "command":"touch child-ready; exec sleep 30"
                 }),
             )],
             "child done",
@@ -631,6 +645,744 @@ async fn owner_shutdown_stops_and_joins_running_processes() {
     let observed = process_outputs(&session).pop().unwrap();
     assert_eq!(observed["joined"], true, "{observed}");
     assert_eq!(observed["exit"]["signal"], 15, "{observed}");
+    session.shutdown().await.unwrap();
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[tokio::test]
+async fn core_pty_start_has_a_real_controlling_terminal_and_dimensions() {
+    let root = std::env::temp_dir().join(format!("ion-pty-contract-{}", Uuid::now_v7()));
+    std::fs::create_dir(&root).unwrap();
+    let owner = Arc::new(ProcessOwner::new(1).unwrap());
+    let session =
+        Arc::new(CodingSession::create(root.join("session.sqlite"), Some(&root)).unwrap());
+    let command = concat!(
+        "i=n o=n e=n d=n; ",
+        "[ -t 0 ] && i=y; [ -t 1 ] && o=y; [ -t 2 ] && e=y; ",
+        "[ -c /dev/tty ] && d=y; ",
+        "printf 'in=%s out=%s err=%s ttydev=%s\\n' \"$i\" \"$o\" \"$e\" \"$d\"; ",
+        "printf 'tty=%s\\n' \"$(tty)\"; ",
+        "printf 'size=%s\\n' \"$(stty size)\"; ",
+        "printf 'pgid=%s tpgid=%s pid=%s\\n' ",
+        "\"$(ps -o pgid= -p $$ | tr -d ' ')\" ",
+        "\"$(ps -o tpgid= -p $$ | tr -d ' ')\" \"$$\"; ",
+        "printf 'term=%s\\n' \"$TERM\""
+    );
+    let runner = agent(
+        model(turn(
+            vec![call(
+                "start",
+                json!({
+                    "action":"start", "backend":"pty", "rows":30, "columns":100,
+                    "command": command
+                }),
+            )],
+            "started",
+        )),
+        Arc::new(ProcessTools::new(&root, owner.clone()).unwrap()),
+    );
+    submit(&runner, &session, "start").await.unwrap();
+    let start = process_outputs(&session)[0].clone();
+    assert_eq!(start["backend"], "pty", "{start}");
+    assert_eq!(start["screen"]["available"], true, "{start}");
+    assert_eq!(start["screen"]["rows"], 30, "{start}");
+    assert_eq!(start["screen"]["columns"], 100, "{start}");
+    assert!(start.get("stdout").is_none(), "{start}");
+    assert!(start.get("stderr").is_none(), "{start}");
+    let id = started_id(&start);
+
+    let observer = agent(
+        model(turn(
+            vec![
+                call("wait", json!({"action":"wait","id":id,"timeout_ms":10000})),
+                call(
+                    "raw",
+                    json!({"action":"read","id":id,"stream":"terminal","limit":65536}),
+                ),
+                call("screen", json!({"action":"screen","id":id,"rows":24})),
+                call("ack", json!({"action":"acknowledge","id":id})),
+            ],
+            "observed",
+        )),
+        Arc::new(ProcessTools::new(&root, owner.clone()).unwrap()),
+    );
+    submit(&observer, &session, "observe").await.unwrap();
+    let outputs = process_outputs(&session);
+    owner.join_shutdown().await.unwrap();
+    let wait = &outputs[1];
+    assert_eq!(wait["joined"], true, "{wait}");
+    assert_eq!(wait["timed_out"], false, "{wait}");
+    assert_eq!(wait["exit"]["exit_code"], 0, "{wait}");
+    assert_eq!(wait["terminal"]["complete"], true, "{wait}");
+    let raw = &outputs[2];
+    let text = raw["text"].as_str().unwrap();
+    assert!(text.contains("in=y out=y err=y ttydev=y"), "{text}");
+    assert!(text.contains("size=30 100"), "{text}");
+    assert!(text.contains("term=xterm-256color"), "{text}");
+    assert!(text.contains("tty=/dev/"), "{text}");
+    let pgrp = text
+        .lines()
+        .find(|line| line.starts_with("pgid="))
+        .expect("pgrp observation");
+    let values = pgrp
+        .split_whitespace()
+        .map(|part| part.split_once('=').unwrap().1)
+        .collect::<Vec<_>>();
+    assert_eq!(
+        values[0], values[1],
+        "foreground group is not the shell: {pgrp}"
+    );
+    assert_eq!(
+        values[1], values[2],
+        "shell is not its own process-group leader: {pgrp}"
+    );
+    let screen = &outputs[3];
+    assert_eq!(screen["visible_rows"], 24, "{screen}");
+    assert_eq!(screen["rows"], 30, "{screen}");
+    assert_eq!(screen["columns"], 100, "{screen}");
+    assert!(
+        screen["text"].as_str().unwrap().contains("size=30 100"),
+        "{screen}"
+    );
+    assert_eq!(outputs[4]["acknowledged"], true, "{}", outputs[4]);
+    owner.join_shutdown().await.unwrap();
+    session.shutdown().await.unwrap();
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[tokio::test]
+async fn pty_screen_projects_alternate_tui_split_unicode_and_input_modes() {
+    let root = std::env::temp_dir().join(format!("ion-pty-screen-{}", Uuid::now_v7()));
+    std::fs::create_dir(&root).unwrap();
+    let owner = Arc::new(ProcessOwner::new(1).unwrap());
+    let session =
+        Arc::new(CodingSession::create(root.join("session.sqlite"), Some(&root)).unwrap());
+    let command = concat!(
+        "printf 'MAIN\\033[31mRED\\033[0m\\033[3;5H'; ",
+        "printf '\\033[?1049h'; ",
+        "printf '\\033[2;3HALT'; ",
+        "printf '\\033[?1h\\033=\\033[?2004h'; ",
+        "printf '\\033[6;1H\\303'; sleep 0.05; printf '\\251'"
+    );
+    let runner = agent(
+        model(turn(
+            vec![call(
+                "start",
+                json!({"action":"start","backend":"pty","command":command}),
+            )],
+            "started",
+        )),
+        Arc::new(ProcessTools::new(&root, owner.clone()).unwrap()),
+    );
+    submit(&runner, &session, "start").await.unwrap();
+    let id = started_id(&process_outputs(&session)[0]);
+    let observer = agent(
+        model(turn(
+            vec![
+                call("wait", json!({"action":"wait","id":id,"timeout_ms":10000})),
+                call(
+                    "raw",
+                    json!({"action":"read","id":id,"stream":"terminal","limit":65536}),
+                ),
+                call("screen", json!({"action":"screen","id":id,"rows":24})),
+                call("ack", json!({"action":"acknowledge","id":id})),
+            ],
+            "observed",
+        )),
+        Arc::new(ProcessTools::new(&root, owner.clone()).unwrap()),
+    );
+    submit(&observer, &session, "observe").await.unwrap();
+    let outputs = process_outputs(&session);
+    owner.join_shutdown().await.unwrap();
+    let raw = outputs[2]["text"].as_str().unwrap();
+    assert!(raw.contains("MAIN"), "{raw:?}");
+    assert!(raw.contains("\u{1b}[?1049h"), "{raw:?}");
+    assert!(raw.contains("\u{1b}[31m"), "{raw:?}");
+    let screen = &outputs[3];
+    assert_eq!(screen["alternate_screen"], true, "{screen}");
+    assert_eq!(screen["application_cursor"], true, "{screen}");
+    assert_eq!(screen["application_keypad"], true, "{screen}");
+    assert_eq!(screen["bracketed_paste"], true, "{screen}");
+    assert_eq!(screen["cursor_row"], 5, "{screen}");
+    assert_eq!(screen["cursor_column"], 1, "{screen}");
+    let text = screen["text"].as_str().unwrap();
+    let lines = text.lines().collect::<Vec<_>>();
+    assert_eq!(lines[1], "  ALT", "{screen}");
+    assert_eq!(lines[5], "\u{e9}", "{screen}");
+    assert!(screen["source_bytes"].as_u64().unwrap() > 0, "{screen}");
+    assert_eq!(outputs[4]["acknowledged"], true, "{}", outputs[4]);
+    owner.join_shutdown().await.unwrap();
+    session.shutdown().await.unwrap();
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[tokio::test]
+async fn pty_program_dsr_receives_the_automatic_cursor_reply() {
+    let root = std::env::temp_dir().join(format!("ion-pty-dsr-{}", Uuid::now_v7()));
+    std::fs::create_dir(&root).unwrap();
+    let owner = Arc::new(ProcessOwner::new(1).unwrap());
+    let session =
+        Arc::new(CodingSession::create(root.join("session.sqlite"), Some(&root)).unwrap());
+    let command = concat!(
+        "stty raw -echo; ",
+        "printf '\\033[4;7H\\033[6n'; ",
+        "IFS= read -r -d R response; ",
+        "printf '%s' \"$response\" > reply; ",
+        "printf 'REPLY:%s\\n' \"$response\""
+    );
+    let runner = agent(
+        model(turn(
+            vec![call(
+                "start",
+                json!({"action":"start","backend":"pty","command":command}),
+            )],
+            "started",
+        )),
+        Arc::new(ProcessTools::new(&root, owner.clone()).unwrap()),
+    );
+    submit(&runner, &session, "start").await.unwrap();
+    let id = started_id(&process_outputs(&session)[0]);
+    let observer = agent(
+        model(turn(
+            vec![
+                call("wait", json!({"action":"wait","id":id,"timeout_ms":10000})),
+                call("screen", json!({"action":"screen","id":id,"rows":8})),
+                call(
+                    "raw",
+                    json!({"action":"read","id":id,"stream":"terminal","limit":65536}),
+                ),
+                call("ack", json!({"action":"acknowledge","id":id})),
+            ],
+            "observed",
+        )),
+        Arc::new(ProcessTools::new(&root, owner.clone()).unwrap()),
+    );
+    submit(&observer, &session, "observe").await.unwrap();
+    let outputs = process_outputs(&session);
+    owner.join_shutdown().await.unwrap();
+    let wait = &outputs[1];
+    assert_eq!(wait["joined"], true, "{wait}");
+    assert_eq!(wait["exit"]["exit_code"], 0, "{wait}");
+    assert_eq!(std::fs::read(root.join("reply")).unwrap(), b"\x1b[4;7");
+    let raw = outputs[3]["text"].as_str().unwrap();
+    assert!(raw.contains("REPLY:\u{1b}[4;7"), "{raw:?}");
+    assert_eq!(outputs[4]["acknowledged"], true, "{}", outputs[4]);
+    owner.join_shutdown().await.unwrap();
+    session.shutdown().await.unwrap();
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[tokio::test]
+async fn pty_resize_updates_the_tty_projection_and_signals_the_foreground_group() {
+    let root = std::env::temp_dir().join(format!("ion-pty-resize-{}", Uuid::now_v7()));
+    std::fs::create_dir(&root).unwrap();
+    let owner = Arc::new(ProcessOwner::new(1).unwrap());
+    let session =
+        Arc::new(CodingSession::create(root.join("session.sqlite"), Some(&root)).unwrap());
+    let command = concat!(
+        "trap 'stty size > winch; printf \"SIGWINCH\\n\"' WINCH; ",
+        "stty size > initial; ",
+        "printf 'READY\\n'; ",
+        "while :; do sleep 0.02; done"
+    );
+    let runner = agent(
+        model(turn(
+            vec![call(
+                "start",
+                json!({
+                    "action":"start", "backend":"pty", "rows":24, "columns":80,
+                    "command": command
+                }),
+            )],
+            "started",
+        )),
+        Arc::new(ProcessTools::new(&root, owner.clone()).unwrap()),
+    );
+    submit(&runner, &session, "start").await.unwrap();
+    let id = started_id(&process_outputs(&session)[0]);
+    until_file(&root.join("initial"), "24 80").await;
+
+    let resizer = agent(
+        model(turn(
+            vec![call(
+                "resize",
+                json!({"action":"resize","id":id,"rows":12,"columns":40}),
+            )],
+            "resized",
+        )),
+        Arc::new(ProcessTools::new(&root, owner.clone()).unwrap()),
+    );
+    submit(&resizer, &session, "resize").await.unwrap();
+    let outputs = process_outputs(&session);
+    let resize = &outputs[1];
+    assert_eq!(resize["resized"], true, "{resize}");
+    assert_eq!(resize["rows"], 12, "{resize}");
+    assert_eq!(resize["columns"], 40, "{resize}");
+    assert_eq!(resize["screen"]["rows"], 12, "{resize}");
+    assert_eq!(resize["screen"]["columns"], 40, "{resize}");
+    until_file(&root.join("winch"), "12 40").await;
+
+    let observer = agent(
+        model(turn(
+            vec![
+                call("screen", json!({"action":"screen","id":id,"rows":12})),
+                call("close", json!({"action":"close","id":id})),
+                call("ack", json!({"action":"acknowledge","id":id})),
+            ],
+            "observed",
+        )),
+        Arc::new(ProcessTools::new(&root, owner.clone()).unwrap()),
+    );
+    submit(&observer, &session, "observe").await.unwrap();
+    let outputs = process_outputs(&session);
+    owner.join_shutdown().await.unwrap();
+    let screen = &outputs[2];
+    assert_eq!(screen["rows"], 12, "{screen}");
+    assert_eq!(screen["columns"], 40, "{screen}");
+    let text = screen["text"].as_str().unwrap();
+    assert!(text.contains("SIGWINCH"), "{screen}");
+    let close = &outputs[3];
+    assert_eq!(close["joined"], true, "{close}");
+    assert_eq!(close["exit"]["signal"], 15, "{close}");
+    assert_eq!(close["terminal"]["complete"], true, "{close}");
+    assert_eq!(outputs[4]["acknowledged"], true, "{}", outputs[4]);
+    owner.join_shutdown().await.unwrap();
+    session.shutdown().await.unwrap();
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[tokio::test]
+async fn invalid_dimensions_and_cross_backend_actions_reject_without_effects() {
+    let root = std::env::temp_dir().join(format!("ion-pty-invalid-{}", Uuid::now_v7()));
+    std::fs::create_dir(&root).unwrap();
+    let owner = Arc::new(ProcessOwner::new(2).unwrap());
+    let session =
+        Arc::new(CodingSession::create(root.join("session.sqlite"), Some(&root)).unwrap());
+    let first = agent(
+        model(turn(
+            vec![
+                call(
+                    "pipe_dims",
+                    json!({"action":"start","backend":"pipe","rows":24,"command":"printf bad > bad-pipe"}),
+                ),
+                call(
+                    "pty_zero",
+                    json!({"action":"start","backend":"pty","rows":0,"command":"printf bad > bad-zero"}),
+                ),
+                call(
+                    "pty_cells",
+                    json!({"action":"start","backend":"pty","rows":200,"columns":200,"command":"printf bad > bad-cells"}),
+                ),
+                call(
+                    "pipe",
+                    json!({"action":"start","command":"printf pipe > pipe-marker; exec sleep 30"}),
+                ),
+                call(
+                    "pty",
+                    json!({"action":"start","backend":"pty","command":"printf pty > pty-marker; exec sleep 30"}),
+                ),
+            ],
+            "started",
+        )),
+        Arc::new(ProcessTools::new(&root, owner.clone()).unwrap()),
+    );
+    submit(&first, &session, "start").await.unwrap();
+    let outputs = process_outputs(&session);
+    assert!(
+        outputs[0]["error"]
+            .as_str()
+            .unwrap()
+            .contains("does not accept terminal dimensions"),
+        "{}",
+        outputs[0]
+    );
+    assert!(
+        outputs[1]["error"].as_str().unwrap().contains("rows"),
+        "{}",
+        outputs[1]
+    );
+    assert!(
+        outputs[2]["error"].as_str().unwrap().contains("maximum"),
+        "{}",
+        outputs[2]
+    );
+    assert!(!root.join("bad-pipe").exists());
+    assert!(!root.join("bad-zero").exists());
+    assert!(!root.join("bad-cells").exists());
+    let pipe = started_id(&outputs[3]);
+    let pty = started_id(&outputs[4]);
+    until(&root.join("pipe-marker")).await;
+    until(&root.join("pty-marker")).await;
+
+    let second = agent(
+        model(turn(
+            vec![
+                call(
+                    "pipe_resize",
+                    json!({"action":"resize","id":pipe,"rows":12,"columns":40}),
+                ),
+                call(
+                    "pipe_terminal",
+                    json!({"action":"read","id":pipe,"stream":"terminal"}),
+                ),
+                call("pty_eof", json!({"action":"eof","id":pty})),
+                call(
+                    "pty_stdout",
+                    json!({"action":"read","id":pty,"stream":"stdout"}),
+                ),
+                call(
+                    "pty_bad_resize",
+                    json!({"action":"resize","id":pty,"rows":201,"columns":80}),
+                ),
+                call("inspect_pty", json!({"action":"inspect","id":pty})),
+                call("close_pipe", json!({"action":"close","id":pipe})),
+                call("close_pty", json!({"action":"close","id":pty})),
+                call("ack_pipe", json!({"action":"acknowledge","id":pipe})),
+                call("ack_pty", json!({"action":"acknowledge","id":pty})),
+            ],
+            "checked",
+        )),
+        Arc::new(ProcessTools::new(&root, owner.clone()).unwrap()),
+    );
+    submit(&second, &session, "check").await.unwrap();
+    let outputs = process_outputs(&session);
+    owner.join_shutdown().await.unwrap();
+    assert!(
+        outputs[5]["error"]
+            .as_str()
+            .unwrap()
+            .contains("only available for PTY"),
+        "{}",
+        outputs[5]
+    );
+    assert!(
+        outputs[6]["error"]
+            .as_str()
+            .unwrap()
+            .contains("only available for PTY"),
+        "{}",
+        outputs[6]
+    );
+    assert!(
+        outputs[7]["error"].as_str().unwrap().contains("PTY EOF"),
+        "{}",
+        outputs[7]
+    );
+    assert!(
+        outputs[8]["error"]
+            .as_str()
+            .unwrap()
+            .contains("merged terminal stream"),
+        "{}",
+        outputs[8]
+    );
+    assert!(
+        outputs[9]["error"].as_str().unwrap().contains("rows"),
+        "{}",
+        outputs[9]
+    );
+    let inspect = &outputs[10];
+    assert_eq!(inspect["backend"], "pty", "{inspect}");
+    assert_eq!(inspect["running"], true, "{inspect}");
+    assert_eq!(inspect["screen"]["available"], true, "{inspect}");
+    assert_eq!(
+        inspect["screen"]["rows"], 24,
+        "invalid resize took effect: {inspect}"
+    );
+    assert_eq!(
+        inspect["screen"]["columns"], 80,
+        "invalid resize took effect: {inspect}"
+    );
+    assert_eq!(outputs[11]["joined"], true, "{}", outputs[11]);
+    assert_eq!(outputs[12]["joined"], true, "{}", outputs[12]);
+    assert_eq!(outputs[13]["acknowledged"], true, "{}", outputs[13]);
+    assert_eq!(outputs[14]["acknowledged"], true, "{}", outputs[14]);
+    owner.join_shutdown().await.unwrap();
+    session.shutdown().await.unwrap();
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[tokio::test]
+async fn oversized_control_string_keeps_raw_terminal_bytes_and_disables_screen() {
+    let root = std::env::temp_dir().join(format!("ion-pty-osc-{}", Uuid::now_v7()));
+    std::fs::create_dir(&root).unwrap();
+    let owner = Arc::new(ProcessOwner::new(1).unwrap());
+    let session =
+        Arc::new(CodingSession::create(root.join("session.sqlite"), Some(&root)).unwrap());
+    let command = concat!(
+        "printf '\\033]0;'; head -c 5000 /dev/zero | tr '\\000' x; ",
+        "printf '\\007'; printf 'AFTER\\n'"
+    );
+    let runner = agent(
+        model(turn(
+            vec![call(
+                "start",
+                json!({"action":"start","backend":"pty","command":command}),
+            )],
+            "started",
+        )),
+        Arc::new(ProcessTools::new(&root, owner.clone()).unwrap()),
+    );
+    submit(&runner, &session, "start").await.unwrap();
+    let id = started_id(&process_outputs(&session)[0]);
+    let observer = agent(
+        model(turn(
+            vec![
+                call("wait", json!({"action":"wait","id":id,"timeout_ms":10000})),
+                call("screen", json!({"action":"screen","id":id,"rows":24})),
+                call(
+                    "resize",
+                    json!({"action":"resize","id":id,"rows":12,"columns":40}),
+                ),
+                call(
+                    "raw",
+                    json!({"action":"read","id":id,"stream":"terminal","limit":65536}),
+                ),
+                call("inspect", json!({"action":"inspect","id":id})),
+                call("ack", json!({"action":"acknowledge","id":id})),
+            ],
+            "observed",
+        )),
+        Arc::new(ProcessTools::new(&root, owner.clone()).unwrap()),
+    );
+    submit(&observer, &session, "observe").await.unwrap();
+    let outputs = process_outputs(&session);
+    owner.join_shutdown().await.unwrap();
+    assert_eq!(outputs[1]["joined"], true, "{}", outputs[1]);
+    assert_eq!(outputs[1]["exit"]["exit_code"], 0, "{}", outputs[1]);
+    assert!(
+        outputs[2]["error"]
+            .as_str()
+            .unwrap()
+            .contains("screen projection unavailable"),
+        "{}",
+        outputs[2]
+    );
+    assert!(outputs[3]["error"].is_string(), "{}", outputs[3]);
+    let raw = &outputs[4];
+    let text = raw["text"].as_str().unwrap();
+    assert!(text.starts_with("\u{1b}]0;"), "{:?}", &text[..20]);
+    assert!(text.contains(&"x".repeat(5000)), "{raw}");
+    assert!(text.ends_with("AFTER\r\n"), "{raw}");
+    assert_eq!(raw["complete"], true, "{raw}");
+    let inspect = &outputs[5];
+    assert_eq!(inspect["screen"]["available"], false, "{inspect}");
+    assert!(
+        inspect["screen"]["reason"]
+            .as_str()
+            .unwrap()
+            .contains("4096"),
+        "{inspect}"
+    );
+    assert_eq!(inspect["terminal"]["complete"], true, "{inspect}");
+    assert_eq!(outputs[6]["acknowledged"], true, "{}", outputs[6]);
+    owner.join_shutdown().await.unwrap();
+    session.shutdown().await.unwrap();
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[tokio::test]
+async fn application_shutdown_stops_and_joins_a_live_pty() {
+    let root = std::env::temp_dir().join(format!("ion-pty-shutdown-{}", Uuid::now_v7()));
+    std::fs::create_dir(&root).unwrap();
+    let owner = Arc::new(ProcessOwner::new(1).unwrap());
+    let session =
+        Arc::new(CodingSession::create(root.join("session.sqlite"), Some(&root)).unwrap());
+    let runner = agent(
+        model(turn(
+            vec![call(
+                "start",
+                json!({
+                    "action":"start", "backend":"pty",
+                    "command":"touch pty-ready; exec sleep 30"
+                }),
+            )],
+            "started",
+        )),
+        Arc::new(ProcessTools::new(&root, owner.clone()).unwrap()),
+    );
+    submit(&runner, &session, "start").await.unwrap();
+    let id = started_id(&process_outputs(&session)[0]);
+    until(&root.join("pty-ready")).await;
+    owner.request_shutdown();
+    let (first, second) = tokio::time::timeout(Duration::from_secs(3), async {
+        tokio::join!(owner.join_shutdown(), owner.join_shutdown())
+    })
+    .await
+    .expect("PTY shutdown did not join");
+    first.unwrap();
+    second.unwrap();
+
+    let observer = agent(
+        model(turn(
+            vec![
+                call("inspect", json!({"action":"inspect","id":id})),
+                call("screen", json!({"action":"screen","id":id})),
+                call("ack", json!({"action":"acknowledge","id":id})),
+            ],
+            "observed",
+        )),
+        Arc::new(ProcessTools::new(&root, owner.clone()).unwrap()),
+    );
+    submit(&observer, &session, "observe").await.unwrap();
+    let outputs = process_outputs(&session);
+    let inspect = &outputs[1];
+    assert_eq!(inspect["joined"], true, "{inspect}");
+    assert_eq!(inspect["exit"]["signal"], 15, "{inspect}");
+    assert_eq!(inspect["terminal"]["complete"], true, "{inspect}");
+    assert_eq!(inspect["screen"]["available"], true, "{inspect}");
+    assert_eq!(outputs[2]["visible_rows"], 24, "{}", outputs[2]);
+    assert_eq!(outputs[3]["acknowledged"], true, "{}", outputs[3]);
+    session.shutdown().await.unwrap();
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[tokio::test]
+async fn exited_pty_screen_remains_stable_until_ack_and_releases_capacity() {
+    let root = std::env::temp_dir().join(format!("ion-pty-ack-{}", Uuid::now_v7()));
+    std::fs::create_dir(&root).unwrap();
+    let owner = Arc::new(ProcessOwner::new(1).unwrap());
+    let session =
+        Arc::new(CodingSession::create(root.join("session.sqlite"), Some(&root)).unwrap());
+    let tools = Arc::new(ProcessTools::new(&root, owner.clone()).unwrap());
+    let first = agent(
+        model(turn(
+            vec![call(
+                "start",
+                json!({"action":"start","backend":"pty","command":"printf 'STABLE\\n'"}),
+            )],
+            "started",
+        )),
+        tools.clone(),
+    );
+    submit(&first, &session, "first").await.unwrap();
+    let first_id = started_id(&process_outputs(&session)[0]);
+    let observer = agent(
+        model(turn(
+            vec![
+                call(
+                    "wait",
+                    json!({"action":"wait","id":first_id,"timeout_ms":10000}),
+                ),
+                call("screen", json!({"action":"screen","id":first_id})),
+                call("ack", json!({"action":"acknowledge","id":first_id})),
+            ],
+            "observed",
+        )),
+        tools.clone(),
+    );
+    submit(&observer, &session, "observe").await.unwrap();
+    let outputs = process_outputs(&session);
+    assert!(
+        outputs[2]["text"].as_str().unwrap().contains("STABLE"),
+        "{}",
+        outputs[2]
+    );
+    assert_eq!(outputs[3]["acknowledged"], true, "{}", outputs[3]);
+
+    let second = agent(
+        model(turn(
+            vec![call(
+                "start",
+                json!({"action":"start","backend":"pty","command":"printf 'SECOND\\n'"}),
+            )],
+            "started",
+        )),
+        tools.clone(),
+    );
+    submit(&second, &session, "second").await.unwrap();
+    let second_start = process_outputs(&session).pop().unwrap();
+    assert_eq!(second_start["started"], true, "{second_start}");
+    assert!(second_start.get("error").is_none(), "{second_start}");
+    let second_id = started_id(&second_start);
+    let observer = agent(
+        model(turn(
+            vec![
+                call(
+                    "wait",
+                    json!({"action":"wait","id":second_id,"timeout_ms":10000}),
+                ),
+                call("screen", json!({"action":"screen","id":second_id})),
+                call("ack", json!({"action":"acknowledge","id":second_id})),
+            ],
+            "observed",
+        )),
+        tools,
+    );
+    submit(&observer, &session, "observe second").await.unwrap();
+    let outputs = process_outputs(&session);
+    assert!(
+        outputs.last().unwrap()["acknowledged"] == true,
+        "{outputs:?}"
+    );
+    assert!(
+        outputs[outputs.len() - 2]["text"]
+            .as_str()
+            .unwrap()
+            .contains("SECOND"),
+        "{outputs:?}"
+    );
+    owner.join_shutdown().await.unwrap();
+    session.shutdown().await.unwrap();
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[tokio::test]
+async fn interactive_bash_reads_a_command_and_exits_in_the_owned_session() {
+    let root = std::env::temp_dir().join(format!("ion-pty-bash-{}", Uuid::now_v7()));
+    std::fs::create_dir(&root).unwrap();
+    let owner = Arc::new(ProcessOwner::new(1).unwrap());
+    let session =
+        Arc::new(CodingSession::create(root.join("session.sqlite"), Some(&root)).unwrap());
+    let command = format!(
+        "HOME='{}' HISTFILE=/dev/null bash --noprofile --norc -i",
+        root.display()
+    );
+    let runner = agent(
+        model(turn(
+            vec![call(
+                "start",
+                json!({"action":"start","backend":"pty","command":command}),
+            )],
+            "started",
+        )),
+        Arc::new(ProcessTools::new(&root, owner.clone()).unwrap()),
+    );
+    submit(&runner, &session, "start").await.unwrap();
+    let id = started_id(&process_outputs(&session)[0]);
+    let data = "printf 'INTERACTIVE_OK\\n'; exit\n";
+    let input = agent(
+        model(turn(
+            vec![
+                call("empty", json!({"action":"write","id":id,"data":""})),
+                call("write", json!({"action":"write","id":id,"data":data})),
+                call("wait", json!({"action":"wait","id":id,"timeout_ms":10000})),
+                call(
+                    "raw",
+                    json!({"action":"read","id":id,"stream":"terminal","limit":65536}),
+                ),
+                call("ack", json!({"action":"acknowledge","id":id})),
+            ],
+            "input",
+        )),
+        Arc::new(ProcessTools::new(&root, owner.clone()).unwrap()),
+    );
+    submit(&input, &session, "input").await.unwrap();
+    let outputs = process_outputs(&session);
+    owner.join_shutdown().await.unwrap();
+    assert_eq!(outputs[1]["bytes_written"], 0, "{}", outputs[1]);
+    assert_eq!(outputs[1]["cancelled"], false, "{}", outputs[1]);
+    assert!(outputs[1].get("error").is_none(), "{}", outputs[1]);
+    assert_eq!(outputs[2]["bytes_written"], data.len(), "{}", outputs[2]);
+    assert_eq!(outputs[2]["cancelled"], false, "{}", outputs[2]);
+    let wait = &outputs[3];
+    assert_eq!(wait["joined"], true, "{wait}");
+    assert_eq!(wait["timed_out"], false, "{wait}");
+    assert_eq!(wait["exit"]["exit_code"], 0, "{wait}");
+    let raw = outputs[4]["text"].as_str().unwrap();
+    assert!(raw.contains("INTERACTIVE_OK"), "{raw:?}");
+    assert_eq!(outputs[5]["acknowledged"], true, "{}", outputs[5]);
+    owner.join_shutdown().await.unwrap();
     session.shutdown().await.unwrap();
     std::fs::remove_dir_all(root).unwrap();
 }

@@ -18,8 +18,9 @@ use tokio_util::sync::CancellationToken;
 use uuid::Uuid;
 
 use super::{
-    Entry, JoinGate, ProcessOwner,
-    driver::{self, InputRequest, ProcessState, StartReceipt, StatusView},
+    Backend, Capture, Entry, JoinGate, ProcessOwner,
+    driver::{self, InputRequest, ProcessState, ResizeRequest, StartReceipt, StatusView},
+    screen::{Dimensions, MAX_ROWS, MAX_SCREEN_PAGE_ROWS},
     unavailable,
 };
 
@@ -52,13 +53,15 @@ impl CodingToolSource for ProcessTools {
             ToolDefinition {
                 spec: ion_ai::ToolSpec {
                     name: "process".into(),
-                    description: "Application-owned pipe-backed native processes. start returns promptly after an actual shell spawn and survives this Turn; it is not a terminal, PTY or human-attached shell, and daemonized/background descendants are not contained. Coding child jobs close and release their own programs before settling; their process handles do not transfer to the parent. Commands run in the captured working directory with host permissions, stdin/stdout/stderr as pipes. Handles are owner UUIDs, never PIDs, and controls only work from the invoking Session and captured cwd in this application. list/inspect observe scoped slots. wait joins the real driver and readers without killing or consuming the slot; timeout is an observation, not a process deadline. read returns bounded raw rolling windows (64 KiB per stream) with monotonic cursors, gaps and observed-EOF completeness; it is not a whole-output artifact. write and eof serialize through a bounded input queue and report actual delivered bytes and partial progress. close requests a process-group stop and joins; acknowledge frees one actually joined retained slot. Unknown, foreign and previous-owner IDs are unavailable and are never restarted or replayed.".into(),
+                    description: "Application-owned native programs, pipe-backed by default or PTY-backed when requested. start returns promptly after an actual shell spawn and survives this Turn; it is not a shell-ready receipt, durable job or human-attached terminal. Commands run in the captured working directory with host permissions. Pipe programs expose separate stdout/stderr streams and line-oriented stdin. PTY programs get a fresh OS session, controlling terminal and foreground process group; stdout/stderr merge into one raw terminal stream and a bounded screen projection with cursor/input-mode metadata. PTY EOF is terminal input interpreted by the line discipline, not eof; write Ctrl-D (0x04) for end-of-file where appropriate. resize changes the owned tty and projection together and fails if the terminal is not live. Automatic cursor/device-status replies are bounded and serialized before model input; clipboard/title effects are not exposed. Daemonized/background descendants are not contained and no input is accepted from a concurrent human writer. Coding child jobs close and release their own programs before settling; handles do not transfer to the parent. Handles are owner UUIDs, never PIDs, and controls only work from the invoking Session and captured cwd in this application. list/inspect observe scoped slots and declare the backend and streams actually present. wait joins the real driver without killing or consuming the slot; timeout is an observation, not a process deadline. read returns bounded raw rolling windows (64 KiB per stream) with monotonic cursors, gaps and observed-EOF completeness; it is not a whole-output artifact. Screen reads are paged projections with source-byte and revision cursors, not replay or durable resurrection. write/eof serialize through a bounded input queue and report actual delivered bytes and partial progress. close requests a process-group stop and joins; acknowledge frees one actually joined retained slot. Unknown, foreign and previous-owner IDs are unavailable and are never restarted or replayed.".into(),
                     input_schema: json!({"type":"object","oneOf":[
-                        {"type":"object","additionalProperties":false,"required":["action","command"],"properties":{"action":{"const":"start"},"command":{"type":"string","minLength":1,"maxLength":65536}}},
+                        {"type":"object","additionalProperties":false,"required":["action","command"],"properties":{"action":{"const":"start"},"command":{"type":"string","minLength":1,"maxLength":65536},"backend":{"enum":["pipe","pty"]},"rows":{"type":"integer","minimum":1,"maximum":200},"columns":{"type":"integer","minimum":1,"maximum":400}}},
                         {"type":"object","additionalProperties":false,"required":["action"],"properties":{"action":{"const":"list"}}},
                         {"type":"object","additionalProperties":false,"required":["action","id"],"properties":{"action":{"const":"inspect"},"id":{"type":"string","format":"uuid"}}},
                         {"type":"object","additionalProperties":false,"required":["action","id"],"properties":{"action":{"const":"wait"},"id":{"type":"string","format":"uuid"},"timeout_ms":{"type":"integer","minimum":1,"maximum":30000}}},
-                        {"type":"object","additionalProperties":false,"required":["action","id"],"properties":{"action":{"const":"read"},"id":{"type":"string","format":"uuid"},"stream":{"enum":["stdout","stderr"]},"offset":{"type":"integer","minimum":0},"limit":{"type":"integer","minimum":1,"maximum":65536},"encoding":{"enum":["utf8","base64"]}}},
+                        {"type":"object","additionalProperties":false,"required":["action","id"],"properties":{"action":{"const":"read"},"id":{"type":"string","format":"uuid"},"stream":{"enum":["stdout","stderr","terminal"]},"offset":{"type":"integer","minimum":0},"limit":{"type":"integer","minimum":1,"maximum":65536},"encoding":{"enum":["utf8","base64"]}}},
+                        {"type":"object","additionalProperties":false,"required":["action","id"],"properties":{"action":{"const":"screen"},"id":{"type":"string","format":"uuid"},"row":{"type":"integer","minimum":0,"maximum":199},"rows":{"type":"integer","minimum":1,"maximum":64}}},
+                        {"type":"object","additionalProperties":false,"required":["action","id","rows","columns"],"properties":{"action":{"const":"resize"},"id":{"type":"string","format":"uuid"},"rows":{"type":"integer","minimum":1,"maximum":200},"columns":{"type":"integer","minimum":1,"maximum":400}}},
                         {"type":"object","additionalProperties":false,"required":["action","id","data"],"properties":{"action":{"const":"write"},"id":{"type":"string","format":"uuid"},"data":{"type":"string","maxLength":65536}}},
                         {"type":"object","additionalProperties":false,"required":["action","id"],"properties":{"action":{"const":"eof"},"id":{"type":"string","format":"uuid"}}},
                         {"type":"object","additionalProperties":false,"required":["action","id"],"properties":{"action":{"const":"close"},"id":{"type":"string","format":"uuid"}}},
@@ -85,7 +88,15 @@ impl ToolExecutor for ProcessTools {
             };
             let stop = invocation.stop().clone();
             match action {
-                Action::Start { command } => self.start(origin, command, stop).await,
+                Action::Start {
+                    command,
+                    backend,
+                    rows,
+                    columns,
+                } => {
+                    self.start(origin, command, backend, rows, columns, stop)
+                        .await
+                }
                 Action::List => self.list(origin).await,
                 Action::Inspect { id } => match self.owner.scoped(origin, &self.cwd, id).await {
                     Ok(entry) => success(entry.state, entry.gate, json!({})),
@@ -112,12 +123,30 @@ impl ToolExecutor for ProcessTools {
                     self.read(
                         origin,
                         id,
-                        stream.unwrap_or(Stream::Stdout),
+                        stream,
                         offset.unwrap_or(0),
                         limit as usize,
                         encoding.unwrap_or(Encoding::Utf8),
                     )
                     .await
+                }
+                Action::Screen { id, row, rows } => {
+                    let row = row.unwrap_or(0);
+                    let rows = rows.unwrap_or(24);
+                    if row >= MAX_ROWS {
+                        return error(format!("screen row must be 0..{}", MAX_ROWS - 1));
+                    }
+                    if rows == 0 || rows > MAX_SCREEN_PAGE_ROWS {
+                        return error(format!("screen rows must be 1..={MAX_SCREEN_PAGE_ROWS}"));
+                    }
+                    self.screen(origin, id, row, rows).await
+                }
+                Action::Resize { id, rows, columns } => {
+                    let dimensions = match Dimensions::new(rows, columns) {
+                        Ok(dimensions) => dimensions,
+                        Err(failure) => return error(failure),
+                    };
+                    self.resize(origin, id, dimensions, stop).await
                 }
                 Action::Write { id, data } => {
                     if data.len() > MAX_INPUT_BYTES {
@@ -125,7 +154,7 @@ impl ToolExecutor for ProcessTools {
                     }
                     self.input(origin, id, Some(data.into_bytes()), stop).await
                 }
-                Action::Eof { id } => self.input(origin, id, None, stop).await,
+                Action::Eof { id } => self.eof(origin, id, stop).await,
                 Action::Close { id } => self.close(origin, id, stop).await,
                 Action::Acknowledge { id } => self.acknowledge(origin, id).await,
             }
@@ -138,8 +167,27 @@ impl ProcessTools {
         &self,
         origin: ToolOrigin,
         command: String,
+        backend: Option<Backend>,
+        rows: Option<u16>,
+        columns: Option<u16>,
         stop: CancellationToken,
     ) -> CodingToolOutput {
+        let backend = backend.unwrap_or(Backend::Pipe);
+        let dimensions = match backend {
+            Backend::Pipe => {
+                if rows.is_some() || columns.is_some() {
+                    return error("pipe backend does not accept terminal dimensions");
+                }
+                None
+            }
+            Backend::Pty => match Dimensions::new(
+                rows.unwrap_or(super::screen::DEFAULT_ROWS),
+                columns.unwrap_or(super::screen::DEFAULT_COLUMNS),
+            ) {
+                Ok(dimensions) => Some(dimensions),
+                Err(failure) => return error(failure),
+            },
+        };
         if command.is_empty() || command.len() > MAX_COMMAND_BYTES || command.contains('\0') {
             return error("invalid process command");
         }
@@ -147,7 +195,13 @@ impl ProcessTools {
             return error("cancelled before process start");
         }
         let id = Uuid::now_v7();
-        let state = Arc::new(ProcessState::new(id, self.cwd.clone(), command));
+        let state = Arc::new(ProcessState::new(
+            id,
+            self.cwd.clone(),
+            command,
+            backend,
+            dimensions,
+        ));
         let (go_tx, go_rx) = oneshot::channel();
         let (receipt_tx, receipt_rx) = oneshot::channel();
         let gate = {
@@ -241,7 +295,7 @@ impl ProcessTools {
                 .as_str()
                 .and_then(|id| Uuid::parse_str(id).ok())
         });
-        success_value(json!({"backend":"pipe","processes":processes}))
+        success_value(json!({"processes":processes}))
     }
 
     async fn wait(
@@ -289,7 +343,7 @@ impl ProcessTools {
         &self,
         origin: ToolOrigin,
         id: Uuid,
-        stream: Stream,
+        stream: Option<Stream>,
         offset: u64,
         limit: usize,
         encoding: Encoding,
@@ -298,9 +352,20 @@ impl ProcessTools {
             Ok(entry) => entry,
             Err(failure) => return error(failure),
         };
-        let ring = match stream {
-            Stream::Stdout => &entry.state.stdout,
-            Stream::Stderr => &entry.state.stderr,
+        let stream = stream.unwrap_or(match entry.state.backend {
+            Backend::Pipe => Stream::Stdout,
+            Backend::Pty => Stream::Terminal,
+        });
+        let (ring, stream_name) = match (&entry.state.capture, stream) {
+            (Capture::Pipe { stdout, .. }, Stream::Stdout) => (stdout, "stdout"),
+            (Capture::Pipe { stderr, .. }, Stream::Stderr) => (stderr, "stderr"),
+            (Capture::Pty { raw, .. }, Stream::Terminal) => (raw, "terminal"),
+            (Capture::Pipe { .. }, Stream::Terminal) => {
+                return error("terminal stream is only available for PTY programs");
+            }
+            (Capture::Pty { .. }, Stream::Stdout | Stream::Stderr) => {
+                return error("PTY output is a merged terminal stream; use stream 'terminal'");
+            }
         };
         let window = match ring.read(offset, limit, MAX_READ_BYTES) {
             Ok(window) => window,
@@ -309,7 +374,7 @@ impl ProcessTools {
         let meta = ring.meta();
         let mut output = json!({
             "id": id,
-            "stream": match stream { Stream::Stdout => "stdout", Stream::Stderr => "stderr" },
+            "stream": stream_name,
             "first_available": window.first_available,
             "offset": window.offset,
             "next_offset": window.next_offset,
@@ -333,6 +398,121 @@ impl ProcessTools {
             }
         }
         success_value(output)
+    }
+
+    async fn screen(&self, origin: ToolOrigin, id: Uuid, row: u16, rows: u16) -> CodingToolOutput {
+        let entry = match self.owner.scoped(origin, &self.cwd, id).await {
+            Ok(entry) => entry,
+            Err(failure) => return error(failure),
+        };
+        let Capture::Pty { screen, .. } = &entry.state.capture else {
+            return error("screen projection is only available for PTY programs");
+        };
+        let page = match screen.page(row, rows) {
+            Ok(page) => page,
+            Err(failure) => return error(failure),
+        };
+        let meta = page.meta;
+        success_value(json!({
+            "id": id,
+            "backend": "pty",
+            "start_row": page.start_row,
+            "next_row": page.next_row,
+            "visible_rows": page.visible_rows,
+            "text": page.text,
+            "revision": meta.revision,
+            "source_bytes": meta.source_bytes,
+            "rows": meta.rows,
+            "columns": meta.columns,
+            "cursor_base": 0,
+            "cursor_row": meta.cursor_row,
+            "cursor_column": meta.cursor_column,
+            "cursor_visible": meta.cursor_visible,
+            "alternate_screen": meta.alternate_screen,
+            "application_cursor": meta.application_cursor,
+            "application_keypad": meta.application_keypad,
+            "bracketed_paste": meta.bracketed_paste,
+            "mouse_protocol_mode": meta.mouse_protocol_mode,
+            "mouse_protocol_encoding": meta.mouse_protocol_encoding,
+        }))
+    }
+
+    async fn resize(
+        &self,
+        origin: ToolOrigin,
+        id: Uuid,
+        dimensions: Dimensions,
+        stop: CancellationToken,
+    ) -> CodingToolOutput {
+        let entry = match self.owner.scoped(origin, &self.cwd, id).await {
+            Ok(entry) => entry,
+            Err(failure) => return error(failure),
+        };
+        if entry.state.backend != Backend::Pty {
+            return error("terminal resize is only available for PTY programs");
+        }
+        let Some(sender) = entry.state.resize() else {
+            return error("process terminal is not live");
+        };
+        let (reply, reply_rx) = oneshot::channel();
+        let request = ResizeRequest { dimensions, reply };
+        tokio::select! {
+            biased;
+            () = stop.cancelled() => {
+                return error_value(json!({
+                    "id": id, "cancelled": true, "enqueued": false,
+                    "error": "resize request cancelled before enqueue",
+                }));
+            }
+            result = sender.send(request) => {
+                if result.is_err() {
+                    return error("process terminal is not live");
+                }
+            }
+        }
+        let result = tokio::select! {
+            biased;
+            result = reply_rx => result,
+            () = stop.cancelled() => {
+                return error_value(json!({
+                    "id": id, "cancelled": true, "enqueued": true,
+                    "delivery_unknown": true,
+                    "error": "resize request cancelled after enqueue; result is unknown",
+                }));
+            }
+        };
+        match result {
+            Ok(Ok(())) => success(
+                entry.state,
+                entry.gate,
+                json!({
+                    "resized": true,
+                    "rows": dimensions.rows,
+                    "columns": dimensions.columns,
+                }),
+            ),
+            Ok(Err(failure)) => error_value(json!({
+                "id": id, "resized": false, "error": failure,
+            })),
+            Err(_) => error_value(json!({
+                "id": id, "resized": Value::Null, "delivery_unknown": true,
+                "error": "terminal driver ended without acknowledging resize",
+            })),
+        }
+    }
+
+    async fn eof(&self, origin: ToolOrigin, id: Uuid, stop: CancellationToken) -> CodingToolOutput {
+        let entry = match self.owner.scoped(origin, &self.cwd, id).await {
+            Ok(entry) => entry,
+            Err(failure) => return error(failure),
+        };
+        match entry.state.backend {
+            Backend::Pipe => self.input(origin, id, None, stop).await,
+            Backend::Pty => error(
+                "PTY EOF is terminal input interpreted by the line discipline, not a half-close; \
+                 write byte 0x04 (Ctrl-D) instead",
+            ),
+        }
     }
 
     async fn input(
@@ -453,27 +633,54 @@ impl ProcessTools {
 fn snapshot(state: &ProcessState, gate: &JoinGate) -> Value {
     let status = state.status();
     let joined = status.joined || gate.is_joined();
-    let stdout = state.stdout.meta();
-    let stderr = state.stderr.meta();
-    json!({
+    let mut snapshot = json!({
         "id": state.id,
-        "backend": "pipe",
+        "backend": match state.backend { Backend::Pipe => "pipe", Backend::Pty => "pty" },
         "joined": joined,
         "started": status.started,
         "running": status.started && status.exit.is_none() && !joined,
         "start_error": status.start_error,
         "exit": exit_json(&status),
         "supervision_error": status.supervision_error,
-        "stdout": {
-            "total_bytes": stdout.total_bytes,
-            "complete": stdout.complete,
-            "capture_error": stdout.capture_error,
-        },
-        "stderr": {
-            "total_bytes": stderr.total_bytes,
-            "complete": stderr.complete,
-            "capture_error": stderr.capture_error,
-        },
+    });
+    match &state.capture {
+        Capture::Pipe { stdout, stderr } => {
+            snapshot["stdout"] = stream_meta(stdout);
+            snapshot["stderr"] = stream_meta(stderr);
+        }
+        Capture::Pty { raw, screen } => {
+            snapshot["terminal"] = stream_meta(raw);
+            snapshot["screen"] = match screen.meta() {
+                Ok(meta) => json!({
+                    "available": true,
+                    "revision": meta.revision,
+                    "source_bytes": meta.source_bytes,
+                    "rows": meta.rows,
+                    "columns": meta.columns,
+                    "cursor_base": 0,
+                    "cursor_row": meta.cursor_row,
+                    "cursor_column": meta.cursor_column,
+                    "cursor_visible": meta.cursor_visible,
+                    "alternate_screen": meta.alternate_screen,
+                    "application_cursor": meta.application_cursor,
+                    "application_keypad": meta.application_keypad,
+                    "bracketed_paste": meta.bracketed_paste,
+                    "mouse_protocol_mode": meta.mouse_protocol_mode,
+                    "mouse_protocol_encoding": meta.mouse_protocol_encoding,
+                }),
+                Err(reason) => json!({"available": false, "reason": reason}),
+            };
+        }
+    }
+    snapshot
+}
+
+fn stream_meta(ring: &super::ring::Ring) -> Value {
+    let meta = ring.meta();
+    json!({
+        "total_bytes": meta.total_bytes,
+        "complete": meta.complete,
+        "capture_error": meta.capture_error,
     })
 }
 
@@ -536,6 +743,12 @@ fn cancellation_output(
 enum Action {
     Start {
         command: String,
+        #[serde(default, deserialize_with = "present_input")]
+        backend: Option<Backend>,
+        #[serde(default, deserialize_with = "present_input")]
+        rows: Option<u16>,
+        #[serde(default, deserialize_with = "present_input")]
+        columns: Option<u16>,
     },
     List,
     Inspect {
@@ -561,6 +774,18 @@ enum Action {
         id: Uuid,
         data: String,
     },
+    Screen {
+        id: Uuid,
+        #[serde(default, deserialize_with = "present_input")]
+        row: Option<u16>,
+        #[serde(default, deserialize_with = "present_input")]
+        rows: Option<u16>,
+    },
+    Resize {
+        id: Uuid,
+        rows: u16,
+        columns: u16,
+    },
     Eof {
         id: Uuid,
     },
@@ -577,6 +802,7 @@ enum Action {
 enum Stream {
     Stdout,
     Stderr,
+    Terminal,
 }
 
 #[derive(Clone, Copy, Deserialize)]

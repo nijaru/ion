@@ -3,6 +3,7 @@ import json
 import os
 import queue
 import select
+import shlex
 import signal
 import sqlite3
 import subprocess
@@ -10,6 +11,7 @@ import sys
 import tempfile
 import threading
 import time
+from contextlib import closing
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
@@ -35,7 +37,7 @@ if len(sys.argv) > 1 and sys.argv[1] == "mcp":
 
 
 def facts(path):
-    with sqlite3.connect(f"file:{path}?mode=ro", uri=True) as db:
+    with closing(sqlite3.connect(f"file:{path}?mode=ro", uri=True)) as db:
         header = json.loads(db.execute("SELECT header FROM session WHERE id=1").fetchone()[0])
         entries = [json.loads(row[0]) for row in db.execute("SELECT body FROM entries ORDER BY seq")]
     return header, entries
@@ -140,6 +142,40 @@ with tempfile.TemporaryDirectory(prefix="ion-coding-subagent-") as temporary:
     Path(env["HOME"]).mkdir()
     requests, failures, changed_route = [], [], set()
     managed = {}
+    # This is an actual raw-mode terminal client, not a prerecorded tool result.
+    # It requires a controlling tty, asks a cursor query, observes SIGWINCH and
+    # exits only after receiving a literal key through the managed master.
+    terminal_program = workspace / "terminal.py"
+    terminal_program.write_text('''import fcntl, json, os, select, signal, struct, termios, tty
+from pathlib import Path
+assert all(os.isatty(fd) for fd in (0, 1, 2))
+assert os.environ['TERM'] == 'xterm-256color'
+assert not any(key in os.environ for key in ('TERM_PROGRAM', 'KITTY_WINDOW_ID', 'REX_SESSION', 'SSH_TTY'))
+assert os.environ['SSH_AUTH_SOCK'] == 'retained-auth-socket'
+with open('/dev/tty', 'rb') as controlling:
+    assert os.tcgetpgrp(controlling.fileno()) == os.getpgrp()
+Path('PTY.pid').write_text(str(os.getpid()))
+def dimensions():
+    return list(struct.unpack('HHHH', fcntl.ioctl(0, termios.TIOCGWINSZ, b'\\0' * 8))[:2])
+assert dimensions() == [24, 80], dimensions()
+def resized(*_):
+    os.write(1, b'\\x1b[HRESIZED')
+    Path('PTY.resize.tmp').write_text(json.dumps(dimensions()))
+    Path('PTY.resize.tmp').replace('PTY.resize')
+signal.signal(signal.SIGWINCH, resized)
+tty.setraw(0)
+os.write(1, b'\\x1b[?1049h\\x1b[2J\\x1b[3;5HREADY\\x1b[6n')
+response = b''
+while not response.endswith(b'R'):
+    assert select.select([0], [], [], 5)[0], 'terminal did not answer cursor query'
+    response += os.read(0, 64)
+assert response == b'\\x1b[3;10R', response
+Path('PTY.query').write_bytes(response)
+Path('PTY.ready').touch()
+assert os.read(0, 1) == b'q'
+os.write(1, b'\\x1b[?1049lTTY_DONE\\n')
+os.write(2, b'MERGED_STDERR\\n')
+''')
     processes, rpcs, pids = [], [], []
 
     def histories():
@@ -171,7 +207,68 @@ with tempfile.TemporaryDirectory(prefix="ion-coding-subagent-") as temporary:
                 effort = {"PARENT_DIRECT":"high", "CHILD_DIRECT":"high", "PARENT_COMPOSED":"low", "CHILD_COMPOSED":"low", "PARENT_CANCEL":"medium", "CHILD_CANCEL":"medium", "PARENT_FORK":"high", "CHILD_FORK":"high"}.get(user)
                 if effort:
                     assert body.get("reasoning_effort") == effort, body
-                if user in ("PROCESS_HEADLESS", "PROCESS_HEADLESS_BLOCKED"):
+                if user == "PROCESS_PTY":
+                    assert "process" in tools
+                    if fresh:
+                        managed["pty_step"] = 0
+                        delta = call("process", {"action":"start", "backend":"pty", "command":shlex.join([sys.executable, "-u", str(terminal_program)]), "rows":24, "columns":80})
+                    else:
+                        results = []
+                        for message in reversed(body["messages"]):
+                            if message["role"] != "tool":
+                                break
+                            results.append(json.loads(message["content"]))
+                        results.reverse()
+                        step = managed["pty_step"]
+                        if step == 0:
+                            started = results[0]["result"]
+                            assert not results[0]["is_error"] and started["backend"] == "pty", results
+                            managed["pty"] = started["id"]
+                            until(lambda: (workspace / "PTY.ready").exists(), "actual terminal client did not receive its cursor reply")
+                            assert (workspace / "PTY.query").read_bytes() == b"\x1b[3;10R"
+                            actions = [{"action":"screen"}, {"action":"eof"}, {"action":"resize", "rows":12, "columns":40}]
+                        elif step == 1:
+                            screen = results[0]["result"]
+                            assert not results[0]["is_error"] and "READY" in json.dumps(screen), results
+                            assert results[1]["is_error"], "PTY EOF must not half-close or pretend to close a pipe"
+                            assert not results[2]["is_error"], results
+                            until(lambda: (workspace / "PTY.resize").exists(), "kernel terminal resize did not reach the client")
+                            assert json.loads((workspace / "PTY.resize").read_text()) == [12, 40]
+                            managed["pty_screen_deadline"] = time.monotonic() + 5
+                            actions = [{"action":"screen"}]
+                        else:
+                            assert not results[0]["is_error"], results
+                            if "RESIZED" in json.dumps(results[0]["result"]):
+                                actions = None
+                            else:
+                                assert time.monotonic() < managed["pty_screen_deadline"], ("terminal output never reached the screen projection", results)
+                                actions = [{"action":"screen"}]
+                        managed["pty_step"] += 1
+                        if actions:
+                            calls = []
+                            for index, action in enumerate(actions):
+                                item = call("process", {**action, "id":managed["pty"]})["tool_calls"][0]
+                                item.update(index=index, id=f"pty-{step}-{index}")
+                                calls.append(item)
+                            delta = {"tool_calls":calls}
+                        else:
+                            delta = {"content":"PTY_RUNNING"}
+                elif user == "PROCESS_PTY_FINISH":
+                    if fresh:
+                        first = call("process", {"action":"write", "id":managed["pty"], "data":"q"})["tool_calls"][0]
+                        second = call("process", {"action":"wait", "id":managed["pty"], "timeout_ms":3000})["tool_calls"][0]
+                        second.update(index=1, id="pty-wait")
+                        delta = {"tool_calls":[first, second]}
+                    elif body["messages"][-1].get("tool_call_id") == "pty-wait":
+                        result = json.loads(body["messages"][-1]["content"])
+                        assert not result["is_error"] and result["result"]["joined"] and result["result"]["exit"]["exit_code"] == 0, result
+                        delta = call("process", {"action":"read", "id":managed["pty"], "stream":"terminal"})
+                    else:
+                        result = json.loads(body["messages"][-1]["content"])
+                        assert not result["is_error"] and result["result"]["complete"], result
+                        assert "TTY_DONE" in result["result"]["text"] and "MERGED_STDERR" in result["result"]["text"], result
+                        delta = {"content":"PTY_FINISHED"}
+                elif user in ("PROCESS_HEADLESS", "PROCESS_HEADLESS_BLOCKED"):
                     assert "process" in tools
                     if fresh:
                         delta = call("process", {"action":"start", "command":f"printf '%s' $$ > {user}.pid; touch {user}.ready; exec sleep 30"})
@@ -248,7 +345,7 @@ with tempfile.TemporaryDirectory(prefix="ion-coding-subagent-") as temporary:
                     assert ("SEEDED_CONTEXT" in json.dumps(body)) == (user == "CHILD_FORK"), "incorrect fork prefix"
                     if fresh:
                         if user == "CHILD_PROCESS_RESOURCE":
-                            delta = call("process", {"action":"start", "command":"printf '%s' $$ > CHILD_PROCESS_RESOURCE.pid; touch CHILD_PROCESS_RESOURCE.ready; exec sleep 30"})
+                            delta = call("process", {"action":"start", "backend":"pty", "command":"printf '%s' $$ > CHILD_PROCESS_RESOURCE.pid; touch CHILD_PROCESS_RESOURCE.ready; exec sleep 30"})
                         elif user == "CHILD_CANCEL":
                             delta = call("exec", {"command":"printf '%s' $$ > CHILD_CANCEL.pid; touch CHILD_CANCEL.ready; exec sleep 30", "timeout_ms":120000})
                         elif user.startswith("CHILD_BG_"):
@@ -336,6 +433,23 @@ with tempfile.TemporaryDirectory(prefix="ion-coding-subagent-") as temporary:
         assert rpc.settled(2, "completed")["text"] == "PROCESS_SCOPE_OK"
         error = rpc.close()
         assert rpc.process.returncode == 0 and dead(pid), error
+        # Actual controlling-terminal/query/resize behavior through the same RPC
+        # and Core tool entry point. A completed Turn does not kill its terminal.
+        # Outer-terminal identity must not leak, while normal host auth remains.
+        terminal_env = {**env, "TERM_PROGRAM":"outer", "KITTY_WINDOW_ID":"123",
+                        "REX_SESSION":"outer", "SSH_TTY":"/dev/outer",
+                        "SSH_AUTH_SOCK":"retained-auth-socket"}
+        rpc = Rpc(terminal_env, workspace)
+        rpcs.append(rpc)
+        rpc.send("prompt", message="PROCESS_PTY")
+        assert rpc.settled(1, "completed")["text"] == "PTY_RUNNING"
+        pid = marker_pid("PTY")
+        assert not dead(pid)
+        rpc.send("prompt", message="PROCESS_PTY_FINISH")
+        assert rpc.settled(2, "completed")["text"] == "PTY_FINISHED"
+        assert dead(pid), "terminal completion was reported before the direct child joined"
+        error = rpc.close()
+        assert rpc.process.returncode == 0, error
         for composed in (False, True):
             configure(env, endpoint)
             before = {path for path, _header, _entries in histories()}

@@ -332,9 +332,27 @@ Separate process state, input ownership, raw capture and presentation. Pipe-back
 programs support background servers and line-oriented stdin, not terminal control
 sequences or full-screen interaction. PTY programs require controlling-terminal,
 resize and derived screen semantics; human takeover additionally requires exclusive
-write custody. Those are extensions of the same process ownership/control contract,
-not a second runtime or a reason to claim pipes are terminals. Shell startup and
-environment capture are independent from process lifetime.
+write custody. These extend the same process owner rather than introduce another
+runtime. Shell startup and environment capture are independent from process lifetime.
+
+PTY start explicitly selects a terminal backend with initial dimensions; ordinary
+pipe execution remains available. The child gets a fresh OS session, controlling
+terminal and foreground process group. Terminal stdout/stderr merge into one raw
+stream, not two fictitious pipes. PTY EOF is terminal input interpreted by its line
+discipline, not a half-close of the master. Closing and waiting retain the same
+custody rules as pipe programs, including startup cancellation and child-scope cleanup.
+
+A bounded live terminal parser consumes every output byte before raw eviction.
+Screen reads are paged projections with a source-byte cursor, revision, dimensions,
+visible cursor and input-mode metadata; they are not replayed tool output or durable
+terminal resurrection. Resize changes the owned terminal and its projection together;
+failed OS resize must not publish successful dimensions. Required terminal protocol
+replies are bounded, serialized with input and cannot access clipboard, host display
+or arbitrary services. Unsupported terminal behavior is not silently advertised as
+complete emulator support. A failed or over-limit projection becomes explicitly
+unavailable while raw capture and process custody continue. Model-only terminal
+control precedes human attachment:
+there is no concurrent human writer until a real caller owns an exclusive input lease.
 
 Bound live slots, retained results, pending input and raw capture. Reads use explicit
 byte cursors and report evicted gaps, decoding loss and incomplete capture. Exit

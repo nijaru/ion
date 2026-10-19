@@ -1,11 +1,16 @@
-//! Application-lifetime ownership of pipe-backed native processes.
+//! Application-lifetime ownership of managed native programs.
 //!
+//! Pipe-backed programs remain the default. PTY-backed programs extend the
+//! same owner, scoping, receipt, stop and join contract with a fresh session,
+//! controlling terminal, merged raw output and a derived bounded screen.
 //! Controls are scoped by Core invocation provenance and the canonical working
 //! directory captured when the tools were composed. Handles are owner-issued
 //! UUIDs, never PIDs. Startup is registered before spawn; explicit close and
 //! application shutdown request a process-group stop and join the real driver.
 mod driver;
+mod pty;
 mod ring;
+mod screen;
 mod tools;
 pub use tools::ProcessTools;
 #[cfg(test)]
@@ -24,6 +29,7 @@ use tokio_util::sync::CancellationToken;
 use uuid::Uuid;
 
 use driver::ProcessState;
+use ring::Ring;
 
 /// One application-lifetime live supervisor. It is not a daemon, durable job
 /// store or process-resurrection mechanism.
@@ -31,6 +37,24 @@ pub struct ProcessOwner {
     capacity: usize,
     stop: CancellationToken,
     entries: Mutex<BTreeMap<Uuid, Entry>>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub(super) enum Backend {
+    Pipe,
+    Pty,
+}
+
+pub(in crate::process) enum Capture {
+    Pipe {
+        stdout: Arc<Ring>,
+        stderr: Arc<Ring>,
+    },
+    Pty {
+        raw: Arc<Ring>,
+        screen: Arc<screen::Terminal>,
+    },
 }
 
 #[derive(Clone)]

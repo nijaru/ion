@@ -1,5 +1,6 @@
-//! One pipe-backed native process supervisor. It owns the direct child, its
-//! process group, bounded input queue and output readers until all are joined.
+//! One native process supervisor. It owns the direct child, its process group,
+//! bounded input queue and output readers until all are joined. Pipe and PTY
+//! programs share the owner, start receipt, status and join contract.
 use std::{
     path::PathBuf,
     process::{ExitStatus, Stdio},
@@ -14,10 +15,14 @@ use tokio::{
 };
 use tokio_util::sync::CancellationToken;
 
-use super::ring::Ring;
+use super::{
+    Backend, Capture,
+    ring::Ring,
+    screen::{Dimensions, Terminal},
+};
 use crate::local_tools::command;
 
-const INPUT_QUEUE: usize = 8;
+pub(super) const INPUT_QUEUE: usize = 8;
 
 pub(super) enum StartReceipt {
     Started,
@@ -45,11 +50,12 @@ pub(super) struct ProcessState {
     pub id: uuid::Uuid,
     pub cwd: PathBuf,
     pub command: String,
+    pub backend: Backend,
     pub stop: CancellationToken,
     pub input_stop: CancellationToken,
-    pub stdout: Arc<Ring>,
-    pub stderr: Arc<Ring>,
+    pub capture: Capture,
     input: StdMutex<Option<mpsc::Sender<InputRequest>>>,
+    resize: StdMutex<Option<mpsc::Sender<ResizeRequest>>>,
     status: StdMutex<Status>,
 }
 
@@ -66,6 +72,11 @@ pub(super) struct InputAck {
     pub cancelled: bool,
 }
 
+pub(super) struct ResizeRequest {
+    pub dimensions: Dimensions,
+    pub reply: oneshot::Sender<Result<(), String>>,
+}
+
 pub(super) struct StatusView {
     pub started: bool,
     pub start_error: Option<String>,
@@ -75,16 +86,35 @@ pub(super) struct StatusView {
 }
 
 impl ProcessState {
-    pub(super) fn new(id: uuid::Uuid, cwd: PathBuf, command: String) -> Self {
+    pub(super) fn new(
+        id: uuid::Uuid,
+        cwd: PathBuf,
+        command: String,
+        backend: Backend,
+        dimensions: Option<Dimensions>,
+    ) -> Self {
+        let capture = match backend {
+            Backend::Pipe => Capture::Pipe {
+                stdout: Arc::new(Ring::default()),
+                stderr: Arc::new(Ring::default()),
+            },
+            Backend::Pty => Capture::Pty {
+                raw: Arc::new(Ring::default()),
+                screen: Arc::new(Terminal::new(
+                    dimensions.expect("PTY start carries validated dimensions"),
+                )),
+            },
+        };
         Self {
             id,
             cwd,
             command,
+            backend,
             stop: CancellationToken::new(),
             input_stop: CancellationToken::new(),
-            stdout: Arc::new(Ring::default()),
-            stderr: Arc::new(Ring::default()),
+            capture,
             input: StdMutex::new(None),
+            resize: StdMutex::new(None),
             status: StdMutex::new(Status::default()),
         }
     }
@@ -94,6 +124,15 @@ impl ProcessState {
             return None;
         }
         self.input.lock().ok().and_then(|input| input.clone())
+    }
+
+    pub(super) fn resize(&self) -> Option<mpsc::Sender<ResizeRequest>> {
+        let status = self.lock_status();
+        if !status.started || status.exit.is_some() || status.joined {
+            return None;
+        }
+        drop(status);
+        self.resize.lock().ok().and_then(|resize| resize.clone())
     }
 
     pub(super) fn status(&self) -> StatusView {
@@ -125,27 +164,39 @@ impl ProcessState {
         }
     }
 
-    fn set_start_error(&self, error: impl Into<String>) {
+    pub(super) fn set_start_error(&self, error: impl Into<String>) {
         self.lock_status().start_error = Some(error.into());
     }
 
-    fn started(&self) {
+    pub(super) fn started(&self) {
         self.lock_status().started = true;
     }
 
-    fn set_input(&self, sender: mpsc::Sender<InputRequest>) {
+    pub(super) fn set_input(&self, sender: mpsc::Sender<InputRequest>) {
         if let Ok(mut input) = self.input.lock() {
             *input = Some(sender);
         }
     }
 
-    fn clear_input(&self) {
+    pub(super) fn clear_input(&self) {
         if let Ok(mut input) = self.input.lock() {
             *input = None;
         }
     }
 
-    fn set_exit(&self, exit: Exit) {
+    pub(super) fn set_resize(&self, sender: mpsc::Sender<ResizeRequest>) {
+        if let Ok(mut resize) = self.resize.lock() {
+            *resize = Some(sender);
+        }
+    }
+
+    pub(super) fn clear_resize(&self) {
+        if let Ok(mut resize) = self.resize.lock() {
+            *resize = None;
+        }
+    }
+
+    pub(super) fn set_exit(&self, exit: Exit) {
         self.lock_status().exit = Some(exit);
     }
 }
@@ -169,6 +220,20 @@ pub(super) async fn run(
         return Ok(());
     }
 
+    match state.backend {
+        Backend::Pipe => run_pipe(state, receipt, root_stop).await,
+        Backend::Pty => super::pty::run(state, receipt, root_stop).await,
+    }
+}
+
+async fn run_pipe(
+    state: Arc<ProcessState>,
+    receipt: oneshot::Sender<StartReceipt>,
+    root_stop: CancellationToken,
+) -> Result<(), String> {
+    let Capture::Pipe { stdout, stderr } = &state.capture else {
+        unreachable!("pipe driver owns a pipe capture");
+    };
     let mut command = Command::new(command::shell_program());
     command
         .arg("-c")
@@ -189,56 +254,25 @@ pub(super) async fn run(
             return Ok(());
         }
     };
-    let pid = child
-        .id()
-        .and_then(|id| i32::try_from(id).ok())
-        .and_then(rustix::process::Pid::from_raw);
     state.started();
 
-    let stdout = child.stdout.take().expect("piped stdout");
-    let stderr = child.stderr.take().expect("piped stderr");
+    let stdout_pipe = child.stdout.take().expect("piped stdout");
+    let stderr_pipe = child.stderr.take().expect("piped stderr");
     let stdin = child.stdin.take().expect("piped stdin");
     let reader_exit = CancellationToken::new();
     let (input_tx, input_rx) = mpsc::channel(INPUT_QUEUE);
     state.set_input(input_tx);
     let _ = receipt.send(StartReceipt::Started);
 
-    let supervision = async {
-        let status = tokio::select! {
-            biased;
-            status = child.wait() => Some(status),
-            () = state.stop.cancelled() => None,
-            () = root_stop.cancelled() => None,
-        };
-        match status {
-            Some(Ok(status)) => state.set_exit(status_exit(status)),
-            Some(Err(error)) => state.set_exit(Exit {
-                exit_code: None,
-                signal: None,
-                wait_error: Some(format!(
-                    "process started, but direct-child exit is unknown: {error}"
-                )),
-            }),
-            None => match command::stop_child(&mut child, pid).await {
-                Ok(status) => state.set_exit(status_exit(status)),
-                Err(error) => state.set_exit(Exit {
-                    exit_code: None,
-                    signal: None,
-                    wait_error: Some(format!("process stop failed: {error}")),
-                }),
-            },
-        }
-        state.input_stop.cancel();
-        reader_exit.cancel();
-    };
+    let supervision = supervise(&state, &mut child, &root_stop, &reader_exit);
     // These are concurrent futures inside the one retained driver, not detached
     // tasks. A panic drops every pipe and pending acknowledgement together. Read
     // through graceful stop and then a bounded drain, rather than dropping the
     // shutdown handler's final output as soon as stop is requested.
     let ((), _, _, ()) = tokio::join!(
         supervision,
-        read_stream(stdout, state.stdout.clone(), reader_exit.clone()),
-        read_stream(stderr, state.stderr.clone(), reader_exit.clone()),
+        read_stream(stdout_pipe, stdout.clone(), reader_exit.clone()),
+        read_stream(stderr_pipe, stderr.clone(), reader_exit.clone()),
         write_input(stdin, input_rx, state.input_stop.clone()),
     );
     state.clear_input();
@@ -246,7 +280,7 @@ pub(super) async fn run(
     if let Some(error) = state.status().exit.and_then(|exit| exit.wait_error) {
         failures.push(error);
     }
-    for (name, capture) in [("stdout", &state.stdout), ("stderr", &state.stderr)] {
+    for (name, capture) in [("stdout", stdout), ("stderr", stderr)] {
         if let Some(error) = capture.meta().capture_error {
             failures.push(format!("{name} capture failed: {error}"));
         }
@@ -258,7 +292,51 @@ pub(super) async fn run(
     }
 }
 
-fn status_exit(status: ExitStatus) -> Exit {
+/// Both backends use one child-lifetime policy. Stop closes input before
+/// signalling; output keeps draining concurrently until the actual child wait
+/// settles. Never signal a group after its owned child is known reaped.
+pub(super) async fn supervise(
+    state: &ProcessState,
+    child: &mut tokio::process::Child,
+    root_stop: &CancellationToken,
+    reader_exit: &CancellationToken,
+) {
+    let pid = child
+        .id()
+        .and_then(|id| i32::try_from(id).ok())
+        .and_then(rustix::process::Pid::from_raw);
+    let status = tokio::select! {
+        biased;
+        status = child.wait() => Some(status),
+        () = state.stop.cancelled() => None,
+        () = root_stop.cancelled() => None,
+    };
+    match status {
+        Some(Ok(status)) => state.set_exit(status_exit(status)),
+        Some(Err(error)) => state.set_exit(Exit {
+            exit_code: None,
+            signal: None,
+            wait_error: Some(format!(
+                "process started, but direct-child exit is unknown: {error}"
+            )),
+        }),
+        None => {
+            state.input_stop.cancel();
+            match command::stop_child(child, pid).await {
+                Ok(status) => state.set_exit(status_exit(status)),
+                Err(error) => state.set_exit(Exit {
+                    exit_code: None,
+                    signal: None,
+                    wait_error: Some(format!("process stop failed: {error}")),
+                }),
+            }
+        }
+    }
+    state.input_stop.cancel();
+    reader_exit.cancel();
+}
+
+pub(super) fn status_exit(status: ExitStatus) -> Exit {
     use std::os::unix::process::ExitStatusExt;
     Exit {
         exit_code: status.code(),
