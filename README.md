@@ -77,7 +77,9 @@ OS sandboxes or credential boundaries: user `!` shell commands and host-side
 application effects remain separate. A managed child inherits the initiating
 application's selection. `tool_search` is added only when the selection allows it
 and selected deferred tools need discovery. `--read-only` cannot be combined with
-`--tools` or `--exclude-tools`.
+`--tools` or `--exclude-tools`. Terminal coding also includes
+`ask_user_question` when its question responder is configured; headless and RPC
+coding do not declare that tool.
 
 `--cwd PATH` chooses a working directory. By default, a run starts a new
 session; `--continue` reopens the most recently active one in that directory.
@@ -218,9 +220,11 @@ returns a draft without starting an operation restores the retained outcome
 An observed failed shell command reports `error`; cancellation reports `idle`.
 `working` is not re-sent as a heartbeat. The sequence is emitted only by the interactive terminal's physical output owner,
 never by headless, RPC or redirected output. Reports omit optional task messages,
-titles and percentages. Ion currently has no approval/question interaction, so it
-does not invent corresponding blocked states. Feature detection is optional in
-the protocol; Ion sends reports without adding a startup query.
+titles and percentages. A displayed question reports `blocked` with
+`kind=question`, without its text; closing the dialog restores the underlying
+operation/outcome status. Per-call approval is not implemented, so Ion does not
+invent an approval state. Feature detection is optional in the protocol; Ion
+sends reports without adding a startup query.
 Fullscreen owns the transcript viewport and scrolling while using
 the same Session, agent loop and semantic transcript projection. File/model/
 session pickers and Ctrl-O conversation detail use alternate-screen views in either
@@ -1088,6 +1092,45 @@ normal one-shot runs still drain delegated agents first, but do not wait forever
 for servers. This is process-local supervision, not a daemon, sandbox or guarantee
 that escaped descendants have stopped. `--read-only` excludes this capability.
 
+## Typed questions
+
+Interactive terminal coding offers `ask_user_question` within the current Turn.
+A request contains `questions`: 1–4 single-select questions, each with question
+text and 2–6 `{label, description?}` options. The dialog adds **Type something.**
+for custom text; do not author that label or **Other** as an option. Multiselect,
+headers and rich previews are not implemented.
+
+Use Up/Down and Enter to choose. A custom answer supports Unicode editing and
+paste; Enter accepts it and Shift-Enter adds a newline. Answers advance through
+the batch and submit together. Esc cancels the whole questionnaire with an
+explicit cancellation observation; the model may continue without an answer.
+Ctrl-C stops the Turn. The dialog preserves the composer draft and waits for an
+existing picker, detail view or attached PTY to release input rather than stealing
+keystrokes or revoking a terminal lease.
+
+Answers become ordinary committed tool observations, not steering, new user
+messages, approval or permission. An answered result carries an `answers` array:
+question ordinals are one-based, option indices are zero-based, and selected
+labels come from the original request. A live responder lease and request nonce reject
+stale/duplicate replies; requests carry their Core Session/Turn/tool occurrence.
+Losing the responder while a question waits stops that Turn before releasing the
+waiter. Shutdown revokes requests even if a caller retains its responder handle.
+Pending questions are live-only: reopening a Session does not restart a dialog or
+reinterpret an old request as authorization.
+
+Requests are bounded to 64 KiB of serialized arguments. Question text is limited
+to 4096 UTF-8 bytes, labels to 120 bytes and descriptions to 1024 bytes. Custom
+answers are nonempty and at most 4096 UTF-8 bytes each; the serialized answer
+batch is bounded to 48 KiB. Invalid answers leave the request available for a
+corrected reply. Only one batch can wait per control; concurrent asks fail
+explicitly. Without a connected responder, an explicitly installed question tool
+returns unavailability rather than waiting or auto-answering.
+
+Headless, RPC and managed coding children omit this capability. Rust applications
+can configure the same typed Host port and responder through shared control;
+terminal presentation is its first consumer, not a separate agent runtime.
+Explicit tool selection applies to direct calls and Code Mode as usual.
+
 ## Coding subagents
 
 The main coding preset includes `subagent({...})` in run, chat and RPC. For
@@ -1347,7 +1390,7 @@ example prints only the committed answer using fallible output, restores the
 saved reasoning preference, and connects no MCP servers. It is an SDK lifecycle
 sample, not a replacement for the terminal or RPC client.
 
-`CodingApplication::new(host, tools).setup(session, selected, reasoning)` supplies
+`CodingApplication::new(host, tools).setup(session, selected, reasoning, questions)` supplies
 the coding preset. It loads coding instructions/resources and native tools; the
 optional `tools` source adds or overrides registrations, not a complete allowlist.
 `with_tool_selection(ToolSelection::include(...).with_exclude(...))` narrows the
@@ -1368,7 +1411,15 @@ configuration. `Resources::new(instructions)` does no filesystem discovery;
 access. Encoded/normalized images still require the model's image capability.
 Native input is an explicit grant, not a sandbox or path allowlist.
 
-Construct `SessionSetup::new(session, catalog, application, model, reasoning)`.
+Construct `SessionSetup::new(session, catalog, application, model, reasoning, questions)`.
+Pass `None` for no question interaction, or an owned `QuestionCustody::new()` in
+`Some` for a real consumer. `Application::runtime` receives that optional port as
+an `Arc`; custom recipes explicitly register `QuestionTools` if they offer it.
+`SessionControl::attach_question_responder()` returns the non-clone consumer
+lease. Pull its pending request, then call `answer` or `cancel` with the exact
+request ID. Host invalidations wake shared control; complete authorized snapshots
+also expose the current pending request, not answer authority. Idle model/Session
+replacement retains the consumer while invalidating old request IDs.
 Omitted model/reasoning restore the saved preferences; a fresh Session uses the
 application's model default. The recipe remains attached through reload and
 replacement. Clone retains the resolved runtime rather than resolving a route
