@@ -958,8 +958,24 @@ subsequent work. Bash/sh selection matches `exec`. The default `backend: "pipe"`
 provides piped stdin/stdout/stderr; select `backend: "pty"` for a program that needs
 an actual terminal. PTY programs have a fresh controlling terminal and merged
 stdout/stderr, including terminal input echo. The invoked command still runs via
-Bash/sh `-c`; start an interactive shell explicitly if needed. There is no human
-attachment/takeover or login-shell environment snapshot.
+Bash/sh `-c`; start an interactive shell explicitly if needed. There is no
+login-shell environment snapshot.
+
+`/attach [ID]` in the terminal client takes exclusive human input of a running PTY
+program in the current Session and captured directory. Without an ID it selects
+the only running PTY or lists the candidates. The view uses the existing screen
+projection, cursor and input modes with no local echo, and owns ordinary keys
+including Ctrl-C; Ctrl-] detaches and restores the composer without stopping the
+program. While attached, model `write` and `resize` are rejected; model `read`,
+`screen`, `inspect` and `wait` remain available, and automatic terminal replies
+stay driver-owned. Acquisition serializes with the input queue: a partially
+delivered model write reports its actual prefix, queued input is rejected, and a
+stale lease can neither write nor release a newer one. The lease is live-only and
+bound to the Session and captured directory; it survives Turn stop but not process
+exit, application shutdown or Session replacement, and grants neither secrecy nor
+process lifecycle authority. Headless and RPC clients do not attach. There is no
+restart attachment, login-shell snapshot, graphical terminal protocol support, or
+split keyboard ownership with a question/approval dialog.
 
 `start` returns an observed process handle, not completion. `list` and `inspect`
 show retained state; bounded `wait` observes without consuming or killing it.
@@ -1210,7 +1226,7 @@ contracts are not all implemented:
 | Application setup | Caller-owned model/tool/instruction configuration, workspace-free Sessions and explicit shell/local-image authority. Opt-in continuation checks a saved authority reference and declarations. | Changed-authority reconciliation. Applications must reconstruct and attest live bindings on reopen; the reference is not a credential or sandbox. |
 | Durability | SQLite conversation/effect history, conservative recovery, restart-safe direct admission through the Rust SDK and keyed RPC literal text; explicit same-Turn continuation through the Rust SDK. | Durable pending queues, wire-protocol delivery IDs and automatic restart/continuation. Coding CLI/TUI/RPC submissions do not opt in to continuation. |
 | Delegation | Main coding preset exposes fresh/fork foreground and background Sessions with inherited route/reasoning, application-owned retained results, wait/status/cancel/acknowledge and joined original answers. SDK children use the same stable identity, complete environments and conservative recovery; Code Mode nested tools remain distinct. | Live-model/service-scale delegation qualification and native-app visual acceptance remain open. Model arguments never grant execution authority. |
-| Native programs | Scoped pipe/PTY programs, stdin interaction, bounded raw capture and screen pages, terminal resize, retained wait/close/release and shared application cleanup; child-job scope reclaimed before answer release. | Human attachment/input takeover, shell environment capture, graphical terminal protocols and restart attachment. |
+| Native programs | Scoped pipe/PTY programs, stdin interaction, bounded raw capture and screen pages, terminal resize, retained wait/close/release and shared application cleanup; live human attachment lease with a Ctrl-] terminal view; child-job scope reclaimed before answer release. | Concurrent model/human input, shell environment capture, graphical terminal protocols and restart attachment. |
 | Controls and trust | Model-loadout include/exclude selection, read-only model tools, MCP direct/deferred/hidden exposure, digest-bound project MCP trust and host-permission execution. | Per-call approval/consent, OS sandboxing, dynamic executable extensions, MCP OAuth and per-tool exposure patterns. Loadout selection and trust are not security boundaries. |
 | Remote use | Foreground stdio RPC, lossy progress and complete pull snapshots through shared control. A service embedding retains/drives the owner independently of connections. | No built-in authenticated network server, reliable activity replay or durable queue/metadata recovery. RPC EOF still stops/joins work. |
 

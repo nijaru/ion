@@ -29,6 +29,7 @@ use tokio::time::Duration;
 #[cfg(test)]
 use tokio_util::sync::CancellationToken;
 mod activity;
+mod attach;
 mod clipboard_input;
 mod composer;
 mod draft;

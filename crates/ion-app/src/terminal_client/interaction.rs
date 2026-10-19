@@ -132,6 +132,12 @@ pub(super) async fn dispatch_command(
                 format!("Copy failed: {error:#}")
             }
         };
+    } else if builtin == Some(Builtin::Attach) {
+        match super::attach::run(runtime, terminal, screen, args).await {
+            Ok(Some(status)) => ui.status = status,
+            Ok(None) => ui.status.clear(),
+            Err(error) => ui.status = format!("Attachment failed: {error:#}"),
+        }
     } else if builtin == Some(Builtin::Editor) && args.is_empty() {
         ui.completion.clear();
         match edit_draft_in_terminal(terminal, screen, ui).await? {
