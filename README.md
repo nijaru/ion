@@ -107,8 +107,8 @@ Session-owned: reopen and clone retain it, forks restore the selected Turn's
 preference, and new Sessions start at `default`. Coding and compaction freeze
 the same preference. Changes require no live operation. Reopened interrupted
 history may remain unresolved: changing a future preference does not settle its
-Turn, rewrite its original model/reasoning, or recover unfinished effects. Strict
-same-Turn continuation still requires matching authority and configuration. Unsupported adapter controls refuse before saving
+Turn, rewrite its original model/reasoning, or recover unfinished effects.
+Logical-Turn continuation still requires matching authority and configuration. Unsupported adapter controls refuse before saving
 the preference or making a model request. Model changes also preflight the
 retained preference rather than silently resetting it. Explicit effort selection
 saves the bound model and effort together, including an invocation-only model override.
@@ -683,7 +683,20 @@ local process cleanup errors are reported. The HTTP SDK still logs remote
 session-deletion failures rather than returning them. Cleanup does not guarantee
 termination of descendants or remote work, and abrupt process loss cannot
 guarantee joined cleanup. Rust embedders must await `McpTools::shutdown` before
-dropping their runtime. Current MCP support handles text, structured data and
+dropping their runtime. Cancelling that wait leaves the retained close running;
+a later shutdown joins the same task instead of reporting an already-taken
+connection as clean. Incoming messages are bounded before decoding: one stdio
+JSON line or HTTP JSON/error body may be at most 64 MiB, and an SSE event stays
+within the transport's 16 MiB default and that 64 MiB ceiling. Oversize input
+fails the connection without truncating a message into a different observation,
+and Ion never reconnects and repeats a possibly executed call. Local server
+stderr goes to a private `0600` temporary file retaining the first 64 KiB while
+the rest of the stream is drained so logging cannot block the protocol. Nonempty
+captures appear as `server_stderr` metadata with the path, byte counts and any
+capture error; startup diagnostics name servers that logged, and nothing is
+written directly to the terminal. The capture stops and joins with the root
+process, so descendants holding the pipe cannot stall shutdown.
+Current MCP support handles text, structured data and
 normalized image tool results; audio and
 embedded resource content report an explicit unsupported-content error.
 Servers that advertise resources also expose `list_mcp_resources`,

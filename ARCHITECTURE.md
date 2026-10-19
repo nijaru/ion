@@ -435,7 +435,7 @@ local conversion, separately owned by the calling operation.
 Enforce incoming MCP budgets before framing or decoding can allocate an unbounded
 message: at most 64 MiB per stdio JSON line or HTTP JSON/error body. SSE events
 retain their transport's stricter 16 MiB default and cannot exceed the aggregate
-message ceiling. Reject overflow rather than truncate a message into a different
+64 MiB per-message ceiling. Reject overflow rather than truncate a message into a different
 observation; do not reconnect and repeat an effectful call. An unanswered call on
 a failed transport may already have executed. These are transport budgets, not
 model-context or artifact quotas.
@@ -545,7 +545,7 @@ Host prepares replacements before publishing them. Failed preflight leaves the
 previous binding usable; active operations retain captured configuration. An idle
 live operation gate permits future preference changes even when reopened history
 contains an interrupted Turn. Such changes neither settle that Turn nor rewrite
-its original configuration. Strict continuation still requires matching current
+its original configuration. Logical-Turn continuation still requires matching current
 authority and configuration; passive recovery eligibility is not that attestation.
 Logical selection, effective model, returned identity and usage remain distinct. Model
 epochs survive reopen, including A → B → A; routing policy is not correctness state.

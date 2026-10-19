@@ -1,7 +1,13 @@
 //! Owned protocol services, HTTP workers and local root processes.
-use std::{future::Future, path::Path, process::Stdio, time::Duration};
+use std::{future::Future, path::Path, process::Stdio, sync::Arc, time::Duration};
 
-use super::{ChangeHandler, Client, McpServer, http::OwnedHttpClient, send::Tracked};
+use super::{
+    ChangeHandler, Client, McpServer,
+    framing::{BoundedLineReader, MAX_MCP_MESSAGE_BYTES},
+    http::OwnedHttpClient,
+    send::Tracked,
+    stderr,
+};
 use anyhow::{Context, Result, ensure};
 use rmcp::{
     RoleClient,
@@ -33,13 +39,15 @@ impl Connection {
     ) -> Result<Self> {
         let (initialized, owned) = match definition {
             McpServer::Stdio(server) => {
+                let diagnostics = stderr::Destination::create()
+                    .with_context(|| format!("cannot create MCP server {name} stderr capture"))?;
                 let mut command = Command::new(&server.command);
                 command
                     .args(&server.args)
                     .current_dir(cwd)
                     .stdin(Stdio::piped())
                     .stdout(Stdio::piped())
-                    .stderr(Stdio::inherit())
+                    .stderr(Stdio::piped())
                     .kill_on_drop(true);
                 let mut process = command
                     .spawn()
@@ -47,12 +55,16 @@ impl Connection {
                 // These handles are guaranteed by the piped configuration above.
                 let stdout = process.stdout.take().expect("MCP stdout is piped");
                 let stdin = process.stdin.take().expect("MCP stdin is piped");
+                let stderr = diagnostics.start(process.stderr.take().expect("MCP stderr is piped"));
                 let initialized = initialize(
                     name,
-                    handler.serve(Tracked(AsyncRwTransport::new_client(stdout, stdin))),
+                    handler.serve(Tracked(AsyncRwTransport::new_client(
+                        BoundedLineReader::new(stdout, MAX_MCP_MESSAGE_BYTES),
+                        stdin,
+                    ))),
                 )
                 .await;
-                (initialized, OwnedTransport::Stdio(process))
+                (initialized, OwnedTransport::Stdio { process, stderr })
             }
             McpServer::Http(server) => {
                 let mut config = StreamableHttpClientTransportConfig::with_uri(server.url);
@@ -97,9 +109,15 @@ impl Connection {
                 if let OwnedTransport::Http { client, .. } = &owned {
                     client.stop.cancel();
                 }
-                combine_cleanup(Err(error), owned.shutdown().await)
+                let stderr = owned.stderr_log();
+                let result = combine_cleanup(Err(error), owned.shutdown().await);
+                with_diagnostics(result, stderr, name)
             }
         }
+    }
+
+    pub fn stderr_log(&self) -> Option<Arc<stderr::Log>> {
+        self.owned.stderr_log()
     }
 
     pub async fn shutdown(mut self) -> Result<()> {
@@ -113,6 +131,7 @@ impl Connection {
         // A blocked SDK send can hold the stdio writer lock while service close
         // waits for it. Escalate/reap the root concurrently so closing its pipes
         // releases that send; neither cleanup future is detached.
+        let stderr = self.owned.stderr_log();
         let (service, cleanup) = tokio::join!(self.client.close(), self.owned.shutdown());
         let service = match service {
             Ok(QuitReason::JoinError(error)) | Err(error) => {
@@ -120,7 +139,14 @@ impl Connection {
             }
             Ok(_) => Ok(()),
         };
-        combine_cleanup(service, cleanup)
+        with_diagnostics(combine_cleanup(service, cleanup), stderr, "connection")
+    }
+}
+
+fn with_diagnostics<T>(result: Result<T>, log: Option<Arc<stderr::Log>>, name: &str) -> Result<T> {
+    match log.and_then(|log| log.notice(name)) {
+        Some(notice) => result.context(notice),
+        None => result,
     }
 }
 
@@ -135,7 +161,10 @@ async fn initialize(
 }
 
 enum OwnedTransport {
-    Stdio(Child),
+    Stdio {
+        process: Child,
+        stderr: stderr::Capture,
+    },
     Http {
         returned: oneshot::Receiver<HttpTransport>,
         client: OwnedHttpClient,
@@ -143,22 +172,37 @@ enum OwnedTransport {
 }
 
 impl OwnedTransport {
+    fn stderr_log(&self) -> Option<Arc<stderr::Log>> {
+        match self {
+            Self::Stdio { stderr, .. } => Some(stderr.log.clone()),
+            Self::Http { .. } => None,
+        }
+    }
+
     async fn shutdown(self) -> Result<()> {
         match self {
-            Self::Stdio(mut child) => {
-                match tokio::time::timeout(Duration::from_secs(3), child.wait()).await {
-                    Ok(result) => {
-                        result.context("cannot reap MCP server process")?;
-                    }
-                    Err(_) => {
-                        // kill() waits as well as signalling. Keep ownership
-                        // through this await; kill_on_drop alone does not reap.
-                        child
-                            .kill()
-                            .await
-                            .context("cannot kill and reap MCP server process")?;
-                    }
-                }
+            Self::Stdio {
+                mut process,
+                mut stderr,
+            } => {
+                let reaped =
+                    match tokio::time::timeout(Duration::from_secs(3), process.wait()).await {
+                        Ok(result) => result.map(|_| ()).context("cannot reap MCP server process"),
+                        Err(_) => {
+                            // kill() waits as well as signalling. The retained close
+                            // task owns both the root and diagnostic reader throughout.
+                            process
+                                .kill()
+                                .await
+                                .context("cannot kill and reap MCP server process")
+                        }
+                    };
+                let captured = stderr
+                    .finish()
+                    .await
+                    .map_err(anyhow::Error::msg)
+                    .context("MCP stderr capture failed");
+                combine_cleanup(reaped, captured)?;
             }
             Self::Http { returned, client } => {
                 let cleanup = match returned.await {

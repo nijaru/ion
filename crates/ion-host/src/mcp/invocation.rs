@@ -38,7 +38,7 @@ impl ToolExecutor for McpExecutor {
         let call = invocation.call();
         let stop = invocation.stop().clone();
         Box::pin(async move {
-            match self.call(call, stop).await {
+            let mut output = match self.call(call, stop).await {
                 Ok((result, cleanup_error)) => {
                     let name = call.name.clone();
                     // Once observed, conversion remains owned through stop and
@@ -60,7 +60,9 @@ impl ToolExecutor for McpExecutor {
                     output
                 }
                 Err(output) => output,
-            }
+            };
+            self.server.attach_stderr(&mut output);
+            output
         })
     }
 }

@@ -177,11 +177,22 @@ impl ToolExecutor for ResourceExecutor {
         let call = invocation.call();
         let stop = invocation.stop().clone();
         Box::pin(async move {
-            match self.kind {
+            let mut output = match self.kind {
                 Kind::Resources => list(call, &self.servers, &stop, Kind::Resources).await,
                 Kind::Templates => list(call, &self.servers, &stop, Kind::Templates).await,
                 Kind::Read => read(call, &self.servers, &stop).await,
+            };
+            let selected = call
+                .arguments
+                .get("server")
+                .and_then(Value::as_str)
+                .map(str::trim);
+            for server in self.servers.iter().filter(|server| server.resources) {
+                if selected.is_none_or(|name| name.is_empty() || name == server.name) {
+                    server.attach_stderr(&mut output);
+                }
             }
+            output
         })
     }
 }

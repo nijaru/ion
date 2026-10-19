@@ -29,10 +29,12 @@ use tokio_util::sync::CancellationToken;
 
 mod config;
 mod connection;
+mod framing;
 mod http;
 mod invocation;
 mod resource_tools;
 mod send;
+mod stderr;
 use connection::{Connection, combine_cleanup};
 use invocation::McpExecutor;
 
@@ -67,12 +69,18 @@ struct Server {
     /// The initialize handshake advertised resource operations. Capabilities are
     /// fixed for the connection, so callers do not need a second discovery round.
     resources: bool,
-    client: RwLock<Option<Connection>>,
+    client: Arc<RwLock<Option<Connection>>>,
+    stderr: Option<Arc<stderr::Log>>,
     catalog: Arc<SyncRwLock<Catalog>>,
     tool_list_version: Arc<AtomicU64>,
     refreshed_version: AtomicU64,
     retiring: CancellationToken,
-    retirement: Mutex<Option<std::result::Result<(), String>>>,
+    retirement: Mutex<Option<Retirement>>,
+}
+
+struct Retirement {
+    work: tokio::task::JoinHandle<std::result::Result<(), String>>,
+    result: Option<std::result::Result<(), String>>,
 }
 
 pub struct McpTools {
@@ -108,7 +116,16 @@ impl McpTools {
                 Ok((server, discovered)) => {
                     let published = publish_tools(&catalog, &server.name, discovered);
                     match published {
-                        Ok(()) => servers.push(Arc::new(server)),
+                        Ok(()) => {
+                            if let Some(notice) = server
+                                .stderr
+                                .as_ref()
+                                .and_then(|log| log.notice(&server.name))
+                            {
+                                diagnostics.push(notice);
+                            }
+                            servers.push(Arc::new(server));
+                        }
                         Err(error) => {
                             let closed = combine_cleanup::<()>(Err(error), server.shutdown().await);
                             diagnostics.push(format!("{:#}", closed.unwrap_err()));
@@ -153,13 +170,15 @@ impl McpTools {
         } else {
             Ok(Vec::new())
         };
+        let stderr = client.stderr_log();
         match discovered {
             Ok(tools) => Ok((
                 Server {
                     name,
                     exposure,
                     resources,
-                    client: RwLock::new(Some(client)),
+                    client: Arc::new(RwLock::new(Some(client))),
+                    stderr,
                     catalog,
                     tool_list_version: changed,
                     refreshed_version: AtomicU64::new(0),
@@ -234,6 +253,12 @@ impl McpTools {
 }
 
 impl Server {
+    fn attach_stderr(&self, output: &mut CodingToolOutput) {
+        if let Some(snapshot) = self.stderr.as_ref().and_then(|log| log.snapshot()) {
+            output.value["server_stderr"][&self.name] = snapshot;
+        }
+    }
+
     fn retire(&self) {
         self.retiring.cancel();
     }
@@ -242,26 +267,45 @@ impl Server {
         // Direct failure/cancellation paths use the same retirement boundary.
         // A request must release its read lease before joining this close.
         self.retire();
-        // Concurrent callers join the same retirement, including a tool whose
-        // protocol cancellation could not flush. Taking the client alone is
-        // not evidence that another caller has finished closing it.
+        // Retain a running close task, not a future owned only by its waiter.
+        // Cancelling shutdown cannot drop a taken connection or its reader joins.
         let mut retirement = self.retirement.lock().await;
-        if let Some(result) = retirement.as_ref() {
-            return result.clone().map_err(anyhow::Error::msg);
+        let retirement = retirement.get_or_insert_with(|| {
+            let client = self.client.clone();
+            let catalog = self.catalog.clone();
+            let name = self.name.clone();
+            Retirement {
+                work: tokio::spawn(async move {
+                    let result = match client.write().await.take() {
+                        Some(client) => client.shutdown().await,
+                        None => Ok(()),
+                    };
+                    catalog
+                        .write()
+                        .unwrap_or_else(std::sync::PoisonError::into_inner)
+                        .remove(&name);
+                    result
+                        .with_context(|| format!("MCP server {name} shutdown failed"))
+                        .map_err(|error| format!("{error:#}"))
+                }),
+                result: None,
+            }
+        });
+        if retirement.result.is_none() {
+            let result = match (&mut retirement.work).await {
+                Ok(result) => result,
+                Err(error) => Err(format!(
+                    "MCP cleanup task failed; effects may be unknown: {error}"
+                )),
+            };
+            retirement.result = Some(result);
         }
-        let result = match self.client.write().await.take() {
-            Some(client) => client.shutdown().await,
-            None => Ok(()),
-        };
-        self.catalog
-            .write()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .remove(&self.name);
-        let result = result
-            .with_context(|| format!("MCP server {} shutdown failed", self.name))
-            .map_err(|error| format!("{error:#}"));
-        *retirement = Some(result.clone());
-        result.map_err(anyhow::Error::msg)
+        retirement
+            .result
+            .as_ref()
+            .expect("joined retirement has an outcome")
+            .clone()
+            .map_err(anyhow::Error::msg)
     }
 }
 

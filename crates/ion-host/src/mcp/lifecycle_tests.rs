@@ -30,14 +30,22 @@ for line in sys.stdin:
     elif method == 'tools/list':
         if mode == 'list-timeout':
             continue
-        result = {'tools': 'invalid' if mode == 'list-error' else []}
+        result = {'tools': 'invalid' if mode == 'list-error' else
+                  [{'name': 'log', 'inputSchema': {'type': 'object'}}] if mode == 'stderr-flood' else []}
+    elif method == 'tools/call' and mode == 'stderr-flood':
+        os.write(2, b'LOG_PREFIX\n\x1b[2J' + b'x' * (1024 * 1024))
+        result = {'content': [{'type': 'text', 'text': 'logging completed'}]}
     else:
         continue
     print(json.dumps({'jsonrpc': '2.0', 'id': request['id'], 'result': result}), flush=True)
     if mode == 'blocked-send':
         time.sleep(60)
 Path('eof').touch()
-time.sleep(60)
+if mode == 'delayed-exit':
+    time.sleep(0.3)
+    Path('graceful').touch()
+else:
+    time.sleep(60)
 "#;
 
 #[tokio::test]
@@ -169,6 +177,118 @@ async fn shutdown_reaps_root_while_protocol_send_is_backpressured() {
         "backpressured root PID {pid} was not reaped"
     );
     fs::remove_dir_all(root).unwrap();
+}
+
+#[tokio::test]
+async fn stderr_is_bounded_private_and_drained_without_blocking_tool_results() {
+    use std::os::unix::fs::PermissionsExt;
+    let root = std::env::temp_dir().join(format!("ion-mcp-stderr-{}", uuid::Uuid::now_v7()));
+    fs::create_dir(&root).unwrap();
+    let config = McpConfig::new(&root);
+    config
+        .add(
+            "owned",
+            McpServer::Stdio(McpStdioServer {
+                command: "python3".into(),
+                args: vec!["-c".into(), SERVER.into(), "stderr-flood".into()],
+                exposure: McpExposure::Direct,
+            }),
+        )
+        .unwrap();
+    let startup = McpTools::connect(&config, &root).await;
+    let source = startup.tools.unwrap();
+    let tools = ion_core::ToolSet::new([source.clone() as Arc<dyn CodingToolSource>]);
+    let call = ion_ai::ToolCall {
+        id: "logs".into(),
+        name: "mcp__5_owned__log".into(),
+        arguments: json!({}),
+        raw_arguments: None,
+    };
+    let output = tools
+        .snapshot()
+        .execute_untracked(&call, CancellationToken::new())
+        .await;
+    source.shutdown().await.unwrap();
+    let log = source.servers[0]
+        .stderr
+        .as_ref()
+        .unwrap()
+        .snapshot()
+        .unwrap();
+    let path = std::path::Path::new(log["path"].as_str().unwrap());
+    let captured = fs::read(path).unwrap();
+    let mode = fs::metadata(path).unwrap().permissions().mode();
+    fs::remove_file(path).unwrap();
+    fs::remove_dir_all(root).unwrap();
+    assert!(!output.is_error, "{output:?}");
+    assert_eq!(output.value["content"], "logging completed");
+    assert!(
+        output.value["server_stderr"]["owned"]["path"].is_string(),
+        "{output:?}"
+    );
+    assert_eq!(captured.len(), 64 * 1024);
+    assert!(captured.starts_with(b"LOG_PREFIX\n\x1b[2J"));
+    assert_eq!(mode & 0o777, 0o600);
+    assert_eq!(
+        log["total_bytes"],
+        1024 * 1024 + b"LOG_PREFIX\n\x1b[2J".len()
+    );
+    assert_eq!(log["retained_bytes"], 64 * 1024);
+    assert_eq!(log["eof"], true);
+    assert!(log["capture_error"].is_null());
+}
+
+#[tokio::test]
+async fn cancelled_shutdown_waiter_does_not_abandon_graceful_close() {
+    let root = std::env::temp_dir().join(format!("ion-mcp-close-{}", uuid::Uuid::now_v7()));
+    fs::create_dir(&root).unwrap();
+    let config = McpConfig::new(&root);
+    config
+        .add(
+            "owned",
+            McpServer::Stdio(McpStdioServer {
+                command: "python3".into(),
+                args: vec!["-c".into(), SERVER.into(), "delayed-exit".into()],
+                exposure: McpExposure::Direct,
+            }),
+        )
+        .unwrap();
+    let source = McpTools::connect(&config, &root).await.tools.unwrap();
+    let mut closing = Box::pin(source.shutdown());
+    let released = tokio::time::timeout(Duration::from_secs(2), async {
+        loop {
+            tokio::select! {
+                result = &mut closing => panic!("shutdown settled before delayed root exit: {result:?}"),
+                () = tokio::time::sleep(Duration::from_millis(5)) => {}
+            }
+            if root.join("eof").exists() { break; }
+        }
+    }).await;
+    drop(closing);
+    // Cleanup continues without a waiter; cancellation must not kill the root early.
+    let graceful = tokio::time::timeout(Duration::from_secs(2), async {
+        while !root.join("graceful").exists() {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .is_ok();
+    let joined = source.shutdown().await;
+    let pid = fs::read_to_string(root.join("pid")).unwrap();
+    let process = Command::new("ps")
+        .args(["-p", &pid, "-o", "pid="])
+        .output()
+        .await
+        .unwrap();
+    fs::remove_dir_all(root).unwrap();
+    released.unwrap();
+    joined.unwrap();
+    assert!(
+        graceful,
+        "cancelled waiter interrupted the root's graceful close"
+    );
+    assert!(process.stderr.is_empty());
+    assert!(process.stdout.is_empty(), "root PID {pid} was not reaped");
 }
 
 #[tokio::test]
