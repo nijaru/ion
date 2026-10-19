@@ -253,6 +253,16 @@ with fresh provider affinity. It neither snapshots nor rolls back a workspace,
 nor establishes delegation or security isolation. An unfinished Turn is not a
 settled fork boundary. Empty Sessions must not displace useful recent conversations.
 
+Saved-Session selection is passive: expose identity, name/input preview, recorded
+model, Turn count, activity time and the current selection before switching through
+idle shared control. Discovery must not monopolize terminal input; dismissal and
+replacement retain cancellation/join custody and cannot publish stale results.
+Selection does not submit a prompt or repair history. Both before/after fork
+pickers use committed Turn facts; before restores editable input without sending,
+and after requires a recorded end. Do not infer Session ancestry from matching
+content or timestamps. Pi's in-file branch tree is a distinct storage contract,
+not implied by Ion's independent copies or a saved-Session browser.
+
 ## Managed delegation and coordination
 
 A managed subagent is another Session plus an explicit owned relationship. Record
