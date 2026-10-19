@@ -285,7 +285,9 @@ async fn coding_application_selection_and_read_only_narrow_the_model_loadout() {
             .into_control::<()>();
         let catalog = control.agent().tool_catalog();
         assert_eq!(catalog.specs().len(), names.len());
-        for name in ["read", "write", "edit", "exec", "process", "subagent"] {
+        for name in [
+            "read", "write", "edit", "exec", "process", "subagent", "ls", "find", "grep",
+        ] {
             assert_eq!(catalog.is_declared(name), names.contains(&name), "{name}");
         }
         drop(control);
@@ -297,12 +299,35 @@ async fn coding_application_selection_and_read_only_narrow_the_model_loadout() {
     );
     let application = crate::CodingApplication::new(host.clone(), None).with_read_only_tools();
     let control = application
-        .setup(session.clone(), selected, None)
+        .setup(session.clone(), selected.clone(), None)
         .unwrap()
         .into_control::<()>();
     let catalog = control.agent().tool_catalog();
     assert!(catalog.is_declared("read"));
+    assert!(catalog.is_declared("ls"));
+    assert!(catalog.is_declared("find"));
+    assert!(catalog.is_declared("grep"));
     assert!(catalog.is_declared("history"));
+    for excluded in ["edit", "write", "exec", "process", "subagent"] {
+        assert!(!catalog.is_declared(excluded), "{excluded}");
+    }
+    drop(control);
+    drop(session);
+
+    let session = Arc::new(
+        CodingSession::create(host.sessions(cwd.clone()).new_path().unwrap(), Some(&cwd)).unwrap(),
+    );
+    let application = crate::CodingApplication::new(host.clone(), None)
+        .with_code_mode(true)
+        .with_read_only_tools();
+    let control = application
+        .setup(session.clone(), selected.clone(), None)
+        .unwrap()
+        .into_control::<()>();
+    let catalog = control.agent().tool_catalog();
+    for included in ["code_mode", "read", "ls", "find", "grep", "history"] {
+        assert!(catalog.is_declared(included), "{included}");
+    }
     for excluded in ["edit", "write", "exec", "process", "subagent"] {
         assert!(!catalog.is_declared(excluded), "{excluded}");
     }

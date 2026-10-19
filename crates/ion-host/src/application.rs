@@ -81,6 +81,9 @@ pub struct CodingApplication {
 
 const READ_ONLY_TOOLS: &[&str] = &[
     "read",
+    "ls",
+    "find",
+    "grep",
     "history",
     "list_mcp_resources",
     "list_mcp_resource_templates",

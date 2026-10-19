@@ -16,7 +16,7 @@ use super::{error, present_input, success, text_read};
 
 pub(super) const MAX_FILE_BYTES: usize = 8 * 1024 * 1024;
 
-fn path(cwd: &Path, raw: &str) -> Result<PathBuf, String> {
+pub(super) fn path(cwd: &Path, raw: &str) -> Result<PathBuf, String> {
     if raw.is_empty() || raw.contains('\0') {
         return Err("invalid path".into());
     }

@@ -15,6 +15,7 @@ use ion_core::{
 };
 
 pub(crate) mod command;
+mod discovery;
 mod files;
 mod text_read;
 
@@ -54,6 +55,9 @@ impl ToolSource for LocalTools {
             .map(|spec| {
                 let (operation, kind, key) = match spec.name.as_str() {
                     "read" => (LocalOperation::Read, ToolActivityKind::Read, "path"),
+                    "ls" => (LocalOperation::Ls, ToolActivityKind::List, "path"),
+                    "find" => (LocalOperation::Find, ToolActivityKind::Search, "pattern"),
+                    "grep" => (LocalOperation::Grep, ToolActivityKind::Search, "pattern"),
                     "edit" => (LocalOperation::Edit, ToolActivityKind::Edit, "path"),
                     "write" => (LocalOperation::Write, ToolActivityKind::Write, "path"),
                     "exec" => (LocalOperation::Exec, ToolActivityKind::Command, "command"),
@@ -78,6 +82,9 @@ impl ToolSource for LocalTools {
 #[derive(Clone, Copy)]
 enum LocalOperation {
     Read,
+    Ls,
+    Find,
+    Grep,
     Edit,
     Write,
     Exec,
@@ -114,6 +121,9 @@ impl ToolExecutor for LocalExecutor {
                 } else {
                     match operation {
                         LocalOperation::Read => files::read(&tools.cwd, &arguments, &stop),
+                        LocalOperation::Ls => discovery::ls(&tools.cwd, &arguments, &stop),
+                        LocalOperation::Find => discovery::find(&tools.cwd, &arguments, &stop),
+                        LocalOperation::Grep => discovery::grep(&tools.cwd, &arguments, &stop),
                         LocalOperation::Edit => files::edit(&tools.cwd, &arguments, &stop),
                         LocalOperation::Write => files::write(&tools.cwd, &arguments, &stop),
                         LocalOperation::Exec => unreachable!("shell uses async execution"),
@@ -160,6 +170,9 @@ fn error(message: impl Into<String>) -> ToolOutput {
 fn specs() -> Vec<ToolSpec> {
     vec![
         ToolSpec { name: "read".into(), description: "Read UTF-8 text or a supported image (JPEG, PNG, GIF, WebP) from the live working directory. Images are attached to the result. Paths may be relative or absolute. Text reads use one-based line ranges (default 2000 lines), bounded to 65536 bytes of complete lines. Check has_more and pass next_line as offset to continue. For oversized lines or saved JSON observations, use zero-based byte_offset and byte_limit (4..65536, default 65536) instead of line offset/limit. Byte pages preserve UTF-8; pass next_byte as byte_offset to continue. base_digest covers the complete file when available, not just returned content. Do not recreate an existing file from an incomplete read; prefer exact edits or read all pages before full replacement.".into(), input_schema: json!({"type":"object","additionalProperties":false,"required":["path"],"properties":{"path":{"type":"string"},"offset":{"type":"integer","minimum":1,"description":"One-based starting line (default 1). Pass the prior result's next_line to continue. Omit for images."},"limit":{"type":"integer","minimum":1,"maximum":2000,"description":"Maximum complete lines to return (default and maximum 2000); the 65536-byte output bound may stop earlier. Omit for images."},"byte_offset":{"type":"integer","minimum":0,"description":"Zero-based UTF-8 byte offset (default 0). Cannot combine byte and line selectors. Start at a character boundary or use the previous next_byte. Omit for images."},"byte_limit":{"type":"integer","minimum":4,"maximum":65536,"description":"Maximum UTF-8 bytes (default 65536), independent of physical lines. End rounds down to a character boundary; continue at next_byte. Omit for images."}}}) },
+        ToolSpec { name: "ls".into(), description: "List one directory, including hidden entries. Returns names sorted lexicographically with type file, dir, symlink or other. Path defaults to the working directory; absolute paths are allowed. limit defaults to 500 and is at most 1000. If the directory is too large or cannot be read exhaustively, partial results are explicit: check exhaustive, skipped and omissions. Output is serialized JSON bounded to 64 KiB; refine the directory after an entry, work or output cap. This is ordinary host filesystem access, not a sandbox.".into(), input_schema: json!({"type":"object","additionalProperties":false,"properties":{"path":{"type":"string","description":"Directory to list (default: current directory)."},"limit":{"type":"integer","minimum":1,"maximum":1000,"description":"Maximum entries to return (default 500)."}}}) },
+        ToolSpec { name: "find".into(), description: "Find regular files recursively by glob. Pattern uses gitignore-style globs: no slash matches basenames at any depth, a slash matches the path relative to the returned root, and ** is recursive. path defaults to the working directory; absolute paths are allowed. Hidden files are included; discovered symlinks are not followed and the .git tree is skipped. .gitignore and .ignore rules are traversal convenience, not a secret or security boundary. limit defaults to and is at most 1000. Traversal is bounded to 20000 visited entries and depth 9; filesystem skips, result caps and output bounds are explicit. An empty incomplete result is not proof of no match; refine the root or glob. Output is serialized JSON bounded to 64 KiB.".into(), input_schema: json!({"type":"object","additionalProperties":false,"required":["pattern"],"properties":{"pattern":{"type":"string","minLength":1,"maxLength":4096,"description":"Glob such as '*.rs', 'src/**/*.rs' or 'docs/*'."},"path":{"type":"string","description":"Directory to search (default: current directory)."},"limit":{"type":"integer","minimum":1,"maximum":1000,"description":"Maximum file results (default 1000)."}}}) },
+        ToolSpec { name: "grep".into(), description: "Search one UTF-8 regular file or a directory recursively. Returns one item per matching line with path relative to the returned root, a 1-based line number, the first match's zero-based byte_offset (usable with read byte_offset), and a UTF-8 snippet of at most 1024 bytes; long-line truncation is visible. pattern is a regex by default; literal=true searches literal text; ignore_case is optional. glob filters files with the same basename/relative-path semantics as find. path defaults to the working directory; absolute paths are allowed. Hidden files are included; discovered symlinks are not followed and the .git tree is skipped. .gitignore and .ignore rules are convenience only, not a secret or security boundary. Binary/invalid UTF-8 files, files over 8 MiB and the total 32 MiB inspected-source budget are reported; traversal is bounded to 20000 visited entries and depth 9; limit defaults to 100 and is at most 1000. Check exhaustive, skipped and omissions: an empty incomplete result is not proof of no match. root names the returned search root and root_kind is file or directory: for a file root, use root itself and match paths are its basename; otherwise match paths are relative to root. Output is serialized JSON bounded to 64 KiB; use read with byte_offset for a full long line.".into(), input_schema: json!({"type":"object","additionalProperties":false,"required":["pattern"],"properties":{"pattern":{"type":"string","minLength":1,"maxLength":4096,"description":"Regex, or literal text when literal=true."},"path":{"type":"string","description":"File or directory to search (default: current directory)."},"glob":{"type":"string","minLength":1,"maxLength":4096,"description":"Optional file glob, e.g. '*.rs' or 'src/**/*.ts'."},"ignore_case":{"type":"boolean","description":"Case-insensitive matching (default false)."},"literal":{"type":"boolean","description":"Treat pattern as literal text instead of a regex (default false)."},"limit":{"type":"integer","minimum":1,"maximum":1000,"description":"Maximum matching lines (default 100)."}}}) },
         ToolSpec { name: "edit".into(), description: "Apply one or more disjoint exact text replacements to a UTF-8 file in one write. Requires base_digest from a read of the complete current file; stale content is rejected. Each old_text must occur exactly once in the original file; overlapping edits are rejected. Operates with the host user's permissions.".into(), input_schema: json!({"type":"object","additionalProperties":false,"required":["path","edits","base_digest"],"properties":{"path":{"type":"string"},"edits":{"type":"array","minItems":1,"items":{"type":"object","additionalProperties":false,"required":["old_text","new_text"],"properties":{"old_text":{"type":"string","minLength":1},"new_text":{"type":"string"}}}},"base_digest":{"type":"string","description":"Complete-file digest returned by read; required."}}}) },
         ToolSpec { name: "write".into(), description: "Create or replace a UTF-8 file in the live working directory. Replacing an existing file requires base_digest from read, or unconditional=true only for an intentional unread replacement; creation needs neither and creates missing parents. A supplied digest must match the entire existing regular file under the native mutation lock; stale, missing or unreadable targets reject. Use exact edit or complete-source guarded replacement, not an incomplete read window. Success returns path, created, bytes and new_digest (SHA256 of published content), plus a bounded unified diff when the previous content is readable UTF-8; otherwise diff_omitted explains the omission. The digest is not a lease against later changes.".into(), input_schema: json!({"type":"object","additionalProperties":false,"required":["path","content"],"properties":{"path":{"type":"string"},"content":{"type":"string"},"base_digest":{"type":"string","description":"Complete-file digest returned by read; required to replace an existing file."},"unconditional":{"type":"boolean","description":"Only for intentional unguarded replacement; do not use after a read."}}}) },
         ToolSpec { name: "exec".into(), description: "Run a Bash command (or POSIX sh when Bash is unavailable) in the live working directory with the host user's permissions; this is not sandboxed. Timeout is optional. Returns the observed direct command exit and the final 64 KiB of each raw output stream decoded as UTF-8. Per-stream stdout_/stderr_ flags: lossy means decoding replaced bytes in the returned tail (including possible UTF-8 boundary cuts, not a literal U+FFFD); complete means pipe EOF was observed; truncated means bytes were omitted or capture is incomplete. omitted_bytes counts raw bytes outside the tail, or is null when capture is incomplete. For complete truncated or lossy captures, full_path names a private temporary raw file when available; full_error reports capture/artifact failures. Artifact paths do not guarantee retention. Inspect available raw evidence instead of rerunning effects. Capture/decoding loss does not change a known command exit. Cancellation is best effort.".into(), input_schema: json!({"type":"object","additionalProperties":false,"required":["command"],"properties":{"command":{"type":"string"},"timeout_ms":{"type":"integer","minimum":1}}}) },
@@ -195,6 +208,17 @@ mod tests {
                 "base_digest",
                 json!({"path":"file.txt","edits":[{"old_text":"old","new_text":"new"}]}),
             ),
+            ("ls", "limit", json!({})),
+            ("ls", "path", json!({})),
+            ("find", "pattern", json!({"pattern":"*"})),
+            ("find", "path", json!({"pattern":"*"})),
+            ("find", "limit", json!({"pattern":"*"})),
+            ("grep", "pattern", json!({"pattern":"needle"})),
+            ("grep", "path", json!({"pattern":"needle"})),
+            ("grep", "glob", json!({"pattern":"needle"})),
+            ("grep", "ignore_case", json!({"pattern":"needle"})),
+            ("grep", "literal", json!({"pattern":"needle"})),
+            ("grep", "limit", json!({"pattern":"needle"})),
             (
                 "exec",
                 "timeout_ms",
@@ -291,6 +315,45 @@ mod tests {
             write.input_schema["properties"]["unconditional"]["type"],
             "boolean"
         );
+    }
+
+    #[test]
+    fn native_discovery_schema_and_presentation_are_registered() {
+        let catalog =
+            ion_core::ToolSet::new([
+                Arc::new(LocalTools::new(std::env::temp_dir()).unwrap()) as Arc<dyn ToolSource>
+            ])
+            .snapshot();
+        let specs = catalog.specs();
+        assert_eq!(specs.len(), 7);
+        for (name, kind, key) in [
+            ("ls", ToolActivityKind::List, "path"),
+            ("find", ToolActivityKind::Search, "pattern"),
+            ("grep", ToolActivityKind::Search, "pattern"),
+        ] {
+            let spec = specs.iter().find(|spec| spec.name == name).unwrap();
+            assert_eq!(spec.input_schema["additionalProperties"], false);
+            let call = ToolCall {
+                id: name.into(),
+                name: name.into(),
+                arguments: json!({key: "target"}),
+                raw_arguments: None,
+            };
+            let activity = catalog.activity(&call);
+            assert_eq!(activity.kind, kind, "{name}");
+            assert_eq!(activity.subject.as_deref(), Some("target"));
+        }
+        let grep = specs.iter().find(|spec| spec.name == "grep").unwrap();
+        assert_eq!(grep.input_schema["properties"]["limit"]["minimum"], 1);
+        assert_eq!(grep.input_schema["properties"]["limit"]["maximum"], 1000);
+        assert_eq!(
+            grep.input_schema["properties"]["literal"]["type"],
+            "boolean"
+        );
+        let find = specs.iter().find(|spec| spec.name == "find").unwrap();
+        assert_eq!(find.input_schema["required"], json!(["pattern"]));
+        let ls = specs.iter().find(|spec| spec.name == "ls").unwrap();
+        assert_eq!(ls.input_schema["properties"]["limit"]["maximum"], 1000);
     }
 
     #[tokio::test]
@@ -479,6 +542,9 @@ mod tests {
             .snapshot();
             for (name, arguments) in [
                 ("read", json!({"path":"file.txt"})),
+                ("ls", json!({})),
+                ("find", json!({"pattern":"*.txt"})),
+                ("grep", json!({"pattern":"old"})),
                 (
                     "edit",
                     json!({"path":"file.txt","edits":[{"old_text":"old","new_text":"new"}],"base_digest":hex_digest(b"old")}),

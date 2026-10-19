@@ -11,7 +11,8 @@ use ion_ai::{
 };
 use ion_core::{
     ChildOutcome, CodeLimits, CodingAgent, CodingAgentError, CodingSession, CodingToolSource,
-    ForkPoint, LiveTranscript, SessionEntry, ToolSet, TranscriptItem, TranscriptProjection,
+    ForkPoint, LiveTranscript, SessionEntry, ToolSelection, ToolSet, TranscriptItem,
+    TranscriptProjection,
 };
 use ion_host::{LocalTools, code_mode::QuickJs};
 use serde_json::json;
@@ -180,6 +181,110 @@ fn guest_and_native_effects_progress_with_one_host_blocking_worker() {
         ));
         assert_eq!(model.requests().len(), 2);
     });
+}
+
+#[tokio::test]
+async fn read_only_discovery_is_callable_from_code_mode_without_mutation_authority() {
+    let root = Workspace::new();
+    fs::create_dir(root.0.join("nested")).unwrap();
+    fs::write(root.0.join("data.txt"), "alpha\nbeta\n").unwrap();
+    fs::write(
+        root.0.join("nested/note.txt"),
+        "note without\nneedle here\n",
+    )
+    .unwrap();
+    let session = root.session();
+    let model = Arc::new(ScriptedModelService::new([
+        response(vec![code(
+            "discovery",
+            r#"
+            const listing = await tools.ls({path:'.'});
+            if (listing.is_error) throw new Error(JSON.stringify(listing.value));
+            const found = await tools.find({pattern:'*.txt'});
+            if (found.is_error) throw new Error(JSON.stringify(found.value));
+            const grepped = await tools.grep({pattern:'needle'});
+            if (grepped.is_error) throw new Error(JSON.stringify(grepped.value));
+            const read = await tools.read({path:'nested/note.txt'});
+            if (read.is_error) throw new Error(JSON.stringify(read.value));
+            return {
+                names: listing.value.entries.map(entry => entry.name),
+                files: found.value.files,
+                match: grepped.value.matches[0],
+                content: read.value.content,
+                exec: typeof tools.exec,
+                edit: typeof tools.edit,
+                write: typeof tools.write,
+            };
+        "#,
+        )]),
+        response(vec![Content::Text("discovery complete".into())]),
+    ]));
+    let source: Arc<dyn CodingToolSource> = Arc::new(LocalTools::new(&root.0).unwrap());
+    let tools = ToolSet::new([source])
+        .with_selection(ToolSelection::include(
+            ["read", "ls", "find", "grep", "code_mode"]
+                .into_iter()
+                .map(str::to_owned),
+        ))
+        .with_code_mode(Arc::new(QuickJs), CodeLimits::default());
+    let agent = CodingAgent::with_tool_set(model, Arc::new(tools), identity());
+    agent
+        .submit(
+            session.clone(),
+            "discover".into(),
+            String::new(),
+            CancellationToken::new(),
+            |_| {},
+        )
+        .await
+        .unwrap();
+    session.ensure_idle().unwrap();
+    let view = session.view().unwrap();
+    let parent = view
+        .entries
+        .iter()
+        .find_map(|entry| match entry {
+            SessionEntry::ToolResult { result, .. } if result.name == "code_mode" => {
+                match &result.outcome {
+                    ion_core::ToolOutcome::Observed { output, .. } => Some(output),
+                    _ => None,
+                }
+            }
+            _ => None,
+        })
+        .unwrap();
+    assert!(!parent.is_error, "{}", parent.value);
+    let result = &parent.value["result"];
+    let names = result["names"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|name| name.as_str().unwrap())
+        .collect::<std::collections::BTreeSet<_>>();
+    assert!(
+        names.is_superset(&std::collections::BTreeSet::from(["data.txt", "nested"])),
+        "{names:?}"
+    );
+    assert_eq!(
+        result["files"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|path| path.as_str().unwrap())
+            .collect::<std::collections::BTreeSet<_>>(),
+        std::collections::BTreeSet::from(["data.txt", "nested/note.txt"])
+    );
+    assert_eq!(result["match"]["path"], "nested/note.txt");
+    assert_eq!(result["match"]["line"], 2);
+    assert_eq!(result["content"], "note without\nneedle here\n");
+    assert_eq!(result["exec"], "undefined");
+    assert_eq!(result["edit"], "undefined");
+    assert_eq!(result["write"], "undefined");
+    assert_eq!(
+        fs::read_to_string(root.0.join("data.txt")).unwrap(),
+        "alpha\nbeta\n"
+    );
+    assert!(!root.0.join("changed").exists());
 }
 
 #[tokio::test]
