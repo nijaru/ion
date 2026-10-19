@@ -642,6 +642,44 @@ fn truncated_conversion_keeps_notices_and_retrieval_references() {
 }
 
 #[test]
+fn oversized_structured_content_is_not_retained_inline() {
+    // The inline preview must stay bounded even when the large payload is
+    // structured content rather than text. The artifact keeps the full value.
+    let rows: Vec<Value> = (0..8000)
+        .map(|index| json!({ "index": index, "row": "x" }))
+        .collect();
+    let result: CallToolResult =
+        serde_json::from_value(json!({ "content": [], "structuredContent": { "rows": rows } }))
+            .unwrap();
+    let output = convert_tool_result("wide", result);
+    let inline = serde_json::to_string(&output.value).unwrap();
+    assert!(
+        inline.len() < 64 * 1024,
+        "inline value stayed {} bytes",
+        inline.len()
+    );
+    assert_eq!(output.value["truncated"], true);
+    assert_eq!(output.value["structured_content"], Value::Null);
+    assert_eq!(output.value["structured_content_omitted"], true);
+    assert!(
+        output.value["content"]
+            .as_str()
+            .unwrap()
+            .contains("Structured content")
+    );
+    let full = output.value["full_output_path"].as_str().unwrap();
+    let saved: Value = serde_json::from_slice(&fs::read(full).unwrap()).unwrap();
+    assert_eq!(
+        saved["structured_content"]["rows"]
+            .as_array()
+            .unwrap()
+            .len(),
+        8000
+    );
+    fs::remove_file(full).unwrap();
+}
+
+#[test]
 fn omission_notices_stay_bounded_for_many_unsupported_blocks() {
     let blocks: Vec<Value> = (0..64)
         .map(|_| json!({"type": "audio", "data": "AAAA", "mimeType": "audio/wav"}))

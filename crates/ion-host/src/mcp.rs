@@ -187,7 +187,15 @@ impl McpTools {
                 },
                 tools,
             )),
-            Err(error) => combine_cleanup(Err(error), client.shutdown().await),
+            Err(error) => {
+                // A listing failure can be explained only on the server's
+                // stderr; keep that reference in the startup diagnostic.
+                let error = match stderr.as_ref().and_then(|log| log.notice(&name)) {
+                    Some(notice) => error.context(notice),
+                    None => error,
+                };
+                combine_cleanup(Err(error), client.shutdown().await)
+            }
         }
     }
 
@@ -256,6 +264,14 @@ impl Server {
     fn attach_stderr(&self, output: &mut CodingToolOutput) {
         if let Some(snapshot) = self.stderr.as_ref().and_then(|log| log.snapshot()) {
             output.value["server_stderr"][&self.name] = snapshot;
+        }
+    }
+
+    /// Why an HTTP transport retired itself, if framing rejected input.
+    async fn transport_failure(&self) -> Option<String> {
+        match &*self.client.read().await {
+            Some(connection) => connection.transport_failure(),
+            None => None,
         }
     }
 

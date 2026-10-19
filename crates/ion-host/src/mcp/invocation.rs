@@ -163,10 +163,18 @@ impl McpExecutor {
                 cleanup.err().map(|error| format!("{error:#}"))
             }
         };
-        match response
-            .map_err(|_| self.failed("transport closed"))?
-            .map_err(|error| self.failed(error))?
-        {
+        let response = match response {
+            Ok(response) => response.map_err(|error| self.failed(error))?,
+            Err(_) => {
+                let reason = self
+                    .server
+                    .transport_failure()
+                    .await
+                    .unwrap_or_else(|| "transport closed".to_owned());
+                return Err(self.failed(reason));
+            }
+        };
+        match response {
             ServerResult::CallToolResult(result) => Ok((result, cleanup_error)),
             ServerResult::InputRequiredResult(_) => Err(self.failed(
                 "unsupported input_required continuation; no additional tools/call was issued",
@@ -272,11 +280,27 @@ pub(super) fn convert_tool_result(name: &str, result: CallToolResult) -> CodingT
     };
     let prefix_end = floor_char_boundary(&encoded, 10 * 1024);
     let suffix_start = floor_char_boundary(&encoded, encoded.len() - 10 * 1024);
-    // Truncation replaces only the inline content preview: the outcome flag,
-    // conversion notices and retrieval references stay top-level.
+    // Truncation replaces the inline observation with a bounded preview: the
+    // outcome flag, conversion notices and retrieval references stay top-level,
+    // and oversized structured content cannot bypass the inline bound.
+    let structured_len = value
+        .get("structured_content")
+        .filter(|value| !value.is_null())
+        .and_then(|value| serde_json::to_string(value).ok())
+        .map_or(0, |encoded| encoded.len());
+    let structured_omitted = structured_len > 4 * 1024;
+    if structured_omitted {
+        value["structured_content"] = serde_json::Value::Null;
+        value["structured_content_omitted"] = json!(true);
+    }
     value["content"] = json!(format!(
-        "MCP result truncated from {} bytes. Read full_output_path with read using byte_offset=0, continuing at next_byte, or bounded exec when available.\n{}\n[... omitted middle ...]\n{}",
+        "MCP result truncated from {} bytes. Read full_output_path with read using byte_offset=0, continuing at next_byte, or bounded exec when available.{}\n{}\n[... omitted middle ...]\n{}",
         encoded.len(),
+        if structured_omitted {
+            " Structured content is in the full output."
+        } else {
+            ""
+        },
         &encoded[..prefix_end],
         &encoded[suffix_start..]
     ));

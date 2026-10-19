@@ -687,9 +687,12 @@ dropping their runtime. Cancelling that wait leaves the retained close running;
 a later shutdown joins the same task instead of reporting an already-taken
 connection as clean. Incoming messages are bounded before decoding: one stdio
 JSON line or HTTP JSON/error body may be at most 64 MiB, and an SSE event stays
-within the transport's 16 MiB default and that 64 MiB ceiling. Oversize input
-fails the connection without truncating a message into a different observation,
-and Ion never reconnects and repeats a possibly executed call. Local server
+within the transport's 16 MiB default and that 64 MiB ceiling. Oversize input is
+rejected rather than truncated into a different observation. A rejected stdio
+line or SSE event retires that connection, so Ion cannot resume and replay it;
+an oversize HTTP JSON/error body fails that request. Neither case reconnects and
+repeats a possibly executed call, and lost transport errors surface after one
+bounded retry instead of retrying forever. Local server
 stderr goes to a private `0600` temporary file retaining the first 64 KiB while
 the rest of the stream is drained so logging cannot block the protocol. Nonempty
 captures appear as `server_stderr` metadata with the path, byte counts and any
@@ -720,7 +723,8 @@ as tool results. These operations are read-only and are never retried; a
 cancellation that cannot flush within three seconds retires that connection.
 Large text or structured results include a bounded preview and a
 `full_output_path` to a private JSON file containing the complete result;
-`read` can inspect it in ranges.
+oversized structured content is omitted from the inline preview and marked
+`structured_content_omitted`; `read` can inspect the full output in ranges.
 Each invocation sends one `tools/call`; `input_required` continuations and task
 results report an unsupported-result error rather than issuing hidden follow-up
 calls or task polling. Cancellation notifies the original request and joins

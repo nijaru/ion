@@ -1,5 +1,10 @@
 //! Own HTTP work through startup, invocation retirement and SSE disposal.
-use std::{borrow::Cow, collections::HashMap, future::Future, sync::Arc};
+use std::{
+    borrow::Cow,
+    collections::HashMap,
+    future::Future,
+    sync::{Arc, Mutex},
+};
 
 use anyhow::{Context, Result};
 use futures_util::StreamExt;
@@ -38,6 +43,7 @@ pub(super) struct OwnedHttpClient {
     inner: reqwest::Client,
     pub stop: CancellationToken,
     io: Arc<RwLock<()>>,
+    failure: Arc<Mutex<Option<String>>>,
 }
 
 impl OwnedHttpClient {
@@ -53,6 +59,7 @@ impl OwnedHttpClient {
             inner,
             stop: CancellationToken::new(),
             io: Arc::new(RwLock::new(())),
+            failure: Arc::new(Mutex::new(None)),
         })
     }
 
@@ -76,6 +83,25 @@ impl OwnedHttpClient {
         // No new I/O can start after stop. Unlike the SDK's abort_all without
         // join_next, this waits for started requests and SSE bodies to drop.
         let _joined = self.io.write().await;
+    }
+
+    /// A framing failure retires this connection: the SDK treats stream errors
+    /// as resumable unless they are its private fatal type, so a rejected event
+    /// must not leave a resume GET replaying it. Keep the reason for the caller.
+    fn fail(&self, reason: String) {
+        let mut failure = self
+            .failure
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        failure.get_or_insert(reason);
+        self.stop.cancel();
+    }
+
+    pub fn take_failure(&self) -> Option<String> {
+        self.failure
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .take()
     }
 
     fn interrupt_stream(
@@ -208,7 +234,7 @@ impl OwnedHttpClient {
         match content_type.as_deref() {
             Some(content_type) if is_event_stream(content_type) => {
                 Ok(StreamableHttpPostResponse::Sse(
-                    bounded_sse_response(response, limits.sse),
+                    self.bounded_sse_response(response, limits.sse),
                     session_id,
                 ))
             }
@@ -489,11 +515,25 @@ async fn read_bounded_body(response: reqwest::Response, limit: usize) -> HttpRes
     Ok(body)
 }
 
-fn bounded_sse_response(response: reqwest::Response, max_event_size: usize) -> BoxedSseResponse {
-    let stream = bounded_sse_events(response.bytes_stream(), max_event_size);
-    sse_stream::SseStream::from_bytes_stream(stream).boxed()
+impl OwnedHttpClient {
+    /// Bound POST SSE bytes before parsing. A rejected event retires this
+    /// connection: the SDK treats foreign stream errors as resumable, and a
+    /// resume GET could replay the event that framing already refused.
+    fn bounded_sse_response(
+        &self,
+        response: reqwest::Response,
+        max_event_size: usize,
+    ) -> BoxedSseResponse {
+        let client = self.clone();
+        let stream = bounded_sse_events(response.bytes_stream(), max_event_size).map(move |item| {
+            if let Err(error) = &item {
+                client.fail(format!("MCP HTTP response framing failed: {error}"));
+            }
+            item
+        });
+        sse_stream::SseStream::from_bytes_stream(stream).boxed()
+    }
 }
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -608,13 +648,35 @@ mod tests {
     async fn sse_wire_budget_rejects_an_oversize_event_before_parsing() {
         let response = b"HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nConnection: close\r\n\r\ndata: 1234567890\n\n".to_vec();
         let (url, server) = spawn_response(response).await;
-        let result = post(&url, request("ping", 1), None, 1024, 4).await;
+        let client = OwnedHttpClient::new().unwrap();
+        let result = client
+            .post_with_limits(
+                Arc::from(url.as_str()),
+                request("ping", 1),
+                None,
+                None,
+                HashMap::new(),
+                PostLimits { body: 1024, sse: 4 },
+            )
+            .await;
         server.await.unwrap();
         let StreamableHttpPostResponse::Sse(mut stream, _) = result.unwrap() else {
             panic!("expected an SSE response");
         };
         let error = stream.next().await.unwrap().unwrap_err();
         assert!(error.to_string().contains("SSE event exceeded"), "{error}");
+        // The SDK treats foreign stream errors as resumable; a rejected event
+        // must retire this connection instead of replaying it on a resume GET.
+        assert!(
+            client.stop.is_cancelled(),
+            "framing failure left the connection live"
+        );
+        let failure = client.take_failure().expect("framing failure reason");
+        assert!(failure.contains("framing failed"), "{failure}");
+        assert!(
+            client.take_failure().is_none(),
+            "failure reason outlived its call"
+        );
     }
 
     #[tokio::test]

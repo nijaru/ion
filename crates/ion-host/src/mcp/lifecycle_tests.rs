@@ -30,6 +30,8 @@ for line in sys.stdin:
     elif method == 'tools/list':
         if mode == 'list-timeout':
             continue
+        if mode == 'list-error':
+            os.write(2, b'LIST_FAILURE_DIAGNOSTIC\n')
         result = {'tools': 'invalid' if mode == 'list-error' else
                   [{'name': 'log', 'inputSchema': {'type': 'object'}}] if mode == 'stderr-flood' else []}
     elif method == 'tools/call' and mode == 'stderr-flood':
@@ -121,6 +123,15 @@ async fn native_roots_are_reaped_after_shutdown_and_failed_startup() {
                     "tool listing"
                 };
                 assert!(diagnostics[0].contains(phase), "{mode}: {diagnostics:?}");
+                if mode == "list-error" {
+                    // A listing failure after successful initialization must
+                    // still expose the server's captured stderr reference.
+                    assert!(diagnostics[0].contains("stderr"), "{mode}: {diagnostics:?}");
+                    assert!(
+                        diagnostics[0].contains("ion-mcp-stderr-"),
+                        "{mode}: {diagnostics:?}"
+                    );
+                }
                 let fault = if mode.ends_with("timeout") {
                     "timed out"
                 } else {

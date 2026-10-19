@@ -15,6 +15,7 @@ use rmcp::{
     transport::{
         StreamableHttpClientTransport, Transport,
         async_rw::AsyncRwTransport,
+        common::client_side_sse::SseRetryPolicy,
         streamable_http_client::{StreamableHttpClientTransportConfig, StreamableHttpError},
     },
 };
@@ -24,6 +25,16 @@ use tokio::{
 };
 
 type HttpTransport = StreamableHttpClientTransport<OwnedHttpClient>;
+
+/// One bounded SSE retry: stream failures surface instead of retrying forever.
+#[derive(Debug)]
+struct OneRetry;
+
+impl SseRetryPolicy for OneRetry {
+    fn retry(&self, times: usize) -> Option<Duration> {
+        (times == 0).then(|| Duration::from_millis(500))
+    }
+}
 
 pub(super) struct Connection {
     pub client: Client,
@@ -71,6 +82,10 @@ impl Connection {
                 // A 404 can mean a lost MCP session, but a tool may already have
                 // executed. Never transparently reinitialize and repeat it.
                 config.reinit_on_expired_session = false;
+                // The SDK's default unbounded exponential backoff can leave an
+                // unanswered call retrying a broken stream indefinitely. One
+                // short retry then failure keeps a lost response observable.
+                config.retry_config = Arc::new(OneRetry);
                 if let Some(env_name) = server.bearer_token_env {
                     let token = std::env::var(&env_name)
                         .with_context(|| format!("MCP server {name} needs {env_name}"))?;
@@ -118,6 +133,11 @@ impl Connection {
 
     pub fn stderr_log(&self) -> Option<Arc<stderr::Log>> {
         self.owned.stderr_log()
+    }
+
+    /// The reason a framing or transport failure retired this connection.
+    pub fn transport_failure(&self) -> Option<String> {
+        self.owned.transport_failure()
     }
 
     pub async fn shutdown(mut self) -> Result<()> {
@@ -176,6 +196,13 @@ impl OwnedTransport {
         match self {
             Self::Stdio { stderr, .. } => Some(stderr.log.clone()),
             Self::Http { .. } => None,
+        }
+    }
+
+    fn transport_failure(&self) -> Option<String> {
+        match self {
+            Self::Stdio { .. } => None,
+            Self::Http { client, .. } => client.take_failure(),
         }
     }
 
