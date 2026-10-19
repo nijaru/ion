@@ -300,8 +300,11 @@ impl HistoryRead {
                 "oversized_entry":false
             }));
         }
+        // Read only metadata for the page window. Body prefixes are loaded
+        // per processed row below so a full page of large unread bodies cannot
+        // enter the scan before the work budget rejects them.
         let mut statement = connection.prepare(
-            "SELECT seq, length(body), substr(CAST(body AS TEXT),1,?3) FROM entries WHERE seq < ?1 ORDER BY seq DESC LIMIT ?2",
+            "SELECT seq, length(body) FROM entries WHERE seq < ?1 ORDER BY seq DESC LIMIT ?2",
         )?;
         let rows = statement
             .query_map(
@@ -309,15 +312,8 @@ impl HistoryRead {
                     i64::try_from(exclusive).map_err(|_| SessionError::InvalidHistory)?,
                     i64::try_from(MAX_SCAN_ENTRIES + 1)
                         .map_err(|_| SessionError::InvalidHistory)?,
-                    i64::try_from(KIND_PREFIX_BYTES).map_err(|_| SessionError::InvalidHistory)?,
                 ],
-                |row| {
-                    Ok((
-                        row.get::<_, i64>(0)?,
-                        row.get::<_, i64>(1)?,
-                        row.get::<_, String>(2)?,
-                    ))
-                },
+                |row| Ok((row.get::<_, i64>(0)?, row.get::<_, i64>(1)?)),
             )?
             .collect::<Result<Vec<_>, _>>()?;
 
@@ -327,7 +323,7 @@ impl HistoryRead {
         let mut last_processed = None;
         let mut stopped_for_limit = false;
         let mut stopped_for_bytes = false;
-        for (seq, bytes, prefix) in &rows {
+        for (seq, bytes) in &rows {
             if stop.is_cancelled() {
                 return Err(HistoryError::request("history search cancelled"));
             }
@@ -339,17 +335,47 @@ impl HistoryRead {
                 stopped_for_bytes = true;
                 break;
             }
-            scanned += 1;
-            scanned_bytes = scanned_bytes.saturating_add(bytes);
             let entry = u64::try_from(*seq).map_err(|_| SessionError::InvalidHistory)?;
-            last_processed = Some(entry);
-            let Some(kind) = kind_from_prefix(prefix) else {
+            let prefix = entry_prefix(connection, entry)?;
+            let Some(kind) = kind_from_prefix(&prefix) else {
                 return Err(SessionError::InvalidHistory.into());
             };
-            if kind == "user_shell_admitted" && private_shell(connection, entry)? {
+            let private = kind == "user_shell_admitted" && private_shell(connection, entry)?;
+            // A shell record's visible outcome is its next settlement. When
+            // that settlement is outside this cursor window, its body is an
+            // extra access not covered by the metadata row above.
+            let joined_bytes = if kind == "user_shell_admitted"
+                && !private
+                && entry < self.upper_entry
+                && entry.saturating_add(1) >= exclusive
+            {
+                entry_body_bytes(connection, entry.saturating_add(1))?.unwrap_or(0)
+            } else {
+                0
+            };
+            if scanned > 0
+                && scanned_bytes
+                    .saturating_add(bytes)
+                    .saturating_add(joined_bytes)
+                    > MAX_SCAN_BYTES
+            {
+                // The admission prefix was already read, but the hit was not.
+                // Leave last_processed at the previous row so the next cursor
+                // includes this logical record instead of skipping its result.
+                scanned += 1;
+                scanned_bytes = scanned_bytes.saturating_add(bytes);
+                stopped_for_bytes = true;
+                break;
+            }
+            scanned += 1;
+            scanned_bytes = scanned_bytes
+                .saturating_add(bytes)
+                .saturating_add(joined_bytes);
+            last_processed = Some(entry);
+            if private {
                 continue;
             }
-            let Some(hit) = hit(connection, entry, kind, query)? else {
+            let Some(hit) = hit(connection, entry, kind, query, self.upper_entry)? else {
                 continue;
             };
             hits.push(hit);
@@ -391,16 +417,11 @@ impl HistoryRead {
                 self.upper_entry
             )));
         }
-        let seq = i64::try_from(entry).map_err(|_| SessionError::InvalidHistory)?;
-        let prefix: Option<String> = connection
-            .query_row(
-                "SELECT substr(CAST(body AS TEXT),1,?2) FROM entries WHERE seq=?1",
-                params![seq, KIND_PREFIX_BYTES as i64],
-                |row| row.get(0),
-            )
-            .optional()?;
-        let prefix = prefix.ok_or_else(|| {
-            HistoryError::request(format!("entry {entry} is not a committed entry"))
+        let prefix = entry_prefix(connection, entry).map_err(|error| match error {
+            SessionError::Sqlite(rusqlite::Error::QueryReturnedNoRows) => {
+                HistoryError::request(format!("entry {entry} is not a committed entry"))
+            }
+            error => error.into(),
         })?;
         let kind = kind_from_prefix(&prefix).ok_or(SessionError::InvalidHistory)?;
         match kind {
@@ -648,7 +669,9 @@ impl HistoryRead {
                         END
                     ) AS document
                 FROM entries e
-                LEFT JOIN entries s ON s.seq=e.seq+1 AND json_extract(s.body,'$.kind')='user_shell_settled'
+                LEFT JOIN entries s ON s.seq=e.seq+1
+                    AND s.seq<=?4
+                    AND json_extract(s.body,'$.kind')='user_shell_settled'
                 WHERE e.seq=?1 AND json_extract(e.body,'$.data.exclude_from_context')=0
             )
             SELECT command,state,is_error,length(CAST(document AS BLOB)),
@@ -658,6 +681,7 @@ impl HistoryRead {
                 i64::try_from(entry).map_err(|_| SessionError::InvalidHistory)?,
                 i64::try_from(offset).map_err(|_| SessionError::InvalidHistory)?,
                 i64::try_from(limit.saturating_add(4)).map_err(|_| SessionError::InvalidHistory)?,
+                i64::try_from(self.upper_entry).map_err(|_| SessionError::InvalidHistory)?,
             ],
             |row| {
                 Ok((
@@ -723,6 +747,32 @@ impl HistoryRead {
     }
 }
 
+fn entry_prefix(connection: &Connection, entry: u64) -> Result<String, SessionError> {
+    connection
+        .query_row(
+            "SELECT substr(CAST(body AS TEXT),1,?2) FROM entries WHERE seq=?1",
+            params![
+                i64::try_from(entry).map_err(|_| SessionError::InvalidHistory)?,
+                KIND_PREFIX_BYTES as i64
+            ],
+            |row| row.get(0),
+        )
+        .map_err(Into::into)
+}
+
+fn entry_body_bytes(connection: &Connection, entry: u64) -> Result<Option<usize>, SessionError> {
+    let bytes: Option<i64> = connection
+        .query_row(
+            "SELECT length(body) FROM entries WHERE seq=?1",
+            [i64::try_from(entry).map_err(|_| SessionError::InvalidHistory)?],
+            |row| row.get(0),
+        )
+        .optional()?;
+    bytes
+        .map(|bytes| usize::try_from(bytes).map_err(|_| SessionError::InvalidHistory))
+        .transpose()
+}
+
 fn private_shell(connection: &Connection, entry: u64) -> Result<bool, SessionError> {
     let excluded: Option<bool> = connection
         .query_row(
@@ -747,6 +797,7 @@ fn hit(
     entry: u64,
     kind: &str,
     query: Option<&str>,
+    upper_entry: u64,
 ) -> Result<Option<Value>, SessionError> {
     let seq = i64::try_from(entry).map_err(|_| SessionError::InvalidHistory)?;
     let preview_limit =
@@ -927,9 +978,16 @@ fn hit(
                     substr(CAST(json_extract(e.body,'$.data.command') AS BLOB),1,?2),
                     length(CAST(json_extract(e.body,'$.data.command') AS BLOB))
                 FROM entries e
-                LEFT JOIN entries s ON s.seq=e.seq+1 AND json_extract(s.body,'$.kind')='user_shell_settled'
+                LEFT JOIN entries s ON s.seq=e.seq+1
+                    AND s.seq<=?4
+                    AND json_extract(s.body,'$.kind')='user_shell_settled'
                 WHERE e.seq=?3"#,
-                params![query, preview_limit, seq],
+                params![
+                    query,
+                    preview_limit,
+                    seq,
+                    i64::try_from(upper_entry).map_err(|_| SessionError::InvalidHistory)?
+                ],
                 |row| {
                     Ok((
                         row.get::<_, String>(0)?,

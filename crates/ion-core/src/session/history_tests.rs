@@ -619,6 +619,71 @@ fn search_cursor_scan_bound_and_committed_upper_snapshot_are_truthful() {
 }
 
 #[test]
+fn prepared_history_does_not_join_shell_settlement_committed_after_its_bound() {
+    let (root, path) = fixture();
+    let session = Session::create(&path, Some(&root)).unwrap();
+    let admission = session
+        .admit_user_shell("printf PREPARED_SHELL_COMMAND".into(), false)
+        .unwrap();
+    let prepared_read = session
+        .prepare_history(&json!({"action":"read","entry":admission}).to_string())
+        .unwrap();
+    let prepared_search = session
+        .prepare_history(&json!({"action":"search","query":"PREPARED_SHELL_OUTPUT"}).to_string())
+        .unwrap();
+    session
+        .record_user_shell(admission, json!({"stdout":"PREPARED_SHELL_OUTPUT"}), false)
+        .unwrap();
+
+    let bounded = prepared_read.read(&CancellationToken::new()).unwrap();
+    assert_eq!(bounded["provenance"]["through_entry"], admission);
+    let document: Value =
+        serde_json::from_str(bounded["entry"]["content"].as_str().unwrap()).unwrap();
+    assert_eq!(document["outcome"]["state"], "unknown");
+    assert!(!document.to_string().contains("PREPARED_SHELL_OUTPUT"));
+
+    let search = prepared_search.read(&CancellationToken::new()).unwrap();
+    assert!(search["entries"].as_array().unwrap().is_empty(), "{search}");
+    let fresh = read_all(&session, admission, 64).unwrap();
+    assert!(fresh.contains("PREPARED_SHELL_OUTPUT"));
+    assert!(fresh.contains("\"state\":\"observed\""));
+    drop(session);
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn search_charges_a_shell_settlement_outside_its_cursor_window() {
+    let (root, path) = fixture();
+    let session = Session::create(&path, Some(&root)).unwrap();
+    let output = format!("HUGE_SETTLEMENT_OUTPUT{}", "x".repeat(9 * 1024 * 1024));
+    let admission = session
+        .admit_user_shell("printf HUGE_SETTLEMENT_COMMAND".into(), false)
+        .unwrap();
+    session
+        .record_user_shell(admission, json!({"stdout":output}), false)
+        .unwrap();
+    let page = history_query(
+        &session,
+        json!({
+            "action":"search",
+            "query":"HUGE_SETTLEMENT_OUTPUT",
+            "before":admission + 1
+        }),
+    )
+    .unwrap();
+    assert_eq!(page["entries"].as_array().unwrap().len(), 1);
+    assert_eq!(page["entries"][0]["entry"], admission);
+    assert_eq!(page["entries"][0]["state"], "observed");
+    assert!(
+        page["scanned_bytes"].as_u64().unwrap() >= output.len() as u64,
+        "{page}"
+    );
+    assert_eq!(page["oversized_entry"], true);
+    drop(session);
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
 fn list_is_newest_first_and_pages_without_repeating_or_skipping_entries() {
     let (root, path) = fixture();
     let session = Session::create(&path, Some(&root)).unwrap();
