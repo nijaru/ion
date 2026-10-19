@@ -374,8 +374,14 @@ pub(super) fn frontmatter<T: DeserializeOwned>(source: &str) -> Result<(T, &str)
     let mut offset = first.len();
     for line in lines {
         if line.trim_end_matches(['\r', '\n']) == "---" {
-            let metadata = serde_saphyr::from_str(&source[first.len()..offset])
-                .context("invalid YAML frontmatter")?;
+            // Frontmatter is a flat metadata block, not a configuration
+            // language with indirection: merge keys would let an anchor fill
+            // trusted fields while the literal lines look unrelated.
+            let mut options = serde_saphyr::Options::default();
+            options.merge_keys = serde_saphyr::MergeKeyPolicy::AsOrdinary;
+            let metadata =
+                serde_saphyr::from_str_with_options(&source[first.len()..offset], options)
+                    .context("invalid YAML frontmatter")?;
             return Ok((metadata, &source[offset + line.len()..]));
         }
         offset += line.len();
@@ -574,6 +580,27 @@ mod tests {
             "Check Rust API; scope all; arguments Rust API."
         );
         fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn frontmatter_merge_keys_cannot_fill_trusted_fields() {
+        // Frontmatter is a flat metadata block: an anchor merge must not
+        // supply the description/name that the literal lines omit.
+        let root = std::env::temp_dir().join(format!("ion-yaml-merge-{}", uuid::Uuid::now_v7()));
+        let skill = root.join("merge");
+        fs::create_dir_all(&skill).unwrap();
+        let path = skill.join("SKILL.md");
+        fs::write(
+            &path,
+            "---\nname: merge\nbase: &base\n  description: Injected through a merge key\n<<: *base\n---\nBODY\n",
+        )
+        .unwrap();
+        let error = load_skill(&path).unwrap_err();
+        fs::remove_dir_all(root).unwrap();
+        assert!(
+            format!("{error:#}").contains("description"),
+            "merge key filled a trusted field: {error:#}"
+        );
     }
 
     #[test]

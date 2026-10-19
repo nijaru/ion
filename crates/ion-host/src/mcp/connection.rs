@@ -39,6 +39,7 @@ impl SseRetryPolicy for OneRetry {
 pub(super) struct Connection {
     pub client: Client,
     owned: OwnedTransport,
+    name: String,
 }
 
 impl Connection {
@@ -115,7 +116,11 @@ impl Connection {
             }
         };
         match initialized {
-            Ok(client) => Ok(Self { client, owned }),
+            Ok(client) => Ok(Self {
+                client,
+                owned,
+                name: name.to_owned(),
+            }),
             Err(error) => {
                 // Initialization drops the pipes/lease on error or timeout.
                 // Unlike rmcp's child transport, cleanup stays in this future.
@@ -159,7 +164,7 @@ impl Connection {
             }
             Ok(_) => Ok(()),
         };
-        with_diagnostics(combine_cleanup(service, cleanup), stderr, "connection")
+        with_diagnostics(combine_cleanup(service, cleanup), stderr, &self.name)
     }
 }
 

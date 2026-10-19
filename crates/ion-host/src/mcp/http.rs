@@ -228,7 +228,7 @@ impl OwnedHttpClient {
                 return Ok(StreamableHttpPostResponse::Json(message, session_id));
             }
             return Err(StreamableHttpError::UnexpectedServerResponse(Cow::Owned(
-                format!("HTTP {status}: {body}"),
+                format!("HTTP {status}: {}", body_preview(body.as_bytes())),
             )));
         }
         match content_type.as_deref() {
@@ -451,7 +451,10 @@ fn legacy_discover_response(
     let error = match serde_json::from_str::<ServerJsonRpcMessage>(body) {
         Ok(ServerJsonRpcMessage::Error(error)) => error.error,
         _ => ErrorData::invalid_request(
-            format!("server/discover rejected with HTTP {status}: {body}"),
+            format!(
+                "server/discover rejected with HTTP {status}: {}",
+                body_preview(body.as_bytes())
+            ),
             None,
         ),
     };
