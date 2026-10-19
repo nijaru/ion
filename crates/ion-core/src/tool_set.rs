@@ -218,6 +218,9 @@ pub(crate) enum ToolDispatch<'a> {
     Rejected(String),
     Execution(BoxFuture<'a, ToolExecution>),
     Composition(&'a Arc<dyn crate::CodeRuntime>, crate::CodeLimits),
+    /// Session-owned historical evidence retrieval. The active Session is
+    /// supplied by the dispatcher; this route never resolves one itself.
+    History,
 }
 
 impl ToolDispatch<'_> {
@@ -297,6 +300,7 @@ pub trait ToolSource: Send + Sync {
 pub struct ToolSet {
     sources: Vec<Arc<dyn ToolSource>>,
     composition: Option<(Arc<dyn crate::CodeRuntime>, crate::CodeLimits)>,
+    history: bool,
     selection: ToolSelection,
 }
 
@@ -305,6 +309,7 @@ impl ToolSet {
         Self {
             sources: sources.into_iter().collect(),
             composition: None,
+            history: false,
             selection: ToolSelection::all(),
         }
     }
@@ -323,6 +328,13 @@ impl ToolSet {
         limits: crate::CodeLimits,
     ) -> Self {
         self.composition = Some((runtime, limits));
+        self
+    }
+
+    /// Opt in to Core's read-only committed-history tool. This is a coding
+    /// preset choice, not ambient authority for every restricted application.
+    pub fn with_history(mut self) -> Self {
+        self.history = true;
         self
     }
 
@@ -384,6 +396,23 @@ impl ToolSet {
                 }
             }
         }
+        if self.history {
+            let definition = crate::session::history::definition();
+            let name = definition.spec.name.clone();
+            if self.selection.allows(&name) {
+                let routed = RoutedTool {
+                    definition,
+                    route: ToolRoute::History,
+                };
+                match positions.get(&name).copied() {
+                    Some(index) => entries[index] = routed,
+                    None => {
+                        positions.insert(name, entries.len());
+                        entries.push(routed);
+                    }
+                }
+            }
+        }
         ToolCatalog::from_entries(entries, previous, self.selection.clone())
     }
 }
@@ -393,6 +422,7 @@ enum ToolRoute {
     Executor(Arc<dyn ToolExecutor>),
     Search,
     Composition(Arc<dyn crate::CodeRuntime>, crate::CodeLimits),
+    History,
 }
 
 #[derive(Clone)]
@@ -488,7 +518,7 @@ impl ToolCatalog {
                 let limits = match &entry.route {
                     ToolRoute::Search => return None,
                     ToolRoute::Composition(_, limits) => Some(*limits),
-                    ToolRoute::Executor(_) => None,
+                    ToolRoute::Executor(_) | ToolRoute::History => None,
                 };
                 Some((
                     &entry.definition.spec,
@@ -546,7 +576,7 @@ impl ToolCatalog {
             .iter()
             .filter(|entry| match &entry.route {
                 ToolRoute::Search => search_needed,
-                ToolRoute::Executor(_) | ToolRoute::Composition(..) => {
+                ToolRoute::Executor(_) | ToolRoute::Composition(..) | ToolRoute::History => {
                     self.declared.contains(&entry.definition.spec.name)
                         || (entry.definition.exposure == ToolExposure::Deferred
                             && additional.contains(&entry.definition.spec.name))
@@ -563,6 +593,13 @@ impl ToolCatalog {
             .is_some_and(|entry| {
                 matches!(entry.route, ToolRoute::Search | ToolRoute::Composition(..))
             })
+    }
+
+    pub(crate) fn is_history(&self, name: &str) -> bool {
+        self.positions
+            .get(name)
+            .and_then(|index| self.entries.get(*index))
+            .is_some_and(|entry| matches!(entry.route, ToolRoute::History))
     }
 
     pub fn activity(&self, call: &ToolCall) -> ToolActivity {
@@ -596,6 +633,11 @@ impl ToolCatalog {
                 ToolDispatch::Execution(execution) => execution.await.output,
                 ToolDispatch::Composition(..) => ToolOutput {
                     value: serde_json::json!({"error":"code_mode requires the Session effect gateway"}),
+                    images: Vec::new(),
+                    is_error: true,
+                },
+                ToolDispatch::History => ToolOutput {
+                    value: serde_json::json!({"error":"history requires an active Session"}),
                     images: Vec::new(),
                     is_error: true,
                 },
@@ -652,6 +694,10 @@ impl ToolCatalog {
                 route: ToolRoute::Composition(runtime, limits),
                 ..
             }) => ToolDispatch::Composition(runtime, *limits),
+            Some(RoutedTool {
+                route: ToolRoute::History,
+                ..
+            }) => ToolDispatch::History,
             None => ToolDispatch::rejected(format!("unknown tool: {}", call.name)),
         }
     }
@@ -1040,6 +1086,33 @@ mod tests {
         assert!(without_search.is_declared("direct"));
         assert!(!without_search.is_declared("deferred"));
         assert!(!without_search.is_declared("tool_search"));
+    }
+
+    #[tokio::test]
+    async fn history_is_explicit_selected_and_never_resolves_an_untracked_session() {
+        let plain = ToolSet::new([]).snapshot();
+        assert!(plain.definition("history").is_none());
+        let catalog = ToolSet::new([]).with_history().snapshot();
+        assert!(catalog.is_declared("history"));
+        // Guest-callable rather than an opaque intrinsic: Code Mode's frozen
+        // namespace can retrieve history, while tool_search/code_mode stay out.
+        assert!(!catalog.is_intrinsic("history"));
+        let excluded = ToolSet::new([])
+            .with_history()
+            .with_selection(ToolSelection::include(["read".into()]))
+            .snapshot();
+        assert!(excluded.definition("history").is_none());
+        let call = ToolCall {
+            id: "history".into(),
+            name: "history".into(),
+            arguments: json!({"action":"list"}),
+            raw_arguments: None,
+        };
+        let output = catalog
+            .execute_untracked(&call, CancellationToken::new())
+            .await;
+        assert!(output.is_error);
+        assert!(output.value["error"].as_str().unwrap().contains("Session"));
     }
 
     #[test]

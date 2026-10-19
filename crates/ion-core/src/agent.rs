@@ -1285,6 +1285,10 @@ impl Agent {
                             });
                         }
                         match dispatch {
+                            ToolDispatch::History => Ok(ToolExecution::output(
+                                crate::session::history::execute(session, &call, stop.clone())
+                                    .await,
+                            )),
                             ToolDispatch::Composition(runtime, limits) => crate::code_gateway::run(
                                 runtime,
                                 limits,
@@ -2941,14 +2945,25 @@ mod tests {
             assert!(model_result.result.get("notice").is_some());
             assert!(model_result.result.get("error").is_none());
             let view = session.view().unwrap();
-            let observed = view
+            let (result_entry, observed) = view
                 .entries
                 .iter()
-                .find_map(|entry| match entry {
-                    crate::SessionEntry::ToolResult { result, .. } => Some(result),
+                .enumerate()
+                .find_map(|(index, entry)| match entry {
+                    crate::SessionEntry::ToolResult { result, .. } => {
+                        Some((index as u64 + 1, result))
+                    }
                     _ => None,
                 })
                 .unwrap();
+            assert!(
+                model_result.result["notice"]
+                    .as_str()
+                    .unwrap()
+                    .contains(&format!("Committed Session entry {result_entry}")),
+                "withheld notice lacks its stable entry locator: {}",
+                model_result.result
+            );
             let crate::ToolOutcome::Observed {
                 output: observed, ..
             } = &observed.outcome

@@ -182,6 +182,164 @@ fn guest_and_native_effects_progress_with_one_host_blocking_worker() {
     });
 }
 
+#[tokio::test]
+async fn history_retrieves_compacted_evidence_through_direct_and_code_mode_routes() {
+    let root = Workspace::new();
+    let session = root.session();
+    let source = Arc::new(LocalTools::new(&root.0).unwrap());
+    let tools = ToolSet::new([source as Arc<dyn CodingToolSource>])
+        .with_history()
+        .with_code_mode(Arc::new(QuickJs), CodeLimits::default());
+    let model = Arc::new(ScriptedModelService::new([
+        response(vec![Content::ToolCall(ToolCall {
+            id: "source".into(),
+            name: "exec".into(),
+            arguments: json!({"command":"printf 'HISTORY_NEEDLE\n' >> effects; printf 'HISTORY_NEEDLE\n'"}),
+            raw_arguments: None,
+        })]),
+        response(vec![Content::Text("source complete".into())]),
+        response(vec![Content::Text("summary omits the needle".into())]),
+        response(vec![Content::ToolCall(ToolCall {
+            id: "history-direct".into(),
+            name: "history".into(),
+            arguments: json!({"action":"search","query":"HISTORY_NEEDLE"}),
+            raw_arguments: None,
+        })]),
+        response(vec![Content::Text("direct history complete".into())]),
+        response(vec![code(
+            "history-code",
+            r#"
+            const found = await tools.history({action:'search',query:'HISTORY_'+'NEEDLE'});
+            if (found.is_error) throw new Error(JSON.stringify(found.value));
+            const target = found.value.entries.find(entry => entry.kind === 'tool_result' && entry.tool && entry.tool.name === 'exec');
+            if (!target) throw new Error('missing historical tool result');
+            const page = await tools.history({action:'read',entry:target.entry,limit:512});
+            if (page.is_error) throw new Error(JSON.stringify(page.value));
+            return {entry:target.entry,state:target.state,content:page.value.entry.content,next:page.value.entry.next_offset,total:page.value.entry.total_bytes};
+        "#,
+        )]),
+        response(vec![Content::Text("code history complete".into())]),
+    ]));
+    let agent = CodingAgent::with_tool_set(model.clone(), Arc::new(tools), identity());
+    agent
+        .submit(
+            session.clone(),
+            "record evidence".into(),
+            String::new(),
+            CancellationToken::new(),
+            |_| {},
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        fs::read_to_string(root.0.join("effects")).unwrap(),
+        "HISTORY_NEEDLE\n"
+    );
+    let source_entry = session
+        .view()
+        .unwrap()
+        .entries
+        .iter()
+        .position(|entry| {
+            matches!(entry, SessionEntry::ToolResult { result, .. } if result.name == "exec")
+        })
+        .unwrap() as u64
+        + 1;
+    assert!(
+        agent
+            .compact(session.clone(), CancellationToken::new(), |_| {})
+            .await
+            .unwrap()
+    );
+    let compacted = session.view().unwrap().compacted_through.unwrap();
+    assert!(source_entry <= compacted);
+
+    agent
+        .submit(
+            session.clone(),
+            "retrieve directly".into(),
+            String::new(),
+            CancellationToken::new(),
+            |_| {},
+        )
+        .await
+        .unwrap();
+    let view = session.view().unwrap();
+    let direct = view
+        .entries
+        .iter()
+        .find_map(|entry| match entry {
+            SessionEntry::ToolResult { result, .. }
+                if result.name == "history"
+                    && matches!(result.outcome, ion_core::ToolOutcome::Observed { .. }) =>
+            {
+                match &result.outcome {
+                    ion_core::ToolOutcome::Observed { output, .. } => Some(output),
+                    _ => None,
+                }
+            }
+            _ => None,
+        })
+        .unwrap();
+    assert!(!direct.is_error, "{}", direct.value);
+    assert!(
+        direct.value["entries"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|hit| {
+                hit["entry"] == source_entry
+                    && hit["kind"] == "tool_result"
+                    && hit["state"] == "observed"
+            })
+    );
+
+    agent
+        .submit(
+            session.clone(),
+            "retrieve through code mode".into(),
+            String::new(),
+            CancellationToken::new(),
+            |_| {},
+        )
+        .await
+        .unwrap();
+    let view = session.view().unwrap();
+    let parent = view
+        .entries
+        .iter()
+        .find_map(|entry| match entry {
+            SessionEntry::ToolResult { result, .. }
+                if result.name == "code_mode"
+                    && matches!(result.outcome, ion_core::ToolOutcome::Observed { .. }) =>
+            {
+                match &result.outcome {
+                    ion_core::ToolOutcome::Observed { output, .. } => Some(output),
+                    _ => None,
+                }
+            }
+            _ => None,
+        })
+        .unwrap();
+    assert!(!parent.is_error, "{}", parent.value);
+    assert_eq!(parent.value["result"]["entry"], source_entry);
+    assert_eq!(parent.value["result"]["state"], "observed");
+    assert!(
+        parent.value["result"]["content"]
+            .as_str()
+            .unwrap()
+            .contains("HISTORY_NEEDLE"),
+        "{}",
+        parent.value
+    );
+    assert_eq!(
+        fs::read_to_string(root.0.join("effects")).unwrap(),
+        "HISTORY_NEEDLE\n",
+        "historical retrieval repeated an effect"
+    );
+    assert_eq!(model.requests().len(), 7);
+}
+
 #[derive(Default)]
 struct DiscoverySource {
     pending: std::sync::atomic::AtomicBool,

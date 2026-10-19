@@ -81,6 +81,7 @@ pub struct CodingApplication {
 
 const READ_ONLY_TOOLS: &[&str] = &[
     "read",
+    "history",
     "list_mcp_resources",
     "list_mcp_resource_templates",
     "read_mcp_resource",
@@ -170,7 +171,9 @@ impl CodingApplication {
             )));
         }
         sources.extend(self.external_tools.iter().cloned());
-        let tools = ion_core::ToolSet::new(sources).with_selection(self.selection.clone());
+        let tools = ion_core::ToolSet::new(sources)
+            .with_selection(self.selection.clone())
+            .with_history();
         let tools = if self.code_mode {
             tools.with_code_mode(
                 Arc::new(crate::code_mode::QuickJs),

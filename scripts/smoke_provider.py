@@ -64,8 +64,8 @@ class Handler(BaseHTTPRequestHandler):
             if count == 6 and require_steering:
                 assert "tools" not in body
             else:
-                assert len(body["tools"]) == 6
-                assert {tool["function"]["name"] for tool in body["tools"]} == {"read", "edit", "write", "exec", "process", "subagent"}
+                assert len(body["tools"]) == 7
+                assert {tool["function"]["name"] for tool in body["tools"]} == {"read", "edit", "write", "exec", "process", "subagent", "history"}
             if salience:
                 if count == 0:
                     calls = [("exec", {"command": "printf 'FAILURE_MARKER\\n'; exit 7"})]

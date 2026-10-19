@@ -34,6 +34,7 @@ mod delegation_background_tests;
 mod delegation_fork_tests;
 #[cfg(test)]
 mod delegation_tests;
+pub(crate) mod history;
 mod recovery;
 #[cfg(test)]
 mod recovery_tests;
@@ -633,7 +634,7 @@ impl State {
                 self.pending.remove(position);
                 messages.push(ProjectedMessage::new(
                     self.sequence + 1,
-                    result.message(false),
+                    result.message(self.sequence + 1, false),
                 ));
                 if self.pending.is_empty() {
                     new_settled.push(self.sequence + 1);
@@ -1949,11 +1950,11 @@ fn encode_entry(entry: &SessionEntry) -> Result<Vec<u8>, SessionError> {
     Ok(bytes)
 }
 
-fn summary_message(summary: &str) -> Message {
+fn summary_message(through_entry: u64, summary: &str) -> Message {
     Message {
         role: Role::User,
         content: vec![Content::Text(format!(
-            "Earlier conversation summary (retain its constraints and progress):\n{summary}"
+            "Earlier conversation summary (entries 1 through {through_entry} were compacted from model context; their original committed records remain in Session history):\n{summary}"
         ))],
         provider_replay: None,
     }
@@ -2032,9 +2033,11 @@ fn projected_entry_messages(entries: &[SessionEntry], display: bool) -> Vec<Opti
                 shell_outcome_at(entries, index + 1),
                 *exclude_from_context,
             )),
-            SessionEntry::ToolResult { result, .. } if display => Some(result.message(true)),
+            SessionEntry::ToolResult { result, .. } if display => {
+                Some(result.message(index as u64 + 1, true))
+            }
             SessionEntry::Assistant { message, .. } if !display => Some(model_message(message)),
-            other => message_from_entry(other),
+            other => message_from_entry(index as u64 + 1, other),
         })
         .collect()
 }
@@ -2054,12 +2057,12 @@ fn model_message(message: &Message) -> Message {
     }
 }
 
-fn message_from_entry(entry: &SessionEntry) -> Option<Message> {
+fn message_from_entry(coordinate: u64, entry: &SessionEntry) -> Option<Message> {
     match entry {
         SessionEntry::TurnStarted { input, .. } => Some(input.clone()),
         SessionEntry::Steering { input, .. } => Some(input.clone()),
         SessionEntry::Assistant { message, .. } => Some(message.clone()),
-        SessionEntry::ToolResult { result, .. } => Some(result.message(false)),
+        SessionEntry::ToolResult { result, .. } => Some(result.message(coordinate, false)),
         SessionEntry::ChildToolAdmitted { .. }
         | SessionEntry::ChildToolResult { .. }
         | SessionEntry::DelegationAdmitted { .. }

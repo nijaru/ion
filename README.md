@@ -70,9 +70,9 @@ or automatically retried.
 `--tools LIST` limits the model-visible tools to comma-separated exact names or
 `*` patterns; `--exclude-tools LIST` removes matches after inclusion. Exclusions
 win, and both apply to native tools, MCP tools and Code Mode's callable namespace.
-`--read-only` is an allowlist preset for `read`, MCP resource inspection and
-Code Mode when enabled; it excludes native mutations, direct shell execution and
-managed children. These flags are model-loadout policies for the invocation, not
+`--read-only` is an allowlist preset for `read`, `history`, MCP resource
+inspection and Code Mode when enabled; it excludes native mutations, direct shell
+execution and managed children. These flags are model-loadout policies for the invocation, not
 OS sandboxes or credential boundaries: user `!` shell commands and host-side
 application effects remain separate. A managed child inherits the initiating
 application's selection. `tool_search` is added only when the selection allows it
@@ -918,14 +918,44 @@ summary request cannot fit. Summary requests treat the selected prefix as
 historical data, exclude opaque replay and human thinking, and carry its images
 as typed attachments when the summary model supports them. Text-only summary
 models receive explicit image-omission notices instead of base64 transcript text.
-Summaries are model-generated and can be wrong; the raw facts remain inspectable.
-Incomplete, empty, wrong-role or non-text summary responses are rejected without
-replacing the existing context. Errors distinguish output/context limits, content
-filtering and invalid response shape; unknown provider details are not echoed.
+The compacted model projection names the exact one-based committed entry range it
+replaced. Summaries are model-generated and can be wrong; the raw facts remain
+inspectable. Incomplete, empty, wrong-role or non-text summary responses are
+rejected without replacing the existing context. Errors distinguish
+output/context limits, content filtering and invalid response shape; unknown
+provider details are not echoed.
+
+The coding preset declares a read-only `history` tool, including under
+`--read-only` and in managed coding children. A restricted application receives
+it only by explicitly enabling it with `ToolSet::with_history`; it is not ambient
+authority. `history` searches or lists committed model-facing Session entries
+newest first, then reads one entry by its stable one-based committed entry
+coordinate. Coordinates are the full physical Session sequence: excluded private
+records leave gaps rather than renumbering results. Search is literal and
+ASCII-case-insensitive and returns kind, Turn, tool, state and a bounded preview;
+`next_before` continues through older records. Entry coordinates, not reusable
+provider call IDs, are authoritative. A read takes a zero-based UTF-8 byte
+`offset` and 4–16384-byte `limit`, returns a JSON text fragment with
+`next_offset` and `total_bytes`, and preserves character boundaries. Fragments
+need not parse as complete JSON until assembled.
+
+A `tool_result` read returns the original observed output JSON text even when the
+result was withheld from model context, plus its original
+observed/not-dispatched/unknown state and error flag. Other entries return a safe
+committed record projection. Historical reads are evidence, not current workspace
+state, and never authorize rerunning a tool or repeating an effect. Search
+examines at most 256 physical entries and normally 8 MiB of stored entry bodies
+per call; a single larger entry may be inspected alone and is reported as
+`oversized_entry`, so scanning progresses without skipping records. Thinking,
+provider replay, typed image bytes, context/configuration snapshots and private
+`!!` shell records are excluded from both search and read. Image attachments are
+reported as counts only and are never returned as text pages. These exclusions
+are structural, not a general secret scrubber for ordinary user or tool text.
 Tool results that individually exceed the route's
 request bound, or return images to a text-only route, give the model a bounded
-explanation. Their observed output remains available in Session inspection,
-export and tool detail, with a notice that it was not shared. The Session's
+explanation naming their stable committed entry coordinate. Their observed output
+remains available through `history`, Session inspection, export and tool detail,
+with a notice that it was not shared. The Session's
 64 MiB encoded-entry limit still applies; a failed result commit leaves the
 effect unknown rather than silently discarding data or replaying the tool.
 A large prompt or accumulated context can still exceed the limit when no

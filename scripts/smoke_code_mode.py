@@ -55,6 +55,11 @@ def program(prompt):
         return "await Promise.all(['a','b'].map(x=>tools.exec({command:`touch ${x}.ready; sleep 1.5; printf done`}))); return true;"
     if prompt == "SELECT":
         return "const report=await tools.read({path:'one'}); text({length:report.value.content.length}); const picture=await tools.read({path:'pixel.png'}); image(picture.images[0]);"
+    if prompt == "HISTORY_SOURCE":
+        command = "printf 'HISTORY_NEEDLE_SMOKE\\n' >> effects; printf 'HISTORY_NEEDLE_SMOKE\\n'"
+        return "await tools.exec(" + json.dumps({"command": command}) + "); return true;"
+    if prompt == "HISTORY_RECOVERY":
+        return "const found=await tools.history({action:'search',query:'HISTORY_'+'NEEDLE_SMOKE'}); if(found.is_error) throw new Error(JSON.stringify(found.value)); const target=found.value.entries.find(entry=>entry.kind==='tool_result'&&entry.tool&&entry.tool.name==='exec'); if(!target) throw new Error('missing compacted tool result'); const page=await tools.history({action:'read',entry:target.entry,limit:512}); if(page.is_error) throw new Error(JSON.stringify(page.value)); return {entry:target.entry,state:target.state,content:page.value.entry.content,next:page.value.entry.next_offset};"
     if prompt == "MCP":
         return "const candidates=await searchTools('Lookup an item'); const bounded=await searchTools('Lookup an item',{limit:1}); if(bounded.length!==1 || bounded[0].name!==candidates[0].name) throw new Error('bounded discovery'); let rejected=false; try { await searchTools('Lookup an item',{limit:null}); } catch (_) { rejected=true; } if(!rejected) throw new Error('invalid limit admitted'); const [candidate]=bounded; const d=await describeTool(candidate.name); if(d.input_schema.required[0]!=='index' || await describeTool('code_mode')!==null || await describeTool('missing')!==null) throw new Error('discovery contract'); const rs=await Promise.all([1,2].map(index=>tools[d.name]({index}))); return {total:rs.reduce((n,r)=>n+r.value.structured_content.count,0)};"
     if prompt in ("IO", "STDERR"):
@@ -85,7 +90,10 @@ class Provider(BaseHTTPRequestHandler):
                 code = discovery + "const exit=await inspectSaved({kind:'output',parent,child:0,pointer:'/exit_code'}); return {exit:JSON.parse(exit.json), original_failed:exit.is_error};"
             delta = {"tool_calls": [{"index": 0, "id": "inspect", "type": "function", "function": {"name": "code_mode", "arguments": json.dumps({"code": code})}}]}
             reason = "tool_calls"
-        elif enabled and prompt in ("FANOUT", "GUARD", "MCP", "SELECT", "IO", "STDERR", "ACTIVE", "RECOVER_FAIL") and fresh:
+        elif enabled and prompt == "HISTORY_SOURCE" and fresh:
+            delta = {"tool_calls": [{"index": 0, "id": "history-source", "type": "function", "function": {"name": "exec", "arguments": json.dumps({"command": "printf 'HISTORY_NEEDLE_SMOKE\\n' >> effects; printf 'HISTORY_NEEDLE_SMOKE\\n'"})}}]}
+            reason = "tool_calls"
+        elif enabled and prompt in ("FANOUT", "GUARD", "MCP", "SELECT", "IO", "STDERR", "ACTIVE", "RECOVER_FAIL", "HISTORY_RECOVERY") and fresh:
             delta = {"tool_calls": [{"index": 0, "id": "parent", "type": "function", "function": {"name": "code_mode", "arguments": json.dumps({"code": program(prompt)})}}]}
             reason = "tool_calls"
         else:
@@ -212,6 +220,27 @@ with tempfile.TemporaryDirectory(prefix="ion-code-mode-") as temporary:
             assert capture.read_bytes() == saved_bytes
         finally:
             capture.unlink()
+
+        # Recover a committed tool observation after a real compaction through
+        # the built Code Mode route. The summary request does not see the needle;
+        # the history tool reads the original tool-result entry and must not
+        # repeat its shell effect.
+        history_work = work / "history"
+        history_work.mkdir()
+        records = [json.loads(line) for line in run(env, history_work, "--code-mode", "--json", "run", "HISTORY_SOURCE").stdout.splitlines()]
+        history_id = next(record["id"] for record in records if record["type"] == "session")
+        assert (history_work / "effects").read_text() == "HISTORY_NEEDLE_SMOKE\n"
+        run(env, history_work, "--session", history_id, "compact")
+        before_recovery = len(requests)
+        records = [json.loads(line) for line in run(env, history_work, "--session", history_id, "--code-mode", "--json", "run", "HISTORY_RECOVERY").stdout.splitlines()]
+        recovered = next(record for record in records if record["type"] == "tool_finished")
+        assert not recovered["is_error"], recovered
+        result = recovered["output"]["result"]
+        assert result["state"] == "observed", recovered
+        assert "HISTORY_NEEDLE_SMOKE" in result["content"], recovered
+        assert isinstance(result["entry"], int) and result["entry"] > 0
+        assert "HISTORY_NEEDLE_SMOKE" not in json.dumps(requests[before_recovery])
+        assert (history_work / "effects").read_text() == "HISTORY_NEEDLE_SMOKE\n"
 
         # Read the same settled facts through RPC after another process reopen,
         # even though the external capture has now been removed.

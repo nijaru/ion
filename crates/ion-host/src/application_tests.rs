@@ -302,6 +302,7 @@ async fn coding_application_selection_and_read_only_narrow_the_model_loadout() {
         .into_control::<()>();
     let catalog = control.agent().tool_catalog();
     assert!(catalog.is_declared("read"));
+    assert!(catalog.is_declared("history"));
     for excluded in ["edit", "write", "exec", "process", "subagent"] {
         assert!(!catalog.is_declared(excluded), "{excluded}");
     }

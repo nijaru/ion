@@ -75,10 +75,10 @@ impl ToolSettlement {
         }
     }
 
-    pub(crate) fn message(&self, display: bool) -> Message {
+    pub(crate) fn message(&self, entry: u64, display: bool) -> Message {
         let output = if let ToolOutcome::Observed { output, projection } = &self.outcome
             && !display
-            && let Some(notice) = projection.model_notice()
+            && let Some(notice) = projection.model_notice(entry)
         {
             ToolOutput {
                 value: serde_json::json!({"output_withheld":projection,"notice":notice}),
@@ -144,15 +144,15 @@ impl ToolResultProjection {
         }
     }
 
-    fn model_notice(self) -> Option<&'static str> {
+    fn model_notice(self, entry: u64) -> Option<String> {
         match self {
             Self::Observed => None,
-            Self::ImagesUnsupported => Some(
-                "The observed tool output includes images unsupported by this route and was withheld. Its outcome is retained for inspection. Withholding does not undo effects or authorize rerunning the tool.",
-            ),
-            Self::RequestLimitExceeded => Some(
-                "The observed tool output exceeds this route's request bound and was withheld. Its outcome is retained for inspection. Withholding does not undo effects or authorize rerunning the tool.",
-            ),
+            Self::ImagesUnsupported => Some(format!(
+                "The observed tool output includes images unsupported by this route and was withheld from model context. Committed Session entry {entry} retains its original output. Withholding does not undo effects or authorize rerunning the tool."
+            )),
+            Self::RequestLimitExceeded => Some(format!(
+                "The observed tool output exceeds this route's request bound and was withheld from model context. Committed Session entry {entry} retains its original output. Withholding does not undo effects or authorize rerunning the tool."
+            )),
         }
     }
 }

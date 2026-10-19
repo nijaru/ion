@@ -25,7 +25,7 @@ pub(super) fn context_projection(store: &Store, model: Option<&ModelRef>) -> Vec
         .state
         .compaction
         .as_ref()
-        .map(|(_, summary)| vec![summary_message(summary)])
+        .map(|(through, summary)| vec![summary_message(*through, summary)])
         .unwrap_or_default();
     let clear_all = model != store.state.last_effective_model.as_ref();
     let first = store
@@ -67,13 +67,15 @@ impl Session {
             .state
             .compaction
             .as_ref()
-            .map(|(_, summary)| crate::json_size::encoded_len(&summary_message(summary)))
+            .map(|(through, summary)| {
+                crate::json_size::encoded_len(&summary_message(*through, summary))
+            })
             .transpose()?
             .map_or(0, |bytes| bytes + 1);
         let suffix_budget = keep_bytes.saturating_sub(summary_bytes);
         let mut prefix_bytes = match &store.state.compaction {
-            Some((_, summary)) => {
-                crate::summary::content_bytes(&summary_message(summary), summary_images)?
+            Some((through, summary)) => {
+                crate::summary::content_bytes(&summary_message(*through, summary), summary_images)?
                     .saturating_add(1)
             }
             None => 1,
@@ -146,8 +148,8 @@ impl Session {
             .checked_sub(1)
             .map(|last| prefix_fits[last / 2]);
         let mut messages = Vec::new();
-        if let Some((_, summary)) = &store.state.compaction {
-            messages.push(summary_message(summary));
+        if let Some((through, summary)) = &store.state.compaction {
+            messages.push(summary_message(*through, summary));
         }
         messages.extend(
             projected

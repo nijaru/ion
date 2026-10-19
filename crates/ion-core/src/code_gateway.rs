@@ -617,6 +617,14 @@ pub(crate) async fn run<F: FnMut(AgentEvent) + Send>(
                     Ok(ChildOutcome::NotDispatched {
                         reason: "stopped before dispatch".into(),
                     })
+                } else if catalog.is_history(&admitted.intent.call.name) {
+                    let output = crate::session::history::execute(
+                        session,
+                        &admitted.intent.call,
+                        child_stop.clone(),
+                    )
+                    .await;
+                    Ok(ChildOutcome::Observed { output })
                 } else {
                     let (invocation, gateway) = crate::ToolInvocation::admitted(
                         &admitted.intent.call,
