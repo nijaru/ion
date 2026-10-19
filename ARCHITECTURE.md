@@ -688,7 +688,9 @@ the tool; terminal coding connects the actual responder before admission.
 
 Esc cancels the questionnaire with an explicit ordinary tool observation; it need
 not stop the Turn. Ctrl-C stops the Turn. Losing a responder while a request waits
-requests Turn stop before releasing its answer waiter. Stop, shutdown and control
+requests Turn stop before releasing its answer waiter. Composed calls retain that
+owning Turn stop separately from a narrower guest-local cancellation token.
+Stop, shutdown and control
 loss revoke pending requests independently of a retained UI handle. Answers become
 only committed tool observations, not new user/steering messages. Pending request
 state is live Host custody, included in complete authorized pull inspection but

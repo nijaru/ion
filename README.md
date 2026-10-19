@@ -1124,7 +1124,9 @@ answers are nonempty and at most 4096 UTF-8 bytes each; the serialized answer
 batch is bounded to 48 KiB. Invalid answers leave the request available for a
 corrected reply. Only one batch can wait per control; concurrent asks fail
 explicitly. Without a connected responder, an explicitly installed question tool
-returns unavailability rather than waiting or auto-answering.
+returns unavailability rather than waiting or auto-answering. The tool also
+requires a Turn admitted through shared control: a genuine Core origin alone does
+not supply its owning Turn's stop authority, including inside Code Mode.
 
 Headless, RPC and managed coding children omit this capability. Rust applications
 can configure the same typed Host port and responder through shared control;
