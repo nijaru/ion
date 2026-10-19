@@ -221,6 +221,7 @@ impl Control {
                     self.mark_gap(1);
                 }
             }
+            ControlUpdate::QuestionChanged => {}
             ControlUpdate::Idle => {
                 self.turn_reply = None;
             }

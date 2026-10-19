@@ -284,7 +284,7 @@ with tempfile.TemporaryDirectory(prefix="ion-terminal-") as temporary:
     env = os.environ.copy()
     env.update(XDG_CONFIG_HOME=str(work / "config"), XDG_STATE_HOME=str(work / "state"), TERM="xterm-256color", ION_SMOKE_STEERING="1", SSH_CONNECTION="ion-smoke", WAYLAND_DISPLAY="ion-smoke", ION_SMOKE_CLIPBOARD=str(copy_file), PATH=f"{copy_bin}:{env['PATH']}")
     port_file, trace = work / "port", work / "requests"
-    server = subprocess.Popen([sys.executable, str(root / "scripts/smoke_provider.py"), str(port_file), str(trace)], env=env, stderr=subprocess.PIPE)
+    server = subprocess.Popen([sys.executable, str(root / "scripts/smoke_provider.py"), str(port_file), str(trace)], env=env | {"ION_SMOKE_TERMINAL": "1"}, stderr=subprocess.PIPE)
     try:
         while not port_file.exists():
             assert time.monotonic() < deadline, "mock provider did not start"
@@ -648,7 +648,7 @@ def exercise_active_band():
         env = os.environ.copy()
         env.update(XDG_CONFIG_HOME=str(work / "config"), XDG_STATE_HOME=str(work / "state"), TERM="xterm-256color", ION_SMOKE_SALIENCE="1")
         port, trace = work / "port", work / "trace"
-        server = subprocess.Popen([sys.executable, str(root / "scripts/smoke_provider.py"), str(port), str(trace)], env=env, stderr=subprocess.PIPE)
+        server = subprocess.Popen([sys.executable, str(root / "scripts/smoke_provider.py"), str(port), str(trace)], env=env | {"ION_SMOKE_TERMINAL": "1"}, stderr=subprocess.PIPE)
         child = None
         master = None
         try:
@@ -738,3 +738,133 @@ def exercise_active_band():
 
 exercise_file_discovery()
 exercise_active_band()
+
+
+def exercise_questions():
+    """Real built client questions: option, custom Unicode, cancel and Ctrl-C."""
+    with tempfile.TemporaryDirectory(prefix="ion-questions-") as temporary:
+        work = Path(temporary)
+        env = {name: value for name, value in os.environ.items() if name in ("PATH", "SHELL", "TMPDIR")}
+        env.update(HOME=str(work / "home"), XDG_CONFIG_HOME=str(work / "config"), XDG_STATE_HOME=str(work / "state"), TERM="xterm-256color")
+        for mode in ("select", "custom", "cancel", "stop"):
+            workspace = work / mode
+            workspace.mkdir()
+            port_file, trace = work / f"port-{mode}", work / f"requests-{mode}"
+            server_env = env | {"ION_SMOKE_QUESTIONS": mode}
+            server = subprocess.Popen([sys.executable, str(root / "scripts/smoke_provider.py"), str(port_file), str(trace)], env=server_env, stderr=subprocess.PIPE)
+            try:
+                deadline = time.monotonic() + 20
+                while not port_file.exists():
+                    assert time.monotonic() < deadline and server.poll() is None, (mode, "mock provider did not start")
+                    time.sleep(0.02)
+                subprocess.run([binary, "use", "smoke", "smoke-model", "--endpoint", f"http://127.0.0.1:{port_file.read_text()}/v1/chat/completions", "--wire", "chat-completions"], env=env, check=True, capture_output=True)
+                master, slave = pty.openpty()
+                fcntl.ioctl(slave, termios.TIOCSWINSZ, struct.pack("HHHH", 30, 100, 0, 0))
+
+                def attach():
+                    os.setsid()
+                    fcntl.ioctl(slave, termios.TIOCSCTTY, 0)
+
+                child = subprocess.Popen([binary, "--cwd", workspace, "chat"], env=env, stdin=slave, stdout=slave, stderr=slave, preexec_fn=attach)
+                os.close(slave)
+                output = bytearray()
+                cursor = CursorReplies()
+
+                def pump():
+                    if select.select([master], [], [], 0.03)[0]:
+                        try:
+                            data = os.read(master, 65536)
+                        except OSError as error:
+                            if error.errno != errno.EIO:
+                                raise
+                            data = b""
+                        output.extend(data)
+                        for reply in cursor.feed(data):
+                            os.write(master, reply)
+
+                def wait(predicate, label):
+                    end = time.monotonic() + 8
+                    while not predicate():
+                        assert child.poll() is None and time.monotonic() < end, (mode, label, child.poll(), bytes(output[-2500:]))
+                        pump()
+
+                def plain():
+                    return re.sub(rb"\x1b\[[0-9;?]*[A-Za-z]", b"", bytes(output))
+
+                try:
+                    wait(lambda: "›".encode() in output, "composer")
+                    os.write(master, b"Ask the fixture question\r")
+                    wait(lambda: b"Question 1/1" in plain() and b"Type something." in plain(), "question modal")
+                    assert b"\x1b]7501;state=blocked:kind=question:app=ion\x1b\\" in output, "question modal did not publish blocked status"
+                    if mode == "select":
+                        os.write(master, b"\x1b[B\r")
+                        wait(lambda: b"QUESTION_DONE" in plain(), "selected answer effect")
+                    elif mode == "custom":
+                        os.write(master, b"\x1b[B\x1b[B\r")
+                        wait(lambda: b"Enter answer" in plain(), "custom editor")
+                        os.write(master, "café 🦀\r".encode())
+                        wait(lambda: b"QUESTION_DONE" in plain(), "custom answer effect")
+                    elif mode == "cancel":
+                        os.write(master, b"\x1b")
+                        wait(lambda: b"CANCEL_OBSERVED" in plain(), "cancelled batch continuation")
+                    else:
+                        os.write(master, b"\x03")
+                        wait(lambda: b"Question closed" in plain(), "Ctrl-C stopped question Turn")
+                    if mode != "stop":
+                        wait(lambda: b"state=done:app=ion" in output or b"state=idle:app=ion" in output, "settled program status")
+                        os.write(master, b"\x04")
+                    else:
+                        time.sleep(0.3)
+                        os.write(master, b"\x04")
+                    end = time.monotonic() + 6
+                    while child.poll() is None:
+                        assert time.monotonic() < end, (mode, "terminal did not exit", bytes(output[-2500:]))
+                        pump()
+                    drain_terminal(master, output)
+                    assert child.returncode == 0, (mode, child.returncode, bytes(output[-2500:]))
+                finally:
+                    if child.poll() is None:
+                        child.kill()
+                    child.wait(timeout=5)
+                    os.close(master)
+
+                records = [json.loads(line) for line in trace.read_text().splitlines() if line.strip()]
+                if mode in ("select", "custom"):
+                    assert len(records) == 3, (mode, len(records))
+                    expected = "SELECTED:Beta" if mode == "select" else "CUSTOM:café 🦀"
+                    assert (workspace / "question-effect.txt").read_text() == expected
+                elif mode == "cancel":
+                    assert len(records) == 2, (mode, len(records))
+                    assert not (workspace / "question-effect.txt").exists()
+                else:
+                    assert len(records) == 1, (mode, len(records))
+                    assert not (workspace / "question-effect.txt").exists()
+                inspected = json.loads(subprocess.run([binary, "--cwd", workspace, "--continue", "inspect"], env=env, check=True, capture_output=True).stdout)
+                outcomes = []
+                for entry in inspected["entries"]:
+                    if entry["kind"] != "tool_result":
+                        continue
+                    result = entry["data"]["result"]
+                    if result.get("name") != "ask_user_question":
+                        continue
+                    outcome = result["outcome"]
+                    assert outcome["state"] == "observed", outcome
+                    outcomes.append(outcome["output"]["value"])
+                assert outcomes, (mode, inspected)
+                if mode in ("select", "custom"):
+                    assert outcomes[-1]["status"] == "answered", outcomes[-1]
+                else:
+                    assert outcomes[-1]["status"] == "cancelled", outcomes[-1]
+                status_sequences = re.findall(rb"\x1b\]7501;state=([^:\x1b]+)", bytes(output))
+                assert status_sequences and status_sequences[-1] != b"blocked", (mode, status_sequences[-1:])
+                assert b"Which route" not in b"".join(re.findall(rb"\x1b\]7501;.*?\x1b\\\\", bytes(output)))
+            finally:
+                server.terminate()
+                server.wait(timeout=5)
+                diagnostics = server.stderr.read()
+                if diagnostics:
+                    print(f"question provider {mode} stderr:\n{diagnostics.decode(errors='replace')}", file=sys.stderr)
+    print("Ion typed questions: option, custom Unicode, cancel, Ctrl-C stop, status and independent effects: OK")
+
+
+exercise_questions()

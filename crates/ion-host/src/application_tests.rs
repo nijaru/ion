@@ -55,6 +55,7 @@ impl Application for Restricted {
         &self,
         cwd: Option<&Path>,
         selected: Option<&ModelRef>,
+        _questions: Option<Arc<crate::QuestionCustody>>,
     ) -> Result<ApplicationRuntime> {
         ensure!(cwd.is_none(), "this application has no workspace");
         let selected = selected.cloned().unwrap_or_else(|| model("first"));
@@ -84,7 +85,7 @@ fn identified_admission_requires_execution_custody_before_commit() {
         service: Arc::new(ScriptedModelService::new([])),
         instructions: RwLock::new(Some("Explicit instructions".into())),
     });
-    let mut control = SessionSetup::new(session.clone(), catalog, application, None, None)
+    let mut control = SessionSetup::new(session.clone(), catalog, application, None, None, None)
         .unwrap()
         .into_control::<String>();
     let key = ion_core::RequestKey::new("inbox".into(), "not-accepted".into()).unwrap();
@@ -130,10 +131,11 @@ async fn workspace_free_application_keeps_its_authority_across_shared_lifecycle(
         application.clone(),
         None,
         Some(ion_ai::Reasoning::ProviderDefault),
+        None,
     );
     assert!(mismatched.is_err());
     assert!(session.view().unwrap().entries.is_empty());
-    let mut control = SessionSetup::new(session, catalog, application.clone(), None, None)
+    let mut control = SessionSetup::new(session, catalog, application.clone(), None, None, None)
         .unwrap()
         .into_control::<String>();
     let refused = control
@@ -246,6 +248,7 @@ async fn workspace_free_application_keeps_its_authority_across_shared_lifecycle(
         application,
         None,
         None,
+        None,
     )
     .unwrap();
     assert_eq!(reopened.agent().model(), &model("second"));
@@ -280,7 +283,7 @@ async fn coding_application_selection_and_read_only_narrow_the_model_loadout() {
             ion_core::ToolSelection::include(names.iter().map(|name| (*name).into())),
         );
         let control = application
-            .setup(session.clone(), selected.clone(), None)
+            .setup(session.clone(), selected.clone(), None, None)
             .unwrap()
             .into_control::<()>();
         let catalog = control.agent().tool_catalog();
@@ -299,7 +302,7 @@ async fn coding_application_selection_and_read_only_narrow_the_model_loadout() {
     );
     let application = crate::CodingApplication::new(host.clone(), None).with_read_only_tools();
     let control = application
-        .setup(session.clone(), selected.clone(), None)
+        .setup(session.clone(), selected.clone(), None, None)
         .unwrap()
         .into_control::<()>();
     let catalog = control.agent().tool_catalog();
@@ -321,7 +324,7 @@ async fn coding_application_selection_and_read_only_narrow_the_model_loadout() {
         .with_code_mode(true)
         .with_read_only_tools();
     let control = application
-        .setup(session.clone(), selected.clone(), None)
+        .setup(session.clone(), selected.clone(), None, None)
         .unwrap()
         .into_control::<()>();
     let catalog = control.agent().tool_catalog();
@@ -333,5 +336,123 @@ async fn coding_application_selection_and_read_only_narrow_the_model_loadout() {
     }
     drop(control);
     drop(session);
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn last_selection_builder_wins_for_restricted_roles() {
+    let root = std::env::temp_dir().join(format!("ion-selection-order-{}", uuid::Uuid::now_v7()));
+    let cwd = root.join("work");
+    fs::create_dir_all(&cwd).unwrap();
+    let host = Arc::new(crate::Host::new(root.join("config"), root.join("state")));
+    let selected = host
+        .models()
+        .save_default(&crate::SavedSelection {
+            provider: "offline".into(),
+            model: "selection-order".into(),
+            endpoint: Some("http://127.0.0.1:1/v1/chat/completions".into()),
+            wire: Some(crate::Wire::ChatCompletions),
+            api_key_env: None,
+            image_input: false,
+        })
+        .unwrap();
+    let catalog = host.sessions(cwd.clone());
+    let session = Arc::new(CodingSession::create(catalog.new_path().unwrap(), Some(&cwd)).unwrap());
+    let explicit = ion_core::ToolSelection::include(["write".into()]);
+    let control = crate::CodingApplication::new(host.clone(), None)
+        .with_read_only_tools()
+        .with_tool_selection(explicit.clone())
+        .setup(session, selected.clone(), None, None)
+        .unwrap()
+        .into_control::<()>();
+    let tools = control.agent().tool_catalog();
+    assert_eq!(tools.specs().len(), 1);
+    assert!(tools.is_declared("write"));
+    assert!(!tools.is_declared("read"));
+    drop(control);
+
+    let session = Arc::new(CodingSession::create(catalog.new_path().unwrap(), Some(&cwd)).unwrap());
+    let control = crate::CodingApplication::new(host, None)
+        .with_tool_selection(explicit)
+        .with_read_only_tools()
+        .setup(session, selected, None, None)
+        .unwrap()
+        .into_control::<()>();
+    let tools = control.agent().tool_catalog();
+    assert!(tools.is_declared("read"));
+    assert!(!tools.is_declared("write"));
+    assert!(!tools.is_declared("ask_user_question"));
+    drop(control);
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn question_capability_obeys_explicit_selection_and_read_only_policy() {
+    let root = std::env::temp_dir().join(format!("ion-question-tools-{}", uuid::Uuid::now_v7()));
+    let cwd = root.join("work");
+    fs::create_dir_all(&cwd).unwrap();
+    let host = Arc::new(crate::Host::new(root.join("config"), root.join("state")));
+    let selected = host
+        .models()
+        .save_default(&crate::SavedSelection {
+            provider: "offline".into(),
+            model: "question-tools".into(),
+            endpoint: Some("http://127.0.0.1:1/v1/chat/completions".into()),
+            wire: Some(crate::Wire::ChatCompletions),
+            api_key_env: None,
+            image_input: false,
+        })
+        .unwrap();
+    let catalog = host.sessions(cwd.clone());
+    let session = Arc::new(CodingSession::create(catalog.new_path().unwrap(), Some(&cwd)).unwrap());
+    let control = crate::CodingApplication::new(host.clone(), None)
+        .with_code_mode(true)
+        .with_tool_selection(ion_core::ToolSelection::include([
+            "read".into(),
+            "code_mode".into(),
+        ]))
+        .setup(
+            session,
+            selected.clone(),
+            None,
+            Some(crate::QuestionCustody::new()),
+        )
+        .unwrap()
+        .into_control::<()>();
+    let tools = control.agent().tool_catalog();
+    assert!(tools.is_declared("read"));
+    assert!(tools.is_declared("code_mode"));
+    assert!(!tools.is_declared("ask_user_question"));
+    drop(control);
+
+    let session = Arc::new(CodingSession::create(catalog.new_path().unwrap(), Some(&cwd)).unwrap());
+    let control = crate::CodingApplication::new(host.clone(), None)
+        .with_read_only_tools()
+        .setup(
+            session,
+            selected.clone(),
+            None,
+            Some(crate::QuestionCustody::new()),
+        )
+        .unwrap()
+        .into_control::<()>();
+    let tools = control.agent().tool_catalog();
+    assert!(tools.is_declared("read"));
+    assert!(tools.is_declared("ask_user_question"));
+    drop(control);
+
+    let session = Arc::new(CodingSession::create(catalog.new_path().unwrap(), Some(&cwd)).unwrap());
+    let control = crate::CodingApplication::new(host, None)
+        .with_read_only_tools()
+        .setup(session, selected, None, None)
+        .unwrap()
+        .into_control::<()>();
+    assert!(
+        !control
+            .agent()
+            .tool_catalog()
+            .is_declared("ask_user_question")
+    );
+    drop(control);
     fs::remove_dir_all(root).unwrap();
 }

@@ -184,7 +184,10 @@ async fn foreground(
                     request_shutdown();
                     parent_result = Some(Err(rejected.take().unwrap_or_else(|| anyhow!("operation ended without settlement"))));
                 }
-                ControlUpdate::Input { .. } | ControlUpdate::Dispatched { .. } | ControlUpdate::Accepted { .. } => {}
+                ControlUpdate::Input { .. }
+                | ControlUpdate::Dispatched { .. }
+                | ControlUpdate::Accepted { .. }
+                | ControlUpdate::QuestionChanged => {}
             }
         }
     };

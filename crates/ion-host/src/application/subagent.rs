@@ -33,7 +33,12 @@ impl Application for ChildApplication {
     fn resources(&self, cwd: Option<&Path>) -> Result<Resources> {
         self.coding.resources(cwd)
     }
-    fn runtime(&self, cwd: Option<&Path>, model: Option<&ModelRef>) -> Result<ApplicationRuntime> {
+    fn runtime(
+        &self,
+        cwd: Option<&Path>,
+        model: Option<&ModelRef>,
+        _questions: Option<Arc<crate::QuestionCustody>>,
+    ) -> Result<ApplicationRuntime> {
         ensure!(
             model.is_none_or(|model| *model == self.selected.identity()),
             "child model differs from the prepared coding route"
@@ -41,6 +46,7 @@ impl Application for ChildApplication {
         self.coding.runtime_with_selection(
             cwd.ok_or_else(|| anyhow::anyhow!("coding requires a working directory"))?,
             &self.selected,
+            None,
         )
     }
 }

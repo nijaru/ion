@@ -32,7 +32,12 @@ impl Application for App {
         ensure!(cwd.is_none(), "workspace-free application");
         Ok(Resources::new(self.instructions.into()))
     }
-    fn runtime(&self, _: Option<&Path>, model: Option<&ModelRef>) -> Result<ApplicationRuntime> {
+    fn runtime(
+        &self,
+        _: Option<&Path>,
+        model: Option<&ModelRef>,
+        _questions: Option<Arc<ion_host::QuestionCustody>>,
+    ) -> Result<ApplicationRuntime> {
         ensure!(
             model.is_none_or(|model| model == self.agent.model()),
             "unexpected model"
@@ -298,6 +303,7 @@ async fn main() -> Result<()> {
         session.clone(),
         SessionCatalog::new(root.clone(), None),
         app,
+        None,
         None,
         None,
     )?

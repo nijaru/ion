@@ -19,7 +19,9 @@ use ion_core::{
     TranscriptProjection, TurnEndReason,
 };
 use ion_host::image_input::{ImageSource, LoadedImage};
-use ion_host::{CredentialStatus, CredentialStore, Delivery, Resources, SessionControl};
+use ion_host::{
+    CredentialStatus, CredentialStore, Delivery, QuestionResponder, Resources, SessionControl,
+};
 use ion_terminal::{
     Frame, InputEvent, KeyCode, KeyEvent, Modifiers, MouseKind, ProgramStatus, Screen,
     TerminalSession,
@@ -37,11 +39,13 @@ mod editing;
 mod interaction;
 mod output;
 mod picker;
+mod question;
 use clipboard_input::*;
 use composer::input_window;
 use editing::{Edit, vertical_cursor};
 use interaction::{apply_picker, dispatch_command, submit_editor};
 use picker::{Picker, PickerItem, PickerValue, Pickers};
+use question::{QuestionAction, QuestionModal};
 
 const MAX_DRAFT: usize = 64 * 1024;
 const LIVE_REGION_MAX_ROWS: usize = 12;
@@ -53,6 +57,7 @@ pub(super) struct ProgramStatusState {
     // Preparation and modal activity overlay this result; neither consumes it.
     settled: Option<ProgramStatus>,
     blocked_auth: bool,
+    blocked_question: bool,
     published: Option<ProgramStatus>,
 }
 
@@ -70,6 +75,8 @@ impl ProgramStatusState {
     fn status(&self, busy: bool) -> ProgramStatus {
         if self.blocked_auth {
             ProgramStatus::BlockedAuth
+        } else if self.blocked_question {
+            ProgramStatus::BlockedQuestion
         } else if busy {
             ProgramStatus::Working
         } else {
@@ -139,6 +146,7 @@ struct Frontend {
     browsing: Option<PromptBrowse>,
     details: Option<DetailView>,
     clipboard_job: Option<ClipboardJob>,
+    question: Option<QuestionModal>,
     cwd: PathBuf,
 }
 
@@ -215,6 +223,9 @@ pub struct ChatInit {
 
 pub async fn chat(init: ChatInit) -> Result<()> {
     let mut runtime = init.setup.into_control::<EditorDraft>();
+    let questions = runtime
+        .attach_question_responder()
+        .context("attach the terminal question consumer")?;
     let application_owner = runtime.owner();
     let background = runtime.background();
     let mut background_revision = 0;
@@ -243,6 +254,8 @@ pub async fn chat(init: ChatInit) -> Result<()> {
         let mut poll_control = true;
         loop {
             terminal.check_active().context("terminal lifecycle failed")?;
+            ui.sync_question(questions.as_ref());
+            program.blocked_question = ui.question_owns_input();
             program.publish(terminal, runtime.is_busy())?;
             draw(terminal, screen, &mut ui, activity.live(), activity.view(&runtime)).await?;
             #[cfg(debug_assertions)]
@@ -288,6 +301,16 @@ pub async fn chat(init: ChatInit) -> Result<()> {
                         && (runtime.is_busy() || activity.view(&runtime).is_some())
                     {
                         runtime.request_stop();
+                        poll_control = true;
+                        continue;
+                    }
+                    if ui.question_owns_input() {
+                        let action = ui
+                            .question
+                            .as_mut()
+                            .expect("question owns input")
+                            .key(key);
+                        apply_question_action(&mut ui, questions.as_ref(), action);
                         poll_control = true;
                         continue;
                     }
@@ -342,7 +365,19 @@ pub async fn chat(init: ChatInit) -> Result<()> {
                     }
                     poll_control = true;
                 },
-                InputEvent::Paste(text) => ui.insert(&text),
+                InputEvent::Paste(text) => {
+                    if ui.question_owns_input() {
+                        let action = ui
+                            .question
+                            .as_mut()
+                            .expect("question owns input")
+                            .paste(&text);
+                        apply_question_action(&mut ui, questions.as_ref(), action);
+                        poll_control = true;
+                    } else {
+                        ui.insert(&text);
+                    }
+                },
                 InputEvent::Rejected(error) => ui.status = error.to_string(),
                 InputEvent::Resize(_) => screen.note_resize(),
                 InputEvent::Mouse(mouse) => match mouse.kind() {
@@ -944,6 +979,36 @@ enum Action {
 }
 
 impl Frontend {
+    fn sync_question(&mut self, responder: Option<&QuestionResponder>) {
+        let Some(responder) = responder else {
+            return;
+        };
+        match responder.pending() {
+            Ok(Some(pending)) => {
+                if self
+                    .question
+                    .as_ref()
+                    .is_none_or(|question| question.request() != pending.request)
+                {
+                    self.question = Some(QuestionModal::new(pending));
+                    self.completion.clear();
+                }
+            }
+            Ok(None) => {
+                if self.question.take().is_some() {
+                    self.status = "Question closed".into();
+                }
+            }
+            Err(_) => {
+                self.question = None;
+            }
+        }
+    }
+
+    fn question_owns_input(&self) -> bool {
+        self.question.is_some() && self.details.is_none() && self.pickers.active().is_none()
+    }
+
     fn attach_image(&mut self, image: ImageSource) {
         self.images.push(image);
         self.status = format!("{} image(s) attached to the next prompt", self.images.len());
@@ -1476,7 +1541,11 @@ async fn prepare_draw(
     screen: &mut Screen,
     ui: &Frontend,
 ) -> Result<Option<(u16, u16, bool)>> {
-    if ui.details.is_some() || ui.pickers.active().is_some() || ui.mode == TuiMode::Fullscreen {
+    if ui.question_owns_input()
+        || ui.details.is_some()
+        || ui.pickers.active().is_some()
+        || ui.mode == TuiMode::Fullscreen
+    {
         terminal.enter_alt_screen()?;
         let (width, height) = terminal.size()?;
         screen.resize_fullscreen(width, height);
@@ -1518,6 +1587,9 @@ fn draw_prepared(
 ) -> Result<()> {
     if ui.details.is_some() || ui.pickers.active().is_some() {
         return draw_modal_fullscreen(terminal, screen, ui, progress, operation, width, height);
+    }
+    if ui.question_owns_input() {
+        return draw_question_fullscreen(terminal, screen, ui, width, height);
     }
     if ui.mode == TuiMode::Fullscreen {
         return draw_chat_fullscreen(terminal, screen, ui, progress, operation, width, height);
@@ -1779,6 +1851,68 @@ fn draw_chat_fullscreen(
     Ok(())
 }
 
+fn draw_question_fullscreen(
+    terminal: &mut TerminalSession,
+    screen: &mut Screen,
+    ui: &mut Frontend,
+    width: u16,
+    height: u16,
+) -> Result<()> {
+    let frame = ui
+        .question
+        .as_mut()
+        .expect("question owns input")
+        .render(width, height);
+    screen.draw_fullscreen(&mut terminal.output()?, &frame.rows, frame.cursor)?;
+    Ok(())
+}
+
+fn apply_question_action(
+    ui: &mut Frontend,
+    responder: Option<&QuestionResponder>,
+    action: QuestionAction,
+) {
+    match action {
+        QuestionAction::None => {}
+        QuestionAction::Answer(request, answers) => {
+            let Some(responder) = responder else {
+                ui.question = None;
+                ui.status = "Question responder is unavailable".into();
+                return;
+            };
+            match responder.answer(request, answers) {
+                Ok(()) => {
+                    ui.question = None;
+                    ui.status.clear();
+                }
+                Err(error) => {
+                    if let Some(question) = &mut ui.question {
+                        question.set_status(format!("Answer was not accepted: {error}"));
+                    }
+                }
+            }
+        }
+        QuestionAction::Cancel(request) => {
+            let Some(responder) = responder else {
+                ui.question = None;
+                ui.status = "Question responder is unavailable".into();
+                return;
+            };
+            match responder.cancel(request) {
+                Ok(()) => {
+                    ui.question = None;
+                    ui.status = "Question cancelled".into();
+                }
+                Err(error) => {
+                    if let Some(question) = &mut ui.question {
+                        question.set_status(format!("Question was not cancelled: {error}"));
+                    }
+                }
+            }
+        }
+    }
+}
+
 fn notice_rows(text: &str, width: usize) -> Vec<Line<'static>> {
     let mut rows = Vec::new();
     push_wrapped(&mut rows, text, width);
@@ -1813,6 +1947,14 @@ fn modal_rows(
     }
     let controls = ui.details.as_ref().map(DetailView::controls);
     let status = visible_status(ui, operation);
+    let status = if ui.question.is_some() {
+        Some(status.map_or_else(
+            || "Question waiting · close this view to answer".into(),
+            |status| format!("{status} · Question waiting · close this view to answer"),
+        ))
+    } else {
+        status
+    };
     let picker = ui.pickers.active();
     // Leave a selected result visible alongside the query when at least two
     // physical rows exist. Status is less important than choosing visibly.

@@ -196,6 +196,9 @@ pub enum ControlUpdate<M> {
         turn: u64,
     },
     Activity(Observation),
+    /// Live question custody changed. State is pulled through the responder;
+    /// this invalidation carries no payload and is omitted from snapshots.
+    QuestionChanged,
     Returned(ReturnedInput<M>),
     Settled(Settlement<M>),
     /// No work remains now; admission remains open unless shutdown was requested.

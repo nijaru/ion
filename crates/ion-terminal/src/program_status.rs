@@ -13,6 +13,8 @@ pub enum ProgramStatus {
     /// A real credential prompt is waiting for input. This is an actual auth
     /// block, not an ordinary idle composer or invented approval state.
     BlockedAuth,
+    /// The typed-question modal owns the keyboard while the model waits.
+    BlockedQuestion,
 }
 
 impl ProgramStatus {
@@ -26,6 +28,7 @@ impl ProgramStatus {
             Self::Done => b"\x1b]7501;state=done:app=ion\x1b\\",
             Self::Error => b"\x1b]7501;state=error:app=ion\x1b\\",
             Self::BlockedAuth => b"\x1b]7501;state=blocked:kind=auth:app=ion\x1b\\",
+            Self::BlockedQuestion => b"\x1b]7501;state=blocked:kind=question:app=ion\x1b\\",
         }
     }
 }
@@ -42,6 +45,7 @@ mod tests {
             ProgramStatus::Done,
             ProgramStatus::Error,
             ProgramStatus::BlockedAuth,
+            ProgramStatus::BlockedQuestion,
         ] {
             let sequence = status.sequence();
             assert!(sequence.starts_with(b"\x1b]7501;"));

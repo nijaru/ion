@@ -133,6 +133,8 @@ pub struct ControlSnapshot<T> {
     pub inputs: Vec<InputSnapshot<T>>,
     /// Shell/compaction/continuation correlation, separate from input metadata.
     pub operation_metadata: Option<(OperationId, T)>,
+    /// Live-only question custody, not a durable Session fact or answer queue.
+    pub pending_question: Option<crate::PendingQuestion>,
     pub updates: Vec<UpdateSnapshot<T>>,
     pub cleanup_errors: Vec<String>,
 }
@@ -186,6 +188,7 @@ impl<M: Serialize + Send + 'static> SessionControl<M> {
                 .as_ref()
                 .map(|(value, _)| (active.id, metadata(value)))
         });
+        let pending_question = self.pending_question();
         let updates = custody
             .updates
             .iter()
@@ -208,6 +211,7 @@ impl<M: Serialize + Send + 'static> SessionControl<M> {
             state,
             inputs,
             operation_metadata,
+            pending_question,
             updates,
             cleanup_errors: self
                 .cleanup_errors
@@ -285,6 +289,8 @@ fn update_snapshot<M, T>(
                 .collect(),
             metadata: settlement.metadata.as_ref().map(metadata),
         },
-        ControlUpdate::Activity(_) | ControlUpdate::Idle => return None,
+        ControlUpdate::Activity(_) | ControlUpdate::QuestionChanged | ControlUpdate::Idle => {
+            return None;
+        }
     })
 }

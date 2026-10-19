@@ -5,6 +5,9 @@ impl<M: Serialize + Send + 'static> SessionControl<M> {
     /// Stop intent is retained even if Core has already completed successfully.
     pub fn request_stop(&mut self) {
         self.stop_requested = true;
+        if let Some(questions) = &self.setup.questions {
+            questions.cancel_pending(self.owner, "stopped");
+        }
         if let Some(active) = &self.active {
             active.work.stop();
         }

@@ -6,7 +6,9 @@ use ion_ai::ModelRef;
 use ion_core::{CodingAgent, CodingSession, ForkPoint};
 use serde::Serialize;
 
-use crate::{Application, ApplicationRuntime, Resources, SessionCatalog, SessionControl};
+use crate::{
+    Application, ApplicationRuntime, QuestionCustody, Resources, SessionCatalog, SessionControl,
+};
 
 /// Configuration, not execution. Consume this to create the sole control owner.
 pub struct SessionSetup {
@@ -15,6 +17,7 @@ pub struct SessionSetup {
     pub(crate) session: Arc<CodingSession>,
     pub(crate) runtime: ApplicationRuntime,
     pub(crate) resources: Resources,
+    pub(crate) questions: Option<Arc<QuestionCustody>>,
 }
 
 impl SessionSetup {
@@ -26,12 +29,22 @@ impl SessionSetup {
         application: Arc<dyn Application>,
         model: Option<&ModelRef>,
         reasoning: Option<ion_ai::Reasoning>,
+        questions: Option<QuestionCustody>,
     ) -> Result<Self> {
+        let questions = questions.map(Arc::new);
         let model = model.cloned().or(session.model_preference()?);
         let resources = application.resources(session.cwd())?;
-        let runtime = application.runtime(session.cwd(), model.as_ref())?;
+        let runtime = application.runtime(session.cwd(), model.as_ref(), questions.clone())?;
         validate_model(&runtime, model.as_ref())?;
-        Self::from_prepared(session, catalog, application, resources, runtime, reasoning)
+        Self::from_prepared(
+            session,
+            catalog,
+            application,
+            resources,
+            runtime,
+            reasoning,
+            questions,
+        )
     }
 
     pub(crate) fn from_prepared(
@@ -41,6 +54,7 @@ impl SessionSetup {
         resources: Resources,
         runtime: ApplicationRuntime,
         reasoning: Option<ion_ai::Reasoning>,
+        questions: Option<Arc<QuestionCustody>>,
     ) -> Result<Self> {
         ensure!(
             catalog.cwd() == session.cwd(),
@@ -57,6 +71,7 @@ impl SessionSetup {
             session,
             runtime,
             resources,
+            questions,
         })
     }
 
@@ -96,7 +111,9 @@ impl SessionSetup {
         model: Option<&ModelRef>,
     ) -> Result<(Resources, ApplicationRuntime)> {
         let resources = self.application.resources(session.cwd())?;
-        let runtime = self.application.runtime(session.cwd(), model)?;
+        let runtime = self
+            .application
+            .runtime(session.cwd(), model, self.questions.clone())?;
         validate_model(&runtime, model)?;
         runtime.agent.validate_reasoning(session.reasoning()?)?;
         Ok((resources, runtime))
@@ -150,10 +167,11 @@ impl<M: Serialize + Send + 'static> SessionControl<M> {
 
     pub fn select_model(&mut self, model: ModelRef) -> Result<()> {
         self.ensure_replaceable()?;
-        let runtime = self
-            .setup
-            .application
-            .runtime(self.setup.session.cwd(), Some(&model))?;
+        let runtime = self.setup.application.runtime(
+            self.setup.session.cwd(),
+            Some(&model),
+            self.setup.questions.clone(),
+        )?;
         validate_model(&runtime, Some(&model))?;
         runtime.agent.select_model(&self.setup.session)?;
         self.setup.runtime = runtime;
@@ -176,7 +194,10 @@ impl<M: Serialize + Send + 'static> SessionControl<M> {
         // Preflight before allocating/publishing a new database. New Sessions
         // intentionally reset reasoning, unlike conversation copies.
         let resources = self.setup.application.resources(previous.cwd())?;
-        let runtime = self.setup.application.runtime(previous.cwd(), None)?;
+        let runtime =
+            self.setup
+                .application
+                .runtime(previous.cwd(), None, self.setup.questions.clone())?;
         runtime
             .agent
             .validate_reasoning(ion_ai::Reasoning::ProviderDefault)?;
@@ -217,10 +238,11 @@ impl<M: Serialize + Send + 'static> SessionControl<M> {
             .find(|item| item.turn == turn)
             .context("selected Turn does not exist")?;
         let resources = self.setup.application.resources(previous.cwd())?;
-        let runtime = self
-            .setup
-            .application
-            .runtime(previous.cwd(), Some(&selected_turn.model))?;
+        let runtime = self.setup.application.runtime(
+            previous.cwd(),
+            Some(&selected_turn.model),
+            self.setup.questions.clone(),
+        )?;
         validate_model(&runtime, Some(&selected_turn.model))?;
         runtime.agent.validate_reasoning(selected_turn.reasoning)?;
         let path = self.setup.catalog.new_path()?;
@@ -258,6 +280,9 @@ impl<M: Serialize + Send + 'static> SessionControl<M> {
         runtime: ApplicationRuntime,
         resources: Resources,
     ) {
+        if let Some(questions) = &self.setup.questions {
+            questions.rebind_session(self.owner, session.id());
+        }
         self.setup.session = session;
         self.setup.runtime = runtime;
         self.setup.resources = resources;

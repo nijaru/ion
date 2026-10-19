@@ -15,7 +15,7 @@ fn route(model: &str) -> SavedSelection {
 }
 fn control(host: Arc<Host>, session: Arc<CodingSession>, selected: Selection) -> SessionControl {
     crate::CodingApplication::new(host, None)
-        .setup(session, selected, None)
+        .setup(session, selected, None, None)
         .unwrap()
         .into_control()
 }

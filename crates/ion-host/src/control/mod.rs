@@ -14,13 +14,14 @@ use ion_core::{
     CodingToolOutput, InputBudget, InputReservation, Operation, SteeringInbox,
 };
 use serde::Serialize;
-use tokio::sync::broadcast;
+use tokio::sync::{broadcast, watch};
 use tokio_util::sync::CancellationToken;
 
 use crate::{SessionSetup, image_input::ImageSource};
 
 mod admission;
 mod input;
+mod question;
 mod snapshot;
 pub use snapshot::*;
 #[cfg(test)]
@@ -183,7 +184,9 @@ pub struct SessionControl<M = ()> {
     stop_requested: bool,
     closed: bool,
     cleanup_errors: Vec<CodingSessionError>,
-    owner: uuid::Uuid,
+    pub(crate) owner: uuid::Uuid,
+    question_changes: Option<watch::Receiver<u64>>,
+    question_seen: u64,
     snapshot_sequence: u64,
     shutdown_complete: bool,
 }
@@ -196,6 +199,16 @@ fn lock<M>(custody: &Mutex<Custody<M>>) -> MutexGuard<'_, Custody<M>> {
 impl<M: Serialize + Send + 'static> SessionControl<M> {
     pub(crate) fn from_setup(setup: SessionSetup) -> Self {
         let (observations, receiver) = broadcast::channel(OBSERVATION_CAPACITY);
+        let owner = uuid::Uuid::now_v7();
+        let question_changes = setup.questions.as_ref().map(|questions| {
+            questions
+                .bind_control(owner, setup.session.id())
+                .expect("question custody is owned by one SessionSetup");
+            questions.subscribe()
+        });
+        let question_seen = question_changes
+            .as_ref()
+            .map_or(0, |changes| *changes.borrow());
         Self {
             setup,
             custody: Arc::new(Mutex::new(Custody::default())),
@@ -212,7 +225,9 @@ impl<M: Serialize + Send + 'static> SessionControl<M> {
             stop_requested: false,
             closed: false,
             cleanup_errors: Vec::new(),
-            owner: uuid::Uuid::now_v7(),
+            owner,
+            question_changes,
+            question_seen,
             snapshot_sequence: 0,
             shutdown_complete: false,
         }
@@ -324,6 +339,7 @@ impl<M: Serialize + Send + 'static> SessionControl<M> {
             Prepared(Result<Message>),
             Settled(OperationOutcome),
             Activity(Observation),
+            Question,
         }
         let progress = match (&mut self.preparing, &mut self.active) {
             // Drain bounded ready observations before consuming completion, so
@@ -334,6 +350,12 @@ impl<M: Serialize + Send + 'static> SessionControl<M> {
                 result = preparation.join() => Progress::Prepared(result),
                 Some(observation) = self.observer.next() => Progress::Activity(observation),
                 result = active.work.join() => Progress::Settled(result),
+                Some(()) = async {
+                    match self.question_changes.as_mut() {
+                        Some(changes) => changes.changed().await.ok(),
+                        None => Some(()),
+                    }
+                }, if self.question_changes.is_some() => Progress::Question,
             },
             (Some((_, preparation)), None) => tokio::select! {
                 biased;
@@ -344,6 +366,12 @@ impl<M: Serialize + Send + 'static> SessionControl<M> {
                 biased;
                 Some(observation) = self.observer.next() => Progress::Activity(observation),
                 result = active.work.join() => Progress::Settled(result),
+                Some(()) = async {
+                    match self.question_changes.as_mut() {
+                        Some(changes) => changes.changed().await.ok(),
+                        None => Some(()),
+                    }
+                }, if self.question_changes.is_some() => Progress::Question,
             },
             (None, None) => return None,
         };
@@ -352,6 +380,7 @@ impl<M: Serialize + Send + 'static> SessionControl<M> {
             Progress::Prepared(result) => self.finish_preparation(result),
             Progress::Settled(result) => self.finish_operation(result),
             Progress::Activity(observation) => return Some(observation),
+            Progress::Question => {}
         }
         self.advance();
         None
@@ -456,6 +485,9 @@ impl<M: Serialize + Send + 'static> SessionControl<M> {
             if let Some(update) = self.take_update() {
                 return update;
             }
+            if self.take_question_change() {
+                return ControlUpdate::QuestionChanged;
+            }
             if !self.is_busy() {
                 return ControlUpdate::Idle;
             }
@@ -470,6 +502,9 @@ impl<M: Serialize + Send + 'static> SessionControl<M> {
     /// Close admission and request stop without waiting or consuming results.
     pub fn request_shutdown(&mut self) {
         self.closed = true;
+        if let Some(questions) = &self.setup.questions {
+            questions.close(self.owner, "shutdown");
+        }
         self.request_stop();
     }
 
@@ -507,6 +542,9 @@ impl<M: Serialize + Send + 'static> SessionControl<M> {
 
 impl<M> Drop for SessionControl<M> {
     fn drop(&mut self) {
+        if let Some(questions) = &self.setup.questions {
+            questions.close(self.owner, "control_dropped");
+        }
         if let Some(active) = &self.active {
             active.work.stop();
         }

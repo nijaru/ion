@@ -26,6 +26,8 @@ pub mod model_setup;
 mod preparation;
 mod process;
 mod project_instructions;
+mod question;
+mod question_tool;
 pub mod resources;
 pub mod session_catalog;
 
@@ -62,6 +64,13 @@ pub use process::{
     AttachmentPage, AttachmentScreen, AttachmentWrite, ProcessOwner, ProcessTools,
     TerminalAttachment, TerminalSummary,
 };
+pub use question::{
+    MAX_ANSWER_BYTES, MAX_OPTION_DESCRIPTION_BYTES, MAX_OPTION_LABEL_BYTES, MAX_OPTIONS,
+    MAX_QUESTION_BYTES, MAX_QUESTIONS, MAX_REQUEST_BYTES, PendingQuestion, Question,
+    QuestionAnswer, QuestionCustody, QuestionError, QuestionOption, QuestionRequestId,
+    QuestionResponder, SYNTHETIC_TEXT_LABEL,
+};
+pub use question_tool::QuestionTools;
 pub use resources::{PromptTemplate, ResourceDiagnostic, Resources, Skill};
 pub use session_catalog::{SessionCatalog, SessionSummary};
 

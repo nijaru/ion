@@ -131,7 +131,7 @@ impl Fixture {
         let session =
             Arc::new(CodingSession::create(root.join("session.sqlite"), Some(&root)).unwrap());
         let setup = ion_host::CodingApplication::new(host.clone(), None)
-            .setup(session, selected, None)
+            .setup(session, selected, None, None)
             .unwrap();
         Self {
             root,
@@ -596,4 +596,57 @@ fn shell_syntax_and_output_settings_remain_editor_operations() {
         crate::transcript_render::ThinkingVisibility::Visible
     );
     assert!(ui.output_settings("thinking sometimes").is_err());
+}
+
+#[test]
+fn question_block_status_requires_the_real_modal_and_clears() {
+    let mut program = ProgramStatusState::default();
+    program.settle(ProgramStatus::Done);
+    assert_eq!(program.status(false), ProgramStatus::Done);
+    program.blocked_question = true;
+    assert_eq!(program.status(true), ProgramStatus::BlockedQuestion);
+    program.blocked_auth = true;
+    assert_eq!(program.status(true), ProgramStatus::BlockedAuth);
+    program.blocked_auth = false;
+    program.blocked_question = false;
+    assert_eq!(program.status(false), ProgramStatus::Done);
+}
+
+#[test]
+fn question_modal_preserves_composer_draft_images_and_defers_to_other_views() {
+    let request = ion_host::QuestionRequestId(uuid::Uuid::now_v7());
+    let questions = vec![ion_host::Question {
+        question: "Continue?".into(),
+        options: vec![
+            ion_host::QuestionOption {
+                label: "Yes".into(),
+                description: None,
+            },
+            ion_host::QuestionOption {
+                label: "No".into(),
+                description: None,
+            },
+        ],
+    }];
+    let mut ui = Frontend {
+        draft: "literal draft".into(),
+        cursor: "literal draft".len(),
+        images: vec![ImageSource::Path(PathBuf::from("missing.png"))],
+        question: Some(QuestionModal::fixture(request, questions)),
+        ..Frontend::default()
+    };
+    assert!(ui.question_owns_input());
+    let question = ui.question.as_mut().unwrap();
+    question.key(KeyEvent::new(KeyCode::Down, Modifiers::NONE));
+    question.key(KeyEvent::new(KeyCode::Enter, Modifiers::NONE));
+    assert_eq!(ui.draft, "literal draft");
+    assert_eq!(ui.cursor, "literal draft".len());
+    assert_eq!(ui.images.len(), 1);
+    ui.pickers.open(Picker {
+        title: "Existing view",
+        query: String::new(),
+        selected: 0,
+        items: Vec::new(),
+    });
+    assert!(!ui.question_owns_input());
 }

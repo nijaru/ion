@@ -705,6 +705,11 @@ async fn run_cli(cli: Cli) -> Result<()> {
             let external_tools: Option<Arc<dyn CodingToolSource>> = external_mcp
                 .as_ref()
                 .map(|tools| tools.clone() as Arc<dyn CodingToolSource>);
+            // The question capability exists only for the actual terminal
+            // client. Headless, RPC, compaction and managed children get no
+            // consumer and therefore no declared question tool.
+            let questions = (cli.print.is_none() && matches!(&action, Some(Action::Chat) | None))
+                .then(ion_host::QuestionCustody::new);
             let mut application = ion_host::CodingApplication::new(host.clone(), external_tools)
                 .with_code_mode(cli.code_mode);
             if cli.read_only {
@@ -725,6 +730,7 @@ async fn run_cli(cli: Cli) -> Result<()> {
                     preflight_session.as_ref().expect("unbound Session").clone(),
                     selected,
                     cli.reasoning,
+                    questions,
                 ) {
                     Ok(setup) => setup,
                     Err(error) => {

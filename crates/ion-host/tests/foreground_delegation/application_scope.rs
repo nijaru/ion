@@ -90,6 +90,7 @@ async fn application_failure_stops_parent_without_a_host_result_reader() {
         }),
         None,
         None,
+        None,
     )
     .unwrap()
     .into_control();

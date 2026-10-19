@@ -92,6 +92,7 @@ impl Application for App {
         &self,
         _cwd: Option<&Path>,
         selected: Option<&ModelRef>,
+        _questions: Option<Arc<ion_host::QuestionCustody>>,
     ) -> Result<ApplicationRuntime> {
         ensure!(
             selected.is_none_or(|model| model == &identity()),
@@ -338,7 +339,7 @@ async fn main() -> Result<()> {
     let path = catalog.new_path()?;
     let session = Arc::new(CodingSession::create(&path, None)?);
     let mut control =
-        SessionSetup::new(session.clone(), catalog, app.clone(), None, None)?.into_control();
+        SessionSetup::new(session.clone(), catalog, app.clone(), None, None, None)?.into_control();
     control
         .submit(Delivery::Start, input("first"), metadata("first"))
         .map_err(|e| e.reason)?;
@@ -388,9 +389,15 @@ async fn main() -> Result<()> {
     drop(control);
     drop(session);
     let reopened = Arc::new(CodingSession::open(path)?);
-    let mut replacement =
-        SessionSetup::new(reopened, SessionCatalog::new(root, None), app, None, None)?
-            .into_control::<Metadata>();
+    let mut replacement = SessionSetup::new(
+        reopened,
+        SessionCatalog::new(root, None),
+        app,
+        None,
+        None,
+        None,
+    )?
+    .into_control::<Metadata>();
     let after = replacement.snapshot(|_| ())?.cursor;
     ensure!(
         after.session == before.session

@@ -43,6 +43,7 @@ impl Application for App {
         &self,
         _: Option<&std::path::Path>,
         _: Option<&ModelRef>,
+        _: Option<Arc<ion_host::QuestionCustody>>,
     ) -> anyhow::Result<ApplicationRuntime> {
         Ok(ApplicationRuntime::new(self.agent.clone()))
     }
@@ -373,6 +374,7 @@ impl Fixture {
                 instructions: "parent instructions",
                 owner: None,
             }),
+            None,
             None,
             None,
         )

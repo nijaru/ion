@@ -6,7 +6,7 @@ use ion_ai::{BoxFuture, ModelRef};
 use ion_core::{CodingAgent, CodingSession, CodingToolOutput, CodingToolSource, ToolSelection};
 use tokio_util::sync::CancellationToken;
 
-use crate::{Host, LocalTools, Resources, Selection, SessionSetup};
+use crate::{Host, LocalTools, QuestionCustody, Resources, Selection, SessionSetup};
 
 mod owner;
 mod subagent;
@@ -18,7 +18,12 @@ pub use owner::ApplicationOwner;
 /// coding defaults. A missing model requests the application's own default.
 pub trait Application: Send + Sync {
     fn resources(&self, cwd: Option<&Path>) -> Result<Resources>;
-    fn runtime(&self, cwd: Option<&Path>, model: Option<&ModelRef>) -> Result<ApplicationRuntime>;
+    fn runtime(
+        &self,
+        cwd: Option<&Path>,
+        model: Option<&ModelRef>,
+        questions: Option<Arc<QuestionCustody>>,
+    ) -> Result<ApplicationRuntime>;
     /// Stable application-lifetime custody, independent of any Session's
     /// shutdown or binding. Return the same retained owner on every call;
     /// the outer application explicitly closes/joins it before its environment.
@@ -62,6 +67,12 @@ impl ApplicationRuntime {
 }
 
 #[derive(Clone)]
+enum SelectionPolicy {
+    Explicit(ToolSelection),
+    ReadOnly,
+}
+
+#[derive(Clone)]
 enum CodingRole {
     Main(Arc<ApplicationOwner>),
     Subagent,
@@ -74,7 +85,7 @@ pub struct CodingApplication {
     host: Arc<Host>,
     external_tools: Option<Arc<dyn CodingToolSource>>,
     code_mode: bool,
-    selection: ToolSelection,
+    selection: SelectionPolicy,
     role: CodingRole,
     processes: Arc<crate::ProcessOwner>,
 }
@@ -102,7 +113,7 @@ impl CodingApplication {
             host,
             external_tools,
             code_mode: false,
-            selection: ToolSelection::all(),
+            selection: SelectionPolicy::Explicit(ToolSelection::all()),
             role: CodingRole::Main(owner),
             processes,
         }
@@ -119,7 +130,7 @@ impl CodingApplication {
     /// or Code Mode, but user shell commands and host-side application actions
     /// remain separate.
     pub fn with_tool_selection(mut self, selection: ToolSelection) -> Self {
-        self.selection = selection;
+        self.selection = SelectionPolicy::Explicit(selection);
         self
     }
 
@@ -127,7 +138,7 @@ impl CodingApplication {
     /// shell execution and managed children; it is a model-loadout policy, not
     /// an OS or credential boundary.
     pub fn with_read_only_tools(mut self) -> Self {
-        self.selection = ToolSelection::include(READ_ONLY_TOOLS.iter().map(|name| (*name).into()));
+        self.selection = SelectionPolicy::ReadOnly;
         self
     }
 
@@ -138,13 +149,15 @@ impl CodingApplication {
         session: Arc<CodingSession>,
         selected: Selection,
         reasoning: Option<ion_ai::Reasoning>,
+        questions: Option<QuestionCustody>,
     ) -> Result<SessionSetup> {
+        let questions = questions.map(Arc::new);
         let cwd = session
             .cwd()
             .context("coding requires a working directory")?;
         let catalog = self.host.sessions(cwd.to_path_buf());
         let resources = self.resources(Some(cwd))?;
-        let runtime = self.runtime_with_selection(cwd, &selected)?;
+        let runtime = self.runtime_with_selection(cwd, &selected, questions.clone())?;
         SessionSetup::from_prepared(
             session,
             catalog,
@@ -152,6 +165,7 @@ impl CodingApplication {
             resources,
             runtime,
             reasoning,
+            questions,
         )
     }
 
@@ -159,6 +173,7 @@ impl CodingApplication {
         &self,
         cwd: &Path,
         selected: &Selection,
+        questions: Option<Arc<QuestionCustody>>,
     ) -> Result<ApplicationRuntime> {
         let native = Arc::new(LocalTools::new(cwd)?);
         let mut sources: Vec<Arc<dyn CodingToolSource>> = vec![
@@ -173,9 +188,26 @@ impl CodingApplication {
                 owner.background().clone(),
             )));
         }
+        let ask_available = questions.is_some();
+        if let Some(questions) = questions {
+            sources.push(Arc::new(crate::QuestionTools::new(questions)));
+        }
         sources.extend(self.external_tools.iter().cloned());
+        let selection = match &self.selection {
+            SelectionPolicy::Explicit(selection) => selection.clone(),
+            SelectionPolicy::ReadOnly => {
+                let mut names = READ_ONLY_TOOLS
+                    .iter()
+                    .map(|name| (*name).to_owned())
+                    .collect::<Vec<_>>();
+                if ask_available {
+                    names.push("ask_user_question".into());
+                }
+                ToolSelection::include(names)
+            }
+        };
         let tools = ion_core::ToolSet::new(sources)
-            .with_selection(self.selection.clone())
+            .with_selection(selection)
             .with_history();
         let tools = if self.code_mode {
             tools.with_code_mode(
@@ -208,7 +240,12 @@ impl Application for CodingApplication {
             .resources(cwd.context("coding requires a working directory")?)
     }
 
-    fn runtime(&self, cwd: Option<&Path>, model: Option<&ModelRef>) -> Result<ApplicationRuntime> {
+    fn runtime(
+        &self,
+        cwd: Option<&Path>,
+        model: Option<&ModelRef>,
+        questions: Option<Arc<QuestionCustody>>,
+    ) -> Result<ApplicationRuntime> {
         let selected =
             self.host
                 .models()
@@ -216,6 +253,7 @@ impl Application for CodingApplication {
         self.runtime_with_selection(
             cwd.context("coding requires a working directory")?,
             &selected,
+            questions,
         )
     }
 }

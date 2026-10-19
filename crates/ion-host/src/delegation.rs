@@ -46,7 +46,7 @@ impl SessionDelegation {
         let resources = self.application.resources(cwd.as_deref())?;
         let runtime = self
             .application
-            .runtime(cwd.as_deref(), self.model.as_ref())?;
+            .runtime(cwd.as_deref(), self.model.as_ref(), None)?;
         crate::binding::validate_model(&runtime, self.model.as_ref())?;
         runtime.agent.validate_reasoning(self.reasoning)?;
         let spec = DelegationSpec {
@@ -72,6 +72,7 @@ impl SessionDelegation {
                     resources,
                     runtime,
                     Some(reasoning),
+                    None,
                 )
                 .map_err(|error| DelegationFailure::Infrastructure(error.to_string()))?;
                 let mut control = setup.into_control::<()>();

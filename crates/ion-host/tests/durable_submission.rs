@@ -70,7 +70,12 @@ impl Application for Fixture {
         ensure!(cwd.is_none(), "fixture has no workspace");
         Ok(Resources::new("Only explicit fixture tools.".into()))
     }
-    fn runtime(&self, _: Option<&Path>, _: Option<&ModelRef>) -> Result<ApplicationRuntime> {
+    fn runtime(
+        &self,
+        _: Option<&Path>,
+        _: Option<&ModelRef>,
+        _: Option<Arc<ion_host::QuestionCustody>>,
+    ) -> Result<ApplicationRuntime> {
         Ok(ApplicationRuntime::new(Arc::new(
             CodingAgent::new(
                 self.service.clone(),
@@ -144,6 +149,7 @@ async fn worker(root: &Path, mode: &str) {
         session.clone(),
         SessionCatalog::new(root.to_path_buf(), None),
         application,
+        None,
         None,
         None,
     )

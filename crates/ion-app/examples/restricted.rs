@@ -91,7 +91,12 @@ impl Application for CounterApplication {
         ensure!(cwd.is_none(), "counter application needs no workspace");
         Ok(Resources::new(INSTRUCTIONS.into()))
     }
-    fn runtime(&self, _cwd: Option<&Path>, model: Option<&ModelRef>) -> Result<ApplicationRuntime> {
+    fn runtime(
+        &self,
+        _cwd: Option<&Path>,
+        model: Option<&ModelRef>,
+        _questions: Option<Arc<ion_host::QuestionCustody>>,
+    ) -> Result<ApplicationRuntime> {
         let identity = ModelRef {
             provider: "synthetic".into(),
             model: "counter".into(),
@@ -164,8 +169,8 @@ async fn main() -> Result<()> {
     let session_id = session.id();
     let key = RequestKey::new("counter-app".into(), "delivery-1".into())?;
     let literal = Message::user_input("Count 🦀e".into(), []);
-    let mut control =
-        SessionSetup::new(session, catalog, application.clone(), None, None)?.into_control::<()>();
+    let mut control = SessionSetup::new(session, catalog, application.clone(), None, None, None)?
+        .into_control::<()>();
     let result: Result<()> = async {
         if resume {
             let state = control.session().recovery_state()?.context("no recoverable Turn")?;
@@ -256,6 +261,7 @@ async fn main() -> Result<()> {
         reopened,
         SessionCatalog::new(root, None),
         application,
+        None,
         None,
         None,
     )?

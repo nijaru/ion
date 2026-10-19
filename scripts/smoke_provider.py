@@ -26,6 +26,8 @@ partial_failure = os.environ.get("ION_SMOKE_PARTIAL_FAILURE") == "1"
 stream_error = os.environ.get("ION_SMOKE_STREAM_ERROR") == "1"
 salience = os.environ.get("ION_SMOKE_SALIENCE") == "1"
 discovery = os.environ.get("ION_SMOKE_DISCOVERY") == "1"
+questions = os.environ.get("ION_SMOKE_QUESTIONS")
+question_count = 0
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -69,8 +71,14 @@ class Handler(BaseHTTPRequestHandler):
             if count == 6 and require_steering:
                 assert "tools" not in body
             else:
-                assert len(body["tools"]) == 10
-                assert {tool["function"]["name"] for tool in body["tools"]} == {"read", "edit", "write", "exec", "process", "subagent", "history", "ls", "find", "grep"}
+                names = {tool["function"]["name"] for tool in body["tools"]}
+                default = {"read", "edit", "write", "exec", "process", "subagent", "history", "ls", "find", "grep"}
+                expected = default | ({"ask_user_question"} if questions or os.environ.get("ION_SMOKE_TERMINAL") == "1" else set())
+                assert names == expected, (names, expected)
+            if questions:
+                self.question_step(body)
+                count += 1
+                return
             if salience:
                 if count == 0:
                     calls = [("exec", {"command": "printf 'FAILURE_MARKER\\n'; exit 7"})]
@@ -132,6 +140,68 @@ class Handler(BaseHTTPRequestHandler):
         except Exception as error:
             print(f"mock provider request {count} failed: {error!r}", file=sys.stderr, flush=True)
             self.send_error(500, str(error))
+
+    def question_step(self, body):
+        global question_count
+        if question_count == 0:
+            calls = [("question-1", "ask_user_question", {
+                "questions": [{
+                    "question": "Which route should the fixture take?",
+                    "options": [
+                        {"label": "Alpha", "description": "first"},
+                        {"label": "Beta", "description": "second"},
+                    ],
+                }],
+            })]
+            delta = {"tool_calls": [
+                {"index": index, "id": call_id, "type": "function", "function": {"name": name, "arguments": json.dumps(arguments)}}
+                for index, (call_id, name, arguments) in enumerate(calls)
+            ]}
+            finish = "tool_calls"
+            question_count = 1
+        elif question_count == 1:
+            last = body["messages"][-1]
+            assert last["role"] == "tool" and last["tool_call_id"] == "question-1", last
+            envelope = json.loads(last["content"])
+            result = envelope.get("result", envelope)
+            mode = questions
+            if mode == "select":
+                assert result["status"] == "answered", result
+                assert result["answers"] == [{"kind": "option", "question": 1, "option": 1, "label": "Beta"}], result
+                effect = "SELECTED:Beta"
+            elif mode == "custom":
+                assert result["status"] == "answered", result
+                assert result["answers"] == [{"kind": "text", "question": 1, "text": "café 🦀"}], result
+                effect = "CUSTOM:café 🦀"
+            elif mode == "cancel":
+                assert result["status"] == "cancelled" and result["reason"] == "user_cancelled", result
+                delta, finish = {"content": "CANCEL_OBSERVED"}, "stop"
+                question_count = 3
+                effect = None
+            else:
+                raise AssertionError(f"question mode {mode!r} received a continuation")
+            if effect is not None:
+                delta = {"tool_calls": [{"index": 0, "id": "effect-1", "type": "function", "function": {"name": "write", "arguments": json.dumps({"path": "question-effect.txt", "content": effect})}}]}
+                finish = "tool_calls"
+                question_count = 2
+        elif question_count == 2:
+            last = body["messages"][-1]
+            assert last["role"] == "tool" and last["tool_call_id"] == "effect-1", last
+            assert "question-effect.txt" in last["content"], last
+            delta, finish = {"content": "QUESTION_DONE"}, "stop"
+            question_count = 3
+        else:
+            raise AssertionError("unexpected question continuation")
+        events = [
+            {"id": "smoke", "model": "smoke-model", "choices": [{"index": 0, "delta": delta, "finish_reason": None}]},
+            {"id": "smoke", "choices": [{"index": 0, "delta": {}, "finish_reason": finish}]},
+        ]
+        payload = b"".join(b"data: " + json.dumps(event).encode() + b"\n\n" for event in events) + b"data: [DONE]\n\n"
+        self.send_response(200)
+        self.send_header("Content-Type", "text/event-stream")
+        self.send_header("Content-Length", str(len(payload)))
+        self.end_headers()
+        self.wfile.write(payload)
 
     def discovery_step(self, step, body):
         names = {tool["function"]["name"] for tool in body["tools"]}

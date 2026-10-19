@@ -68,7 +68,8 @@ async fn submit(args: Args, cwd: &Path, session: Arc<CodingSession>) -> Result<(
     )?;
     // This example connects no MCP servers and restores the saved reasoning
     // preference instead of overriding it. There is no client-owned agent loop.
-    let setup = ion_host::CodingApplication::new(host, None).setup(session, selected, None)?;
+    let setup =
+        ion_host::CodingApplication::new(host, None).setup(session, selected, None, None)?;
     let mut control = setup.into_control::<()>();
     let application_owner = control.owner();
     let mut outcome = prompt(&mut control, args.prompt).await;

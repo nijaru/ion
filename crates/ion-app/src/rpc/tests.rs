@@ -41,7 +41,7 @@ impl Fixture {
         let session = Arc::new(ion_core::CodingSession::create(path, Some(&cwd)).unwrap());
         session.select_model(selected.identity()).unwrap();
         let setup = ion_host::CodingApplication::new(host.clone(), None)
-            .setup(session, selected, None)
+            .setup(session, selected, None, None)
             .unwrap();
         Self {
             control: Some(Control::new(setup, host)),

@@ -270,6 +270,7 @@ impl Activity {
                 }
                 return Ok(error);
             }
+            ControlUpdate::QuestionChanged => {}
             ControlUpdate::Idle => {
                 self.live = None;
             }
