@@ -990,7 +990,7 @@ impl Frontend {
                     .as_ref()
                     .is_none_or(|question| question.request() != pending.request)
                 {
-                    self.question = Some(QuestionModal::new(pending));
+                    self.question = Some(QuestionModal::new(pending.request, pending.questions));
                     self.completion.clear();
                 }
             }

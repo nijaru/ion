@@ -632,7 +632,7 @@ fn question_modal_preserves_composer_draft_images_and_defers_to_other_views() {
         draft: "literal draft".into(),
         cursor: "literal draft".len(),
         images: vec![ImageSource::Path(PathBuf::from("missing.png"))],
-        question: Some(QuestionModal::fixture(request, questions)),
+        question: Some(QuestionModal::new(request, questions)),
         ..Frontend::default()
     };
     assert!(ui.question_owns_input());

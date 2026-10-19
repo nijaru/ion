@@ -1,8 +1,7 @@
 //! Typed question modal: presentation, bounded editor and lease-bound answers.
 //! Question custody itself remains in ion-host.
 use ion_host::{
-    MAX_ANSWER_BYTES, PendingQuestion, Question, QuestionAnswer, QuestionRequestId,
-    SYNTHETIC_TEXT_LABEL,
+    MAX_ANSWER_BYTES, Question, QuestionAnswer, QuestionRequestId, SYNTHETIC_TEXT_LABEL,
 };
 use ion_terminal::{KeyCode, KeyEvent, Modifiers};
 use ratatui::text::Line;
@@ -42,10 +41,10 @@ pub(super) struct QuestionFrame {
 }
 
 impl QuestionModal {
-    pub(super) fn new(pending: PendingQuestion) -> Self {
+    pub(super) fn new(request: QuestionRequestId, questions: Vec<Question>) -> Self {
         Self {
-            request: pending.request,
-            questions: pending.questions,
+            request,
+            questions,
             index: 0,
             selected: 0,
             editor: None,
@@ -57,20 +56,6 @@ impl QuestionModal {
 
     pub(super) fn request(&self) -> QuestionRequestId {
         self.request
-    }
-
-    #[cfg(test)]
-    pub(super) fn fixture(request: QuestionRequestId, questions: Vec<Question>) -> Self {
-        Self {
-            request,
-            questions,
-            index: 0,
-            selected: 0,
-            editor: None,
-            answers: Vec::new(),
-            status: String::new(),
-            too_small: false,
-        }
     }
 
     pub(super) fn set_status(&mut self, status: String) {
@@ -381,7 +366,7 @@ mod tests {
     use ion_host::{Question, QuestionOption};
 
     fn modal() -> QuestionModal {
-        QuestionModal::fixture(
+        QuestionModal::new(
             QuestionRequestId(uuid::Uuid::now_v7()),
             vec![
                 Question {
