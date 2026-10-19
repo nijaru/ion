@@ -374,7 +374,7 @@ pub(super) fn frontmatter<T: DeserializeOwned>(source: &str) -> Result<(T, &str)
     let mut offset = first.len();
     for line in lines {
         if line.trim_end_matches(['\r', '\n']) == "---" {
-            let metadata = serde_yaml_ng::from_str(&source[first.len()..offset])
+            let metadata = serde_saphyr::from_str(&source[first.len()..offset])
                 .context("invalid YAML frontmatter")?;
             return Ok((metadata, &source[offset + line.len()..]));
         }
@@ -535,7 +535,7 @@ mod tests {
         fs::create_dir_all(project.join("src/.agents/skills/review")).unwrap();
         fs::create_dir_all(project.join(".agents/skills/review")).unwrap();
         fs::create_dir_all(project.join(".ion/prompts")).unwrap();
-        fs::write(project.join("src/.agents/skills/review/SKILL.md"), "---\nname: review\ndescription: Inspect Rust changes when reviewing code.\n---\n# Review\nRead the diff.\n").unwrap();
+        fs::write(project.join("src/.agents/skills/review/SKILL.md"), "---\nname: 'review'\ndescription: >-\n  Inspect Rust changes\n  when reviewing code.\ndisable-model-invocation: false\nmetadata: {labels: [rust, review]}\n---\n# Review\nRead the diff.\n").unwrap();
         fs::write(
             project.join(".agents/skills/review/SKILL.md"),
             "---\nname: review\ndescription: Older root skill.\n---\n",
@@ -547,6 +547,14 @@ mod tests {
         )
         .unwrap();
         let resources = Resources::load_with_home(&project.join("src"), &config, None).unwrap();
+        assert_eq!(
+            resources
+                .skills()
+                .find(|skill| skill.name == "review")
+                .unwrap()
+                .description,
+            "Inspect Rust changes when reviewing code."
+        );
         assert!(resources.instructions().contains("Inspect Rust changes"));
         assert!(!resources.instructions().contains("Older root skill"));
         assert_eq!(resources.diagnostics().len(), 1);
