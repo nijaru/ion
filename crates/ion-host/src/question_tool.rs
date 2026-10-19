@@ -253,17 +253,17 @@ fn parse_request(args: &Value) -> Result<Vec<Question>, String> {
                     option_index + 1
                 )
             })?;
-            let label = label.trim();
-            if label.is_empty() {
+            if label.len() > MAX_OPTION_LABEL_BYTES {
                 return Err(format!(
-                    "question {} option {} label must not be empty",
+                    "question {} option {} label exceeds {MAX_OPTION_LABEL_BYTES} UTF-8 bytes",
                     index + 1,
                     option_index + 1
                 ));
             }
-            if label.len() > MAX_OPTION_LABEL_BYTES {
+            let label = label.trim();
+            if label.is_empty() {
                 return Err(format!(
-                    "question {} option {} label exceeds {MAX_OPTION_LABEL_BYTES} UTF-8 bytes",
+                    "question {} option {} label must not be empty",
                     index + 1,
                     option_index + 1
                 ));
@@ -290,15 +290,16 @@ fn parse_request(args: &Value) -> Result<Vec<Question>, String> {
             let description = match option.get("description") {
                 None => None,
                 Some(Value::String(description)) => {
-                    let description = description.trim();
-                    if description.is_empty() {
-                        None
-                    } else if description.len() > MAX_OPTION_DESCRIPTION_BYTES {
+                    if description.len() > MAX_OPTION_DESCRIPTION_BYTES {
                         return Err(format!(
                             "question {} option {} description exceeds {MAX_OPTION_DESCRIPTION_BYTES} UTF-8 bytes",
                             index + 1,
                             option_index + 1
                         ));
+                    }
+                    let description = description.trim();
+                    if description.is_empty() {
+                        None
                     } else {
                         Some(description.to_owned())
                     }
@@ -352,6 +353,14 @@ mod tests {
             json!([{"question":"Q","options":[{"label":"A"},{"label":"Other"}]}]),
             json!([{"question":"Q","options":[{"label":"A"},{"label":"Type something."}]}]),
             json!([{"question":"Q","options":[{"label":"A"}]}]),
+            json!([{"question":"Q","options":[
+                {"label":format!("{}A", " ".repeat(MAX_OPTION_LABEL_BYTES))},
+                {"label":"B"}
+            ]}]),
+            json!([{"question":"Q","options":[
+                {"label":"A","description":format!("{}A", " ".repeat(MAX_OPTION_DESCRIPTION_BYTES))},
+                {"label":"B"}
+            ]}]),
         ] {
             assert!(parse(questions).is_err());
         }
