@@ -38,13 +38,17 @@ useful context, responsive interaction and replaceable model/tool integrations.
 The product target is comparable workflow completeness, reliability and polish
 to Pi and fx; architectural similarity and passing tests alone do not reach it.
 
-| Concern | Reference semantics | Ion adaptation |
+| Concern | Reference implementation | Ion design |
 | --- | --- | --- |
-| Application composition | Pi's session factory assembles model, tools and resources; fx runs configured engines behind session control. | A complete Host application recipe feeds shared control. Coding is a preset; restricted applications use the same lifecycle without ambient coding authority. |
-| Interaction | Pi separates steering from later follow-ups; fx keeps inline input and activity tied to actual work. | Typed input custody, one control owner and separate terminal presentation. UI/protocol adapters do not recreate queues, the loop or settlement. |
-| Durable hosting | fx persists accepted inputs and step results, fences superseded workers and separates storage/scheduling adapters. | Admission and execution facts stay in the Session history. Host reconstructs validated authority and supervises work; future hosting adapters must reuse these owners rather than wrap them in a competing durable runtime. |
-| Tool recovery | fx explicitly distinguishes replay-safe tools from calls that may have partly run. | Unknown effects remain unknown by default. Re-execution needs an explicit tool-specific reconciliation/idempotency contract and stable occurrence identity; a read-only label or unchanged schema is not enough. |
-| Context and clients | Pi separates agent messages, provider conversion and session/UI behavior; fx exposes the same agent across hosts. | Durable facts, model projection and human transcript are distinct. Provider quirks stay in adapters; terminal, headless, RPC and library callers share control. |
+| Coding tools and prompts | Pi's tool definitions contribute schemas, prompt guidance and renderers; read/edit/shell results include continuation, diffs and saved-output references. | Keep model-facing tools coherent with their declarations and selected loadout. Bounded output must remain retrievable; precise edits and useful feedback must not require repeated model round trips for independent changes. |
+| Context and continuity | Pi projects Session paths and supports compaction/branch summaries. fx calibrates request estimates from usage and preserves retrievable records with checked compaction notes. | Core owns context projection, sizing and compaction. Preserve original facts and retrieval coordinates; calibrate only from applicable observations. Source checks improve summaries but do not make them authoritative. |
+| Interaction | Pi combines editable input, steering/follow-ups, selectors and Session navigation. fx combines inline output with managed terminals and child work. | Shared control owns input/execution lifecycle; clients own editing and navigation. Shell, background and interactive-process workflows need explicit custody, not detached processes or UI-owned tasks. |
+| Customization | Pi loads tools, commands, shortcuts, renderers, providers and resource packages. fx exposes custom tools, skills and MCP through its application/library surfaces. | Support application and user customization without forking the engine. Tools, resources, commands, UI contributions and lifecycle hooks are distinct powers; choose delivery mechanisms without granting mutable Session or wire authority. |
+| Application composition | Pi's session factory assembles model, tools and resources; fx composes native and library hosts. | A complete Host application recipe feeds shared control. Coding is a preset; restricted applications inherit no ambient coding authority. |
+| Model access | Pi separates model metadata, credentials, provider protocols and session selection; fx offers configured gateway, subscription and compatible-endpoint routes. | Model setup, authentication, reasoning controls, switching and custom endpoints form one usable application surface. Provider protocols and credentials remain outside Core; unavailable capabilities are explicit. |
+| Durable hosting | fx's JavaScript durable harness persists inputs/steps and fences workers through storage/queue adapters; native conversation persistence is a different regime. | Admission and execution facts stay in the Session history. Hosting adapters reuse the engine and its authority/ownership semantics; they do not introduce competing execution truth or imply guarantees from another host. |
+| Tool recovery | fx distinguishes explicitly idempotent replay from ambiguous calls. | Unknown effects remain unknown by default. Re-execution requires a tool-specific reconciliation/idempotency contract and stable occurrence identity, not a read-only label or unchanged schema. |
+| Operational quality | fx maintains startup, UI-activity and memory benchmarks; both projects exercise actual clients and expose diagnostics. | Design for bounded active work, responsive presentation and diagnosable failures. Measure representative costs before claiming performance; source similarity or a fast helper command does not establish coding quality. |
 
 Rust boundaries use typed states and errors, explicit owned work, narrow traits for
 replaceable providers/tools/applications, and asynchronous stop/join. Persist data,
@@ -66,10 +70,13 @@ and [`app_worker_runtime.zig`](https://github.com/vercel-labs/fx/blob/1a070af32c
 These are inspected snapshots, not automatic parity or correctness evidence;
 refresh the relevant implementation when its behavior changes.
 
-The first completion target is the coding daily driver. Dynamic extension
-ecosystems, virtual routers, session trees, authenticated services, multi-tenant
-sandboxing and durable queues are post-v1 choices unless a concrete daily-driver
-need changes the scope; they are not permanent engine exclusions.
+The first completion target is the coding daily driver, not the end of the
+competitive design. Evaluate customization, Session navigation, interactive work,
+model access and hosting as product capabilities with explicit delivery priorities.
+Do not treat an earlier milestone boundary as evidence that a gap is unimportant,
+or adopt every reference feature without an Ion consumer and coherent owner.
+Deployment, isolation and ecosystem expansion may be staged without narrowing the
+shared engine's contracts.
 
 ## Engine concepts and owners
 
@@ -90,16 +97,38 @@ need changes the scope; they are not permanent engine exclusions.
   Delegation records the relationship between independently executing Sessions;
   it does not create another worker engine.
 
-`ion-ai` owns neutral model/content contracts. `ion-core` owns Session facts, the
-single agent loop, context, recovery and durable delegation relationships.
-`ion-host` owns providers/credentials, tool environments, configuration assembly,
-shared control and live child supervision. `ion-app` owns client input, protocols
-and presentation; `ion-terminal` owns physical terminal mechanics.
+```text
+TUI / CLI / RPC / embedded application
+          │ commands       ↑ snapshots, facts and activity
+Host: shared Session control ← complete application recipe
+          │ admission, execution, stop/join
+Core: Session + context projection + one Turn engine
+          │ frozen model/tool contracts
+Host: provider adapters, trusted tools and execution environments
+```
 
-Shared control owns preparation, reservations, steering/follow-ups, stopping,
-settlement and unaccepted-input recovery. Clients retain editors, modal UI and
-protocol correlation. An application coordinator may compose runs, not implement
-a second model → tools → model loop.
+This is control flow, not a cyclic crate dependency. `ion-ai` defines neutral
+model/content contracts; Core depends on contracts rather than concrete Host
+implementations. Host assembles the implementations. App and Terminal do not
+provide alternate engines.
+
+| State or responsibility | Authoritative owner |
+| --- | --- |
+| Committed conversation, accepted inputs, execution relationships and observations | Core Session; derived indexes and projections are rebuildable. |
+| Request context, frozen catalogue, generation and effect ordering | Core Turn engine; providers/tools implement captured contracts. |
+| Live operation task, stop and joined outcome | Core operation owner, independent of waits and observers. |
+| Submitted but unaccepted inputs, preparation, follow-ups and replacement | Host shared control; clients retain only unsent drafts and presentation state. |
+| Resources, credentials, model/tool environment and application policy | Host application recipe and prepared binding; active work retains its captured binding. |
+| Live child supervision and transferred background work | Host owner; Core records durable Session relationships and observations. |
+| Semantic transcript/activity projection | Core facts and live previews, rendered by App without turning previews into facts. |
+| Editor, pickers, local diagnostics and protocol correlation | App/client; local presentation is not model history. |
+| Physical paint, input modes and terminal restoration | Terminal publication/input owners. |
+
+Input custody is a transfer protocol, not a requirement to store every stage in
+one queue. Shared control retains originals until Core confirms committed
+acceptance; Core may hold transferred steering until an atomic assistant/input commit.
+Only the current custodian can dispatch or return an input. An application
+coordinator may compose runs, not implement a second model → tools → model loop.
 
 ## Application configuration and authority
 
@@ -133,10 +162,22 @@ an optional access workflow, not a first-use gate.
 
 ## Agent loop and effects
 
-Accept input, prepare, generate, commit the assistant response, settle its calls,
-and continue or end. Direct calls execute in order; opted-in composition can admit
-bounded concurrent tool children. There is no fixed production step-count cap
-masquerading as task completion.
+The principal lifecycle is:
+
+1. Assemble and validate the application's resources, model and executable tools
+   before publishing a binding. Prepare client input without admitting effects.
+2. Commit accepted input and Turn identity. Project bounded context and freeze
+   the exact model/tool request before issuance.
+3. Generate, commit the assistant response and call intents, execute admitted
+   effects, and commit their observations before dependent consumption.
+4. Continue through that same loop or atomically commit the final answer and
+   Turn end. Join owned work before reporting operation settlement.
+5. Project facts and live previews to observers; presentation failure cannot
+   retroactively change admission or observed effects.
+
+Direct calls execute in order; opted-in composition can admit bounded concurrent
+tool children. There is no fixed production step-count cap masquerading as task
+completion.
 
 - Commit calls and resolved semantic activity before dispatch; commit observations
   before dependent model or guest consumption.
@@ -315,11 +356,11 @@ local conversion, separately owned by the calling operation.
 MCP resources are bounded read-only context operations:
 listings use frozen server identity, reads use the ordinary image or private-file
 path rather than model-visible base64, and an observation grants no effect,
-settlement or replay authority. Dynamic extension loading is not implied:
-in-process extensions are compiled Rust application/tool registrations,
-out-of-process tools use MCP, and inert instructions, skills and templates remain
-lower-trust resources. Executable hooks and UI contributions are separately
-scoped trusted powers, not permission to mutate history or provider wire state.
+settlement or replay authority. Current extension delivery uses compiled Rust
+application/tool registrations and MCP processes; inert instructions, skills and
+templates remain lower-trust resources. This does not define the full customization
+target. Executable hooks, commands and UI contributions require separately scoped
+trusted powers, not permission to mutate history or provider wire state.
 
 ## Context and providers
 
@@ -335,9 +376,12 @@ old projection when cancelled before commit. Preserve retrieval coordinates with
 replay or implicit evidence injection. Measure continuation quality, not compression
 alone. Neutral prompt estimates count text/tool content once, excluding opaque
 provider replay; retained request-representation byte bounds still include it.
-These estimates are neither provider-token counts nor transport-wire bounds:
-provider-only continuation and reported usage remain separate concerns. Context
-bounds do not imply bounded resident history or artifact retention.
+These estimates are neither provider-token counts nor transport-wire bounds.
+Use compatible observed input usage to inform later estimates; do not reuse a
+sample across incompatible model routes, context representations or image inputs.
+Missing usage must remain unknown, and calibration cannot relax independent
+retained-byte or transport bounds. Provider-only continuation remains an adapter
+concern. Context bounds do not imply bounded resident history or artifact retention.
 
 Prepare wire declarations and durable context from the same catalogue. Admit
 model/context changes atomically before issuance. Pre-output retries retain that

@@ -815,8 +815,11 @@ across launches. An inherited pipe left open after output goes idle can produce
 an incomplete capture with no full-output path. Capture loss does not change a
 known command exit. Shared `!` shell context preserves the complete structured
 host observation, including these diagnostics; `!!` remains private.
-Commands use Bash when available, then fall back to POSIX sh. Commands have
-no default timeout; pass `timeout_ms` when a deadline is needed. The deadline
+Commands use Bash when available, then fall back to POSIX sh, with closed stdin.
+They do not capture the user's login-shell environment or provide persistent
+interactive terminals or managed background process sessions. Managed subagents
+are separate agent Sessions, not process-session handles. Commands have no default
+timeout; pass `timeout_ms` when a deadline is needed. The deadline
 covers output capture even after the direct shell exits. On timeout, Ion requests
 process-group stop and stops acquiring output, then awaits started capture I/O.
 This is not a hard wall-clock or all-descendant termination guarantee.
