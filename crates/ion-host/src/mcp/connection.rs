@@ -202,7 +202,7 @@ impl OwnedTransport {
     fn transport_failure(&self) -> Option<String> {
         match self {
             Self::Stdio { .. } => None,
-            Self::Http { client, .. } => client.take_failure(),
+            Self::Http { client, .. } => client.failure(),
         }
     }
 

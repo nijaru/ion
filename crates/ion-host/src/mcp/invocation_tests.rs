@@ -504,6 +504,108 @@ server.serve_forever()
     );
 }
 
+#[tokio::test]
+async fn oversized_http_event_fails_the_call_with_the_framing_reason() {
+    use std::process::Stdio;
+    use tokio::{
+        io::{AsyncBufReadExt, BufReader},
+        process::Command,
+    };
+    let root = std::env::temp_dir().join(format!("ion-mcp-http-sse-{}", uuid::Uuid::now_v7()));
+    fs::create_dir(&root).unwrap();
+    let server = r#"
+import json
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+
+class Handler(BaseHTTPRequestHandler):
+    protocol_version = "HTTP/1.1"
+    def do_POST(self):
+        request = json.loads(self.rfile.read(int(self.headers['Content-Length'])))
+        method = request.get('method')
+        if method == 'tools/call':
+            body = b'data: ' + b'x' * (17 * 1024 * 1024) + b'\n\n'
+            try:
+                self.send_response(200)
+                self.send_header('Content-Type', 'text/event-stream')
+                self.send_header('Mcp-Session-Id', 'fixture')
+                self.end_headers()
+                self.wfile.write(body)
+                self.wfile.flush()
+            except (BrokenPipeError, ConnectionResetError):
+                pass
+            return
+        if method == 'initialize':
+            result = {'protocolVersion': request['params']['protocolVersion'],
+                      'capabilities': {'tools': {}}, 'serverInfo': {'name': 'http', 'version': '1'}}
+        elif method == 'tools/list':
+            result = {'tools': [{'name': 'probe', 'inputSchema': {'type': 'object'}}]}
+        else:
+            self.send_response(202)
+            self.send_header('Content-Length', '0')
+            self.end_headers()
+            return
+        payload = json.dumps({'jsonrpc': '2.0', 'id': request['id'], 'result': result}).encode()
+        self.send_response(200)
+        self.send_header('Content-Type', 'application/json')
+        self.send_header('Content-Length', str(len(payload)))
+        self.send_header('Mcp-Session-Id', 'fixture')
+        self.end_headers()
+        self.wfile.write(payload)
+    def log_message(self, *args): pass
+
+server = ThreadingHTTPServer(('127.0.0.1', 0), Handler)
+print(server.server_port, flush=True)
+server.serve_forever()
+"#;
+    let mut process = Command::new("python3")
+        .args(["-c", server])
+        .current_dir(&root)
+        .stdout(Stdio::piped())
+        .kill_on_drop(true)
+        .spawn()
+        .unwrap();
+    let mut port = String::new();
+    BufReader::new(process.stdout.take().unwrap())
+        .read_line(&mut port)
+        .await
+        .unwrap();
+    let config = McpConfig::new(&root);
+    config
+        .add(
+            "http",
+            McpServer::Http(McpHttpServer {
+                url: format!("http://127.0.0.1:{}/mcp", port.trim()),
+                bearer_token_env: None,
+                exposure: McpExposure::Direct,
+            }),
+        )
+        .unwrap();
+    let startup = McpTools::connect(&config, &root).await;
+    assert!(startup.diagnostics.is_empty(), "{:?}", startup.diagnostics);
+    let source = startup.tools.unwrap();
+    let issued = ion_core::ToolSet::new([source.clone() as Arc<dyn CodingToolSource>]).snapshot();
+    let call = ToolCall {
+        id: "http-sse".into(),
+        name: issued.specs()[0].name.clone(),
+        arguments: json!({}),
+        raw_arguments: None,
+    };
+    let output = tokio::time::timeout(
+        Duration::from_secs(30),
+        issued.execute_untracked(&call, CancellationToken::new()),
+    )
+    .await
+    .expect("oversized SSE response left the call waiting");
+    source.shutdown().await.unwrap();
+    process.kill().await.unwrap();
+    fs::remove_dir_all(root).unwrap();
+    // The SDK reports a generic transport closure for a terminated stream;
+    // the recorded framing reason must reach the tool observation instead.
+    assert!(output.is_error, "{:?}", output.value);
+    let error = output.value["error"].as_str().unwrap_or_default();
+    assert!(error.contains("framing failed"), "{error}");
+}
+
 #[test]
 fn partial_conversion_keeps_supported_text_structured_and_outcome() {
     let result: CallToolResult = serde_json::from_value(json!({

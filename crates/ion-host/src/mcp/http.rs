@@ -97,11 +97,11 @@ impl OwnedHttpClient {
         self.stop.cancel();
     }
 
-    pub fn take_failure(&self) -> Option<String> {
+    pub fn failure(&self) -> Option<String> {
         self.failure
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .take()
+            .clone()
     }
 
     fn interrupt_stream(
@@ -671,12 +671,11 @@ mod tests {
             client.stop.is_cancelled(),
             "framing failure left the connection live"
         );
-        let failure = client.take_failure().expect("framing failure reason");
+        let failure = client.failure().expect("framing failure reason");
         assert!(failure.contains("framing failed"), "{failure}");
-        assert!(
-            client.take_failure().is_none(),
-            "failure reason outlived its call"
-        );
+        // The connection is retired, so every in-flight caller observes the
+        // same reason instead of racing for a consumable value.
+        assert_eq!(client.failure().as_deref(), Some(failure.as_str()));
     }
 
     #[tokio::test]

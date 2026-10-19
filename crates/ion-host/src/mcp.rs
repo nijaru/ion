@@ -189,12 +189,15 @@ impl McpTools {
             )),
             Err(error) => {
                 // A listing failure can be explained only on the server's
-                // stderr; keep that reference in the startup diagnostic.
+                // stderr. Join capture before reading it: stdout and stderr
+                // have no cross-stream ordering, so the final bounded prefix
+                // is the honest reference for this startup diagnostic.
+                let shutdown = client.shutdown().await;
                 let error = match stderr.as_ref().and_then(|log| log.notice(&name)) {
                     Some(notice) => error.context(notice),
                     None => error,
                 };
-                combine_cleanup(Err(error), client.shutdown().await)
+                combine_cleanup(Err(error), shutdown)
             }
         }
     }

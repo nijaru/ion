@@ -163,8 +163,21 @@ impl McpExecutor {
                 cleanup.err().map(|error| format!("{error:#}"))
             }
         };
+        // A framing failure retires the connection; rmcp then reports that
+        // stream termination as a request-specific transport-closed error. The
+        // recorded reason is the useful observation for both closure shapes.
         let response = match response {
-            Ok(response) => response.map_err(|error| self.failed(error))?,
+            Ok(response) => match response {
+                Ok(message) => message,
+                Err(error) => {
+                    let reason = self
+                        .server
+                        .transport_failure()
+                        .await
+                        .unwrap_or_else(|| error.to_string());
+                    return Err(self.failed(reason));
+                }
+            },
             Err(_) => {
                 let reason = self
                     .server
