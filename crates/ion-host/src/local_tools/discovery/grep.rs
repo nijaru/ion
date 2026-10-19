@@ -359,23 +359,27 @@ impl<'a> Search<'a> {
         let work_limit = scan.work_limit;
         let max_depth = scan.max_depth;
         let diagnostics = scan.finish_diagnostics();
-        json!({
-            "root": root,
-            "root_kind": if root_is_file { "file" } else { "directory" },
-            "matches": Value::Array(matches),
-            "returned": returned,
-            "limit": limit,
-            "exhaustive": exhaustive,
-            "visited_entries": visited,
-            "work_budget": work_limit,
-            "max_depth": max_depth,
-            "inspected_bytes": inspected,
-            "byte_budget": limits.grep_total_bytes,
-            "skipped": skipped,
-            "omissions": omissions,
-            "diagnostics": Value::Array(diagnostics),
-            "output_limited": output_limited,
-        })
+        super::output::finalize(
+            json!({
+                "root": root,
+                "root_kind": if root_is_file { "file" } else { "directory" },
+                "matches": Value::Array(matches),
+                "returned": returned,
+                "limit": limit,
+                "exhaustive": exhaustive,
+                "visited_entries": visited,
+                "work_budget": work_limit,
+                "max_depth": max_depth,
+                "inspected_bytes": inspected,
+                "byte_budget": limits.grep_total_bytes,
+                "skipped": skipped,
+                "omissions": omissions,
+                "diagnostics": Value::Array(diagnostics),
+                "output_limited": output_limited,
+            }),
+            "matches",
+            output_omission,
+        )
     }
 }
 
@@ -474,6 +478,7 @@ fn floor_boundary(text: &str, mut index: usize) -> usize {
 
 #[cfg(test)]
 mod tests {
+    use super::super::output::MAX_OUTPUT_BYTES;
     use super::*;
     use std::io::Cursor;
 
@@ -505,5 +510,78 @@ mod tests {
         let result = read_file(PartialFailure { remaining: 5 }, 10, &stop, &mut inspected);
         assert!(matches!(result, Err(ReadFailure::Io(_))));
         assert_eq!(inspected, 5);
+    }
+
+    #[test]
+    fn finish_enforces_the_serialized_bound_after_max_diagnostics_and_full_items() {
+        let stop = CancellationToken::new();
+        let regex = Regex::new("needle").unwrap();
+        let limits = Limits::default();
+        let limit = 1000;
+        let base = json!({
+            "root": "/repo",
+            "matches": [],
+            "returned": 0,
+            "limit": limit,
+            "exhaustive": false,
+            "visited_entries": 0,
+            "work_budget": limits.work,
+            "max_depth": limits.max_depth,
+            "inspected_bytes": 0,
+            "byte_budget": limits.grep_total_bytes,
+            "skipped": {},
+            "omissions": [],
+            "diagnostics": [],
+            "output_limited": false,
+        });
+        let mut search = Search::new(&regex, limit, &limits, &stop, base);
+
+        // Four legal diagnostics with path and message at the 512-byte preview
+        // bound expand sixfold when JSON escapes every control character.
+        let control = "\u{1}".repeat(512);
+        for _ in 0..4 {
+            search.scan.diagnostics.push(Path::new(&control), &control);
+        }
+
+        let item = json!({
+            "path": "src/file.rs",
+            "line": 1,
+            "byte_offset": 0,
+            "text": "x".repeat(SNIPPET_BYTES),
+            "truncated": false,
+        });
+        let mut pushed = 0;
+        while search.output.push(item.clone()) {
+            pushed += 1;
+        }
+
+        let value = search.finish(
+            "/repo",
+            false,
+            "serialized output byte limit stopped matches; refine the search",
+        );
+        let returned = value["matches"].as_array().unwrap().len();
+        let serialized = serde_json::to_vec(&value).unwrap();
+        assert!(
+            serialized.len() <= MAX_OUTPUT_BYTES,
+            "{} > {MAX_OUTPUT_BYTES}",
+            serialized.len()
+        );
+        assert!(
+            returned < pushed,
+            "expected dropped matches: {returned} of {pushed}"
+        );
+        assert_eq!(value["returned"], json!(returned));
+        assert_eq!(value["exhaustive"], false);
+        assert_eq!(value["output_limited"], true);
+        assert_eq!(value["diagnostics"].as_array().unwrap().len(), 4);
+        assert!(
+            value["omissions"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|omission| omission
+                    == "serialized output byte limit stopped matches; refine the search")
+        );
     }
 }
