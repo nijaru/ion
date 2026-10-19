@@ -68,7 +68,12 @@ fx v0.0.14's
 [`fx-harness.js`](https://github.com/vercel-labs/fx/blob/1a070af32cdfaf8cd0da6de3dc7f053302828b17/sdk/fx-harness.js)
 and [`app_worker_runtime.zig`](https://github.com/vercel-labs/fx/blob/1a070af32cdfaf8cd0da6de3dc7f053302828b17/src/core/app/app_worker_runtime.zig).
 These are inspected snapshots, not automatic parity or correctness evidence;
-refresh the relevant implementation when its behavior changes.
+refresh the relevant implementation when its behavior changes. UniiChat
+[`0500bf6`](https://github.com/VictorTaelin/UniiChat/tree/0500bf6a8ea4bf0ce047488562022b1b6532cc30)
+is an exploratory reference for addressable summary trees, explicit zoom and
+shared browser/terminal view state, below the Pi/fx baselines. Its preserved raw
+messages do not establish summary fidelity, cache stability or durable effect
+recovery. It does not change Ion's history, compaction or delegation ownership.
 
 The first completion target is the coding daily driver, not the end of the
 competitive design. Evaluate customization, Session navigation, interactive work,
@@ -175,9 +180,19 @@ The principal lifecycle is:
 5. Project facts and live previews to observers; presentation failure cannot
    retroactively change admission or observed effects.
 
-Direct calls execute in order; opted-in composition can admit bounded concurrent
-tool children. There is no fixed production step-count cap masquerading as task
-completion.
+Direct batches execute and commit in call order by default. Allowing a provider
+to return several calls is not permission to overlap their effects. Opted-in
+composition already admits bounded concurrent tool children. Do not infer safe
+parallel execution or replay from a read-only label, schema or remote tool name.
+
+Any direct-batch overlap must be an explicit application policy over frozen,
+executor-declared eligibility, with ordered execution as the fallback for the whole
+batch if any call requires it. Commit completed observations promptly by occurrence,
+join all started work before another model request, and preserve stop, steering and
+cache-warming custody. Retain the ordered default until a representative comparison
+justifies the additional in-flight uncertainty and lifecycle complexity. Pi's
+parallel default is a reference trade-off, not measured evidence for Ion. There is
+no fixed production step-count cap masquerading as task completion.
 
 - Commit calls and resolved semantic activity before dispatch; commit observations
   before dependent model or guest consumption.
@@ -320,7 +335,10 @@ them. Application shutdown closes admission, requests stop for both managed
 programs and delegated agents, and joins both before releasing their environment.
 Dropping an observer or stopping a Turn does not terminate an already-started
 program. A start cancelled before its receipt stops and joins its admitted process;
-subsequent wait cancellation only ends observation. Explicit close stops and joins.
+subsequent wait cancellation only ends observation. Explicit close requests stop
+and joins. Cancelling that join reports an incomplete close, not successful
+settlement or rollback; stop remains requested and later wait/close joins the same
+retained work.
 This is in-process custody, not a daemon, OS sandbox or all-descendant containment.
 A coding child job stops, joins and releases its own program scope before its
 answer is released; it cannot transfer that grant by returning a handle to its
@@ -349,10 +367,13 @@ terminal resurrection. Resize changes the owned terminal and its projection toge
 failed OS resize must not publish successful dimensions. Required terminal protocol
 replies are bounded, serialized with input and cannot access clipboard, host display
 or arbitrary services. Unsupported terminal behavior is not silently advertised as
-complete emulator support. A failed or over-limit projection becomes explicitly
-unavailable while raw capture and process custody continue. Model-only terminal
-control precedes human attachment:
-there is no concurrent human writer until a real caller owns an exclusive input lease.
+complete emulator support. Projection-only failures, including oversized control
+strings, make the screen explicitly unavailable while raw capture and the program
+continue. Required-reply overload is instead a protocol supervision failure: stop
+and join the program, retain raw capture and report the failure, never silently
+drop required replies. Neither failure relinquishes process custody. Model-only
+terminal control precedes human attachment: there is no concurrent human writer
+until a real caller owns an exclusive input lease.
 
 Bound live slots, retained results, pending input and raw capture. Reads use explicit
 byte cursors and report evicted gaps, decoding loss and incomplete capture. Exit
@@ -410,14 +431,78 @@ in-flight requests release read leases without requiring a remote response or
 caller cancellation. Concurrent closers join the same cleanup. Unanswered effects
 remain unknown; already observed results retain their original outcome through
 local conversion, separately owned by the calling operation.
+
+Enforce incoming MCP budgets before framing or decoding can allocate an unbounded
+message: at most 64 MiB per stdio JSON line or HTTP JSON/error body. SSE events
+retain their transport's stricter 16 MiB default and cannot exceed the aggregate
+message ceiling. Reject overflow rather than truncate a message into a different
+observation; do not reconnect and repeat an effectful call. An unanswered call on
+a failed transport may already have executed. These are transport budgets, not
+model-context or artifact quotas.
+
+Conversion preserves the server's observed error/success flag, supported text and
+structured data even when another block cannot be delivered. Unsupported media or
+invalid images produce indexed conversion notices, not a replacement execution
+failure. Retain the original response in a private artifact when conversion omits
+content; report artifact failures without inventing the missing evidence. Inline
+previews retain the outcome, notices and retrieval references. Validation still
+rejects invalid image data from image delivery; preserving a response is not
+permission to render or execute unsupported content.
+
+Local MCP stderr is diagnostic data, never direct terminal publication or synthetic
+conversation. Capture a private 64 KiB prefix per connection, report omitted bytes
+and capture failures, and expose its reference through startup diagnostics and
+tool results.
+Continue draining after the prefix fills so logging cannot block protocol work.
+Own the reader through startup failure and connection shutdown; stop and join it
+after bounded final draining, including when descendants retain the pipe. Server
+retirement is retained independently of a particular shutdown waiter.
+
 MCP resources are bounded read-only context operations:
 listings use frozen server identity, reads use the ordinary image or private-file
 path rather than model-visible base64, and an observation grants no effect,
-settlement or replay authority. Current extension delivery uses compiled Rust
-application/tool registrations and MCP processes; inert instructions, skills and
-templates remain lower-trust resources. This does not define the full customization
-target. Executable hooks, commands and UI contributions require separately scoped
-trusted powers, not permission to mutate history or provider wire state.
+settlement or replay authority.
+
+### Customization delivery and powers
+
+Keep executable customization separate from inert resources. Use compiled Rust
+application registrations for in-process implementations and supervised external
+processes for user-installable code; MCP is the established external tool/resource
+protocol. This avoids a Rust dylib ABI or a second long-lived JavaScript engine.
+Code Mode remains invocation-scoped composition, not an extension loader. A named
+command protocol is the first external contribution to specify through a real
+consumer; it does not require inventing a general event bus or workflow language.
+
+- **Data:** instructions, skills and prompt templates remain lower-trust input,
+  with provenance and explicit expansion, never executable launch instructions.
+- **Model tools:** bind declarations and executors in the frozen catalogue through
+  Rust registration or MCP. Existing selection and exposure rules still apply.
+- **User commands:** explicit user invocation expands input or requests an existing
+  typed shared-control action. External commands receive literal arguments and
+  bounded input/output, cancellation and joined supervision. Effects use the
+  action's ordinary admission/recording contract and explicit model-context sharing;
+  command output is not a fabricated user message or model tool call.
+- **Lifecycle hooks:** receive immutable committed facts at named boundaries.
+  A pre-dispatch decision hook can allow or veto a specific invocation, not rewrite
+  its arguments or observed result. Deliver that seam with an actual policy or
+  approval consumer, not unused hook variants. Stop/shutdown retains and joins
+  started hook work; observer loss cannot silently abandon it.
+- **UI contributions:** produce bounded presentation data through the client owner,
+  not raw terminal writes. They cannot change execution, input custody or history;
+  failure leaves the underlying observation inspectable.
+- **Providers:** explicitly registered Host adapters own protocol and credentials;
+  custom endpoint settings are configuration data. A generic command, tool or hook
+  cannot rewrite issued requests, headers, signed replay or active provider state.
+  Replacement follows ordinary preflight and captured-binding rules.
+
+Project executable contributions require an explicit trust decision binding their
+manifest identity and digest to the canonical project root. Trust of an MCP file
+must not silently approve a different command/hook manifest. Changed manifests
+invalidate their own trust; merely opening a repository launches nothing new.
+User-installed executables run with captured host permissions: this is not a code
+sandbox. No registration protocol grants mutable Session or provider-wire access.
+Dynamic command/hook packaging and external renderers remain staged capabilities,
+not evidence supplied by the existing compiled Rust and MCP delivery.
 
 ## Context and providers
 
@@ -457,8 +542,12 @@ capacity. Exhausting the dispatched output budget is not itself context pressure
 Recovery is bounded and visible; incompatible context must fail or change explicitly.
 
 Host prepares replacements before publishing them. Failed preflight leaves the
-previous binding usable; active operations retain captured configuration. Logical
-selection, effective model, returned identity and usage remain distinct. Model
+previous binding usable; active operations retain captured configuration. An idle
+live operation gate permits future preference changes even when reopened history
+contains an interrupted Turn. Such changes neither settle that Turn nor rewrite
+its original configuration. Strict continuation still requires matching current
+authority and configuration; passive recovery eligibility is not that attestation.
+Logical selection, effective model, returned identity and usage remain distinct. Model
 epochs survive reopen, including A → B → A; routing policy is not correctness state.
 
 Adapters own framing, errors and opaque provider continuation. Bound transport/
@@ -523,6 +612,49 @@ Shutdown closes admission before stop/join. Cancelling its wait retains closure,
 handles and failures; finish it before destroying the runtime. Drop cannot promise
 async cleanup. A genuine task panic blocks live owner reuse and reports unknown
 effects. No synchronous idle guard crosses await.
+
+### Questions, approvals and terminal attachment
+
+These are distinct application interactions, not new Core Turn states. Ordinary
+clarification already uses a final question followed by new input in the same
+Session. A same-Turn question capability instead exposes one live, correlated
+request through shared Host control and returns the answer as its normal tool
+observation. Bind it to the Session, Turn, tool occurrence and authorized responder;
+reject stale answers. Question cancellation is an explicit result, not a fabricated
+answer. Turn stop or responder loss releases the waiter without new dependent
+dispatch. Answers are untrusted data, never steering, credentials or permission.
+Without a responder, omit the capability or return explicit unavailability; do not
+auto-answer. RPC needs a real typed request/reply consumer before advertising it.
+
+An optional approval policy decides a specific validated, admitted invocation
+before its executor's effect dispatch. Denial starts no effect and records that
+outcome; cancellation or loss of the decision channel fails closed. Approval
+cannot add tools, widen captured authority, change the approved arguments or
+retroactively cancel a started effect. Keep remembered rules in application policy,
+not a second Session ledger. The coding preset currently uses host permissions;
+adding approvals is neither a sandbox nor a universal V1 requirement.
+
+Human terminal attachment extends the existing process owner through shared
+control. A trusted client acquires one live, opaque input lease scoped to the
+current Session, captured cwd and PTY handle, without manufacturing a model tool
+origin. The driver quiesces model input, acknowledges any delivered prefixes and
+rejects undelivered queued portions before granting the lease. Model writes and
+resize are rejected while leased; model reads and observation remain available.
+Automatic protocol replies remain driver-owned. A stale lease cannot write or
+release a newer one. A write lease grants neither secrecy nor lifecycle authority.
+
+The terminal attachment view uses the existing screen projection, cursor and input
+modes with no local echo or second emulator. It owns ordinary key input, including
+Ctrl-C; an explicit detach key restores the composer. It may resize through the
+same driver and reports projection/resize failures rather than showing stale state
+as current. Detach, view failure and Session replacement release the lease without
+stopping the program. Turn stop does not stop a program or revoke human ownership;
+process exit/close and application shutdown end the view. Leases are not durable,
+restart attachment or committed keystroke history. Headless clients do not attach;
+RPC requires a typed authorized attachment consumer, not raw terminal passthrough.
+An attached view and a question/approval dialog cannot both own keystrokes: make
+focus transfer explicit before presenting another interaction. Implement each
+interaction with its real caller before adding status variants or capability flags.
 
 ## Terminal experience
 

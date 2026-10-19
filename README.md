@@ -105,8 +105,10 @@ Use `--reasoning high` for headless/chat/RPC startup or manual compaction,
 `off`, `low`, `medium`, `high` and `budget:TOKENS`. The preference is
 Session-owned: reopen and clone retain it, forks restore the selected Turn's
 preference, and new Sessions start at `default`. Coding and compaction freeze
-the same preference. Changes require an idle, settled Session; they do not
-recover unfinished effects. Unsupported adapter controls refuse before saving
+the same preference. Changes require no live operation. Reopened interrupted
+history may remain unresolved: changing a future preference does not settle its
+Turn, rewrite its original model/reasoning, or recover unfinished effects. Strict
+same-Turn continuation still requires matching authority and configuration. Unsupported adapter controls refuse before saving
 the preference or making a model request. Model changes also preflight the
 retained preference rather than silently resetting it. Explicit effort selection
 saves the bound model and effort together, including an invocation-only model override.
