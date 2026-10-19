@@ -357,17 +357,17 @@ fn search_metadata_is_bounded_while_entry_coordinates_stay_authoritative() {
         .unwrap();
     let long_call_id = format!(
         "CALL_PREFIX{}雪{}",
-        "x".repeat(super::MAX_METADATA_BYTES - "CALL_PREFIX".len() - 1),
+        "x".repeat(super::records::MAX_METADATA_BYTES - "CALL_PREFIX".len() - 1),
         "y".repeat(1_024)
     );
     let long_name = format!("exec{}", "n".repeat(1_024));
     let exact_call_id = format!(
         "EXACT{}",
-        "z".repeat(super::MAX_METADATA_BYTES - "EXACT".len())
+        "z".repeat(super::records::MAX_METADATA_BYTES - "EXACT".len())
     );
     let exact_name = format!(
         "name{}",
-        "z".repeat(super::MAX_METADATA_BYTES - "name".len())
+        "z".repeat(super::records::MAX_METADATA_BYTES - "name".len())
     );
     session
         .record_assistant(
@@ -423,8 +423,8 @@ fn search_metadata_is_bounded_while_entry_coordinates_stay_authoritative() {
     let hit = &found["entries"][0];
     assert_eq!(hit["entry"], long_entry);
     assert_eq!(hit["tool_truncated"], true);
-    let expected_call_id = &long_call_id[..super::MAX_METADATA_BYTES - 1];
-    let expected_name = &long_name[..super::MAX_METADATA_BYTES];
+    let expected_call_id = &long_call_id[..super::records::MAX_METADATA_BYTES - 1];
+    let expected_name = &long_name[..super::records::MAX_METADATA_BYTES];
     assert_eq!(hit["tool"]["call_id"], expected_call_id);
     assert_eq!(hit["tool"]["name"], expected_name);
     let read = history_query(&session, json!({"action":"read","entry":long_entry})).unwrap();
