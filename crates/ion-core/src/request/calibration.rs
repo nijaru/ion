@@ -129,10 +129,10 @@ impl RequestScope {
     fn matches(&self, current: &Self) -> bool {
         self.model == current.model
             && self.context == current.context
-            && match (self.service.upgrade(), current.service.upgrade()) {
-                (Some(previous), Some(current)) => Arc::ptr_eq(&previous, &current),
-                _ => false,
-            }
+            // The current request already owns its live service. Compare weak
+            // identities without creating a last strong reference whose Drop
+            // could run application code while Session's Store is locked.
+            && Weak::ptr_eq(&self.service, &current.service)
     }
 }
 
