@@ -40,6 +40,7 @@ mod recovery_tests;
 mod submission;
 #[cfg(test)]
 mod submission_tests;
+use crate::request::{RequestCalibration, RequestMeasurement, RequestScope};
 use code_inspection::ChildRecordIndex;
 use context::{ProjectedMessage, context_projection};
 pub use recovery::{AuthorityScope, RecoveryBinding, RecoveryPoint, RecoveryState};
@@ -735,6 +736,9 @@ struct Store {
     // not retain or reproject historical tool payloads on each model request.
     context_changes: Vec<ModelContextChange>,
     child_records: ChildRecordIndex,
+    // Process-local capacity evidence. Reopen, fork and clone start cold; this
+    // is never serialized into Session history.
+    calibration: Option<RequestCalibration>,
     // Process-local task custody only; absent after reopen. Not replay grants.
     live_backgrounds: BTreeMap<uuid::Uuid, std::sync::Weak<()>>,
 }
@@ -815,6 +819,7 @@ impl Session {
                 messages: projection.messages,
                 context_changes: projection.context_changes,
                 child_records: projection.child_records,
+                calibration: None,
                 live_backgrounds: BTreeMap::new(),
             }),
             _lock: lock,
@@ -847,6 +852,7 @@ impl Session {
                 messages,
                 context_changes,
                 child_records,
+                calibration: None,
                 live_backgrounds: BTreeMap::new(),
             }),
             _lock: lock,
@@ -1136,6 +1142,45 @@ impl Session {
     ) -> Result<Vec<Message>, SessionError> {
         let store = self.store.lock().map_err(|_| SessionError::Poisoned)?;
         Ok(context_projection(&store, Some(model)))
+    }
+
+    /// Preparing an incompatible request must not discard evidence belonging
+    /// to the current binding. Only admitted issuance advances runtime scope.
+    pub(crate) fn request_calibration_for(
+        &self,
+        scope: &RequestScope,
+    ) -> Result<Option<RequestCalibration>, SessionError> {
+        let store = self.store.lock().map_err(|_| SessionError::Poisoned)?;
+        Ok(store
+            .calibration
+            .as_ref()
+            .filter(|calibration| calibration.matches_scope(scope))
+            .cloned())
+    }
+
+    pub(crate) fn activate_request_calibration(
+        &self,
+        measurement: &RequestMeasurement,
+        scope: &RequestScope,
+    ) -> Result<(), SessionError> {
+        let mut store = self.store.lock().map_err(|_| SessionError::Poisoned)?;
+        if store
+            .calibration
+            .as_ref()
+            .is_some_and(|calibration| !calibration.applies(measurement, scope))
+        {
+            store.calibration = None;
+        }
+        Ok(())
+    }
+
+    pub(crate) fn set_request_calibration(
+        &self,
+        calibration: RequestCalibration,
+    ) -> Result<(), SessionError> {
+        let mut store = self.store.lock().map_err(|_| SessionError::Poisoned)?;
+        store.calibration = Some(calibration);
+        Ok(())
     }
 
     /// Admit one prepared coding request atomically before provider issuance.
@@ -1872,6 +1917,19 @@ fn append(store: &mut Store, entries: &[SessionEntry]) -> Result<(), SessionErro
         if let SessionEntry::DelegationSettled { child, .. } = entry {
             store.live_backgrounds.remove(child);
         }
+    }
+    if entries.iter().any(|entry| {
+        matches!(
+            entry,
+            SessionEntry::Compacted { .. }
+                | SessionEntry::ProviderReplayRebased { .. }
+                | SessionEntry::EffectiveModelChanged { .. }
+                | SessionEntry::ModelSelected { .. }
+                | SessionEntry::ReasoningSelected { .. }
+                | SessionEntry::ModelContextChanged { .. }
+        )
+    }) {
+        store.calibration = None;
     }
     store.state = candidate;
     store.settled.extend(new_settled);

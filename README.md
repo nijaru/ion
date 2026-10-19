@@ -562,10 +562,19 @@ Session accounting fact but never enters model context or normal transcript/expo
 output. Idle cache warming is not implemented.
 Ion avoids compaction during a signed tool continuation; if its prefix changes
 or cannot fit, the Turn fails without repeating a tool effect. Context-window
-estimates count neutral content once rather than adding duplicate opaque replay.
-The encoded request bound still includes retained replay. Neither is an exact
-provider-token count or wire-size limit, and provider-only reasoning can make
-actual usage differ from the neutral estimate.
+estimates fall back to neutral content counted once, without duplicate opaque
+replay. Later requests can use total input usage from a compatible committed
+assistant exchange to refine capacity estimates. Samples are Session-local and
+require the same live model service, effective model, instructions, tools and
+reasoning; images must match as well. Context/model changes, compaction, replay
+reset, reopen and fork/clone discard the sample. Missing usage never means zero.
+Known input plus its assistant's reported output establishes a context baseline;
+only later messages are estimated. This avoids treating duplicate replay JSON as
+provider input. Incomplete usage creates no new baseline; later opaque messages
+without a known baseline use the fallback. Summary/cache-warm usage does not
+calibrate normal requests. New image sets retain the conservative first-contact
+image allowance. The independent encoded request bound still includes retained
+replay. Neither estimate is an exact provider-token count or transport-wire limit.
 Provider SSE frames are limited to 256 KiB. Newly retained decoded output,
 including opaque replay, has an 8 MiB admission budget. Independent transport
 bounds allow 64 MiB per response and 8 MiB without retained-state progress.
@@ -1136,8 +1145,10 @@ need representative measurements; no comparative performance gain is claimed.
 Direct Anthropic and OpenAI still need live account qualification; thinking on
 custom llama.cpp routes is unsupported. Historical route success does not imply
 current availability. Ion has no native ChatGPT subscription integration. Context
-pressure uses an approximate token estimate; unknown-window routes rely on the
-encoded request bound.
+pressure uses approximate estimates, refined by compatible observed input usage
+when available. Unknown-window routes rely on the encoded request bound. New image
+sets still use a conservative visual-token allowance; calibration cannot prevent
+an initial image request from exceeding that estimate.
 
 Chat-compatible tool messages encode
 `{"is_error": bool, "result": original_payload}`; inspection keeps raw payloads

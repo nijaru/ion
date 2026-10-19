@@ -2,25 +2,29 @@
 use std::sync::Arc;
 
 use ion_ai::{
-    Content, GenerationControls, ModelRef, ModelRequest, ModelRoute, ModelRouteReason,
-    ModelService, PromptCacheIntent, Reasoning, ToolChoice, ToolSpec,
+    Content, GenerationControls, ModelExecution, ModelRef, ModelRequest, ModelRoute,
+    ModelRouteReason, ModelService, Reasoning, ToolChoice, ToolSpec, Usage,
 };
-use serde::Serialize;
 use tokio_util::sync::CancellationToken;
 
 use crate::{
     agent::{AgentError, AgentEvent, AgentLimits},
     generation::{GeneratedResponse, generate_with_retry},
-    json_size::encoded_len,
-    prompt_size::NeutralMessages,
     session::{AuthorityScope, ModelContextSnapshot, RecoveryBinding, Session, SessionError},
     tool_set::{ToolCatalog, ToolSet},
 };
+
+pub(crate) mod calibration;
+#[cfg(test)]
+mod calibration_tests;
+pub(crate) use calibration::{RequestCalibration, RequestMeasurement, RequestScope};
 
 pub(crate) struct PreparedRequest {
     turn: u64,
     request: ModelRequest,
     catalog: ToolCatalog,
+    measurement: RequestMeasurement,
+    scope: RequestScope,
 }
 
 pub(crate) struct RequestStep {
@@ -66,6 +70,7 @@ impl PreparedRequest {
     pub fn new(
         session: &Session,
         turn: u64,
+        service: &Arc<dyn ModelService>,
         tools: &ToolSet,
         reason: ModelRouteReason,
         settings: RequestSettings<'_>,
@@ -112,14 +117,46 @@ impl PreparedRequest {
         {
             return Err(AgentError::ImagesUnsupported);
         }
+        let scope = RequestScope::new(service, &request)?;
+        let calibration = session.request_calibration_for(&scope)?;
+        let measurement = RequestMeasurement::measure(&request, calibration.as_ref())?;
+        let estimated_input = calibration.as_ref().map_or_else(
+            || measurement.fallback_input_tokens(),
+            |calibration| calibration.estimate(&measurement),
+        );
         request.controls.max_output_tokens = limits
-            .request_output_budget(&request, limits.max_output_tokens)?
+            .output_budget(
+                measurement.retained_bytes(),
+                estimated_input,
+                limits.max_output_tokens,
+            )
             .ok_or(AgentError::ContextTooLarge)?;
         Ok(Self {
             turn,
             request,
             catalog,
+            measurement,
+            scope,
         })
+    }
+
+    /// Publish a compatible total-input sample only after the assistant exchange
+    /// was committed. Failed validation/commit and auxiliary requests never call
+    /// this path.
+    pub fn record_observed_input(
+        &self,
+        session: &Session,
+        execution: &ModelExecution,
+        usage: Usage,
+    ) -> Result<(), SessionError> {
+        let scope = self
+            .scope
+            .clone()
+            .with_model(execution.route.effective.clone());
+        if let Some(calibration) = RequestCalibration::new(&self.measurement, scope, usage) {
+            session.set_request_calibration(calibration)?;
+        }
+        Ok(())
     }
 
     pub fn output_budget(&self) -> u32 {
@@ -161,6 +198,7 @@ impl PreparedRequest {
                 tools: self.request.tools.clone(),
             },
         )?;
+        session.activate_request_calibration(&self.measurement, &self.scope)?;
         let started = tokio::time::Instant::now();
         let generated = generate_with_retry(model, &self.request, stop, observe).await?;
         // Retain the route actually used by pre-output retry for cache warming.
@@ -205,7 +243,7 @@ impl AgentLimits {
         let Some(window) = self.context_window_tokens else {
             return Some(ceiling);
         };
-        let available = u64::from(window).saturating_sub(estimated_input + 8_192);
+        let available = u64::from(window).saturating_sub(estimated_input.saturating_add(8_192));
         (available > 0).then(|| ceiling.min(available as u32))
     }
 
@@ -214,82 +252,11 @@ impl AgentLimits {
         request: &ModelRequest,
         ceiling: u32,
     ) -> Result<Option<u32>, serde_json::Error> {
-        // Timelines optimize adapters, not the latest provider-neutral prompt.
-        // Borrow only the latest snapshot; do not clone replay/images or encode
-        // historical loadouts just to discard them. Exhaustive destructuring
-        // makes new request fields require an explicit sizing decision.
-        #[derive(Serialize)]
-        struct LatestRequest<'a, M> {
-            route: &'a ModelRoute,
-            provider_session_id: &'a Option<String>,
-            instructions: &'a Option<String>,
-            messages: M,
-            tools: &'a [ToolSpec],
-            context_timeline: Option<()>,
-            prompt_cache: &'a PromptCacheIntent,
-            controls: &'a GenerationControls,
-        }
-        let ModelRequest {
-            route,
-            provider_session_id,
-            instructions,
-            messages,
-            tools,
-            context_timeline: _,
-            prompt_cache,
-            controls,
-        } = request;
-        let latest = LatestRequest {
-            route,
-            provider_session_id,
-            instructions,
-            messages,
-            tools,
-            context_timeline: None,
-            prompt_cache,
-            controls,
-        };
-        // Bound the retained representation, including opaque continuation, even
-        // though it is not an additive part of the neutral token estimate.
-        let bytes = encoded_len(&latest)?;
-        if bytes > self.max_request_bytes {
-            return Ok(None);
-        }
-        let neutral_bytes = if messages
-            .iter()
-            .any(|message| message.provider_replay.is_some())
-        {
-            encoded_len(&LatestRequest {
-                route,
-                provider_session_id,
-                instructions,
-                messages: NeutralMessages(messages),
-                tools,
-                context_timeline: None,
-                prompt_cache,
-                controls,
-            })?
-        } else {
-            bytes
-        };
-        let (encoded_images, image_count) = request
-            .messages
-            .iter()
-            .flat_map(|message| &message.content)
-            .fold((0usize, 0u64), |(bytes, count), part| match part {
-                Content::Image(image) => (bytes.saturating_add(image.data().len()), count + 1),
-                Content::ToolResult(result) => result
-                    .images
-                    .iter()
-                    .fold((bytes, count), |(bytes, count), image| {
-                        (bytes.saturating_add(image.data().len()), count + 1)
-                    }),
-                _ => (bytes, count),
-            });
-        // Base64 is transport data, not prompt text. Reserve visual tokens until
-        // observed provider usage supplies a more precise count.
-        let estimated_input =
-            neutral_bytes.saturating_sub(encoded_images).div_ceil(3) as u64 + image_count * 16_384;
-        Ok(self.output_budget(bytes, estimated_input, ceiling))
+        let measurement = RequestMeasurement::measure(request, None)?;
+        Ok(self.output_budget(
+            measurement.retained_bytes(),
+            measurement.fallback_input_tokens(),
+            ceiling,
+        ))
     }
 }

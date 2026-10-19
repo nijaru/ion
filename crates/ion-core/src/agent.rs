@@ -981,6 +981,7 @@ impl Agent {
                     let prepared = match PreparedRequest::new(
                         session,
                         turn,
+                        &self.service,
                         &self.tools,
                         route_reason,
                         self.request_settings(&instructions),
@@ -1142,6 +1143,7 @@ impl Agent {
                         execution.clone(),
                         response.usage,
                     )?;
+                    prepared.record_observed_input(session, &execution, response.usage)?;
                     observe(AgentEvent::AssistantCommitted {
                         turn,
                         content: committed_content,
@@ -1209,6 +1211,7 @@ impl Agent {
                         Vec::new(),
                     )
                 };
+                prepared.record_observed_input(session, &execution, response.usage)?;
                 observe(AgentEvent::AssistantCommitted {
                     turn,
                     content: committed_content,

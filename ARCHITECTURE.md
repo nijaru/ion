@@ -380,8 +380,18 @@ These estimates are neither provider-token counts nor transport-wire bounds.
 Use compatible observed input usage to inform later estimates; do not reuse a
 sample across incompatible model routes, context representations or image inputs.
 Missing usage must remain unknown, and calibration cannot relax independent
-retained-byte or transport bounds. Provider-only continuation remains an adapter
-concern. Context bounds do not imply bounded resident history or artifact retention.
+retained-byte or transport bounds. Samples are process-local per Session and
+bound to the live model service, effective model and request-context scope.
+Model/context/reasoning changes, compaction and replay rebasing invalidate them;
+reopen and copied Sessions start cold. Record samples only from committed normal
+assistant exchanges: total input plus that assistant's output establishes a
+known context boundary, then estimate only subsequently appended messages. Do
+not add cache sub-buckets again, recount the baseline assistant, or scale by
+retained JSON that may duplicate opaque replay. Unknown output/opaque suffixes
+require fallback rather than invented hidden-token counts. Summary and cache-warm
+usage belong to different requests.
+Provider-only continuation remains an adapter concern. Context bounds do not imply
+bounded resident history or artifact retention.
 
 Prepare wire declarations and durable context from the same catalogue. Admit
 model/context changes atomically before issuance. Pre-output retries retain that
