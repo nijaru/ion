@@ -17,7 +17,7 @@ use serde::Serialize;
 use tokio::sync::{broadcast, watch};
 use tokio_util::sync::CancellationToken;
 
-use crate::{SessionSetup, image_input::ImageSource};
+use crate::{SessionSetup, image_input::ImageSource, question::TurnStopScope};
 
 mod admission;
 mod input;
@@ -146,6 +146,8 @@ struct Active<M> {
     work: Work,
     inbox: Arc<SteeringInbox<InputId>>,
     metadata: Option<(M, InputReservation)>,
+    /// Exact root stop bound to question custody while this Turn owns control.
+    turn_stop: Option<TurnStopScope>,
 }
 enum Work {
     Turn(Operation<String, CodingAgentError>),
@@ -388,6 +390,7 @@ impl<M: Serialize + Send + 'static> SessionControl<M> {
 
     fn finish_operation(&mut self, outcome: OperationOutcome) {
         let active = self.active.take().expect("retained Core operation");
+        self.clear_turn_stop(active.turn_stop);
         // Settlement supersedes any unread provisional stream for this owner.
         // Explicitly invalidate it rather than leaking old deltas into the next Turn.
         let skipped = self.observer.receiver.len();
@@ -547,6 +550,9 @@ impl<M> Drop for SessionControl<M> {
         }
         if let Some(active) = &self.active {
             active.work.stop();
+            if let (Some(questions), Some(scope)) = (&self.setup.questions, active.turn_stop) {
+                questions.clear_turn_stop(self.owner, self.setup.session.id(), scope);
+            }
         }
         if let Some((_, preparation)) = &self.preparing {
             preparation.request_stop();

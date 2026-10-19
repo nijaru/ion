@@ -137,6 +137,7 @@ impl<M: Serialize + Send + 'static> SessionControl<M> {
             },
         );
         // Hold custody until the callback has a complete root to acknowledge.
+        let turn_stop = self.bind_turn_stop(stop.clone());
         let result = self.setup.runtime.agent.submit_request(
             self.setup.session.clone(),
             ion_core::SubmissionRequest {
@@ -170,10 +171,12 @@ impl<M: Serialize + Send + 'static> SessionControl<M> {
                     work: Work::Turn(work),
                     inbox,
                     metadata: None,
+                    turn_stop: turn_stop.as_ref().map(|binding| binding.scope()),
                 });
                 Ok(RequestAdmission::Started { id, receipt })
             }
             result => {
+                self.restore_turn_stop(turn_stop);
                 let input = custody
                     .inputs
                     .remove(&id)
@@ -224,11 +227,13 @@ impl<M: Serialize + Send + 'static> SessionControl<M> {
             self.setup.runtime.agent.limits(),
             self.budget.clone(),
         ));
+        let stop = self.work_stop();
+        let turn_stop = self.bind_turn_stop(stop.clone());
         let result = self.setup.runtime.agent.resume_turn(
             self.setup.session.clone(),
             point,
             self.setup.resources.instructions().to_owned(),
-            self.work_stop(),
+            stop,
             Some(inbox.clone()),
             turn_observer(
                 self.custody.clone(),
@@ -239,7 +244,10 @@ impl<M: Serialize + Send + 'static> SessionControl<M> {
         );
         let (point, work) = match result {
             Ok(value) => value,
-            Err(error) => return Err((metadata, error.into())),
+            Err(error) => {
+                self.restore_turn_stop(turn_stop);
+                return Err((metadata, error.into()));
+            }
         };
         lock(&self.custody).occupied += 1;
         self.stop_requested = false;
@@ -250,6 +258,7 @@ impl<M: Serialize + Send + 'static> SessionControl<M> {
             work: Work::Turn(work),
             inbox,
             metadata: Some((metadata, reservation)),
+            turn_stop: turn_stop.as_ref().map(|binding| binding.scope()),
         });
         Ok(RecoveryAdmission { operation, point })
     }
@@ -450,6 +459,7 @@ impl<M: Serialize + Send + 'static> SessionControl<M> {
                 self.budget.clone(),
             )),
             metadata: Some((metadata, reservation)),
+            turn_stop: None,
         });
     }
 }

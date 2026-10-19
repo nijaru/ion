@@ -259,11 +259,15 @@ impl<M: Serialize + Send + 'static> SessionControl<M> {
                     id: root,
                     operation,
                 });
+                let stop = self.work_stop();
+                let turn_stop = self
+                    .bind_turn_stop(stop.clone())
+                    .map(|binding| binding.scope());
                 let work = self.setup.runtime.agent.submit_message_with_steering(
                     self.setup.session.clone(),
                     message,
                     instructions,
-                    self.work_stop(),
+                    stop,
                     inbox.clone(),
                     turn_observer(state, observations, Some(root), operation),
                 );
@@ -275,6 +279,7 @@ impl<M: Serialize + Send + 'static> SessionControl<M> {
                     work: Work::Turn(work),
                     inbox,
                     metadata: None,
+                    turn_stop,
                 });
             }
         }

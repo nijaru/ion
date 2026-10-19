@@ -161,12 +161,38 @@ struct Consumer {
     session: Uuid,
 }
 
+struct TurnStop {
+    scope: TurnStopScope,
+    owner: Uuid,
+    session: Uuid,
+    stop: CancellationToken,
+}
+
+/// Identity of one Host-owned Turn stop binding. Clearing an old scope cannot
+/// remove a newer operation's authority.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct TurnStopScope(u64);
+
+pub(crate) struct TurnStopBinding {
+    scope: TurnStopScope,
+    previous: Option<TurnStop>,
+}
+
+impl TurnStopBinding {
+    pub(crate) fn scope(&self) -> TurnStopScope {
+        self.scope
+    }
+}
+
 struct PendingState {
     id: QuestionRequestId,
     owner: Uuid,
     session: Uuid,
     origin: ToolOrigin,
     stop: CancellationToken,
+    /// Root Turn stop captured when this request opened, distinct from the
+    /// invocation/guest stop above. Cancelling it ends the owning Turn.
+    turn_stop: Option<CancellationToken>,
     questions: Vec<Question>,
     reply: Option<oneshot::Sender<QuestionDecision>>,
 }
@@ -182,6 +208,8 @@ struct State {
     binding: Option<Binding>,
     consumer: Option<Consumer>,
     pending: Option<PendingState>,
+    turn_stop: Option<TurnStop>,
+    next_turn_stop: u64,
 }
 
 impl State {
@@ -266,7 +294,7 @@ impl QuestionCustody {
             state.pending.take()
         };
         if let Some(pending) = cancelled {
-            pending.stop.cancel();
+            cancel_pending_stops(&pending);
             if let Some(reply) = pending.reply {
                 let _ = reply.send(QuestionDecision::Cancelled("binding_replaced".into()));
             }
@@ -295,12 +323,62 @@ impl QuestionCustody {
             state.pending.take()
         };
         if let Some(pending) = pending {
-            pending.stop.cancel();
+            cancel_pending_stops(&pending);
             if let Some(reply) = pending.reply {
                 let _ = reply.send(QuestionDecision::Cancelled(reason.into()));
             }
         }
         self.notify();
+    }
+
+    /// Retain the exact root stop Core receives for the Turn that is starting.
+    /// This is Host operation metadata, not a second durable execution record.
+    pub(crate) fn bind_turn_stop(
+        &self,
+        owner: Uuid,
+        session: Uuid,
+        stop: CancellationToken,
+    ) -> Option<TurnStopBinding> {
+        let mut state = lock(&self.state);
+        let binding = state.binding.as_ref()?;
+        if binding.owner != owner || binding.session != session {
+            return None;
+        }
+        state.next_turn_stop = state
+            .next_turn_stop
+            .checked_add(1)
+            .expect("question turn stop scope exhausted");
+        let scope = TurnStopScope(state.next_turn_stop);
+        let previous = state.turn_stop.take();
+        state.turn_stop = Some(TurnStop {
+            scope,
+            owner,
+            session,
+            stop,
+        });
+        Some(TurnStopBinding { scope, previous })
+    }
+
+    /// Failed or reconciled admission did not start this Turn; put back any
+    /// authority it provisionally covered before Core rejected the submission.
+    pub(crate) fn restore_turn_stop(&self, owner: Uuid, session: Uuid, binding: TurnStopBinding) {
+        let mut state = lock(&self.state);
+        if state.turn_stop.as_ref().is_some_and(|turn| {
+            turn.scope == binding.scope && turn.owner == owner && turn.session == session
+        }) {
+            state.turn_stop = binding.previous;
+        }
+    }
+
+    /// Clear only this operation's binding; a stale scope cannot revoke the
+    /// authority retained by a replacement operation.
+    pub(crate) fn clear_turn_stop(&self, owner: Uuid, session: Uuid, scope: TurnStopScope) {
+        let mut state = lock(&self.state);
+        if state.turn_stop.as_ref().is_some_and(|turn| {
+            turn.scope == scope && turn.owner == owner && turn.session == session
+        }) {
+            state.turn_stop = None;
+        }
     }
 
     pub(crate) fn cancel_pending(&self, owner: Uuid, reason: &'static str) {
@@ -317,7 +395,7 @@ impl QuestionCustody {
             state.pending.take()
         };
         if let Some(pending) = pending {
-            pending.stop.cancel();
+            cancel_pending_stops(&pending);
             if let Some(reply) = pending.reply {
                 let _ = reply.send(QuestionDecision::Cancelled(reason.into()));
             }
@@ -476,7 +554,7 @@ impl QuestionCustody {
             if let Some(pending) = pending {
                 // Ordering is part of the contract: revoke the original Turn
                 // before waking the model/tool with a cancellation result.
-                pending.stop.cancel();
+                cancel_pending_stops(&pending);
                 if let Some(reply) = pending.reply {
                     let _ = reply.send(QuestionDecision::Cancelled("responder_lost".into()));
                 }
@@ -512,6 +590,17 @@ impl QuestionCustody {
         if state.pending.is_some() {
             return Err(QuestionError::Busy);
         }
+        let turn_stop = state
+            .turn_stop
+            .as_ref()
+            .filter(|turn| turn.owner == consumer.owner && turn.session == consumer.session)
+            .map(|turn| turn.stop.clone());
+        if turn_stop
+            .as_ref()
+            .is_some_and(CancellationToken::is_cancelled)
+        {
+            return Err(QuestionError::Stopped);
+        }
         let id = QuestionRequestId(Uuid::now_v7());
         let (reply, receiver) = oneshot::channel();
         state.pending = Some(PendingState {
@@ -520,6 +609,7 @@ impl QuestionCustody {
             session: consumer.session,
             origin,
             stop,
+            turn_stop,
             questions,
             reply: Some(reply),
         });
@@ -594,6 +684,13 @@ impl Drop for QuestionResponder {
     fn drop(&mut self) {
         self.custody.revoke(self.lease);
     }
+}
+
+fn cancel_pending_stops(pending: &PendingState) {
+    if let Some(turn_stop) = &pending.turn_stop {
+        turn_stop.cancel();
+    }
+    pending.stop.cancel();
 }
 
 fn validate_answers(

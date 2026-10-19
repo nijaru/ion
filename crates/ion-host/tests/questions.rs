@@ -14,12 +14,13 @@ use ion_ai::{
     Role, Script, ScriptedModelService, ToolCall, ToolSpec, Usage,
 };
 use ion_core::{
-    CodingAgent, CodingSession, CodingToolOutput, CodingToolSource, ToolDefinition, ToolExecutor,
-    ToolInvocation, ToolSet,
+    ChildOutcome, CodeLimits, CodingAgent, CodingSession, CodingToolOutput, CodingToolSource,
+    SessionEntry, ToolDefinition, ToolExecutor, ToolInvocation, ToolSet,
 };
 use ion_host::{
     Application, ApplicationRuntime, ControlUpdate, Delivery, PendingQuestion, QuestionAnswer,
     QuestionCustody, QuestionTools, Resources, SessionCatalog, SessionSetup, Settlement, UserInput,
+    code_mode::QuickJs,
 };
 use serde_json::json;
 
@@ -106,11 +107,8 @@ impl Application for App {
         if let Some(questions) = questions {
             sources.push(Arc::new(QuestionTools::new(questions)));
         }
-        let agent = CodingAgent::with_tool_set(
-            self.service.clone(),
-            Arc::new(ToolSet::new(sources)),
-            model(),
-        );
+        let tools = ToolSet::new(sources).with_code_mode(Arc::new(QuickJs), CodeLimits::default());
+        let agent = CodingAgent::with_tool_set(self.service.clone(), Arc::new(tools), model());
         Ok(ApplicationRuntime::new(Arc::new(agent)))
     }
 }
@@ -176,6 +174,15 @@ fn effect_call() -> Content {
         id: "effect".into(),
         name: "effect".into(),
         arguments: json!({"value":"chosen once"}),
+        raw_arguments: None,
+    })
+}
+
+fn code_mode_call(code: &str) -> Content {
+    Content::ToolCall(ToolCall {
+        id: "code".into(),
+        name: "code_mode".into(),
+        arguments: json!({"code": code}),
         raw_arguments: None,
     })
 }
@@ -308,6 +315,128 @@ async fn responder_loss_stops_before_dependent_dispatch() {
     assert!(!fixture.effect.exists());
     assert_eq!(fixture.service.requests().len(), 1);
     let _ = fixture.control.shutdown().await;
+    drop(fixture.control);
+    fs::remove_dir_all(fixture.root).unwrap();
+}
+
+#[tokio::test]
+async fn responder_loss_in_code_mode_stops_the_root_turn_before_dependent_effects() {
+    let mut fixture = fixture(
+        vec![
+            response(vec![code_mode_call(
+                r#"
+                const answer = await tools.ask_user_question({
+                    questions:[{
+                        question:"Which route?",
+                        options:[{label:"Alpha"},{label:"Beta"}]
+                    }]
+                });
+                await tools.effect({value:"guest after responder loss"});
+                return answer;
+                "#,
+            )]),
+            response(vec![effect_call()]),
+            response(vec![Content::Text("next turn complete".into())]),
+        ],
+        true,
+    );
+    fixture
+        .control
+        .submit(
+            Delivery::Start,
+            UserInput::Prompt {
+                text: "ask from code mode".into(),
+                images: Vec::new(),
+            },
+            (),
+        )
+        .unwrap();
+    let pending = tokio::time::timeout(
+        std::time::Duration::from_secs(5),
+        wait_for_pending(&mut fixture),
+    )
+    .await
+    .expect("code-mode question did not become pending");
+    assert!(
+        pending.origin.composed_child().is_some(),
+        "fixture must exercise a genuine Code Mode child origin"
+    );
+    drop(fixture.responder.take());
+    let settlement = tokio::time::timeout(
+        std::time::Duration::from_secs(5),
+        wait_for_settlement(&mut fixture),
+    )
+    .await
+    .expect("responder loss did not settle the Turn");
+    assert!(matches!(
+        settlement.outcome,
+        ion_host::OperationOutcome::Turn(Err(ion_core::CodingAgentError::Cancelled))
+    ));
+    assert_eq!(fixture.calls.load(Ordering::SeqCst), 0);
+    assert!(!fixture.effect.exists());
+    assert_eq!(fixture.service.requests().len(), 1);
+
+    let view = fixture.control.session().view().unwrap();
+    let child = view
+        .entries
+        .iter()
+        .find_map(|entry| match entry {
+            SessionEntry::ChildToolResult { child, outcome, .. }
+                if Some(*child) == pending.origin.composed_child() =>
+            {
+                Some(outcome)
+            }
+            _ => None,
+        })
+        .expect("started question child has a committed outcome");
+    match child {
+        ChildOutcome::Observed { output } => {
+            assert_eq!(output.value["status"], "cancelled");
+            assert!(output.value["reason"].is_string());
+        }
+        other => panic!("unexpected question child outcome: {other:?}"),
+    }
+    assert!(view.entries.iter().any(|entry| matches!(
+        entry,
+        SessionEntry::TurnEnded {
+            reason: ion_core::TurnEndReason::Cancelled,
+            ..
+        }
+    )));
+
+    // A cancelled Turn's authority is not carried into the next operation.
+    fixture.responder = Some(
+        fixture
+            .control
+            .attach_question_responder()
+            .unwrap()
+            .expect("question custody remains configured"),
+    );
+    fixture
+        .control
+        .submit(
+            Delivery::Start,
+            UserInput::Prompt {
+                text: "new turn".into(),
+                images: Vec::new(),
+            },
+            (),
+        )
+        .unwrap();
+    let next = tokio::time::timeout(
+        std::time::Duration::from_secs(5),
+        wait_for_settlement(&mut fixture),
+    )
+    .await
+    .expect("new Turn did not settle");
+    assert!(matches!(
+        next.outcome,
+        ion_host::OperationOutcome::Turn(Ok(ref text)) if text == "next turn complete"
+    ));
+    assert_eq!(fixture.service.requests().len(), 3);
+    assert_eq!(fixture.calls.load(Ordering::SeqCst), 1);
+    assert_eq!(fs::read_to_string(&fixture.effect).unwrap(), "chosen once");
+    fixture.control.shutdown().await;
     drop(fixture.control);
     fs::remove_dir_all(fixture.root).unwrap();
 }
