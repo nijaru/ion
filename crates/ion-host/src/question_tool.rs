@@ -161,9 +161,6 @@ impl Drop for PendingGuard<'_> {
 fn unavailable(error: QuestionError) -> CodingToolOutput {
     match error {
         QuestionError::NotAttached => rejected("interactive question UI is unavailable"),
-        QuestionError::ForeignSession => rejected("question request belongs to another Session"),
-        QuestionError::Busy => rejected("another question batch is already pending"),
-        QuestionError::Untracked => rejected("question tool requires a live Core invocation"),
         other => rejected(other.to_string()),
     }
 }

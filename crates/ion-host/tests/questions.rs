@@ -23,6 +23,7 @@ use ion_host::{
     code_mode::QuickJs,
 };
 use serde_json::json;
+use tokio_util::sync::CancellationToken;
 
 fn model() -> ModelRef {
     ModelRef {
@@ -278,6 +279,68 @@ async fn answer_resumes_the_same_turn_and_dispatches_dependent_effect_once() {
     drop(fixture.responder);
     fixture.control.request_shutdown();
     let _ = fixture.control.shutdown().await;
+    drop(fixture.control);
+    fs::remove_dir_all(fixture.root).unwrap();
+}
+
+#[tokio::test]
+async fn question_tool_outside_control_admission_requires_root_turn_stop() {
+    let mut fixture = fixture(
+        vec![
+            response(vec![question_call()]),
+            response(vec![Content::Text("bypassed".into())]),
+        ],
+        true,
+    );
+    let agent = fixture.control.agent().clone();
+    let session = fixture.control.session().clone();
+    let stop = CancellationToken::new();
+    let operation = agent.submit(
+        session.clone(),
+        "direct".into(),
+        String::new(),
+        stop.clone(),
+        |_| {},
+    );
+    let result = tokio::time::timeout(std::time::Duration::from_secs(5), operation).await;
+    if result.is_err() {
+        stop.cancel();
+    }
+    // Join cleanup even when the bypassed operation did not settle in time.
+    let cleanup = tokio::time::timeout(std::time::Duration::from_secs(5), session.shutdown())
+        .await
+        .expect("bypassed operation retained execution during cleanup");
+    let result = result.expect("bypassed Core call did not settle");
+    cleanup.unwrap();
+    assert_eq!(result.unwrap(), "bypassed");
+    assert!(fixture.control.pending_question().is_none());
+    assert!(
+        fixture
+            .responder
+            .as_ref()
+            .unwrap()
+            .pending()
+            .unwrap()
+            .is_none()
+    );
+    let requests = fixture.service.requests();
+    assert_eq!(requests.len(), 2);
+    let tool_result = requests[1]
+        .messages
+        .iter()
+        .flat_map(|message| &message.content)
+        .find_map(|part| match part {
+            Content::ToolResult(result) if result.call_id == "question" => Some(result),
+            _ => None,
+        })
+        .expect("question tool result committed before the next model request");
+    assert!(tool_result.is_error);
+    assert!(
+        tool_result.result["error"]
+            .as_str()
+            .is_some_and(|message| message.contains("active controlled Turn"))
+    );
+    drop(fixture.responder.take());
     drop(fixture.control);
     fs::remove_dir_all(fixture.root).unwrap();
 }

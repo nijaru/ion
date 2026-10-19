@@ -140,6 +140,8 @@ pub enum QuestionError {
     StaleRequest,
     #[error("question request was already stopped")]
     Stopped,
+    #[error("question tool requires an active controlled Turn")]
+    InactiveTurn,
     #[error("question request belongs to another Session")]
     ForeignSession,
     #[error("question tool requires a live Core invocation")]
@@ -191,8 +193,9 @@ struct PendingState {
     origin: ToolOrigin,
     stop: CancellationToken,
     /// Root Turn stop captured when this request opened, distinct from the
-    /// invocation/guest stop above. Cancelling it ends the owning Turn.
-    turn_stop: Option<CancellationToken>,
+    /// invocation/guest stop above. Every accepted request requires it; there
+    /// is no guest-only fallback. Cancelling it ends the owning Turn.
+    turn_stop: CancellationToken,
     questions: Vec<Question>,
     reply: Option<oneshot::Sender<QuestionDecision>>,
 }
@@ -313,6 +316,9 @@ impl QuestionCustody {
                 return;
             }
             state.bump();
+            // Teardown releases the controller's root authority. An existing
+            // pending request retains its own clone and is cancelled below.
+            state.turn_stop = None;
             if state
                 .consumer
                 .as_ref()
@@ -594,13 +600,11 @@ impl QuestionCustody {
             .turn_stop
             .as_ref()
             .filter(|turn| turn.owner == consumer.owner && turn.session == consumer.session)
-            .map(|turn| turn.stop.clone());
-        if turn_stop
-            .as_ref()
-            .is_some_and(CancellationToken::is_cancelled)
-        {
+            .ok_or(QuestionError::InactiveTurn)?;
+        if turn_stop.stop.is_cancelled() {
             return Err(QuestionError::Stopped);
         }
+        let turn_stop = turn_stop.stop.clone();
         let id = QuestionRequestId(Uuid::now_v7());
         let (reply, receiver) = oneshot::channel();
         state.pending = Some(PendingState {
@@ -687,9 +691,7 @@ impl Drop for QuestionResponder {
 }
 
 fn cancel_pending_stops(pending: &PendingState) {
-    if let Some(turn_stop) = &pending.turn_stop {
-        turn_stop.cancel();
-    }
+    pending.turn_stop.cancel();
     pending.stop.cancel();
 }
 
