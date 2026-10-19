@@ -12,6 +12,7 @@ import tempfile
 import termios
 import threading
 import time
+from contextlib import closing
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
@@ -71,8 +72,19 @@ def available(pipe):
 
 
 def entries(database):
-    with sqlite3.connect(database) as connection:
+    with closing(sqlite3.connect(f"file:{database}?mode=ro", uri=True)) as connection:
         return [json.loads(row[0]) for row in connection.execute("SELECT body FROM entries ORDER BY seq")]
+
+
+def session_database(state, workspace):
+    matches = []
+    for path in state.rglob("*.sqlite"):
+        with closing(sqlite3.connect(f"file:{path}?mode=ro", uri=True)) as connection:
+            header = json.loads(connection.execute("SELECT header FROM session WHERE id=1").fetchone()[0])
+        if Path(header["cwd"]).resolve() == workspace.resolve():
+            matches.append(path)
+    assert len(matches) == 1, (workspace, matches)
+    return matches[0]
 
 
 def alive(pid):
@@ -110,7 +122,14 @@ with tempfile.TemporaryDirectory(prefix="ion-headless-") as temporary:
         assert burst.returncode == 0, burst.stderr
         burst_records = [json.loads(line) for line in burst.stdout.splitlines()]
         assert burst_records[-1] == {"type": "run_end", "status": "completed"}, burst_records[-3:]
-        assert "".join(record["text"] for record in burst_records if record["type"] == "text_delta") == "x" * 5000
+        visible = "".join(record["text"] for record in burst_records if record["type"] == "text_delta")
+        gaps = [record for record in burst_records if record["type"] == "observation_gap"]
+        # Provisional progress is bounded and may overflow even with a draining
+        # reader if scheduling lets a burst get ahead. Loss must be explicit;
+        # the committed final below must still be complete and exact.
+        assert len(visible) <= 5000 and visible == "x" * len(visible), (len(visible), gaps)
+        if len(visible) < 5000:
+            assert gaps and sum(record["skipped"] for record in gaps) > 0, (len(visible), gaps)
         assert next(record["text"] for record in burst_records if record["type"] == "final") == "x" * 5000
         for json_output in (True, False):
             workspace = work / ("json" if json_output else "text")
@@ -151,8 +170,13 @@ with tempfile.TemporaryDirectory(prefix="ion-headless-") as temporary:
                     time.sleep(0.01)
                 else:
                     raise AssertionError(f"fixture did not establish output pressure and required native work: json={json_output}, available={previous}, native_ready={(workspace / 'native.ready').exists()}")
-                databases = list((work / "state").rglob("*.sqlite"))
-                database = max(databases, key=lambda path: path.stat().st_mtime_ns)
+                if not json_output:
+                    # A prior cancelled Session must not become this test's
+                    # oracle because a checkpoint/touch changed its file mtime.
+                    previous = session_database(work / "state", work / "json")
+                    stamp = time.time_ns() + 10_000_000_000
+                    os.utime(previous, ns=(stamp, stamp))
+                database = session_database(work / "state", workspace)
                 child.send_signal(signal.SIGINT)
                 deadline = time.monotonic() + 4
                 facts = []
@@ -208,7 +232,7 @@ with tempfile.TemporaryDirectory(prefix="ion-headless-") as temporary:
                 stdout, stderr = child.communicate(timeout=8)
                 assert child.returncode == 1, (child.returncode, stdout, stderr)
                 assert not alive(native_pid), "broken output dropped owned native work"
-                database = max((work / "state").rglob("*.sqlite"), key=lambda path: path.stat().st_mtime_ns)
+                database = session_database(work / "state", workspace)
                 facts = entries(database)
                 assert facts[-1]["kind"] == "turn_ended" and facts[-1]["data"]["reason"] == "cancelled", facts[-1]
                 outcomes = [fact["data"]["result"]["outcome"] for fact in facts if fact["kind"] == "tool_result"]
