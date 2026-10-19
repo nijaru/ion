@@ -288,6 +288,104 @@ async fn cancelled_wait_does_not_kill_and_close_really_joins() {
 }
 
 #[tokio::test]
+async fn cancelled_close_reports_incomplete_join_and_retains_stop() {
+    let root = std::env::temp_dir().join(format!("ion-process-close-{}", Uuid::now_v7()));
+    std::fs::create_dir(&root).unwrap();
+    let owner = Arc::new(ProcessOwner::new(1).unwrap());
+    let tools = Arc::new(ProcessTools::new(&root, owner.clone()).unwrap());
+    let session =
+        Arc::new(CodingSession::create(root.join("session.sqlite"), Some(&root)).unwrap());
+    let starter = agent(
+        model(turn(
+            vec![call(
+                "start",
+                json!({
+                    "action":"start", "command":"trap '' TERM; printf ready > ready; exec sleep 30"
+                }),
+            )],
+            "started",
+        )),
+        tools.clone(),
+    );
+    submit(&starter, &session, "start").await.unwrap();
+    let id = started_id(&process_outputs(&session)[0]);
+    until(&root.join("ready")).await;
+
+    let stop = CancellationToken::new();
+    let trigger = stop.clone();
+    let closer = agent(
+        model(vec![response(vec![call(
+            "close",
+            json!({"action":"close","id":id}),
+        )])]),
+        tools.clone(),
+    );
+    let result = closer
+        .submit(
+            session.clone(),
+            "close".into(),
+            String::new(),
+            stop,
+            move |event| {
+                if matches!(event, CodingAgentEvent::ToolStarted { .. }) {
+                    trigger.cancel();
+                }
+            },
+        )
+        .await;
+    let close = session
+        .view()
+        .unwrap()
+        .entries
+        .iter()
+        .find_map(|entry| match entry {
+            SessionEntry::ToolResult { result, .. } if result.call_id == "close" => {
+                match &result.outcome {
+                    ToolOutcome::Observed { output, .. } => Some(output.clone()),
+                    _ => None,
+                }
+            }
+            _ => None,
+        });
+    let waiter = agent(
+        model(turn(
+            vec![
+                call("wait", json!({"action":"wait","id":id,"timeout_ms":5000})),
+                call("ack", json!({"action":"acknowledge","id":id})),
+            ],
+            "joined",
+        )),
+        tools,
+    );
+    let joined = submit(&waiter, &session, "join").await;
+    let outputs = process_outputs(&session);
+    // Settle owned work before assertions so the regression cannot leak a process.
+    owner.join_shutdown().await.unwrap();
+    session.shutdown().await.unwrap();
+    std::fs::remove_dir_all(root).unwrap();
+
+    assert!(
+        matches!(result, Err(CodingAgentError::Cancelled)),
+        "{result:?}"
+    );
+    joined.unwrap();
+    let close = close.expect("close observation");
+    assert_eq!(close.value["cancelled"], true, "{close:?}");
+    assert_eq!(close.value["joined"], false, "{close:?}");
+    assert!(
+        close.is_error,
+        "cancelled close must not report successful settlement: {close:?}"
+    );
+    let wait = &outputs[2];
+    assert_eq!(wait["joined"], true, "{wait}");
+    assert_eq!(
+        wait["exit"]["signal"], 9,
+        "stop must survive waiter cancellation: {wait}"
+    );
+    assert_eq!(outputs[3]["acknowledged"], true);
+}
+
+#[tokio::test]
 async fn absent_and_foreign_authority_reject_before_effects() {
     let root = std::env::temp_dir().join(format!("ion-process-authority-{}", Uuid::now_v7()));
     std::fs::create_dir(&root).unwrap();

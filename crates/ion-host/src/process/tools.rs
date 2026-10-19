@@ -610,7 +610,7 @@ impl ProcessTools {
         CodingToolOutput {
             value: output,
             images: Vec::new(),
-            is_error: false,
+            is_error: cancelled,
         }
     }
 
