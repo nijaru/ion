@@ -207,7 +207,7 @@ where
             let mut commands = BTreeMap::new();
             while let Some((name, command)) = map.next_entry::<String, RawCommand>()? {
                 if commands.contains_key(&name) {
-                    return Err(A::Error::custom(format!("duplicate command name `{name}`")));
+                    return Err(A::Error::custom(format!("duplicate command name {name:?}")));
                 }
                 commands.insert(name, command);
             }

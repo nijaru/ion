@@ -250,7 +250,9 @@ async fn main() {
     if let Err(error) = run_cli(Cli::parse()).await {
         // Reporting to a broken stderr must not replace the original failure
         // with a printing panic after controlled cleanup has completed.
-        let _ = writeln!(io::stderr().lock(), "ion: {error:#}");
+        // Errors can quote repository metadata before trust is granted.
+        let diagnostic = display_text::diagnostic(&format!("{error:#}"));
+        let _ = writeln!(io::stderr().lock(), "ion: {diagnostic}");
         std::process::exit(1);
     }
 }

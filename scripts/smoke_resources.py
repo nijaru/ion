@@ -102,6 +102,36 @@ with tempfile.TemporaryDirectory(prefix="ion-resources-") as temporary:
     )
     env = os.environ.copy()
     env.update(HOME=str(work / "home"), XDG_CONFIG_HOME=str(work / "config"), XDG_STATE_HOME=str(work / "state"))
+    # Executable command metadata stays inert, including before model setup.
+    # Invalid metadata must not write terminal controls or replace a trust grant.
+    manifest = workspace / ".ion/commands.json"
+    command_cli = [binary, "--cwd", workspace, "commands"]
+    entry = {
+        "description": "Must run only on explicit invocation", "program": "touch",
+        "args": [str(workspace / "UNEXPECTED_COMMAND_EFFECT")],
+        "share_with_model": False,
+    }
+    manifest.write_text(json.dumps({"commands": {"check": {
+        **entry, "\x1b]52;c;QUJD\x07": True,
+    }}}))
+    denied = subprocess.run([*command_cli, "trust"], env=env, capture_output=True, text=True)
+    assert denied.returncode != 0 and "unknown field" in denied.stderr, denied
+    assert "\x1b" not in denied.stderr and "\x07" not in denied.stderr, repr(denied.stderr)
+    manifest.write_text(json.dumps({"commands": {"check": entry}}))
+    subprocess.run([*command_cli, "trust"], env=env, check=True, capture_output=True)
+    trust_path = work / "config/ion/commands-trust.json"
+    previous_grant = trust_path.read_bytes()
+    listed = subprocess.run([*command_cli, "list"], env=env, check=True, capture_output=True, text=True)
+    assert "check" in listed.stdout and "project" in listed.stdout, listed
+    raw_entry = json.dumps(entry)
+    manifest.write_text('{"commands":{"check":' + raw_entry + ',"check":' + raw_entry + '}}')
+    denied = subprocess.run([*command_cli, "trust"], env=env, capture_output=True, text=True)
+    assert denied.returncode != 0 and "duplicate command name" in denied.stderr, denied
+    assert trust_path.read_bytes() == previous_grant, "refusal replaced the previous grant"
+    assert not (workspace / "UNEXPECTED_COMMAND_EFFECT").exists()
+    assert not requests, "offline command setup contacted a model"
+    manifest.unlink()
+
     server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()

@@ -132,6 +132,17 @@ fn wrap_line(
     emit(row);
 }
 
+/// Human diagnostics keep their logical lines without allowing quoted metadata
+/// to issue terminal controls. Use the same grapheme policy as transcript text.
+pub(super) fn diagnostic(text: &str) -> String {
+    text.graphemes(true)
+        .map(|grapheme| match grapheme {
+            "\n" | "\r\n" => "\n",
+            _ => visible(grapheme),
+        })
+        .collect()
+}
+
 pub(super) fn fit_line(text: &str, width: usize) -> String {
     fit_line_with_status(text, width).0
 }
@@ -177,6 +188,14 @@ pub(super) fn fit_line_with_status(text: &str, width: usize) -> (String, bool) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn diagnostics_preserve_lines_without_executing_quoted_controls() {
+        assert_eq!(
+            diagnostic("\u{1b}]52;c;QUJD\u{7}\r\t🦀\r\nmore"),
+            "�]52;c;QUJD��    🦀\nmore"
+        );
+    }
 
     #[test]
     fn chrome_and_transcript_use_control_safe_display_columns() {
