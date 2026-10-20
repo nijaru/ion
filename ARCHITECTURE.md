@@ -778,7 +778,14 @@ neither text nor recovery history. Bound retained history and kill text separate
 evicting oldest entries rather than making the current draft invalid.
 Budget activity and composer together; keep state/exceptions visible with honest omission/inspection.
 Coalesce benign repetition, not mutations/failures. Details retain arguments,
-observations, capture paths and delivery notices.
+observations, capture paths and delivery notices. An explicit copy action in a
+selected tool's detail view copies that call's recorded evidence independently
+of viewport width or scroll, not a different answer or the whole conversation.
+Keep capture/projection omissions, child-context labels and image metadata;
+never read referenced files or rerun work to complete the copy. This is client
+presentation through existing clipboard custody, not new Session input. Preserve
+the draft and inspector on success or failure, and distinguish a terminal
+clipboard request from confirmed native-helper success.
 
 Use one control-safe grapheme/display-width policy for content; composer byte/cursor
 mapping is separate. Semantic styles survive redraw and irreversible publication.
