@@ -168,6 +168,17 @@ def exercise(mode, supported=True, panic=False, editor_fault=None):
                 expected = 1 if supported else (8 if mode == "fullscreen" else 4)
                 assert terminal.stacks[terminal.alternate][-1] == expected, "composer lacks its own keyboard mode"
                 if supported:
+                    # Reversible composer custody: kills, yanks, legacy/CSI-u
+                    # undo/redo and an atomic paste stay local until Enter.
+                    os.write(master, b"ab")
+                    os.write(master, b"\x17\x19")  # Ctrl-W, Ctrl-Y
+                    os.write(master, b"\x1f\x1b\x1f")  # legacy undo, ESC legacy redo
+                    os.write(master, b"\x1b[95;6u\x1b[95;8u")  # Ctrl-Shift-_, Alt-Ctrl-Shift-_
+                    os.write(master, b"\x1b[200~P\x1b[201~")
+                    os.write(master, b"\x1f\x1b[95;8u")  # undo/redo the paste atomically
+                    os.write(master, b"\x7f\x7f\x7f")  # remove P and ab
+                    drain(0.25)
+                    assert not requests, "composer recovery admitted before Enter"
                     # CSI-u Backspace must edit, not insert a control byte.
                     os.write(master, b"firstX\x1b[127u\x1b[13;2usecondX\x1b[8u")
                     drain(0.25)
@@ -180,6 +191,10 @@ def exercise(mode, supported=True, panic=False, editor_fault=None):
                     until(lambda: settled in output)
                     users = [message for message in requests[0]["messages"] if message["role"] == "user"]
                     assert users[-1]["content"] == "START_first\nsecond", users[-1]
+                    # Handoff discarded the sent text; undo must not revive it.
+                    os.write(master, b"ghost\x1f\x1f")
+                    drain(0.25)
+                    assert len(requests) == 1, "undo after handoff admitted sent input"
                     if editor_fault:
                         # Keep a multiline literal and mid-line cursor through
                         # editor rejection; resume type-ahead inserts at it.

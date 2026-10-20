@@ -4,9 +4,18 @@ use std::ops::Range;
 use ion_terminal::{KeyCode, KeyEvent, Modifiers};
 use unicode_segmentation::{GraphemeCursor, UnicodeSegmentation};
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum Kill {
+    Backward,
+    Forward,
+}
+
 pub(super) enum Edit {
     Move(usize),
-    Delete(Range<usize>),
+    Delete {
+        range: Range<usize>,
+        kill: Option<Kill>,
+    },
 }
 
 fn previous_grapheme(text: &str, cursor: usize) -> usize {
@@ -104,6 +113,23 @@ pub(super) fn vertical_cursor(text: &str, cursor: usize, down: bool) -> Option<u
     )
 }
 
+/// Which kill behavior a key owns, independent of the current draft.
+pub(super) fn kill(key: KeyEvent) -> Option<Kill> {
+    let control = key.modifiers.contains(Modifiers::CONTROL);
+    let alt = key.modifiers.contains(Modifiers::ALT);
+    let control_char = control && !alt;
+    let alt_char = alt && !control;
+    match key.code {
+        KeyCode::Backspace if alt => Some(Kill::Backward),
+        KeyCode::Delete if alt => Some(Kill::Forward),
+        KeyCode::Char('w') if control_char => Some(Kill::Backward),
+        KeyCode::Char('d') if alt_char => Some(Kill::Forward),
+        KeyCode::Char('u') if control_char => Some(Kill::Backward),
+        KeyCode::Char('k') if control_char => Some(Kill::Forward),
+        _ => None,
+    }
+}
+
 pub(super) fn key(text: &str, cursor: usize, key: KeyEvent) -> Option<Edit> {
     let control = key.modifiers.contains(Modifiers::CONTROL);
     let alt = key.modifiers.contains(Modifiers::ALT);
@@ -117,40 +143,61 @@ pub(super) fn key(text: &str, cursor: usize, key: KeyEvent) -> Option<Edit> {
         KeyCode::Right if modified_word => Edit::Move(word_end(text, cursor)),
         KeyCode::Left => Edit::Move(previous_grapheme(text, cursor)),
         KeyCode::Right => Edit::Move(next_grapheme(text, cursor)),
-        KeyCode::Backspace if alt => Edit::Delete(word_start(text, cursor)..cursor),
-        KeyCode::Delete if alt => Edit::Delete(cursor..word_end(text, cursor)),
-        KeyCode::Backspace => Edit::Delete(previous_grapheme(text, cursor)..cursor),
-        KeyCode::Delete => Edit::Delete(cursor..next_grapheme(text, cursor)),
+        KeyCode::Backspace if alt => Edit::Delete {
+            range: word_start(text, cursor)..cursor,
+            kill: Some(Kill::Backward),
+        },
+        KeyCode::Delete if alt => Edit::Delete {
+            range: cursor..word_end(text, cursor),
+            kill: Some(Kill::Forward),
+        },
+        KeyCode::Backspace => Edit::Delete {
+            range: previous_grapheme(text, cursor)..cursor,
+            kill: None,
+        },
+        KeyCode::Delete => Edit::Delete {
+            range: cursor..next_grapheme(text, cursor),
+            kill: None,
+        },
         KeyCode::Char('a') if control_char => Edit::Move(line_start(text, cursor)),
         KeyCode::Char('e') if control_char => Edit::Move(line_end(text, cursor)),
         KeyCode::Char('b') if control_char => Edit::Move(previous_grapheme(text, cursor)),
         KeyCode::Char('f') if control_char => Edit::Move(next_grapheme(text, cursor)),
         KeyCode::Char('b') if alt_char => Edit::Move(word_start(text, cursor)),
         KeyCode::Char('f') if alt_char => Edit::Move(word_end(text, cursor)),
-        KeyCode::Char('w') if control_char => Edit::Delete(word_start(text, cursor)..cursor),
-        KeyCode::Char('d') if alt_char => Edit::Delete(cursor..word_end(text, cursor)),
-        KeyCode::Char('d') if control_char && !text.is_empty() => {
-            Edit::Delete(cursor..next_grapheme(text, cursor))
-        }
+        KeyCode::Char('w') if control_char => Edit::Delete {
+            range: word_start(text, cursor)..cursor,
+            kill: Some(Kill::Backward),
+        },
+        KeyCode::Char('d') if alt_char => Edit::Delete {
+            range: cursor..word_end(text, cursor),
+            kill: Some(Kill::Forward),
+        },
+        KeyCode::Char('d') if control_char && !text.is_empty() => Edit::Delete {
+            range: cursor..next_grapheme(text, cursor),
+            kill: None,
+        },
         KeyCode::Char('u') if control_char => {
             let start = line_start(text, cursor);
-            Edit::Delete(
-                if cursor == start {
+            Edit::Delete {
+                range: if cursor == start {
                     previous_grapheme(text, cursor)
                 } else {
                     start
                 }..cursor,
-            )
+                kill: Some(Kill::Backward),
+            }
         }
         KeyCode::Char('k') if control_char => {
             let end = line_end(text, cursor);
-            Edit::Delete(
-                cursor..if cursor == end {
+            Edit::Delete {
+                range: cursor..if cursor == end {
                     next_grapheme(text, cursor)
                 } else {
                     end
                 },
-            )
+                kill: Some(Kill::Forward),
+            }
         }
         _ => return None,
     };
@@ -160,6 +207,63 @@ pub(super) fn key(text: &str, cursor: usize, key: KeyEvent) -> Option<Edit> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn kill_classification_matches_the_delete_ranges_it_owns() {
+        let text = "alpha βeta\ngamma";
+        for (cursor, key, expected) in [
+            (
+                text.len(),
+                KeyEvent::new(KeyCode::Char('w'), Modifiers::CONTROL),
+                Kill::Backward,
+            ),
+            (
+                text.len(),
+                KeyEvent::new(KeyCode::Char('u'), Modifiers::CONTROL),
+                Kill::Backward,
+            ),
+            (
+                "alpha βeta\n".len(),
+                KeyEvent::new(KeyCode::Backspace, Modifiers::ALT),
+                Kill::Backward,
+            ),
+            (
+                0,
+                KeyEvent::new(KeyCode::Delete, Modifiers::ALT),
+                Kill::Forward,
+            ),
+            (
+                "alpha βeta\n".len(),
+                KeyEvent::new(KeyCode::Char('d'), Modifiers::ALT),
+                Kill::Forward,
+            ),
+            (
+                "alpha βeta".len(),
+                KeyEvent::new(KeyCode::Char('k'), Modifiers::CONTROL),
+                Kill::Forward,
+            ),
+        ] {
+            assert_eq!(kill(key), Some(expected));
+            assert!(matches!(
+                self::key(text, cursor, key),
+                Some(Edit::Delete {
+                    kill: Some(found),
+                    ..
+                }) if found == expected
+            ));
+        }
+        for key in [
+            KeyEvent::new(KeyCode::Backspace, Modifiers::NONE),
+            KeyEvent::new(KeyCode::Delete, Modifiers::NONE),
+            KeyEvent::new(KeyCode::Char('d'), Modifiers::CONTROL),
+        ] {
+            assert_eq!(kill(key), None);
+            assert!(matches!(
+                self::key(text, text.len(), key),
+                Some(Edit::Delete { kill: None, .. }) | None
+            ));
+        }
+    }
 
     #[test]
     fn word_keys_respect_unicode_punctuation_and_line_boundaries() {

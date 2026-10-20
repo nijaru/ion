@@ -89,7 +89,7 @@ impl Builtin {
             .collect::<Vec<_>>()
             .join(" ");
         format!(
-            "{commands}\nType / to discover commands; Tab completes without executing. Ctrl-V pastes files, image or text. !COMMAND shares shell output; !!COMMAND excludes it from model context"
+            "{commands}\nType / to discover commands; Tab completes without executing. Ctrl-V pastes files, image or text. Ctrl--/Ctrl-_ undoes, Alt-Ctrl--/Alt-Ctrl-_ redoes; Ctrl-Y yanks, Alt-Y cycles text kills. !COMMAND shares shell output; !!COMMAND excludes it from model context"
         )
     }
 }

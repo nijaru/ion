@@ -36,6 +36,7 @@ mod clipboard_input;
 mod composer;
 mod draft;
 mod editing;
+mod editor_recovery;
 mod interaction;
 mod navigation;
 mod output;
@@ -44,6 +45,7 @@ mod question;
 use clipboard_input::*;
 use composer::input_window;
 use editing::{Edit, vertical_cursor};
+use editor_recovery::EditorRecovery;
 use interaction::{apply_picker, dispatch_command, submit_editor};
 use picker::{Picker, PickerItem, PickerValue, Pickers};
 use question::{QuestionAction, QuestionModal};
@@ -133,6 +135,7 @@ struct Frontend {
     draft: String,
     images: Vec<ImageSource>,
     cursor: usize,
+    recovery: EditorRecovery,
     history_session: Option<PathBuf>,
     history_published_items: usize,
     pending_history_target: usize,
@@ -914,11 +917,13 @@ impl Frontend {
                 {
                     self.question = Some(QuestionModal::new(pending.request, pending.questions));
                     self.completion.clear();
+                    self.break_edit_focus();
                 }
             }
             Ok(None) => {
                 if self.question.take().is_some() {
                     self.status = "Question closed".into();
+                    self.break_edit_focus();
                 }
             }
             Err(_) => {
@@ -932,6 +937,7 @@ impl Frontend {
     }
 
     fn attach_image(&mut self, image: ImageSource) {
+        self.reset_edit_baseline();
         self.images.push(image);
         self.status = format!("{} image(s) attached to the next prompt", self.images.len());
     }
@@ -958,6 +964,9 @@ impl Frontend {
         let session_path = session.path().to_path_buf();
         let same_session = self.history_session.as_ref() == Some(&session_path);
         if !same_session {
+            // Text recovery belongs to the unsent draft baseline, not the
+            // Session's durable facts. Same-Session resync must preserve it.
+            self.reset_edit_baseline();
             self.output = output::Output::default();
             let had_previous_session = self.history_session.is_some();
             let label = session.id().to_string();
@@ -1107,13 +1116,16 @@ impl Frontend {
 
     fn key(&mut self, key: KeyEvent, resources: Option<&Resources>) -> Action {
         if self.details.is_some() {
+            self.break_edit_focus();
             self.completion.clear();
             return self.detail_key(key);
         }
         if self.pickers.active().is_some() {
+            self.break_edit_focus();
             self.completion.clear();
             return self.pickers.key(key).map_or(Action::None, Action::Pick);
         }
+        self.prepare_edit_key(key);
         let menu_was_visible = self.completion.visible();
         self.completion.refresh(
             &self.draft,
@@ -1138,13 +1150,7 @@ impl Frontend {
                         return Action::None;
                     }
                     if let Some((range, text, cursor)) = self.completion.replacement(&self.draft) {
-                        if self.draft.len() - range.len() + text.len() <= MAX_DRAFT {
-                            self.draft.replace_range(range, &text);
-                            self.cursor = cursor;
-                            self.browsing = None;
-                        } else {
-                            self.status = format!("Prompt is limited to {MAX_DRAFT} bytes");
-                        }
+                        self.replace_text(range, &text, cursor);
                     }
                     self.completion.clear();
                     return Action::None;
@@ -1173,14 +1179,23 @@ impl Frontend {
                 return Action::None;
             }
         }
+        if self.undo_key(key) {
+            self.completion
+                .refresh(&self.draft, self.cursor, resources, false);
+            return Action::None;
+        }
+        if self.yank_keys(key) {
+            self.completion
+                .refresh(&self.draft, self.cursor, resources, false);
+            return Action::None;
+        }
         if let Some(edit) = editing::key(&self.draft, self.cursor, key) {
             match edit {
-                Edit::Move(cursor) => self.cursor = cursor,
-                Edit::Delete(range) => {
-                    self.browsing = None;
-                    self.cursor = range.start;
-                    self.draft.replace_range(range, "");
+                Edit::Move(cursor) => {
+                    self.break_edit_focus();
+                    self.cursor = cursor;
                 }
+                Edit::Delete { range, kill } => self.delete_text(range, kill),
             }
             self.completion
                 .refresh(&self.draft, self.cursor, resources, false);
@@ -1194,7 +1209,7 @@ impl Frontend {
                 if self.draft.is_empty() {
                     Action::Quit
                 } else {
-                    self.replace_draft(String::new());
+                    self.clear_draft_text();
                     Action::None
                 }
             }
@@ -1247,6 +1262,7 @@ impl Frontend {
                 code: KeyCode::Enter,
                 modifiers,
             } if modifiers.contains(Modifiers::ALT) => {
+                self.begin_draft_handoff();
                 self.browsing = None;
                 let prompt = std::mem::take(&mut self.draft);
                 self.cursor = 0;
@@ -1277,6 +1293,7 @@ impl Frontend {
                 code: KeyCode::Enter,
                 ..
             } => {
+                self.begin_draft_handoff();
                 self.browsing = None;
                 let cursor = self.cursor;
                 let prompt = std::mem::take(&mut self.draft);
@@ -1372,7 +1389,7 @@ impl Frontend {
                 modifiers,
             } if !modifiers.contains(Modifiers::CONTROL) && !modifiers.contains(Modifiers::ALT) => {
                 let mut bytes = [0; 4];
-                self.insert(ch.encode_utf8(&mut bytes));
+                self.insert_typed(ch.encode_utf8(&mut bytes));
                 Action::None
             }
             _ => Action::None,
@@ -1433,28 +1450,6 @@ impl Frontend {
             }
         };
         self.details = Some(DetailView::new(selected));
-    }
-
-    fn insert(&mut self, text: &str) {
-        self.completion.clear();
-        if self.pickers.insert(text) {
-            return;
-        }
-        let clean = text
-            .chars()
-            .filter_map(|ch| match ch {
-                '\n' | '\t' => Some(ch),
-                ch if ch.is_control() => None,
-                ch => Some(ch),
-            })
-            .collect::<String>();
-        if self.draft.len().saturating_add(clean.len()) > MAX_DRAFT {
-            self.status = format!("Prompt is limited to {MAX_DRAFT} bytes");
-            return;
-        }
-        self.browsing = None;
-        self.draft.insert_str(self.cursor, &clean);
-        self.cursor += clean.len();
     }
 }
 

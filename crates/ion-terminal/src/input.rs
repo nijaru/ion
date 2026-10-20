@@ -1021,6 +1021,36 @@ mod tests {
     }
 
     #[test]
+    fn composer_undo_redo_encodings_decode_as_keys() {
+        use Modifiers as M;
+        for (bytes, code, modifiers) in [
+            // Legacy terminals send Ctrl-minus and Ctrl-underscore as one
+            // control byte; ESC prefixes the Alt form.
+            (b"\x1f".as_slice(), KeyCode::Char('\x1f'), M::NONE),
+            (b"\x1b\x1f", KeyCode::Char('\x1f'), M::ALT),
+            // Kitty CSI-u preserves the layout key and its modifiers.
+            (b"\x1b[45;5u", KeyCode::Char('-'), M::CONTROL),
+            (b"\x1b[45;7u", KeyCode::Char('-'), M::CONTROL | M::ALT),
+            (b"\x1b[45;6u", KeyCode::Char('-'), M::CONTROL | M::SHIFT),
+            (b"\x1b[95;5u", KeyCode::Char('_'), M::CONTROL),
+            (b"\x1b[95;7u", KeyCode::Char('_'), M::CONTROL | M::ALT),
+            (
+                b"\x1b[95;8u",
+                KeyCode::Char('_'),
+                M::CONTROL | M::ALT | M::SHIFT,
+            ),
+        ] {
+            let events = InputParser::new().parse_as_vec(bytes, false);
+            assert_eq!(events.len(), 1, "{bytes:?}");
+            assert_eq!(
+                InputStream::decode(events[0].clone()),
+                Some(InputEvent::Key(KeyEvent::new(code, modifiers))),
+                "{bytes:?}"
+            );
+        }
+    }
+
+    #[test]
     fn csi_u_controls_are_named_keys_with_original_modifiers() {
         for (bytes, code, modifiers) in [
             (b"\x1b[27u".as_slice(), KeyCode::Esc, Modifiers::NONE),

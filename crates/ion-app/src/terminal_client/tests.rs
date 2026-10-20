@@ -252,6 +252,53 @@ fn returned_draft_ends_history_browsing_without_losing_unsent_input() {
     assert_eq!(ui.draft, "returned");
 }
 
+#[test]
+fn submit_and_queue_handoff_discard_unsent_text_history() {
+    for modifiers in [Modifiers::NONE, Modifiers::ALT] {
+        let mut ui = Frontend::default();
+        ui.insert("sent input");
+        let action = ui.key(KeyEvent::new(KeyCode::Enter, modifiers), None);
+        assert!(match modifiers {
+            Modifiers::NONE => matches!(action, Action::Submit(prompt) if prompt == "sent input"),
+            _ => matches!(action, Action::Queue(prompt) if prompt == "sent input"),
+        });
+        assert!(ui.draft.is_empty());
+        ui.key(KeyEvent::new(KeyCode::Char('_'), Modifiers::CONTROL), None);
+        assert!(
+            ui.draft.is_empty(),
+            "handoff history resurrected sent input"
+        );
+        ui.insert("next input");
+        ui.key(KeyEvent::new(KeyCode::Char('_'), Modifiers::CONTROL), None);
+        assert_eq!(ui.draft, "", "undo crossed a completed handoff");
+    }
+}
+
+#[tokio::test]
+async fn session_sync_preserves_text_recovery_but_session_replacement_resets_it() {
+    let mut fixture = Fixture::new();
+    let mut ui = Frontend::default();
+    ui.refresh_session(fixture.control.session()).unwrap();
+    ui.insert("same session");
+    ui.refresh_session(fixture.control.session()).unwrap();
+    assert!(matches!(
+        ui.key(KeyEvent::new(KeyCode::Char('_'), Modifiers::CONTROL), None),
+        Action::None
+    ));
+    assert_eq!(ui.draft, "", "same-Session sync discarded unsent edits");
+
+    ui.insert("kept across replacement");
+    fixture.control.new_session().unwrap();
+    ui.refresh_session(fixture.control.session()).unwrap();
+    assert_eq!(ui.draft, "kept across replacement");
+    ui.key(KeyEvent::new(KeyCode::Char('_'), Modifiers::CONTROL), None);
+    assert_eq!(
+        ui.draft, "kept across replacement",
+        "Session replacement kept the old edit history"
+    );
+    fixture.control.shutdown().await;
+}
+
 #[tokio::test]
 async fn host_rejection_restores_exact_editor_and_images() {
     let mut fixture = Fixture::new();

@@ -190,7 +190,7 @@ impl QuestionModal {
                 if let Some(edit) = editing::key(&editor.text, editor.cursor, key) {
                     match edit {
                         Edit::Move(cursor) => editor.cursor = cursor,
-                        Edit::Delete(range) => {
+                        Edit::Delete { range, .. } => {
                             editor.cursor = range.start;
                             editor.text.replace_range(range, "");
                         }

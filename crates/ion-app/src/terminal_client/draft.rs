@@ -18,13 +18,21 @@ impl Frontend {
         self.cursor = source.cursor;
     }
 
+    fn set_editor_baseline(&mut self, source: EditorDraft) {
+        self.reset_edit_baseline();
+        self.set_editor(source);
+    }
+
+    /// A successful external-editor return is an atomic undoable replacement,
+    /// unlike a Host-returned or browsed draft, which owns a new baseline.
     pub(super) fn replace_draft(&mut self, draft: String) {
-        self.restore_editor(EditorDraft::at_end(draft));
+        self.browsing = None;
+        self.replace_draft_atomic(draft);
     }
 
     pub(super) fn restore_editor(&mut self, source: EditorDraft) {
         self.browsing = None;
-        self.set_editor(source);
+        self.set_editor_baseline(source);
     }
 
     pub(super) fn replace_prompt_history(&mut self, prompts: Vec<String>, same_session: bool) {
@@ -38,7 +46,7 @@ impl Frontend {
 
     pub(super) fn restore_browsed_draft(&mut self) {
         if let Some(browse) = self.browsing.take() {
-            self.set_editor(EditorDraft {
+            self.set_editor_baseline(EditorDraft {
                 literal: browse.draft,
                 cursor: browse.cursor,
             });
@@ -57,7 +65,7 @@ impl Frontend {
         });
         browse.index = browse.index.saturating_sub(1);
         let draft = self.prompt_history[browse.index].clone();
-        self.set_editor(EditorDraft::at_end(draft));
+        self.set_editor_baseline(EditorDraft::at_end(draft));
     }
 
     pub(super) fn history_next(&mut self) {
@@ -67,7 +75,7 @@ impl Frontend {
         if browse.index + 1 < browse.end {
             browse.index += 1;
             let draft = self.prompt_history[browse.index].clone();
-            self.set_editor(EditorDraft::at_end(draft));
+            self.set_editor_baseline(EditorDraft::at_end(draft));
         } else {
             self.restore_browsed_draft();
         }
@@ -110,20 +118,15 @@ impl Frontend {
     }
 
     pub(super) fn insert_file(&mut self, path: String, start: usize, end: usize) {
-        // File completion owns a range in the current draft. set_editor closes
-        // that picker before replacing text, including delayed input returns.
+        // File completion owns a range in the current draft. Text replacement
+        // is recorded as one atomic edit before the picker's delayed join can
+        // publish into a different baseline.
         let mention = if path.chars().any(char::is_whitespace) {
             format!("@\"{path}\"")
         } else {
             format!("@{path}")
         };
-        if self.draft.len() - (end - start) + mention.len() > MAX_DRAFT {
-            self.status = format!("Prompt is limited to {MAX_DRAFT} bytes");
-            return;
-        }
-        self.draft.replace_range(start..end, &mention);
-        self.cursor = start + mention.len();
-        self.browsing = None;
+        self.replace_text(start..end, &mention, start + mention.len());
     }
 
     pub(super) fn restore_input(&mut self, input: Message) -> Result<(), &'static str> {
