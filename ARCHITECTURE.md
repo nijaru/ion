@@ -763,7 +763,20 @@ process tree. Queued is not running or successful.
 Keep drafts editable during work: multiline/history, paste/images, external editor,
 steering and follow-ups. Commands/pickers retain unsent input. Draft replacement
 invalidates draft-bound completion ranges and cancels their discovery without
-abandoning the worker's join. Budget activity and composer together; keep state/exceptions visible with honest omission/inspection.
+abandoning the worker's join. Text editing has bounded terminal-local undo/redo
+and kill/yank recovery, independent of durable input custody. Ordinary typing
+coalesces at word boundaries; paste, completion and external-editor replacement
+are atomic edits. Undo restores literal text and its byte cursor, never submits
+input or reverses admitted work. Submission/queue handoff, history/returned-draft
+replacement, Session replacement and attachment changes start a fresh undo
+baseline; changing views or receiving progress does not discard the unsent draft.
+Attachments are not reconstructed by text history. A terminal-local kill ring
+contains text only; consecutive directional kills accumulate in cursor order,
+explicit yank can reuse text in another draft, and yank-pop is valid only directly
+after yank/pop without intervening input actions. Failed over-limit edits change
+neither text nor recovery history. Bound retained history and kill text separately,
+evicting oldest entries rather than making the current draft invalid.
+Budget activity and composer together; keep state/exceptions visible with honest omission/inspection.
 Coalesce benign repetition, not mutations/failures. Details retain arguments,
 observations, capture paths and delivery notices.
 
