@@ -353,6 +353,9 @@ pub async fn chat(init: ChatInit) -> Result<()> {
                                 }
                             }
                         },
+                        Action::CopyDetail => {
+                            copy_detail_evidence(&mut ui, terminal).await?;
+                        },
                         Action::Command(command) => {
                             dispatch_command(
                                 &mut runtime,
@@ -503,6 +506,24 @@ async fn copy_last_answer(
 ) -> Result<crate::clipboard::CopyOutcome> {
     let answer = last_committed_answer(&session.view()?)?;
     crate::clipboard::copy(&answer, terminal).await
+}
+
+async fn copy_detail_evidence(ui: &mut Frontend, terminal: &mut TerminalSession) -> Result<()> {
+    let Some((number, evidence)) = ui.details.as_ref().and_then(DetailView::copy_evidence) else {
+        ui.status = "No selected tool evidence; open /tool N to copy".into();
+        return Ok(());
+    };
+    let outcome = crate::clipboard::copy(evidence, terminal).await;
+    ui.status = match outcome {
+        Ok(crate::clipboard::CopyOutcome::Copied) => {
+            format!("Copied tool {number} evidence")
+        }
+        Ok(crate::clipboard::CopyOutcome::RequestedFromTerminal) => {
+            format!("Sent tool {number} clipboard request to terminal")
+        }
+        Err(error) => crate::clipboard::failure_status(error)?,
+    };
+    Ok(())
 }
 
 fn last_committed_answer(view: &SessionView) -> Result<String> {
@@ -898,6 +919,7 @@ enum Action {
     Queue(String),
     Recover,
     PasteClipboard,
+    CopyDetail,
     Command(String),
     Pick(PickerValue),
     Quit,
@@ -1423,6 +1445,16 @@ impl Frontend {
         {
             self.details = None;
             self.status = "Details closed".into();
+        } else if key.code == KeyCode::Char('x') && key.modifiers.contains(Modifiers::CONTROL) {
+            let selected = self
+                .details
+                .as_ref()
+                .and_then(DetailView::copy_evidence)
+                .is_some();
+            if selected {
+                return Action::CopyDetail;
+            }
+            self.status = "No selected tool evidence; open /tool N to copy".into();
         } else if let Some(view) = &mut self.details {
             view.key(key.code);
         }

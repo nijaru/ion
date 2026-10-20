@@ -23,6 +23,7 @@ struct Page {
     end: usize,
     total: usize,
     rows: Vec<String>,
+    evidence: Option<String>,
 }
 
 enum Entry<'a> {
@@ -100,6 +101,7 @@ impl DetailView {
             let end = self.page_end.unwrap_or(total).min(total);
             let start = end.saturating_sub(PAGE_ENTRIES);
             let mut rows = Vec::new();
+            let mut evidence = None;
             if let Some(number) = self.tool {
                 if let Some(activity) = entries(history, live)
                     .filter_map(|entry| match entry {
@@ -108,7 +110,9 @@ impl DetailView {
                     })
                     .nth(number.get() - 1)
                 {
-                    render_tool(&mut rows, number.get(), activity, width);
+                    let text = format_activity(&number.get().to_string(), activity);
+                    push_wrapped(&mut rows, &text, width);
+                    evidence = Some(text);
                 } else {
                     push_wrapped(&mut rows, "Tool result not found", width);
                 }
@@ -223,6 +227,7 @@ impl DetailView {
                 end,
                 total,
                 rows,
+                evidence,
             });
         }
     }
@@ -231,10 +236,20 @@ impl DetailView {
         &self.page.as_ref().expect("prepare precedes display").rows
     }
 
+    pub fn copy_evidence(&self) -> Option<(NonZeroUsize, &str)> {
+        let number = self.tool?;
+        let evidence = self.page.as_ref()?.evidence.as_deref()?;
+        Some((number, evidence))
+    }
+
     pub fn controls(&self) -> String {
         self.tool.map_or_else(
             || "Conversation · ← older / → newer · ↑/↓ scroll · Esc or Ctrl-O closes".into(),
-            |number| format!("Tool {number} · ↑/↓ scroll · Esc or Ctrl-O closes"),
+            |number| {
+                format!(
+                    "Tool {number} · Ctrl-X copies evidence · ↑/↓ scroll · Esc or Ctrl-O closes"
+                )
+            },
         )
     }
 }
@@ -271,84 +286,86 @@ pub fn tools(history: &TranscriptProjection) -> impl Iterator<Item = &Transcript
 }
 
 fn render_tool(rows: &mut Vec<String>, number: usize, activity: &TranscriptActivity, width: usize) {
-    render_activity(rows, &number.to_string(), activity, width);
+    push_wrapped(rows, &format_activity(&number.to_string(), activity), width);
 }
 
-fn render_activity(
-    rows: &mut Vec<String>,
-    number: &str,
-    activity: &TranscriptActivity,
-    width: usize,
-) {
-    push_wrapped(
-        rows,
+fn format_activity(number: &str, activity: &TranscriptActivity) -> String {
+    let mut text = String::new();
+    append_activity(&mut text, number, activity);
+    text
+}
+
+fn append_activity(text: &mut String, number: &str, activity: &TranscriptActivity) {
+    push_field(
+        text,
         &format!(
             "Tool {number}: {} · {} · {}",
             activity.name,
             kind_label(activity.activity.kind),
             state_label(activity.state)
         ),
-        width,
     );
-    push_wrapped(rows, &format!("Call ID: {}", activity.call_id), width);
+    push_field(text, &format!("Call ID: {}", activity.call_id));
     if let Some(subject) = &activity.activity.subject {
-        push_wrapped(rows, &format!("Subject: {subject}"), width);
+        push_field(text, &format!("Subject: {subject}"));
     }
-    push_wrapped(rows, "Arguments", width);
-    render_json(rows, &activity.arguments, width);
-    push_wrapped(rows, "Result", width);
+    push_field(text, "Arguments");
+    push_field(text, &json_text(&activity.arguments));
+    push_field(text, "Result");
     if let Some(result) = &activity.result {
         if let Some(notice) = result
             .projection
             .and_then(ion_core::ToolResultProjection::notice)
         {
-            push_wrapped(rows, notice, width);
+            push_field(text, notice);
         }
         if let Some(diff) = crate::edit_diff::recorded(activity) {
             for (key, value) in diff.fields {
                 if key != "diff" {
-                    push_wrapped(rows, &format!("{key}: {value}"), width);
+                    push_field(text, &format!("{key}: {value}"));
                 }
             }
-            push_wrapped(
-                rows,
+            push_field(
+                text,
                 if diff.truncated {
                     "Recorded edit diff · capture truncated"
                 } else {
                     "Recorded edit diff"
                 },
-                width,
             );
             if diff.text.is_empty() {
-                push_wrapped(rows, "No text changes", width);
+                push_field(text, "No text changes");
             } else {
-                push_wrapped(rows, diff.text, width);
+                push_field(text, diff.text);
             }
         } else {
-            render_json(rows, &result.value, width);
+            push_field(text, &json_text(&result.value));
         }
         for mime in &result.image_mime_types {
-            push_wrapped(rows, &format!("[image: {mime}]"), width);
+            push_field(text, &format!("[image: {mime}]"));
         }
     } else {
-        push_wrapped(rows, "[no committed result]", width);
+        push_field(text, "[no committed result]");
     }
     for (child, activity) in activity.children.iter().enumerate() {
-        push_wrapped(
-            rows,
-            "Child activity · not included in model context",
-            width,
-        );
-        render_activity(rows, &format!("{number}.{}", child + 1), activity, width);
+        push_field(text, "Child activity · not included in model context");
+        append_activity(text, &format!("{number}.{}", child + 1), activity);
     }
 }
 
 fn render_json(rows: &mut Vec<String>, value: &serde_json::Value, width: usize) {
-    push_wrapped(
-        rows,
-        &serde_json::to_string_pretty(value).expect("JSON values are serializable"),
-        width,
-    );
+    push_wrapped(rows, &json_text(value), width);
+}
+
+fn json_text(value: &serde_json::Value) -> String {
+    serde_json::to_string_pretty(value).expect("JSON values are serializable")
+}
+
+fn push_field(text: &mut String, field: &str) {
+    if !text.is_empty() {
+        text.push('\n');
+    }
+    text.push_str(field);
 }
 
 #[cfg(test)]

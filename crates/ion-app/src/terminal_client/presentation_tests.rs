@@ -1,4 +1,166 @@
 use super::*;
+use ion_core::{
+    ActivityGroup, ActivityResult, ActivityState, ToolActivity, ToolActivityKind,
+    ToolResultProjection, TranscriptActivity, TranscriptMessage, TranscriptPart,
+};
+
+fn history_with_tools(activities: Vec<TranscriptActivity>) -> TranscriptProjection {
+    TranscriptProjection {
+        items: vec![
+            TranscriptItem::Assistant(TranscriptMessage {
+                turn: Some(1),
+                steering: false,
+                parts: vec![TranscriptPart::Text("LAST_ASSISTANT_ANSWER".into())],
+            }),
+            TranscriptItem::ActivityGroup(ActivityGroup {
+                turn: 1,
+                open: false,
+                activities,
+            }),
+        ],
+    }
+}
+
+fn tool(call_id: &str, result: Option<ActivityResult>) -> TranscriptActivity {
+    TranscriptActivity {
+        call_id: call_id.into(),
+        name: "edit".into(),
+        activity: ToolActivity {
+            kind: ToolActivityKind::Edit,
+            subject: Some("src/lib.rs".into()),
+        },
+        arguments: serde_json::json!({"path": "src/lib.rs"}),
+        state: ActivityState::Completed,
+        result,
+        children: Vec::new(),
+    }
+}
+
+#[test]
+fn selected_tool_copy_is_unwrapped_recorded_evidence_and_keeps_inspector_state() {
+    let long_line = format!("+{}", "x".repeat(240));
+    let diff =
+        format!("--- src/lib.rs\n+++ src/lib.rs\n@@ -1 +1 @@\n-old\tvalue\n{long_line}\u{1b}[2J\n");
+    let mut activity = tool(
+        "edit-call",
+        Some(ActivityResult {
+            projection: Some(ToolResultProjection::RequestLimitExceeded),
+            value: serde_json::json!({
+                "path": "src/lib.rs",
+                "diff": {"text": diff, "truncated": true}
+            }),
+            image_mime_types: vec!["image/png".into()],
+            is_error: false,
+        }),
+    );
+    activity.children.push(TranscriptActivity {
+        call_id: "child-call".into(),
+        name: "read".into(),
+        activity: ToolActivity {
+            kind: ToolActivityKind::Read,
+            subject: Some("src/child.rs".into()),
+        },
+        arguments: serde_json::json!({"path": "src/child.rs"}),
+        state: ActivityState::Completed,
+        result: Some(ActivityResult {
+            projection: Some(ToolResultProjection::Observed),
+            value: serde_json::json!({"stdout": "CHILD_RESULT"}),
+            image_mime_types: vec!["image/jpeg".into()],
+            is_error: false,
+        }),
+        children: Vec::new(),
+    });
+    let history = history_with_tools(vec![activity, tool("other-call", None)]);
+    let mut ui = Frontend {
+        draft: "unsent 🦀 draft".into(),
+        cursor: "unsent ".len(),
+        scroll: 9,
+        images: vec![
+            ion_ai::normalize_rgba(1, 1, vec![0, 255, 0, 255])
+                .unwrap()
+                .into(),
+        ],
+        status: "inspector ready".into(),
+        ..Frontend::default()
+    };
+    ui.history = history;
+    ui.open_details(Some(1));
+    let view = ui.details.as_mut().unwrap();
+    view.prepare(&ui.history, None, 13);
+    let narrow = view.copy_evidence().unwrap().1.to_owned();
+    view.prepare(&ui.history, None, 200);
+    let wide = view.copy_evidence().unwrap().1.to_owned();
+    view.scroll = 4;
+
+    assert_eq!(narrow, wide);
+    assert!(wide.contains("Tool 1: edit"));
+    assert!(wide.contains("Call ID: edit-call"));
+    assert!(wide.contains("Arguments"));
+    assert!(wide.contains("Result not shared with model: exceeds request limit"));
+    assert!(wide.contains("Recorded edit diff · capture truncated"));
+    assert!(wide.contains(&long_line));
+    assert!(wide.contains('\t') && wide.contains("\u{1b}[2J"));
+    assert!(wide.contains("Child activity · not included in model context"));
+    assert!(wide.contains("Tool 1.1: read"));
+    assert!(wide.contains("Call ID: child-call"));
+    assert!(wide.contains("CHILD_RESULT"));
+    assert!(wide.contains("[image: image/png]") && wide.contains("[image: image/jpeg]"));
+    assert!(!wide.contains("LAST_ASSISTANT_ANSWER"));
+    assert!(!wide.contains("Call ID: other-call"));
+
+    assert!(matches!(
+        ui.key(KeyEvent::new(KeyCode::Char('x'), Modifiers::CONTROL), None),
+        Action::CopyDetail
+    ));
+    assert!(ui.details.is_some());
+    assert_eq!(
+        (ui.draft.as_str(), ui.cursor),
+        ("unsent 🦀 draft", "unsent ".len())
+    );
+    assert_eq!(ui.images.len(), 1);
+    assert_eq!(ui.history.items.len(), 2);
+    assert_eq!(ui.status, "inspector ready");
+    let view = ui.details.as_ref().unwrap();
+    assert_eq!(view.scroll, 4);
+    assert_eq!(view.copy_evidence().unwrap().1, wide);
+}
+
+#[test]
+fn conversation_ctrl_x_does_not_copy_an_assistant_answer() {
+    let mut ui = Frontend {
+        status: "inspector ready".into(),
+        ..Frontend::default()
+    };
+    ui.history = history_with_tools(vec![tool("edit-call", None)]);
+    ui.open_details(None);
+    ui.details.as_mut().unwrap().prepare(&ui.history, None, 80);
+
+    assert!(matches!(
+        ui.key(KeyEvent::new(KeyCode::Char('x'), Modifiers::CONTROL), None),
+        Action::None
+    ));
+    assert!(ui.details.is_some());
+    assert!(ui.details.as_ref().unwrap().copy_evidence().is_none());
+    assert_eq!(ui.status, "No selected tool evidence; open /tool N to copy");
+}
+
+#[test]
+fn selected_tool_without_a_result_copies_its_recorded_absence() {
+    let mut ui = Frontend {
+        history: history_with_tools(vec![tool("pending-call", None)]),
+        ..Frontend::default()
+    };
+    ui.open_details(Some(1));
+    ui.details.as_mut().unwrap().prepare(&ui.history, None, 80);
+
+    assert!(matches!(
+        ui.key(KeyEvent::new(KeyCode::Char('x'), Modifiers::CONTROL), None),
+        Action::CopyDetail
+    ));
+    let evidence = ui.details.as_ref().unwrap().copy_evidence().unwrap().1;
+    assert!(evidence.contains("Call ID: pending-call"));
+    assert!(evidence.contains("[no committed result]"));
+}
 
 #[test]
 fn consecutive_notes_are_coalesced_without_hiding_distinct_messages() {

@@ -126,12 +126,7 @@ pub(super) async fn dispatch_command(
             Ok(crate::clipboard::CopyOutcome::RequestedFromTerminal) => {
                 "Sent clipboard request to terminal".into()
             }
-            Err(error) => {
-                if error.chain().any(|cause| cause.is::<std::io::Error>()) {
-                    return Err(error.context("terminal clipboard output failed"));
-                }
-                format!("Copy failed: {error:#}")
-            }
+            Err(error) => crate::clipboard::failure_status(error)?,
         };
     } else if builtin == Some(Builtin::Attach) {
         match super::attach::run(runtime, terminal, screen, args).await {

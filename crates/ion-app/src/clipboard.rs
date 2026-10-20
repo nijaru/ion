@@ -43,7 +43,7 @@ pub async fn copy(text: &str, terminal: &mut TerminalSession) -> Result<CopyOutc
     if remote || (cfg!(target_os = "linux") && !display) {
         let encoded = STANDARD.encode(text);
         if encoded.len() > OSC52_LIMIT {
-            bail!("answer exceeds the terminal clipboard request size limit");
+            bail!("clipboard text exceeds the terminal clipboard request size limit");
         }
         let mut output = terminal.output()?;
         output.write_all(format!("\x1b]52;c;{encoded}\x07").as_bytes())?;
@@ -51,6 +51,14 @@ pub async fn copy(text: &str, terminal: &mut TerminalSession) -> Result<CopyOutc
         return Ok(CopyOutcome::RequestedFromTerminal);
     }
     bail!("clipboard is unavailable in this environment")
+}
+
+pub fn failure_status(error: anyhow::Error) -> Result<String> {
+    if error.chain().any(|cause| cause.is::<std::io::Error>()) {
+        Err(error.context("terminal clipboard output failed"))
+    } else {
+        Ok(format!("Copy failed: {error:#}"))
+    }
 }
 
 async fn try_command(program: &str, args: &[&str], text: &str) -> bool {
