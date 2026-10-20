@@ -443,7 +443,7 @@ pub async fn chat(init: ChatInit) -> Result<()> {
     outcome
 }
 
-// Session IDs can be arbitrary UTF-8 filename stems. Shorten only the label.
+// Shorten display labels only; selectors and current-Session matching use full IDs.
 fn short_session_id(id: &str) -> &str {
     let end = id
         .char_indices()

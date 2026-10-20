@@ -90,7 +90,7 @@ use clone or fork to copy a conversation. Opening and quitting an empty chat doe
 not displace the latest conversation in `--continue` or `sessions`. An
 existing session uses its recorded directory, and an explicit `--cwd` must
 match it. Headless runs print the
-session ID to stderr. In the TUI, `/new`, `/clone`, `/fork`, `/fork-after TURN`, `/resume`, `/name`, `/session`,
+session ID to stderr. In the TUI, `/new`, `/clone`, `/fork`, `/fork-after`, `/resume`, `/name`, `/session`,
 `/model` and `/compact` manage the conversation; `/login PROVIDER` and `/logout PROVIDER`
 manage saved keys. `/tasks` lists application-owned background Sessions; use
 `/tasks result ID`, `/tasks cancel ID` and `/tasks acknowledge ID` to inspect,
@@ -100,6 +100,16 @@ default for new sessions. Custom routes and that default are published together
 in `$XDG_CONFIG_HOME/ion/models.json` (or `~/.config/ion/models.json`), with
 concurrent saves serialized. After updating from a development build with the
 older split preferences, select your default and configure custom routes again.
+
+`/resume` opens a searchable saved-Session browser and marks the current Session.
+The selected conversation shows its full ID, Turn count, recorded model and file
+activity timestamp/age. Activity is a discovery-time snapshot, not execution
+status. Discovery runs outside the input loop; Esc dismisses the browser while
+Ion retains and joins its scan before starting another scan. An in-flight
+filesystem/metadata call cannot be interrupted. Dismissed results cannot overwrite
+a newer picker. Browsing does not submit input or repair history;
+confirming a selection switches through idle shared control. This is a flat
+catalog, not inferred fork ancestry or Pi's in-file branch tree.
 
 Use `--reasoning high` for headless/chat/RPC startup or manual compaction,
 `/reasoning high` in an idle terminal, or RPC
@@ -237,9 +247,11 @@ directory; cloning does not copy or restore files.
 images, including each image's coordinate note, in a new Session;
 `/fork TURN` selects directly. Oversized prompts or multipart input that the
 editor cannot represent report a notice and leave the current draft intact;
-the selected input remains in the source Session. `/fork-after
-TURN` continues after that Turn's recorded end. CLI `fork` prints the new
-Session ID. The source retains all later history. These operations copy
+the selected input remains in the source Session. `/fork-after` opens a picker
+of Turns with recorded ends, including cancelled or failed Turns; `/fork-after
+TURN` selects directly. It copies through that end without submitting input or
+clearing the existing draft and images. CLI `fork` prints the new Session ID.
+The source retains all later history. These operations copy
 conversation facts, not working files, and an unfinished Turn cannot be an
 after-Turn point. RPC clients can use `list_turns` and `fork` with `turn` and
 optional `after: true`.
