@@ -2,7 +2,7 @@
 use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 
-use crate::display_text::{fit_line, push_wrapped};
+use crate::display_text::{fit_line_with_status, push_wrapped};
 use anyhow::{Context, Result};
 use ignore::WalkBuilder;
 use ion_ai::ModelRef;
@@ -151,15 +151,16 @@ impl Pickers {
         for (index, item) in matching.iter().enumerate().skip(start).take(visible) {
             let selected = index == picker.selected;
             let marker = if selected { '›' } else { ' ' };
-            let row = if width > 2 {
-                format!(
-                    "{marker} {}",
-                    fit_line(&picker.items[*item].label, width - 2)
-                )
+            let (row, candidate_visible) = if width > 2 {
+                let (label, omitted) = fit_line_with_status(&picker.items[*item].label, width - 2);
+                // An omission marker is not candidate text. A literal ellipsis
+                // filename, unlike a wholly clipped label, is still selectable.
+                let visible = !label.is_empty() && !(omitted && label == "…");
+                (format!("{marker} {label}"), visible)
             } else {
-                marker.to_string()
+                (marker.to_string(), false)
             };
-            selected_visible |= selected && width > 2;
+            selected_visible |= selected && candidate_visible;
             rows.push(row);
         }
         if selected_visible {
@@ -574,6 +575,15 @@ mod tests {
 
         let marker_only = pickers.rows(2, 10);
         assert_eq!(&marker_only[1..], ["›", " "]);
+        assert!(
+            pickers
+                .key(KeyEvent::new(KeyCode::Enter, Modifiers::NONE))
+                .is_none()
+        );
+        assert!(pickers.active().is_some());
+
+        let ellipsis_only = pickers.rows(3, 10);
+        assert_eq!(&ellipsis_only[1..], ["› …", "  …"]);
         assert!(
             pickers
                 .key(KeyEvent::new(KeyCode::Enter, Modifiers::NONE))
