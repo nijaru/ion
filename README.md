@@ -70,7 +70,7 @@ or automatically retried.
 `--tools LIST` limits the model-visible tools to comma-separated exact names or
 `*` patterns; `--exclude-tools LIST` removes matches after inclusion. Exclusions
 win, and both apply to native tools, MCP tools and Code Mode's callable namespace.
-`--read-only` is an allowlist preset for `read`, `ls`, `find`, `grep`, `history`,
+`--read-only` is an allowlist preset for `read`, `ls`, `find`, `grep`, `web_fetch`, `history`,
 MCP resource inspection and Code Mode when enabled; it excludes native mutations, direct shell
 execution and managed children. These flags are model-loadout policies for the invocation, not
 OS sandboxes or credential boundaries: user `!` shell commands and host-side
@@ -925,8 +925,17 @@ an owner UUID is not authority to adopt or resume it. New model-issued delegatio
 is new work, not an exactly-once effect guarantee. Live-model delegation
 qualification remains open.
 
-Tools act directly in the working directory with the host user's permissions.
-There is no implicit sandbox. Settlements distinguish observed host output,
+The coding preset includes `web_fetch` for selected HTTP(S) URLs, including local
+and internal sites. It returns untrusted UTF-8 text or HTML converted to readable
+text, with final URL, redirect chain and source digest. Truncated text has a private
+temporary `full_path` for `read`; this is not a retention guarantee. Downloads are
+bounded; unsupported content and failures are explicit. No browser cookies,
+provider credentials or ambient proxies are imported. It also works through Code
+Mode and the read-only loadout; GET does not imply replay safety. Built-in web
+search still needs a service/credential route.
+
+Filesystem and command tools act directly in the working directory with the host
+user's permissions. There is no implicit sandbox. Settlements distinguish observed host output,
 calls known not to have been dispatched, and unknown effects. Cancellation
 closes unused calls as not dispatched. After process loss, a call without a
 committed result remains unknown even if dispatch might not have started. The

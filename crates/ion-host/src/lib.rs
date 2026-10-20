@@ -33,6 +33,7 @@ mod question_tool;
 pub mod resources;
 pub mod session_catalog;
 mod user_commands;
+mod web_tools;
 
 use std::{
     path::{Path, PathBuf},
@@ -79,6 +80,7 @@ pub use question_tool::QuestionTools;
 pub use resources::{PromptTemplate, ResourceDiagnostic, Resources, Skill};
 pub use session_catalog::{SessionCatalog, SessionSummary};
 pub use user_commands::{CommandCatalog, CommandConfig, CommandOrigin, UserCommand};
+pub use web_tools::WebTools;
 
 /// Host configuration can be supplied explicitly by an embedding program or
 /// resolved from `ION_HOME` (default `~/.ion`) for the executable.

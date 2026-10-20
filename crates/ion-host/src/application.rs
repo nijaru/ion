@@ -103,6 +103,7 @@ const READ_ONLY_TOOLS: &[&str] = &[
     "ls",
     "find",
     "grep",
+    "web_fetch",
     "history",
     "list_mcp_resources",
     "list_mcp_resource_templates",
@@ -201,6 +202,7 @@ impl CodingApplication {
         );
         let mut sources: Vec<Arc<dyn CodingToolSource>> = vec![
             native.clone(),
+            Arc::new(crate::WebTools::new()?),
             Arc::new(crate::ProcessTools::with_environment(
                 cwd,
                 self.processes.clone(),

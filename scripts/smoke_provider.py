@@ -72,7 +72,7 @@ class Handler(BaseHTTPRequestHandler):
                 assert "tools" not in body
             else:
                 names = {tool["function"]["name"] for tool in body["tools"]}
-                default = {"read", "edit", "write", "exec", "process", "subagent", "history", "ls", "find", "grep"}
+                default = {"read", "edit", "write", "exec", "process", "subagent", "history", "ls", "find", "grep", "web_fetch"}
                 expected = default | ({"ask_user_question"} if questions or os.environ.get("ION_SMOKE_TERMINAL") == "1" else set())
                 assert names == expected, (names, expected)
             if questions:
@@ -205,7 +205,7 @@ class Handler(BaseHTTPRequestHandler):
 
     def discovery_step(self, step, body):
         names = {tool["function"]["name"] for tool in body["tools"]}
-        assert names == {"read", "ls", "find", "grep", "history"}, names
+        assert names == {"read", "ls", "find", "grep", "web_fetch", "history"}, names
         if step == 0:
             calls = [("discovery-ls", "ls", {"path": "."})]
         elif step == 1:

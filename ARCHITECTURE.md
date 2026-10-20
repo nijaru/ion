@@ -56,7 +56,7 @@ External deployment must not introduce a second execution ledger or agent loop.
 The contracts below do not settle every reference feature. These capabilities
 must be considered explicitly rather than hidden under broad claims of parity:
 
-- **Coding context:** web search and URL/document retrieval; login-shell startup
+- **Coding context:** web search and richer document retrieval; login-shell startup
   state capture beyond explicit command setup; non-image document/media support; summary-quality
   aids beyond original-evidence retrieval.
 - **Continuity:** Pi-style in-file tree navigation and branch summaries versus
@@ -437,6 +437,18 @@ permissions. Bound inline capture and identify omission, decoding loss and
 incomplete EOF. Full artifacts have a separate disk
 lifecycle, not an aggregate quota or retention guarantee. Images have one bounded
 normalization owner across user/native/MCP inputs; unsupported content is explicit.
+
+The coding application includes selected-URL HTTP(S) retrieval in direct and
+composed loadouts. It uses the execution host's network, including local/internal
+destinations, without importing browser state, provider credentials or ambient
+proxies. Neutral applications gain no network tool implicitly. Bound redirects,
+network acquisition, conversion and output; preserve requested/final source URLs,
+completed-body digests and explicit failures. Retrieved content remains untrusted
+data, never instructions or grants. Conversion and snapshot workers remain owned
+through stop/join. Omitted converted text may have a private temporary snapshot,
+not a durable reference or retention lease. GET, a read-only label and equal tool
+declarations grant no replay authority. Search services and other document formats
+remain separate capability decisions.
 
 The coding application includes native `ls`, `find` and `grep` for repository
 exploration without shell authority. Explicit selection and the read-only loadout

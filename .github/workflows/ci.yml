@@ -46,6 +46,8 @@ jobs:
         run: bash scripts/smoke.sh && python3 scripts/smoke_headless.py
       - name: Fixed coding qualification smoke
         run: python3 scripts/smoke_coding.py
+      - name: Native web retrieval smoke
+        run: python3 scripts/smoke_web.py
       - name: Native file boundary smoke
         run: python3 scripts/smoke_file_io.py
       - name: Terminal PTY smoke
