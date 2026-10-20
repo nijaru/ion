@@ -494,7 +494,8 @@ reopening it; exit still waits for any filesystem call already underway.
 Restoring or replacing a draft also closes its old completion picker. Returned
 input keeps its cursor and attachments; a displaced unsent draft remains
 recoverable with Alt-Up.
-Type `/` to discover terminal commands, prompt templates and `/skill:NAME`.
+Type `/` to discover terminal commands, prompt templates, `/skill:NAME` and
+configured `/command:NAME` user commands.
 Up/Down selects a suggestion; Tab or Enter inserts it without executing it.
 Submit the completed draft separately. Esc closes discovery without discarding
 input. Suggestions stay in the selected terminal surface, including during work;
@@ -682,6 +683,52 @@ receive an error before a Turn is accepted. Core still checks the complete
 encoded message and attachments separately. Project resources are lower-trust repository text
 under the same live-directory tool permissions as `AGENTS.md`; review
 unfamiliar resources before using them.
+
+Executable user commands are separate from skills and prompt templates. Put a
+`commands.json` in the user configuration directory, or `.ion/commands.json` at
+the nearest Git root (the working directory when there is no Git ancestor):
+
+```json
+{
+  "commands": {
+    "check": {
+      "description": "Run the workspace tests",
+      "program": "cargo",
+      "args": ["test", "--locked"],
+      "share_with_model": false
+    }
+  }
+}
+```
+
+`share_with_model` is required. In the terminal, `/commands` lists enabled names,
+descriptions and origins; `/command:check [arguments]` runs one. Discovery and Tab
+completion do not execute it. Quotes and escapes group literal arguments, without
+variable, glob or command substitution. Fixed manifest arguments precede user
+arguments. Execution uses the Session's working directory and existing user-shell
+admission, capture, cancellation and recovery. It records the actual launched
+command and outcome, not a fabricated model tool call or user prompt. With sharing
+false, both stay out of later model context; true shares them with the next model
+request, without starting a request itself.
+
+Project commands remain disabled until `ion commands trust` approves their current
+manifest bytes and canonical root. `ion commands list` works without model setup;
+`ion commands untrust` revokes only command trust, independently of `ion trust`
+for MCP. Trusted project commands override user entries with the same name.
+Manifests are strict JSON, limited to 1 MiB; duplicate command names are rejected. Editing a loaded source, deleting it
+or revoking project trust rejects new launches; review, trust project changes and
+`/reload` before running the new definition. Already admitted work keeps its
+captured route. Reloading, listing or opening a repository never launches a command.
+
+Commands use host permissions, not a sandbox: the manifest digest does not freeze
+scripts or transitive executable code, and a program can interpret its own argv.
+Read-only **model** tool selection does not revoke explicit user-shell/command
+authority. Custom applications opt in through `Application::commands` (empty by
+default) and user-shell authority; neither alone permits execution.
+Commands cannot be queued as follow-ups. Headless/RPC prompt submission does not
+execute terminal commands; embedded clients can explicitly use shared control's
+`command` method. This is named execution, not arbitrary extension handlers,
+lifecycle hooks or UI plugins.
 
 Add local MCP tool servers explicitly with `ion mcp add NAME COMMAND [ARGS...]`.
 Use `ion mcp add-http NAME URL` for a Streamable HTTP server; add
@@ -1374,7 +1421,7 @@ contracts are not all implemented:
 | Durability | SQLite conversation/effect history, conservative recovery, restart-safe direct admission through the Rust SDK and keyed RPC literal text; explicit same-Turn continuation through the Rust SDK. | Durable pending queues, wire-protocol delivery IDs and automatic restart/continuation. Coding CLI/TUI/RPC submissions do not opt in to continuation. |
 | Delegation | Main coding preset exposes fresh/fork foreground and background Sessions with inherited route/reasoning, application-owned retained results, wait/status/cancel/acknowledge and joined original answers. SDK children use the same stable identity, complete environments and conservative recovery; Code Mode nested tools remain distinct. | Live-model/service-scale delegation qualification and native-app visual acceptance remain open. Model arguments never grant execution authority. |
 | Native programs | Scoped pipe/PTY programs, stdin interaction, bounded raw capture and screen pages, terminal resize, retained wait/close/release and shared application cleanup; live human attachment lease with a Ctrl-] terminal view; child-job scope reclaimed before answer release. | Concurrent model/human input, shell environment capture, graphical terminal protocols and restart attachment. |
-| Controls and trust | Model-loadout include/exclude selection, read-only model tools, MCP direct/deferred/hidden exposure, digest-bound project MCP trust and host-permission execution. | Per-call approval/consent, OS sandboxing, dynamic executable extensions, MCP OAuth and per-tool exposure patterns. Loadout selection and trust are not security boundaries. |
+| Controls and trust | Model-loadout include/exclude selection, read-only model tools, MCP direct/deferred/hidden exposure, digest-bound project MCP/command trust, explicit named user commands and host-permission execution. | Per-call approval/consent, OS sandboxing, arbitrary extension handlers/hooks/UI contributions, MCP OAuth and per-tool exposure patterns. Loadout selection and trust are not security boundaries. |
 | Remote use | Foreground stdio RPC, lossy progress and complete pull snapshots through shared control. A service embedding retains/drives the owner independently of connections. | No built-in authenticated network server, reliable activity replay or durable queue/metadata recovery. RPC EOF still stops/joins work. |
 
 Common coding workflows are implemented, but Pi-level daily-driver reliability
