@@ -554,7 +554,7 @@ async fn edit_draft_in_terminal(
     *screen = new_inline_screen(terminal)
         .await
         .context("restore inline chat after editor")?;
-    Ok(edited.map(|edited| ui.replace_draft(edited)))
+    Ok(edited.map(|edited| ui.replace_draft_atomic(edited)))
 }
 
 fn handle_command(

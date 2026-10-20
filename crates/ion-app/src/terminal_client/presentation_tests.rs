@@ -599,7 +599,7 @@ fn resource_completion_preserves_literal_commands_and_terminal_control_names() {
         Some(&resources),
     );
     assert_eq!(ui.draft, "/skill:zzmenu-audit ");
-    ui.replace_draft("/ne".into());
+    ui.replace_draft_atomic("/ne".into());
     ui.completion
         .refresh(&ui.draft, ui.cursor, Some(&resources), false);
     assert!(

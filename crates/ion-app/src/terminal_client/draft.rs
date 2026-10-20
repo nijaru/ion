@@ -23,13 +23,6 @@ impl Frontend {
         self.set_editor(source);
     }
 
-    /// A successful external-editor return is an atomic undoable replacement,
-    /// unlike a Host-returned or browsed draft, which owns a new baseline.
-    pub(super) fn replace_draft(&mut self, draft: String) {
-        self.browsing = None;
-        self.replace_draft_atomic(draft);
-    }
-
     pub(super) fn restore_editor(&mut self, source: EditorDraft) {
         self.browsing = None;
         self.set_editor_baseline(source);
