@@ -165,7 +165,7 @@ def exercise_file_discovery():
     with tempfile.TemporaryDirectory(prefix="ion-file-discovery-") as temporary:
         work = Path(temporary)
         env = {name: value for name, value in os.environ.items() if name in ("PATH", "SHELL", "TMPDIR")}
-        env.update(HOME=str(work / "home"), XDG_CONFIG_HOME=str(work / "config"), XDG_STATE_HOME=str(work / "state"), TERM="xterm-256color")
+        env.update(HOME=str(work / "home"), ION_HOME=str(work / "ion"), XDG_CONFIG_HOME=str(work / "config"), XDG_STATE_HOME=str(work / "state"), TERM="xterm-256color")
         # Selection alone does not contact this endpoint; these are offline
         # composer/direct-shell checks, not provider qualification.
         subprocess.run([binary, "use", "smoke", "smoke-model", "--endpoint", "http://127.0.0.1:1/v1/chat/completions", "--wire", "chat-completions"], env=env, check=True, capture_output=True)
@@ -300,7 +300,7 @@ with tempfile.TemporaryDirectory(prefix="ion-terminal-") as temporary:
         wrapper.write_text('#!/bin/sh\ncat > "$ION_SMOKE_CLIPBOARD"\n')
         wrapper.chmod(0o755)
     env = os.environ.copy()
-    env.update(XDG_CONFIG_HOME=str(work / "config"), XDG_STATE_HOME=str(work / "state"), TERM="xterm-256color", ION_SMOKE_STEERING="1", SSH_CONNECTION="ion-smoke", WAYLAND_DISPLAY="ion-smoke", ION_SMOKE_CLIPBOARD=str(copy_file), PATH=f"{copy_bin}:{env['PATH']}")
+    env.update(ION_HOME=str(work / "ion"), XDG_CONFIG_HOME=str(work / "config"), XDG_STATE_HOME=str(work / "state"), TERM="xterm-256color", ION_SMOKE_STEERING="1", SSH_CONNECTION="ion-smoke", WAYLAND_DISPLAY="ion-smoke", ION_SMOKE_CLIPBOARD=str(copy_file), PATH=f"{copy_bin}:{env['PATH']}")
     port_file, trace = work / "port", work / "requests"
     server = subprocess.Popen([sys.executable, str(root / "scripts/smoke_provider.py"), str(port_file), str(trace)], env=env | {"ION_SMOKE_TERMINAL": "1"}, stderr=subprocess.PIPE)
     try:
@@ -495,7 +495,7 @@ with tempfile.TemporaryDirectory(prefix="ion-terminal-") as temporary:
             turns = [entry["data"]["input"]["content"][0]["Text"] for entry in entries if entry["kind"] == "turn_started"]
             assert len(turns) == 2 and turns[1] == "What did we finish previously?", turns
             assert json.loads(inspected.stdout)["last_model"] == {"provider": "smoke", "model": "smoke-model"}
-            assert not (work / "config" / "ion" / "credentials" / "smoke.key").exists()
+            assert not (work / "ion" / "credentials" / "smoke.key").exists()
 
             # The terminal has exited and all inspect/export processes have
             # settled: rename the owned completed Session, never copy a live
@@ -503,7 +503,7 @@ with tempfile.TemporaryDirectory(prefix="ion-terminal-") as temporary:
             def logical_id(path):
                 with sqlite3.connect(path) as connection:
                     return json.loads(connection.execute("SELECT header FROM session WHERE id=1").fetchone()[0])["id"]
-            saved = next(path for path in (work / "state").rglob("*.sqlite") if logical_id(path) == session_id)
+            saved = next(path for path in (work / "ion").rglob("*.sqlite") if logical_id(path) == session_id)
             renamed = saved.with_name("01234567890🦀.sqlite")
             saved.rename(renamed)
             unicode_listing = subprocess.run([binary, "--cwd", workspace, "sessions"], env=env, check=True, capture_output=True, text=True).stdout
@@ -664,7 +664,7 @@ def exercise_active_band():
     with tempfile.TemporaryDirectory(prefix="ion-active-band-") as temporary:
         work = Path(temporary)
         env = os.environ.copy()
-        env.update(XDG_CONFIG_HOME=str(work / "config"), XDG_STATE_HOME=str(work / "state"), TERM="xterm-256color", ION_SMOKE_SALIENCE="1")
+        env.update(ION_HOME=str(work / "ion"), XDG_CONFIG_HOME=str(work / "config"), XDG_STATE_HOME=str(work / "state"), TERM="xterm-256color", ION_SMOKE_SALIENCE="1")
         port, trace = work / "port", work / "trace"
         server = subprocess.Popen([sys.executable, str(root / "scripts/smoke_provider.py"), str(port), str(trace)], env=env | {"ION_SMOKE_TERMINAL": "1"}, stderr=subprocess.PIPE)
         child = None
@@ -724,7 +724,7 @@ def exercise_active_band():
                 if checked and b"SALIENCE_DONE" in output and not quit_sent:
                     # Provisional text can arrive before Core completion. Quit
                     # only after the owned Turn has actually committed success.
-                    sessions = list((work / "state/ion/sessions").rglob("*.sqlite"))
+                    sessions = list((work / "ion/sessions").rglob("*.sqlite"))
                     assert len(sessions) == 1, sessions
                     with sqlite3.connect(f"file:{sessions[0]}?mode=ro", uri=True) as db:
                         completed = db.execute("SELECT count(*) FROM entries WHERE json_extract(body,'$.kind')='turn_ended' AND json_extract(body,'$.data.reason')='completed'").fetchone()[0]
@@ -763,7 +763,7 @@ def exercise_questions():
     with tempfile.TemporaryDirectory(prefix="ion-questions-") as temporary:
         work = Path(temporary)
         env = {name: value for name, value in os.environ.items() if name in ("PATH", "SHELL", "TMPDIR")}
-        env.update(HOME=str(work / "home"), XDG_CONFIG_HOME=str(work / "config"), XDG_STATE_HOME=str(work / "state"), TERM="xterm-256color")
+        env.update(HOME=str(work / "home"), ION_HOME=str(work / "ion"), XDG_CONFIG_HOME=str(work / "config"), XDG_STATE_HOME=str(work / "state"), TERM="xterm-256color")
         for mode in ("select", "custom", "cancel", "stop"):
             workspace = work / mode
             workspace.mkdir()

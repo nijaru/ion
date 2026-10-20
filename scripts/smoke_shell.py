@@ -205,7 +205,7 @@ for mode in ("inline", "fullscreen"):
         editor.chmod(0o700)
         env = {
             **os.environ,
-            "XDG_CONFIG_HOME": str(work / "config"),
+            "ION_HOME": str(work / "ion"), "XDG_CONFIG_HOME": str(work / "config"),
             "XDG_STATE_HOME": str(work / "state"),
             "TERM": "xterm-256color",
             "VISUAL": str(editor),

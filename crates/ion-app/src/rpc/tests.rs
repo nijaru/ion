@@ -37,7 +37,7 @@ impl Fixture {
                 image_input: false,
             })
             .unwrap();
-        let path = host.sessions(cwd.clone()).new_path().unwrap();
+        let path = host.sessions(Some(cwd.clone())).new_path().unwrap();
         let session = Arc::new(ion_core::CodingSession::create(path, Some(&cwd)).unwrap());
         session.select_model(selected.identity()).unwrap();
         let setup = ion_host::CodingApplication::new(host.clone(), None)

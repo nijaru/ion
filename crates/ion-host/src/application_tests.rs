@@ -323,8 +323,11 @@ async fn coding_application_selection_and_read_only_narrow_the_model_loadout() {
 
     for names in [vec!["read", "write"], Vec::new()] {
         let session = Arc::new(
-            CodingSession::create(host.sessions(cwd.clone()).new_path().unwrap(), Some(&cwd))
-                .unwrap(),
+            CodingSession::create(
+                host.sessions(Some(cwd.clone())).new_path().unwrap(),
+                Some(&cwd),
+            )
+            .unwrap(),
         );
         let application = crate::CodingApplication::new(host.clone(), None).with_tool_selection(
             ion_core::ToolSelection::include(names.iter().map(|name| (*name).into())),
@@ -351,7 +354,11 @@ async fn coding_application_selection_and_read_only_narrow_the_model_loadout() {
     )
     .unwrap();
     let session = Arc::new(
-        CodingSession::create(host.sessions(cwd.clone()).new_path().unwrap(), Some(&cwd)).unwrap(),
+        CodingSession::create(
+            host.sessions(Some(cwd.clone())).new_path().unwrap(),
+            Some(&cwd),
+        )
+        .unwrap(),
     );
     let application = crate::CodingApplication::new(host.clone(), None).with_read_only_tools();
     let control = application
@@ -372,7 +379,11 @@ async fn coding_application_selection_and_read_only_narrow_the_model_loadout() {
     drop(session);
 
     let session = Arc::new(
-        CodingSession::create(host.sessions(cwd.clone()).new_path().unwrap(), Some(&cwd)).unwrap(),
+        CodingSession::create(
+            host.sessions(Some(cwd.clone())).new_path().unwrap(),
+            Some(&cwd),
+        )
+        .unwrap(),
     );
     let application = crate::CodingApplication::new(host.clone(), None)
         .with_code_mode(true)
@@ -410,7 +421,7 @@ fn last_selection_builder_wins_for_restricted_roles() {
             image_input: false,
         })
         .unwrap();
-    let catalog = host.sessions(cwd.clone());
+    let catalog = host.sessions(Some(cwd.clone()));
     let session = Arc::new(CodingSession::create(catalog.new_path().unwrap(), Some(&cwd)).unwrap());
     let explicit = ion_core::ToolSelection::include(["write".into()]);
     let control = crate::CodingApplication::new(host.clone(), None)
@@ -457,7 +468,7 @@ fn question_capability_obeys_explicit_selection_and_read_only_policy() {
             image_input: false,
         })
         .unwrap();
-    let catalog = host.sessions(cwd.clone());
+    let catalog = host.sessions(Some(cwd.clone()));
     let session = Arc::new(CodingSession::create(catalog.new_path().unwrap(), Some(&cwd)).unwrap());
     let control = crate::CodingApplication::new(host.clone(), None)
         .with_code_mode(true)

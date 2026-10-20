@@ -448,6 +448,13 @@ uninterruptible native syscalls. These tools grant neither mutation nor automati
 replay authority and do not replace the existing command workflow for builds and
 verification.
 
+The executable selects one user home: `ION_HOME`, defaulting to `~/.ion`.
+Configuration, credentials, resources and Session subdirectories share that root;
+XDG locations are not fallback sources or implicitly migrated. Explicit embedding
+recipes may still supply separate configuration and state roots. Project `.ion`
+remains a distinct layer; a physical alias of the selected user directory is not
+loaded again as a project source or assigned project trust.
+
 The coding preset loads user defaults from its configured `AGENTS.md`, then
 filesystem ancestors through the working directory. These standing resources are
 captured at admission; reload changes future admissions. Project rules apply to

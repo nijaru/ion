@@ -129,7 +129,7 @@ with tempfile.TemporaryDirectory(prefix="ion-rpc-") as temporary:
     prompts.mkdir(parents=True)
     (prompts / "check.md").write_text("Check $1.\n")
     env = {key: os.environ[key] for key in ("PATH", "SHELL", "TMPDIR") if key in os.environ}
-    env.update(HOME=str(work / "home"), XDG_CONFIG_HOME=str(work / "config"), XDG_STATE_HOME=str(work / "state"))
+    env.update(HOME=str(work / "home"), ION_HOME=str(work / "ion"), XDG_CONFIG_HOME=str(work / "config"), XDG_STATE_HOME=str(work / "state"))
     server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
@@ -142,7 +142,7 @@ with tempfile.TemporaryDirectory(prefix="ion-rpc-") as temporary:
         # Publication fails normally; a committed selection is not rolled back.
         listing_failure = closed_stdout(["models"], env)
         confirmation_failure = closed_stdout(["use", "rpc-alt", "alt-model"], env)
-        applied = json.loads((work / "config/ion/models.json").read_text())
+        applied = json.loads((work / "ion/models.json").read_text())
         assert applied["default"] == {"provider": "rpc-alt", "model": "alt-model"}, applied
         for failure in (listing_failure, confirmation_failure):
             assert failure.returncode == 1 and b"panicked" not in failure.stderr, failure
@@ -153,13 +153,13 @@ with tempfile.TemporaryDirectory(prefix="ion-rpc-") as temporary:
         locator = "LOCATOR" + controls + "雪"
         model_id = "MODEL" + controls + "雪"
         selected = subprocess.run([binary, "use", "rpc-text", model_id, "--endpoint", endpoint, "--wire", "chat-completions"], env=env, check=True, capture_output=True).stdout.decode()
-        directory = work / "state/ion/sessions" / hashlib.sha256(os.fsencode(workspace.resolve())).hexdigest()
+        directory = work / "ion/sessions" / hashlib.sha256(os.fsencode(workspace.resolve())).hexdigest()
         directory.mkdir(parents=True)
         fixture = directory / (locator + ".sqlite")
         subprocess.run([binary, "--cwd", workspace, "--session", fixture, "run", "TEXT_PREVIEW"], env=env, check=True, capture_output=True)
         exact = json.loads(subprocess.run([binary, "--cwd", workspace, "--session", fixture, "inspect"], env=env, check=True, capture_output=True).stdout)
         assert exact["last_model"]["model"] == model_id, exact
-        config = json.loads((work / "config/ion/models.json").read_text())
+        config = json.loads((work / "ion/models.json").read_text())
         assert config["default"]["model"] == model_id, config
         assert next(route for route in config["custom"] if route["provider"] == "rpc-text")["model"] == model_id, config
         probe = subprocess.Popen([binary, "--cwd", workspace, "--session", fixture, "rpc"], env=env, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, bufsize=0)
@@ -195,7 +195,7 @@ with tempfile.TemporaryDirectory(prefix="ion-rpc-") as temporary:
         command = "COMMAND" + controls + "雪"
         argument = "ARG" + controls + "雪"
         subprocess.run([binary, "mcp", "add", "text-smoke", command, argument], env=env, check=True, capture_output=True)
-        mcp_config = (work / "config/ion/mcp.json").read_text()
+        mcp_config = (work / "ion/mcp.json").read_text()
         assert json.loads(mcp_config)["servers"]["text-smoke"] == {"command": command, "args": [argument]}, mcp_config
         mcp_rows = subprocess.run([binary, "mcp", "list"], env=env, check=True, capture_output=True).stdout.decode()
         assert mcp_rows == "text-smoke\tdirect\tCOMMAND       雪 ARG       雪\n", repr(mcp_rows)
@@ -433,7 +433,7 @@ with tempfile.TemporaryDirectory(prefix="ion-rpc-") as temporary:
         def logical_id(path):
             with sqlite3.connect(path) as connection:
                 return json.loads(connection.execute("SELECT header FROM session WHERE id=1").fetchone()[0])["id"]
-        database = next(path for path in (work / "state").rglob("*.sqlite") if logical_id(path) == session)
+        database = next(path for path in (work / "ion").rglob("*.sqlite") if logical_id(path) == session)
         with sqlite3.connect(database) as connection:
             connection.execute("CREATE TRIGGER refuse_model BEFORE INSERT ON entries BEGIN SELECT RAISE(ABORT, 'injected model publication failure'); END")
         try:

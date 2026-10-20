@@ -38,7 +38,7 @@ def qualify(case):
         cwd.mkdir()
         session = work / "session.sqlite"
         env = {key: os.environ[key] for key in ("PATH", "SHELL", "TMPDIR") if key in os.environ}
-        env.update(HOME=str(work / "home"), XDG_CONFIG_HOME=str(work / "config"), XDG_STATE_HOME=str(work / "state"))
+        env.update(HOME=str(work / "home"), ION_HOME=str(work / "ion"), XDG_CONFIG_HOME=str(work / "config"), XDG_STATE_HOME=str(work / "state"))
         subprocess.run([binary, "use", "offline", "shell", "--endpoint", "http://127.0.0.1:9/v1/chat/completions", "--wire", "chat-completions"], env=env, capture_output=True, check=True)
         reader = client = listener = None
         if case == "input":

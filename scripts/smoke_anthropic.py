@@ -156,7 +156,7 @@ with tempfile.TemporaryDirectory(prefix="ion-anthropic-") as temporary:
     temporary_files.mkdir()
     env = {key: os.environ[key] for key in ("PATH", "SHELL") if key in os.environ}
     env.update(
-        HOME=str(home), XDG_CONFIG_HOME=str(work / "config"),
+        HOME=str(home), ION_HOME=str(work / "ion"), XDG_CONFIG_HOME=str(work / "config"),
         XDG_STATE_HOME=str(work / "state"), XDG_DATA_HOME=str(work / "data"),
         TMPDIR=str(temporary_files),
     )

@@ -19,7 +19,7 @@ def main():
         home = root / "home"
         home.mkdir()
         env = {key: os.environ[key] for key in ("PATH", "SHELL", "TMPDIR") if key in os.environ}
-        env.update(HOME=str(home), XDG_CONFIG_HOME=str(home / "config"), XDG_DATA_HOME=str(home / "data"))
+        env.update(HOME=str(home), ION_HOME=str(home / "ion"), XDG_CONFIG_HOME=str(home / "config"), XDG_DATA_HOME=str(home / "data"))
         first = subprocess.Popen([str(binary), str(state), "--pause-after-effect"], env=env,
                                  stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
         marker = queue.Queue(maxsize=1)

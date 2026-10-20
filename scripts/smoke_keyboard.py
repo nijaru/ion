@@ -95,7 +95,7 @@ def exercise(mode, supported=True, panic=False, editor_fault=None):
         thread = threading.Thread(target=server.serve_forever)
         thread.start()
         env = {key: os.environ[key] for key in ("PATH", "LANG", "LC_ALL", "TMPDIR") if key in os.environ}
-        env.update(HOME=str(work / "home"), XDG_CONFIG_HOME=str(work / "config"), XDG_STATE_HOME=str(work / "state"), TERM="xterm-256color")
+        env.update(HOME=str(work / "home"), ION_HOME=str(work / "ion"), XDG_CONFIG_HOME=str(work / "config"), XDG_STATE_HOME=str(work / "state"), TERM="xterm-256color")
         marker = work / "editor-flags"
         editor = work / "editor"
         editor.write_text(

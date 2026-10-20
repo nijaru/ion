@@ -128,8 +128,8 @@ with tempfile.TemporaryDirectory(prefix="ion-rpc-requests-") as temporary:
     (workspace / ".git").mkdir()
     (prompts / "check.md").write_text("EXPANDED $1\n")
     env = {name: os.environ[name] for name in ("PATH", "SHELL", "TMPDIR") if name in os.environ}
-    state = work / "state"
-    env.update(HOME=str(work / "home"), XDG_CONFIG_HOME=str(work / "config"), XDG_STATE_HOME=str(state))
+    state = work / "ion"
+    env.update(HOME=str(work / "home"), ION_HOME=str(work / "ion"), XDG_CONFIG_HOME=str(work / "config"), XDG_STATE_HOME=str(state))
     server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()

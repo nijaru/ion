@@ -101,7 +101,7 @@ with tempfile.TemporaryDirectory(prefix="ion-resources-") as temporary:
         "---\ndescription: Check a named concern\n---\nCheck $1; scope ${2:-all}.\n"
     )
     env = os.environ.copy()
-    env.update(HOME=str(work / "home"), XDG_CONFIG_HOME=str(work / "config"), XDG_STATE_HOME=str(work / "state"))
+    env.update(HOME=str(work / "home"), ION_HOME=str(work / "ion"), XDG_CONFIG_HOME=str(work / "config"), XDG_STATE_HOME=str(work / "state"))
     # Executable command metadata stays inert, including before model setup.
     # Invalid metadata must not write terminal controls or replace a trust grant.
     manifest = workspace / ".ion/commands.json"
@@ -119,7 +119,7 @@ with tempfile.TemporaryDirectory(prefix="ion-resources-") as temporary:
     assert "\x1b" not in denied.stderr and "\x07" not in denied.stderr, repr(denied.stderr)
     manifest.write_text(json.dumps({"commands": {"check": entry}}))
     subprocess.run([*command_cli, "trust"], env=env, check=True, capture_output=True)
-    trust_path = work / "config/ion/commands-trust.json"
+    trust_path = work / "ion/commands-trust.json"
     previous_grant = trust_path.read_bytes()
     listed = subprocess.run([*command_cli, "list"], env=env, check=True, capture_output=True, text=True)
     assert "check" in listed.stdout and "project" in listed.stdout, listed
@@ -194,7 +194,7 @@ with tempfile.TemporaryDirectory(prefix="ion-resources-") as temporary:
         # payload is written to disk or passed on the command line.
         (prompts / "amplify.md").write_text("$1 " * 4000)
         before_refusal = len(requests)
-        before_turns = admitted_turns(work / "state")
+        before_turns = admitted_turns(work / "ion")
         refusal = subprocess.run(
             [binary, "--cwd", workspace, "run", "/amplify " + "x" * 4000],
             env=env, capture_output=True, text=True,
@@ -202,7 +202,7 @@ with tempfile.TemporaryDirectory(prefix="ion-resources-") as temporary:
         assert refusal.returncode != 0, refusal
         assert "byte limit" in refusal.stderr, refusal.stderr
         assert len(requests) == before_refusal, "over-expansion reached the provider"
-        assert admitted_turns(work / "state") == before_turns, "refusal admitted a Turn"
+        assert admitted_turns(work / "ion") == before_turns, "refusal admitted a Turn"
         # RPC must refuse before admission too, then remain usable in the same
         # process. Core still owns admission of the recovered ordinary prompt.
         child = subprocess.Popen([binary, "--cwd", workspace, "rpc"], env=env, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, bufsize=0)
@@ -212,7 +212,7 @@ with tempfile.TemporaryDirectory(prefix="ion-resources-") as temporary:
             denied = rpc_record(child)
             assert denied["type"] == "response" and denied["id"] == "oversized" and not denied["success"], denied
             assert "byte limit" in denied["error"], denied
-            assert len(requests) == before_refusal and admitted_turns(work / "state") == before_turns
+            assert len(requests) == before_refusal and admitted_turns(work / "ion") == before_turns
             child.stdin.write((json.dumps({"type": "prompt", "id": "recovery", "message": "/check RPC_recovery"}) + "\n").encode())
             while True:
                 record = rpc_record(child)
@@ -220,7 +220,7 @@ with tempfile.TemporaryDirectory(prefix="ion-resources-") as temporary:
                     assert record["status"] == "completed", record
                     break
             assert requests[-1]["messages"][-1]["content"].strip() == "Check RPC_recovery; scope all."
-            assert len(requests) == before_refusal + 1 and admitted_turns(work / "state") == before_turns + 1
+            assert len(requests) == before_refusal + 1 and admitted_turns(work / "ion") == before_turns + 1
             child.stdin.close()
             child.wait(timeout=10)
             assert child.returncode == 0, child.stderr.read()
@@ -240,7 +240,7 @@ with tempfile.TemporaryDirectory(prefix="ion-resources-") as temporary:
         assert len(requests) == before_refusal + 1, requests[before_refusal:]
         assert requests[-1]["messages"][-1]["content"].strip() == "Check Recovery; scope all."
         (prompts / "amplify.md").unlink()
-        global_rule = work / "config/ion/AGENTS.md"
+        global_rule = work / "ion/AGENTS.md"
         for mode in ("inline", "fullscreen"):
             old_rule = f"GLOBAL_{mode}_OLD"
             new_rule = f"GLOBAL_{mode}_NEW"
@@ -253,7 +253,7 @@ with tempfile.TemporaryDirectory(prefix="ion-resources-") as temporary:
                 fcntl.ioctl(slave, termios.TIOCSCTTY, 0)
 
             terminal_env = {**env, "TERM": "xterm-256color"}
-            previous_sessions = set((work / "state").rglob("*.sqlite"))
+            previous_sessions = set((work / "ion").rglob("*.sqlite"))
             child = subprocess.Popen([binary, "--cwd", workspace, "--tui-mode", mode, "chat"], env=terminal_env, stdin=slave, stdout=slave, stderr=slave, preexec_fn=attach_terminal)
             os.close(slave)
             output = bytearray()
@@ -310,7 +310,7 @@ with tempfile.TemporaryDirectory(prefix="ion-resources-") as temporary:
                     elif (phase == 31
                           and b"session control has active work or pending inputs" in current
                           and time.monotonic() >= reasoning_retry_at
-                          and completed_turns(work / "state", previous_sessions) == 1):
+                          and completed_turns(work / "ion", previous_sessions) == 1):
                         # Streamed text and /reload are valid before settlement;
                         # changing reasoning requires joined Host control. A busy
                         # refusal retains this exact command in the composer.
@@ -326,7 +326,7 @@ with tempfile.TemporaryDirectory(prefix="ion-resources-") as temporary:
                     elif phase == 5 and len(requests) == before + 2 and b"RESOURCE_OK" in current:
                         # Streamed text does not establish settlement. Observe
                         # this process's committed Turns before requesting quit.
-                        if completed_turns(work / "state", previous_sessions) == 2:
+                        if completed_turns(work / "ion", previous_sessions) == 2:
                             os.write(master, b"\x04")
                             quit_at = time.monotonic()
                             phase = 6
@@ -358,7 +358,7 @@ with tempfile.TemporaryDirectory(prefix="ion-resources-") as temporary:
             for steer in (False, True):
                 master, slave = pty.openpty()
                 fcntl.ioctl(slave, termios.TIOCSWINSZ, struct.pack("HHHH", 30, 100, 0, 0))
-                previous_sessions = set((work / "state").rglob("*.sqlite"))
+                previous_sessions = set((work / "ion").rglob("*.sqlite"))
                 child = subprocess.Popen([binary, "--cwd", workspace, "--tui-mode", mode, "chat"], env={**env, "TERM": "xterm-256color"}, stdin=slave, stdout=slave, stderr=slave, preexec_fn=attach_terminal)
                 os.close(slave)
                 output = bytearray()
@@ -401,7 +401,7 @@ with tempfile.TemporaryDirectory(prefix="ion-resources-") as temporary:
                         elif phase == 4 and len(requests) > before + 1 and b"RESOURCE_OK" in output:
                             assert len(requests) == before + 2
                             assert requests[-1]["messages"][-1]["content"] == "PREFIX_" + literal, (mode, steer, "resource recovery lost literal arguments/cursor", requests[-1]["messages"][-1]["content"])
-                            if completed_turns(work / "state", previous_sessions) == 1:
+                            if completed_turns(work / "ion", previous_sessions) == 1:
                                 os.write(master, b"\x04")
                                 quit_at = time.monotonic()
                                 phase = 5

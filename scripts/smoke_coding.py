@@ -192,7 +192,7 @@ def main():
         }
         env.update(
             HOME=str(root / "home"),
-            XDG_CONFIG_HOME=str(root / "config"),
+            ION_HOME=str(root / "ion"), XDG_CONFIG_HOME=str(root / "config"),
             XDG_STATE_HOME=str(root / "state"),
             TMPDIR=str(root / "tmp"),
             LANG="C.UTF-8",

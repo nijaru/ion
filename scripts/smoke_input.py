@@ -136,7 +136,7 @@ class Terminal:
 with tempfile.TemporaryDirectory(prefix="ion-input-") as temporary:
     work = Path(temporary)
     env = {name: value for name, value in os.environ.items() if name in ("PATH", "SHELL", "TMPDIR")}
-    env.update(HOME=str(work / "home"), XDG_CONFIG_HOME=str(work / "config"), XDG_STATE_HOME=str(work / "state"), TERM="xterm-256color")
+    env.update(HOME=str(work / "home"), ION_HOME=str(work / "ion"), XDG_CONFIG_HOME=str(work / "config"), XDG_STATE_HOME=str(work / "state"), TERM="xterm-256color")
     server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
@@ -153,7 +153,7 @@ with tempfile.TemporaryDirectory(prefix="ion-input-") as temporary:
             assert terminal.child.returncode == 1, terminal.text()
             assert "secret prompt contains control characters" in terminal.text(), terminal.text()
             assert "API key:" not in terminal.text(), "transformed provider label solicited a secret"
-            assert not (work / "config/ion/credentials").exists(), "rejected prompt changed credentials"
+            assert not (work / "ion/credentials").exists(), "rejected prompt changed credentials"
         finally:
             terminal.close()
 
@@ -182,7 +182,7 @@ with tempfile.TemporaryDirectory(prefix="ion-input-") as temporary:
                 if redirected:
                     assert termios.tcgetattr(terminal.redirected_master) == terminal.redirected_modes, "login changed an unrelated stdin TTY"
                 assert "DISPOSABLE" not in terminal.text(), "CLI credential leaked"
-                key_path = work / "config/ion/credentials/smoke.key"
+                key_path = work / "ion/credentials/smoke.key"
                 assert key_path.read_bytes() == b"CLI_DISPOSABLE", "cancel/EOF changed the saved key"
             finally:
                 terminal.close()
@@ -221,7 +221,7 @@ with tempfile.TemporaryDirectory(prefix="ion-input-") as temporary:
                 terminal.paint()
                 terminal.send(b"\r")
                 terminal.paint()
-                assert (work / "config/ion/credentials/smoke.key").read_bytes() == b"ACTUAL_DISPOSABLE", "credential entry lost bytes or saved type-ahead"
+                assert (work / "ion/credentials/smoke.key").read_bytes() == b"ACTUAL_DISPOSABLE", "credential entry lost bytes or saved type-ahead"
                 assert len(requests) == before + 1, "pre-read credential became chat input"
                 assert "DISPOSABLE" not in terminal.text(), "credential leaked to terminal"
                 for ending in (b"\x03", b"\x04", b"\x1b[200~bad\nvalue\x1b[201~"):
@@ -245,7 +245,7 @@ with tempfile.TemporaryDirectory(prefix="ion-input-") as temporary:
                 terminal.send(b"\x1b[201~")
                 terminal.wait(lambda: "read login credential" in terminal.text())
                 terminal.paint()
-                assert (work / "config/ion/credentials/smoke.key").read_bytes() == b"ACTUAL_DISPOSABLE", "rejected/cancelled entry replaced the saved credential"
+                assert (work / "ion/credentials/smoke.key").read_bytes() == b"ACTUAL_DISPOSABLE", "rejected/cancelled entry replaced the saved credential"
                 terminal.finish()
                 assert termios.tcgetattr(terminal.master) == terminal.original_modes, "chat secret entry did not restore terminal"
             finally:
@@ -256,12 +256,12 @@ with tempfile.TemporaryDirectory(prefix="ion-input-") as temporary:
             for cancelled in (True, False):
                 cwd = work / f"{mode}-shell-queue-{cancelled}"
                 cwd.mkdir()
-                previous = set((work / "state").rglob("*.sqlite"))
+                previous = set((work / "ion").rglob("*.sqlite"))
                 terminal = Terminal(cwd, env, mode)
                 pid = None
                 try:
                     terminal.wait(lambda: "›" in terminal.text())
-                    database, = set((work / "state").rglob("*.sqlite")) - previous
+                    database, = set((work / "ion").rglob("*.sqlite")) - previous
                     before = len(requests)
                     command = "printf '%s\\n' $$ > native.pid; printf 'OBSERVED_QUEUE\\n'; touch native.ready; " + (
                         "exec sleep 30" if cancelled else
@@ -421,11 +421,11 @@ with tempfile.TemporaryDirectory(prefix="ion-input-") as temporary:
 
             cwd = work / (mode + "-admission")
             cwd.mkdir()
-            previous = set((work / "state").rglob("*.sqlite"))
+            previous = set((work / "ion").rglob("*.sqlite"))
             terminal = Terminal(cwd, env, mode)
             try:
                 terminal.wait(lambda: "›" in terminal.text())
-                database, = set((work / "state").rglob("*.sqlite")) - previous
+                database, = set((work / "ion").rglob("*.sqlite")) - previous
                 connection = sqlite3.connect(database)
                 try:
                     seq = connection.execute("SELECT COALESCE(MAX(seq), -1) + 1 FROM entries").fetchone()[0]
@@ -454,11 +454,11 @@ with tempfile.TemporaryDirectory(prefix="ion-input-") as temporary:
                 terminal.close()
             cwd = work / (mode + "-accepted")
             cwd.mkdir()
-            previous = set((work / "state").rglob("*.sqlite"))
+            previous = set((work / "ion").rglob("*.sqlite"))
             terminal = Terminal(cwd, env, mode)
             try:
                 terminal.wait(lambda: "›" in terminal.text())
-                database, = set((work / "state").rglob("*.sqlite")) - previous
+                database, = set((work / "ion").rglob("*.sqlite")) - previous
                 before = len(requests)
                 release.clear()
                 terminal.output.clear()

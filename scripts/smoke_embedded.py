@@ -62,7 +62,7 @@ with tempfile.TemporaryDirectory(prefix="ion-embedded-") as temporary:
     other = root / "other"
     other.mkdir()
     env = {key: os.environ[key] for key in ("PATH", "SHELL", "TMPDIR") if key in os.environ}
-    env.update(HOME=str(root / "home"), XDG_CONFIG_HOME=str(root / "config"), XDG_STATE_HOME=str(root / "state"))
+    env.update(HOME=str(root / "home"), ION_HOME=str(root / "ion"), XDG_CONFIG_HOME=str(root / "config"), XDG_STATE_HOME=str(root / "state"))
     server = ThreadingHTTPServer(("127.0.0.1", 0), Peer)
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()

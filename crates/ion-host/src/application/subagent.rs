@@ -71,7 +71,7 @@ impl Subagent {
             }),
             directory: parent
                 .host
-                .sessions(cwd.to_path_buf())
+                .sessions(Some(cwd.to_path_buf()))
                 .directory()
                 .join("children"),
             cwd: cwd.to_path_buf(),

@@ -163,7 +163,7 @@ impl CodingApplication {
         let cwd = session
             .cwd()
             .context("coding requires a working directory")?;
-        let catalog = self.host.sessions(cwd.to_path_buf());
+        let catalog = self.host.sessions(Some(cwd.to_path_buf()));
         let resources = self.resources(Some(cwd))?;
         let runtime = self.runtime_with_selection(cwd, &selected, questions.clone())?;
         SessionSetup::from_prepared(

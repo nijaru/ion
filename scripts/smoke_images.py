@@ -97,7 +97,7 @@ with tempfile.TemporaryDirectory(prefix="ion-images-") as temporary:
     workspace.mkdir()
     (workspace / "red.png").write_bytes(tiny_png())
     (workspace / "bad.png").write_bytes(b"\x89PNG\r\n\x1a\ninvalid")
-    env = {**os.environ, "XDG_CONFIG_HOME": str(work / "config"), "XDG_STATE_HOME": str(work / "state")}
+    env = {**os.environ, "ION_HOME": str(work / "ion"), "XDG_CONFIG_HOME": str(work / "config"), "XDG_STATE_HOME": str(work / "state")}
     server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()

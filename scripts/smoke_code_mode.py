@@ -152,7 +152,7 @@ with tempfile.TemporaryDirectory(prefix="ion-code-mode-") as temporary:
     (workspace / "one").write_text("PRIVATE_ONE_" * 100)
     (workspace / "two").write_text("PRIVATE_TWO_" * 100)
     (workspace / "pixel.png").write_bytes(base64.b64decode("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGP4z8DwHwAFAAH/iZk9HQAAAABJRU5ErkJggg=="))
-    env = {**os.environ, "XDG_CONFIG_HOME": str(work / "config"), "XDG_STATE_HOME": str(work / "state"), "TERM": "xterm-256color"}
+    env = {**os.environ, "ION_HOME": str(work / "ion"), "XDG_CONFIG_HOME": str(work / "config"), "XDG_STATE_HOME": str(work / "state"), "TERM": "xterm-256color"}
     server = ThreadingHTTPServer(("127.0.0.1", 0), Provider)
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
@@ -174,7 +174,7 @@ with tempfile.TemporaryDirectory(prefix="ion-code-mode-") as temporary:
         assert parent["output"]["result"] == {"first": hashlib.sha256(b"FIRST").hexdigest(), "second": hashlib.sha256(b"SECOND").hexdigest(), "stale": True, "final": "SECOND"}, parent
         assert parent["output"]["calls"] == 5 and parent["output"]["failed_calls"] == 1
         assert (workspace / "guarded").read_text() == "SECOND"
-        config = work / "config/ion/mcp.json"
+        config = work / "ion/mcp.json"
         config.write_text(json.dumps({"servers": {"demo": {"command": sys.executable, "args": [str(Path(__file__).resolve()), "mcp"]}}}))
         records = [json.loads(line) for line in run(env, workspace, "--code-mode", "--json", "run", "MCP").stdout.splitlines()]
         parent = next(record for record in records if record["type"] == "tool_finished")
@@ -324,7 +324,7 @@ with tempfile.TemporaryDirectory(prefix="ion-code-mode-") as temporary:
             def attach_active():
                 os.setsid()
                 fcntl.ioctl(slave, termios.TIOCSCTTY, 0)
-            existing_sessions = set((work / "state/ion/sessions").rglob("*.sqlite"))
+            existing_sessions = set((work / "ion/sessions").rglob("*.sqlite"))
             child = subprocess.Popen([binary, "--cwd", active_work, "--code-mode", "--tui-mode", mode, "chat"], env=env, stdin=slave, stdout=slave, stderr=slave, preexec_fn=attach_active)
             os.close(slave)
             output = bytearray()
@@ -353,7 +353,7 @@ with tempfile.TemporaryDirectory(prefix="ion-code-mode-") as temporary:
                     if submitted and not finished and b"CODE_OK" in output:
                         assert running, (mode, output[-3000:])
                         assert all((active_work / f"{x}.ready").exists() for x in ("a", "b"))
-                        sessions = set((work / "state/ion/sessions").rglob("*.sqlite")) - existing_sessions
+                        sessions = set((work / "ion/sessions").rglob("*.sqlite")) - existing_sessions
                         assert len(sessions) == 1, sessions
                         with sqlite3.connect(f"file:{next(iter(sessions))}?mode=ro", uri=True) as db:
                             completed = db.execute("SELECT count(*) FROM entries WHERE json_extract(body,'$.kind')='turn_ended' AND json_extract(body,'$.data.reason')='completed'").fetchone()[0]

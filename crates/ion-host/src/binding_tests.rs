@@ -27,7 +27,7 @@ async fn direct_shell_preflights_before_recovery_or_admission() {
     fs::create_dir_all(&cwd).unwrap();
     let host = Arc::new(Host::new(root.join("config"), root.join("state")));
     let selected = host.models().save_default(&route("one")).unwrap();
-    let path = host.sessions(cwd.clone()).new_path().unwrap();
+    let path = host.sessions(Some(cwd.clone())).new_path().unwrap();
     let session = Arc::new(CodingSession::create(&path, Some(&cwd)).unwrap());
     let interrupted = session
         .run_user_shell(
@@ -92,7 +92,11 @@ fn clone_preserves_resolved_route_without_a_store_entry() {
     let selected = host.models().save_default(&route("resolved-only")).unwrap();
     fs::remove_file(root.join("config/models.json")).unwrap();
     let session = Arc::new(
-        CodingSession::create(host.sessions(cwd.clone()).new_path().unwrap(), Some(&cwd)).unwrap(),
+        CodingSession::create(
+            host.sessions(Some(cwd.clone())).new_path().unwrap(),
+            Some(&cwd),
+        )
+        .unwrap(),
     );
     session.select_model(selected.identity()).unwrap();
     let identity = selected.identity();
@@ -119,7 +123,7 @@ fn idle_override_and_effort_restore_as_one_selection() {
     limited.wire = Some(Wire::LlamaCppNoThinking);
     let limited = host.models().save_default(&limited).unwrap();
     let selected = host.models().save_default(&route("override")).unwrap();
-    let path = host.sessions(cwd.clone()).new_path().unwrap();
+    let path = host.sessions(Some(cwd.clone())).new_path().unwrap();
     let session = Arc::new(CodingSession::create(&path, Some(&cwd)).unwrap());
     session.select_model(limited.identity()).unwrap();
     let binding = control(host.clone(), session.clone(), selected);
@@ -154,7 +158,7 @@ fn replacement_restores_model_and_keeps_old_binding_on_preflight_failure() {
     fs::create_dir_all(&cwd).unwrap();
     let host = Arc::new(Host::new(root.join("config"), root.join("state")));
     let first_model = host.models().save_default(&route("one")).unwrap();
-    let first_path = host.sessions(cwd.clone()).new_path().unwrap();
+    let first_path = host.sessions(Some(cwd.clone())).new_path().unwrap();
     let first = Arc::new(CodingSession::create(&first_path, Some(&cwd)).unwrap());
     first.select_model(first_model.identity()).unwrap();
     let mut binding = control(host.clone(), first, first_model);

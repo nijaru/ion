@@ -120,7 +120,8 @@ impl McpConfig {
         let path = root.join(".ion/mcp.json");
         Ok(Self {
             user: config_root.join("mcp.json"),
-            project: Some(ProjectConfig { root, path }),
+            project: (!crate::same_directory(config_root, &root.join(".ion")))
+                .then_some(ProjectConfig { root, path }),
             trust: config_root.join("mcp-trust.json"),
         })
     }

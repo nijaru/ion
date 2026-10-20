@@ -170,7 +170,7 @@ with tempfile.TemporaryDirectory(prefix="ion-file-io-") as temporary:
     (workspace / ".git").mkdir()
     os.mkfifo(workspace / "pipe")
     env = {key: os.environ[key] for key in ("PATH", "SHELL", "TMPDIR") if key in os.environ}
-    env.update(HOME=str(work / "home"), XDG_CONFIG_HOME=str(work / "config"), XDG_STATE_HOME=str(work / "state"), XDG_DATA_HOME=str(work / "data"), XDG_CACHE_HOME=str(work / "cache"))
+    env.update(HOME=str(work / "home"), ION_HOME=str(work / "ion"), XDG_CONFIG_HOME=str(work / "config"), XDG_STATE_HOME=str(work / "state"), XDG_DATA_HOME=str(work / "data"), XDG_CACHE_HOME=str(work / "cache"))
     server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
@@ -196,7 +196,7 @@ with tempfile.TemporaryDirectory(prefix="ion-file-io-") as temporary:
         assert len(requests) == 1, len(requests)
         (workspace / "AGENTS.md").unlink()
         (workspace / "AGENTS.md").write_text("ROOT_ONE\n")
-        global_rule = work / "config/ion/AGENTS.md"
+        global_rule = work / "ion/AGENTS.md"
         global_rule.write_text("GLOBAL_ONE\n")
         (workspace / "sub").mkdir()
         (workspace / "sub/input").write_text("original source\n")

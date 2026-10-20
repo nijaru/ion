@@ -30,7 +30,7 @@ with tempfile.TemporaryDirectory(prefix="ion-scrollback-") as temporary:
     env = os.environ.copy()
     env.update(
         HOME=str(home),
-        XDG_CONFIG_HOME=str(work / "config"),
+        ION_HOME=str(work / "ion"), XDG_CONFIG_HOME=str(work / "config"),
         XDG_STATE_HOME=str(work / "state"),
         TERM="xterm-256color",
     )
@@ -96,7 +96,7 @@ with tempfile.TemporaryDirectory(prefix="ion-scrollback-") as temporary:
         # publication. Require committed completion and the emulator's idle
         # surface before asserting exact-once scrollback content.
         while True:
-            sessions = list((work / "state/ion/sessions").rglob("*.sqlite"))
+            sessions = list((work / "ion/sessions").rglob("*.sqlite"))
             assert len(sessions) == 1, "expected one owned main Session"
             with sqlite3.connect(f"file:{sessions[0]}?mode=ro", uri=True) as db:
                 completed = db.execute("SELECT count(*) FROM entries WHERE json_extract(body,'$.kind')='turn_ended' AND json_extract(body,'$.data.reason')='completed'").fetchone()[0]
@@ -323,7 +323,7 @@ with tempfile.TemporaryDirectory(prefix="ion-scrollback-") as temporary:
             assert time.monotonic() < deadline, "inline client did not exit"
             time.sleep(0.02)
         assert exit_path.read_text().strip() == "0", "inline client failed on exit"
-        session = next((work / "state/ion/sessions").rglob("*.sqlite"))
+        session = next((work / "ion/sessions").rglob("*.sqlite"))
         inspected = json.loads(subprocess.run([binary, "--cwd", workspace, "--session", session, "inspect"], env=env, capture_output=True, text=True, check=True).stdout)
         assistants = [entry["data"]["message"] for entry in inspected["entries"] if entry["kind"] == "assistant"]
         assert assistants[0]["content"][:2] == [{"Thinking": "THINK_1"}, {"Thinking": "SAFE_SUMMARY_1"}], "saved human thinking lost its block boundaries"

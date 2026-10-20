@@ -30,7 +30,7 @@ def qualify(case, excluded=False):
         workspace = work / "workspace"
         workspace.mkdir()
         session = work / "session.sqlite"
-        env = {**os.environ, "XDG_CONFIG_HOME": str(work / "config"), "XDG_STATE_HOME": str(work / "state"), "TERM": "xterm-256color"}
+        env = {**os.environ, "ION_HOME": str(work / "ion"), "XDG_CONFIG_HOME": str(work / "config"), "XDG_STATE_HOME": str(work / "state"), "TERM": "xterm-256color"}
         subprocess.run([binary, "use", "smoke", "shell-model", "--endpoint", "http://127.0.0.1:9/v1/chat/completions", "--wire", "chat-completions"], env=env, capture_output=True, check=True)
         mode = "fullscreen" if excluded else "inline"
         master, slave = pty.openpty()

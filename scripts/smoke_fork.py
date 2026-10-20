@@ -47,7 +47,7 @@ with tempfile.TemporaryDirectory(prefix="ion-fork-") as temporary:
     work = Path(temporary)
     workspace = work / "workspace"
     workspace.mkdir()
-    env = {**os.environ, "XDG_CONFIG_HOME": str(work / "config"), "XDG_STATE_HOME": str(work / "state")}
+    env = {**os.environ, "ION_HOME": str(work / "ion"), "XDG_CONFIG_HOME": str(work / "config"), "XDG_STATE_HOME": str(work / "state")}
     server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
@@ -82,7 +82,7 @@ with tempfile.TemporaryDirectory(prefix="ion-fork-") as temporary:
             (["clone"], [1, 2], source_view["messages"]),
             (["fork", "2"], [1], source_view["messages"][:2]),
         ):
-            before_paths = set((work / "state/ion/sessions").rglob("*.sqlite"))
+            before_paths = set((work / "ion/sessions").rglob("*.sqlite"))
             before_requests = len(requests)
             reader, writer = os.pipe()
             os.close(reader)
@@ -91,7 +91,7 @@ with tempfile.TemporaryDirectory(prefix="ion-fork-") as temporary:
             finally:
                 os.close(writer)
             assert failed.returncode == 1 and b"panicked" not in failed.stderr, failed
-            children = set((work / "state/ion/sessions").rglob("*.sqlite")) - before_paths
+            children = set((work / "ion/sessions").rglob("*.sqlite")) - before_paths
             assert len(children) == 1, "failed confirmation lost or duplicated the saved copy"
             saved = children.pop()
             copied = json.loads(ion("--session", saved, "inspect").stdout)
@@ -189,7 +189,7 @@ with tempfile.TemporaryDirectory(prefix="ion-fork-") as temporary:
         # The no-argument picker exposes only committed ended Turns, and choosing
         # one copies facts without dispatching the restored Turn.
         source_before = json.loads(ion("--session", source_id, "inspect").stdout)
-        before_paths = set((work / "state/ion/sessions").rglob("*.sqlite"))
+        before_paths = set((work / "ion/sessions").rglob("*.sqlite"))
         before_requests = len(requests)
         master, slave = pty.openpty()
         fcntl.ioctl(slave, termios.TIOCSWINSZ, struct.pack("HHHH", 30, 100, 0, 0))
@@ -230,7 +230,7 @@ with tempfile.TemporaryDirectory(prefix="ion-fork-") as temporary:
                 child.wait()
             os.close(master)
         assert len(requests) == before_requests, "picked /fork-after dispatched Turn work"
-        children = set((work / "state/ion/sessions").rglob("*.sqlite")) - before_paths
+        children = set((work / "ion/sessions").rglob("*.sqlite")) - before_paths
         assert len(children) == 1, "picked /fork-after did not save exactly one copy"
         picked = json.loads(ion("--session", children.pop(), "inspect").stdout)
         assert [entry["data"]["turn"] for entry in picked["entries"] if entry["kind"] == "turn_started"] == [1]

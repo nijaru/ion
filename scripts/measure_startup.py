@@ -14,7 +14,7 @@ with tempfile.TemporaryDirectory(prefix="ion-startup-measure-") as temporary:
     work = Path(temporary)
     env = {
         **os.environ,
-        "XDG_CONFIG_HOME": str(work / "config"),
+        "ION_HOME": str(work / "ion"), "XDG_CONFIG_HOME": str(work / "config"),
         "XDG_STATE_HOME": str(work / "state"),
     }
 

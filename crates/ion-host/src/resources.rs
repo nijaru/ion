@@ -1,6 +1,6 @@
 //! Local instructions, Agent Skills and prompt templates for every client.
 use std::{
-    collections::BTreeMap,
+    collections::{BTreeMap, HashSet},
     fs,
     path::{Path, PathBuf},
 };
@@ -82,10 +82,22 @@ impl Resources {
             skill_roots.push(directory.join(".agents/skills"));
             template_roots.push(directory.join(".ion/prompts"));
         }
+        let mut seen = HashSet::new();
         for root in skill_roots {
+            if let Ok(identity) = root.canonicalize()
+                && !seen.insert(identity)
+            {
+                continue;
+            }
             resources.load_skills(&root);
         }
+        seen.clear();
         for root in template_roots {
+            if let Ok(identity) = root.canonicalize()
+                && !seen.insert(identity)
+            {
+                continue;
+            }
             resources.load_templates(&root);
         }
         if resources
@@ -494,6 +506,33 @@ mod tests {
             assert!(text.find("USER_DEFAULT").unwrap() < text.find("LOCAL_RULE").unwrap());
             assert!(!text.contains("UNRELATED_HOME_RULE"));
         }
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn user_and_project_resource_aliases_are_loaded_once() {
+        use std::os::unix::fs::symlink;
+        let root =
+            std::env::temp_dir().join(format!("ion-home-resources-{}", uuid::Uuid::now_v7()));
+        let home = root.join("home");
+        fs::create_dir_all(home.join(".git")).unwrap();
+        fs::create_dir_all(home.join(".ion/prompts")).unwrap();
+        fs::create_dir_all(home.join(".agents/skills/check")).unwrap();
+        fs::write(home.join(".ion/prompts/check.md"), "CHECK_TEMPLATE").unwrap();
+        fs::write(
+            home.join(".agents/skills/check/SKILL.md"),
+            "---\nname: check\ndescription: Check things.\n---\nCHECK_SKILL",
+        )
+        .unwrap();
+        symlink(home.join(".ion"), root.join("alias")).unwrap();
+        let resources = Resources::load_with_home(&home, &root.join("alias"), Some(&home)).unwrap();
+        assert_eq!(resources.templates().count(), 1);
+        assert_eq!(resources.skills().count(), 1);
+        assert!(
+            resources.diagnostics().is_empty(),
+            "{:?}",
+            resources.diagnostics()
+        );
         fs::remove_dir_all(root).unwrap();
     }
 

@@ -109,7 +109,7 @@ def cleanup(child, workspace):
 with tempfile.TemporaryDirectory(prefix="ion-headless-") as temporary:
     work = Path(temporary)
     env = {key: os.environ[key] for key in ("PATH", "SHELL", "TMPDIR") if key in os.environ}
-    env.update(HOME=str(work / "home"), XDG_CONFIG_HOME=str(work / "config"), XDG_STATE_HOME=str(work / "state"))
+    env.update(HOME=str(work / "home"), ION_HOME=str(work / "ion"), XDG_CONFIG_HOME=str(work / "config"), XDG_STATE_HOME=str(work / "state"))
     server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
     server.daemon_threads = True
     threading.Thread(target=server.serve_forever, daemon=True).start()
@@ -173,10 +173,10 @@ with tempfile.TemporaryDirectory(prefix="ion-headless-") as temporary:
                 if not json_output:
                     # A prior cancelled Session must not become this test's
                     # oracle because a checkpoint/touch changed its file mtime.
-                    previous = session_database(work / "state", work / "json")
+                    previous = session_database(work / "ion", work / "json")
                     stamp = time.time_ns() + 10_000_000_000
                     os.utime(previous, ns=(stamp, stamp))
-                database = session_database(work / "state", workspace)
+                database = session_database(work / "ion", workspace)
                 child.send_signal(signal.SIGINT)
                 deadline = time.monotonic() + 4
                 facts = []
@@ -232,7 +232,7 @@ with tempfile.TemporaryDirectory(prefix="ion-headless-") as temporary:
                 stdout, stderr = child.communicate(timeout=8)
                 assert child.returncode == 1, (child.returncode, stdout, stderr)
                 assert not alive(native_pid), "broken output dropped owned native work"
-                database = session_database(work / "state", workspace)
+                database = session_database(work / "ion", workspace)
                 facts = entries(database)
                 assert facts[-1]["kind"] == "turn_ended" and facts[-1]["data"]["reason"] == "cancelled", facts[-1]
                 outcomes = [fact["data"]["result"]["outcome"] for fact in facts if fact["kind"] == "tool_result"]

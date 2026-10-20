@@ -62,7 +62,7 @@ def main():
         home = root / "home"
         home.mkdir()
         env = {key: os.environ[key] for key in ("PATH", "SHELL", "TMPDIR") if key in os.environ}
-        env.update(HOME=str(home), XDG_CONFIG_HOME=str(home / "config"), XDG_DATA_HOME=str(home / "data"))
+        env.update(HOME=str(home), ION_HOME=str(home / "ion"), XDG_CONFIG_HOME=str(home / "config"), XDG_DATA_HOME=str(home / "data"))
         for fork, background, flags in (
             (False, False, ()), (True, False, ("--fork",)),
             (False, True, ("--background",)), (True, True, ("--background", "--fork")),

@@ -424,7 +424,7 @@ def check_owned_cleanup():
         work = Path(temporary)
         fixture = work / "owned-server.py"
         fixture.write_text(owned_source)
-        env = {**os.environ, "XDG_CONFIG_HOME": str(work / "config"), "XDG_STATE_HOME": str(work / "state")}
+        env = {**os.environ, "ION_HOME": str(work / "ion"), "XDG_CONFIG_HOME": str(work / "config"), "XDG_STATE_HOME": str(work / "state")}
         subprocess.run([binary, "use", "offline", "model", "--endpoint", "http://127.0.0.1:1/v1/chat/completions", "--wire", "chat-completions"], env=env, check=True, capture_output=True)
         cases = [
             ("exit", "ready", ["rpc"], None),
@@ -435,7 +435,7 @@ def check_owned_cleanup():
             ("diagnostic-io", "ready", ["rpc"], None),
             ("preflight-io", "ready", ["--reasoning", "budget:128", "rpc"], None),
         ]
-        config_path = work / "config/ion/mcp.json"
+        config_path = work / "ion/mcp.json"
         for name, mode, args, error in cases:
             workspace = work / name
             workspace.mkdir()
@@ -505,7 +505,7 @@ with tempfile.TemporaryDirectory(prefix="ion-mcp-") as temporary:
     changing_script.write_text(changing_source)
     for directory in ("home", "tmp", "cache"):
         (work / directory).mkdir()
-    env = {**os.environ, "HOME": str(work / "home"), "TMPDIR": str(work / "tmp"), "XDG_CACHE_HOME": str(work / "cache"), "XDG_CONFIG_HOME": str(work / "config"), "XDG_STATE_HOME": str(work / "state"), "REMOTE_MCP_TOKEN": "test-token"}
+    env = {**os.environ, "HOME": str(work / "home"), "TMPDIR": str(work / "tmp"), "XDG_CACHE_HOME": str(work / "cache"), "ION_HOME": str(work / "ion"), "XDG_CONFIG_HOME": str(work / "config"), "XDG_STATE_HOME": str(work / "state"), "REMOTE_MCP_TOKEN": "test-token"}
     server = ThreadingHTTPServer(("127.0.0.1", 0), Provider)
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
@@ -546,7 +546,7 @@ with tempfile.TemporaryDirectory(prefix="ion-mcp-") as temporary:
         flagged = subprocess.run([binary, "mcp", "list"], env=env, check=True, capture_output=True, text=True)
         assert "flag-probe\thidden\t" in flagged.stdout, flagged.stdout
         subprocess.run([binary, "mcp", "remove", "flag-probe"], env=env, check=True, capture_output=True)
-        config_path = Path(env["XDG_CONFIG_HOME"]) / "ion" / "mcp.json"
+        config_path = Path(env["ION_HOME"]) / "mcp.json"
         config = json.loads(config_path.read_text())
         config["servers"]["malformed"] = {"command": 7}
         config_path.write_text(json.dumps(config))

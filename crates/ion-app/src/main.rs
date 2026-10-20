@@ -391,7 +391,7 @@ async fn run_cli(cli: Cli) -> Result<()> {
         }
         Some(Action::Sessions) => {
             let cwd = cli.cwd.unwrap_or(std::env::current_dir()?).canonicalize()?;
-            let catalog = host.sessions(cwd);
+            let catalog = host.sessions(Some(cwd));
             for session in catalog.list()? {
                 print_stdout(format_args!(
                     "{}\t{}\t{} turn(s)\t{}\t{}",
@@ -602,7 +602,7 @@ async fn run_cli(cli: Cli) -> Result<()> {
             let explicit_cwd = cli.cwd.is_some();
             let cwd = cli.cwd.unwrap_or(std::env::current_dir()?).canonicalize()?;
             ensure!(cwd.is_dir(), "working directory is not a directory");
-            let catalog = host.sessions(cwd.clone());
+            let catalog = host.sessions(Some(cwd.clone()));
             let path = if let Some(explicit) = cli.session {
                 catalog.resolve_explicit(explicit)?
             } else if cli.continue_session {
@@ -636,6 +636,11 @@ async fn run_cli(cli: Cli) -> Result<()> {
                         .map_or_else(|| "(none)".into(), |cwd| cwd.display().to_string())
                 );
             }
+            // Copies and navigation belong to the stored Session's namespace,
+            // not the directory that happened to launch this executable.
+            let catalog = existing
+                .as_ref()
+                .map_or(catalog, |view| host.sessions(view.cwd.clone()));
             if matches!(action, Some(Action::Inspect)) {
                 ensure!(existing.is_some(), "session does not exist");
                 let view = CodingSession::inspect(&path)?;

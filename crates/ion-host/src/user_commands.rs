@@ -246,9 +246,11 @@ impl CommandConfig {
         let root = project_root(cwd)?;
         Ok(Self {
             user: config_root.join("commands.json"),
-            project: Some(ProjectConfig {
-                manifest: root.join(".ion/commands.json"),
-                root,
+            project: (!crate::same_directory(config_root, &root.join(".ion"))).then(|| {
+                ProjectConfig {
+                    manifest: root.join(".ion/commands.json"),
+                    root,
+                }
             }),
             trust: config_root.join("commands-trust.json"),
         })

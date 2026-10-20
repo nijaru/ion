@@ -79,7 +79,7 @@ pub use session_catalog::{SessionCatalog, SessionSummary};
 pub use user_commands::{CommandCatalog, CommandConfig, CommandOrigin, UserCommand};
 
 /// Host configuration can be supplied explicitly by an embedding program or
-/// resolved from standard local directories for the executable.
+/// resolved from `ION_HOME` (default `~/.ion`) for the executable.
 pub struct Host {
     config_root: PathBuf,
     state_root: PathBuf,
@@ -100,10 +100,8 @@ impl Host {
     }
 
     pub fn from_environment() -> Result<Self> {
-        Ok(Self::new(
-            app_root("XDG_CONFIG_HOME", ".config")?,
-            app_root("XDG_STATE_HOME", ".local/state")?,
-        ))
+        let home = user_home(|name| std::env::var_os(name))?;
+        Ok(Self::new(home.clone(), home))
     }
 
     pub fn config_root(&self) -> &Path {
@@ -119,8 +117,8 @@ impl Host {
         &self.models
     }
 
-    pub fn sessions(&self, cwd: PathBuf) -> SessionCatalog {
-        SessionCatalog::new(self.state_root.join("sessions"), Some(cwd))
+    pub fn sessions(&self, cwd: Option<PathBuf>) -> SessionCatalog {
+        SessionCatalog::new(self.state_root.join("sessions"), cwd)
     }
 
     pub fn resources(&self, cwd: &Path) -> Result<Resources> {
@@ -199,13 +197,31 @@ fn prompt_cache_warming(selected: &Selection) -> Option<PromptCacheWarmingPolicy
     })
 }
 
-fn app_root(variable: &str, fallback: &str) -> Result<PathBuf> {
-    if let Some(path) = std::env::var_os(variable) {
-        ensure!(!path.is_empty(), "{variable} must not be empty");
-        return Ok(PathBuf::from(path).join("ion"));
-    }
-    let home = std::env::var_os("HOME").context("HOME is required for Ion paths")?;
-    Ok(PathBuf::from(home).join(fallback).join("ion"))
+fn user_home(get: impl Fn(&str) -> Option<std::ffi::OsString>) -> Result<PathBuf> {
+    let path = if let Some(path) = get("ION_HOME") {
+        ensure!(!path.is_empty(), "ION_HOME must not be empty");
+        PathBuf::from(path)
+    } else {
+        let home = get("HOME").context("HOME or ION_HOME is required for Ion paths")?;
+        ensure!(!home.is_empty(), "HOME must not be empty");
+        PathBuf::from(home).join(".ion")
+    };
+    std::path::absolute(path).context("cannot resolve Ion home")
+}
+
+// A not-yet-created final directory still has an identity through its parent.
+// This prevents a user's ~/.ion from also becoming a project configuration
+// when cwd is HOME, without hiding subsequent source read/validation errors.
+pub(crate) fn same_directory(left: &Path, right: &Path) -> bool {
+    let identity = |path: &Path| {
+        path.canonicalize()
+            .ok()
+            .or_else(|| Some(path.parent()?.canonicalize().ok()?.join(path.file_name()?)))
+    };
+    left == right
+        || identity(left)
+            .zip(identity(right))
+            .is_some_and(|(a, b)| a == b)
 }
 
 #[cfg(test)]
@@ -218,6 +234,84 @@ mod tests {
         net::TcpListener,
     };
     use tokio_util::sync::CancellationToken;
+
+    #[test]
+    fn user_home_has_one_explicit_override_and_no_xdg_fallback() {
+        let resolve = |pairs: &[(&str, &str)]| {
+            user_home(|name| {
+                assert!(matches!(name, "ION_HOME" | "HOME"));
+                pairs
+                    .iter()
+                    .find(|(key, _)| *key == name)
+                    .map(|(_, value)| (*value).into())
+            })
+        };
+        assert_eq!(
+            resolve(&[("HOME", "/user")]).unwrap(),
+            PathBuf::from("/user/.ion")
+        );
+        assert_eq!(
+            resolve(&[("ION_HOME", "/portable")]).unwrap(),
+            PathBuf::from("/portable")
+        );
+        assert_eq!(
+            resolve(&[("ION_HOME", "profile"), ("HOME", "/user")]).unwrap(),
+            std::path::absolute("profile").unwrap()
+        );
+        for pairs in [
+            &[][..],
+            &[("ION_HOME", ""), ("HOME", "/user")],
+            &[("HOME", "")],
+        ] {
+            assert!(resolve(pairs).is_err());
+        }
+    }
+
+    #[test]
+    fn user_home_is_not_also_an_untrusted_project_layer() {
+        use std::{fs, os::unix::fs::symlink};
+        let root = std::env::temp_dir().join(format!("ion-home-layers-{}", uuid::Uuid::now_v7()));
+        fs::create_dir_all(root.join("home/.git")).unwrap();
+        symlink(root.join("home"), root.join("alias")).unwrap();
+        let home = root.join("home");
+        let config = root.join("alias/.ion");
+        // Also deduplicate before the user directory has been created.
+        assert!(
+            McpConfig::with_project(&config, &home)
+                .unwrap()
+                .project_path()
+                .is_none()
+        );
+        assert!(
+            CommandConfig::with_project(&config, &home)
+                .unwrap()
+                .project_path()
+                .is_none()
+        );
+        fs::create_dir_all(&config).unwrap();
+        fs::write(config.join("commands.json"), r#"{"commands":{"check":{"description":"user command","program":"echo","args":[],"share_with_model":false}}}"#).unwrap();
+        McpConfig::new(&config)
+            .add(
+                "user",
+                McpServer::Stdio(McpStdioServer {
+                    command: "unused".into(),
+                    args: Vec::new(),
+                    exposure: McpExposure::Direct,
+                }),
+            )
+            .unwrap();
+        let mcp = McpConfig::with_project(&config, &home)
+            .unwrap()
+            .list()
+            .unwrap();
+        assert_eq!(mcp.servers.len(), 1);
+        assert!(mcp.diagnostics.is_empty());
+        let commands = CommandCatalog::load(&home, &config).unwrap();
+        assert_eq!(commands.iter().count(), 1);
+        assert_eq!(commands.iter().next().unwrap().origin, CommandOrigin::User);
+        assert!(commands.diagnostics().is_empty());
+        fs::remove_dir_all(root).unwrap();
+    }
 
     #[tokio::test]
     async fn selected_agent_keeps_identity_transport_and_limits_together() {

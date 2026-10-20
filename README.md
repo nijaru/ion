@@ -97,9 +97,10 @@ manage saved keys. `/tasks` lists application-owned background Sessions; use
 stop or release joined custody without deleting committed facts. The TUI model picker searches catalog and configured
 custom routes. A resumed session restores its model; `ion use` sets the
 default for new sessions. Custom routes and that default are published together
-in `$XDG_CONFIG_HOME/ion/models.json` (or `~/.config/ion/models.json`), with
-concurrent saves serialized. After updating from a development build with the
-older split preferences, select your default and configure custom routes again.
+in `~/.ion/models.json`, with concurrent saves serialized. Ion keeps user
+configuration, credentials, resources and saved Sessions under `~/.ion`; set
+`ION_HOME` to choose another directory for all of them. Existing XDG data is
+not automatically imported or migrated.
 
 `/resume` opens a searchable saved-Session browser and marks the current Session.
 The selected conversation shows its full ID, Turn count, recorded model and file
@@ -544,7 +545,7 @@ explicit coding or shell admission closes that interruption atomically without
 rerunning it. `!!` interruptions remain excluded from model context.
 
 Ion loads global `AGENTS.md` defaults from its configuration root
-(`$XDG_CONFIG_HOME/ion`, normally `~/.config/ion`), then rules along the working
+(`ION_HOME`, normally `~/.ion`), then rules along the working
 directory's filesystem ancestor path. Standing rules refresh on resource reload
 or reopen, without changing already admitted inputs. Native file/directory tools
 also discover rules for their explicit physical targets. New, changed or removed
@@ -666,13 +667,13 @@ receive an explicit withholding notice; that does not change the saved tool's
 observed success or discard its attachments.
 
 Ion also discovers Agent Skills from `~/.agents/skills/`,
-`~/.config/ion/skills/` (or `$XDG_CONFIG_HOME/ion/skills/`) and project
+`~/.ion/skills/` (under `ION_HOME` when overridden) and project
 `.agents/skills/` directories from the working directory up to its Git root.
 Each skill is a directory with `SKILL.md` and valid Agent Skills frontmatter.
 Only its name, description and path enter the standing model instructions;
 the model can read the full file when relevant. Use `/skill:NAME [request]` to
 load it explicitly. Prompt templates are direct `.md` files in
-`~/.config/ion/prompts/` or project `.ion/prompts/`; `/NAME [arguments]`
+`~/.ion/prompts/` (under `ION_HOME` when overridden) or project `.ion/prompts/`; `/NAME [arguments]`
 expands one before submitting it. Templates support `$1`, `$@`,
 `${1:-default}` and `${@:N:L}` argument forms; quote an argument containing
 spaces. `ion resources` lists both, and the TUI has

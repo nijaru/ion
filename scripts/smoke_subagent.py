@@ -138,7 +138,7 @@ with tempfile.TemporaryDirectory(prefix="ion-coding-subagent-") as temporary:
     workspace.mkdir()
     (workspace / "AGENTS.md").write_text("SUBAGENT_RESOURCE: follow this workspace's instructions.\n")
     env = {key: os.environ[key] for key in ("PATH", "SHELL", "TMPDIR") if key in os.environ}
-    env.update(HOME=str(work / "home"), XDG_CONFIG_HOME=str(work / "config"), XDG_STATE_HOME=str(work / "state"), TERM="xterm-256color")
+    env.update(HOME=str(work / "home"), ION_HOME=str(work / "ion"), XDG_CONFIG_HOME=str(work / "config"), XDG_STATE_HOME=str(work / "state"), TERM="xterm-256color")
     Path(env["HOME"]).mkdir()
     requests, failures, changed_route = [], [], set()
     managed = {}
@@ -179,7 +179,7 @@ os.write(2, b'MERGED_STDERR\\n')
     processes, rpcs, pids = [], [], []
 
     def histories():
-        return [(path, *facts(path)) for path in Path(env["XDG_STATE_HOME"]).rglob("*.sqlite")]
+        return [(path, *facts(path)) for path in Path(env["ION_HOME"]).rglob("*.sqlite")]
 
     def parent_for(identity):
         return next(path for path, header, _entries in histories() if header["id"] == identity)
@@ -387,7 +387,7 @@ os.write(2, b'MERGED_STDERR\\n')
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
     endpoint = f"http://127.0.0.1:{server.server_port}/v1/chat/completions"
-    config = Path(env["XDG_CONFIG_HOME"]) / "ion/mcp.json"
+    config = Path(env["ION_HOME"]) / "mcp.json"
     config.parent.mkdir(parents=True)
     config.write_text(json.dumps({"servers":{"fixture":{"command":sys.executable,"args":[str(Path(__file__).resolve()),"mcp"]}}}))
     passed = False

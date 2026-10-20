@@ -22,13 +22,17 @@ cleanup() {
     if [[ "${ION_SMOKE_KEEP:-0}" == 1 ]]; then echo "smoke files: $WORK" >&2; else rm -rf "$WORK"; fi
 }
 trap cleanup EXIT
-mkdir -p "$WORK/workspace" "$WORK/config" "$WORK/state"
+mkdir -p "$WORK/workspace" "$WORK/home" "$WORK/config/ion" "$WORK/state/ion"
 printf 'sample data\nsecond token\n' > "$WORK/workspace/data.txt"
-export XDG_CONFIG_HOME="$WORK/config" XDG_STATE_HOME="$WORK/state"
+# Conflicting legacy data must neither be consumed nor modified.
+printf 'legacy-ion-data\n' > "$WORK/config/ion/models.json"
+printf 'legacy-state\n' > "$WORK/state/ion/marker"
+export HOME="$WORK/home" XDG_CONFIG_HOME="$WORK/config" XDG_STATE_HOME="$WORK/state"
+unset ION_HOME
 if "$BIN" --cwd "$WORK/workspace" inspect > "$WORK/missing.out" 2> "$WORK/missing.err"; then
     echo 'inspect accepted a nonexistent session' >&2; exit 1
 fi
-[[ ! -e "$WORK/state/ion" ]] || { echo 'read-only inspect created session state' >&2; exit 1; }
+[[ ! -e "$HOME/.ion" ]] || { echo 'read-only inspect created session state' >&2; exit 1; }
 python3 "$ROOT/scripts/smoke_provider.py" "$WORK/port" "$WORK/requests" > "$WORK/server.out" 2> "$WORK/server.err" &
 server_pid=$!
 for _ in {1..100}; do [[ -s "$WORK/port" ]] && break; sleep 0.05; done
@@ -64,7 +68,7 @@ PY
 # An explicit session owns its original working directory. A conflicting
 # --cwd must fail before model or tool work instead of silently targeting it.
 mkdir "$WORK/other-workspace"
-session_db="$(find "$WORK/state/ion/sessions" -name '*.sqlite' -print -quit)"
+session_db="$(find "$HOME/.ion/sessions" -name '*.sqlite' -print -quit)"
 [[ -n "$session_db" ]]
 if "$BIN" --cwd "$WORK/other-workspace" --session "$session_db" run 'Do not run this' \
     > "$WORK/wrong-cwd.out" 2> "$WORK/wrong-cwd.err"; then
@@ -205,4 +209,19 @@ if "$BIN" --cwd "$WORK/workspace" run 'Return a final answer.' > "$WORK/stream-e
 fi
 [[ ! -s "$WORK/stream-error.out" ]] || { echo 'headless text mode published an uncommitted stream answer' >&2; exit 1; }
 grep -q 'upstream disconnected' "$WORK/stream-error.err"
-echo 'Ion offline headless coding and session reopen: OK'
+# The override selects both configuration and saved Sessions, without falling
+# back to the default home or rewriting either default or legacy data.
+cp "$HOME/.ion/models.json" "$WORK/default-models.json"
+ION_HOME="$WORK/profile" "$BIN" use profile profile-model --endpoint http://127.0.0.1:1/v1 --wire chat-completions > "$WORK/profile-use.out"
+ION_HOME="$WORK/profile" "$BIN" --session "$session_db" clone > "$WORK/profile-clone.out"
+[[ -f "$WORK/profile/models.json" ]]
+[[ -n "$(find "$WORK/profile/sessions" -name '*.sqlite' -print -quit)" ]]
+ION_HOME="$WORK/profile" "$BIN" --cwd "$WORK/workspace" --continue inspect > "$WORK/profile-inspect.json"
+cmp "$HOME/.ion/models.json" "$WORK/default-models.json"
+grep -qx 'legacy-ion-data' "$WORK/config/ion/models.json"
+grep -qx 'legacy-state' "$WORK/state/ion/marker"
+if ION_HOME="" "$BIN" models > "$WORK/empty-home.out" 2> "$WORK/empty-home.err"; then
+    echo 'empty ION_HOME was accepted' >&2; exit 1
+fi
+grep -q 'ION_HOME must not be empty' "$WORK/empty-home.err"
+echo 'Ion default/override user home, offline coding and session reopen: OK'
