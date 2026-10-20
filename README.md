@@ -503,8 +503,13 @@ Ctrl-O opens the whole conversation, including current work and provisional
 assistant text, in a full-screen detail view. Left/Right browse earlier/newer
 pages (32 messages, calls or shell records); Up/Down and Page-Up/Page-Down
 scroll. Results retain their full stored content, including capture paths.
-`/tools` lists calls, `/tool` opens the latest and `/tool N` selects one. Esc or Ctrl-O
-closes details and restores the selected chat renderer. Input not yet accepted
+`/tools` lists calls, `/tool` opens the latest and `/tool N` selects one. In a
+selected tool view, Ctrl-X copies the whole recorded call: arguments, result,
+capture/delivery notices and child activity, without viewport wrapping. It does
+not read referenced capture files or copy image bytes. Copy feedback appears in
+the inspector, which stays open; the whole-conversation view has no selected tool
+to copy. Esc or Ctrl-O closes details and restores the selected chat renderer.
+Input not yet accepted
 by the Session returns to the editor if the turn fails or is cancelled.
 If history cannot be read, Ion displays the error and retains the last readable
 view. Shared control continues: follow-ups may already be running and are not
@@ -512,9 +517,9 @@ returned to the editor. Normal stop/failure rules still return unaccepted input.
 Do not resubmit a prompt to repair the display; inspect the Session and effects
 first.
 Ctrl-G edits the current draft in `$VISUAL`, then `$EDITOR`, falling back to
-`vi`; Ion keeps the original draft if the editor fails. Ctrl-X or `/copy`
-copies the last committed assistant answer to the system clipboard when one
-is available. On remote or displayless terminals, Ion sends an OSC 52
+`vi`; Ion keeps the original draft if the editor fails. Outside detail views,
+Ctrl-X or `/copy` copies the last committed assistant answer to the system
+clipboard when one is available. On remote or displayless terminals, Ion sends an OSC 52
 clipboard request, whose support depends on the terminal. `/export PATH`
 saves a readable transcript to a new file; `ion --continue export` prints it
 to stdout, and `ion --continue export PATH` saves it. Export includes prompts,
