@@ -533,8 +533,26 @@ must not silently approve a different command/hook manifest. Changed manifests
 invalidate their own trust; merely opening a repository launches nothing new.
 User-installed executables run with captured host permissions: this is not a code
 sandbox. No registration protocol grants mutable Session or provider-wire access.
-Dynamic command/hook packaging and external renderers remain staged capabilities,
-not evidence supplied by the existing compiled Rust and MCP delivery.
+The first named-command protocol maps a manifest entry's program and fixed argv,
+plus explicitly supplied literal arguments, to the existing user-shell action.
+Quote/escape parsing groups arguments but performs no shell expansion; launcher
+quoting preserves each argument. A command may intentionally invoke a shell or
+another interpreter, so this is not a sandbox. Require an explicit context-sharing
+choice in the manifest. Admission records the actual launched command and its
+outcome through ordinary user-shell facts; no generator process runs outside
+that custody and no stdout response is interpreted as a new control action.
+
+Keep command catalogues separate from inert resources and model tool selection.
+Only explicit client/Host command invocation executes them; prompt submission,
+completion, listing, loading and reloading do not. Revalidate the captured source
+manifest and its trust before each new launch; edits, deletion or revocation
+reject stale definitions rather than selecting a replacement silently. Already
+admitted work retains its captured route and stop/join custody. Reload preflights
+resources and command metadata before publishing either. Project command trust
+uses its own manifest identity/digest, not MCP trust. User-owned configuration can
+register commands without project trust; scripts and transitive executable code
+are not frozen by a manifest digest. Dynamic hook packaging, arbitrary extension
+handlers and external renderers remain staged, not delivered by named commands.
 
 ## Context and providers
 
