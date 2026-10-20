@@ -1051,6 +1051,26 @@ mod tests {
     }
 
     #[test]
+    fn yank_encodings_decode_as_ctrl_and_alt_y() {
+        for (bytes, modifiers) in [
+            (b"\x19".as_slice(), Modifiers::CONTROL),
+            (b"\x1by", Modifiers::ALT),
+            (b"\x1b[121;3u", Modifiers::ALT),
+        ] {
+            let events = InputParser::new().parse_as_vec(bytes, false);
+            assert_eq!(events.len(), 1, "{bytes:?}");
+            assert_eq!(
+                InputStream::decode(events[0].clone()),
+                Some(InputEvent::Key(KeyEvent::new(
+                    KeyCode::Char('y'),
+                    modifiers
+                ))),
+                "{bytes:?}"
+            );
+        }
+    }
+
+    #[test]
     fn csi_u_controls_are_named_keys_with_original_modifiers() {
         for (bytes, code, modifiers) in [
             (b"\x1b[27u".as_slice(), KeyCode::Esc, Modifiers::NONE),

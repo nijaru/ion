@@ -136,6 +136,7 @@ pub(super) fn key(text: &str, cursor: usize, key: KeyEvent) -> Option<Edit> {
     let modified_word = control || alt;
     let control_char = control && !alt;
     let alt_char = alt && !control;
+    let kill = kill(key);
     let operation = match key.code {
         KeyCode::Home => Edit::Move(line_start(text, cursor)),
         KeyCode::End => Edit::Move(line_end(text, cursor)),
@@ -145,19 +146,19 @@ pub(super) fn key(text: &str, cursor: usize, key: KeyEvent) -> Option<Edit> {
         KeyCode::Right => Edit::Move(next_grapheme(text, cursor)),
         KeyCode::Backspace if alt => Edit::Delete {
             range: word_start(text, cursor)..cursor,
-            kill: Some(Kill::Backward),
+            kill,
         },
         KeyCode::Delete if alt => Edit::Delete {
             range: cursor..word_end(text, cursor),
-            kill: Some(Kill::Forward),
+            kill,
         },
         KeyCode::Backspace => Edit::Delete {
             range: previous_grapheme(text, cursor)..cursor,
-            kill: None,
+            kill,
         },
         KeyCode::Delete => Edit::Delete {
             range: cursor..next_grapheme(text, cursor),
-            kill: None,
+            kill,
         },
         KeyCode::Char('a') if control_char => Edit::Move(line_start(text, cursor)),
         KeyCode::Char('e') if control_char => Edit::Move(line_end(text, cursor)),
@@ -167,15 +168,15 @@ pub(super) fn key(text: &str, cursor: usize, key: KeyEvent) -> Option<Edit> {
         KeyCode::Char('f') if alt_char => Edit::Move(word_end(text, cursor)),
         KeyCode::Char('w') if control_char => Edit::Delete {
             range: word_start(text, cursor)..cursor,
-            kill: Some(Kill::Backward),
+            kill,
         },
         KeyCode::Char('d') if alt_char => Edit::Delete {
             range: cursor..word_end(text, cursor),
-            kill: Some(Kill::Forward),
+            kill,
         },
         KeyCode::Char('d') if control_char && !text.is_empty() => Edit::Delete {
             range: cursor..next_grapheme(text, cursor),
-            kill: None,
+            kill,
         },
         KeyCode::Char('u') if control_char => {
             let start = line_start(text, cursor);
@@ -185,7 +186,7 @@ pub(super) fn key(text: &str, cursor: usize, key: KeyEvent) -> Option<Edit> {
                 } else {
                     start
                 }..cursor,
-                kill: Some(Kill::Backward),
+                kill,
             }
         }
         KeyCode::Char('k') if control_char => {
@@ -196,7 +197,7 @@ pub(super) fn key(text: &str, cursor: usize, key: KeyEvent) -> Option<Edit> {
                 } else {
                     end
                 },
-                kill: Some(Kill::Forward),
+                kill,
             }
         }
         _ => return None,

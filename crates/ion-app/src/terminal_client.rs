@@ -304,6 +304,7 @@ pub async fn chat(init: ChatInit) -> Result<()> {
                     if key.code == KeyCode::Char('c') && key.modifiers.contains(Modifiers::CONTROL)
                         && (runtime.is_busy() || activity.view(&runtime).is_some())
                     {
+                        ui.break_edit_focus();
                         runtime.request_stop();
                         poll_control = true;
                         continue;
@@ -382,13 +383,12 @@ pub async fn chat(init: ChatInit) -> Result<()> {
                         ui.insert(&text);
                     }
                 },
-                InputEvent::Rejected(error) => ui.status = error.to_string(),
-                InputEvent::Resize(_) => screen.note_resize(),
-                InputEvent::Mouse(mouse) => match mouse.kind() {
-                    MouseKind::ScrollUp => ui.scroll = ui.scroll.saturating_add(3),
-                    MouseKind::ScrollDown => ui.scroll = ui.scroll.saturating_sub(3),
-                    _ => {},
+                InputEvent::Rejected(error) => {
+                    ui.break_edit_focus();
+                    ui.status = error.to_string();
                 },
+                InputEvent::Resize(_) => screen.note_resize(),
+                InputEvent::Mouse(mouse) => ui.mouse(mouse.kind()),
             }
         }
         Ok(())
@@ -1262,13 +1262,13 @@ impl Frontend {
                 code: KeyCode::Enter,
                 modifiers,
             } if modifiers.contains(Modifiers::ALT) => {
-                self.begin_draft_handoff();
-                self.browsing = None;
-                let prompt = std::mem::take(&mut self.draft);
-                self.cursor = 0;
-                if prompt.trim().is_empty() && self.images.is_empty() {
+                if self.draft.trim().is_empty() && self.images.is_empty() {
                     Action::None
                 } else {
+                    self.begin_draft_handoff();
+                    self.browsing = None;
+                    let prompt = std::mem::take(&mut self.draft);
+                    self.cursor = 0;
                     Action::Queue(prompt)
                 }
             }
@@ -1293,27 +1293,37 @@ impl Frontend {
                 code: KeyCode::Enter,
                 ..
             } => {
-                self.begin_draft_handoff();
-                self.browsing = None;
-                let cursor = self.cursor;
-                let prompt = std::mem::take(&mut self.draft);
-                self.cursor = 0;
-                let syntax = prompt.trim();
+                let syntax = self.draft.trim();
+                let invalid_shell = if let Some(command) = syntax.strip_prefix("!!") {
+                    command
+                        .trim()
+                        .is_empty()
+                        .then_some("Type a shell command after !!")
+                } else if let Some(command) = syntax.strip_prefix('!') {
+                    command
+                        .trim()
+                        .is_empty()
+                        .then_some("Type a shell command after !")
+                } else {
+                    None
+                };
                 if syntax.is_empty() && self.images.is_empty() {
                     Action::None
-                } else if Builtin::parse(syntax) == Some(Builtin::Quit) {
-                    Action::Quit
-                } else if syntax.starts_with('/') {
-                    Action::Command(syntax.to_owned())
-                } else if let Some(command) = syntax.strip_prefix("!!") {
-                    if command.trim().is_empty() {
-                        self.restore_editor(EditorDraft {
-                            literal: prompt,
-                            cursor,
-                        });
-                        self.status = "Type a shell command after !!".into();
-                        Action::None
-                    } else {
+                } else if let Some(status) = invalid_shell {
+                    self.status = status.into();
+                    Action::None
+                } else {
+                    self.begin_draft_handoff();
+                    self.browsing = None;
+                    let cursor = self.cursor;
+                    let prompt = std::mem::take(&mut self.draft);
+                    self.cursor = 0;
+                    let syntax = prompt.trim();
+                    if Builtin::parse(syntax) == Some(Builtin::Quit) {
+                        Action::Quit
+                    } else if syntax.starts_with('/') {
+                        Action::Command(syntax.to_owned())
+                    } else if let Some(command) = syntax.strip_prefix("!!") {
                         Action::Shell {
                             command: command.trim().to_owned(),
                             exclude_from_context: true,
@@ -1322,16 +1332,7 @@ impl Frontend {
                                 cursor,
                             },
                         }
-                    }
-                } else if let Some(command) = syntax.strip_prefix('!') {
-                    if command.trim().is_empty() {
-                        self.restore_editor(EditorDraft {
-                            literal: prompt,
-                            cursor,
-                        });
-                        self.status = "Type a shell command after !".into();
-                        Action::None
-                    } else {
+                    } else if let Some(command) = syntax.strip_prefix('!') {
                         Action::Shell {
                             command: command.trim().to_owned(),
                             exclude_from_context: false,
@@ -1340,9 +1341,9 @@ impl Frontend {
                                 cursor,
                             },
                         }
+                    } else {
+                        Action::Submit(prompt)
                     }
-                } else {
-                    Action::Submit(prompt)
                 }
             }
             KeyEvent {
@@ -1401,6 +1402,19 @@ impl Frontend {
                 .refresh(&self.draft, self.cursor, resources, false);
         }
         action
+    }
+
+    fn mouse(&mut self, kind: MouseKind) {
+        // Scrolling is a user viewport action: it ends direct yank-pop and
+        // typed-word affinity while retaining draft text and undo history.
+        if matches!(kind, MouseKind::ScrollUp | MouseKind::ScrollDown) {
+            self.break_edit_focus();
+        }
+        match kind {
+            MouseKind::ScrollUp => self.scroll = self.scroll.saturating_add(3),
+            MouseKind::ScrollDown => self.scroll = self.scroll.saturating_sub(3),
+            _ => {}
+        }
     }
 
     fn detail_key(&mut self, key: KeyEvent) -> Action {

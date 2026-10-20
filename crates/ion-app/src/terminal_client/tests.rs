@@ -274,6 +274,55 @@ fn submit_and_queue_handoff_discard_unsent_text_history() {
     }
 }
 
+#[test]
+fn mouse_scroll_breaks_edit_affinity_without_resetting_history_or_text() {
+    let mut ui = Frontend::default();
+    assert!(matches!(
+        ui.key(KeyEvent::new(KeyCode::Char('a'), Modifiers::NONE), None),
+        Action::None
+    ));
+    ui.mouse(MouseKind::ScrollUp);
+    assert!(matches!(
+        ui.key(KeyEvent::new(KeyCode::Char('b'), Modifiers::NONE), None),
+        Action::None
+    ));
+    assert_eq!(ui.draft, "ab");
+    assert_eq!(ui.scroll, 3);
+    assert!(matches!(
+        ui.key(KeyEvent::new(KeyCode::Char('_'), Modifiers::CONTROL), None),
+        Action::None
+    ));
+    assert_eq!(ui.draft, "a", "scroll must break typed-word coalescing");
+    assert!(matches!(
+        ui.key(KeyEvent::new(KeyCode::Char('_'), Modifiers::CONTROL), None),
+        Action::None
+    ));
+    assert_eq!(ui.draft, "", "scroll must not reset undo history");
+
+    for text in ["first", "second"] {
+        ui.insert(text);
+        ui.cursor = ui.draft.len();
+        assert!(matches!(
+            ui.key(KeyEvent::new(KeyCode::Char('w'), Modifiers::CONTROL), None),
+            Action::None
+        ));
+    }
+    assert!(matches!(
+        ui.key(KeyEvent::new(KeyCode::Char('y'), Modifiers::CONTROL), None),
+        Action::None
+    ));
+    assert_eq!(ui.draft, "second");
+    ui.mouse(MouseKind::ScrollDown);
+    assert!(matches!(
+        ui.key(KeyEvent::new(KeyCode::Char('y'), Modifiers::ALT), None),
+        Action::None
+    ));
+    assert_eq!(
+        ui.draft, "second",
+        "scroll must invalidate direct yank-pop affinity"
+    );
+}
+
 #[tokio::test]
 async fn session_sync_preserves_text_recovery_but_session_replacement_resets_it() {
     let mut fixture = Fixture::new();

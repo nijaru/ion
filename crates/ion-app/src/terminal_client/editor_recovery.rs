@@ -1,9 +1,10 @@
 //! Terminal-local recovery for unsent draft text.
 //!
 //! Undo/redo stores owned text deltas with their before/after byte cursors;
-//! the kill ring stores killed text only. Both are presentation state: they
-//! never admit, submit or duplicate attached images, and submission handoff
-//! discards them rather than reviving already-sent input.
+//! the kill ring stores killed text only. Both are presentation state and never
+//! admit, submit or duplicate attached images. Submission handoff discards
+//! undo/redo, while the kill ring deliberately survives draft changes so killed
+//! text can be yanked into another draft.
 use std::{collections::VecDeque, ops::Range};
 
 use ion_terminal::{KeyCode, KeyEvent, Modifiers};
@@ -64,6 +65,8 @@ impl KillRing {
         if text.is_empty() {
             return;
         }
+        // Consecutive kills without an insertion remove at most the current
+        // MAX_DRAFT-sized draft, so accumulation cannot exceed that bound.
         let merged = accumulate
             && self
                 .entries
@@ -152,8 +155,15 @@ impl EditorRecovery {
             .undo
             .back_mut()
             .expect("a typed continuation has an undo entry");
-        debug_assert!(entry.removed.is_empty());
-        debug_assert_eq!(entry.start + entry.inserted.len(), start);
+        assert!(
+            entry.removed.is_empty(),
+            "a typed continuation must extend an insertion"
+        );
+        assert_eq!(
+            entry.start + entry.inserted.len(),
+            start,
+            "a typed continuation must append at its recorded draft end"
+        );
         entry.inserted.push_str(text);
         entry.cursor_after = cursor_after;
         self.retained += text.len();
@@ -190,8 +200,8 @@ fn yank_key(key: KeyEvent) -> bool {
 
 fn yank_pop_key(key: KeyEvent) -> bool {
     key.code == KeyCode::Char('y')
-        && key.modifiers.contains(Modifiers::CONTROL)
         && key.modifiers.contains(Modifiers::ALT)
+        && !key.modifiers.contains(Modifiers::CONTROL)
 }
 
 fn typed_key(key: KeyEvent) -> bool {
@@ -266,6 +276,7 @@ impl Frontend {
         self.completion.clear();
         let clean = sanitize(text);
         if clean.is_empty() {
+            self.recovery.interrupt();
             return;
         }
         if self.draft.len().saturating_add(clean.len()) > MAX_DRAFT {
@@ -314,10 +325,9 @@ impl Frontend {
 
     /// Replace one already-owned composer range, such as completion or a path.
     pub(super) fn replace_text(&mut self, range: Range<usize>, text: &str, cursor: usize) -> bool {
-        let Some(removed) = self.draft.get(range.clone()).map(str::to_owned) else {
-            debug_assert!(false, "editor replacement range is not a draft boundary");
-            return false;
-        };
+        // Completion and editor callers derive this range from the current
+        // draft. An invalid internal range is a writer bug, not malformed input.
+        let removed = self.draft[range.clone()].to_owned();
         let next_len = self.draft.len() - removed.len() + text.len();
         if next_len > MAX_DRAFT {
             self.status = format!("Prompt is limited to {MAX_DRAFT} bytes");
@@ -355,14 +365,15 @@ impl Frontend {
     }
 
     pub(super) fn delete_text(&mut self, range: Range<usize>, kill: Option<Kill>) {
-        if range.start >= range.end {
+        // Empty ranges are expected at line and draft boundaries; an inverted
+        // range is an internal writer bug and fails at the direct index below.
+        if range.start == range.end {
             self.recovery.interrupt();
             return;
         }
-        let Some(removed) = self.draft.get(range.clone()).map(str::to_owned) else {
-            debug_assert!(false, "editor deletion range is not a draft boundary");
-            return;
-        };
+        // `editing::key` derives deletion ranges from the current draft. An
+        // invalid internal range would corrupt cursor and recovery state.
+        let removed = self.draft[range.clone()].to_owned();
         let cursor_before = self.cursor;
         let was_kill = self.recovery.group == Group::Kill;
         self.browsing = None;
@@ -393,32 +404,35 @@ impl Frontend {
         self.replace_text(0..end, "", 0);
     }
 
-    fn apply_history(&mut self, entry: &Delta, undo: bool) -> bool {
+    fn apply_history(&mut self, entry: &Delta, undo: bool) {
         let (expected, replacement, cursor_after) = if undo {
             (&entry.inserted, &entry.removed, entry.cursor_before)
         } else {
             (&entry.removed, &entry.inserted, entry.cursor_after)
         };
         let end = entry.start + expected.len();
-        if self.draft.get(entry.start..end) != Some(expected.as_str()) {
-            debug_assert!(false, "editor history delta no longer owns the draft");
-            return false;
-        }
+        // History entries are recorded against the exact draft they edit. Any
+        // baseline replacement resets history, so a mismatch is a writer bug.
+        assert!(
+            end <= self.draft.len(),
+            "an editor history delta must stay within the current draft"
+        );
+        assert_eq!(
+            &self.draft[entry.start..end],
+            expected.as_str(),
+            "an editor history delta must still own its recorded draft text"
+        );
         self.browsing = None;
         self.completion.clear();
         self.draft.replace_range(entry.start..end, replacement);
         self.cursor = cursor_after;
-        true
     }
 
     fn undo(&mut self) {
         let Some(entry) = self.recovery.undo.pop_back() else {
             return;
         };
-        if !self.apply_history(&entry, true) {
-            self.recovery.undo.push_back(entry);
-            return;
-        }
+        self.apply_history(&entry, true);
         self.recovery.redo.push_back(entry);
         self.recovery.interrupt();
     }
@@ -427,10 +441,7 @@ impl Frontend {
         let Some(entry) = self.recovery.redo.pop_back() else {
             return;
         };
-        if !self.apply_history(&entry, false) {
-            self.recovery.redo.push_back(entry);
-            return;
-        }
+        self.apply_history(&entry, false);
         self.recovery.undo.push_back(entry);
         self.recovery.interrupt();
     }
@@ -478,11 +489,11 @@ impl Frontend {
             self.recovery.clear_yank();
             return;
         };
-        if self.draft.get(yank.range.clone()) != Some(current.as_str()) {
-            debug_assert!(false, "yank-pop no longer owns its inserted span");
-            self.recovery.clear_yank();
-            return;
-        }
+        assert_eq!(
+            self.draft.get(yank.range.clone()),
+            Some(current.as_str()),
+            "a yank-pop span must still hold the kill it inserted"
+        );
         let Some(next) = self.recovery.kills.second_newest().map(str::to_owned) else {
             return;
         };
@@ -521,28 +532,14 @@ impl Frontend {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::terminal_client::{EditorDraft, editing::Edit};
+    use crate::terminal_client::{Action, EditorDraft};
 
     fn key(code: KeyCode, modifiers: Modifiers) -> KeyEvent {
         KeyEvent::new(code, modifiers)
     }
 
     fn composer_key(ui: &mut Frontend, key: KeyEvent) -> bool {
-        ui.prepare_edit_key(key);
-        if ui.undo_key(key) {
-            return true;
-        }
-        if ui.yank_keys(key) {
-            return true;
-        }
-        if let Some(edit) = super::super::editing::key(&ui.draft, ui.cursor, key) {
-            match edit {
-                Edit::Move(cursor) => ui.cursor = cursor,
-                Edit::Delete { range, kill } => ui.delete_text(range, kill),
-            }
-            return true;
-        }
-        false
+        matches!(ui.key(key, None), Action::None)
     }
 
     #[test]
@@ -612,6 +609,118 @@ mod tests {
     }
 
     #[test]
+    fn empty_enter_preserves_redo_for_both_enter_forms() {
+        for modifiers in [Modifiers::NONE, Modifiers::ALT] {
+            let mut ui = Frontend::default();
+            ui.insert("hello");
+            assert!(composer_key(
+                &mut ui,
+                key(KeyCode::Char('_'), Modifiers::CONTROL)
+            ));
+            assert_eq!((ui.draft.as_str(), ui.cursor), ("", 0));
+            let history = (
+                ui.recovery.undo.len(),
+                ui.recovery.redo.len(),
+                ui.recovery.retained,
+            );
+            assert!(matches!(
+                ui.key(key(KeyCode::Enter, modifiers), None),
+                Action::None
+            ));
+            assert_eq!((ui.draft.as_str(), ui.cursor), ("", 0));
+            assert_eq!(
+                (
+                    ui.recovery.undo.len(),
+                    ui.recovery.redo.len(),
+                    ui.recovery.retained
+                ),
+                history,
+                "an empty Enter is not a submission handoff"
+            );
+            assert!(composer_key(
+                &mut ui,
+                key(KeyCode::Char('_'), Modifiers::CONTROL | Modifiers::ALT)
+            ));
+            assert_eq!(ui.draft, "hello");
+        }
+    }
+
+    #[test]
+    fn empty_shell_rejection_preserves_literal_cursor_and_undo() {
+        for (literal, expected) in [
+            ("!", "Type a shell command after !"),
+            ("!!", "Type a shell command after !!"),
+            ("!   ", "Type a shell command after !"),
+            ("!!   ", "Type a shell command after !!"),
+        ] {
+            let mut ui = Frontend::default();
+            ui.insert(literal);
+            ui.cursor = literal.len() / 2;
+            let history = (
+                ui.recovery.undo.len(),
+                ui.recovery.redo.len(),
+                ui.recovery.retained,
+            );
+            assert!(matches!(
+                ui.key(key(KeyCode::Enter, Modifiers::NONE), None),
+                Action::None
+            ));
+            assert_eq!((ui.draft.as_str(), ui.cursor), (literal, literal.len() / 2));
+            assert_eq!(ui.status, expected);
+            assert_eq!(
+                (
+                    ui.recovery.undo.len(),
+                    ui.recovery.redo.len(),
+                    ui.recovery.retained
+                ),
+                history
+            );
+            assert!(composer_key(
+                &mut ui,
+                key(KeyCode::Char('_'), Modifiers::CONTROL)
+            ));
+            assert_eq!(ui.draft, "");
+        }
+    }
+
+    #[test]
+    fn empty_insert_breaks_yank_affinity_without_touching_history() {
+        let mut ui = Frontend::default();
+        for text in ["first", "second"] {
+            ui.insert(text);
+            ui.cursor = ui.draft.len();
+            assert!(composer_key(
+                &mut ui,
+                key(KeyCode::Char('w'), Modifiers::CONTROL)
+            ));
+        }
+        assert!(composer_key(
+            &mut ui,
+            key(KeyCode::Char('y'), Modifiers::CONTROL)
+        ));
+        let history = (
+            ui.recovery.undo.len(),
+            ui.recovery.redo.len(),
+            ui.recovery.retained,
+        );
+        ui.insert("\u{7}");
+        assert_eq!(ui.draft, "second");
+        assert_eq!(
+            (
+                ui.recovery.undo.len(),
+                ui.recovery.redo.len(),
+                ui.recovery.retained
+            ),
+            history
+        );
+        assert!(composer_key(
+            &mut ui,
+            key(KeyCode::Char('y'), Modifiers::ALT)
+        ));
+        assert_eq!(ui.draft, "second");
+    }
+
+    #[test]
     fn unicode_kills_accumulate_and_yank_pop_rotates_only_after_success() {
         let mut ui = Frontend::default();
         ui.insert("alpha βeta");
@@ -643,10 +752,44 @@ mod tests {
         assert_eq!(ui.draft, "Ω");
         assert!(composer_key(
             &mut ui,
-            key(KeyCode::Char('y'), Modifiers::ALT | Modifiers::CONTROL)
+            key(KeyCode::Char('y'), Modifiers::ALT)
         ));
         assert_eq!(ui.draft, "alpha βeta");
         assert_eq!(ui.recovery.kills.newest(), Some("alpha βeta"));
+    }
+
+    #[test]
+    fn frontend_key_binds_yank_pop_to_alt_y_without_the_old_chord() {
+        let mut ui = Frontend::default();
+        for text in ["first", "second"] {
+            ui.insert(text);
+            ui.cursor = ui.draft.len();
+            assert!(composer_key(
+                &mut ui,
+                key(KeyCode::Char('w'), Modifiers::CONTROL)
+            ));
+        }
+        assert!(matches!(
+            ui.key(key(KeyCode::Char('y'), Modifiers::CONTROL), None),
+            Action::None
+        ));
+        assert_eq!(ui.draft, "second");
+        assert!(matches!(
+            ui.key(key(KeyCode::Char('y'), Modifiers::ALT), None),
+            Action::None
+        ));
+        assert_eq!(ui.draft, "first", "Alt-Y must pop the previous kill");
+        assert!(matches!(
+            ui.key(
+                key(KeyCode::Char('y'), Modifiers::CONTROL | Modifiers::ALT),
+                None
+            ),
+            Action::None
+        ));
+        assert_eq!(
+            ui.draft, "first",
+            "the former Ctrl-Alt-Y chord is not an alias"
+        );
     }
 
     #[test]
@@ -704,7 +847,7 @@ mod tests {
         let before_ring = ui.recovery.kills.entries.clone();
         assert!(composer_key(
             &mut ui,
-            key(KeyCode::Char('y'), Modifiers::ALT | Modifiers::CONTROL)
+            key(KeyCode::Char('y'), Modifiers::ALT)
         ));
         assert_eq!(
             ui.draft, before_draft,
@@ -760,6 +903,40 @@ mod tests {
             composer_key(&mut ui, key(KeyCode::Char('_'), Modifiers::CONTROL));
         }
         assert_eq!(ui.draft, " ", "eviction must preserve retained edits");
+
+        let mut ui = Frontend::default();
+        for index in 0..10 {
+            let text = format!("{index:02}{}", "x".repeat(MAX_DRAFT - 2));
+            ui.replace_draft_atomic(text);
+        }
+        assert!(ui.recovery.undo.len() < MAX_HISTORY_ENTRIES);
+        let retained = ui
+            .recovery
+            .undo
+            .iter()
+            .chain(&ui.recovery.redo)
+            .map(|delta| delta.removed.len() + delta.inserted.len())
+            .sum::<usize>();
+        assert!(retained <= MAX_HISTORY_BYTES);
+        assert_eq!(retained, ui.recovery.retained);
+        let final_text = ui.draft.clone();
+        while !ui.recovery.undo.is_empty() {
+            assert!(composer_key(
+                &mut ui,
+                key(KeyCode::Char('_'), Modifiers::CONTROL)
+            ));
+        }
+        while !ui.recovery.redo.is_empty() {
+            assert!(composer_key(
+                &mut ui,
+                key(KeyCode::Char('_'), Modifiers::CONTROL | Modifiers::ALT)
+            ));
+        }
+        assert_eq!(
+            (ui.draft.as_str(), ui.cursor),
+            (final_text.as_str(), final_text.len()),
+            "byte-budget eviction must leave a valid undo/redo chain"
+        );
 
         let mut ring = KillRing::default();
         for index in 0..=MAX_KILL_ENTRIES {
