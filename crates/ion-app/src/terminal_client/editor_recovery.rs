@@ -417,9 +417,8 @@ impl Frontend {
             end <= self.draft.len(),
             "an editor history delta must stay within the current draft"
         );
-        assert_eq!(
-            &self.draft[entry.start..end],
-            expected.as_str(),
+        assert!(
+            &self.draft[entry.start..end] == expected.as_str(),
             "an editor history delta must still own its recorded draft text"
         );
         self.browsing = None;
@@ -489,9 +488,8 @@ impl Frontend {
             self.recovery.clear_yank();
             return;
         };
-        assert_eq!(
-            self.draft.get(yank.range.clone()),
-            Some(current.as_str()),
+        assert!(
+            self.draft.get(yank.range.clone()) == Some(current.as_str()),
             "a yank-pop span must still hold the kill it inserted"
         );
         let Some(next) = self.recovery.kills.second_newest().map(str::to_owned) else {
