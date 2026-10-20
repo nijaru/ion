@@ -651,8 +651,8 @@ fn handle_command(
         Some(Builtin::Reload) => {
             runtime.reload_resources()?;
             ui.print(format!(
-                "Reloaded resources ({} diagnostic(s))",
-                runtime.resources().diagnostics().len()
+                "Reloaded resources and commands ({} diagnostic(s))",
+                runtime.resources().diagnostics().len() + runtime.commands().diagnostics().len()
             ));
         }
         Some(Builtin::Session) => {
