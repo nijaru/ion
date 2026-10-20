@@ -10,7 +10,7 @@ use std::{
 use futures_util::FutureExt;
 use tokio::{
     io::{AsyncRead, AsyncReadExt, AsyncWriteExt},
-    process::{ChildStdin, Command},
+    process::ChildStdin,
     sync::{mpsc, oneshot},
 };
 use tokio_util::sync::CancellationToken;
@@ -50,6 +50,7 @@ pub(super) struct ProcessState {
     pub id: uuid::Uuid,
     pub cwd: PathBuf,
     pub command: String,
+    pub environment: Arc<crate::CommandEnvironment>,
     pub backend: Backend,
     pub stop: CancellationToken,
     pub input_stop: CancellationToken,
@@ -95,6 +96,7 @@ impl ProcessState {
         command: String,
         backend: Backend,
         dimensions: Option<Dimensions>,
+        environment: Arc<crate::CommandEnvironment>,
     ) -> Self {
         let capture = match backend {
             Backend::Pipe => Capture::Pipe {
@@ -112,6 +114,7 @@ impl ProcessState {
             id,
             cwd,
             command,
+            environment,
             backend,
             stop: CancellationToken::new(),
             input_stop: CancellationToken::new(),
@@ -268,10 +271,8 @@ async fn run_pipe(
     let Capture::Pipe { stdout, stderr } = &state.capture else {
         unreachable!("pipe driver owns a pipe capture");
     };
-    let mut command = Command::new(command::shell_program());
+    let mut command = state.environment.command(&state.command);
     command
-        .arg("-c")
-        .arg(&state.command)
         .current_dir(&state.cwd)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())

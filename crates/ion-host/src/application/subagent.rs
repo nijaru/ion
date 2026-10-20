@@ -22,6 +22,7 @@ pub(super) struct Subagent {
     directory: PathBuf,
     cwd: PathBuf,
     owner: Arc<BackgroundOwner>,
+    authority: AuthorityScope,
 }
 /// Actual selected route, not a lookup key redirected by later model-store edits.
 /// A child captures no application owner and enables no recursive built-in.
@@ -56,6 +57,7 @@ impl Subagent {
         cwd: &Path,
         selected: &Selection,
         owner: Arc<BackgroundOwner>,
+        environment: Arc<crate::CommandEnvironment>,
     ) -> Self {
         Self {
             application: Arc::new(ChildApplication {
@@ -66,6 +68,7 @@ impl Subagent {
                     selection: parent.selection.clone(),
                     role: CodingRole::Subagent,
                     processes: parent.processes.clone(),
+                    command_environment: Some(environment),
                 },
                 selected: selected.clone(),
             }),
@@ -76,6 +79,10 @@ impl Subagent {
                 .join("children"),
             cwd: cwd.to_path_buf(),
             owner,
+            // This coding binding makes no durable same-environment claim.
+            // Durable hosts supply and re-attest their own versioned scope.
+            authority: AuthorityScope::new(format!("ion.coding.live/{}", uuid::Uuid::now_v7()))
+                .expect("bounded live authority reference"),
         }
     }
 }
@@ -224,8 +231,7 @@ impl ToolExecutor for Subagent {
                         application: self.application.clone(),
                         model: Some(self.application.selected.identity()),
                         reasoning,
-                        authority: AuthorityScope::new("ion.coding.subagent.v1")
-                            .expect("constant scope"),
+                        authority: self.authority.clone(),
                     };
                     let task = match recipe.prepare(Message::user_input(task, [])) {
                         Ok(task) => task,

@@ -10,6 +10,7 @@ mod binding;
 pub mod catalog;
 pub mod code_mode;
 mod command_args;
+mod command_environment;
 mod control;
 mod credentials;
 pub use background::{
@@ -47,6 +48,7 @@ pub use application::{
 pub use auth::{CredentialStatus, CredentialStore};
 pub use binding::SessionSetup;
 pub use command_args::parse_args as parse_command_args;
+pub use command_environment::CommandEnvironment;
 pub use control::{
     AcceptedMetadata, ControlObserver, ControlSnapshot, ControlState, ControlUpdate, Delivery,
     InputAcceptance, InputCustodyPhase, InputId, InputPhase, InputSnapshot, Observation,

@@ -946,7 +946,29 @@ an incomplete capture with no full-output path. Capture loss does not change a
 known command exit. Shared `!` shell context preserves the complete structured
 host observation, including these diagnostics; `!!` remains private.
 `exec` and direct user shell commands use Bash when available, then fall back to
-POSIX sh, with closed stdin. They do not capture the user's login-shell environment.
+POSIX sh, with closed stdin. The coding binding captures the launching environment;
+it does not reload login startup and overwrite an activated toolchain/virtualenv.
+Optional user-only `~/.ion/settings.json` (under `ION_HOME` when overridden)
+configures a Bash-compatible executable and explicit per-command setup:
+
+```json
+{"shell":{"path":"/bin/bash","setup":"export CI=1"}}
+```
+
+Setup runs in the command's shell, before the requested command; nonzero setup
+stops that command. Setup stderr is suppressed to avoid recording private code
+in evaluator errors; failures expose status and a generic diagnostic. Inherited
+tracing is suspended for setup and restored for the payload. Setup stdout is
+ordinary command output. It may perform effects, so use trusted, noninteractive,
+Bash-compatible code. The same captured policy serves `exec`, `!`/`!!`, named
+commands, managed pipe/PTY programs and coding children. Each invocation is a fresh
+shell; exports from one invocation do not change another. Changed settings apply
+to newly prepared bindings, not active/queued work or existing programs; restart
+to refresh an existing binding. Resource reload alone does not reload shell settings.
+Libraries/services can supply `CommandEnvironment` explicitly through
+`with_command_environment` or the native tools' `with_environment` constructors,
+without reading user shell settings. This is not a durable environment snapshot
+or an OS isolation boundary; recovery still requires Host authority attestation.
 Use `process` for managed background, pipe-interactive or PTY-backed programs,
 including bounded terminal screen inspection. Managed subagents are separate agent
 Sessions, not process-session handles. Foreground commands have no default

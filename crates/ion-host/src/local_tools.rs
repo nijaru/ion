@@ -27,9 +27,17 @@ static INSTRUCTION_MUTATIONS: tokio::sync::Mutex<()> = tokio::sync::Mutex::const
 pub struct LocalTools {
     cwd: PathBuf,
     project_instructions: bool,
+    environment: Arc<crate::CommandEnvironment>,
 }
 impl LocalTools {
     pub fn new(cwd: impl AsRef<Path>) -> std::io::Result<Self> {
+        Self::with_environment(cwd, Arc::new(crate::CommandEnvironment::inherited()))
+    }
+
+    pub fn with_environment(
+        cwd: impl AsRef<Path>,
+        environment: Arc<crate::CommandEnvironment>,
+    ) -> std::io::Result<Self> {
         let cwd = cwd.as_ref().canonicalize()?;
         if !cwd.is_dir() {
             return Err(std::io::Error::other(
@@ -39,6 +47,7 @@ impl LocalTools {
         Ok(Self {
             cwd,
             project_instructions: false,
+            environment,
         })
     }
 
@@ -51,13 +60,19 @@ impl LocalTools {
 
     /// Run a user's direct command through the native shell execution path.
     pub async fn run_user_shell(&self, command: &str, stop: CancellationToken) -> ToolOutput {
-        command::run(&self.cwd, &json!({"command": command}), stop).await
+        command::run(
+            &self.environment,
+            &self.cwd,
+            &json!({"command": command}),
+            stop,
+        )
+        .await
     }
 }
 
 impl crate::UserShell for LocalTools {
     fn prepare(&self, command: &str) -> anyhow::Result<crate::PreparedShell> {
-        let tools = Self::new(&self.cwd)?;
+        let tools = Self::with_environment(&self.cwd, self.environment.clone())?;
         let command = command.to_owned();
         Ok(Box::new(move |stop| {
             Box::pin(async move { tools.run_user_shell(&command, stop).await })
@@ -159,7 +174,13 @@ impl ToolExecutor for LocalExecutor {
                 return error("cancelled before tool start");
             }
             if matches!(self.operation, LocalOperation::Exec) {
-                return command::run(&self.tools.cwd, &call.arguments, stop).await;
+                return command::run(
+                    &self.tools.environment,
+                    &self.tools.cwd,
+                    &call.arguments,
+                    stop,
+                )
+                .await;
             }
             let mutating = matches!(self.operation, LocalOperation::Edit | LocalOperation::Write);
             let instruction_mutation = if self.tools.project_instructions && mutating {

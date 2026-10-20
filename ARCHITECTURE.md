@@ -57,7 +57,7 @@ The contracts below do not settle every reference feature. These capabilities
 must be considered explicitly rather than hidden under broad claims of parity:
 
 - **Coding context:** web search and URL/document retrieval; login-shell startup
-  environment capture; non-image document/media support; summary-quality
+  state capture beyond explicit command setup; non-image document/media support; summary-quality
   aids beyond original-evidence retrieval.
 - **Continuity:** Pi-style in-file tree navigation and branch summaries versus
   Ion's independent conversation copies; richer export/share formats; history and
@@ -140,6 +140,18 @@ require lower-level integration to escape coding defaults. A restricted bot must
 be able to select only its own capabilities and instructions without inheriting
 native shell/file tools, project rules or operator-home resources. Model and tool
 implementations remain replaceable through the same lifecycle API.
+
+Native command configuration belongs to the Host binding, not process-global
+mutable state or model arguments. The coding preset captures inherited variables
+and Bash/sh selection, with optional operator-configured Bash-compatible setup;
+it does not implicitly rerun login startup. Libraries may provide a complete
+environment without user configuration. Exec, direct shell, named commands,
+managed pipe/PTY and coding children retain the same captured policy; replacing a
+binding does not modify queued work or running programs. Setup is part of admitted
+execution, including its effects, cancellation and failure. Generic argv/MCP
+launchers retain their separately configured startup/credential contracts.
+Environment values and setup are not recovery data; the trusted Host reconstructs
+and attests environment/principal/grants under the existing authority scope.
 
 Context inheritance, workspace/environment binding and callable authority are
 independent choices. A Session need not require a local coding directory. A child

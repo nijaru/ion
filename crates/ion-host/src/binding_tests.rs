@@ -21,6 +21,62 @@ fn control(host: Arc<Host>, session: Arc<CodingSession>, selected: Selection) ->
 }
 
 #[tokio::test]
+async fn explicit_service_environment_skips_user_settings_and_serves_named_commands() {
+    let root = std::env::temp_dir().join(format!("ion-service-env-{}", uuid::Uuid::now_v7()));
+    let cwd = root.join("work");
+    fs::create_dir_all(&cwd).unwrap();
+    let host = Arc::new(Host::new(root.join("config"), root.join("state")));
+    let selected = host.models().save_default(&route("one")).unwrap();
+    fs::write(
+        host.config_root().join("settings.json"),
+        b"invalid personal settings",
+    )
+    .unwrap();
+    fs::write(host.config_root().join("commands.json"), r#"{"commands":{"check":{"description":"bound command","program":"probe","args":[],"share_with_model":false}}}"#).unwrap();
+    let environment = Arc::new(
+        crate::CommandEnvironment::new(
+            "/bin/bash".into(),
+            [("BOUND".into(), "service".into())].into(),
+        )
+        .unwrap()
+        .with_setup("# PRIVATE_SETUP_CODE\nprobe() { printf '%s:%s' \"$BOUND\" \"$1\"; }".into())
+        .unwrap(),
+    );
+    let session = Arc::new(
+        CodingSession::create(
+            host.sessions(Some(cwd.clone())).new_path().unwrap(),
+            Some(&cwd),
+        )
+        .unwrap(),
+    );
+    let mut control = crate::CodingApplication::new(host, None)
+        .with_command_environment(environment)
+        .setup(session.clone(), selected, None, None)
+        .unwrap()
+        .into_control::<()>();
+    control
+        .command("check", &["$(touch forbidden)".into()], ())
+        .unwrap();
+    match control.next().await {
+        ControlUpdate::Settled(settlement) => match settlement.outcome {
+            OperationOutcome::Shell(Ok(output)) => {
+                assert!(!output.is_error, "{}", output.value);
+                assert_eq!(output.value["stdout"], "service:$(touch forbidden)");
+            }
+            _ => panic!("observed shell required"),
+        },
+        _ => panic!("shell settlement required"),
+    }
+    let history = serde_json::to_string(&session.view().unwrap().entries).unwrap();
+    assert!(!history.contains("PRIVATE_SETUP_CODE"));
+    assert!(!cwd.join("forbidden").exists());
+    control.shutdown().await;
+    drop(control);
+    drop(session);
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[tokio::test]
 async fn direct_shell_preflights_before_recovery_or_admission() {
     let root = std::env::temp_dir().join(format!("ion-control-{}", uuid::Uuid::now_v7()));
     let cwd = root.join("work");

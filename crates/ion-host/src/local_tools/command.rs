@@ -4,10 +4,7 @@ use std::{
     borrow::Cow,
     collections::VecDeque,
     fs::{self, OpenOptions},
-    os::unix::{
-        fs::{OpenOptionsExt, PermissionsExt},
-        process::ExitStatusExt,
-    },
+    os::unix::{fs::OpenOptionsExt, process::ExitStatusExt},
     path::{Path, PathBuf},
     process::Stdio,
     time::Duration,
@@ -16,10 +13,7 @@ use std::{
 use rustix::process::{Pid, Signal, kill_process_group};
 use serde::Deserialize;
 use serde_json::{Value, json};
-use tokio::{
-    io::{AsyncReadExt, AsyncWriteExt},
-    process::Command,
-};
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio_util::sync::CancellationToken;
 
 use super::{ToolOutput, error};
@@ -38,7 +32,12 @@ struct ExecInput {
 }
 
 /// Run a validated command in `cwd`, returning its observed streams and status.
-pub(super) async fn run(cwd: &Path, args: &Value, stop: CancellationToken) -> ToolOutput {
+pub(super) async fn run(
+    environment: &crate::CommandEnvironment,
+    cwd: &Path,
+    args: &Value,
+    stop: CancellationToken,
+) -> ToolOutput {
     let input: ExecInput = match serde_json::from_value(args.clone()) {
         Ok(value) => value,
         Err(e) => return error(format!("invalid exec arguments: {e}")),
@@ -52,10 +51,8 @@ pub(super) async fn run(cwd: &Path, args: &Value, stop: CancellationToken) -> To
     if stop.is_cancelled() {
         return error("cancelled before command start");
     }
-    let mut command = Command::new(shell_program());
+    let mut command = environment.command(&input.command);
     command
-        .arg("-c")
-        .arg(input.command)
         .current_dir(cwd)
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
@@ -156,28 +153,6 @@ pub(super) async fn run(cwd: &Path, args: &Value, stop: CancellationToken) -> To
         images: Vec::new(),
         is_error: !succeeded || cancelled || timed_out,
     }
-}
-
-/// Prefer Bash when it is executable, then PATH, then the POSIX fallback.
-pub(crate) fn shell_program() -> PathBuf {
-    let primary = PathBuf::from("/bin/bash");
-    if is_executable(&primary) {
-        return primary;
-    }
-    if let Some(path) = std::env::var_os("PATH") {
-        for directory in std::env::split_paths(&path) {
-            let candidate = directory.join("bash");
-            if is_executable(&candidate) {
-                return candidate;
-            }
-        }
-    }
-    PathBuf::from("/bin/sh")
-}
-
-fn is_executable(path: &Path) -> bool {
-    fs::metadata(path)
-        .is_ok_and(|metadata| metadata.is_file() && metadata.permissions().mode() & 0o111 != 0)
 }
 
 pub(crate) async fn stop_child(

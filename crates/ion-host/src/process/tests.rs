@@ -128,6 +128,63 @@ async fn until_file(path: &Path, expected: &str) {
 }
 
 #[tokio::test]
+async fn pipe_and_pty_keep_the_starting_environment_across_binding_replacement() {
+    for backend in ["pipe", "pty"] {
+        let root = std::env::temp_dir().join(format!("ion-process-env-{}", Uuid::now_v7()));
+        std::fs::create_dir(&root).unwrap();
+        let owner = Arc::new(ProcessOwner::new(2).unwrap());
+        let session =
+            Arc::new(CodingSession::create(root.join("session.sqlite"), Some(&root)).unwrap());
+        let environment = |version: &str| {
+            Arc::new(crate::CommandEnvironment::new(
+            "/bin/bash".into(),
+            [("VIRTUAL_ENV".into(), version.into()), ("KITTY_WINDOW_ID".into(), "outer".into())].into(),
+        ).unwrap().with_setup("export FROM_SETUP=ready; probe() { printf '%s/%s' \"$VIRTUAL_ENV\" \"$FROM_SETUP\"; }".into()).unwrap())
+        };
+        let first = agent(
+            model(turn(
+                vec![call(
+                    "start",
+                    json!({
+                        "action":"start", "backend":backend,
+                        "command":"IFS= read -r line; probe > observed; printf '%s' \"${KITTY_WINDOW_ID-unset}\" > terminal"
+                    }),
+                )],
+                "started",
+            )),
+            Arc::new(
+                ProcessTools::with_environment(&root, owner.clone(), environment("old")).unwrap(),
+            ),
+        );
+        submit(&first, &session, "start").await.unwrap();
+        let id = started_id(&process_outputs(&session)[0]);
+        let replacement = agent(
+            model(turn(
+                vec![
+                    call("input", json!({"action":"write","id":id,"data":"go\n"})),
+                    call("join", json!({"action":"wait","id":id,"timeout_ms":10000})),
+                ],
+                "joined",
+            )),
+            Arc::new(
+                ProcessTools::with_environment(&root, owner.clone(), environment("new")).unwrap(),
+            ),
+        );
+        submit(&replacement, &session, "finish").await.unwrap();
+        owner.join_shutdown().await.unwrap();
+        assert_eq!(
+            std::fs::read_to_string(root.join("observed")).unwrap(),
+            "old/ready"
+        );
+        assert_eq!(
+            std::fs::read_to_string(root.join("terminal")).unwrap(),
+            if backend == "pty" { "unset" } else { "outer" }
+        );
+        std::fs::remove_dir_all(root).unwrap();
+    }
+}
+
+#[tokio::test]
 async fn core_workflow_survives_turns_and_exposes_actual_pipe_input_and_output() {
     let root = std::env::temp_dir().join(format!("ion-process-workflow-{}", Uuid::now_v7()));
     std::fs::create_dir(&root).unwrap();

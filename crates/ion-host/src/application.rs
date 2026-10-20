@@ -95,6 +95,7 @@ pub struct CodingApplication {
     selection: SelectionPolicy,
     role: CodingRole,
     processes: Arc<crate::ProcessOwner>,
+    command_environment: Option<Arc<crate::CommandEnvironment>>,
 }
 
 const READ_ONLY_TOOLS: &[&str] = &[
@@ -123,7 +124,15 @@ impl CodingApplication {
             selection: SelectionPolicy::Explicit(ToolSelection::all()),
             role: CodingRole::Main(owner),
             processes,
+            command_environment: None,
         }
+    }
+
+    /// Supply the complete command environment for a service/library binding.
+    /// This skips user shell settings and ambient environment discovery.
+    pub fn with_command_environment(mut self, environment: Arc<crate::CommandEnvironment>) -> Self {
+        self.command_environment = Some(environment);
+        self
     }
 
     /// Enable composition for this application, including later replacements.
@@ -183,10 +192,20 @@ impl CodingApplication {
         selected: &Selection,
         questions: Option<Arc<QuestionCustody>>,
     ) -> Result<ApplicationRuntime> {
-        let native = Arc::new(LocalTools::new(cwd)?.with_project_instructions());
+        let environment = match &self.command_environment {
+            Some(environment) => environment.clone(),
+            None => Arc::new(crate::CommandEnvironment::coding(self.host.config_root())?),
+        };
+        let native = Arc::new(
+            LocalTools::with_environment(cwd, environment.clone())?.with_project_instructions(),
+        );
         let mut sources: Vec<Arc<dyn CodingToolSource>> = vec![
             native.clone(),
-            Arc::new(crate::ProcessTools::new(cwd, self.processes.clone())?),
+            Arc::new(crate::ProcessTools::with_environment(
+                cwd,
+                self.processes.clone(),
+                environment.clone(),
+            )?),
         ];
         if let CodingRole::Main(owner) = &self.role {
             sources.push(Arc::new(subagent::Subagent::new(
@@ -194,6 +213,7 @@ impl CodingApplication {
                 cwd,
                 selected,
                 owner.background().clone(),
+                environment,
             )));
         }
         let ask_available = questions.is_some();

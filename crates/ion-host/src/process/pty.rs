@@ -75,10 +75,8 @@ pub(super) async fn run(
     };
     drop(slave);
 
-    let mut command = Command::new(command::shell_program());
+    let mut command = state.environment.command(&state.command);
     command
-        .arg("-c")
-        .arg(&state.command)
         .current_dir(&state.cwd)
         .stdin(stdin)
         .stdout(stdout)
@@ -161,10 +159,16 @@ pub(super) async fn run(
 /// this is capability correctness, not an environment/privacy sandbox.
 fn terminal_environment(command: &mut Command) {
     command.env("TERM", "xterm-256color");
-    for (name, _) in std::env::vars_os() {
-        if name.to_str().is_some_and(outer_terminal_variable) {
-            command.env_remove(name);
-        }
+    let outer = command
+        .as_std()
+        .get_envs()
+        .filter(|(name, value)| {
+            value.is_some() && name.to_str().is_some_and(outer_terminal_variable)
+        })
+        .map(|(name, _)| name.to_owned())
+        .collect::<Vec<_>>();
+    for name in outer {
+        command.env_remove(name);
     }
 }
 

@@ -311,6 +311,8 @@ os.write(2, b'MERGED_STDERR\\n')
                         if user in ("PARENT_DIRECT", "PARENT_COMPOSED", "PARENT_CANCEL"):
                             configure(env, "http://127.0.0.1:1/v1/chat/completions")
                             changed_route.add(user)
+                        if user == "PARENT_DIRECT":
+                            (Path(env["ION_HOME"]) / "settings.json").write_text(json.dumps({"shell":{"setup":"export ION_ENV_MARKER=changed"}}))
                         if user == "PARENT_FORK":
                             arguments["context"] = {"type":"fork"}
                         if user.startswith("PARENT_BG_"):
@@ -361,7 +363,12 @@ os.write(2, b'MERGED_STDERR\\n')
                                 first = call(marker, {})["tool_calls"][0]
                                 second = call("write", {"path":user + ".txt", "content":"CHILD_EFFECT"})["tool_calls"][0]
                                 second["index"] = 1
-                                delta = {"tool_calls":[first, second]}
+                                calls = [first, second]
+                                if user == "CHILD_DIRECT":
+                                    third = call("exec", {"command":'printf "%s" "$ION_ENV_MARKER" > CHILD_COMMAND_ENV.txt'})["tool_calls"][0]
+                                    third["index"] = 2
+                                    calls.append(third)
+                                delta = {"tool_calls":calls}
                     else:
                         if user == "CHILD_PROCESS_RESOURCE":
                             until(lambda: (workspace / "CHILD_PROCESS_RESOURCE.ready").exists(), "child managed program did not execute")
@@ -454,6 +461,8 @@ os.write(2, b'MERGED_STDERR\\n')
             configure(env, endpoint)
             before = {path for path, _header, _entries in histories()}
             prompt = "PARENT_COMPOSED" if composed else "PARENT_DIRECT"
+            if not composed:
+                (Path(env["ION_HOME"]) / "settings.json").write_text(json.dumps({"shell":{"setup":"export ION_ENV_MARKER=captured"}}))
             records = [json.loads(line) for line in command(env, workspace, "--reasoning", "low" if composed else "high", *(["--code-mode"] if composed else []), "--json", "run", prompt).stdout.splitlines()]
             result = next(record["output"] for record in records if record["type"] == "tool_finished")
             if composed:
@@ -487,6 +496,8 @@ os.write(2, b'MERGED_STDERR\\n')
             assert entries[settlement]["data"]["outcome"]["answer"] == result["outcome"]["answer"]
             assert (workspace / ("CHILD_COMPOSED.txt" if composed else "CHILD_DIRECT.txt")).read_text() == "CHILD_EFFECT"
             assert prompt in changed_route
+            if not composed:
+                assert (workspace / "CHILD_COMMAND_ENV.txt").read_text() == "captured", "child rebound a changed command environment"
 
         # Fork shares only the settled prefix; execution preferences remain current.
         configure(env, endpoint)

@@ -35,15 +35,28 @@ const MAX_WAIT_MS: u64 = 30_000;
 pub struct ProcessTools {
     cwd: PathBuf,
     owner: Arc<ProcessOwner>,
+    environment: Arc<crate::CommandEnvironment>,
 }
 
 impl ProcessTools {
     pub fn new(cwd: impl AsRef<Path>, owner: Arc<ProcessOwner>) -> io::Result<Self> {
+        Self::with_environment(cwd, owner, Arc::new(crate::CommandEnvironment::inherited()))
+    }
+
+    pub fn with_environment(
+        cwd: impl AsRef<Path>,
+        owner: Arc<ProcessOwner>,
+        environment: Arc<crate::CommandEnvironment>,
+    ) -> io::Result<Self> {
         let cwd = cwd.as_ref().canonicalize()?;
         if !cwd.is_dir() {
             return Err(io::Error::other("working directory is not a directory"));
         }
-        Ok(Self { cwd, owner })
+        Ok(Self {
+            cwd,
+            owner,
+            environment,
+        })
     }
 }
 
@@ -201,6 +214,7 @@ impl ProcessTools {
             command,
             backend,
             dimensions,
+            self.environment.clone(),
         ));
         let (go_tx, go_rx) = oneshot::channel();
         let (receipt_tx, receipt_rx) = oneshot::channel();
