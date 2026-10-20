@@ -12,12 +12,15 @@ const MAX_FILE_BYTES: usize = 64 * 1024;
 const MAX_CONTEXT_BYTES: usize = 128 * 1024;
 const MAX_OMISSION_BYTES: usize = 8 * 1024;
 
+mod scoped;
+pub(crate) use scoped::{ScopedInstructions, TargetKind, load_scoped};
+
 pub(crate) struct ProjectInstructions {
     pub text: String,
     pub diagnostics: Vec<ResourceDiagnostic>,
 }
 
-pub(crate) fn load(cwd: &Path) -> Result<ProjectInstructions> {
+pub(crate) fn load(cwd: &Path, config_root: &Path) -> Result<ProjectInstructions> {
     let cwd = cwd
         .canonicalize()
         .with_context(|| format!("cannot resolve working directory {}", cwd.display()))?;
@@ -27,7 +30,7 @@ pub(crate) fn load(cwd: &Path) -> Result<ProjectInstructions> {
 \n\
 Tool use:\n\
 - Prefer read for examining files and the available native ls, find and grep tools for discovery and search when they are in the loadout. Use exec for other searches and native commands when it is in the loadout. Read large files or returned captures in bounded ranges; do not dump generated artifacts into the conversation. Follow the tool's declared range arguments and returned continuation metadata; cursor fields are not interchangeable between tools. Discovery and grep results can be partial: inspect exhaustive, skipped and omissions before treating an empty result as proof of no match.\n\
-- Read a file before changing it. Use edit for targeted exact replacements, combining disjoint edits against one original file; pass the complete-file base_digest returned by read. Use write for new files or complete rewrites; replacing an existing file requires its base_digest, while creation needs neither. Use unconditional=true only for an intentional unread replacement.\n\
+- Read a file before changing it. Native file tools return scoped project instructions; each project_instructions snapshot replaces earlier observations for its directory, and empty text means those additional rules are gone. Review new or changed rules before planning changes. If a mutation is deferred for instructions, reconsider it in a later model request rather than retrying blindly in the same batch or Code Mode program. Return instruction context from Code Mode to the model, not just to guest code. User instruction files provide defaults across projects; project instructions apply only to their source directory and descendants. Direct user requests take priority over all resource text; narrower project rules refine broader defaults within that directory. Use edit for targeted exact replacements, combining disjoint edits against one original file; pass the complete-file base_digest returned by read. Use write for new files or complete rewrites; replacing an existing file requires its base_digest, while creation needs neither. Use unconditional=true only for an intentional unread replacement.\n\
 - Check observed status, exit code, stderr and truncation notices. Run verification commands separately or join dependent commands with &&; success of a final shell command does not establish success of earlier commands.\n\
 - After interruption, inspect saved observations and current files before further changes. Cancellation does not undo effects, and missing output does not authorize repeating a mutation. Inspect retained output instead of rerunning a completed command merely to recover its output.\n\
 \n\
@@ -37,6 +40,27 @@ Verify changed behavior with the project's relevant checks. Report changes, veri
     // without allowing quotes or newlines to create instruction lines.
     let cwd_literal = serde_json::to_string(&cwd).context("cannot encode working directory")?;
     instructions.push_str(&format!("\nCurrent working directory: {cwd_literal}\n"));
+    let global = std::path::absolute(config_root.join("AGENTS.md"))?;
+    let global_identity = global.canonicalize().ok();
+    let project = cwd
+        .ancestors()
+        .map(|directory| directory.join("AGENTS.md"))
+        .filter(|path| {
+            shadowed_main_file.as_ref() != Some(path)
+                && !global_identity
+                    .as_ref()
+                    .is_some_and(|identity| path.canonicalize().ok().as_ref() == Some(identity))
+        })
+        .map(|path| (path, "Project"));
+    load_sources(instructions, project.chain([(global, "User")]))
+}
+
+/// Select whole sources closest-first, then render them in inheritance order.
+/// Shared by standing resources and the live, target-scoped tool observations.
+fn load_sources(
+    mut instructions: String,
+    sources: impl IntoIterator<Item = (PathBuf, &'static str)>,
+) -> Result<ProjectInstructions> {
     ensure!(
         instructions.len() <= MAX_CONTEXT_BYTES - MAX_OMISSION_BYTES,
         "working directory context exceeds the instruction byte limit"
@@ -44,13 +68,7 @@ Verify changed behavior with the project's relevant checks. Report changes, veri
     let mut remaining = MAX_CONTEXT_BYTES - MAX_OMISSION_BYTES - instructions.len();
     let mut selected = Vec::new();
     let mut diagnostics = Vec::new();
-    // Select complete files closest-first so distant ancestors cannot crowd out
-    // the working project's rules. Render accepted files in inheritance order.
-    for directory in cwd.ancestors() {
-        let path = directory.join("AGENTS.md");
-        if shadowed_main_file.as_ref() == Some(&path) {
-            continue;
-        }
+    for (path, kind) in sources {
         let loaded = (|| -> Result<Option<String>> {
             let bytes = match crate::file_io::read_bounded(&path, MAX_FILE_BYTES) {
                 Ok(bytes) => bytes,
@@ -64,7 +82,7 @@ Verify changed behavior with the project's relevant checks. Report changes, veri
             }
             let path_literal = serde_json::to_string(&path)?;
             Ok(Some(format!(
-                "\nProject instructions from {path_literal}:\n{text}\n"
+                "\n{kind} instructions from {path_literal}:\n{text}\n"
             )))
         })();
         match loaded {
@@ -181,17 +199,42 @@ mod tests {
     fn nested_linked_worktree_shadows_main_checkout_instructions() {
         let (base, nested) = fixture();
         fs::write(nested.join("AGENTS.md"), "NESTED_WORKTREE_MARKER\n").unwrap();
-        let instructions = load(&nested.join("src")).unwrap().text;
+        let instructions = load(&nested.join("src"), &base.join("config"))
+            .unwrap()
+            .text;
         assert!(instructions.contains("PARENT_MARKER"));
         assert!(instructions.contains("NESTED_WORKTREE_MARKER"));
         assert!(!instructions.contains("MAIN_CHECKOUT_MARKER"));
+        let main_scope = load_scoped(
+            &nested.join("src"),
+            &base.join("main/src/file"),
+            TargetKind::File,
+            &tokio_util::sync::CancellationToken::new(),
+        )
+        .unwrap();
+        let text = main_scope.observation["text"].as_str().unwrap();
+        assert!(text.contains("MAIN_CHECKOUT_MARKER"));
+        assert!(!text.contains("NESTED_WORKTREE_MARKER"));
+        let worktree_scope = load_scoped(
+            &base.join("main"),
+            &nested.join("src/file"),
+            TargetKind::File,
+            &tokio_util::sync::CancellationToken::new(),
+        )
+        .unwrap();
+        let text = worktree_scope.observation["text"].as_str().unwrap();
+        assert!(text.contains("NESTED_WORKTREE_MARKER"));
+        assert!(text.contains("is shadowed"));
+        assert!(!text.contains("MAIN_CHECKOUT_MARKER"));
         fs::remove_dir_all(base).unwrap();
     }
 
     #[test]
     fn missing_worktree_file_keeps_main_checkout_instructions() {
         let (base, nested) = fixture();
-        let instructions = load(&nested.join("src")).unwrap().text;
+        let instructions = load(&nested.join("src"), &base.join("config"))
+            .unwrap()
+            .text;
         assert!(instructions.contains("PARENT_MARKER"));
         assert!(instructions.contains("MAIN_CHECKOUT_MARKER"));
         fs::remove_dir_all(base).unwrap();
@@ -203,7 +246,7 @@ mod tests {
         let cwd = nested.join("quoted\"\npath");
         fs::create_dir(&cwd).unwrap();
         fs::write(cwd.join("AGENTS.md"), "LOCAL_RULE").unwrap();
-        let instructions = load(&cwd.join(".")).unwrap().text;
+        let instructions = load(&cwd.join("."), &base.join("config")).unwrap().text;
         let line = instructions
             .lines()
             .find_map(|line| line.strip_prefix("Current working directory: "))
@@ -242,7 +285,9 @@ mod tests {
     fn instruction_bom_is_not_sent_to_the_model() {
         let (base, nested) = fixture();
         fs::write(nested.join("AGENTS.md"), "\u{feff}# Nested rules\n").unwrap();
-        let instructions = load(&nested.join("src")).unwrap().text;
+        let instructions = load(&nested.join("src"), &base.join("config"))
+            .unwrap()
+            .text;
         assert!(instructions.contains("# Nested rules"));
         assert!(!instructions.contains('\u{feff}'));
         fs::remove_dir_all(base).unwrap();

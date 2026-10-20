@@ -1241,12 +1241,7 @@ impl Agent {
                     None
                 } else {
                     self.limits.prompt_cache_warming.and_then(|policy| {
-                        PromptCacheWarmer::new(
-                            policy,
-                            prepared.warming_request(),
-                            response.usage,
-                            started,
-                        )
+                        PromptCacheWarmer::new(policy, prepared.request(), response.usage, started)
                     })
                 };
                 let mut activate_tools = BTreeSet::new();
@@ -1265,6 +1260,7 @@ impl Agent {
                         None,
                         prepared.reasoning(),
                     );
+                    let invocation = invocation.with_model_messages(&prepared.request().messages);
                     let dispatch = tool_catalog.execute_model_call(invocation);
                     let rejection = match &dispatch {
                         ToolDispatch::Rejected(reason) => Some(reason.clone()),
@@ -1297,6 +1293,7 @@ impl Agent {
                                 tool_catalog,
                                 &call,
                                 prepared.reasoning(),
+                                &prepared.request().messages,
                                 stop,
                                 observe,
                             )

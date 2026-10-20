@@ -240,7 +240,11 @@ with tempfile.TemporaryDirectory(prefix="ion-resources-") as temporary:
         assert len(requests) == before_refusal + 1, requests[before_refusal:]
         assert requests[-1]["messages"][-1]["content"].strip() == "Check Recovery; scope all."
         (prompts / "amplify.md").unlink()
+        global_rule = work / "config/ion/AGENTS.md"
         for mode in ("inline", "fullscreen"):
+            old_rule = f"GLOBAL_{mode}_OLD"
+            new_rule = f"GLOBAL_{mode}_NEW"
+            global_rule.write_text(old_rule + "\n")
             master, slave = pty.openpty()
             fcntl.ioctl(slave, termios.TIOCSWINSZ, struct.pack("HHHH", 30, 100, 0, 0))
 
@@ -290,6 +294,7 @@ with tempfile.TemporaryDirectory(prefix="ion-resources-") as temporary:
                         phase = 2
                     elif phase == 2 and len(requests) == before + 1 and b"RESOURCE_OK" in current:
                         (prompts / "late.md").write_text("A later prompt.\n")
+                        global_rule.write_text(new_rule + "\n")
                         checkpoint = len(output)
                         os.write(master, b"/reload\r")
                         phase = 3
@@ -340,6 +345,10 @@ with tempfile.TemporaryDirectory(prefix="ion-resources-") as temporary:
                 assert requests[before]["messages"][-1]["content"].strip() == "Check TUI; scope all."
                 assert requests[before + 1]["messages"][-1]["content"].strip() == "A later prompt."
                 assert requests[before + 1]["reasoning_effort"] == "high", requests[before + 1]
+                original = requests[before]["messages"][0]["content"]
+                reloaded = requests[before + 1]["messages"][0]["content"]
+                assert old_rule in original and new_rule not in original, original
+                assert new_rule in reloaded and old_rule not in reloaded, reloaded
             finally:
                 if child.poll() is None:
                     child.send_signal(signal.SIGKILL)

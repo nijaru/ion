@@ -66,7 +66,7 @@ impl Resources {
         let cwd = cwd
             .canonicalize()
             .with_context(|| format!("cannot resolve {}", cwd.display()))?;
-        let project = project_instructions::load(&cwd)?;
+        let project = project_instructions::load(&cwd, config_root)?;
         let mut resources = Self {
             instructions: project.text,
             skills: BTreeMap::new(),
@@ -473,6 +473,27 @@ mod tests {
                 .iter()
                 .any(|item| item.path == root.join("AGENTS.md").canonicalize().unwrap())
         );
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn user_instructions_precede_project_rules_and_are_not_duplicated() {
+        let root = std::env::temp_dir().join(format!("ion-global-rules-{}", uuid::Uuid::now_v7()));
+        let project = root.join("project");
+        let home = root.join("operator-home");
+        fs::create_dir_all(&project).unwrap();
+        fs::create_dir_all(&home).unwrap();
+        fs::write(project.join("AGENTS.md"), "LOCAL_RULE\n").unwrap();
+        fs::write(home.join("AGENTS.md"), "UNRELATED_HOME_RULE\n").unwrap();
+        for config in [root.join("config"), root.clone()] {
+            fs::create_dir_all(&config).unwrap();
+            fs::write(config.join("AGENTS.md"), "USER_DEFAULT\n").unwrap();
+            let resources = Resources::load_with_home(&project, &config, Some(&home)).unwrap();
+            let text = resources.instructions();
+            assert_eq!(text.matches("USER_DEFAULT").count(), 1);
+            assert!(text.find("USER_DEFAULT").unwrap() < text.find("LOCAL_RULE").unwrap());
+            assert!(!text.contains("UNRELATED_HOME_RULE"));
+        }
         fs::remove_dir_all(root).unwrap();
     }
 

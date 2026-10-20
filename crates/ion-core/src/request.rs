@@ -171,7 +171,7 @@ impl PreparedRequest {
         &self.catalog
     }
 
-    pub fn warming_request(&self) -> &ModelRequest {
+    pub fn request(&self) -> &ModelRequest {
         &self.request
     }
 

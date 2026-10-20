@@ -183,7 +183,7 @@ impl CodingApplication {
         selected: &Selection,
         questions: Option<Arc<QuestionCustody>>,
     ) -> Result<ApplicationRuntime> {
-        let native = Arc::new(LocalTools::new(cwd)?);
+        let native = Arc::new(LocalTools::new(cwd)?.with_project_instructions());
         let mut sources: Vec<Arc<dyn CodingToolSource>> = vec![
             native.clone(),
             Arc::new(crate::ProcessTools::new(cwd, self.processes.clone())?),

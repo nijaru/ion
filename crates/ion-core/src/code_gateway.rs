@@ -527,6 +527,7 @@ pub(crate) async fn run<F: FnMut(AgentEvent) + Send>(
     catalog: &ToolCatalog,
     parent_call: &ToolCall,
     reasoning: Reasoning,
+    model_messages: &[ion_ai::Message],
     operation_stop: &CancellationToken,
     observe: &mut F,
 ) -> Result<ToolOutput, AgentError> {
@@ -635,6 +636,7 @@ pub(crate) async fn run<F: FnMut(AgentEvent) + Send>(
                         Some(admitted.intent.child),
                         reasoning,
                     );
+                    let invocation = invocation.with_model_messages(model_messages);
                     gateway
                         .run(session, &child_stop, catalog.execute(invocation))
                         .await

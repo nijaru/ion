@@ -56,9 +56,8 @@ External deployment must not introduce a second execution ledger or agent loop.
 The contracts below do not settle every reference feature. These capabilities
 must be considered explicitly rather than hidden under broad claims of parity:
 
-- **Coding context:** global and target-directory instruction loading beyond the
-  current ancestor snapshot; web search and URL/document retrieval; login-shell
-  startup environment capture; non-image document/media support; summary-quality
+- **Coding context:** web search and URL/document retrieval; login-shell startup
+  environment capture; non-image document/media support; summary-quality
   aids beyond original-evidence retrieval.
 - **Continuity:** Pi-style in-file tree navigation and branch summaries versus
   Ion's independent conversation copies; richer export/share formats; history and
@@ -448,6 +447,23 @@ Filesystem workers remain owned through cancellation and settlement, including
 uninterruptible native syscalls. These tools grant neither mutation nor automatic
 replay authority and do not replace the existing command workflow for builds and
 verification.
+
+The coding preset loads user defaults from its configured `AGENTS.md`, then
+filesystem ancestors through the working directory. These standing resources are
+captured at admission; reload changes future admissions. Project rules apply to
+their source directories and descendants, with narrower rules refining broader
+defaults and linked-worktree sources shadowing the main checkout where applicable.
+Native filesystem targets discover additional physical-directory rules, including
+explicit paths outside the working directory; shell text and custom tool arguments
+are not guessed. Reads/discovery may return new rules alongside their observations.
+Native mutations defer new, changed or removed scoped instructions until the
+snapshot is present in the issuing request's tool context. Sibling/hidden Code Mode
+results are not model delivery, and stored/compacted facts alone are not an
+acknowledgement. No issued request or signed history is rewritten. Instruction-aware
+native mutations coordinate within the process, bind their physical target and
+recheck rules under the mutation lock. This is not atomic isolation from external
+editors, other processes or commands. Explicit applications inherit no such policy
+unless they select it.
 
 Resources do not execute repository text or start unconfigured servers. Instructions,
 skills/templates and results are lower-trust data. Report failures/omissions with

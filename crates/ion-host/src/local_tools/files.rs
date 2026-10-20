@@ -163,7 +163,39 @@ pub(super) fn read(cwd: &Path, args: &Value, stop: &CancellationToken) -> ToolOu
     }
 }
 
-pub(super) fn edit(cwd: &Path, args: &Value, stop: &CancellationToken) -> ToolOutput {
+fn check_instructions(
+    cwd: &Path,
+    path: &Path,
+    expected: Option<&crate::project_instructions::ScopedInstructions>,
+    stop: &CancellationToken,
+) -> Option<ToolOutput> {
+    let expected = expected?;
+    match crate::project_instructions::load_scoped(
+        cwd,
+        path,
+        crate::project_instructions::TargetKind::File,
+        stop,
+    ) {
+        Ok(current) if current.observation != expected.observation => {
+            let mut output = error(
+                "Scoped project instructions changed while acquiring the mutation lock. The target file was not changed; parent directories may already have been created. Review the new instruction context before reconsidering the change.",
+            );
+            output.value["project_instructions"] = current.observation;
+            Some(output)
+        }
+        Ok(_) => None,
+        Err(failure) => Some(error(format!(
+            "instruction revalidation failed before target mutation (parent directories may already exist): {failure:#}"
+        ))),
+    }
+}
+
+pub(super) fn edit(
+    cwd: &Path,
+    args: &Value,
+    stop: &CancellationToken,
+    instructions: Option<&crate::project_instructions::ScopedInstructions>,
+) -> ToolOutput {
     let input: EditInput = match serde_json::from_value(args.clone()) {
         Ok(value) => value,
         Err(e) => return error(format!("invalid edit arguments: {e}")),
@@ -178,10 +210,14 @@ pub(super) fn edit(cwd: &Path, args: &Value, stop: &CancellationToken) -> ToolOu
         Ok(path) => path,
         Err(e) => return error(e),
     };
-    let mutation = match crate::file_io::FileMutation::open(&path, false, stop) {
+    let path = instructions.map_or(path.as_path(), |scope| scope.target.as_path());
+    let mutation = match crate::file_io::FileMutation::open(path, false, stop) {
         Ok(mutation) => mutation,
         Err(e) => return error(format!("edit {}: {e}", input.path)),
     };
+    if let Some(output) = check_instructions(cwd, mutation.path(), instructions, stop) {
+        return output;
+    }
     let bytes = match crate::file_io::read_bounded(mutation.path(), MAX_FILE_BYTES) {
         Ok(bytes) => bytes,
         Err(e) => return error(format!("edit {}: {e}", input.path)),
@@ -217,7 +253,12 @@ pub(super) fn edit(cwd: &Path, args: &Value, stop: &CancellationToken) -> ToolOu
     }
 }
 
-pub(super) fn write(cwd: &Path, args: &Value, stop: &CancellationToken) -> ToolOutput {
+pub(super) fn write(
+    cwd: &Path,
+    args: &Value,
+    stop: &CancellationToken,
+    instructions: Option<&crate::project_instructions::ScopedInstructions>,
+) -> ToolOutput {
     let input: WriteInput = match serde_json::from_value(args.clone()) {
         Ok(value) => value,
         Err(e) => return error(format!("invalid write arguments: {e}")),
@@ -232,11 +273,15 @@ pub(super) fn write(cwd: &Path, args: &Value, stop: &CancellationToken) -> ToolO
         Ok(path) => path,
         Err(e) => return error(e),
     };
-    let mutation =
-        match crate::file_io::FileMutation::open(&path, input.base_digest.is_none(), stop) {
-            Ok(mutation) => mutation,
-            Err(e) => return error(format!("write {}: {e}", input.path)),
-        };
+    let path = instructions.map_or(path.as_path(), |scope| scope.target.as_path());
+    let mutation = match crate::file_io::FileMutation::open(path, input.base_digest.is_none(), stop)
+    {
+        Ok(mutation) => mutation,
+        Err(e) => return error(format!("write {}: {e}", input.path)),
+    };
+    if let Some(output) = check_instructions(cwd, mutation.path(), instructions, stop) {
+        return output;
+    }
     let previous = match fs::metadata(mutation.path()) {
         Ok(meta) if meta.is_file() => Some(meta.permissions()),
         Ok(_) => return error("write target is not a regular file"),
@@ -427,6 +472,58 @@ mod tests {
     use std::os::unix::fs::PermissionsExt;
 
     #[test]
+    fn scoped_mutations_revalidate_rules_and_keep_the_prepared_physical_target() {
+        use crate::project_instructions::{TargetKind, load_scoped};
+        use std::os::unix::fs::symlink;
+        let root =
+            std::env::temp_dir().join(format!("ion-scoped-mutation-{}", uuid::Uuid::now_v7()));
+        fs::create_dir_all(root.join("sub")).unwrap();
+        let root = root.canonicalize().unwrap();
+        let target = root.join("sub/file");
+        let rules = root.join("sub/AGENTS.md");
+        fs::write(&target, "original").unwrap();
+        fs::write(&rules, "INITIAL_RULE").unwrap();
+        let stop = CancellationToken::new();
+        let prepared = load_scoped(&root, &target, TargetKind::File, &stop).unwrap();
+        fs::write(&rules, "CHANGED_RULE").unwrap();
+        let output = write(
+            &root,
+            &json!({"path":"sub/file","content":"lost","base_digest":hex_digest(b"original")}),
+            &stop,
+            Some(&prepared),
+        );
+        assert!(output.is_error);
+        assert!(
+            output.value["project_instructions"]["text"]
+                .as_str()
+                .unwrap()
+                .contains("CHANGED_RULE")
+        );
+        assert_eq!(fs::read_to_string(&target).unwrap(), "original");
+
+        fs::create_dir(root.join("elsewhere")).unwrap();
+        fs::write(root.join("elsewhere/file"), "untouched").unwrap();
+        let alias = root.join("sub/alias");
+        symlink(&target, &alias).unwrap();
+        let prepared = load_scoped(&root, &alias, TargetKind::File, &stop).unwrap();
+        fs::remove_file(&alias).unwrap();
+        symlink(root.join("elsewhere/file"), &alias).unwrap();
+        let output = write(
+            &root,
+            &json!({"path":"sub/alias","content":"captured","base_digest":hex_digest(b"original")}),
+            &stop,
+            Some(&prepared),
+        );
+        assert!(!output.is_error, "{}", output.value);
+        assert_eq!(fs::read_to_string(&target).unwrap(), "captured");
+        assert_eq!(
+            fs::read_to_string(root.join("elsewhere/file")).unwrap(),
+            "untouched"
+        );
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
     fn guarded_write_checks_whole_file_without_creating_missing_targets() {
         let root = std::env::temp_dir().join(format!("ion-write-guard-{}", uuid::Uuid::now_v7()));
         fs::create_dir(&root).unwrap();
@@ -445,6 +542,7 @@ mod tests {
             &tools.cwd,
             &json!({"path":"file","content":"first","base_digest":read.value["base_digest"]}),
             &stop,
+            None,
         );
         assert!(!written.is_error, "{}", written.value);
         assert_eq!(written.value["created"], false);
@@ -453,6 +551,7 @@ mod tests {
             &tools.cwd,
             &json!({"path":"file","content":"lost","base_digest":read.value["base_digest"]}),
             &stop,
+            None,
         );
         assert!(stale.is_error);
         assert_eq!(
@@ -465,6 +564,7 @@ mod tests {
                 &tools.cwd,
                 &json!({"path":"missing/parents/file","content":"lost","base_digest":guard}),
                 &stop,
+                None,
             );
             assert!(rejected.is_error, "{}", rejected.value);
             assert!(!root.join("missing").exists());
@@ -473,6 +573,7 @@ mod tests {
             &tools.cwd,
             &json!({"path":"absent","content":"lost","base_digest":hex_digest(b"")}),
             &stop,
+            None,
         );
         assert!(missing.is_error && !root.join("absent").exists());
         let oversized = vec![b'x'; MAX_FILE_BYTES + 1];
@@ -482,6 +583,7 @@ mod tests {
                 &tools.cwd,
                 &json!({"path":"large","content":"lost","base_digest":hex_digest(&oversized)}),
                 &stop,
+                None,
             )
             .is_error
         );
@@ -490,6 +592,7 @@ mod tests {
             &tools.cwd,
             &json!({"path":"large","content":"second"}),
             &stop,
+            None,
         );
         assert!(unguarded.is_error);
         assert!(
@@ -503,6 +606,7 @@ mod tests {
             &tools.cwd,
             &json!({"path":"large","content":"second","unconditional":true}),
             &stop,
+            None,
         );
         assert!(!unconditional.is_error, "{}", unconditional.value);
         assert_eq!(unconditional.value["new_digest"], hex_digest(b"second"));
@@ -510,6 +614,7 @@ mod tests {
             &tools.cwd,
             &json!({"path":"large","content":"third","base_digest":hex_digest(b"second"),"unconditional":true}),
             &stop,
+            None,
         );
         assert!(conflicting.is_error);
         assert_eq!(fs::read(root.join("large")).unwrap(), b"second");
@@ -517,6 +622,7 @@ mod tests {
             &tools.cwd,
             &json!({"path":"new/parents/file","content":"created"}),
             &stop,
+            None,
         );
         assert!(!created.is_error && created.value["created"] == true);
         assert_eq!(created.value["new_digest"], hex_digest(b"created"));
@@ -534,6 +640,7 @@ mod tests {
             &tools.cwd,
             &json!({"path":"file","content":"lost\n"}),
             &stop,
+            None,
         );
         assert!(rejected.is_error);
         assert_eq!(fs::read(root.join("file")).unwrap(), b"old\n");
@@ -541,6 +648,7 @@ mod tests {
             &tools.cwd,
             &json!({"path":"file","content":"new\n","base_digest":hex_digest(b"old\n")}),
             &stop,
+            None,
         );
         assert!(!replaced.is_error, "{}", replaced.value);
         let diff = replaced.value["diff"]["text"].as_str().unwrap();
@@ -552,6 +660,7 @@ mod tests {
             &tools.cwd,
             &json!({"path":"created","content":"created\n"}),
             &stop,
+            None,
         );
         assert!(!created.is_error, "{}", created.value);
         let diff = created.value["diff"]["text"].as_str().unwrap();
@@ -563,6 +672,7 @@ mod tests {
             &tools.cwd,
             &json!({"path":"binary","content":"text\n","base_digest":hex_digest(&[0xff,0xfe])}),
             &stop,
+            None,
         );
         assert!(!binary.is_error, "{}", binary.value);
         assert!(binary.value.get("diff").is_none());
@@ -574,6 +684,7 @@ mod tests {
             &tools.cwd,
             &json!({"path":"large","content":"replacement","unconditional":true}),
             &stop,
+            None,
         );
         assert!(!large.is_error, "{}", large.value);
         assert!(large.value.get("diff").is_none());
@@ -600,6 +711,7 @@ mod tests {
             &tools.cwd,
             &json!({"path":"link.txt","content":"new","base_digest":hex_digest(b"old")}),
             &CancellationToken::new(),
+            None,
         );
         assert!(!output.is_error, "{}", output.value);
         assert_eq!(fs::read_to_string(&target).unwrap(), "new");
@@ -624,12 +736,14 @@ mod tests {
             &tools.cwd,
             &json!({"path":"file.txt","edits":[{"old_text":"old","new_text":"new"}],"base_digest":hex_digest(b"old")}),
             &CancellationToken::new(),
+            None,
         );
         assert!(edit.is_error, "{}", edit.value);
         let write = write(
             &tools.cwd,
             &json!({"path":"file.txt","content":"new","base_digest":hex_digest(b"old")}),
             &CancellationToken::new(),
+            None,
         );
         assert!(write.is_error, "{}", write.value);
         assert_eq!(fs::read_to_string(&path).unwrap(), "old");
@@ -653,6 +767,7 @@ mod tests {
                 "base_digest": hex_digest(original.as_bytes()),
             }),
             &CancellationToken::new(),
+            None,
         );
         assert!(!output.is_error, "{}", output.value);
         assert_eq!(
@@ -698,6 +813,7 @@ mod tests {
                 "base_digest":digest,
             }),
             &CancellationToken::new(),
+            None,
         );
         assert!(!edit.is_error, "{}", edit.value);
         fs::remove_dir_all(root).unwrap();
@@ -745,6 +861,7 @@ mod tests {
                 "base_digest":hex_digest(original.as_bytes()),
             }),
             &CancellationToken::new(),
+            None,
         );
         assert!(!output.is_error, "{}", output.value);
         assert_eq!(output.value["replacements"], 2);
@@ -769,6 +886,7 @@ mod tests {
                 &tools.cwd,
                 &json!({"path":"file.txt","edits":edits,"base_digest":hex_digest(source.as_bytes())}),
                 &CancellationToken::new(),
+                None,
             );
             assert!(output.is_error, "{}", output.value);
             assert_eq!(fs::read_to_string(&path).unwrap(), source);

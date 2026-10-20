@@ -1,5 +1,5 @@
 //! Engine-issued tool provenance, distinct from application authority.
-use ion_ai::{Reasoning, ToolCall};
+use ion_ai::{Content, Message, Reasoning, Role, ToolCall};
 use serde::{Deserialize, Serialize};
 use tokio_util::sync::CancellationToken;
 
@@ -72,6 +72,7 @@ pub struct ToolInvocation<'a> {
     origin: Option<ToolOrigin>,
     reasoning: Option<Reasoning>,
     delegation: Option<crate::delegation::AdmissionPort>,
+    model_messages: &'a [Message],
 }
 
 impl<'a> ToolInvocation<'a> {
@@ -85,7 +86,30 @@ impl<'a> ToolInvocation<'a> {
             origin: None,
             reasoning: None,
             delegation: None,
+            model_messages: &[],
         }
+    }
+
+    /// Tool-result values included in the frozen request that issued this call,
+    /// in conversation order. These are lower-trust data, not execution authority
+    /// or proof the model understood them. Withheld/compacted observations and
+    /// results of sibling/composed calls made after that request are absent.
+    /// Untracked calls have no model context. Composed children retain their
+    /// parent's request view; reading inside a guest is not model delivery.
+    pub fn model_tool_results(&self) -> impl DoubleEndedIterator<Item = &serde_json::Value> {
+        self.model_messages
+            .iter()
+            .filter(|message| message.role == Role::Tool)
+            .flat_map(|message| &message.content)
+            .filter_map(|content| match content {
+                Content::ToolResult(result) => Some(&result.result),
+                _ => None,
+            })
+    }
+
+    pub(crate) fn with_model_messages(mut self, messages: &'a [Message]) -> Self {
+        self.model_messages = messages;
+        self
     }
 
     pub fn call(&self) -> &'a ToolCall {
@@ -156,6 +180,7 @@ impl<'a> ToolInvocation<'a> {
                 stop,
                 delegation: Some(port),
                 reasoning: Some(reasoning),
+                model_messages: &[],
                 origin: Some(ToolOrigin {
                     session,
                     turn,

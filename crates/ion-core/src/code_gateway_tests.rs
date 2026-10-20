@@ -223,6 +223,7 @@ fn inspection_has_capacity_independent_of_the_waiting_guest() {
             &catalog,
             &call,
             Reasoning::ProviderDefault,
+            &[],
             &CancellationToken::new(),
             &mut |_| {},
         )
@@ -288,6 +289,7 @@ async fn namespace_and_replies_share_one_delivery_budget() {
             &ToolSet::new([]).snapshot(),
             &call,
             Reasoning::ProviderDefault,
+            &[],
             &CancellationToken::new(),
             &mut |_| {},
         )
@@ -331,6 +333,7 @@ async fn unawaited_inspection_fault_blocks_parent_success() {
         &catalog,
         &call,
         Reasoning::ProviderDefault,
+        &[],
         &CancellationToken::new(),
         &mut |_| {},
     )

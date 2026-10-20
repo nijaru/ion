@@ -19,8 +19,14 @@ mod discovery;
 mod files;
 mod text_read;
 
+// A rule edit and a dependent native mutation must not both prepare against the
+// same old rules in concurrent Code Mode/child Sessions. This is process-local
+// coordination, not a lock against external editors, exec or other processes.
+static INSTRUCTION_MUTATIONS: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
 pub struct LocalTools {
     cwd: PathBuf,
+    project_instructions: bool,
 }
 impl LocalTools {
     pub fn new(cwd: impl AsRef<Path>) -> std::io::Result<Self> {
@@ -30,8 +36,19 @@ impl LocalTools {
                 "working directory is not a directory",
             ));
         }
-        Ok(Self { cwd })
+        Ok(Self {
+            cwd,
+            project_instructions: false,
+        })
     }
+
+    /// Opt in to coding instruction discovery from explicit native file targets.
+    /// Plain LocalTools and application-owned Resources inherit no ambient rules.
+    pub fn with_project_instructions(mut self) -> Self {
+        self.project_instructions = true;
+        self
+    }
+
     /// Run a user's direct command through the native shell execution path.
     pub async fn run_user_shell(&self, command: &str, stop: CancellationToken) -> ToolOutput {
         command::run(&self.cwd, &json!({"command": command}), stop).await
@@ -90,9 +107,44 @@ enum LocalOperation {
     Exec,
 }
 
+impl LocalOperation {
+    fn instruction_target(
+        self,
+        cwd: &Path,
+        arguments: &Value,
+    ) -> Option<(PathBuf, crate::project_instructions::TargetKind)> {
+        use crate::project_instructions::TargetKind;
+        let kind = match self {
+            Self::Read | Self::Edit | Self::Write => TargetKind::File,
+            Self::Ls | Self::Find => TargetKind::Directory,
+            Self::Grep => TargetKind::SearchRoot,
+            Self::Exec => return None,
+        };
+        let raw = match arguments.get("path") {
+            Some(Value::String(raw)) if !raw.is_empty() && !raw.contains('\0') => raw.as_str(),
+            None if matches!(self, Self::Ls | Self::Find | Self::Grep) => ".",
+            _ => return None,
+        };
+        Some((cwd.join(raw), kind))
+    }
+}
+
 struct LocalExecutor {
     tools: Arc<LocalTools>,
     operation: LocalOperation,
+}
+
+/// Retain every filesystem worker through settlement, including instruction
+/// discovery. A panic cannot become a plausible observed tool error.
+async fn file_work<T: Send + 'static>(work: impl FnOnce() -> T + Send + 'static) -> T {
+    tokio::task::spawn_blocking(work)
+        .await
+        .unwrap_or_else(|failure| {
+            if failure.is_panic() {
+                std::panic::resume_unwind(failure.into_panic());
+            }
+            panic!("native file worker stopped without an observation: {failure}");
+        })
 }
 
 impl ToolExecutor for LocalExecutor {
@@ -109,13 +161,75 @@ impl ToolExecutor for LocalExecutor {
             if matches!(self.operation, LocalOperation::Exec) {
                 return command::run(&self.tools.cwd, &call.arguments, stop).await;
             }
+            let mutating = matches!(self.operation, LocalOperation::Edit | LocalOperation::Write);
+            let instruction_mutation = if self.tools.project_instructions && mutating {
+                Some(tokio::select! {
+                    biased;
+                    _ = stop.cancelled() => return error("cancelled before instruction preparation"),
+                    guard = INSTRUCTION_MUTATIONS.lock() => guard,
+                })
+            } else {
+                None
+            };
+            let scope: Option<crate::project_instructions::ScopedInstructions> = if self
+                .tools
+                .project_instructions
+            {
+                if let Some((target, kind)) = self
+                    .operation
+                    .instruction_target(&self.tools.cwd, &call.arguments)
+                {
+                    let tools = self.tools.clone();
+                    let stop = stop.clone();
+                    match file_work(move || {
+                        crate::project_instructions::load_scoped(&tools.cwd, &target, kind, &stop)
+                    })
+                    .await
+                    {
+                        Ok(scope) => Some(scope),
+                        Err(failure) => {
+                            return error(format!("instruction discovery failed: {failure:#}"));
+                        }
+                    }
+                } else {
+                    None
+                }
+            } else {
+                None
+            };
+            let requires_review = scope
+                .as_ref()
+                .is_some_and(|scope| scope.requires_review(invocation.model_tool_results()));
+            if mutating
+                && requires_review
+                && let Some(scope) = scope
+            {
+                let mut output = error(
+                    "New or changed scoped project instructions require review. No file mutation or parent creation was performed. Reconsider this change in a later model request; do not blindly retry it inside the same batch or Code Mode program. Return the complete project_instructions observation to the model from Code Mode.",
+                );
+                output.value["project_instructions"] = scope.observation;
+                return output;
+            }
+            let (mutation_context, observation) = if mutating {
+                (scope, None)
+            } else {
+                (
+                    None,
+                    scope
+                        .filter(|_| requires_review)
+                        .map(|scope| scope.observation),
+                )
+            };
             let operation = self.operation;
             let tools = self.tools.clone();
             let arguments = call.arguments.clone();
             // Filesystem calls, hashing and image normalization must not block
             // the coding operation's async poll. Retain the worker through
             // settlement; cancellation cannot interrupt an in-flight syscall.
-            tokio::task::spawn_blocking(move || {
+            let mut output = file_work(move || {
+                // The actual worker owns the fence even if a low-level caller
+                // drops its future. Core still retains and joins this work.
+                let _instruction_mutation = instruction_mutation;
                 if stop.is_cancelled() {
                     error("cancelled before tool start")
                 } else {
@@ -124,21 +238,21 @@ impl ToolExecutor for LocalExecutor {
                         LocalOperation::Ls => discovery::ls(&tools.cwd, &arguments, &stop),
                         LocalOperation::Find => discovery::find(&tools.cwd, &arguments, &stop),
                         LocalOperation::Grep => discovery::grep(&tools.cwd, &arguments, &stop),
-                        LocalOperation::Edit => files::edit(&tools.cwd, &arguments, &stop),
-                        LocalOperation::Write => files::write(&tools.cwd, &arguments, &stop),
+                        LocalOperation::Edit => {
+                            files::edit(&tools.cwd, &arguments, &stop, mutation_context.as_ref())
+                        }
+                        LocalOperation::Write => {
+                            files::write(&tools.cwd, &arguments, &stop, mutation_context.as_ref())
+                        }
                         LocalOperation::Exec => unreachable!("shell uses async execution"),
                     }
                 }
             })
-            .await
-            .unwrap_or_else(|failure| {
-                // A panic is not an observed tool failure: prior effects may be
-                // unknown. Preserve the operation's existing panic/recovery path.
-                if failure.is_panic() {
-                    std::panic::resume_unwind(failure.into_panic());
-                }
-                panic!("native file worker stopped without an observation: {failure}");
-            })
+            .await;
+            if let Some(observation) = observation {
+                output.value["project_instructions"] = observation;
+            }
+            output
         })
     }
 }
@@ -518,6 +632,7 @@ mod tests {
             &root,
             &json!({"path":"file","content":"released","base_digest":hex_digest(b"old")}),
             &CancellationToken::new(),
+            None,
         );
         assert!(!output.is_error, "{}", output.value);
         assert_eq!(fs::read(root.join("file")).unwrap(), b"released");
