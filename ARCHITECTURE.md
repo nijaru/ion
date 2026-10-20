@@ -1,9 +1,8 @@
 # Ion architecture
 
 This document owns accepted engine and application contracts, including targets
-not yet implemented. [README.md](README.md) introduces the application;
-[usage guides](README.md#guides) describe delivered behavior and qualification
-limits. Current source establishes implementation. Ion is unreleased
+not yet implemented. [README.md](README.md) describes delivered behavior and
+qualification limits. Current source establishes implementation. Ion is unreleased
 v0: replace obsolete APIs, development formats and owners rather than retaining
 parallel implementations or compatibility facades.
 
@@ -829,7 +828,7 @@ code, limits and a bounded bridge; Core retains Session/catalogue authority. It 
 not another agent loop or a durable JavaScript runtime. Pi is the model-facing
 authoring reference: named discoverable calls, useful declarations, selected
 structured/text/image output and actionable errors. The
-[Code Mode guide](docs/tools.md#optional-code-mode) states the implemented subset;
+[README](README.md#optional-code-mode) states the implemented subset;
 no comparative speedup is assumed. VM execution capacity must be independent
 of host work awaited through its bridge. Core retains an owned join future until
 actual worker exit, not just receipt of a guest result; VM teardown precedes that

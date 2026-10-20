@@ -3,8 +3,8 @@
 ## Design and scope
 
 - `ARCHITECTURE.md` owns accepted contracts and explicit design boundaries.
-  `README.md` is the entry point; `docs/` owns implemented usage and API details.
-  Source establishes implementation, not old plans, reviews or passing tests.
+  `README.md` describes implemented usage and qualification limits. Source
+  establishes implementation, not old plans, reviews or passing tests.
 - Build one reusable Rust agent engine. Coding is its first application, not
   its ceiling. Bots, services, phone integrations and coordinators reuse shared
   control, admission, recovery and delegation rather than implementing new loops.
