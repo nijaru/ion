@@ -100,6 +100,9 @@ enum PickerOutput {
 pub(super) struct Pickers {
     active: Option<Picker>,
     notice: Option<String>,
+    // The item index rendered as selected in the latest frame. Enter accepts only
+    // that candidate, so a stale or clipped selection cannot be chosen blindly.
+    rendered_selected: Option<usize>,
     // A dismissed worker still owns its handle. New requests replace this single
     // waiting slot, never spawn another scan before the old one is joined.
     waiting: Option<PickerRequest>,
@@ -112,7 +115,8 @@ impl Pickers {
     }
 
     /// Render against the final budget, after composer and status allocation.
-    pub fn rows(&self, width: usize, height: usize) -> Vec<String> {
+    pub fn rows(&mut self, width: usize, height: usize) -> Vec<String> {
+        self.rendered_selected = None;
         let Some(picker) = &self.active else {
             return Vec::new();
         };
@@ -134,15 +138,19 @@ impl Pickers {
             .and_then(|index| picker.items[*index].detail.as_deref())
         {
             let available = height.saturating_sub(rows.len() + selected_row);
-            let mut detail_rows = Vec::new();
-            push_wrapped(&mut detail_rows, detail, width);
-            detail_rows.truncate(available);
-            rows.extend(detail_rows);
+            if available > 0 {
+                let mut detail_rows = Vec::new();
+                push_wrapped(&mut detail_rows, detail, width);
+                detail_rows.truncate(available);
+                rows.extend(detail_rows);
+            }
         }
         let visible = height.saturating_sub(rows.len());
         let start = picker.selected.saturating_sub(visible.saturating_sub(1));
+        let mut selected_visible = false;
         for (index, item) in matching.iter().enumerate().skip(start).take(visible) {
-            let marker = if index == picker.selected { '›' } else { ' ' };
+            let selected = index == picker.selected;
+            let marker = if selected { '›' } else { ' ' };
             let row = if width > 2 {
                 format!(
                     "{marker} {}",
@@ -151,7 +159,11 @@ impl Pickers {
             } else {
                 marker.to_string()
             };
+            selected_visible |= selected && width > 2;
             rows.push(row);
+        }
+        if selected_visible {
+            self.rendered_selected = matching.get(picker.selected).copied();
         }
         rows
     }
@@ -183,6 +195,7 @@ impl Pickers {
     pub fn close(&mut self) {
         self.active = None;
         self.notice = None;
+        self.rendered_selected = None;
         self.waiting = None;
         if let Some(job) = &self.job {
             job.stop.cancel();
@@ -292,6 +305,7 @@ impl Pickers {
                         .selected
                         .min(picker.matches().len().saturating_sub(1));
                 }
+                self.rendered_selected = None;
                 if empty {
                     self.close();
                 }
@@ -317,6 +331,7 @@ impl Pickers {
                         .selected
                         .min(picker.matches().len().saturating_sub(1));
                 }
+                self.rendered_selected = None;
                 if empty {
                     self.close();
                 }
@@ -352,6 +367,7 @@ impl Pickers {
             .query
             .extend(text.chars().filter(|ch| !ch.is_control()));
         picker.selected = 0;
+        self.rendered_selected = None;
         true
     }
 
@@ -361,14 +377,19 @@ impl Pickers {
         match key.code {
             KeyCode::Esc => self.close(),
             KeyCode::Char('c') if key.modifiers.contains(Modifiers::CONTROL) => self.close(),
-            KeyCode::Up => picker.selected = picker.selected.saturating_sub(1),
+            KeyCode::Up => {
+                picker.selected = picker.selected.saturating_sub(1);
+                self.rendered_selected = None;
+            }
             KeyCode::Down => {
                 picker.selected =
-                    (picker.selected + 1).min(picker.matches().len().saturating_sub(1))
+                    (picker.selected + 1).min(picker.matches().len().saturating_sub(1));
+                self.rendered_selected = None;
             }
             KeyCode::Backspace => {
                 picker.query.pop();
                 picker.selected = 0;
+                self.rendered_selected = None;
             }
             KeyCode::Char(ch)
                 if !key.modifiers.contains(Modifiers::CONTROL)
@@ -376,11 +397,16 @@ impl Pickers {
             {
                 picker.query.push(ch);
                 picker.selected = 0;
+                self.rendered_selected = None;
             }
             KeyCode::Enter if !loading => {
                 let index = picker.matches().get(picker.selected).copied();
-                let value = index.map(|index| picker.items.remove(index).value);
-                self.close();
+                let value = index
+                    .filter(|index| self.rendered_selected == Some(*index))
+                    .map(|index| picker.items.remove(index).value);
+                if value.is_some() {
+                    self.close();
+                }
                 return value;
             }
             _ => {}
@@ -517,6 +543,76 @@ mod tests {
         }]))
     }
 
+    fn open_labels(labels: &[&str]) -> Pickers {
+        let mut pickers = Pickers::default();
+        pickers.open(Picker {
+            title: "Resume session",
+            query: String::new(),
+            selected: 0,
+            items: labels
+                .iter()
+                .map(|label| PickerItem {
+                    label: (*label).into(),
+                    detail: None,
+                    value: PickerValue::Session(PathBuf::from(label)),
+                })
+                .collect(),
+        });
+        pickers
+    }
+
+    #[test]
+    fn confirmation_requires_the_selected_candidate_in_the_latest_frame() {
+        let mut pickers = open_labels(&["alpha", "beta"]);
+        assert!(pickers.rows(80, 0).is_empty());
+        assert!(
+            pickers
+                .key(KeyEvent::new(KeyCode::Enter, Modifiers::NONE))
+                .is_none()
+        );
+        assert!(pickers.active().is_some());
+
+        let marker_only = pickers.rows(2, 10);
+        assert_eq!(&marker_only[1..], ["›", " "]);
+        assert!(
+            pickers
+                .key(KeyEvent::new(KeyCode::Enter, Modifiers::NONE))
+                .is_none()
+        );
+        assert!(pickers.active().is_some());
+
+        let rows = pickers.rows(80, 10);
+        assert!(rows.iter().any(|row| row == "› alpha"));
+        assert!(matches!(
+            pickers.key(KeyEvent::new(KeyCode::Enter, Modifiers::NONE)),
+            Some(PickerValue::Session(path)) if path == Path::new("alpha")
+        ));
+        assert!(pickers.active().is_none());
+
+        let mut pickers = open_labels(&["alpha", "beta"]);
+        pickers.rows(80, 10);
+        pickers.rows(1, 10);
+        assert!(
+            pickers
+                .key(KeyEvent::new(KeyCode::Enter, Modifiers::NONE))
+                .is_none()
+        );
+        pickers.rows(80, 10);
+        pickers.key(KeyEvent::new(KeyCode::Char('b'), Modifiers::NONE));
+        assert!(
+            pickers
+                .key(KeyEvent::new(KeyCode::Enter, Modifiers::NONE))
+                .is_none()
+        );
+        assert_eq!(pickers.active().unwrap().query, "b");
+        let rows = pickers.rows(80, 10);
+        assert!(rows.iter().any(|row| row == "› beta"));
+        assert!(matches!(
+            pickers.key(KeyEvent::new(KeyCode::Enter, Modifiers::NONE)),
+            Some(PickerValue::Session(path)) if path == Path::new("beta")
+        ));
+    }
+
     #[tokio::test]
     async fn dismissal_retains_join_and_coalesces_restarts_without_stale_publication() {
         let root = std::env::temp_dir().join(format!("ion-discovery-{}", uuid::Uuid::now_v7()));
@@ -648,6 +744,8 @@ mod tests {
         let detail = picker.items[0].detail.as_deref().unwrap();
         assert!(detail.contains("019abcdef0123456789abcdef01234567"));
         assert!(detail.contains("2 turn(s)"));
+        let rows = pickers.rows(80, 10);
+        assert!(rows.iter().any(|row| row.starts_with("› ")));
         let Some(PickerValue::Session(path)) =
             pickers.key(KeyEvent::new(KeyCode::Enter, Modifiers::NONE))
         else {
@@ -675,6 +773,7 @@ mod tests {
         assert!(pickers.complete().await.is_none());
         assert_eq!(pickers.active().unwrap().query, "draft query");
         assert_eq!(pickers.active().unwrap().selected, 0);
+        pickers.rows(80, 10);
         let Some(PickerValue::File { path, start, end }) =
             pickers.key(KeyEvent::new(KeyCode::Enter, Modifiers::NONE))
         else {

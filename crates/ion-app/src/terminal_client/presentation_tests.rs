@@ -631,6 +631,7 @@ async fn file_picker_inserts_a_selected_project_path() {
     assert_eq!(picker.query, "m");
     assert_eq!(picker.items.len(), 1);
     assert_eq!(picker.items[0].label, "src/main.rs");
+    ui.pickers.rows(80, 10);
     let chosen = ui.key(KeyEvent::new(KeyCode::Enter, Modifiers::NONE), None);
     let Action::Pick(PickerValue::File { path, start, end }) = chosen else {
         panic!("file picker did not choose a path")

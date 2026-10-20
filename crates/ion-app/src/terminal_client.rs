@@ -1893,11 +1893,16 @@ fn modal_rows(
     });
     let composer_height = composer.as_ref().map_or(0, |input| input.lines.len());
     let viewport = height.saturating_sub(composer_height + status_height);
-    let content = ui.pickers.rows(width, viewport);
+    // Picker rows are only physical when the details view is not covering them.
+    let picker_rows = if ui.details.is_none() {
+        ui.pickers.rows(width, viewport)
+    } else {
+        Vec::new()
+    };
     let content = ui
         .details
         .as_ref()
-        .map_or(content.as_slice(), DetailView::rows);
+        .map_or(picker_rows.as_slice(), DetailView::rows);
     let scroll = ui.details.as_ref().map_or(0, |view| view.scroll);
     let end = content.len().saturating_sub(scroll.min(content.len()));
     let start = end.saturating_sub(viewport);

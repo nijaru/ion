@@ -10,6 +10,9 @@ use super::{
     EditorDraft, Frontend, picker::Picker, picker::PickerItem, picker::PickerValue,
     short_session_id,
 };
+use crate::display_text::fit_line;
+
+const MAX_MODEL_METADATA_WIDTH: usize = 96;
 
 pub(super) struct ForkPickerValue {
     pub point: ForkPoint,
@@ -167,10 +170,12 @@ pub(super) fn session_items(
         .into_iter()
         .map(|session| {
             let is_current = session.id == current_id;
+            let label = session_label(&session, is_current);
+            let detail = session_detail(&session, is_current, now);
             PickerItem {
-                label: session_label(&session, is_current),
-                detail: Some(session_detail(&session, is_current, now)),
-                value: PickerValue::Session(session.path.clone()),
+                label,
+                detail: Some(detail),
+                value: PickerValue::Session(session.path),
             }
         })
         .collect()
@@ -198,7 +203,10 @@ fn session_label(session: &SessionSummary, current: bool) -> String {
 fn session_detail(session: &SessionSummary, current: bool, now: SystemTime) -> String {
     let model = session.model.as_ref().map_or_else(
         || "unknown".to_owned(),
-        |model| format!("{}/{}", plain(&model.provider), plain(&model.model)),
+        |model| {
+            let identity = format!("{}/{}", plain(&model.provider), plain(&model.model));
+            fit_line(&identity, MAX_MODEL_METADATA_WIDTH)
+        },
     );
     format!(
         "id {}{} · {} turn(s)\nmodel {} · {}",
@@ -344,6 +352,30 @@ mod tests {
         assert!(detail.contains("3 turn(s)"));
         assert!(detail.contains("model unknown"));
         assert!(detail.contains("file activity 2023-11-14 22:11:15 UTC (2m ago)"));
+    }
+
+    #[test]
+    fn saved_session_detail_bounds_model_metadata_but_not_session_identity() {
+        let now = UNIX_EPOCH + Duration::from_secs(1_700_000_000);
+        let huge_model = "m".repeat(4_096);
+        let summary = summary(
+            "Large model",
+            Some(ModelRef {
+                provider: "provider\u{1b}[31m".into(),
+                model: huge_model.clone(),
+            }),
+            now,
+        );
+        let detail = session_detail(&summary, false, now);
+        assert!(detail.contains("id 019abcdef0123456789abcdef01234567"));
+        assert!(detail.contains('…'));
+        assert!(!detail.contains(&huge_model));
+        assert!(!detail.contains('\u{1b}'));
+        assert!(
+            detail.len() < 512,
+            "metadata display is unbounded: {detail:?}"
+        );
+        assert_eq!(summary.model.as_ref().unwrap().model, huge_model);
     }
 
     #[test]
