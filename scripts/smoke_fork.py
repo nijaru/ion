@@ -186,6 +186,59 @@ with tempfile.TemporaryDirectory(prefix="ion-fork-") as temporary:
                 child.send_signal(signal.SIGKILL)
                 child.wait()
             os.close(master)
+        # The no-argument picker exposes only committed ended Turns, and choosing
+        # one copies facts without dispatching the restored Turn.
+        source_before = json.loads(ion("--session", source_id, "inspect").stdout)
+        before_paths = set((work / "state/ion/sessions").rglob("*.sqlite"))
+        before_requests = len(requests)
+        master, slave = pty.openpty()
+        fcntl.ioctl(slave, termios.TIOCSWINSZ, struct.pack("HHHH", 30, 100, 0, 0))
+        child = subprocess.Popen([binary, "--cwd", workspace, "--session", source_id, "chat"], env={**env, "TERM": "xterm-256color"}, stdin=slave, stdout=slave, stderr=slave, preexec_fn=attach_terminal)
+        os.close(slave)
+        output = bytearray()
+        picker_sent = selected = quit_sent = False
+        deadline = time.monotonic() + 12
+        try:
+            while time.monotonic() < deadline:
+                readable, _, _ = select.select([master], [], [], 0.05)
+                if readable:
+                    try:
+                        data = os.read(master, 65536)
+                    except OSError as error:
+                        if error.errno != errno.EIO:
+                            raise
+                        data = b""
+                    output.extend(data)
+                    if b"\x1b[6n" in data:
+                        os.write(master, b"\x1b[2;1R")
+                if b"\xe2\x80\xba" in output and not picker_sent:
+                    os.write(master, b"/fork-after\r")
+                    picker_sent = True
+                if picker_sent and b"Fork after Turn" in output and b"Turn 1  ended completed" in output and b"Turn 2  ended completed" in output and not selected:
+                    os.write(master, b"\r")
+                    selected = True
+                if selected and b"Forked as" in output and not quit_sent:
+                    os.write(master, b"\x03")
+                    quit_sent = True
+                if child.poll() is not None:
+                    break
+            child.wait(timeout=5)
+            assert child.returncode == 0 and b"Forked as" in output, output[-1200:]
+        finally:
+            if child.poll() is None:
+                child.send_signal(signal.SIGKILL)
+                child.wait()
+            os.close(master)
+        assert len(requests) == before_requests, "picked /fork-after dispatched Turn work"
+        children = set((work / "state/ion/sessions").rglob("*.sqlite")) - before_paths
+        assert len(children) == 1, "picked /fork-after did not save exactly one copy"
+        picked = json.loads(ion("--session", children.pop(), "inspect").stdout)
+        assert [entry["data"]["turn"] for entry in picked["entries"] if entry["kind"] == "turn_started"] == [1]
+        assert picked["messages"] == source_before["messages"][:2]
+        assert picked["unfinished_turn"] is None
+        assert picked["last_model"] == source_before["last_model"]
+        assert json.loads(ion("--session", source_id, "inspect").stdout) == source_before, "picked /fork-after changed source facts"
+
         # The normalized image carries a coordinate note. Fork restoration must
         # keep that note with its image, not fold it into the editable prompt.
         def png_chunk(kind, payload):

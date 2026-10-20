@@ -4,8 +4,9 @@ use ion_host::{Delivery, SessionControl, UserInput};
 use ion_terminal::{Screen, TerminalSession};
 
 use super::{
-    Builtin, CommandInput, EditorDraft, ForkPoint, Frontend, PickerValue, ProgramStatusState,
-    apply_fork, copy_last_answer, edit_draft_in_terminal, handle_command, login_in_terminal,
+    Builtin, CommandInput, EditorDraft, Frontend, PickerValue, ProgramStatusState,
+    copy_last_answer, edit_draft_in_terminal, handle_command, login_in_terminal,
+    navigation::apply_fork,
 };
 
 pub(super) fn editor_delivery(runtime: &SessionControl<EditorDraft>) -> Delivery {
@@ -181,8 +182,8 @@ pub(super) fn apply_picker(
         return Ok(());
     }
     let result = match value {
-        PickerValue::ForkBefore { turn, input } => {
-            return match apply_fork(runtime, ui, ForkPoint::BeforeTurn(turn), Some(input)) {
+        PickerValue::Fork(value) => {
+            return match apply_fork(runtime, ui, value) {
                 Ok(()) => Ok(()),
                 Err(error) => {
                     ui.status = format!("{error:#}");

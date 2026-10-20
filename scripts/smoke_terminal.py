@@ -83,7 +83,7 @@ def drain_terminal(fd, output):
     raise AssertionError("terminal PTY stayed open after process exit")
 
 
-def exercise_unicode_resume(workspace, env, target, mode):
+def exercise_unicode_resume(workspace, env, target, mode, session_id):
     """Select a Unicode-named Session after its database filename changes."""
     master, slave = pty.openpty()
     fcntl.ioctl(slave, termios.TIOCSWINSZ, struct.pack("HHHH", 30, 240, 0, 0))
@@ -125,6 +125,24 @@ def exercise_unicode_resume(workspace, env, target, mode):
         output.clear()
         os.write(master, b"\r")
         wait(lambda: b"Ready" in output and "›".encode() in output)
+        # The reopened browser marks the now-current Session and exposes the
+        # existing recorded facts before a second selection.
+        output.clear()
+        os.write(master, b"/resume\r")
+        wait(lambda: b"Resume session" in output)
+        os.write(master, b"01234567890")
+        wait(lambda: b"1 match(es)" in output
+             and b"[current]" in output
+             and session_id.encode() in output
+             and b"2 turn(s)" in output
+             and b"smoke/smoke-model" in output)
+        output.clear()
+        os.write(master, b"\r")
+        # Selecting the same Session only reloads resources; the unchanged
+        # Ready status is not repainted, so let the close settle before /session.
+        settle = time.monotonic() + 0.5
+        while time.monotonic() < settle:
+            collect()
         output.clear()
         os.write(master, b"/session\r")
         wait(lambda: str(target).encode() in output)
@@ -494,7 +512,7 @@ with tempfile.TemporaryDirectory(prefix="ion-terminal-") as temporary:
             reopened = subprocess.run([binary, "--cwd", workspace, "--session", renamed, "inspect"], env=env, check=True, capture_output=True)
             assert json.loads(reopened.stdout) == json.loads(inspected.stdout), "filename rename changed Session facts"
             for mode in ("inline", "fullscreen"):
-                exercise_unicode_resume(workspace, env, renamed, mode)
+                exercise_unicode_resume(workspace, env, renamed, mode, session_id)
             after_resume = subprocess.run([binary, "--cwd", workspace, "--session", renamed, "inspect"], env=env, check=True, capture_output=True)
             assert json.loads(after_resume.stdout) == json.loads(inspected.stdout), "picker resume changed passive Session facts"
 

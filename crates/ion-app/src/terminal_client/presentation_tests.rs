@@ -476,6 +476,7 @@ fn picker_selection_stays_visible_beside_wrapped_query_and_status() {
             items: (0..20)
                 .map(|index| PickerItem {
                     label: format!("{index:02}-matching-long-project-file.rs"),
+                    detail: None,
                     value: PickerValue::File {
                         path: format!("file-{index}"),
                         start: 0,
@@ -496,6 +497,53 @@ fn picker_selection_stays_visible_beside_wrapped_query_and_status() {
                 );
                 let (row, column) = cursor.expect("query cursor stays visible");
                 assert!(row < height as usize && column < width);
+            }
+        }
+    }
+}
+
+#[test]
+fn session_picker_detail_never_hides_the_selected_row() {
+    let mut ui = Frontend {
+        status: "Ready".into(),
+        ..Frontend::default()
+    };
+    ui.pickers.open(Picker {
+        title: "Resume session",
+        query: "saved".into(),
+        selected: 2,
+        items: (0..3)
+            .map(|index| PickerItem {
+                label: format!(
+                    "{}0{index}-saved-task  saved prompt",
+                    if index == 2 { "[current] " } else { "" }
+                ),
+                detail: Some(format!(
+                    "id 019abcdef0123456789abcdef0123456{index} · {} turn(s)\nmodel smoke/model · file activity 2026-10-19 12:34:56 UTC (2m ago)",
+                    index + 1
+                )),
+                value: PickerValue::Session(PathBuf::from(format!("/session-{index}"))),
+            })
+            .collect(),
+    });
+    for width in [8, 12, 80] {
+        for height in 2..12 {
+            let (rows, _) = modal_rows(&mut ui, None, None, width, height);
+            assert_eq!(rows.len(), height as usize);
+            assert!(rows.iter().all(|row| row.width() <= width as usize));
+            assert!(
+                rows.iter().any(|row| {
+                    let row = row.to_string();
+                    row.starts_with('›') && (width < 24 || row.contains("02-"))
+                }),
+                "selected Session hidden at {width}x{height}"
+            );
+            if height >= 6 && width >= 80 {
+                assert!(
+                    rows.iter()
+                        .any(|row| row.to_string().contains("id 019abcdef")),
+                    "selected metadata missing at {width}x{height}"
+                );
             }
         }
     }

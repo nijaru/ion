@@ -27,7 +27,7 @@ commands! {
     New => ("new", "", "Start a new Session"),
     Clone => ("clone", "", "Copy this conversation into a new Session"),
     Fork => ("fork", "[TURN]", "Fork before a Turn and restore its input"),
-    ForkAfter => ("fork-after", "TURN", "Fork after a Turn"),
+    ForkAfter => ("fork-after", "[TURN]", "Fork after a Turn"),
     Resume => ("resume", "[ID]", "Choose a saved Session"),
     Session => ("session", "", "Show Session and context information"),
     Name => ("name", "[NAME]", "Show or change the Session name"),

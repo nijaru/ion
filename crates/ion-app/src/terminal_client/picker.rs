@@ -1,13 +1,17 @@
-//! Modal picker custody and its one owned, cooperative filesystem traversal.
+//! Modal picker custody and its one owned, cooperative background scan.
 use std::path::{Path, PathBuf};
+use std::time::SystemTime;
 
 use crate::display_text::{fit_line, push_wrapped};
 use anyhow::{Context, Result};
 use ignore::WalkBuilder;
-use ion_ai::{Message, ModelRef};
+use ion_ai::ModelRef;
+use ion_host::{SessionCatalog, SessionSummary};
 use ion_terminal::{KeyCode, KeyEvent, Modifiers};
 use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
+
+use super::navigation::{ForkPickerValue, session_items};
 
 const MAX_FILES: usize = 20_000;
 const MAX_ENTRIES: usize = 100_000;
@@ -15,10 +19,7 @@ const MAX_ENTRIES: usize = 100_000;
 pub(super) enum PickerValue {
     Session(PathBuf),
     Model(ModelRef),
-    ForkBefore {
-        turn: u64,
-        input: Message,
-    },
+    Fork(ForkPickerValue),
     File {
         path: String,
         start: usize,
@@ -28,6 +29,7 @@ pub(super) enum PickerValue {
 
 pub(super) struct PickerItem {
     pub label: String,
+    pub detail: Option<String>,
     pub value: PickerValue,
 }
 
@@ -54,21 +56,44 @@ impl Picker {
     }
 }
 
+#[derive(Clone)]
 struct FileRequest {
     cwd: PathBuf,
     start: usize,
     end: usize,
 }
 
-struct DiscoveryJob {
-    request: FileRequest,
-    stop: CancellationToken,
-    task: JoinHandle<Result<Discovery>>,
+#[derive(Clone)]
+struct SessionRequest {
+    catalog: SessionCatalog,
+    current_id: String,
 }
 
-enum Discovery {
+#[derive(Clone)]
+enum PickerRequest {
+    Files(FileRequest),
+    Sessions(SessionRequest),
+}
+
+impl PickerRequest {
+    fn failure_label(&self) -> &'static str {
+        match self {
+            Self::Files(_) => "File discovery failed",
+            Self::Sessions(_) => "Session discovery failed",
+        }
+    }
+}
+
+struct PickerJob {
+    request: PickerRequest,
+    stop: CancellationToken,
+    task: JoinHandle<Result<PickerOutput>>,
+}
+
+enum PickerOutput {
     Cancelled,
     Files { paths: Vec<String>, limited: bool },
+    Sessions(Vec<SessionSummary>),
 }
 
 #[derive(Default)]
@@ -76,9 +101,9 @@ pub(super) struct Pickers {
     active: Option<Picker>,
     notice: Option<String>,
     // A dismissed worker still owns its handle. New requests replace this single
-    // waiting slot, never spawn another traversal before the old one is joined.
-    waiting: Option<FileRequest>,
-    job: Option<DiscoveryJob>,
+    // waiting slot, never spawn another scan before the old one is joined.
+    waiting: Option<PickerRequest>,
+    job: Option<PickerJob>,
 }
 
 impl Pickers {
@@ -93,16 +118,27 @@ impl Pickers {
         };
         let matching = picker.matches();
         let mut rows = vec![if self.loading() {
-            format!("{} · discovering project files…", picker.title)
+            format!("{} · {}", picker.title, self.loading_label())
         } else {
             format!("{} · {} match(es)", picker.title, matching.len())
         }];
         if let Some(notice) = &self.notice {
             push_wrapped(&mut rows, notice, width);
         }
-        // At small sizes the selected result outranks metadata: Enter must not
-        // select a row clipped away by the query composer or a long notice.
-        rows.truncate(height.saturating_sub(usize::from(!matching.is_empty())));
+        // At small sizes the selected result outranks metadata and notices:
+        // Enter must not select a row clipped away by another row.
+        let selected_row = usize::from(!matching.is_empty());
+        rows.truncate(height.saturating_sub(selected_row));
+        if let Some(detail) = matching
+            .get(picker.selected)
+            .and_then(|index| picker.items[*index].detail.as_deref())
+        {
+            let available = height.saturating_sub(rows.len() + selected_row);
+            let mut detail_rows = Vec::new();
+            push_wrapped(&mut detail_rows, detail, width);
+            detail_rows.truncate(available);
+            rows.extend(detail_rows);
+        }
         let visible = height.saturating_sub(rows.len());
         let start = picker.selected.saturating_sub(visible.saturating_sub(1));
         for (index, item) in matching.iter().enumerate().skip(start).take(visible) {
@@ -118,6 +154,18 @@ impl Pickers {
             rows.push(row);
         }
         rows
+    }
+
+    fn loading_label(&self) -> &'static str {
+        match self.waiting.as_ref().or_else(|| {
+            self.job
+                .as_ref()
+                .filter(|job| !job.stop.is_cancelled())
+                .map(|job| &job.request)
+        }) {
+            Some(PickerRequest::Sessions(_)) => "discovering saved Sessions…",
+            Some(PickerRequest::Files(_)) | None => "discovering project files…",
+        }
     }
 
     pub fn loading(&self) -> bool {
@@ -153,11 +201,25 @@ impl Pickers {
             selected: 0,
             items: Vec::new(),
         });
-        self.waiting = Some(FileRequest {
+        self.waiting = Some(PickerRequest::Files(FileRequest {
             cwd: cwd.to_path_buf(),
             start,
             end,
+        }));
+        self.admit();
+    }
+
+    pub fn open_sessions(&mut self, catalog: SessionCatalog, current_id: String) {
+        self.open(Picker {
+            title: "Resume session",
+            query: String::new(),
+            selected: 0,
+            items: Vec::new(),
         });
+        self.waiting = Some(PickerRequest::Sessions(SessionRequest {
+            catalog,
+            current_id,
+        }));
         self.admit();
     }
 
@@ -165,46 +227,64 @@ impl Pickers {
         if self.job.is_some() {
             return;
         }
-        if let Some(request) = self.waiting.take() {
-            let stop = CancellationToken::new();
-            let worker_stop = stop.clone();
-            let cwd = request.cwd.clone();
-            self.job = Some(DiscoveryJob {
-                request,
-                stop,
-                task: tokio::task::spawn_blocking(move || discover(&cwd, &worker_stop)),
-            });
-        }
+        let Some(request) = self.waiting.take() else {
+            return;
+        };
+        let stop = CancellationToken::new();
+        let worker_stop = stop.clone();
+        let task = match &request {
+            PickerRequest::Files(files) => {
+                let cwd = files.cwd.clone();
+                tokio::task::spawn_blocking(move || discover(&cwd, &worker_stop))
+            }
+            PickerRequest::Sessions(sessions) => {
+                let catalog = sessions.catalog.clone();
+                tokio::task::spawn_blocking(move || {
+                    catalog.scan(&worker_stop).map(|sessions| {
+                        sessions.map_or(PickerOutput::Cancelled, PickerOutput::Sessions)
+                    })
+                })
+            }
+        };
+        self.job = Some(PickerJob {
+            request,
+            stop,
+            task,
+        });
     }
 
     // Await by reference: losing a select race leaves custody here, including
     // the completed result. Only remove the handle after its join has resolved.
     pub async fn complete(&mut self) -> Option<String> {
         let result = (&mut self.job.as_mut()?.task).await;
-        let job = self.job.take().expect("joined discovery is still owned");
+        let job = self.job.take().expect("joined picker work is still owned");
         let publish = !job.stop.is_cancelled();
         let notice = match result
-            .context("file discovery worker stopped")
+            .context("picker worker stopped")
             .and_then(|result| result)
         {
             Err(error) => {
                 if publish {
                     self.close();
                 }
-                Some(format!("File discovery failed: {error:#}"))
+                Some(format!("{}: {error:#}", job.request.failure_label()))
             }
-            Ok(Discovery::Cancelled) => None,
-            Ok(Discovery::Files { paths, limited }) if publish => {
+            Ok(PickerOutput::Cancelled) => None,
+            Ok(PickerOutput::Files { paths, limited }) if publish => {
+                let PickerRequest::Files(request) = job.request else {
+                    unreachable!("file output has a file request")
+                };
                 let empty = paths.is_empty();
                 if let Some(picker) = &mut self.active {
                     picker.items = paths
                         .into_iter()
                         .map(|path| PickerItem {
                             label: path.clone(),
+                            detail: None,
                             value: PickerValue::File {
                                 path,
-                                start: job.request.start,
-                                end: job.request.end,
+                                start: request.start,
+                                end: request.end,
                             },
                         })
                         .collect();
@@ -225,7 +305,24 @@ impl Pickers {
                     None
                 }
             }
-            Ok(Discovery::Files { .. }) => None,
+            Ok(PickerOutput::Sessions(sessions)) if publish => {
+                let PickerRequest::Sessions(request) = job.request else {
+                    unreachable!("Session output has a Session request")
+                };
+                let items = session_items(sessions, &request.current_id, SystemTime::now());
+                let empty = items.is_empty();
+                if let Some(picker) = &mut self.active {
+                    picker.items = items;
+                    picker.selected = picker
+                        .selected
+                        .min(picker.matches().len().saturating_sub(1));
+                }
+                if empty {
+                    self.close();
+                }
+                empty.then(|| "No saved Sessions for this working directory".into())
+            }
+            Ok(PickerOutput::Files { .. } | PickerOutput::Sessions(_)) => None,
         };
         if publish && self.active.is_some() {
             self.notice = notice.clone();
@@ -239,9 +336,9 @@ impl Pickers {
         if let Some(job) = &mut self.job {
             let result = (&mut job.task)
                 .await
-                .context("file discovery worker stopped during exit");
+                .context("picker worker stopped during exit");
             self.job = None;
-            // Cancellation is normal; actual traversal failures are not.
+            // Cancellation is normal; actual scan failures are not.
             result??;
         }
         Ok(())
@@ -292,9 +389,9 @@ impl Pickers {
     }
 }
 
-fn discover(cwd: &Path, stop: &CancellationToken) -> Result<Discovery> {
+fn discover(cwd: &Path, stop: &CancellationToken) -> Result<PickerOutput> {
     if stop.is_cancelled() {
-        return Ok(Discovery::Cancelled);
+        return Ok(PickerOutput::Cancelled);
     }
     let mut walker = WalkBuilder::new(cwd)
         .follow_links(false)
@@ -306,7 +403,7 @@ fn discover(cwd: &Path, stop: &CancellationToken) -> Result<Discovery> {
         // An in-flight filesystem call cannot be killed. Check before and after
         // each traversal step; cap admission even for trees containing no files.
         if stop.is_cancelled() {
-            return Ok(Discovery::Cancelled);
+            return Ok(PickerOutput::Cancelled);
         }
         if paths.len() >= MAX_FILES || visited >= MAX_ENTRIES {
             break true;
@@ -321,7 +418,7 @@ fn discover(cwd: &Path, stop: &CancellationToken) -> Result<Discovery> {
             return Err(anyhow::anyhow!("project ignore rules: {error}"));
         }
         if stop.is_cancelled() {
-            return Ok(Discovery::Cancelled);
+            return Ok(PickerOutput::Cancelled);
         }
         visited += 1;
         if entry.file_type().is_some_and(|kind| kind.is_file()) {
@@ -336,34 +433,50 @@ fn discover(cwd: &Path, stop: &CancellationToken) -> Result<Discovery> {
         }
     };
     paths.sort();
-    Ok(Discovery::Files { paths, limited })
+    Ok(PickerOutput::Files { paths, limited })
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::time::UNIX_EPOCH;
     use tokio::{
         sync::oneshot,
         time::{Duration, timeout},
     };
 
+    fn file_request() -> PickerRequest {
+        PickerRequest::Files(FileRequest {
+            cwd: PathBuf::new(),
+            start: 2,
+            end: 3,
+        })
+    }
+
+    fn session_request(current_id: &str) -> PickerRequest {
+        PickerRequest::Sessions(SessionRequest {
+            catalog: SessionCatalog::new(PathBuf::new(), None),
+            current_id: current_id.into(),
+        })
+    }
+
     // A held blocking step models filesystem I/O that cannot be interrupted.
     // This is test-owned work, not a production fault or timing hook.
-    fn held_job(result: Result<Discovery>) -> (Pickers, oneshot::Sender<()>) {
+    fn held_job(
+        request: PickerRequest,
+        title: &'static str,
+        result: Result<PickerOutput>,
+    ) -> (Pickers, oneshot::Sender<()>) {
         let (release, held) = oneshot::channel();
         let mut pickers = Pickers::default();
         pickers.open(Picker {
-            title: "Choose file",
+            title,
             query: "draft query".into(),
             selected: 0,
             items: Vec::new(),
         });
-        pickers.job = Some(DiscoveryJob {
-            request: FileRequest {
-                cwd: PathBuf::new(),
-                start: 2,
-                end: 3,
-            },
+        pickers.job = Some(PickerJob {
+            request,
             stop: CancellationToken::new(),
             task: tokio::task::spawn_blocking(move || {
                 held.blocking_recv().unwrap();
@@ -373,11 +486,35 @@ mod tests {
         (pickers, release)
     }
 
-    fn files(path: &str) -> Result<Discovery> {
-        Ok(Discovery::Files {
+    fn held_file_job(result: Result<PickerOutput>) -> (Pickers, oneshot::Sender<()>) {
+        held_job(file_request(), "Choose file", result)
+    }
+
+    fn held_session_job(result: Result<PickerOutput>) -> (Pickers, oneshot::Sender<()>) {
+        held_job(
+            session_request("019abcdef0123456789abcdef01234567"),
+            "Resume session",
+            result,
+        )
+    }
+
+    fn files(path: &str) -> Result<PickerOutput> {
+        Ok(PickerOutput::Files {
             paths: vec![path.into()],
             limited: false,
         })
+    }
+
+    fn sessions(path: &str) -> Result<PickerOutput> {
+        Ok(PickerOutput::Sessions(vec![SessionSummary {
+            id: "019abcdef0123456789abcdef01234567".into(),
+            path: path.into(),
+            name: Some("saved task".into()),
+            preview: Some("saved prompt".into()),
+            model: None,
+            turns: 2,
+            updated: UNIX_EPOCH,
+        }]))
     }
 
     #[tokio::test]
@@ -385,7 +522,7 @@ mod tests {
         let root = std::env::temp_dir().join(format!("ion-discovery-{}", uuid::Uuid::now_v7()));
         std::fs::create_dir(&root).unwrap();
         std::fs::write(root.join("current.rs"), "current").unwrap();
-        let (mut pickers, release) = held_job(files("stale.rs"));
+        let (mut pickers, release) = held_file_job(files("stale.rs"));
         let original = pickers.job.as_ref().unwrap().task.id();
         // Cancelling the completion future must not remove/detach its handle.
         assert!(
@@ -411,35 +548,124 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn session_results_cannot_replace_a_new_model_picker() {
+        let (mut pickers, release) = held_session_job(sessions("/saved"));
+        pickers.open(Picker {
+            title: "Choose model",
+            query: "model query".into(),
+            selected: 0,
+            items: Vec::new(),
+        });
+        assert!(pickers.job.as_ref().unwrap().stop.is_cancelled());
+        release.send(()).unwrap();
+        assert!(pickers.complete().await.is_none());
+        assert_eq!(pickers.active().unwrap().title, "Choose model");
+        assert_eq!(pickers.active().unwrap().query, "model query");
+        assert!(pickers.active().unwrap().items.is_empty());
+        assert!(!pickers.has_job());
+        pickers.shutdown().await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn session_worker_joins_before_files_can_replace_it() {
+        let root = std::env::temp_dir().join(format!("ion-discovery-{}", uuid::Uuid::now_v7()));
+        std::fs::create_dir(&root).unwrap();
+        std::fs::write(root.join("current.rs"), "current").unwrap();
+        let (mut pickers, release) = held_session_job(sessions("stale.sqlite"));
+        let original = pickers.job.as_ref().unwrap().task.id();
+        for query in ["first", "latest"] {
+            pickers.open_files(&root, 7, 8, query.into());
+            assert_eq!(pickers.job.as_ref().unwrap().task.id(), original);
+        }
+        release.send(()).unwrap();
+        // The cancelled Session result cannot publish into the newer file picker.
+        assert!(pickers.complete().await.is_none());
+        assert_eq!(pickers.active().unwrap().title, "Choose file");
+        assert!(pickers.active().unwrap().items.is_empty());
+        assert!(pickers.complete().await.is_none());
+        assert_eq!(pickers.active().unwrap().query, "latest");
+        assert_eq!(pickers.active().unwrap().items[0].label, "current.rs");
+        pickers.shutdown().await.unwrap();
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[tokio::test]
     async fn shutdown_waits_for_owned_work_and_reports_errors_even_after_dismissal() {
-        for failing in [false, true] {
-            let result = if failing {
-                Err(anyhow::anyhow!("filesystem failure"))
-            } else {
-                files("late.rs")
-            };
-            let (mut pickers, release) = held_job(result);
-            pickers.close();
-            assert!(
-                timeout(Duration::from_millis(10), pickers.shutdown())
-                    .await
-                    .is_err()
-            );
-            assert!(pickers.has_job());
-            release.send(()).unwrap();
-            let result = pickers.shutdown().await;
-            assert_eq!(result.is_err(), failing);
-            if let Err(error) = result {
-                assert!(format!("{error:#}").contains("filesystem failure"));
+        for (request, title) in [
+            (file_request(), "Choose file"),
+            (
+                session_request("019abcdef0123456789abcdef01234567"),
+                "Resume session",
+            ),
+        ] {
+            for failing in [false, true] {
+                let result = if failing {
+                    Err(anyhow::anyhow!("filesystem failure"))
+                } else {
+                    match request {
+                        PickerRequest::Files(_) => files("late.rs"),
+                        PickerRequest::Sessions(_) => sessions("/late.sqlite"),
+                    }
+                };
+                let (mut pickers, release) = held_job(request.clone(), title, result);
+                pickers.close();
+                assert!(
+                    timeout(Duration::from_millis(10), pickers.shutdown())
+                        .await
+                        .is_err()
+                );
+                assert!(pickers.has_job());
+                release.send(()).unwrap();
+                let result = pickers.shutdown().await;
+                assert_eq!(result.is_err(), failing);
+                if let Err(error) = result {
+                    assert!(format!("{error:#}").contains("filesystem failure"));
+                }
+                assert!(!pickers.has_job());
+                assert!(pickers.active().is_none());
             }
-            assert!(!pickers.has_job());
-            assert!(pickers.active().is_none());
         }
     }
 
     #[tokio::test]
+    async fn completion_preserves_session_query_and_selection_and_surfaces_failures() {
+        let (mut pickers, release) = held_session_job(sessions("/current"));
+        pickers.active.as_mut().unwrap().query.clear();
+        for character in "saved".chars() {
+            pickers.key(KeyEvent::new(KeyCode::Char(character), Modifiers::NONE));
+        }
+        pickers.key(KeyEvent::new(KeyCode::Enter, Modifiers::NONE));
+        assert!(
+            pickers.active().is_some(),
+            "Enter cannot discard a pending query"
+        );
+        release.send(()).unwrap();
+        assert!(pickers.complete().await.is_none());
+        let picker = pickers.active().unwrap();
+        assert_eq!(picker.query, "saved");
+        assert_eq!(picker.selected, 0);
+        assert!(picker.items[0].label.starts_with("[current]"));
+        let detail = picker.items[0].detail.as_deref().unwrap();
+        assert!(detail.contains("019abcdef0123456789abcdef01234567"));
+        assert!(detail.contains("2 turn(s)"));
+        let Some(PickerValue::Session(path)) =
+            pickers.key(KeyEvent::new(KeyCode::Enter, Modifiers::NONE))
+        else {
+            panic!("no chosen Session")
+        };
+        assert_eq!(path, PathBuf::from("/current"));
+
+        let (mut pickers, release) = held_session_job(Err(anyhow::anyhow!("read failed")));
+        pickers.close();
+        release.send(()).unwrap();
+        let notice = pickers.complete().await.unwrap();
+        assert!(notice.contains("Session discovery failed") && notice.contains("read failed"));
+        assert!(pickers.active().is_none());
+    }
+
+    #[tokio::test]
     async fn completion_preserves_query_and_selection_and_surfaces_discovery_failures() {
-        let (mut pickers, release) = held_job(files("draft query.rs"));
+        let (mut pickers, release) = held_file_job(files("draft query.rs"));
         pickers.key(KeyEvent::new(KeyCode::Enter, Modifiers::NONE));
         assert!(
             pickers.active().is_some(),
@@ -456,7 +682,7 @@ mod tests {
         };
         assert_eq!((path.as_str(), start, end), ("draft query.rs", 2, 3));
 
-        let (mut pickers, release) = held_job(Err(anyhow::anyhow!("read failed")));
+        let (mut pickers, release) = held_file_job(Err(anyhow::anyhow!("read failed")));
         pickers.close();
         release.send(()).unwrap();
         assert!(pickers.complete().await.unwrap().contains("read failed"));
@@ -471,7 +697,7 @@ mod tests {
         #[cfg(unix)]
         std::os::unix::fs::symlink(root.join("visible.rs"), root.join("link.rs")).unwrap();
         let stop = CancellationToken::new();
-        let Discovery::Files { paths, limited } = discover(&root, &stop).unwrap() else {
+        let PickerOutput::Files { paths, limited } = discover(&root, &stop).unwrap() else {
             panic!("cancelled unexpectedly")
         };
         assert_eq!(paths, ["visible.rs"]);
@@ -479,7 +705,7 @@ mod tests {
         stop.cancel();
         assert!(matches!(
             discover(&root, &stop).unwrap(),
-            Discovery::Cancelled
+            PickerOutput::Cancelled
         ));
         assert!(discover(&root.join("missing"), &CancellationToken::new()).is_err());
         // Linux permits raw-byte filenames; APFS rejects this fixture at creation.

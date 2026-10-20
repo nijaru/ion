@@ -15,8 +15,8 @@ use crate::transcript_render::kind_label;
 use anyhow::{Context, Result};
 use ion_ai::{Content, Message, ModelRef};
 use ion_core::{
-    CodingSession, ForkPoint, LiveTranscript, SessionEntry, SessionView, TranscriptItem,
-    TranscriptProjection, TurnEndReason,
+    CodingSession, LiveTranscript, SessionEntry, SessionView, TranscriptItem, TranscriptProjection,
+    TurnEndReason,
 };
 use ion_host::image_input::{ImageSource, LoadedImage};
 use ion_host::{
@@ -37,6 +37,7 @@ mod composer;
 mod draft;
 mod editing;
 mod interaction;
+mod navigation;
 mod output;
 mod picker;
 mod question;
@@ -553,29 +554,6 @@ async fn edit_draft_in_terminal(
     Ok(edited.map(|edited| ui.replace_draft(edited)))
 }
 
-fn apply_fork(
-    runtime: &mut SessionControl<EditorDraft>,
-    ui: &mut Frontend,
-    point: ForkPoint,
-    restore: Option<Message>,
-) -> Result<()> {
-    let id = runtime.fork_session(point)?;
-    ui.refresh_session(runtime.session())?;
-    let restore_error = restore.and_then(|input| ui.restore_input(input).err());
-    ui.status = if let Some(error) = restore_error {
-        format!(
-            "Forked as {}; {error}; draft retained; inspect source to copy selected input",
-            short_session_id(&id)
-        )
-    } else {
-        format!(
-            "Forked as {}; both sessions use the same working directory",
-            short_session_id(&id)
-        )
-    };
-    Ok(())
-}
-
 fn handle_command(
     runtime: &mut SessionControl<EditorDraft>,
     services: &ion_host::Host,
@@ -689,66 +667,9 @@ fn handle_command(
                 "Cloned conversation as {id}; both sessions use the same working directory"
             ));
         }
-        Some(Builtin::Fork) => {
-            let turns = runtime.session().view()?.turns();
-            if args.is_empty() {
-                let items = turns
-                    .into_iter()
-                    .map(|item| PickerItem {
-                        label: format!("Turn {}  {}", item.turn, crate::preview_input(&item.input)),
-                        value: PickerValue::ForkBefore {
-                            turn: item.turn,
-                            input: item.input,
-                        },
-                    })
-                    .collect();
-                ui.pickers.open(Picker {
-                    title: "Fork before Turn",
-                    query: String::new(),
-                    selected: 0,
-                    items,
-                });
-            } else {
-                let turn: u64 = args.parse().context("use /fork TURN")?;
-                let input = turns
-                    .into_iter()
-                    .find(|item| item.turn == turn)
-                    .context("selected Turn does not exist")?
-                    .input;
-                apply_fork(runtime, ui, ForkPoint::BeforeTurn(turn), Some(input))?;
-            }
-        }
-        Some(Builtin::ForkAfter) => {
-            let turn: u64 = args.parse().context("use /fork-after TURN")?;
-            apply_fork(runtime, ui, ForkPoint::AfterTurn(turn), None)?;
-        }
-        Some(Builtin::Resume) => {
-            if !args.is_empty() {
-                runtime.switch_session(runtime.catalog().by_id(args)?)?;
-                ui.refresh_session(runtime.session())?;
-            } else {
-                let items = runtime
-                    .catalog()
-                    .list()?
-                    .into_iter()
-                    .map(|session| PickerItem {
-                        label: format!(
-                            "{}  {}  {}",
-                            short_session_id(&session.id),
-                            session.name.as_deref().unwrap_or(""),
-                            session.preview.as_deref().unwrap_or("")
-                        ),
-                        value: PickerValue::Session(session.path),
-                    })
-                    .collect();
-                ui.pickers.open(Picker {
-                    title: "Resume session",
-                    query: String::new(),
-                    selected: 0,
-                    items,
-                });
-            }
-        }
+        Some(Builtin::Fork) => navigation::fork(runtime, ui, args)?,
+        Some(Builtin::ForkAfter) => navigation::fork_after(runtime, ui, args)?,
+        Some(Builtin::Resume) => navigation::resume(runtime, ui, args)?,
         Some(Builtin::Name) => {
             if args.is_empty() {
                 ui.print(
@@ -791,6 +712,7 @@ fn handle_command(
                                     "ready"
                                 }
                             ),
+                            detail: None,
                             value: PickerValue::Model(option.identity()),
                         })
                     })
