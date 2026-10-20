@@ -1,8 +1,9 @@
 # Ion architecture
 
 This document owns accepted engine and application contracts, including targets
-not yet implemented. [README.md](README.md) describes delivered behavior and
-qualification limits; current source establishes implementation. Ion is unreleased
+not yet implemented. [README.md](README.md) introduces the application;
+[usage guides](README.md#guides) describe delivered behavior and qualification
+limits. Current source establishes implementation. Ion is unreleased
 v0: replace obsolete APIs, development formats and owners rather than retaining
 parallel implementations or compatibility facades.
 
@@ -29,59 +30,58 @@ Adapt semantics to Rust, not entire runtimes or feature inventories.
 
 ### Reference-derived design
 
-Use Pi's composable agent/session and coding workflows, and fx's reusable engine,
-managed sessions and inline interaction as the primary baselines. Similarity means
-recognizable behavior and complete workflows, not matching language-level APIs or
-copying their internal layering. State-of-the-art is a quality target, not a claim
-established by feature count: understandable control, dependable effects/recovery,
-useful context, responsive interaction and replaceable model/tool integrations.
-The product target is comparable workflow completeness, reliability and polish
-to Pi and fx; architectural similarity and passing tests alone do not reach it.
+[Pi](https://github.com/earendil-works/pi) and
+[fx](https://github.com/vercel-labs/fx) are living upstream baselines, not pinned
+parity targets. Use their current relevant implementation when making a design
+decision. Historical revisions identify evidence, not the version Ion must match.
+Separate shipped native workflows, examples/extensions and experimental SDKs;
+one surface does not inherit another's guarantees.
 
-| Concern | Reference implementation | Ion design |
-| --- | --- | --- |
-| Coding tools and prompts | Pi's tool definitions contribute schemas, prompt guidance and renderers; read/edit/shell results include continuation, diffs and saved-output references. | Keep model-facing tools coherent with their declarations and selected loadout. Bounded output must remain retrievable; precise edits and useful feedback must not require repeated model round trips for independent changes. |
-| Context and continuity | Pi projects Session paths and supports compaction/branch summaries. fx calibrates request estimates from usage and preserves retrievable records with checked compaction notes. | Core owns context projection, sizing and compaction. Preserve original facts and retrieval coordinates; calibrate only from applicable observations. Source checks improve summaries but do not make them authoritative. |
-| Interaction | Pi combines editable input, steering/follow-ups, selectors and Session navigation. fx combines inline output with managed terminals and child work. | Shared control owns input/execution lifecycle; clients own editing and navigation. Shell, background and interactive-process workflows need explicit custody, not detached processes or UI-owned tasks. |
-| Customization | Pi loads tools, commands, shortcuts, renderers, providers and resource packages. fx exposes custom tools, skills and MCP through its application/library surfaces. | Support application and user customization without forking the engine. Tools, resources, commands, UI contributions and lifecycle hooks are distinct powers; choose delivery mechanisms without granting mutable Session or wire authority. |
-| Application composition | Pi's session factory assembles model, tools and resources; fx composes native and library hosts. | A complete Host application recipe feeds shared control. Coding is a preset; restricted applications inherit no ambient coding authority. |
-| Model access | Pi separates model metadata, credentials, provider protocols and session selection; fx offers configured gateway, subscription and compatible-endpoint routes. | Model setup, authentication, reasoning controls, switching and custom endpoints form one usable application surface. Provider protocols and credentials remain outside Core; unavailable capabilities are explicit. |
-| Durable hosting | fx's JavaScript durable harness persists inputs/steps and fences workers through storage/queue adapters; native conversation persistence is a different regime. | Admission and execution facts stay in the Session history. Hosting adapters reuse the engine and its authority/ownership semantics; they do not introduce competing execution truth or imply guarantees from another host. |
-| Tool recovery | fx distinguishes explicitly idempotent replay from ambiguous calls. | Unknown effects remain unknown by default. Re-execution requires a tool-specific reconciliation/idempotency contract and stable occurrence identity, not a read-only label or unchanged schema. |
-| Operational quality | fx maintains startup, UI-activity and memory benchmarks; both projects exercise actual clients and expose diagnostics. | Design for bounded active work, responsive presentation and diagnosable failures. Measure representative costs before claiming performance; source similarity or a fast helper command does not establish coding quality. |
+Comparable workflow completeness, reliability and polish are the target, not
+matching language APIs, crate diagrams or feature counts. Ion's coding workflow
+must support inspection, guarded changes, native verification and reporting;
+editable input during work; stop/reopen with honest effect uncertainty; useful
+long-session context and evidence retrieval; trusted customization; coherent
+model setup; and responsive, inspectable terminal interaction. The detailed
+contracts below govern those capabilities across clients.
 
-Rust boundaries use typed states and errors, explicit owned work, narrow traits for
-replaceable providers/tools/applications, and asynchronous stop/join. Persist data,
-not tasks, trait objects or credentials. Keep policy in the application rather than
-encoding one host's defaults in Core. Introduce an abstraction for an actual
-variation; do not build a generic workflow system or storage-plugin surface merely
-to resemble a reference SDK. A shared lifecycle API does not make all hosts'
-guarantees identical: volatile input custody, committed admission and restart-safe
-queued custody remain distinct promises, explicit at acknowledgement.
+Use typed states/errors, explicit owned work, narrow replaceable boundaries and
+asynchronous stop/join. Persist data, not tasks, trait objects or credentials.
+Keep application policy out of Core. Introduce abstractions for real variation,
+not merely to resemble a reference SDK. Volatile input custody, committed admission
+and restart-safe queued custody are distinct promises, explicit at acknowledgement.
+External deployment must not introduce a second execution ledger or agent loop.
 
-Source landmarks: Pi's
-[`agent-loop.ts`](https://github.com/earendil-works/pi/blob/6fb2e7815167e6b19006fc526d1a5d0f5f998787/packages/agent/src/agent-loop.ts),
-[`sdk.ts`](https://github.com/earendil-works/pi/blob/6fb2e7815167e6b19006fc526d1a5d0f5f998787/packages/coding-agent/src/core/sdk.ts)
-and [`agent-session.ts`](https://github.com/earendil-works/pi/blob/6fb2e7815167e6b19006fc526d1a5d0f5f998787/packages/coding-agent/src/core/agent-session.ts);
-fx v0.0.14's
-[`durable.js`](https://github.com/vercel-labs/fx/blob/1a070af32cdfaf8cd0da6de3dc7f053302828b17/sdk/durable.js),
-[`fx-harness.js`](https://github.com/vercel-labs/fx/blob/1a070af32cdfaf8cd0da6de3dc7f053302828b17/sdk/fx-harness.js)
-and [`app_worker_runtime.zig`](https://github.com/vercel-labs/fx/blob/1a070af32cdfaf8cd0da6de3dc7f053302828b17/src/core/app/app_worker_runtime.zig).
-These are inspected snapshots, not automatic parity or correctness evidence;
-refresh the relevant implementation when its behavior changes. UniiChat
-[`0500bf6`](https://github.com/VictorTaelin/UniiChat/tree/0500bf6a8ea4bf0ce047488562022b1b6532cc30)
-is an exploratory reference for addressable summary trees, explicit zoom and
-shared browser/terminal view state, below the Pi/fx baselines. Its preserved raw
-messages do not establish summary fidelity, cache stability or durable effect
-recovery. It does not change Ion's history, compaction or delegation ownership.
+### Capability decisions still open
 
-The first completion target is the coding daily driver, not the end of the
-competitive design. Evaluate customization, Session navigation, interactive work,
-model access and hosting as product capabilities with explicit delivery priorities.
-Do not treat an earlier milestone boundary as evidence that a gap is unimportant,
-or adopt every reference feature without an Ion consumer and coherent owner.
-Deployment, isolation and ecosystem expansion may be staged without narrowing the
-shared engine's contracts.
+The contracts below do not settle every reference feature. These capabilities
+must be considered explicitly rather than hidden under broad claims of parity:
+
+- **Coding context:** global and target-directory instruction loading beyond the
+  current ancestor snapshot; web search and URL/document retrieval; login-shell
+  startup environment capture; non-image document/media support; summary-quality
+  aids beyond original-evidence retrieval.
+- **Continuity:** Pi-style in-file tree navigation and branch summaries versus
+  Ion's independent conversation copies; richer export/share formats; history and
+  artifact retention policy.
+- **Customization:** packaged user-installable contributions, arbitrary command
+  handlers, lifecycle/policy consumers, external renderers, themes and configurable
+  keybindings. Named executable commands and Rust/MCP tools do not deliver all of
+  these powers.
+- **Model access and accounting:** subscription/OAuth workflows, additional
+  provider protocols, virtual-model routing, user-facing spending/usage reports
+  and budgets. Context-token calibration is not a spending budget.
+- **Clients and distribution:** ACP/editor adapters, non-Rust SDK bindings,
+  browser/WASM hosts, platform support beyond currently qualified environments,
+  installation/update workflows and user-facing health/trace diagnostics.
+
+These are unresolved product/delivery decisions, not promises to copy every
+reference feature or permanent exclusions from V1. A selected capability needs
+an intended workflow, an owner, authority/failure semantics and a real consumer
+before implementation. Optional approval policy and durable-hosting boundaries
+already have accepted contracts below; their unfinished implementation is not
+an unresolved decision about whether those boundaries exist. Delivery order and
+historical comparison evidence do not belong in this architecture document.
 
 ## Engine concepts and owners
 
@@ -381,9 +381,9 @@ complete emulator support. Projection-only failures, including oversized control
 strings, make the screen explicitly unavailable while raw capture and the program
 continue. Required-reply overload is instead a protocol supervision failure: stop
 and join the program, retain raw capture and report the failure, never silently
-drop required replies. Neither failure relinquishes process custody. Model-only
-terminal control precedes human attachment: there is no concurrent human writer
-until a real caller owns an exclusive input lease.
+drop required replies. Neither failure relinquishes process custody. Human input
+requires a real client owning an exclusive input lease; model-only terminal
+control does not establish a human-attachment workflow.
 
 Bound live slots, retained results, pending input and raw capture. Reads use explicit
 byte cursors and report evicted gaps, decoding loss and incomplete capture. Exit
@@ -501,9 +501,10 @@ Keep executable customization separate from inert resources. Use compiled Rust
 application registrations for in-process implementations and supervised external
 processes for user-installable code; MCP is the established external tool/resource
 protocol. This avoids a Rust dylib ABI or a second long-lived JavaScript engine.
-Code Mode remains invocation-scoped composition, not an extension loader. A named
-command protocol is the first external contribution to specify through a real
-consumer; it does not require inventing a general event bus or workflow language.
+Code Mode remains invocation-scoped composition, not an extension loader. Named
+executable commands are one external contribution with a real shared-control
+consumer; they do not establish a general extension-handler protocol, event bus
+or workflow language.
 
 - **Data:** instructions, skills and prompt templates remain lower-trust input,
   with provenance and explicit expansion, never executable launch instructions.
@@ -827,8 +828,9 @@ Code Mode is opt-in beside direct calls/discovery. A confined Host VM gets owned
 code, limits and a bounded bridge; Core retains Session/catalogue authority. It is
 not another agent loop or a durable JavaScript runtime. Pi is the model-facing
 authoring reference: named discoverable calls, useful declarations, selected
-structured/text/image output and actionable errors. README states the implemented
-subset; no comparative speedup is assumed. VM execution capacity must be independent
+structured/text/image output and actionable errors. The
+[Code Mode guide](docs/tools.md#optional-code-mode) states the implemented subset;
+no comparative speedup is assumed. VM execution capacity must be independent
 of host work awaited through its bridge. Core retains an owned join future until
 actual worker exit, not just receipt of a guest result; VM teardown precedes that
 completion. Cancellation does not detach either the VM or its started host work.
