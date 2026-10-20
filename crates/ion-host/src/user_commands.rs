@@ -13,7 +13,10 @@ use std::{
 };
 
 use anyhow::{Context, Result, anyhow, ensure};
-use serde::{Deserialize, Serialize};
+use serde::{
+    Deserialize, Deserializer, Serialize,
+    de::{Error as _, MapAccess, Visitor},
+};
 use sha2::{Digest, Sha256};
 
 use crate::{command_args::quote, file_io::read_bounded, model_setup::write_json};
@@ -166,6 +169,7 @@ struct TrustEntry {
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct Manifest {
+    #[serde(deserialize_with = "deserialize_commands")]
     commands: BTreeMap<String, RawCommand>,
 }
 
@@ -177,6 +181,41 @@ struct RawCommand {
     #[serde(default)]
     args: Vec<String>,
     share_with_model: bool,
+}
+
+/// Command names are executable catalog keys, so duplicate entries are
+/// ambiguous. Reject them while decoding the map instead of silently keeping
+/// the last definition. User loading, project loading and project trust all
+/// decode through this owner.
+fn deserialize_commands<'de, D>(deserializer: D) -> Result<BTreeMap<String, RawCommand>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    struct CommandVisitor;
+
+    impl<'de> Visitor<'de> for CommandVisitor {
+        type Value = BTreeMap<String, RawCommand>;
+
+        fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            formatter.write_str("a map of uniquely named commands")
+        }
+
+        fn visit_map<A>(self, mut map: A) -> Result<Self::Value, A::Error>
+        where
+            A: MapAccess<'de>,
+        {
+            let mut commands = BTreeMap::new();
+            while let Some((name, command)) = map.next_entry::<String, RawCommand>()? {
+                if commands.contains_key(&name) {
+                    return Err(A::Error::custom(format!("duplicate command name `{name}`")));
+                }
+                commands.insert(name, command);
+            }
+            Ok(commands)
+        }
+    }
+
+    deserializer.deserialize_map(CommandVisitor)
 }
 
 struct ProjectConfig {
@@ -266,8 +305,8 @@ impl CommandConfig {
                             project.manifest.display()
                         )),
                         Err(error) => diagnostics.push(format!(
-                            "cannot read commands trust store {}: {error:#}",
-                            self.trust.display()
+                            "cannot verify project commands manifest {}: {error:#}",
+                            project.manifest.display()
                         )),
                     }
                 }
@@ -632,6 +671,39 @@ mod tests {
             fs::write(root.join(".ion/commands.json"), invalid).unwrap();
             assert!(config.trust_project().is_err(), "{invalid}");
         }
+    }
+
+    #[test]
+    fn duplicate_names_are_inert_and_cannot_be_trusted() {
+        let temp = Temp::new("duplicate");
+        let root = temp.project("work");
+        temp.write_project(&root, &manifest("check", "program", false));
+        let config = temp.config_for(&root);
+        config.trust_project().unwrap();
+        let grant = fs::read(temp.config.join("commands-trust.json")).unwrap();
+
+        let duplicated = r#"{"commands":{"check":{"description":"first","program":"one","args":[],"share_with_model":false},"check":{"description":"second","program":"two","args":[],"share_with_model":false}}}"#;
+        temp.write_project(&root, duplicated);
+        let error = config.trust_project().unwrap_err().to_string();
+        assert!(error.contains("duplicate command name"), "{error}");
+        assert_eq!(
+            fs::read(temp.config.join("commands-trust.json")).unwrap(),
+            grant,
+            "a refused grant must not replace the previous trust store"
+        );
+        assert!(config.list().unwrap().iter().next().is_none());
+
+        temp.write_user(duplicated);
+        let listing = config.list().unwrap();
+        assert!(listing.iter().next().is_none());
+        assert!(
+            listing
+                .diagnostics()
+                .iter()
+                .any(|message| message.contains("duplicate command name")),
+            "{:?}",
+            listing.diagnostics()
+        );
     }
 
     #[test]
