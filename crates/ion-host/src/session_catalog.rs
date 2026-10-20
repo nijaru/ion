@@ -117,25 +117,26 @@ impl SessionCatalog {
         }
         let mut paths = Vec::new();
         match fs::read_dir(self.directory()) {
-            Ok(entries) => {
-                for entry in entries {
-                    if cancelled() {
-                        return Ok(None);
-                    }
-                    // Errors from a traversal step that raced with cancellation
-                    // remain real failures instead of becoming cancellation.
-                    let entry = entry?;
-                    if cancelled() {
-                        return Ok(None);
-                    }
-                    let path = entry.path();
-                    if path.extension().is_some_and(|ext| ext == "sqlite")
-                        && entry.file_type()?.is_file()
-                    {
-                        paths.push(path);
-                    }
+            Ok(mut entries) => loop {
+                if cancelled() {
+                    return Ok(None);
                 }
-            }
+                // `for` would traverse before checking cancellation. Check first,
+                // then surface an observed traversal error before any later stop.
+                let Some(entry) = entries.next() else {
+                    break;
+                };
+                let entry = entry?;
+                if cancelled() {
+                    return Ok(None);
+                }
+                let path = entry.path();
+                if path.extension().is_some_and(|ext| ext == "sqlite")
+                    && entry.file_type()?.is_file()
+                {
+                    paths.push(path);
+                }
+            },
             Err(error) if error.kind() == io::ErrorKind::NotFound => {}
             Err(error) => return Err(error).context("cannot list sessions"),
         }
