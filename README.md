@@ -461,7 +461,26 @@ grapheme. Ctrl/Alt-Left/Right or Alt-B/F move by Unicode word boundaries.
 Ctrl-U/K delete to the line start/end, joining adjacent lines when already at
 the boundary. Ctrl-W or Alt-Backspace deletes the preceding word; Alt-D/Delete
 deletes the next word. Ctrl-D deletes forward in a nonempty draft and exits when
-the draft is empty. These editing keys remain available during work without
+the draft is empty.
+
+Unsent prompt text has undo/redo: `Ctrl-minus` or `Ctrl-_` undoes; adding Alt redoes.
+Typing groups at whitespace boundaries; paste, completion and successful external
+editor replacement are atomic edits. Ctrl-C draft clear is undoable too. Ctrl-Y
+yanks the latest killed text; Alt-Y cycles older kills immediately after yank or
+yank-pop. Consecutive word/line kills accumulate in cursor order; ordinary
+Backspace/Delete does not enter the kill ring. Moving the cursor or taking another
+input action ends yank-pop affinity. Over-limit edits leave text and recorded
+recovery entries unchanged.
+
+Undo/redo retains at most 100 deltas and 1 MiB of text; the terminal-local kill
+ring retains at most 32 entries and 256 KiB. Oldest entries are evicted first.
+Submission or queue handoff, history/returned-draft replacement, Session
+replacement and attachment changes start a fresh undo baseline. Same-Session
+progress does not. Text undo neither restores attachments nor changes admitted
+work, and never submits input. Kill text can cross drafts only through explicit
+yank; neither history nor the kill ring is durable.
+
+These editing keys remain available during work without
 cancelling it; Ctrl-C still cancels the active operation.
 Up and Down browse earlier prompts when the cursor reaches the first or last
 editor line. Returning from history restores the unsent draft and its cursor,
