@@ -12,12 +12,15 @@ use anyhow::{Context, Result, bail};
 use ion_ai::ModelRef;
 use ion_core::{CodingSession, SessionInputPreview};
 use sha2::{Digest, Sha256};
+use tokio_util::sync::CancellationToken;
 
+#[derive(Clone)]
 pub struct SessionCatalog {
     directory: PathBuf,
     cwd: Option<PathBuf>,
 }
 
+#[derive(Clone, Debug)]
 pub struct SessionSummary {
     pub id: String,
     pub path: PathBuf,
@@ -75,21 +78,56 @@ impl SessionCatalog {
     }
 
     pub fn list(&self) -> Result<Vec<SessionSummary>> {
-        let mut sessions = self
-            .paths()?
-            .into_iter()
-            .filter_map(|path| self.summary(path))
-            .collect::<Vec<_>>();
+        self.scan(&CancellationToken::new())
+            .map(|sessions| sessions.expect("an uncancelled scan completes"))
+    }
+
+    /// Scan while retaining cancellation as a distinct outcome. Checks occur
+    /// between directory entries and Session metadata reads; in-flight filesystem
+    /// calls remain uninterruptible.
+    pub fn scan(&self, stop: &CancellationToken) -> Result<Option<Vec<SessionSummary>>> {
+        let Some(paths) = self.paths_until(Some(stop))? else {
+            return Ok(None);
+        };
+        let mut sessions = Vec::new();
+        for path in paths {
+            if stop.is_cancelled() {
+                return Ok(None);
+            }
+            if let Some(summary) = self.summary(path) {
+                sessions.push(summary);
+            }
+        }
+        if stop.is_cancelled() {
+            return Ok(None);
+        }
         sessions.sort_by(|a, b| b.updated.cmp(&a.updated).then_with(|| b.id.cmp(&a.id)));
-        Ok(sessions)
+        Ok(Some(sessions))
     }
 
     fn paths(&self) -> Result<Vec<PathBuf>> {
+        self.paths_until(None)
+            .map(|paths| paths.expect("an uncancelled directory scan completes"))
+    }
+
+    fn paths_until(&self, stop: Option<&CancellationToken>) -> Result<Option<Vec<PathBuf>>> {
+        let cancelled = || stop.is_some_and(CancellationToken::is_cancelled);
+        if cancelled() {
+            return Ok(None);
+        }
         let mut paths = Vec::new();
         match fs::read_dir(self.directory()) {
             Ok(entries) => {
                 for entry in entries {
+                    if cancelled() {
+                        return Ok(None);
+                    }
+                    // Errors from a traversal step that raced with cancellation
+                    // remain real failures instead of becoming cancellation.
                     let entry = entry?;
+                    if cancelled() {
+                        return Ok(None);
+                    }
                     let path = entry.path();
                     if path.extension().is_some_and(|ext| ext == "sqlite")
                         && entry.file_type()?.is_file()
@@ -101,7 +139,10 @@ impl SessionCatalog {
             Err(error) if error.kind() == io::ErrorKind::NotFound => {}
             Err(error) => return Err(error).context("cannot list sessions"),
         }
-        Ok(paths)
+        if cancelled() {
+            return Ok(None);
+        }
+        Ok(Some(paths))
     }
 
     fn summary(&self, path: PathBuf) -> Option<SessionSummary> {
@@ -393,6 +434,44 @@ mod tests {
             let preview = format!("{}{label}", if excluded { "!!" } else { "!" });
             assert_passive_preview(&catalog, &path, &preview, 1);
         }
+        fs::remove_dir_all(root).unwrap();
+    }
+    #[tokio::test]
+    async fn scan_distinguishes_completion_cancellation_and_directory_errors() {
+        let (root, catalog) = fixture();
+        let path = catalog.new_path().unwrap();
+        let session = Arc::new(CodingSession::create(&path, catalog.cwd.as_deref()).unwrap());
+        agent(&catalog, 1)
+            .submit(
+                session.clone(),
+                "saved prompt".into(),
+                String::new(),
+                CancellationToken::new(),
+                |_| {},
+            )
+            .await
+            .unwrap();
+        session.shutdown().await.unwrap();
+        drop(session);
+        fs::write(catalog.directory().join("notes.txt"), b"not a session").unwrap();
+
+        let complete = catalog
+            .scan(&CancellationToken::new())
+            .unwrap()
+            .expect("uncancelled scan completes");
+        assert_eq!(complete.len(), 1);
+        assert_eq!(complete[0].path, path);
+        assert_eq!(catalog.list().unwrap().len(), 1);
+        let stop = CancellationToken::new();
+        stop.cancel();
+        assert!(catalog.scan(&stop).unwrap().is_none());
+
+        let blocked = root.join("state-file");
+        fs::write(&blocked, b"not a directory").unwrap();
+        let error = SessionCatalog::new(blocked, None)
+            .scan(&CancellationToken::new())
+            .unwrap_err();
+        assert!(format!("{error:#}").contains("cannot list sessions"));
         fs::remove_dir_all(root).unwrap();
     }
 }
