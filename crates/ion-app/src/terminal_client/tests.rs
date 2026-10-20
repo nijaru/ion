@@ -147,6 +147,48 @@ impl Drop for Fixture {
 }
 
 #[tokio::test]
+async fn command_namespace_completes_and_never_becomes_a_model_prompt_or_queue() {
+    let mut fixture = Fixture::new();
+    fs::create_dir_all(fixture.host.config_root()).unwrap();
+    fs::write(
+        fixture.host.config_root().join("commands.json"),
+        r#"{"commands":{"check":{"description":"Run checks","program":"true","args":[],"share_with_model":false}}}"#,
+    )
+    .unwrap();
+    fixture.control.reload_resources().unwrap();
+    let mut ui = Frontend::default();
+    ui.insert("/command:ch");
+    assert!(matches!(
+        ui.key(
+            KeyEvent::new(KeyCode::Tab, Modifiers::NONE),
+            None,
+            Some(fixture.control.commands())
+        ),
+        Action::None
+    ));
+    assert_eq!(ui.draft, "/command:check ");
+    ui.insert("a b");
+    assert!(matches!(
+        ui.key(
+            KeyEvent::new(KeyCode::Enter, Modifiers::NONE),
+            None,
+            Some(fixture.control.commands())
+        ),
+        Action::Command(command) if command == "/command:check a b"
+    ));
+    assert!(!fixture.control.is_busy());
+
+    let source = EditorDraft::at_end("/command:check a b".into());
+    ui.draft = source.literal.clone();
+    ui.cursor = source.cursor;
+    submit_editor(&mut fixture.control, &mut ui, Delivery::FollowUp, source);
+    assert_eq!(ui.draft, "/command:check a b");
+    assert!(ui.status.contains("cannot be queued"));
+    assert!(!fixture.control.is_busy());
+    fixture.control.shutdown().await;
+}
+
+#[tokio::test]
 async fn help_output_is_complete_publication_not_clipped_composer_chrome() {
     let mut fixture = Fixture::new();
     let mut ui = Frontend::default();
@@ -257,19 +299,27 @@ fn submit_and_queue_handoff_discard_unsent_text_history() {
     for modifiers in [Modifiers::NONE, Modifiers::ALT] {
         let mut ui = Frontend::default();
         ui.insert("sent input");
-        let action = ui.key(KeyEvent::new(KeyCode::Enter, modifiers), None);
+        let action = ui.key(KeyEvent::new(KeyCode::Enter, modifiers), None, None);
         assert!(match modifiers {
             Modifiers::NONE => matches!(action, Action::Submit(prompt) if prompt == "sent input"),
             _ => matches!(action, Action::Queue(prompt) if prompt == "sent input"),
         });
         assert!(ui.draft.is_empty());
-        ui.key(KeyEvent::new(KeyCode::Char('_'), Modifiers::CONTROL), None);
+        ui.key(
+            KeyEvent::new(KeyCode::Char('_'), Modifiers::CONTROL),
+            None,
+            None,
+        );
         assert!(
             ui.draft.is_empty(),
             "handoff history resurrected sent input"
         );
         ui.insert("next input");
-        ui.key(KeyEvent::new(KeyCode::Char('_'), Modifiers::CONTROL), None);
+        ui.key(
+            KeyEvent::new(KeyCode::Char('_'), Modifiers::CONTROL),
+            None,
+            None,
+        );
         assert_eq!(ui.draft, "", "undo crossed a completed handoff");
     }
 }
@@ -278,23 +328,39 @@ fn submit_and_queue_handoff_discard_unsent_text_history() {
 fn mouse_scroll_breaks_edit_affinity_without_resetting_history_or_text() {
     let mut ui = Frontend::default();
     assert!(matches!(
-        ui.key(KeyEvent::new(KeyCode::Char('a'), Modifiers::NONE), None),
+        ui.key(
+            KeyEvent::new(KeyCode::Char('a'), Modifiers::NONE),
+            None,
+            None
+        ),
         Action::None
     ));
     ui.mouse(MouseKind::ScrollUp);
     assert!(matches!(
-        ui.key(KeyEvent::new(KeyCode::Char('b'), Modifiers::NONE), None),
+        ui.key(
+            KeyEvent::new(KeyCode::Char('b'), Modifiers::NONE),
+            None,
+            None
+        ),
         Action::None
     ));
     assert_eq!(ui.draft, "ab");
     assert_eq!(ui.scroll, 3);
     assert!(matches!(
-        ui.key(KeyEvent::new(KeyCode::Char('_'), Modifiers::CONTROL), None),
+        ui.key(
+            KeyEvent::new(KeyCode::Char('_'), Modifiers::CONTROL),
+            None,
+            None
+        ),
         Action::None
     ));
     assert_eq!(ui.draft, "a", "scroll must break typed-word coalescing");
     assert!(matches!(
-        ui.key(KeyEvent::new(KeyCode::Char('_'), Modifiers::CONTROL), None),
+        ui.key(
+            KeyEvent::new(KeyCode::Char('_'), Modifiers::CONTROL),
+            None,
+            None
+        ),
         Action::None
     ));
     assert_eq!(ui.draft, "", "scroll must not reset undo history");
@@ -303,18 +369,30 @@ fn mouse_scroll_breaks_edit_affinity_without_resetting_history_or_text() {
         ui.insert(text);
         ui.cursor = ui.draft.len();
         assert!(matches!(
-            ui.key(KeyEvent::new(KeyCode::Char('w'), Modifiers::CONTROL), None),
+            ui.key(
+                KeyEvent::new(KeyCode::Char('w'), Modifiers::CONTROL),
+                None,
+                None
+            ),
             Action::None
         ));
     }
     assert!(matches!(
-        ui.key(KeyEvent::new(KeyCode::Char('y'), Modifiers::CONTROL), None),
+        ui.key(
+            KeyEvent::new(KeyCode::Char('y'), Modifiers::CONTROL),
+            None,
+            None
+        ),
         Action::None
     ));
     assert_eq!(ui.draft, "second");
     ui.mouse(MouseKind::ScrollDown);
     assert!(matches!(
-        ui.key(KeyEvent::new(KeyCode::Char('y'), Modifiers::ALT), None),
+        ui.key(
+            KeyEvent::new(KeyCode::Char('y'), Modifiers::ALT),
+            None,
+            None
+        ),
         Action::None
     ));
     assert_eq!(
@@ -331,7 +409,11 @@ async fn session_sync_preserves_text_recovery_but_session_replacement_resets_it(
     ui.insert("same session");
     ui.refresh_session(fixture.control.session()).unwrap();
     assert!(matches!(
-        ui.key(KeyEvent::new(KeyCode::Char('_'), Modifiers::CONTROL), None),
+        ui.key(
+            KeyEvent::new(KeyCode::Char('_'), Modifiers::CONTROL),
+            None,
+            None
+        ),
         Action::None
     ));
     assert_eq!(ui.draft, "", "same-Session sync discarded unsent edits");
@@ -340,7 +422,11 @@ async fn session_sync_preserves_text_recovery_but_session_replacement_resets_it(
     fixture.control.new_session().unwrap();
     ui.refresh_session(fixture.control.session()).unwrap();
     assert_eq!(ui.draft, "kept across replacement");
-    ui.key(KeyEvent::new(KeyCode::Char('_'), Modifiers::CONTROL), None);
+    ui.key(
+        KeyEvent::new(KeyCode::Char('_'), Modifiers::CONTROL),
+        None,
+        None,
+    );
     assert_eq!(
         ui.draft, "kept across replacement",
         "Session replacement kept the old edit history"
@@ -438,8 +524,16 @@ async fn withdrawn_preparation_replaces_draft_and_invalidates_file_completion() 
         );
         assert!(fixture.control.state().preparing_input);
         assert!(fixture.control.withdraw_last_follow_up().is_some());
-        ui.key(KeyEvent::new(KeyCode::Char('x'), Modifiers::NONE), None);
-        ui.key(KeyEvent::new(KeyCode::Char('@'), Modifiers::NONE), None);
+        ui.key(
+            KeyEvent::new(KeyCode::Char('x'), Modifiers::NONE),
+            None,
+            None,
+        );
+        ui.key(
+            KeyEvent::new(KeyCode::Char('@'), Modifiers::NONE),
+            None,
+            None,
+        );
         assert!(ui.pickers.active().is_some());
 
         let mut activity = Activity::default();
@@ -464,7 +558,7 @@ async fn withdrawn_preparation_replaces_draft_and_invalidates_file_completion() 
         assert_eq!((ui.draft.as_str(), ui.cursor), ("x@", 2));
         assert!(ui.images.is_empty());
         assert!(
-            matches!(ui.key(KeyEvent::new(KeyCode::Enter, Modifiers::NONE), None), Action::Submit(text) if text == "x@")
+            matches!(ui.key(KeyEvent::new(KeyCode::Enter, Modifiers::NONE), None, None), Action::Submit(text) if text == "x@")
         );
         fixture.control.shutdown().await;
         ui.pickers.shutdown().await.unwrap();
@@ -680,7 +774,7 @@ fn shell_syntax_and_output_settings_remain_editor_operations() {
             ..Frontend::default()
         };
         assert!(
-            matches!(ui.key(KeyEvent::new(KeyCode::Enter, Modifiers::NONE), None), Action::Shell { exclude_from_context, source, .. } if exclude_from_context == excluded && source.literal == literal && source.cursor == 1)
+            matches!(ui.key(KeyEvent::new(KeyCode::Enter, Modifiers::NONE), None, None), Action::Shell { exclude_from_context, source, .. } if exclude_from_context == excluded && source.literal == literal && source.cursor == 1)
         );
     }
     let mut ui = Frontend::default();

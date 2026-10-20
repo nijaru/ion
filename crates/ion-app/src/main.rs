@@ -111,6 +111,11 @@ enum Action {
     Logout { provider: String },
     /// Show credential sources without displaying secrets.
     Auth,
+    /// Inspect explicit executable user commands.
+    Commands {
+        #[command(subcommand)]
+        action: Option<CommandsAction>,
+    },
     /// Trust the current project's MCP configuration for its current contents.
     Trust,
     /// Remove trust for the current project's MCP configuration.
@@ -163,6 +168,16 @@ impl From<ExposureArg> for McpExposure {
             ExposureArg::Hidden => Self::Hidden,
         }
     }
+}
+
+#[derive(Subcommand)]
+enum CommandsAction {
+    /// List enabled commands and origin; untrusted project entries are inactive.
+    List,
+    /// Trust the current project commands manifest for its exact contents.
+    Trust,
+    /// Remove trust for the current project commands manifest.
+    Untrust,
 }
 
 #[derive(Subcommand)]
@@ -419,6 +434,44 @@ async fn run_cli(cli: Cli) -> Result<()> {
                     metadata_field(&diagnostic.path.to_string_lossy()),
                     metadata_field(&diagnostic.message)
                 ))?;
+            }
+            Ok(())
+        }
+        Some(Action::Commands { action }) => {
+            let cwd = configured_cwd(cli.cwd.clone())?;
+            let commands = ion_host::CommandConfig::with_project(host.config_root(), &cwd)?;
+            match action.unwrap_or(CommandsAction::List) {
+                CommandsAction::List => {
+                    if let Some(path) = commands.project_path().filter(|path| path.is_file()) {
+                        print_stderr(format_args!(
+                            "[commands project: {}]",
+                            metadata_field(&path.to_string_lossy())
+                        ))?;
+                    }
+                    let catalog = commands.list()?;
+                    for diagnostic in catalog.diagnostics() {
+                        print_stderr(format_args!("[commands: {}]", metadata_field(diagnostic)))?;
+                    }
+                    for command in catalog.iter() {
+                        print_stdout(format_args!(
+                            "{}\t{}\t{}",
+                            metadata_field(&command.name),
+                            metadata_field(&command.description),
+                            command.origin
+                        ))?;
+                    }
+                }
+                CommandsAction::Trust => {
+                    let path = commands.trust_project()?;
+                    print_stdout(format_args!(
+                        "Trusted project commands manifest {}",
+                        metadata_field(&path.to_string_lossy())
+                    ))?;
+                }
+                CommandsAction::Untrust => {
+                    commands.untrust_project()?;
+                    print_stdout(format_args!("Removed project commands trust"))?;
+                }
             }
             Ok(())
         }
@@ -752,6 +805,9 @@ async fn run_cli(cli: Cli) -> Result<()> {
                         metadata_field(&diagnostic.path.to_string_lossy()),
                         metadata_field(&diagnostic.message)
                     ));
+                }
+                for diagnostic in setup.commands().diagnostics() {
+                    startup_diagnostics.push(format!("[commands: {}]", metadata_field(diagnostic)));
                 }
                 if cli.print.is_some() || !matches!(&action, Some(Action::Chat) | None) {
                     for diagnostic in &startup_diagnostics {

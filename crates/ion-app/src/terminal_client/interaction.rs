@@ -34,7 +34,8 @@ pub(super) fn submit_editor(
     source: EditorDraft,
 ) {
     if delivery == Delivery::FollowUp
-        && Builtin::parse(source.literal.split_whitespace().next().unwrap_or("")).is_some()
+        && (Builtin::parse(source.literal.split_whitespace().next().unwrap_or("")).is_some()
+            || source.literal.trim_start().starts_with("/command:"))
     {
         ui.restore_editor(source);
         ui.status =
@@ -139,6 +140,21 @@ pub(super) async fn dispatch_command(
         match edit_draft_in_terminal(terminal, screen, ui).await? {
             Ok(()) => ui.status = "Draft returned from editor".into(),
             Err(error) => ui.status = format!("Editor failed: {error:#}; original draft retained"),
+        }
+    } else if let Some(name) = name.strip_prefix("/command:") {
+        let draft = source.unwrap_or_else(|| EditorDraft::at_end(command.clone()));
+        match ion_host::parse_command_args(args) {
+            Err(error) => {
+                ui.restore_editor(draft);
+                ui.status = format!("Command was not started: {error:#}");
+            }
+            Ok(argv) => match runtime.command(name, &argv, draft) {
+                Ok(_) => ui.status.clear(),
+                Err((draft, error)) => {
+                    ui.restore_editor(draft);
+                    ui.status = format!("Command was not started: {error:#}");
+                }
+            },
         }
     } else {
         match handle_command(runtime, services, ui, &command) {

@@ -537,7 +537,7 @@ mod tests {
     }
 
     fn composer_key(ui: &mut Frontend, key: KeyEvent) -> bool {
-        matches!(ui.key(key, None), Action::None)
+        matches!(ui.key(key, None, None), Action::None)
     }
 
     #[test]
@@ -551,7 +551,7 @@ mod tests {
         ui.insert("/he");
         ui.prepare_edit_key(key(KeyCode::Tab, Modifiers::NONE));
         assert!(matches!(
-            ui.key(key(KeyCode::Tab, Modifiers::NONE), None),
+            ui.key(key(KeyCode::Tab, Modifiers::NONE), None, None),
             super::super::Action::None
         ));
         assert_eq!(ui.draft, "/help ");
@@ -622,7 +622,7 @@ mod tests {
                 ui.recovery.retained,
             );
             assert!(matches!(
-                ui.key(key(KeyCode::Enter, modifiers), None),
+                ui.key(key(KeyCode::Enter, modifiers), None, None),
                 Action::None
             ));
             assert_eq!((ui.draft.as_str(), ui.cursor), ("", 0));
@@ -660,7 +660,7 @@ mod tests {
                 ui.recovery.retained,
             );
             assert!(matches!(
-                ui.key(key(KeyCode::Enter, Modifiers::NONE), None),
+                ui.key(key(KeyCode::Enter, Modifiers::NONE), None, None),
                 Action::None
             ));
             assert_eq!((ui.draft.as_str(), ui.cursor), (literal, literal.len() / 2));
@@ -768,18 +768,19 @@ mod tests {
             ));
         }
         assert!(matches!(
-            ui.key(key(KeyCode::Char('y'), Modifiers::CONTROL), None),
+            ui.key(key(KeyCode::Char('y'), Modifiers::CONTROL), None, None),
             Action::None
         ));
         assert_eq!(ui.draft, "second");
         assert!(matches!(
-            ui.key(key(KeyCode::Char('y'), Modifiers::ALT), None),
+            ui.key(key(KeyCode::Char('y'), Modifiers::ALT), None, None),
             Action::None
         ));
         assert_eq!(ui.draft, "first", "Alt-Y must pop the previous kill");
         assert!(matches!(
             ui.key(
                 key(KeyCode::Char('y'), Modifiers::CONTROL | Modifiers::ALT),
+                None,
                 None
             ),
             Action::None
@@ -955,7 +956,7 @@ mod tests {
         let mut ui = Frontend::default();
         ui.insert("unsent 🦀");
         assert!(matches!(
-            ui.key(key(KeyCode::Char('c'), Modifiers::CONTROL), None),
+            ui.key(key(KeyCode::Char('c'), Modifiers::CONTROL), None, None),
             super::super::Action::None
         ));
         assert_eq!(ui.draft, "");

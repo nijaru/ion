@@ -109,7 +109,11 @@ fn selected_tool_copy_is_unwrapped_recorded_evidence_and_keeps_inspector_state()
     assert!(!wide.contains("Call ID: other-call"));
 
     assert!(matches!(
-        ui.key(KeyEvent::new(KeyCode::Char('x'), Modifiers::CONTROL), None),
+        ui.key(
+            KeyEvent::new(KeyCode::Char('x'), Modifiers::CONTROL),
+            None,
+            None
+        ),
         Action::CopyDetail
     ));
     assert!(ui.details.is_some());
@@ -136,7 +140,11 @@ fn conversation_ctrl_x_does_not_copy_an_assistant_answer() {
     ui.details.as_mut().unwrap().prepare(&ui.history, None, 80);
 
     assert!(matches!(
-        ui.key(KeyEvent::new(KeyCode::Char('x'), Modifiers::CONTROL), None),
+        ui.key(
+            KeyEvent::new(KeyCode::Char('x'), Modifiers::CONTROL),
+            None,
+            None
+        ),
         Action::None
     ));
     assert!(ui.details.is_some());
@@ -154,7 +162,11 @@ fn selected_tool_without_a_result_copies_its_recorded_absence() {
     ui.details.as_mut().unwrap().prepare(&ui.history, None, 80);
 
     assert!(matches!(
-        ui.key(KeyEvent::new(KeyCode::Char('x'), Modifiers::CONTROL), None),
+        ui.key(
+            KeyEvent::new(KeyCode::Char('x'), Modifiers::CONTROL),
+            None,
+            None
+        ),
         Action::CopyDetail
     ));
     let evidence = ui.details.as_ref().unwrap().copy_evidence().unwrap().1;
@@ -289,7 +301,11 @@ fn editor_line_shortcuts_keep_other_lines_and_graphemes_intact() {
             ..Frontend::default()
         };
         assert!(matches!(
-            ui.key(KeyEvent::new(KeyCode::Char(code), Modifiers::CONTROL), None),
+            ui.key(
+                KeyEvent::new(KeyCode::Char(code), Modifiers::CONTROL),
+                None,
+                None
+            ),
             Action::None
         ));
         assert_eq!(
@@ -397,7 +413,7 @@ fn alt_enter_queues_a_followup_without_discarding_the_editor() {
     let mut ui = Frontend::default();
     ui.insert("follow up");
     assert!(matches!(
-        ui.key(KeyEvent::new(KeyCode::Enter, Modifiers::ALT), None),
+        ui.key(KeyEvent::new(KeyCode::Enter, Modifiers::ALT), None, None),
         Action::Queue(prompt) if prompt == "follow up"
     ));
     assert!(ui.draft.is_empty());
@@ -438,7 +454,11 @@ fn clipboard_paths_are_quoted_for_shell_and_reject_controls() {
     assert!(clipboard_paths(&[PathBuf::from("/tmp/bad\nname")], false).is_err());
     let mut ui = Frontend::default();
     assert!(matches!(
-        ui.key(KeyEvent::new(KeyCode::Char('v'), Modifiers::CONTROL), None),
+        ui.key(
+            KeyEvent::new(KeyCode::Char('v'), Modifiers::CONTROL),
+            None,
+            None
+        ),
         Action::PasteClipboard
     ));
 }
@@ -502,7 +522,7 @@ async fn pending_clipboard_keeps_literal_input_before_admission() {
             ..Frontend::default()
         };
         assert!(matches!(
-            ui.key(KeyEvent::new(KeyCode::Enter, modifiers), None),
+            ui.key(KeyEvent::new(KeyCode::Enter, modifiers), None, None),
             Action::None
         ));
         assert_eq!(ui.draft, literal);
@@ -545,63 +565,68 @@ fn command_completion_edits_without_dispatch_or_argument_loss() {
     };
     for ch in "/hel".chars() {
         assert!(matches!(
-            ui.key(KeyEvent::new(KeyCode::Char(ch), Modifiers::NONE), None),
+            ui.key(
+                KeyEvent::new(KeyCode::Char(ch), Modifiers::NONE),
+                None,
+                None
+            ),
             Action::None
         ));
     }
     assert!(ui.completion.active());
     assert!(matches!(
-        ui.key(KeyEvent::new(KeyCode::Tab, Modifiers::NONE), None),
+        ui.key(KeyEvent::new(KeyCode::Tab, Modifiers::NONE), None, None),
         Action::None
     ));
     assert_eq!(ui.draft, "/help ");
     assert!(ui.recovered.is_empty());
     assert_eq!(ui.history_published_items, 7);
     assert!(
-        matches!(ui.key(KeyEvent::new(KeyCode::Enter, Modifiers::NONE), None), Action::Command(command) if command == "/help")
+        matches!(ui.key(KeyEvent::new(KeyCode::Enter, Modifiers::NONE), None, None), Action::Command(command) if command == "/help")
     );
 
     ui.insert("  /help focus 🦀");
     ui.cursor = "  /hel".len();
-    ui.key(KeyEvent::new(KeyCode::Tab, Modifiers::NONE), None);
+    ui.key(KeyEvent::new(KeyCode::Tab, Modifiers::NONE), None, None);
     assert_eq!(ui.draft, "  /help focus 🦀");
     assert_eq!(ui.cursor, "  /help ".len());
     ui.draft.clear();
     ui.cursor = 0;
     ui.insert("/re");
     // Pasted ambiguous names open discovery before accepting a proposal.
-    ui.key(KeyEvent::new(KeyCode::Tab, Modifiers::NONE), None);
+    ui.key(KeyEvent::new(KeyCode::Tab, Modifiers::NONE), None, None);
     assert_eq!(ui.draft, "/re");
     assert!(ui.completion.active());
-    ui.key(KeyEvent::new(KeyCode::Esc, Modifiers::NONE), None);
+    ui.key(KeyEvent::new(KeyCode::Esc, Modifiers::NONE), None, None);
     assert!(!ui.completion.active());
     assert_eq!(ui.draft, "/re");
     ui.draft.clear();
     ui.cursor = 0;
     ui.insert("literal");
-    ui.key(KeyEvent::new(KeyCode::Tab, Modifiers::NONE), None);
+    ui.key(KeyEvent::new(KeyCode::Tab, Modifiers::NONE), None, None);
     assert_eq!(ui.draft, "literal\t");
     ui.draft.clear();
     ui.cursor = 0;
     ui.insert("/fork");
-    ui.key(KeyEvent::new(KeyCode::Tab, Modifiers::NONE), None);
+    ui.key(KeyEvent::new(KeyCode::Tab, Modifiers::NONE), None, None);
     assert!(ui.completion.active());
     ui.completion.rows(80, 5);
-    ui.key(KeyEvent::new(KeyCode::Down, Modifiers::NONE), None);
+    ui.key(KeyEvent::new(KeyCode::Down, Modifiers::NONE), None, None);
     ui.completion.rows(80, 5);
     assert!(matches!(
-        ui.key(KeyEvent::new(KeyCode::Enter, Modifiers::NONE), None),
+        ui.key(KeyEvent::new(KeyCode::Enter, Modifiers::NONE), None, None),
         Action::None
     ));
     assert_eq!(ui.draft, "/fork-after ");
     ui.draft.clear();
     ui.cursor = 0;
     ui.insert("/re");
-    ui.completion.refresh(&ui.draft, ui.cursor, None, false);
+    ui.completion
+        .refresh(&ui.draft, ui.cursor, None, None, false);
     assert!(ui.completion.rows(80, 1).is_empty());
     // A menu that cannot fit is not an invisible keyboard target.
     assert!(
-        matches!(ui.key(KeyEvent::new(KeyCode::Enter, Modifiers::NONE), None), Action::Command(command) if command == "/re")
+        matches!(ui.key(KeyEvent::new(KeyCode::Enter, Modifiers::NONE), None, None), Action::Command(command) if command == "/re")
     );
 }
 
@@ -612,15 +637,15 @@ fn prompt_history_restores_unsent_draft_and_moves_between_lines() {
         ..Frontend::default()
     };
     ui.insert("unsent");
-    ui.key(KeyEvent::new(KeyCode::Up, Modifiers::NONE), None);
+    ui.key(KeyEvent::new(KeyCode::Up, Modifiers::NONE), None, None);
     assert_eq!(ui.draft, "second\nline");
-    ui.key(KeyEvent::new(KeyCode::Up, Modifiers::NONE), None);
+    ui.key(KeyEvent::new(KeyCode::Up, Modifiers::NONE), None, None);
     assert_eq!(ui.cursor, "line".len());
-    ui.key(KeyEvent::new(KeyCode::Up, Modifiers::NONE), None);
+    ui.key(KeyEvent::new(KeyCode::Up, Modifiers::NONE), None, None);
     assert_eq!(ui.draft, "first");
-    ui.key(KeyEvent::new(KeyCode::Down, Modifiers::NONE), None);
+    ui.key(KeyEvent::new(KeyCode::Down, Modifiers::NONE), None, None);
     assert_eq!(ui.draft, "second\nline");
-    ui.key(KeyEvent::new(KeyCode::Down, Modifiers::NONE), None);
+    ui.key(KeyEvent::new(KeyCode::Down, Modifiers::NONE), None, None);
     assert_eq!(ui.draft, "unsent");
 }
 
@@ -735,7 +760,7 @@ fn resource_completion_preserves_literal_commands_and_terminal_control_names() {
     };
     ui.insert("/zzmenu-ch");
     ui.completion
-        .refresh(&ui.draft, ui.cursor, Some(&resources), false);
+        .refresh(&ui.draft, ui.cursor, Some(&resources), None, false);
     for width in [1, 8, 24, 80] {
         let rows = ui.completion.rows(width, 5);
         assert!(rows.len() <= 5);
@@ -745,25 +770,27 @@ fn resource_completion_preserves_literal_commands_and_terminal_control_names() {
     assert!(matches!(
         ui.key(
             KeyEvent::new(KeyCode::Tab, Modifiers::NONE),
-            Some(&resources)
+            Some(&resources),
+            None
         ),
         Action::None
     ));
     assert_eq!(ui.draft, "/zzmenu-check ");
     ui.insert("concurrency");
     assert!(
-        matches!(ui.key(KeyEvent::new(KeyCode::Enter, Modifiers::NONE), Some(&resources)), Action::Command(command) if command == "/zzmenu-check concurrency")
+        matches!(ui.key(KeyEvent::new(KeyCode::Enter, Modifiers::NONE), Some(&resources), None), Action::Command(command) if command == "/zzmenu-check concurrency")
     );
     assert_eq!(ui.history_published_items, 7);
     ui.insert("/zzmenu-au");
     ui.key(
         KeyEvent::new(KeyCode::Tab, Modifiers::NONE),
         Some(&resources),
+        None,
     );
     assert_eq!(ui.draft, "/skill:zzmenu-audit ");
     ui.replace_draft_atomic("/ne".into());
     ui.completion
-        .refresh(&ui.draft, ui.cursor, Some(&resources), false);
+        .refresh(&ui.draft, ui.cursor, Some(&resources), None, false);
     assert!(
         ui.completion
             .rows(100, 5)
@@ -786,15 +813,23 @@ async fn file_picker_inserts_a_selected_project_path() {
         ..Frontend::default()
     };
     ui.insert("Read ");
-    ui.key(KeyEvent::new(KeyCode::Char('@'), Modifiers::NONE), None);
-    ui.key(KeyEvent::new(KeyCode::Char('m'), Modifiers::NONE), None);
+    ui.key(
+        KeyEvent::new(KeyCode::Char('@'), Modifiers::NONE),
+        None,
+        None,
+    );
+    ui.key(
+        KeyEvent::new(KeyCode::Char('m'), Modifiers::NONE),
+        None,
+        None,
+    );
     assert!(ui.pickers.complete().await.is_none());
     let picker = ui.pickers.active().unwrap();
     assert_eq!(picker.query, "m");
     assert_eq!(picker.items.len(), 1);
     assert_eq!(picker.items[0].label, "src/main.rs");
     ui.pickers.rows(80, 10);
-    let chosen = ui.key(KeyEvent::new(KeyCode::Enter, Modifiers::NONE), None);
+    let chosen = ui.key(KeyEvent::new(KeyCode::Enter, Modifiers::NONE), None, None);
     let Action::Pick(PickerValue::File { path, start, end }) = chosen else {
         panic!("file picker did not choose a path")
     };

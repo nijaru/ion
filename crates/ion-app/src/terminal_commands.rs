@@ -1,7 +1,7 @@
 //! Terminal command identity, discoverable resources and non-executing completion.
 use std::ops::Range;
 
-use ion_host::Resources;
+use ion_host::{CommandCatalog, Resources};
 
 use crate::display_text::fit_line;
 
@@ -46,7 +46,8 @@ commands! {
     Export => ("export", "PATH", "Save a readable transcript"),
     Skills => ("skills", "", "List available skills"),
     Prompts => ("prompts", "", "List available prompt templates"),
-    Reload => ("reload", "", "Reload project instructions and resources"),
+    Commands => ("commands", "", "List enabled executable user commands"),
+    Reload => ("reload", "", "Reload project instructions, resources and command metadata"),
     Login => ("login", "PROVIDER", "Save a credential using masked input"),
     Logout => ("logout", "PROVIDER", "Remove a saved credential"),
     Quit => ("quit", "", "Exit the terminal client"),
@@ -124,6 +125,7 @@ impl Completion {
         draft: &str,
         cursor: usize,
         resources: Option<&Resources>,
+        commands: Option<&CommandCatalog>,
         force: bool,
     ) {
         let start = draft.len() - draft.trim_start().len();
@@ -188,6 +190,23 @@ impl Completion {
                     .map(|skill| Suggestion {
                         name: format!("skill:{}", skill.name),
                         description: format!("[skill] {}", skill.description),
+                    }),
+            );
+        }
+        if let Some(commands) = commands {
+            items.extend(
+                commands
+                    .iter()
+                    .filter(|command| {
+                        matches(&format!("command:{}", command.name))
+                            && Builtin::parse(&format!("/command:{}", command.name)).is_none()
+                    })
+                    .map(|command| Suggestion {
+                        name: format!("command:{}", command.name),
+                        description: format!(
+                            "[command · {}] {}",
+                            command.origin, command.description
+                        ),
                     }),
             );
         }

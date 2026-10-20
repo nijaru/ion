@@ -326,7 +326,11 @@ pub async fn chat(init: ChatInit) -> Result<()> {
                         && !key.modifiers.contains(Modifiers::ALT)
                         && ui.draft.trim_start().starts_with('/'))
                         .then(|| EditorDraft { literal: ui.draft.clone(), cursor });
-                    match ui.key(key, Some(runtime.resources())) {
+                    match ui.key(
+                        key,
+                        Some(runtime.resources()),
+                        Some(runtime.commands()),
+                    ) {
                         Action::None => {},
                         Action::Quit => break,
                         Action::Submit(prompt) => {
@@ -811,6 +815,27 @@ fn handle_command(
                 }
             }
         }
+        Some(Builtin::Commands) => {
+            if !args.is_empty() {
+                anyhow::bail!("use /commands");
+            }
+            let catalog = runtime.commands();
+            let mut lines = Vec::new();
+            for command in catalog.iter() {
+                lines.push(format!(
+                    "/command:{} — {} · {}",
+                    command.name, command.description, command.origin
+                ));
+            }
+            for diagnostic in catalog.diagnostics() {
+                lines.push(format!("[commands: {diagnostic}]"));
+            }
+            ui.print(if lines.is_empty() {
+                "No enabled user commands. Configure commands.json or a trusted project .ion/commands.json".into()
+            } else {
+                lines.join("\n")
+            });
+        }
         Some(Builtin::Tools) => ui.list_tools(),
         Some(Builtin::Tool) => {
             let number = if args.is_empty() {
@@ -1136,7 +1161,12 @@ impl Frontend {
         self.scroll = 0;
     }
 
-    fn key(&mut self, key: KeyEvent, resources: Option<&Resources>) -> Action {
+    fn key(
+        &mut self,
+        key: KeyEvent,
+        resources: Option<&Resources>,
+        commands: Option<&ion_host::CommandCatalog>,
+    ) -> Action {
         if self.details.is_some() {
             self.break_edit_focus();
             self.completion.clear();
@@ -1153,6 +1183,7 @@ impl Frontend {
             &self.draft,
             self.cursor,
             resources,
+            commands,
             key.code == KeyCode::Tab && key.modifiers.is_empty(),
         );
         if self.completion.active() && key.code == KeyCode::Esc && key.modifiers.is_empty() {
@@ -1203,12 +1234,12 @@ impl Frontend {
         }
         if self.undo_key(key) {
             self.completion
-                .refresh(&self.draft, self.cursor, resources, false);
+                .refresh(&self.draft, self.cursor, resources, commands, false);
             return Action::None;
         }
         if self.yank_keys(key) {
             self.completion
-                .refresh(&self.draft, self.cursor, resources, false);
+                .refresh(&self.draft, self.cursor, resources, commands, false);
             return Action::None;
         }
         if let Some(edit) = editing::key(&self.draft, self.cursor, key) {
@@ -1220,7 +1251,7 @@ impl Frontend {
                 Edit::Delete { range, kill } => self.delete_text(range, kill),
             }
             self.completion
-                .refresh(&self.draft, self.cursor, resources, false);
+                .refresh(&self.draft, self.cursor, resources, commands, false);
             return Action::None;
         }
         let action = match key {
@@ -1421,7 +1452,7 @@ impl Frontend {
             self.completion.clear();
         } else {
             self.completion
-                .refresh(&self.draft, self.cursor, resources, false);
+                .refresh(&self.draft, self.cursor, resources, commands, false);
         }
         action
     }
