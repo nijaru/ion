@@ -9,6 +9,7 @@ mod background;
 mod binding;
 pub mod catalog;
 pub mod code_mode;
+mod command_args;
 mod control;
 mod credentials;
 pub use background::{
@@ -30,6 +31,7 @@ mod question;
 mod question_tool;
 pub mod resources;
 pub mod session_catalog;
+mod user_commands;
 
 use std::{
     path::{Path, PathBuf},
@@ -44,6 +46,7 @@ pub use application::{
 };
 pub use auth::{CredentialStatus, CredentialStore};
 pub use binding::SessionSetup;
+pub use command_args::parse_args as parse_command_args;
 pub use control::{
     AcceptedMetadata, ControlObserver, ControlSnapshot, ControlState, ControlUpdate, Delivery,
     InputAcceptance, InputCustodyPhase, InputId, InputPhase, InputSnapshot, Observation,
@@ -73,6 +76,7 @@ pub use question::{
 pub use question_tool::QuestionTools;
 pub use resources::{PromptTemplate, ResourceDiagnostic, Resources, Skill};
 pub use session_catalog::{SessionCatalog, SessionSummary};
+pub use user_commands::{CommandCatalog, CommandConfig, CommandOrigin, UserCommand};
 
 /// Host configuration can be supplied explicitly by an embedding program or
 /// resolved from standard local directories for the executable.

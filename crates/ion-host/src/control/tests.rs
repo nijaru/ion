@@ -5,7 +5,10 @@ use ion_ai::{
     ProviderError, ResponseTermination, Role, Usage,
 };
 use ion_core::{AgentLimits, CodingAgent, CodingSession, ToolSet};
-use std::{cell::Cell, fs, path::PathBuf, sync::atomic::AtomicUsize, time::Duration};
+use std::{
+    cell::Cell, fs, os::unix::fs::PermissionsExt, path::PathBuf, sync::atomic::AtomicUsize,
+    time::Duration,
+};
 use tokio::sync::{Notify, Semaphore};
 
 #[path = "preparation_tests.rs"]
@@ -591,6 +594,155 @@ async fn ordinary_nonzero_shell_does_not_withdraw_explicit_followups() {
     let (returned, next) = settle(&mut fixture.control).await;
     assert!(returned.is_empty());
     assert_eq!(next.accepted[0].metadata.literal, "followup");
+}
+
+#[tokio::test]
+async fn user_command_reuses_shell_admission_share_and_cancellation_custody() {
+    let model = Model::new(1);
+    let mut fixture = Fixture::new(model, false);
+    let script = fixture.root.join("argv.sh");
+    fs::write(&script, "#!/bin/sh\nprintf '<%s>\\n' \"$@\"\n").unwrap();
+    fs::set_permissions(&script, fs::Permissions::from_mode(0o755)).unwrap();
+    fs::create_dir_all(fixture.host.config_root()).unwrap();
+    let commands = serde_json::json!({
+        "commands": {
+            "check": {
+                "description": "literal argv",
+                "program": script,
+                "args": ["fixed"],
+                "share_with_model": true
+            },
+            "quiet": {
+                "description": "excluded argv",
+                "program": script,
+                "args": ["quiet"],
+                "share_with_model": false
+            },
+            "wait": {
+                "description": "bounded cancellation",
+                "program": "sleep",
+                "args": ["30"],
+                "share_with_model": false
+            }
+        }
+    });
+    fs::write(
+        fixture.host.config_root().join("commands.json"),
+        commands.to_string(),
+    )
+    .unwrap();
+    fixture.control.reload_resources().unwrap();
+    fixture
+        .control
+        .command(
+            "check",
+            &["a b".into(), "$(touch nope)".into(), "x'y".into()],
+            meta("check literal"),
+        )
+        .map_err(|(_, error)| error)
+        .unwrap();
+    let (_, settled) = settle(&mut fixture.control).await;
+    let OperationOutcome::Shell(Ok(output)) = settled.outcome else {
+        panic!("expected observed command result");
+    };
+    assert!(!output.is_error, "{output:?}");
+    assert_eq!(
+        output.value["stdout"],
+        "<fixed>\n<a b>\n<$(touch nope)>\n<x'y>\n"
+    );
+    assert_eq!(settled.metadata.unwrap().literal, "check literal");
+    assert!(!fixture.root.join("nope").exists());
+    let original_manifest = commands.to_string();
+    let mut edited = commands.clone();
+    edited["commands"]["check"]["description"] = "changed after load".into();
+    fs::write(
+        fixture.host.config_root().join("commands.json"),
+        edited.to_string(),
+    )
+    .unwrap();
+    let (metadata, error) = fixture
+        .control
+        .command("check", &[], meta("stale literal"))
+        .unwrap_err();
+    assert_eq!(metadata.literal, "stale literal");
+    assert!(error.to_string().contains("changed since it was loaded"));
+    assert!(!fixture.control.is_busy());
+    fs::write(
+        fixture.host.config_root().join("commands.json"),
+        &original_manifest,
+    )
+    .unwrap();
+    fixture.control.reload_resources().unwrap();
+    let (metadata, error) = fixture
+        .control
+        .command("missing", &[], meta("unknown literal"))
+        .unwrap_err();
+    assert_eq!(metadata.literal, "unknown literal");
+    assert!(error.to_string().contains("unknown user command"));
+    assert!(!fixture.control.is_busy());
+    assert!(
+        fixture
+            .control
+            .session()
+            .view()
+            .unwrap()
+            .entries
+            .iter()
+            .any(|entry| matches!(
+                entry,
+                ion_core::SessionEntry::UserShellAdmitted {
+                    command,
+                    exclude_from_context: false,
+                    ..
+                } if command.contains("'fixed'") && command.contains("'$(touch nope)'")
+            ))
+    );
+
+    fixture
+        .control
+        .command("quiet", &[], meta("quiet literal"))
+        .map_err(|(_, error)| error)
+        .unwrap();
+    settle(&mut fixture.control).await;
+    assert!(
+        fixture
+            .control
+            .session()
+            .view()
+            .unwrap()
+            .entries
+            .iter()
+            .any(|entry| matches!(
+                entry,
+                ion_core::SessionEntry::UserShellAdmitted {
+                    exclude_from_context: true,
+                    ..
+                }
+            ))
+    );
+
+    fixture
+        .control
+        .command("wait", &[], meta("wait literal"))
+        .map_err(|(_, error)| error)
+        .unwrap();
+    let (metadata, error) = fixture
+        .control
+        .command("check", &[], meta("busy literal"))
+        .unwrap_err();
+    assert_eq!(metadata.literal, "busy literal");
+    assert!(
+        error.to_string().contains("active work or pending inputs"),
+        "{error:#}"
+    );
+    fixture.control.request_stop();
+    let (_, settled) = settle(&mut fixture.control).await;
+    assert!(matches!(
+        settled.outcome,
+        OperationOutcome::Shell(Err(ion_core::CodingSessionError::UserShellCancelled))
+    ));
+    assert_eq!(settled.metadata.unwrap().literal, "wait literal");
+    assert!(!fixture.control.is_busy());
 }
 
 #[tokio::test]

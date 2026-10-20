@@ -5,6 +5,7 @@ use anyhow::{Result, anyhow, bail};
 use serde::Deserialize;
 
 use super::{frontmatter, read_resource, valid_name};
+use crate::command_args::parse_args;
 
 #[derive(Debug, Clone)]
 pub struct PromptTemplate {
@@ -70,52 +71,6 @@ impl PromptTemplate {
         }
         substitute(&self.body, &parse_args(raw_args)?, max_output_bytes)
     }
-}
-
-fn parse_args(input: &str) -> Result<Vec<String>> {
-    let mut args = Vec::new();
-    let mut current = String::new();
-    let mut quote = None;
-    let mut started = false;
-    let mut chars = input.chars();
-    while let Some(ch) = chars.next() {
-        match (quote, ch) {
-            (None, '\'' | '"') => {
-                quote = Some(ch);
-                started = true;
-            }
-            (Some(open), close) if open == close => quote = None,
-            (None, ch) if ch.is_whitespace() => {
-                if started {
-                    args.push(std::mem::take(&mut current));
-                    started = false;
-                }
-            }
-            (Some('\''), ch) => {
-                current.push(ch);
-                started = true;
-            }
-            (_, '\\') => {
-                current.push(
-                    chars
-                        .next()
-                        .ok_or_else(|| anyhow!("trailing escape in arguments"))?,
-                );
-                started = true;
-            }
-            (_, ch) => {
-                current.push(ch);
-                started = true;
-            }
-        }
-    }
-    if quote.is_some() {
-        return Err(anyhow!("unclosed quote in arguments"));
-    }
-    if started {
-        args.push(current);
-    }
-    Ok(args)
 }
 
 // Borrow both defaults and parsed arguments; never build a substitution String

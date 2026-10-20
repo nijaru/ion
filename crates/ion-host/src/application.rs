@@ -6,7 +6,9 @@ use ion_ai::{BoxFuture, ModelRef};
 use ion_core::{CodingAgent, CodingSession, CodingToolOutput, CodingToolSource, ToolSelection};
 use tokio_util::sync::CancellationToken;
 
-use crate::{Host, LocalTools, QuestionCustody, Resources, Selection, SessionSetup};
+use crate::{
+    CommandCatalog, Host, LocalTools, QuestionCustody, Resources, Selection, SessionSetup,
+};
 
 mod owner;
 mod subagent;
@@ -18,6 +20,11 @@ pub use owner::ApplicationOwner;
 /// coding defaults. A missing model requests the application's own default.
 pub trait Application: Send + Sync {
     fn resources(&self, cwd: Option<&Path>) -> Result<Resources>;
+    /// Explicit user-command metadata. Custom applications inherit no
+    /// executable catalog; this is separate from model tools and instructions.
+    fn commands(&self, _cwd: Option<&Path>) -> Result<CommandCatalog> {
+        Ok(CommandCatalog::default())
+    }
     fn runtime(
         &self,
         cwd: Option<&Path>,
@@ -134,9 +141,10 @@ impl CodingApplication {
         self
     }
 
-    /// Select the read-only coding tools. This excludes native mutations, direct
-    /// shell execution and managed children; it is a model-loadout policy, not
-    /// an OS or credential boundary.
+    /// Select the read-only coding tools. This narrows model-visible tools and
+    /// excludes managed children; explicit user shell and user commands remain
+    /// separate authority. It is a model-loadout policy, not an OS or credential
+    /// boundary.
     pub fn with_read_only_tools(mut self) -> Self {
         self.selection = SelectionPolicy::ReadOnly;
         self
@@ -238,6 +246,19 @@ impl Application for CodingApplication {
     fn resources(&self, cwd: Option<&Path>) -> Result<Resources> {
         self.host
             .resources(cwd.context("coding requires a working directory")?)
+    }
+
+    fn commands(&self, cwd: Option<&Path>) -> Result<CommandCatalog> {
+        // Managed children and custom subagent recipes inherit no implicit
+        // executable authority. A main coding Session, including one with a
+        // read-only model loadout, may use the user's explicit commands.
+        if !matches!(self.role, CodingRole::Main(_)) {
+            return Ok(CommandCatalog::default());
+        }
+        CommandCatalog::load(
+            cwd.context("coding requires a working directory")?,
+            self.host.config_root(),
+        )
     }
 
     fn runtime(

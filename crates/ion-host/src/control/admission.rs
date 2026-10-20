@@ -407,6 +407,27 @@ impl<M: Serialize + Send + 'static> SessionControl<M> {
         Ok(id)
     }
 
+    /// Invoke one enabled user command with literal argv. The frozen catalog is
+    /// resolved first, then its manifest bytes and project grant are revalidated
+    /// against the current filesystem before the existing direct-shell preflight
+    /// and durable admission. A changed, revoked or deleted source is rejected;
+    /// dispatch never falls back to another definition.
+    pub fn command(
+        &mut self,
+        name: &str,
+        args: &[String],
+        metadata: M,
+    ) -> Result<OperationId, (M, anyhow::Error)> {
+        if let Err(error) = self.ensure_replaceable() {
+            return Err((metadata, error));
+        }
+        let mapped = match self.setup.commands.resolve(name, args) {
+            Ok(mapped) => mapped,
+            Err(error) => return Err((metadata, error)),
+        };
+        self.shell(mapped.command, !mapped.share_with_model, metadata)
+    }
+
     pub fn compact(&mut self, metadata: M) -> Result<OperationId, (M, anyhow::Error)> {
         let prepared = (|| {
             self.ensure_replaceable()?;

@@ -14,13 +14,14 @@ use ion_core::{AgentLimits, CodingAgent, CodingSession, ForkPoint, ToolSet};
 use serde_json::json;
 
 use crate::{
-    Application, ApplicationRuntime, ControlUpdate, Delivery, OperationOutcome, Resources,
-    SessionCatalog, SessionSetup, UserInput, image_input::ImageSource,
+    Application, ApplicationRuntime, CommandCatalog, ControlUpdate, Delivery, OperationOutcome,
+    Resources, SessionCatalog, SessionSetup, UserInput, image_input::ImageSource,
 };
 
 struct Restricted {
     service: Arc<ScriptedModelService>,
     instructions: RwLock<Option<String>>,
+    commands: Option<CommandCatalog>,
 }
 fn model(name: &str) -> ModelRef {
     ModelRef {
@@ -41,6 +42,10 @@ fn response(content: Vec<Content>) -> Script {
     })])
 }
 impl Application for Restricted {
+    fn commands(&self, cwd: Option<&Path>) -> Result<CommandCatalog> {
+        ensure!(cwd.is_none(), "this application has no workspace");
+        Ok(self.commands.clone().unwrap_or_default())
+    }
     fn resources(&self, cwd: Option<&Path>) -> Result<Resources> {
         ensure!(cwd.is_none(), "this application has no workspace");
         Ok(Resources::new(
@@ -84,6 +89,7 @@ fn identified_admission_requires_execution_custody_before_commit() {
     let application = Arc::new(Restricted {
         service: Arc::new(ScriptedModelService::new([])),
         instructions: RwLock::new(Some("Explicit instructions".into())),
+        commands: None,
     });
     let mut control = SessionSetup::new(session.clone(), catalog, application, None, None, None)
         .unwrap()
@@ -123,6 +129,7 @@ async fn workspace_free_application_keeps_its_authority_across_shared_lifecycle(
     let application = Arc::new(Restricted {
         service: service.clone(),
         instructions: RwLock::new(Some("Only this application's instructions.".into())),
+        commands: None,
     });
     let session = Arc::new(CodingSession::create(&path, None).unwrap());
     let mismatched = SessionSetup::new(
@@ -256,6 +263,46 @@ async fn workspace_free_application_keeps_its_authority_across_shared_lifecycle(
     fs::remove_dir_all(root).unwrap();
 }
 
+#[test]
+fn configured_command_is_rejected_when_the_application_has_no_user_shell_authority() {
+    let root = std::env::temp_dir().join(format!("ion-command-shell-{}", uuid::Uuid::now_v7()));
+    let config = root.join("config");
+    fs::create_dir_all(&config).unwrap();
+    fs::write(
+        config.join("commands.json"),
+        r#"{"commands":{"check":{"description":"Run tests","program":"true","args":[],"share_with_model":false}}}"#,
+    )
+    .unwrap();
+    let commands = CommandCatalog::load(&root, &config).unwrap();
+    let session = Arc::new(CodingSession::create(root.join("session.sqlite"), None).unwrap());
+    let application = Arc::new(Restricted {
+        service: Arc::new(ScriptedModelService::new([])),
+        instructions: RwLock::new(Some("Explicit instructions".into())),
+        commands: Some(commands),
+    });
+    let mut control = SessionSetup::new(
+        session,
+        SessionCatalog::new(root.join("state"), None),
+        application,
+        None,
+        None,
+        None,
+    )
+    .unwrap()
+    .into_control::<String>();
+    let (metadata, error) = control
+        .command("check", &[], "literal draft".into())
+        .unwrap_err();
+    assert_eq!(metadata, "literal draft");
+    assert!(
+        error.to_string().contains("direct shell is not enabled"),
+        "{error:#}"
+    );
+    assert!(!control.is_busy());
+    drop(control);
+    fs::remove_dir_all(root).unwrap();
+}
+
 #[tokio::test]
 async fn coding_application_selection_and_read_only_narrow_the_model_loadout() {
     let root = std::env::temp_dir().join(format!("ion-selection-{}", uuid::Uuid::now_v7()));
@@ -297,6 +344,12 @@ async fn coding_application_selection_and_read_only_narrow_the_model_loadout() {
         drop(session);
     }
 
+    fs::create_dir_all(host.config_root()).unwrap();
+    fs::write(
+        host.config_root().join("commands.json"),
+        r#"{"commands":{"check":{"description":"explicit user command","program":"true","args":[],"share_with_model":false}}}"#,
+    )
+    .unwrap();
     let session = Arc::new(
         CodingSession::create(host.sessions(cwd.clone()).new_path().unwrap(), Some(&cwd)).unwrap(),
     );
@@ -305,6 +358,7 @@ async fn coding_application_selection_and_read_only_narrow_the_model_loadout() {
         .setup(session.clone(), selected.clone(), None, None)
         .unwrap()
         .into_control::<()>();
+    assert_eq!(control.commands().iter().count(), 1);
     let catalog = control.agent().tool_catalog();
     assert!(catalog.is_declared("read"));
     assert!(catalog.is_declared("ls"));

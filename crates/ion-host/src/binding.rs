@@ -7,7 +7,8 @@ use ion_core::{CodingAgent, CodingSession, ForkPoint};
 use serde::Serialize;
 
 use crate::{
-    Application, ApplicationRuntime, QuestionCustody, Resources, SessionCatalog, SessionControl,
+    Application, ApplicationRuntime, CommandCatalog, QuestionCustody, Resources, SessionCatalog,
+    SessionControl,
 };
 
 /// Configuration, not execution. Consume this to create the sole control owner.
@@ -17,6 +18,7 @@ pub struct SessionSetup {
     pub(crate) session: Arc<CodingSession>,
     pub(crate) runtime: ApplicationRuntime,
     pub(crate) resources: Resources,
+    pub(crate) commands: CommandCatalog,
     pub(crate) questions: Option<Arc<QuestionCustody>>,
 }
 
@@ -60,6 +62,7 @@ impl SessionSetup {
             catalog.cwd() == session.cwd(),
             "catalog and Session working directories differ"
         );
+        let commands = application.commands(session.cwd())?;
         if let Some(reasoning) = reasoning {
             runtime.agent.select_reasoning(&session, reasoning)?;
         } else {
@@ -71,6 +74,7 @@ impl SessionSetup {
             session,
             runtime,
             resources,
+            commands,
             questions,
         })
     }
@@ -95,6 +99,9 @@ impl SessionSetup {
     pub fn resources(&self) -> &Resources {
         &self.resources
     }
+    pub fn commands(&self) -> &CommandCatalog {
+        &self.commands
+    }
     pub fn instructions(&self) -> &str {
         self.resources.instructions()
     }
@@ -109,14 +116,15 @@ impl SessionSetup {
         &self,
         session: &CodingSession,
         model: Option<&ModelRef>,
-    ) -> Result<(Resources, ApplicationRuntime)> {
+    ) -> Result<(Resources, CommandCatalog, ApplicationRuntime)> {
         let resources = self.application.resources(session.cwd())?;
+        let commands = self.application.commands(session.cwd())?;
         let runtime = self
             .application
             .runtime(session.cwd(), model, self.questions.clone())?;
         validate_model(&runtime, model)?;
         runtime.agent.validate_reasoning(session.reasoning()?)?;
-        Ok((resources, runtime))
+        Ok((resources, commands, runtime))
     }
 }
 
@@ -152,6 +160,9 @@ impl<M: Serialize + Send + 'static> SessionControl<M> {
     pub fn resources(&self) -> &Resources {
         self.setup.resources()
     }
+    pub fn commands(&self) -> &CommandCatalog {
+        self.setup.commands()
+    }
     pub fn instructions(&self) -> &str {
         self.setup.instructions()
     }
@@ -161,12 +172,16 @@ impl<M: Serialize + Send + 'static> SessionControl<M> {
 
     /// Reload affects future admission; active/queued inputs retain their snapshot.
     pub fn reload_resources(&mut self) -> Result<()> {
-        self.setup.resources = self.setup.application.resources(self.setup.session.cwd())?;
+        let resources = self.setup.application.resources(self.setup.session.cwd())?;
+        let commands = self.setup.application.commands(self.setup.session.cwd())?;
+        self.setup.resources = resources;
+        self.setup.commands = commands;
         Ok(())
     }
 
     pub fn select_model(&mut self, model: ModelRef) -> Result<()> {
         self.ensure_replaceable()?;
+        let commands = self.setup.application.commands(self.setup.session.cwd())?;
         let runtime = self.setup.application.runtime(
             self.setup.session.cwd(),
             Some(&model),
@@ -175,6 +190,7 @@ impl<M: Serialize + Send + 'static> SessionControl<M> {
         validate_model(&runtime, Some(&model))?;
         runtime.agent.select_model(&self.setup.session)?;
         self.setup.runtime = runtime;
+        self.setup.commands = commands;
         Ok(())
     }
 
@@ -194,6 +210,7 @@ impl<M: Serialize + Send + 'static> SessionControl<M> {
         // Preflight before allocating/publishing a new database. New Sessions
         // intentionally reset reasoning, unlike conversation copies.
         let resources = self.setup.application.resources(previous.cwd())?;
+        let commands = self.setup.application.commands(previous.cwd())?;
         let runtime =
             self.setup
                 .application
@@ -204,7 +221,7 @@ impl<M: Serialize + Send + 'static> SessionControl<M> {
         let path = self.setup.catalog.new_path()?;
         let session = Arc::new(CodingSession::create(&path, previous.cwd())?);
         runtime.agent.select_model(&session)?;
-        self.publish(session, runtime, resources);
+        self.publish(session, runtime, resources, commands);
         Ok(())
     }
 
@@ -213,6 +230,7 @@ impl<M: Serialize + Send + 'static> SessionControl<M> {
         let previous = self.setup.session.clone();
         let _idle = previous.reserve_idle()?;
         let resources = self.setup.application.resources(previous.cwd())?;
+        let commands = self.setup.application.commands(previous.cwd())?;
         // Retain the resolved configuration, not its lookup key. An unsaved
         // route must remain usable; a changed store must not redirect a clone.
         let runtime = self.setup.runtime.clone();
@@ -220,7 +238,7 @@ impl<M: Serialize + Send + 'static> SessionControl<M> {
         let path = self.setup.catalog.new_path()?;
         let session = Arc::new(previous.clone_to(&path)?);
         let id = session.id().to_string();
-        self.publish(session, runtime, resources);
+        self.publish(session, runtime, resources, commands);
         Ok(id)
     }
 
@@ -238,6 +256,7 @@ impl<M: Serialize + Send + 'static> SessionControl<M> {
             .find(|item| item.turn == turn)
             .context("selected Turn does not exist")?;
         let resources = self.setup.application.resources(previous.cwd())?;
+        let commands = self.setup.application.commands(previous.cwd())?;
         let runtime = self.setup.application.runtime(
             previous.cwd(),
             Some(&selected_turn.model),
@@ -248,7 +267,7 @@ impl<M: Serialize + Send + 'static> SessionControl<M> {
         let path = self.setup.catalog.new_path()?;
         let session = Arc::new(previous.fork_to(&path, point)?);
         let id = session.id().to_string();
-        self.publish(session, runtime, resources);
+        self.publish(session, runtime, resources, commands);
         Ok(id)
     }
 
@@ -269,8 +288,8 @@ impl<M: Serialize + Send + 'static> SessionControl<M> {
             "session belongs to another working directory"
         );
         let model = session.model_preference()?;
-        let (resources, runtime) = self.setup.prepare(&session, model.as_ref())?;
-        self.publish(session, runtime, resources);
+        let (resources, commands, runtime) = self.setup.prepare(&session, model.as_ref())?;
+        self.publish(session, runtime, resources, commands);
         Ok(())
     }
 
@@ -279,6 +298,7 @@ impl<M: Serialize + Send + 'static> SessionControl<M> {
         session: Arc<CodingSession>,
         runtime: ApplicationRuntime,
         resources: Resources,
+        commands: CommandCatalog,
     ) {
         if let Some(questions) = &self.setup.questions {
             questions.rebind_session(self.owner, session.id());
@@ -286,6 +306,7 @@ impl<M: Serialize + Send + 'static> SessionControl<M> {
         self.setup.session = session;
         self.setup.runtime = runtime;
         self.setup.resources = resources;
+        self.setup.commands = commands;
     }
 }
 
