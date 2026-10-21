@@ -58,6 +58,7 @@ impl Subagent {
         selected: &Selection,
         owner: Arc<BackgroundOwner>,
         environment: Arc<crate::CommandEnvironment>,
+        search_settings: Arc<crate::SearchSettings>,
     ) -> Self {
         Self {
             application: Arc::new(ChildApplication {
@@ -69,6 +70,7 @@ impl Subagent {
                     role: CodingRole::Subagent,
                     processes: parent.processes.clone(),
                     command_environment: Some(environment),
+                    search_settings: Some(search_settings),
                 },
                 selected: selected.clone(),
             }),

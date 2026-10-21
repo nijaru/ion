@@ -70,7 +70,7 @@ or automatically retried.
 `--tools LIST` limits the model-visible tools to comma-separated exact names or
 `*` patterns; `--exclude-tools LIST` removes matches after inclusion. Exclusions
 win, and both apply to native tools, MCP tools and Code Mode's callable namespace.
-`--read-only` is an allowlist preset for `read`, `ls`, `find`, `grep`, `web_fetch`, `history`,
+`--read-only` is an allowlist preset for `read`, `ls`, `find`, `grep`, `web_fetch`, `web_search`, `history`,
 MCP resource inspection and Code Mode when enabled; it excludes native mutations, direct shell
 execution and managed children. These flags are model-loadout policies for the invocation, not
 OS sandboxes or credential boundaries: user `!` shell commands and host-side
@@ -931,8 +931,28 @@ text, with final URL, redirect chain and source digest. Truncated text has a pri
 temporary `full_path` for `read`; this is not a retention guarantee. Downloads are
 bounded; unsupported content and failures are explicit. No browser cookies,
 provider credentials or ambient proxies are imported. It also works through Code
-Mode and the read-only loadout; GET does not imply replay safety. Built-in web
-search still needs a service/credential route.
+Mode and the read-only loadout; GET does not imply replay safety.
+
+`web_search` prefers the active provider: OpenAI Responses search for an OpenAI
+profile, Anthropic Messages search, or DeepSeek's Search API. It preserves the
+profile's endpoint prefix and credential resolver. Model-mediated search uses the
+selected model; DeepSeek Search is standalone. Other routes use the
+first configured Exa, DeepSeek or Brave fallback, in that default order; this is
+an operator-reorderable tie-break, not a quality ranking. Set `EXA_API_KEY`,
+`DEEPSEEK_API_KEY` or `BRAVE_API_KEY`, or use `ion login PROVIDER`. Search sends
+only the explicit query, not conversation history or files. Results include
+source URLs, excerpts where supplied, response digest and reported usage. Native
+search may bill model tokens and search fees; its usage is in the tool result,
+not the main model's token totals. There are no post-dispatch retries, redirects
+or provider fallbacks, and no ambient proxies. Unsupported search routes and
+missing credentials fail explicitly.
+
+User-only `~/.ion/settings.json` accepts `search.native` (default `true`) and
+`search.fallbacks`, for example `[{"provider":"deepseek"},{"provider":"exa"}]`.
+An empty list disables direct fallbacks. Each fallback may set `endpoint` and
+`api_key_env`; these are operator settings, never model arguments. Search works
+through Code Mode and read-only selection; `--exclude-tools web_search` removes
+it from both direct calls and the composed namespace.
 
 Filesystem and command tools act directly in the working directory with the host
 user's permissions. There is no implicit sandbox. Settlements distinguish observed host output,

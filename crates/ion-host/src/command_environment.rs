@@ -4,7 +4,7 @@ use std::{
     ffi::OsString,
     fs, io,
     os::unix::{ffi::OsStrExt, fs::PermissionsExt},
-    path::{Path, PathBuf},
+    path::PathBuf,
 };
 
 use anyhow::{Context, Result};
@@ -117,26 +117,9 @@ impl CommandEnvironment {
         Ok(self)
     }
 
-    pub(crate) fn coding(config_root: &Path) -> Result<Self> {
-        let path = config_root.join("settings.json");
-        let settings: Settings = match crate::file_io::read_bounded(&path, MAX_SETTINGS_BYTES) {
-            Ok(bytes) => serde_json::from_slice(&bytes).map_err(|error| {
-                // Serde's ordinary Display can include an invalid string value,
-                // which may be setup code or a credential. Report location only.
-                anyhow::anyhow!(
-                    "invalid shell settings in {} at line {}, column {}",
-                    path.display(),
-                    error.line(),
-                    error.column()
-                )
-            })?,
-            Err(error) if error.kind() == io::ErrorKind::NotFound => Settings::default(),
-            Err(error) => {
-                return Err(error).with_context(|| format!("cannot read {}", path.display()));
-            }
-        };
+    pub(crate) fn coding_with_settings(settings: ShellSettings) -> Result<Self> {
         let mut environment = Self::inherited();
-        if let Some(program) = settings.shell.path {
+        if let Some(program) = settings.path {
             let program = if program.starts_with("~/") {
                 PathBuf::from(
                     environment
@@ -152,7 +135,7 @@ impl CommandEnvironment {
                 .context("invalid configured Bash-compatible shell")?;
         }
         environment
-            .with_setup(settings.shell.setup.unwrap_or_default())
+            .with_setup(settings.setup.unwrap_or_default())
             .map_err(Into::into)
     }
 
@@ -181,12 +164,7 @@ fn invalid(message: &str) -> io::Error {
 
 #[derive(Default, Deserialize)]
 #[serde(default, deny_unknown_fields)]
-struct Settings {
-    shell: ShellSettings,
-}
-#[derive(Default, Deserialize)]
-#[serde(default, deny_unknown_fields)]
-struct ShellSettings {
+pub(crate) struct ShellSettings {
     path: Option<PathBuf>,
     setup: Option<String>,
 }
@@ -195,8 +173,14 @@ struct ShellSettings {
 mod tests {
     use super::*;
     use crate::{LocalTools, UserShell};
-    use std::sync::Arc;
+    use std::{path::Path, sync::Arc};
     use tokio_util::sync::CancellationToken;
+
+    fn configured(root: &Path) -> Result<CommandEnvironment> {
+        CommandEnvironment::coding_with_settings(
+            crate::user_settings::UserSettings::load(root)?.shell()?,
+        )
+    }
 
     fn environment() -> CommandEnvironment {
         CommandEnvironment::new(
@@ -367,11 +351,11 @@ mod tests {
         fs::create_dir(&root).unwrap();
         let path = root.join("settings.json");
         fs::write(&path, r#"{"shell":{"setup":"export MARKER=first"}}"#).unwrap();
-        let first = CommandEnvironment::coding(&root).unwrap();
+        let first = configured(&root).unwrap();
         fs::write(&path, r#"{"shell":{"setup":"export MARKER=second"}}"#).unwrap();
         assert_eq!(first.setup.as_deref(), Some("export MARKER=first"));
         assert_eq!(
-            CommandEnvironment::coding(&root).unwrap().setup.as_deref(),
+            configured(&root).unwrap().setup.as_deref(),
             Some("export MARKER=second")
         );
         for invalid in [
@@ -379,12 +363,12 @@ mod tests {
             r#"{"shell":{"login":true}}"#,
         ] {
             fs::write(&path, invalid).unwrap();
-            let error = CommandEnvironment::coding(&root).err().unwrap().to_string();
+            let error = configured(&root).err().unwrap().to_string();
             assert!(!error.contains("PRIVATE_VALUE"));
             assert!(error.contains("line"));
         }
         fs::write(&path, vec![b' '; MAX_SETTINGS_BYTES + 1]).unwrap();
-        assert!(CommandEnvironment::coding(&root).is_err());
+        assert!(configured(&root).is_err());
         fs::remove_dir_all(root).unwrap();
     }
 }

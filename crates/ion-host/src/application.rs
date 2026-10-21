@@ -96,6 +96,7 @@ pub struct CodingApplication {
     role: CodingRole,
     processes: Arc<crate::ProcessOwner>,
     command_environment: Option<Arc<crate::CommandEnvironment>>,
+    search_settings: Option<Arc<crate::SearchSettings>>,
 }
 
 const READ_ONLY_TOOLS: &[&str] = &[
@@ -104,6 +105,7 @@ const READ_ONLY_TOOLS: &[&str] = &[
     "find",
     "grep",
     "web_fetch",
+    "web_search",
     "history",
     "list_mcp_resources",
     "list_mcp_resource_templates",
@@ -126,13 +128,22 @@ impl CodingApplication {
             role: CodingRole::Main(owner),
             processes,
             command_environment: None,
+            search_settings: None,
         }
     }
 
     /// Supply the complete command environment for a service/library binding.
-    /// This skips user shell settings and ambient environment discovery.
+    /// This skips the user settings file and ambient command-environment
+    /// discovery. Search uses built-in routing unless `with_search_settings`
+    /// supplies explicit policy; native search still uses the selected profile.
     pub fn with_command_environment(mut self, environment: Arc<crate::CommandEnvironment>) -> Self {
         self.command_environment = Some(environment);
+        self
+    }
+
+    /// Supply complete search routing policy rather than reading user settings.
+    pub fn with_search_settings(mut self, settings: Arc<crate::SearchSettings>) -> Self {
+        self.search_settings = Some(settings);
         self
     }
 
@@ -193,9 +204,20 @@ impl CodingApplication {
         selected: &Selection,
         questions: Option<Arc<QuestionCustody>>,
     ) -> Result<ApplicationRuntime> {
+        let settings = if self.command_environment.is_none() {
+            crate::user_settings::UserSettings::load(self.host.config_root())?
+        } else {
+            crate::user_settings::UserSettings::default()
+        };
         let environment = match &self.command_environment {
             Some(environment) => environment.clone(),
-            None => Arc::new(crate::CommandEnvironment::coding(self.host.config_root())?),
+            None => Arc::new(crate::CommandEnvironment::coding_with_settings(
+                settings.shell()?,
+            )?),
+        };
+        let search_settings = match &self.search_settings {
+            Some(settings) => settings.clone(),
+            None => Arc::new(settings.search()?),
         };
         let native = Arc::new(
             LocalTools::with_environment(cwd, environment.clone())?.with_project_instructions(),
@@ -203,6 +225,11 @@ impl CodingApplication {
         let mut sources: Vec<Arc<dyn CodingToolSource>> = vec![
             native.clone(),
             Arc::new(crate::WebTools::new()?),
+            Arc::new(crate::SearchTools::coding(
+                selected,
+                self.host.credentials(),
+                &search_settings,
+            )?),
             Arc::new(crate::ProcessTools::with_environment(
                 cwd,
                 self.processes.clone(),
@@ -216,6 +243,7 @@ impl CodingApplication {
                 selected,
                 owner.background().clone(),
                 environment,
+                search_settings,
             )));
         }
         let ask_available = questions.is_some();

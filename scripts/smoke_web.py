@@ -16,6 +16,8 @@ DIGEST = hashlib.sha256(DOCUMENT).hexdigest()
 web_calls = []
 failures = []
 steps = {}
+search_calls = []
+SEARCH_QUERY = "ion current documentation"
 
 
 class Web(BaseHTTPRequestHandler):
@@ -42,7 +44,13 @@ class Provider(BaseHTTPRequestHandler):
     def do_POST(self):
         try:
             body = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
+            if self.path in {"/proxy/v1/responses", "/search/exa", "/search/deepseek"}:
+                self.search_response(body)
+                return
             prompt = next(m["content"] for m in reversed(body["messages"]) if m["role"] == "user")
+            if prompt.startswith("SEARCH_"):
+                self.search_step(body, prompt)
+                return
             step = steps.get(prompt, 0)
             steps[prompt] = step + 1
             url = f"http://127.0.0.1:{web.server_port}"
@@ -87,6 +95,80 @@ class Provider(BaseHTTPRequestHandler):
         except Exception as error:
             failures.append(repr(error))
             self.send_error(500, str(error))
+
+    def search_response(self, body):
+        if self.path == "/proxy/v1/responses":
+            assert self.headers["Authorization"] == "Bearer model-secret"
+            assert body["model"] == "search-fixture" and body["input"] == SEARCH_QUERY, body
+            assert body["store"] is False and body["max_tool_calls"] == 1, body
+            assert "messages" not in body and "PARENT_PRIVATE_CONTEXT" not in json.dumps(body), body
+            result = {"status": "completed", "output": [{"type": "web_search_call", "status": "completed", "action": {"sources": [self.search_source()]}}], "usage": {"input_tokens": 13, "output_tokens": 7}}
+        else:
+            assert self.headers["Authorization"] == "Bearer search-secret"
+            assert body["query"] == SEARCH_QUERY, body
+            if self.path == "/search/exa":
+                assert body["type"] == "auto" and body["numResults"] == 2, body
+            else:
+                assert body["count"] == 2 and body["need_content"] is False, body
+            result = {"results": [self.search_source()]}
+        self.search_json(result)
+
+    def do_GET(self):
+        try:
+            from urllib.parse import parse_qs, urlsplit
+            target = urlsplit(self.path)
+            assert target.path == "/search/brave", self.path
+            assert self.headers["X-Subscription-Token"] == "search-secret"
+            assert "Authorization" not in self.headers
+            assert parse_qs(target.query) == {"q": [SEARCH_QUERY], "count": ["2"]}
+            self.search_json({"web": {"results": [self.search_source()]}})
+        except Exception as error:
+            failures.append(repr(error))
+            self.send_error(500)
+
+    def search_source(self):
+        return {"url": f"http://127.0.0.1:{web.server_port}/document", "title": "Fixture documentation", "summary": "Independent source", "description": "Independent source", "highlights": ["Independent source"]}
+
+    def search_json(self, result):
+        wire = json.dumps(result).encode()
+        search_calls.append((self.path, hashlib.sha256(wire).hexdigest()))
+        self.send_response(200)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(wire)))
+        self.end_headers()
+        self.wfile.write(wire)
+
+    def search_step(self, body, prompt):
+        step = steps.get(prompt, 0)
+        steps[prompt] = step + 1
+        args = {"query": SEARCH_QUERY, "max_results": 2}
+        composed = prompt in {"SEARCH_CODE_PARENT_PRIVATE_CONTEXT", "SEARCH_EXCLUDED_PARENT_PRIVATE_CONTEXT"}
+        excluded = prompt == "SEARCH_EXCLUDED_PARENT_PRIVATE_CONTEXT"
+        if step == 0:
+            names = {t["function"]["name"] for t in body["tools"]}
+            assert ("web_search" in names) == (not excluded), names
+            if prompt == "SEARCH_READONLY_PARENT_PRIVATE_CONTEXT":
+                assert "exec" not in names and "write" not in names, names
+            if composed:
+                code = "const s=await tools.web_search(" + json.dumps(args) + ");"
+                if not excluded:
+                    code += "if(s.is_error||!s.value.untrusted)throw new Error('search failed');const f=await tools.web_fetch({url:s.value.results[0].url});if(f.is_error)throw new Error('fetch failed');text({search:s.value,content:f.value.content});"
+                self.calls([("search-code", "code_mode", {"code": code})])
+            else:
+                self.calls([("search", "web_search", args)])
+        elif step == 1 and not composed:
+            output = json.loads(body["messages"][-1]["content"])
+            assert not output["is_error"], output
+            result = output["result"]
+            assert result["untrusted"] and result["results"][0]["url"] == self.search_source()["url"], result
+            self.calls([("searched-page", "web_fetch", {"url": result["results"][0]["url"]})])
+        else:
+            output = json.loads(body["messages"][-1]["content"])
+            assert output["is_error"] == excluded, output
+            if not excluded:
+                assert "WEB_FETCH_DOCUMENT" in json.dumps(output), output
+                assert "UNEXPECTED_SCRIPT" not in json.dumps(output), output
+            self.events({"content": "SEARCH_FETCH_OK"}, "stop")
 
     def calls(self, calls):
         self.events({"tool_calls": [{"index": i, "id": ident, "type": "function", "function": {"name": name, "arguments": json.dumps(arguments)}} for i, (ident, name, arguments) in enumerate(calls)]}, "tool_calls")
@@ -152,9 +234,52 @@ if __name__ == "__main__":
                 text = snapshot.read_text()
                 assert "WEB_FETCH_DOCUMENT" in text and "UNEXPECTED_SCRIPT" not in text, text
                 assert f"http://localhost:{web.server_port}/reference" in text, text
+            env.update(MODEL_TOKEN="model-secret", SEARCH_TOKEN="search-secret")
+            cases = [
+                ("SEARCH_NATIVE", "openai", []),
+                ("SEARCH_READONLY", "openai", ["--read-only"]),
+                ("SEARCH_CODE", "openai", ["--code-mode"]),
+                ("SEARCH_EXCLUDED", "openai", ["--code-mode", "--exclude-tools", "web_search"]),
+                ("SEARCH_EXA", "fixture", []),
+                ("SEARCH_DEEPSEEK", "fixture", []),
+                ("SEARCH_BRAVE", "fixture", []),
+            ]
+            for mode, active, options in cases:
+                backend = mode.removeprefix("SEARCH_").lower()
+                fallback = [{"provider": backend, "endpoint": f"http://127.0.0.1:{provider.server_port}/search/{backend}", "api_key_env": "SEARCH_TOKEN"}] if active == "fixture" else []
+                (root / "ion/settings.json").write_text(json.dumps({"search": {"fallbacks": fallback}}))
+                run("use", active, "search-fixture", "--endpoint", f"http://127.0.0.1:{provider.server_port}/proxy/v1", "--wire", "chat-completions", "--api-key-env", "MODEL_TOKEN")
+                before_search, before_web = len(search_calls), len(web_calls)
+                result = run(*options, "run", mode + "_PARENT_PRIVATE_CONTEXT")
+                assert result.stdout.strip() == "SEARCH_FETCH_OK", result
+                assert not failures, failures
+                count = 0 if mode == "SEARCH_EXCLUDED" else 1
+                assert len(search_calls) - before_search == count, search_calls
+                assert len(web_calls) - before_web == count, web_calls
+                view = json.loads(run("--continue", "inspect").stdout)
+                assert view["unfinished_turn"] is None, view
+                outputs = []
+                for entry in view["entries"]:
+                    if entry["kind"] == "tool_result":
+                        outcome = entry["data"]["result"]["outcome"]
+                    elif entry["kind"] == "child_tool_result":
+                        outcome = entry["data"]["outcome"]
+                    else:
+                        continue
+                    if outcome["state"] == "observed":
+                        outputs.append(outcome["output"]["value"])
+                if mode == "SEARCH_EXCLUDED":
+                    assert not any(e["kind"] == "child_tool_admitted" for e in view["entries"]), view
+                else:
+                    observed = next(v for v in outputs if "results" in v)
+                    assert observed["source"]["body_sha256"] == search_calls[-1][1], observed
+                    assert observed["source"]["backend"] == ("openai" if active == "openai" else backend), observed
+                    assert observed["source"]["native"] == (active == "openai"), observed
+                    assert observed["results"][0]["url"] == f"http://127.0.0.1:{web.server_port}/document", observed
+                    assert "model-secret" not in json.dumps(observed) and "search-secret" not in json.dumps(observed), observed
             for _, headers in web_calls:
                 assert not ({key.lower() for key in headers} & {"cookie", "authorization", "proxy-authorization", "referer"}), headers
-            print("Ion web fetch default/read-only/Code Mode/exclusion, private HTTP and source snapshot: OK")
+            print("Ion fetch and provider-first search→fetch: default/read-only/Code Mode/exclusion, native profile/auth, Exa/DeepSeek/Brave and persisted sources: OK")
     finally:
         for server in (web, provider):
             server.shutdown()

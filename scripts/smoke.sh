@@ -115,7 +115,7 @@ python3 - "$WORK/discovery-requests" "$WORK/discovery-workspace" <<'PY'
 import json, pathlib, sys
 requests = [json.loads(line) for line in open(sys.argv[1])]
 assert len(requests) == 5, len(requests)
-expected_tools = {"read", "ls", "find", "grep", "web_fetch", "history"}
+expected_tools = {"read", "ls", "find", "grep", "web_fetch", "web_search", "history"}
 for request in requests:
     assert {tool["function"]["name"] for tool in request["tools"]} == expected_tools
 messages = requests[-1]["messages"]

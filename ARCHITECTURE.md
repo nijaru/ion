@@ -56,7 +56,7 @@ External deployment must not introduce a second execution ledger or agent loop.
 The contracts below do not settle every reference feature. These capabilities
 must be considered explicitly rather than hidden under broad claims of parity:
 
-- **Coding context:** web search and richer document retrieval; login-shell startup
+- **Coding context:** broader search/provider coverage and richer document retrieval; login-shell startup
   state capture beyond explicit command setup; non-image document/media support; summary-quality
   aids beyond original-evidence retrieval.
 - **Continuity:** Pi-style in-file tree navigation and branch summaries versus
@@ -447,8 +447,24 @@ completed-body digests and explicit failures. Retrieved content remains untruste
 data, never instructions or grants. Conversion and snapshot workers remain owned
 through stop/join. Omitted converted text may have a private temporary snapshot,
 not a durable reference or retention lease. GET, a read-only label and equal tool
-declarations grant no replay authority. Search services and other document formats
-remain separate capability decisions.
+declarations grant no replay authority. Other document formats remain separate
+capability decisions.
+
+Coding search prefers the active model/provider's supported search contract, with
+its resolved profile endpoint, model and credential resolver. Operator-configured
+Exa, DeepSeek and Brave routes are the preferred direct fallback tier; their order
+is a configurable tie-break. Capture search policy with the application binding;
+managed children retain that policy but resolve native search against their own
+selected profile. User settings have one bounded snapshot, not competing readers.
+General applications opt into search explicitly. Model arguments may select an
+admitted backend but never supply endpoints, credentials or execution models.
+Send only the explicit query, not implicit conversation/files. Bound acquisition
+and results; retain structured source URLs, response digests and known reported
+usage, including on incomplete native responses. Never manufacture source evidence
+from answer prose. Select fallbacks before dispatch only: a timeout, HTTP failure
+or malformed response does not authorize another potentially billable request.
+Native search may incur both model and search charges; a read-only label is not a
+free-call promise, spending budget or replay grant.
 
 The coding application includes native `ls`, `find` and `grep` for repository
 exploration without shell authority. Explicit selection and the read-only loadout

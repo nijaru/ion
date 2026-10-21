@@ -31,8 +31,10 @@ mod project_instructions;
 mod question;
 mod question_tool;
 pub mod resources;
+mod search_tools;
 pub mod session_catalog;
 mod user_commands;
+mod user_settings;
 mod web_tools;
 
 use std::{
@@ -78,6 +80,7 @@ pub use question::{
 };
 pub use question_tool::QuestionTools;
 pub use resources::{PromptTemplate, ResourceDiagnostic, Resources, Skill};
+pub use search_tools::{SearchBackend, SearchFallback, SearchRoute, SearchSettings, SearchTools};
 pub use session_catalog::{SessionCatalog, SessionSummary};
 pub use user_commands::{CommandCatalog, CommandConfig, CommandOrigin, UserCommand};
 pub use web_tools::WebTools;

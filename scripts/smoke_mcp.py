@@ -173,7 +173,7 @@ class Provider(BaseHTTPRequestHandler):
             ]
         elif len(requests) == 22:
             names = {tool["function"]["name"] for tool in body["tools"]}
-            assert names == {"read", "ls", "find", "grep", "web_fetch", "history", "list_mcp_resources", "list_mcp_resource_templates", "read_mcp_resource"}, names
+            assert names == {"read", "ls", "find", "grep", "web_fetch", "web_search", "history", "list_mcp_resources", "list_mcp_resource_templates", "read_mcp_resource"}, names
             changes = [
                 {"id": "mcp", "choices": [{"index": 0, "delta": {"content": "READ_ONLY_OK"}, "finish_reason": None}]},
                 {"id": "mcp", "choices": [{"index": 0, "delta": {}, "finish_reason": "stop"}]},
