@@ -136,8 +136,14 @@ with tempfile.TemporaryDirectory(prefix="ion-rpc-") as temporary:
     child = None
     try:
         endpoint = f"http://127.0.0.1:{server.server_port}/v1/chat/completions"
-        subprocess.run([binary, "use", "rpc-smoke", "rpc-model", "--endpoint", endpoint, "--wire", "chat-completions", "--images"], env=env, check=True, capture_output=True)
-        subprocess.run([binary, "use", "rpc-alt", "alt-model", "--endpoint", endpoint, "--wire", "chat-completions", "--images"], env=env, check=True, capture_output=True)
+        subprocess.run([binary, "use", "rpc-smoke", "rpc-model", "--endpoint", endpoint, "--wire", "chat-completions", "--images", "--context-window", "131072", "--max-output-tokens", "512"], env=env, check=True, capture_output=True)
+        subprocess.run([binary, "use", "rpc-alt", "alt-model", "--endpoint", endpoint, "--wire", "chat-completions", "--images", "--context-window", "262144", "--max-output-tokens", "1024"], env=env, check=True, capture_output=True)
+        # Even a custom route's window must constrain the real coding entry point.
+        capacity_workspace = work / "capacity"
+        capacity_workspace.mkdir()
+        subprocess.run([binary, "use", "rpc-bounded", "tiny", "--endpoint", endpoint, "--wire", "chat-completions", "--context-window", "1", "--max-output-tokens", "1"], env=env, check=True, capture_output=True)
+        bounded = subprocess.run([binary, "--cwd", capacity_workspace, "run", "MUST_NOT_DISPATCH"], env=env, capture_output=True, timeout=8)
+        assert bounded.returncode == 1 and not requests, (bounded.stderr, requests)
         subprocess.run([binary, "use", "rpc-smoke", "rpc-model"], env=env, check=True, capture_output=True)
         # Publication fails normally; a committed selection is not rolled back.
         listing_failure = closed_stdout(["models"], env)
@@ -269,6 +275,7 @@ with tempfile.TemporaryDirectory(prefix="ion-rpc-") as temporary:
             committed = [entry for entry in view["entries"] if entry["kind"] == "assistant" and entry["data"]["turn"] == accepted[0]["data"]["turn"]]
             assert len(committed) == 1 and "RPC_OK" in str(committed[0]), committed
         assert requests[0]["reasoning_effort"] == "high", requests[0]
+        assert requests[0]["max_completion_tokens"] == 512, requests[0]
         assert "Check RPC." in str(requests[0]["messages"])
         assert "RPC_SHELL_SHARED" in str(requests[0]["messages"]), requests[0]["messages"]
         assert "RPC_SHELL_PRIVATE" not in str(requests[0]["messages"]), requests[0]["messages"]
@@ -499,6 +506,7 @@ with tempfile.TemporaryDirectory(prefix="ion-rpc-") as temporary:
         send(child, {"id": "switched-prompt", "type": "prompt", "message": "Switched session"})
         assert until(child, lambda r: r["type"] == "turn_end")[-1]["status"] == "completed"
         assert requests[-1]["model"] == "alt-model", requests[-1]
+        assert requests[-1]["max_completion_tokens"] == 1024, requests[-1]
         child.stdin.close()
         assert child.wait(timeout=8) == 0, child.stderr.read()
         reopened = subprocess.Popen([binary, "--cwd", workspace, "--session", session, "rpc"], env=env, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, bufsize=0)

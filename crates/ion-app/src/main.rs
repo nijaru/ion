@@ -101,6 +101,12 @@ enum Action {
         wire: Option<Wire>,
         #[arg(long)]
         api_key_env: Option<String>,
+        /// Context capacity in tokens for a custom endpoint's model.
+        #[arg(long)]
+        context_window: Option<u32>,
+        /// Maximum output tokens for a custom endpoint's model.
+        #[arg(long)]
+        max_output_tokens: Option<u32>,
         /// Declare that a custom endpoint's model accepts image input.
         #[arg(long)]
         images: bool,
@@ -324,6 +330,8 @@ async fn run_cli(cli: Cli) -> Result<()> {
             endpoint,
             wire,
             api_key_env,
+            context_window,
+            max_output_tokens,
             images,
         }) => {
             let saved = SavedSelection {
@@ -332,6 +340,8 @@ async fn run_cli(cli: Cli) -> Result<()> {
                 endpoint,
                 wire,
                 api_key_env,
+                context_window_tokens: context_window,
+                max_output_tokens,
                 image_input: images,
             };
             let resolved = models.save_default(&saved)?;

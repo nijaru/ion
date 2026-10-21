@@ -317,6 +317,8 @@ async fn coding_application_selection_and_read_only_narrow_the_model_loadout() {
             endpoint: Some("http://127.0.0.1:1/v1/chat/completions".into()),
             wire: Some(crate::Wire::ChatCompletions),
             api_key_env: None,
+            context_window_tokens: None,
+            max_output_tokens: None,
             image_input: false,
         })
         .unwrap();
@@ -418,6 +420,8 @@ fn last_selection_builder_wins_for_restricted_roles() {
             endpoint: Some("http://127.0.0.1:1/v1/chat/completions".into()),
             wire: Some(crate::Wire::ChatCompletions),
             api_key_env: None,
+            context_window_tokens: None,
+            max_output_tokens: None,
             image_input: false,
         })
         .unwrap();
@@ -465,6 +469,8 @@ fn question_capability_obeys_explicit_selection_and_read_only_policy() {
             endpoint: Some("http://127.0.0.1:1/v1/chat/completions".into()),
             wire: Some(crate::Wire::ChatCompletions),
             api_key_env: None,
+            context_window_tokens: None,
+            max_output_tokens: None,
             image_input: false,
         })
         .unwrap();

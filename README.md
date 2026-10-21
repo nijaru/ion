@@ -577,6 +577,14 @@ hyphens, with 1–64 bytes; the same identifier is used for provider login.
 `URL` may be a compatible API base such as `http://desktop:8080/v1` or the
 complete `http://desktop:8080/v1/chat/completions` request URL. Ion appends
 the standard wire path only when the URL is a base.
+When configuring a custom route, add `--context-window 65536` and
+`--max-output-tokens 4096` to declare its capacity and output ceiling. These
+positive token limits are saved with the route and restored on model selection
+and Session reopen; catalog limits cannot be overridden. An omitted custom
+context window stays unknown; omitted output keeps the 8192-token ceiling.
+The shared agent clamps output to remaining estimated capacity. Instructions,
+history and its safety reserve can still make a request too large. Unknown keys
+in saved route configuration are rejected rather than silently ignored.
 For a custom OpenRouter model, use `--wire openrouter-chat`. This route retains
 plain reasoning or ordered structured `reasoning_details` across tool calls;
 the generic `chat-completions` route does not assume that contract. Qualify a

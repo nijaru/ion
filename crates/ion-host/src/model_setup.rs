@@ -42,12 +42,17 @@ impl std::str::FromStr for Wire {
 }
 
 #[derive(Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct SavedSelection {
     pub provider: String,
     pub model: String,
     pub endpoint: Option<String>,
     pub wire: Option<Wire>,
     pub api_key_env: Option<String>,
+    /// Explicit custom-model capacity; absent means unknown, not a guessed window.
+    pub context_window_tokens: Option<u32>,
+    /// Custom-model output ceiling; absent retains the default ceiling.
+    pub max_output_tokens: Option<u32>,
     #[serde(default)]
     pub image_input: bool,
 }
@@ -127,7 +132,11 @@ impl ModelStore {
         let effective =
             if saved.endpoint.is_none() && catalog::find(&saved.provider, &saved.model).is_none() {
                 ensure!(
-                    saved.wire.is_none() && saved.api_key_env.is_none() && !saved.image_input,
+                    saved.wire.is_none()
+                        && saved.api_key_env.is_none()
+                        && !saved.image_input
+                        && saved.context_window_tokens.is_none()
+                        && saved.max_output_tokens.is_none(),
                     "custom route overrides require --endpoint and --wire"
                 );
                 configuration
@@ -215,6 +224,8 @@ impl ModelStore {
                 endpoint: None,
                 wire: None,
                 api_key_env: None,
+                context_window_tokens: None,
+                max_output_tokens: None,
                 image_input: false,
             });
         }
@@ -289,12 +300,22 @@ impl ModelStore {
 
     fn resolve_saved(&self, saved: &SavedSelection) -> Result<Selection> {
         validate_provider_id(&saved.provider)?;
+        ensure!(
+            saved.context_window_tokens != Some(0),
+            "context window must be greater than zero"
+        );
+        ensure!(
+            saved.max_output_tokens != Some(0),
+            "maximum output tokens must be greater than zero"
+        );
         if let Some(model) = catalog::find(&saved.provider, &saved.model) {
             ensure!(
                 saved.endpoint.is_none()
                     && saved.wire.is_none()
                     && saved.api_key_env.is_none()
-                    && !saved.image_input,
+                    && !saved.image_input
+                    && saved.context_window_tokens.is_none()
+                    && saved.max_output_tokens.is_none(),
                 "catalog model route cannot be overridden; use a custom provider identifier"
             );
             return Ok(Selection {
@@ -340,8 +361,8 @@ impl ModelStore {
             endpoint,
             wire,
             api_key_env: saved.api_key_env.clone(),
-            max_output_tokens: 8192,
-            context_window_tokens: None,
+            max_output_tokens: saved.max_output_tokens.unwrap_or(8192),
+            context_window_tokens: saved.context_window_tokens,
             requires_key: false,
             image_input: saved.image_input,
             capabilities: catalog::ModelCapabilities::conservative(),
@@ -421,6 +442,8 @@ mod tests {
             endpoint: Some(endpoint.into()),
             wire: Some(Wire::ChatCompletions),
             api_key_env: None,
+            context_window_tokens: None,
+            max_output_tokens: None,
             image_input: false,
         }
     }
@@ -435,6 +458,8 @@ mod tests {
             endpoint: Some("http://localhost:1234/v1/chat/completions".into()),
             wire: Some(Wire::ChatCompletions),
             api_key_env: None,
+            context_window_tokens: None,
+            max_output_tokens: None,
             image_input: false,
         };
         assert!(!store.resolve_saved(&route).unwrap().requires_key);
@@ -498,6 +523,8 @@ mod tests {
                 endpoint: Some("https://example.com/v1/chat/completions".into()),
                 wire: Some(Wire::ChatCompletions),
                 api_key_env: None,
+                context_window_tokens: None,
+                max_output_tokens: None,
                 image_input: false,
             })
             .unwrap();
@@ -505,8 +532,72 @@ mod tests {
             custom.capabilities,
             catalog::ModelCapabilities::conservative()
         );
+        assert_eq!(custom.context_window_tokens, None);
+        assert_eq!(custom.max_output_tokens, 8192);
 
         let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn invalid_capacity_overrides_preserve_the_configured_route() {
+        let root = std::env::temp_dir().join(format!("ion-model-limits-{}", uuid::Uuid::now_v7()));
+        let store = ModelStore::new(root.clone());
+        let route = desktop_route("http://localhost:8080/v1");
+        store.save_default(&route).unwrap();
+        let publication = root.join("models.json");
+        let before = fs::read(&publication).unwrap();
+        let catalog = SavedSelection {
+            provider: "anthropic".into(),
+            model: "claude-opus-5-5".into(),
+            endpoint: None,
+            wire: None,
+            ..route.clone()
+        };
+        for invalid in [
+            SavedSelection {
+                context_window_tokens: Some(0),
+                ..route.clone()
+            },
+            SavedSelection {
+                max_output_tokens: Some(0),
+                ..route.clone()
+            },
+            SavedSelection {
+                context_window_tokens: Some(50_000),
+                ..catalog.clone()
+            },
+            SavedSelection {
+                max_output_tokens: Some(1234),
+                ..catalog
+            },
+            SavedSelection {
+                endpoint: None,
+                wire: None,
+                context_window_tokens: Some(50_000),
+                ..route.clone()
+            },
+            SavedSelection {
+                endpoint: None,
+                wire: None,
+                max_output_tokens: Some(1234),
+                ..route.clone()
+            },
+        ] {
+            assert!(store.save_default(&invalid).is_err());
+            assert_eq!(fs::read(&publication).unwrap(), before);
+        }
+        let mut configuration: serde_json::Value = serde_json::from_slice(&before).unwrap();
+        configuration["custom"][0]["context_window_token"] = 50_000.into();
+        fs::write(&publication, serde_json::to_vec(&configuration).unwrap()).unwrap();
+        assert!(
+            store
+                .resolve_identity(&ModelRef {
+                    provider: route.provider,
+                    model: route.model,
+                })
+                .is_err()
+        );
+        fs::remove_dir_all(root).unwrap();
     }
 
     #[test]
@@ -635,14 +726,17 @@ mod tests {
         let root = std::env::temp_dir().join(format!("ion-model-store-{}", std::process::id()));
         let _ = fs::remove_dir_all(&root);
         let store = ModelStore::new(root.clone());
-        let custom = SavedSelection {
-            provider: "desktop".into(),
-            model: "qwen".into(),
-            endpoint: Some("http://127.0.0.1:8080/v1/chat/completions".into()),
-            wire: Some(Wire::LlamaCppNoThinking),
-            api_key_env: None,
-            image_input: false,
-        };
+        let custom: SavedSelection = serde_json::from_value(serde_json::json!({
+            "provider": "desktop",
+            "model": "qwen",
+            "endpoint": "http://127.0.0.1:8080/v1/chat/completions",
+            "wire": "llama-cpp-no-thinking",
+            "api_key_env": null,
+            "image_input": false,
+            "context_window_tokens": 50_000,
+            "max_output_tokens": 1234,
+        }))
+        .unwrap();
         store.save_default(&custom).unwrap();
         store
             .save_default(&SavedSelection {
@@ -651,6 +745,8 @@ mod tests {
                 endpoint: None,
                 wire: None,
                 api_key_env: None,
+                context_window_tokens: None,
+                max_output_tokens: None,
                 image_input: false,
             })
             .unwrap();
@@ -661,10 +757,13 @@ mod tests {
                 endpoint: None,
                 wire: None,
                 api_key_env: None,
+                context_window_tokens: None,
+                max_output_tokens: None,
                 image_input: false,
             })
             .unwrap();
         let credentials = CredentialStore::new(root.join("credentials"));
+        let store = ModelStore::new(root.clone());
         let selected = store
             .choose(
                 None,
@@ -688,5 +787,7 @@ mod tests {
                 .any(|option| option.provider == "desktop")
         );
         fs::remove_dir_all(root).unwrap();
+        assert_eq!(selected.context_window_tokens, Some(50_000));
+        assert_eq!(selected.max_output_tokens, 1234);
     }
 }

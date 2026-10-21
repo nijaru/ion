@@ -10,6 +10,8 @@ fn route(model: &str) -> SavedSelection {
         endpoint: Some("http://127.0.0.1:43129/v1/chat/completions".into()),
         wire: Some(Wire::ChatCompletions),
         api_key_env: None,
+        context_window_tokens: None,
+        max_output_tokens: None,
         image_input: false,
     }
 }

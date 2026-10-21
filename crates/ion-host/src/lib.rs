@@ -364,11 +364,12 @@ mod tests {
             endpoint: Some(endpoint),
             wire: Some(Wire::ChatCompletions),
             api_key_env: None,
+            context_window_tokens: Some(50_000),
+            max_output_tokens: Some(1234),
             image_input: false,
         };
-        let mut selected = host.models().save_default(&route).unwrap();
-        selected.max_output_tokens = 1234;
-        selected.context_window_tokens = Some(50_000);
+        let identity = host.models().save_default(&route).unwrap().identity();
+        let selected = host.models().resolve_identity(&identity).unwrap();
         let agent = host.agent(&selected, Arc::new(ToolSet::new([]))).unwrap();
         host.models()
             .save_default(&SavedSelection {

@@ -693,7 +693,11 @@ bounded resident history or artifact retention.
 Prepare wire declarations and durable context from the same catalogue. Admit
 model/context changes atomically before issuance. Pre-output retries retain that
 preparation; compaction/reset prepares again. Clamp output ceilings to remaining
-capacity. Exhausting the dispatched output budget is not itself context pressure.
+capacity. Custom routes may declare positive context/output limits; Host persists
+them with the route and captures them in the bound agent, including after reopen.
+Unknown custom context stays unknown. Catalog limits cannot be overridden under
+the catalog identity. Exhausting the dispatched output budget is not itself context
+pressure.
 Recovery is bounded and visible; incompatible context must fail or change explicitly.
 A pre-output summary context rejection may shrink to strictly smaller settled-prefix
 cuts on the same model/authority. Report each attempted reduction; stop when no
