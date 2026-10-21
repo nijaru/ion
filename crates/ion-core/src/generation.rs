@@ -3,8 +3,9 @@ use std::{sync::Arc, time::Duration};
 
 use futures_util::StreamExt;
 use ion_ai::{
-    Content, ModelExecution, ModelRequest, ModelResponse, ModelRoute, ModelRouteReason,
-    ModelService, ModelStreamEvent, ProviderError, ProviderErrorKind, Usage,
+    Content, IncompleteReason, ModelExecution, ModelRequest, ModelResponse, ModelRoute,
+    ModelRouteReason, ModelService, ModelStreamEvent, ProviderError, ProviderErrorKind,
+    ResponseTermination, Usage,
 };
 use tokio_util::sync::CancellationToken;
 
@@ -17,6 +18,22 @@ mod tests;
 pub(crate) struct GeneratedResponse {
     pub response: ModelResponse,
     pub route: ModelRoute,
+}
+
+pub(crate) fn context_length_exceeded(result: Result<&GeneratedResponse, &AgentError>) -> bool {
+    matches!(
+        result,
+        Err(AgentError::Provider(ProviderError {
+            kind: ProviderErrorKind::ContextLength,
+            ..
+        })) | Ok(GeneratedResponse {
+            response: ModelResponse {
+                termination: ResponseTermination::Incomplete(IncompleteReason::ContextLength),
+                ..
+            },
+            ..
+        })
+    )
 }
 
 pub(crate) async fn generate_with_retry<F>(

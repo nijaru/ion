@@ -695,6 +695,13 @@ model/context changes atomically before issuance. Pre-output retries retain that
 preparation; compaction/reset prepares again. Clamp output ceilings to remaining
 capacity. Exhausting the dispatched output budget is not itself context pressure.
 Recovery is bounded and visible; incompatible context must fail or change explicitly.
+A pre-output summary context rejection may shrink to strictly smaller settled-prefix
+cuts on the same model/authority. Report each attempted reduction; stop when no
+smaller cut fits or on cancellation. Do not retry a failed attempt after generated
+text, thinking, tool fragments or opaque replay, or treat output truncation as
+capacity rejection. Validate and commit each successful summary atomically; later
+failure preserves that last committed projection rather than rolling back earlier
+successful chunks.
 
 Host prepares replacements before publishing them. Failed preflight leaves the
 previous binding usable; active operations retain captured configuration. An idle

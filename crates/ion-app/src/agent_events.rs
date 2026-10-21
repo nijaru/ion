@@ -78,6 +78,12 @@ pub(super) fn event_record(event: &CodingAgentEvent) -> Value {
         CodingAgentEvent::InterruptedCalls(count) => {
             json!({"type":"interrupted_calls","count":count})
         }
+        CodingAgentEvent::ContextCompactionRetry {
+            through_entry,
+            next_through_entry,
+        } => {
+            json!({"type":"context_compaction_retry","through_entry":through_entry,"next_through_entry":next_through_entry})
+        }
         CodingAgentEvent::ContextCompacted { through_entry } => {
             json!({"type":"context_compacted","through_entry":through_entry})
         }
@@ -132,6 +138,9 @@ pub(super) fn diagnostic(event: &CodingAgentEvent) -> Option<String> {
         CodingAgentEvent::InterruptedCalls(count) => {
             format!("[recovered {count} incomplete tool call(s); effects unknown]")
         }
+        CodingAgentEvent::ContextCompactionRetry {
+            next_through_entry, ..
+        } => format!("[summary request too large; retrying through entry {next_through_entry}]"),
         CodingAgentEvent::ContextCompacted { through_entry } => {
             format!("[context summarized through entry {through_entry}]")
         }

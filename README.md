@@ -1105,8 +1105,16 @@ nears a known model's context window or exceeds its transport bound, and can
 retry one model request after a provider reports context overflow. The raw
 conversation remains inspectable; `compact` and `/compact` also trigger this
 explicitly. Longer saved histories are summarized in bounded steps when one
-summary request cannot fit. Summary requests treat the selected prefix as
-historical data, exclude opaque replay and human thinking, and carry its images
+summary request cannot fit. If a provider rejects a summary for context size before
+any generated output, Ion retries strictly smaller settled prefixes on the same
+model. `context_compaction_retry` reports the rejected `through_entry` and smaller
+`next_through_entry` in JSONL; the TUI shows the same progress. Recovery stops if
+the smallest cut is rejected or on cancellation. Failed attempts are not retried
+after any generated output, including opaque reasoning. Each successful chunk
+remains committed if a later chunk fails.
+
+Summary requests treat the selected prefix as historical data, exclude opaque
+replay and human thinking, and carry its images
 as typed attachments when the summary model supports them. Text-only summary
 models receive explicit image-omission notices instead of base64 transcript text.
 The compacted model projection names the exact one-based committed entry range it

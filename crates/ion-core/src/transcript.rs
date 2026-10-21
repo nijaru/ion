@@ -527,6 +527,11 @@ impl LiveTranscript {
             } => self.note(format!(
                 "Provider retry {attempt}/{max_retries} in {delay_ms}ms"
             )),
+            AgentEvent::ContextCompactionRetry {
+                next_through_entry, ..
+            } => self.note(format!(
+                "Summary request too large; retrying through entry {next_through_entry}"
+            )),
             AgentEvent::ContextCompacted { through_entry } => {
                 self.note(format!("Context summarized through entry {through_entry}"));
             }

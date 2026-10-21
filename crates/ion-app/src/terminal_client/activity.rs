@@ -105,6 +105,15 @@ impl Activity {
                 ui.status.clear();
             }
             ControlUpdate::Activity(Observation::Event { operation, event }) => {
+                if matches!(
+                    event.as_ref(),
+                    CodingAgentEvent::ContextCompactionRetry { .. }
+                ) && self.live.as_ref().is_none_or(|(id, _)| *id != operation)
+                    && let Some(note) = crate::agent_events::diagnostic(&event)
+                {
+                    // Manual compaction has no live Turn transcript.
+                    ui.note(note);
+                }
                 if let CodingAgentEvent::TurnAccepted { turn } = event.as_ref() {
                     // A fresh TurnAccepted is the only safe start for this strict
                     // projection. It is not a tolerant reader for missing tool or
@@ -316,6 +325,37 @@ pub(super) fn combine_error(outcome: &mut Result<()>, error: anyhow::Error) {
 mod tests {
     use super::*;
     use std::sync::Arc;
+
+    #[tokio::test]
+    async fn manual_compaction_retry_is_visible_without_a_live_turn() {
+        let mut fixture = super::super::tests::Fixture::new();
+        let id = fixture
+            .control
+            .compact(EditorDraft::at_end("compact".into()))
+            .unwrap();
+        let mut activity = Activity::default();
+        let mut ui = Frontend::default();
+        activity
+            .update(
+                &mut ui,
+                &fixture.control,
+                ControlUpdate::Activity(Observation::Event {
+                    operation: id,
+                    event: Arc::new(CodingAgentEvent::ContextCompactionRetry {
+                        through_entry: 10,
+                        next_through_entry: 4,
+                    }),
+                }),
+            )
+            .unwrap();
+        assert!(activity.live().is_none());
+        let rows = ui.pending_history_rows(80);
+        assert!(rows.iter().any(|row| {
+            row.to_string()
+                .contains("summary request too large; retrying through entry 4")
+        }));
+        fixture.control.shutdown().await;
+    }
 
     #[tokio::test]
     async fn stopped_initial_preparation_does_not_lose_its_ui_stop_intent() {

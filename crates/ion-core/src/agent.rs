@@ -1,11 +1,12 @@
 //! One coding loop for library, headless and terminal clients.
+#[cfg(test)]
+use crate::generation::generate_with_retry;
 use ion_ai::{
     Content, IncompleteReason, Message, ModelExecution, ModelRef, ModelRequest, ModelResponse,
-    ModelRoute, ModelRouteReason, ModelService, ProviderError, ProviderErrorKind, Reasoning,
-    ResponseTermination, Role,
+    ModelRouteReason, ModelService, ProviderError, Reasoning, ResponseTermination, Role,
 };
 #[cfg(test)]
-use ion_ai::{GenerationControls, ToolChoice};
+use ion_ai::{GenerationControls, ModelRoute, ProviderErrorKind, ToolChoice};
 use serde_json::Value;
 use std::collections::{BTreeSet, VecDeque};
 use std::sync::{Arc, Mutex};
@@ -14,7 +15,7 @@ use tokio_util::sync::CancellationToken;
 
 use crate::{
     RequestReceipt, SubmissionRequest,
-    generation::{GeneratedResponse, generate_with_retry, refresh_prompt_cache},
+    generation::{GeneratedResponse, context_length_exceeded, refresh_prompt_cache},
     request::{PreparedRequest, RequestStep},
     session::{
         ModelContextSnapshot, Session, SessionError, StoredToolActivity, TurnAdmission,
@@ -333,9 +334,12 @@ impl Default for AgentLimits {
     }
 }
 
+mod compaction;
 mod recovery;
 #[cfg(test)]
 mod recovery_tests;
+#[cfg(test)]
+mod summary_recovery_tests;
 use recovery::TurnStart;
 
 /// One agent loop bound to a logical model and its immutable host contract.
@@ -472,178 +476,6 @@ impl Agent {
                 }
             }
         }
-    }
-
-    /// Summarize a settled prefix while retaining the complete raw Session.
-    pub fn compact<F>(
-        &self,
-        session: Arc<Session>,
-        stop: CancellationToken,
-        observe: F,
-    ) -> crate::Operation<bool, AgentError>
-    where
-        F: FnMut(AgentEvent) + Send + 'static,
-    {
-        let agent = self.clone();
-        session.operations.start(stop.clone(), {
-            let session = session.clone();
-            async move {
-                let (mut observe, failed) = contained_observer(observe, stop.clone());
-                let result = agent.compact_owned(&session, stop, &mut observe).await;
-                observation_result(result, failed.load(std::sync::atomic::Ordering::Relaxed))
-            }
-        })
-    }
-
-    async fn compact_owned<F>(
-        &self,
-        session: &Session,
-        stop: CancellationToken,
-        observe: &mut F,
-    ) -> Result<bool, AgentError>
-    where
-        F: FnMut(AgentEvent) + Send,
-    {
-        if stop.is_cancelled() {
-            return Err(AgentError::Cancelled);
-        }
-        self.validate_reasoning(session.reasoning()?)?;
-        let keep_bytes = self.keep_bytes().min(
-            crate::json_size::encoded_len(&crate::prompt_size::NeutralMessages(
-                &session.context_messages()?,
-            ))? / 2,
-        );
-        let mut changed = false;
-        loop {
-            match self
-                .compact_inner(session, &stop, keep_bytes, observe)
-                .await?
-            {
-                Some(chunked) => {
-                    changed = true;
-                    if !chunked {
-                        return Ok(true);
-                    }
-                }
-                None => return Ok(changed),
-            }
-        }
-    }
-
-    fn keep_bytes(&self) -> usize {
-        let model_budget = self
-            .limits
-            .context_window_tokens
-            .map_or(usize::MAX, |window| {
-                (window.saturating_sub(8_192) as usize).saturating_mul(3)
-            });
-        self.limits.max_request_bytes.min(model_budget) / 2
-    }
-
-    async fn compact_inner<F>(
-        &self,
-        session: &Session,
-        stop: &CancellationToken,
-        keep_bytes: usize,
-        observe: &mut F,
-    ) -> Result<Option<bool>, AgentError>
-    where
-        F: FnMut(AgentEvent) + Send,
-    {
-        let output_tokens = self.limits.max_output_tokens.min(4096);
-        let mut max_through_entry = u64::MAX;
-        let (through_entry, chunked, request) = loop {
-            if stop.is_cancelled() {
-                return Err(AgentError::Cancelled);
-            }
-            let Some(plan) = session.compaction_plan(
-                keep_bytes,
-                self.limits.max_request_bytes,
-                self.limits.image_input,
-                max_through_entry,
-            )?
-            else {
-                return if session
-                    .compaction_plan(keep_bytes, usize::MAX, self.limits.image_input, u64::MAX)?
-                    .is_some()
-                {
-                    Err(AgentError::ContextTooLarge)
-                } else {
-                    Ok(None)
-                };
-            };
-            let mut request = ModelRequest {
-                route: ModelRoute::direct(self.model.clone(), ModelRouteReason::Auxiliary),
-                provider_session_id: Some(session.provider_session_id().to_string()),
-                instructions: Some(crate::summary::INSTRUCTIONS.into()),
-                messages: vec![crate::summary::input(
-                    plan.messages,
-                    self.limits.image_input,
-                )?],
-                tools: Vec::new(),
-                context_timeline: None,
-                prompt_cache: ion_ai::PromptCacheIntent::Default,
-                controls: self.limits.controls(session.reasoning()?, false),
-            };
-            if let Some(available) = self.limits.request_output_budget(&request, output_tokens)? {
-                request.controls.max_output_tokens = available;
-                break (plan.through_entry, plan.chunked, request);
-            }
-            max_through_entry = plan
-                .smaller_through_entry
-                .ok_or(AgentError::ContextTooLarge)?;
-        };
-        let GeneratedResponse { response, route } =
-            generate_with_retry(&self.service, &request, stop, &mut |_| {}).await?;
-        if let ResponseTermination::Incomplete(reason) = &response.termination {
-            let reason = match reason {
-                IncompleteReason::MaxOutputTokens => "model output limit reached",
-                IncompleteReason::ContextLength => "model context limit reached",
-                IncompleteReason::ContentFilter => "provider content filter interrupted response",
-                IncompleteReason::Other(_) => "provider ended response before completion",
-            };
-            return Err(AgentError::InvalidSummary(reason));
-        }
-        if response.message.role != Role::Assistant {
-            return Err(AgentError::InvalidSummary(
-                "response is not an assistant message",
-            ));
-        }
-        if response
-            .message
-            .content
-            .iter()
-            .any(|part| !matches!(part, Content::Text(_) | Content::Thinking(_)))
-        {
-            return Err(AgentError::InvalidSummary(
-                "response contains non-text content",
-            ));
-        }
-        let summary = response
-            .message
-            .content
-            .iter()
-            .filter_map(|part| match part {
-                Content::Text(text) => Some(text.as_str()),
-                _ => None,
-            })
-            .collect::<Vec<_>>()
-            .join("\n");
-        if summary.trim().is_empty() {
-            return Err(AgentError::InvalidSummary(
-                "response contains no summary text",
-            ));
-        }
-        if stop.is_cancelled() {
-            return Err(AgentError::Cancelled);
-        }
-        let execution = ModelExecution {
-            route,
-            returned_model: response.returned_model,
-        };
-        session.record_compaction(through_entry, summary, execution, response.usage)?;
-        observe(AgentEvent::ContextCompacted { through_entry });
-        Ok(Some(chunked))
     }
 
     pub fn submit<F>(
@@ -1030,24 +862,7 @@ impl Agent {
                         replay_rebased = true;
                         continue;
                     }
-                    let overflow = matches!(
-                        &generated,
-                        Err(AgentError::Provider(ProviderError {
-                            kind: ProviderErrorKind::ContextLength,
-                            ..
-                        }))
-                    ) || matches!(
-                        &generated,
-                        Ok(GeneratedResponse {
-                            response: ModelResponse {
-                                termination: ResponseTermination::Incomplete(
-                                    IncompleteReason::ContextLength
-                                ),
-                                ..
-                            },
-                            ..
-                        })
-                    );
+                    let overflow = context_length_exceeded(generated);
                     let recoverable_length = !length_recovery_attempted
                         && matches!(
                             &generated,
@@ -1418,6 +1233,12 @@ pub enum AgentEvent {
         attempt: usize,
         max_retries: usize,
         delay_ms: u64,
+    },
+    /// A pre-output summary capacity rejection is retried at a strictly smaller
+    /// settled cut. Progress only: the existing context has not been replaced.
+    ContextCompactionRetry {
+        through_entry: u64,
+        next_through_entry: u64,
     },
     ContextCompacted {
         through_entry: u64,
