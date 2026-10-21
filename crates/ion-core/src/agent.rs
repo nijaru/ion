@@ -961,11 +961,6 @@ impl Agent {
                 if stop.is_cancelled() {
                     return Err(AgentError::Cancelled);
                 }
-                if let Some(inbox) = steering {
-                    for input in inbox.record_pending(session, turn, self.limits)? {
-                        observe(AgentEvent::SteeringCommitted { turn, input });
-                    }
-                }
                 let mut recovered_overflow = false;
                 let step = loop {
                     // Opted-in continuation pins executable routes for the Turn.
@@ -973,6 +968,16 @@ impl Agent {
                     if start.catalog.is_none() {
                         for diagnostic in self.tools.refresh(stop.clone()).await {
                             observe(AgentEvent::ToolCatalogWarning(diagnostic));
+                        }
+                    }
+                    if stop.is_cancelled() {
+                        return Err(AgentError::Cancelled);
+                    }
+                    // Catalog refresh and compaction can await new guidance.
+                    // Recheck on every rebuild, before freezing the next request.
+                    if let Some(inbox) = steering {
+                        for input in inbox.record_pending(session, turn, self.limits)? {
+                            observe(AgentEvent::SteeringCommitted { turn, input });
                         }
                     }
                     if stop.is_cancelled() {
@@ -4283,7 +4288,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn provider_overflow_compacts_and_retries_only_the_model_request() {
+    async fn provider_overflow_rebuild_includes_steering_queued_during_compaction() {
         let root = std::env::temp_dir().join(format!("ion-overflow-{}", uuid::Uuid::now_v7()));
         std::fs::create_dir(&root).unwrap();
         let session =
@@ -4299,23 +4304,47 @@ mod tests {
             response(vec![Content::Text("continued".into())]),
         ]));
         let agent = Agent::new(scripts.clone(), Arc::new(TestTools::new(&root)), model());
-        for prompt in ["first task", "next task"] {
-            agent
-                .submit(
-                    session.clone(),
-                    prompt.into(),
-                    "test".into(),
-                    CancellationToken::new(),
-                    |_| {},
-                )
-                .await
-                .unwrap();
-        }
+        agent
+            .submit(
+                session.clone(),
+                "first task".into(),
+                "test".into(),
+                CancellationToken::new(),
+                |_| {},
+            )
+            .await
+            .unwrap();
+        let steering = Arc::new(SteeringInbox::new(
+            agent.limits(),
+            crate::InputBudget::default(),
+        ));
+        let observed_steering = steering.clone();
+        let guidance = "Inspect only; do not modify files.";
+        let result = agent
+            .submit_with_steering(
+                session.clone(),
+                "next task".into(),
+                "test".into(),
+                CancellationToken::new(),
+                steering.clone(),
+                move |event| {
+                    if matches!(event, AgentEvent::ContextCompacted { .. }) {
+                        observed_steering.push(guidance.into()).unwrap();
+                    }
+                },
+            )
+            .await;
         let requests = scripts.requests();
+        assert_eq!(
+            requests[3].messages.last(),
+            Some(&user_text(guidance.into()))
+        );
         assert_eq!(requests.len(), 4);
         assert!(requests[2].tools.is_empty());
-        assert_eq!(requests[3].messages.len(), 2);
-        assert_eq!(session.messages().unwrap().len(), 4);
+        assert_eq!(requests[3].messages.len(), 3);
+        assert_eq!(result.unwrap(), "continued");
+        assert!(steering.take_uncommitted().is_empty());
+        assert_eq!(session.messages().unwrap().len(), 5);
         assert!(session.view().unwrap().compacted_through.is_some());
         drop(session);
         std::fs::remove_dir_all(root).unwrap();
@@ -5336,7 +5365,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn request_pressure_compacts_before_the_next_model_request() {
+    async fn request_pressure_rebuild_includes_steering_queued_during_compaction() {
         let root = std::env::temp_dir().join(format!("ion-pressure-{}", uuid::Uuid::now_v7()));
         std::fs::create_dir(&root).unwrap();
         let session =
@@ -5353,20 +5382,45 @@ mod tests {
                 max_request_bytes: 3_200,
                 ..AgentLimits::default()
             });
-        for prompt in ["first", "second"] {
-            agent
-                .submit(
-                    session.clone(),
-                    prompt.into(),
-                    "test".into(),
-                    CancellationToken::new(),
-                    |_| {},
-                )
-                .await
-                .unwrap();
-        }
-        assert_eq!(scripts.requests().len(), 3);
-        assert!(scripts.requests()[1].tools.is_empty());
+        agent
+            .submit(
+                session.clone(),
+                "first".into(),
+                "test".into(),
+                CancellationToken::new(),
+                |_| {},
+            )
+            .await
+            .unwrap();
+        let steering = Arc::new(SteeringInbox::new(
+            agent.limits(),
+            crate::InputBudget::default(),
+        ));
+        let observed_steering = steering.clone();
+        let guidance = "Inspect only; do not modify files.";
+        let result = agent
+            .submit_with_steering(
+                session.clone(),
+                "second".into(),
+                "test".into(),
+                CancellationToken::new(),
+                steering.clone(),
+                move |event| {
+                    if matches!(event, AgentEvent::ContextCompacted { .. }) {
+                        observed_steering.push(guidance.into()).unwrap();
+                    }
+                },
+            )
+            .await;
+        let requests = scripts.requests();
+        assert_eq!(
+            requests[2].messages.last(),
+            Some(&user_text(guidance.into()))
+        );
+        assert_eq!(requests.len(), 3);
+        assert!(requests[1].tools.is_empty());
+        assert_eq!(result.unwrap(), "continued");
+        assert!(steering.take_uncommitted().is_empty());
         assert!(session.view().unwrap().compacted_through.is_some());
         drop(session);
         std::fs::remove_dir_all(root).unwrap();

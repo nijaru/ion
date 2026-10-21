@@ -736,8 +736,10 @@ State whether queue/acceptance promises are volatile or durable. Preserve origin
 kind, literals, attachments and reservations until acceptance or explicit handoff.
 Validate before acknowledgement; a byte reservation is not a context/RSS guarantee.
 Expand queued resources at admission. Steering joins a safe boundary in its Turn;
-only explicit follow-ups start later Turns. Return late steering and unaccepted
-inputs on failure/stop, including successful preparation racing cancellation.
+consume ready steering after asynchronous catalog refresh or automatic compaction,
+before freezing the next request. Issued requests and their tool batches remain
+frozen. Only explicit follow-ups start later Turns. Return late steering and
+unaccepted inputs on failure/stop, including successful preparation racing cancellation.
 Preparation remains cancellable/joinable without blocking controls; bounded active
 decoders need not support hard interruption.
 

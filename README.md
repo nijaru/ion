@@ -347,7 +347,9 @@ available; active decoders cannot be forcibly interrupted. A preparation error
 returns the original typed input. Steering preparation cannot attach to a later
 Turn when its target ends.
 
-`steer` targets the active coding Turn. `follow_up` queues a separate Turn behind
+`steer` targets the active coding Turn. Ready steering queued during automatic
+compaction joins the rebuilt request; it does not rewrite an issued request or
+interrupt a running tool. `follow_up` queues a separate Turn behind
 current work, including shell/compaction, or starts when idle. Its queued
 acknowledgement means prepared Host custody, not durable Session acceptance;
 `follow_up_started` supplies the committed Turn ID. `clear_queue` acknowledges withdrawal intent; separate `uncommitted_steering`
@@ -445,8 +447,8 @@ While a turn runs, the editor remains available: Enter steers the next model
 step, Alt-Enter queues a separate follow-up turn, Alt-Up returns the most
 recent queued follow-up to the editor, and Ctrl-C cancels. After stopped work settles, unaccepted input is returned rather than starting
 model work. An occupied editor stays separate: Alt-Up cycles retained drafts
-without submitting them. Enter during shell/compaction queues a follow-up. An ordinary nonzero shell exit does not withdraw an
-intentional follow-up. The terminal uses the same shared queued-input allowance
+without submitting them. Enter during shell or manual compaction queues a
+follow-up. An ordinary nonzero shell exit does not withdraw an intentional follow-up. The terminal uses the same shared queued-input allowance
 and route checks as RPC. Rejected input remains in the editor with its attachments; recovered steering retains image
 notes with their corresponding images. Queued resource commands expand before
 admission, so later resource changes do not rewrite an accepted follow-up.
