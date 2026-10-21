@@ -230,7 +230,9 @@ def exercise_file_discovery():
                     os.write(master, b"Read @")
                     writer = hold_read()
                     wait(lambda: "discovering project files…".encode() in output)
-                    os.write(master, b"data.txt\r")
+                    # The final character fences Enter processing while discovery
+                    # is held; a query repaint before Enter is not an acknowledgement.
+                    os.write(master, b"data.tx\rt")
                     wait(lambda: "› data.txt".encode() in output)
                     output.clear()
                     os.close(writer)
