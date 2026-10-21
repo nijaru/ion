@@ -184,7 +184,11 @@ show alt text and a destination, without fetching. HTML remains literal text;
 links never open automatically, and unsupported/opaque URL schemes are hidden
 in the formatted view. User prompts and tool output remain literal. Ctrl-O
 source inspection, saved Session facts, copy and export retain original Markdown.
-Tables, syntax highlighting and other Markdown extensions are not implemented.
+Pipe tables retain inline styles and column alignment, wrapping cells to fit.
+When columns cannot remain legible, rows become header/value fields instead of
+clipping their values. Already-published inline tables follow the emulator's native
+reflow rather than being rebuilt. Syntax highlighting and other Markdown extensions
+are not implemented.
 
 Successful native edits and writes record a unified patch from the previous
 text and the published text, alongside both digests where applicable. A created

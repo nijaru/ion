@@ -464,6 +464,7 @@ with tempfile.TemporaryDirectory(prefix="ion-terminal-") as temporary:
             assert b"\x1b]7501;state=blocked:kind=auth:app=ion\x1b\\" in output, "credential prompt did not publish auth block"
             plain_output = re.sub(rb"\x1b\[[0-9;?]*[A-Za-z]", b"", bytes(output))
             assert b"MARKDOWN_BOLD and literal_code docs (https://example.org/ion)" in plain_output, "assistant Markdown was not rendered"
+            assert b"TABLE_CELL \xe2\x94\x82 TABLE_VISIBLE" in plain_output, "assistant table was not laid out"
             assert b"-sample data" in plain_output and b"+sample data updated" in plain_output, "actual edit patch was not rendered"
             assert b"+created by ion" in plain_output, "actual write patch was not rendered"
             assert "• ".encode() in output, "semantic activity group header was not rendered"
@@ -486,6 +487,7 @@ with tempfile.TemporaryDirectory(prefix="ion-terminal-") as temporary:
             assert "+created by ion\n" in diffs[1]["text"], diffs
             exported = subprocess.run([binary, "--cwd", workspace, "--session", session_id, "export"], env=env, check=True, capture_output=True, text=True).stdout
             assert "**MARKDOWN_BOLD**" in exported, "export lost the original Markdown source"
+            assert "| TABLE_CELL | TABLE_VISIBLE |" in exported, "export lost the original table source"
             source = [line for line in listing.splitlines() if "\t\t2 turn(s)" in line]
             assert len(source) == 1, listing
             original = subprocess.run([binary, "--cwd", workspace, "--session", source[0].split("\t")[0], "inspect"], env=env, check=True, capture_output=True)

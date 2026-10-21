@@ -1,5 +1,7 @@
 //! Assistant-only Markdown presentation. No HTML renderer, fetches or terminal links.
-use pulldown_cmark::{CodeBlockKind, Event, Parser, Tag, TagEnd};
+use pulldown_cmark::{CodeBlockKind, Event, Options, Parser, Tag, TagEnd};
+
+mod table;
 use ratatui::{
     style::{Modifier, Style},
     text::{Line, Span},
@@ -32,37 +34,13 @@ struct View<'a> {
 
 pub(super) fn render(rows: &mut Vec<Line<'static>>, source: &str, width: usize) {
     let start = rows.len();
-    let mut view = View {
-        rows,
-        width,
-        spans: Vec::new(),
-        separator: None,
-        styles: vec![Style::default()],
-        prefixes: Vec::new(),
-        lists: Vec::new(),
-        links: Vec::new(),
-    };
-    for event in Parser::new(source) {
-        match event {
-            Event::Start(tag) => view.start(tag),
-            Event::End(tag) => view.end(tag),
-            Event::Text(text) | Event::Html(text) | Event::InlineHtml(text) => {
-                view.text(text.into_string());
-            }
-            Event::Code(text) => view.spans.push(Span::styled(
-                text.into_string(),
-                view.style().patch(style(Role::Code)),
-            )),
-            Event::SoftBreak => view.text(" ".into()),
-            Event::HardBreak => view.text("\n".into()),
-            Event::Rule => {
-                view.flush();
-                view.text("─".repeat(width.clamp(1, 12)));
-                view.flush();
-                view.separate();
-            }
-            // These require parser options which this CommonMark view does not enable.
-            _ => {}
+    let mut view = View::new(rows, width, Style::default());
+    let mut events = Parser::new_ext(source, Options::ENABLE_TABLES);
+    while let Some(event) = events.next() {
+        if let Event::Start(Tag::Table(alignments)) = event {
+            view.table(&mut events, alignments);
+        } else {
+            view.event(event);
         }
     }
     view.flush();
@@ -71,7 +49,44 @@ pub(super) fn render(rows: &mut Vec<Line<'static>>, source: &str, width: usize) 
     }
 }
 
-impl View<'_> {
+impl<'a> View<'a> {
+    fn new(rows: &'a mut Vec<Line<'static>>, width: usize, base: Style) -> Self {
+        Self {
+            rows,
+            width,
+            spans: Vec::new(),
+            separator: None,
+            styles: vec![base],
+            prefixes: Vec::new(),
+            lists: Vec::new(),
+            links: Vec::new(),
+        }
+    }
+
+    fn event(&mut self, event: Event<'_>) {
+        match event {
+            Event::Start(tag) => self.start(tag),
+            Event::End(tag) => self.end(tag),
+            Event::Text(text) | Event::Html(text) | Event::InlineHtml(text) => {
+                self.text(text.into_string());
+            }
+            Event::Code(text) => self.spans.push(Span::styled(
+                text.into_string(),
+                self.style().patch(style(Role::Code)),
+            )),
+            Event::SoftBreak => self.text(" ".into()),
+            Event::HardBreak => self.text("\n".into()),
+            Event::Rule => {
+                self.flush();
+                self.text("─".repeat(self.width.clamp(1, 12)));
+                self.flush();
+                self.separate();
+            }
+            // Other extensions remain disabled.
+            _ => {}
+        }
+    }
+
     fn style(&self) -> Style {
         // The parser's balanced start/end events retain the base style.
         *self.styles.last().expect("Markdown base style")
@@ -322,6 +337,79 @@ mod tests {
                 .flat_map(|row| &row.spans)
                 .any(|span| span.content == "code" && span.style.fg == Some(Color::Magenta))
         );
+    }
+
+    #[test]
+    fn tables_align_columns_and_retain_cell_styles() {
+        let rows = view(
+            "| Name | Count | Flag |\n| :--- | ---: | :---: |\n| *alpha* | 7 | ok |",
+            80,
+        );
+        assert_eq!(
+            rows.iter().map(ToString::to_string).collect::<Vec<_>>(),
+            [
+                "Name  │ Count │ Flag",
+                "──────┼───────┼─────",
+                "alpha │     7 │  ok ",
+            ]
+        );
+        assert!(
+            rows[0]
+                .spans
+                .iter()
+                .filter(|span| span.content.chars().any(char::is_alphabetic))
+                .all(|span| span.style.add_modifier.contains(Modifier::BOLD))
+        );
+        assert!(
+            rows[2].spans.iter().any(|span| span.content == "alpha"
+                && span.style.add_modifier.contains(Modifier::ITALIC))
+        );
+    }
+
+    #[test]
+    fn invisible_cell_graphemes_do_not_push_values_out_of_their_columns() {
+        let rows = view("| A | B |\n| --- | --- |\n| \u{200b} | x |", 5);
+        assert_eq!(
+            rows.iter().map(ToString::to_string).collect::<Vec<_>>(),
+            ["A │ B", "──┼──", "� │ x"]
+        );
+    }
+
+    #[test]
+    fn tables_wrap_or_stack_without_losing_values_or_terminal_safety() {
+        let source = "| Item | Details | Note |\n| --- | --- | --- |\n| **e**\u{0301}界 | `foo_bar_baz` | [x](javascript:SECRET) |\n| tail | a\\|b | end |\n| empty |";
+        for width in [1, 2, 7, 13, 24, 48, 80] {
+            let rows = view(source, width);
+            let text = rows
+                .iter()
+                .map(ToString::to_string)
+                .collect::<Vec<_>>()
+                .join("\n");
+            assert!(
+                rows.iter().all(|line| line.width() <= width),
+                "width={width}: {text}"
+            );
+            assert!(!text.contains("SECRET"));
+            assert!(!text.chars().any(|ch| ch.is_control() && ch != '\n'));
+            assert!(text.contains("e\u{0301}"));
+            assert!(
+                rows.iter()
+                    .flat_map(|line| &line.spans)
+                    .any(|span| span.style.fg == Some(Color::Magenta))
+            );
+            if width == 7 {
+                let joined = rows.iter().map(ToString::to_string).collect::<String>();
+                assert!(joined.contains("Details: foo_bar_baz"), "{text}");
+                assert!(joined.contains("Details: a|b"), "{text}");
+                assert!(joined.contains("Item: empty"), "{text}");
+            }
+        }
+        let rows = view(
+            "> - | Key | Value |\n>   | --- | --- |\n>   | abc | long_value |",
+            18,
+        );
+        assert!(rows.iter().all(|line| line.width() <= 18));
+        assert!(rows[0].to_string().starts_with("│ • "));
     }
 
     #[test]

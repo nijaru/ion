@@ -904,7 +904,12 @@ the draft and inspector on success or failure, and distinguish a terminal
 clipboard request from confirmed native-helper success.
 
 Use one control-safe grapheme/display-width policy for content; composer byte/cursor
-mapping is separate. Semantic styles survive redraw and irreversible publication.
+mapping is separate. Standalone zero-width units use a visible one-column replacement,
+so measurement, wrapping and physical grid alignment agree; combined graphemes stay intact. Semantic styles survive redraw and irreversible publication. Assistant Markdown
+tables wrap recognized cells with header emphasis and column alignment; narrow
+viewports stack header/value fields rather than clipping values. Share inline
+styles, link/control safety and grapheme wrapping with ordinary assistant text;
+keep original model text in Session facts, source inspection, copy and export.
 Publish settled content once. Terminal-local command output and diagnostics share
 an ordered presentation log anchored to stable Session prefixes, not a clipped
 composer surface or synthetic Session/model facts. Inline publication acknowledges

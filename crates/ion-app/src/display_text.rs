@@ -46,7 +46,9 @@ pub(super) fn push_styled(
 fn visible(grapheme: &str) -> &str {
     if grapheme == "\t" {
         "    "
-    } else if grapheme.chars().any(char::is_control) {
+    } else if grapheme.chars().any(char::is_control) || UnicodeWidthStr::width(grapheme) == 0 {
+        // Wrapping budgets every standalone grapheme at least one column.
+        // Make otherwise invisible units occupy that column on screen too.
         "�"
     } else {
         grapheme
@@ -204,7 +206,7 @@ mod tests {
             ("界界", 4, "界界"),
             ("e\u{0301}x", 2, "e\u{0301}x"),
             ("a\u{1b}b", 3, "a�b"),
-            ("\u{200b}\u{200b}\u{200b}", 2, "\u{200b}…"),
+            ("\u{200b}\u{200b}\u{200b}", 2, "�…"),
         ] {
             let fitted = fit_line(text, width);
             assert_eq!(fitted, expected);

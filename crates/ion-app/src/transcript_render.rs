@@ -1448,7 +1448,7 @@ mod tests {
 
     #[test]
     fn markdown_is_assistant_presentation_not_user_or_inspection_source() {
-        let source = "# Heading\n\n**bold** [site](https://example.org)";
+        let source = "# Heading\n\n**bold** [site](https://example.org)\n\n| Key | Value |\n| --- | --- |\n| state | verified |";
         let message = TranscriptMessage {
             turn: Some(1),
             steering: false,
@@ -1469,6 +1469,8 @@ mod tests {
             .join("\n");
         assert!(formatted.contains("Heading\n\nbold site (https://example.org)"));
         assert!(!formatted.contains("**"));
+        assert!(formatted.contains("state │ verified"));
+        assert!(!formatted.contains("| --- |"));
         let mut raw = Vec::new();
         render_source_message(&mut raw, &message, false, 80);
         assert_eq!(
