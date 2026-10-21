@@ -739,8 +739,11 @@ to settlement. Schedule only positive refresh deadlines within the active horizo
 ineligible policies disable warming rather than issuing immediate requests.
 Do not dispatch refreshes after cache expiry or the active horizon, even when
 model responses or earlier refreshes arrive late. Transient provider retries are
-bounded, cancellable and allowed only before observed output, without repeating completed tools. Accounting,
-input-transformation notices and empty deltas do not establish output custody.
+bounded, cancellable and allowed only before observed output, without repeating
+completed tools. Already-ready cancellation at a request-opening boundary wins
+before even constructing the model service future, including normal, summary,
+retry and cache-warm requests. Accounting, input-transformation notices and empty
+deltas do not establish output custody.
 
 ## Clients and extension boundaries
 

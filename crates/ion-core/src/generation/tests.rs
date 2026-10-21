@@ -11,8 +11,9 @@ struct InterruptedStream {
 }
 impl ModelService for InterruptedStream {
     fn stream<'a>(&'a self, _: ModelRequest) -> BoxFuture<'a, Result<ModelStream, ProviderError>> {
+        // A service may enqueue work when called, before its future is polled.
+        self.requests.fetch_add(1, Ordering::SeqCst);
         Box::pin(async move {
-            self.requests.fetch_add(1, Ordering::SeqCst);
             let prefix = self.prefix.lock().unwrap().take();
             let events = if let Some(prefix) = prefix {
                 prefix
@@ -39,6 +40,98 @@ impl ModelService for InterruptedStream {
             Ok(Box::pin(futures_util::stream::iter(events)) as ModelStream)
         })
     }
+}
+
+fn request() -> ModelRequest {
+    ModelRequest {
+        route: ModelRoute::direct(
+            ModelRef {
+                provider: "test".into(),
+                model: "test".into(),
+            },
+            ModelRouteReason::UserRequest,
+        ),
+        provider_session_id: None,
+        instructions: None,
+        messages: Vec::new(),
+        tools: Vec::new(),
+        context_timeline: None,
+        prompt_cache: ion_ai::PromptCacheIntent::Default,
+        controls: crate::AgentLimits::default().controls(ion_ai::Reasoning::ProviderDefault, false),
+    }
+}
+
+#[tokio::test]
+async fn cancellation_prevents_provider_construction_including_cache_warm() {
+    for warming in [false, true] {
+        let service = Arc::new(InterruptedStream {
+            prefix: Mutex::new(None),
+            requests: AtomicUsize::new(0),
+        });
+        let model: Arc<dyn ModelService> = service.clone();
+        let stop = CancellationToken::new();
+        stop.cancel();
+        let cancelled = if warming {
+            refresh_prompt_cache(&model, request(), &stop)
+                .await
+                .is_none()
+        } else {
+            matches!(
+                generate_with_retry(&model, &request(), &stop, &mut |_| {}).await,
+                Err(AgentError::Cancelled)
+            )
+        };
+        assert_eq!(
+            service.requests.load(Ordering::SeqCst),
+            0,
+            "warming={warming}"
+        );
+        assert!(cancelled, "warming={warming}");
+    }
+}
+
+#[tokio::test]
+async fn cancellation_from_retry_observer_settles_the_agent_without_redispatch() {
+    let root = std::env::temp_dir().join(format!("ion-retry-stop-{}", uuid::Uuid::now_v7()));
+    std::fs::create_dir(&root).unwrap();
+    let session =
+        Arc::new(crate::CodingSession::create(root.join("session.sqlite"), Some(&root)).unwrap());
+    let service = Arc::new(InterruptedStream {
+        prefix: Mutex::new(Some(Vec::new())),
+        requests: AtomicUsize::new(0),
+    });
+    let agent = crate::CodingAgent::with_tool_set(
+        service.clone(),
+        Arc::new(crate::ToolSet::new([])),
+        request().route.effective,
+    );
+    let stop = CancellationToken::new();
+    let observer_stop = stop.clone();
+    let result = agent
+        .submit(
+            session.clone(),
+            "start".into(),
+            "neutral".into(),
+            stop,
+            move |event| {
+                if matches!(event, AgentEvent::ProviderRetry { .. }) {
+                    observer_stop.cancel();
+                }
+            },
+        )
+        .await;
+    assert!(matches!(result, Err(AgentError::Cancelled)));
+    assert_eq!(service.requests.load(Ordering::SeqCst), 1);
+    let view = session.view().unwrap();
+    assert!(matches!(
+        view.last_end,
+        Some((1, crate::TurnEndReason::Cancelled))
+    ));
+    assert!(view.unfinished_turn.is_none());
+    assert_eq!(view.messages.len(), 1);
+    assert_eq!(view.messages[0].role, Role::User);
+    drop(session);
+    std::fs::remove_dir_all(root).unwrap();
 }
 
 #[tokio::test]
@@ -82,23 +175,7 @@ async fn only_generated_output_bars_retry_after_a_stream_error() {
             requests: AtomicUsize::new(0),
         });
         let model: Arc<dyn ModelService> = service.clone();
-        let request = ModelRequest {
-            route: ModelRoute::direct(
-                ModelRef {
-                    provider: "test".into(),
-                    model: "test".into(),
-                },
-                ModelRouteReason::UserRequest,
-            ),
-            provider_session_id: None,
-            instructions: None,
-            messages: Vec::new(),
-            tools: Vec::new(),
-            context_timeline: None,
-            prompt_cache: ion_ai::PromptCacheIntent::Default,
-            controls: crate::AgentLimits::default()
-                .controls(ion_ai::Reasoning::ProviderDefault, false),
-        };
+        let request = request();
         let mut output = false;
         let mut retries = 0;
         let mut notices = 0;

@@ -94,14 +94,17 @@ where
     F: FnMut(AgentEvent) + Send,
 {
     let stream = tokio::select! {
-        result = model.stream(request) => match result {
+        // A service may dispatch while constructing its future. Do not even
+        // call it when cancellation is already ready at this boundary.
+        biased;
+        () = stop.cancelled() => return (Err(AgentError::Cancelled), false),
+        result = async { model.stream(request).await } => match result {
             Ok(stream) => stream,
             Err(error) if error.kind == ProviderErrorKind::ReplayContextChanged => {
                 return (Err(AgentError::ReplayContextChanged), false);
             }
             Err(error) => return (Err(AgentError::Provider(error)), false),
         },
-        () = stop.cancelled() => return (Err(AgentError::Cancelled), false),
     };
     tokio::pin!(stream);
     let mut output_observed = false;
@@ -176,8 +179,9 @@ pub(crate) async fn refresh_prompt_cache(
     request.route.reason = ModelRouteReason::Auxiliary;
     let route = request.route.clone();
     let stream = tokio::select! {
-        result = model.stream(request) => result.ok()?,
+        biased;
         () = stop.cancelled() => return None,
+        result = async { model.stream(request).await } => result.ok()?,
     };
     tokio::pin!(stream);
     loop {

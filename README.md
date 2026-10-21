@@ -1178,8 +1178,10 @@ the configured provider name.
 Transient provider failures can trigger up to two cancellable retries before
 generated output, including tool fragments and opaque reasoning. Input-usage
 updates and replay-transformation notices do not count as generated output.
-Retry events appear in the TUI and JSONL output. A response that stops after producing partial
-output is not replayed silently.
+A stop already pending when a model request would open prevents that dispatch,
+including retries, summaries and cache warming; already-issued requests are not
+rolled back. Retry events appear in the TUI and JSONL output. A response that stops
+after producing partial output is not replayed silently.
 If an output-token limit cuts off identifiable tool calls, Ion records them
 as skipped errors and lets the model reissue complete calls. No tool from the
 truncated response runs.
