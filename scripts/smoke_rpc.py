@@ -144,6 +144,11 @@ with tempfile.TemporaryDirectory(prefix="ion-rpc-") as temporary:
         subprocess.run([binary, "use", "rpc-bounded", "tiny", "--endpoint", endpoint, "--wire", "chat-completions", "--context-window", "1", "--max-output-tokens", "1"], env=env, check=True, capture_output=True)
         bounded = subprocess.run([binary, "--cwd", capacity_workspace, "run", "MUST_NOT_DISPATCH"], env=env, capture_output=True, timeout=8)
         assert bounded.returncode == 1 and not requests, (bounded.stderr, requests)
+        subprocess.run([binary, "use", "rpc-small", "small", "--endpoint", endpoint, "--wire", "chat-completions", "--context-window", "8192", "--max-output-tokens", "512"], env=env, check=True, capture_output=True)
+        small = subprocess.run([binary, "--cwd", capacity_workspace, "--tools", "read", "run", "SMALL_CONTEXT"], env=env, capture_output=True, timeout=8)
+        assert small.returncode == 0 and b"RPC_OK" in small.stdout, small.stderr
+        assert len(requests) == 1 and 0 < requests[0]["max_completion_tokens"] <= 512, requests
+        requests.clear()
         subprocess.run([binary, "use", "rpc-smoke", "rpc-model"], env=env, check=True, capture_output=True)
         # Publication fails normally; a committed selection is not rolled back.
         listing_failure = closed_stdout(["models"], env)

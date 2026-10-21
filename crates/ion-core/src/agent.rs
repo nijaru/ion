@@ -1524,6 +1524,25 @@ mod tests {
         );
         assert_eq!(limits.output_budget(600_000, 200_000, 128_000), None);
         assert_eq!(limits.output_budget(9 * 1024 * 1024, 300, 128_000), None);
+        for (window, input, expected) in [
+            (0, 0, None),
+            (4096, 1024, Some(1024)),
+            (8192, 300, Some(3796)),
+            (8192, 4095, Some(1)),
+            (8192, 4096, None),
+            (16_384, 100, Some(8092)),
+            (u32::MAX, u64::MAX, None),
+        ] {
+            assert_eq!(
+                AgentLimits {
+                    context_window_tokens: Some(window),
+                    ..limits
+                }
+                .output_budget(900, input, 128_000),
+                expected,
+                "window {window}, input {input}"
+            );
+        }
     }
 
     #[tokio::test]
@@ -2271,7 +2290,8 @@ mod tests {
         ]));
         let agent = Agent::new(service.clone(), Arc::new(TestTools::new(&root)), model())
             .with_limits(AgentLimits {
-                context_window_tokens: Some(11_800),
+                // Keep 3608 usable tokens: neutral content fits, duplicated replay does not.
+                context_window_tokens: Some(7216),
                 max_output_tokens: 256,
                 ..AgentLimits::default()
             });
@@ -5249,7 +5269,7 @@ mod tests {
 
     #[tokio::test]
     async fn compaction_uses_available_capacity_without_skipping_valid_settled_prefixes() {
-        for (window, lengths) in [(12_000, vec![10]), (50_000, vec![49_900, 13_400, 34_900])] {
+        for (window, lengths) in [(8192, vec![10]), (50_000, vec![49_900, 13_400, 34_900])] {
             let root =
                 std::env::temp_dir().join(format!("ion-summary-capacity-{}", uuid::Uuid::now_v7()));
             std::fs::create_dir(&root).unwrap();
@@ -5306,7 +5326,7 @@ mod tests {
             assert!(after.starts_with(&before));
             assert_eq!(reopened_entries, after);
             let requests = scripts.requests();
-            if window == 12_000 {
+            if window == 8192 {
                 assert_eq!(cuts.len(), 1);
                 assert!(requests[0].controls.max_output_tokens > 0);
                 assert!(requests[0].controls.max_output_tokens < 4096);

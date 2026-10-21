@@ -692,9 +692,12 @@ bounded resident history or artifact retention.
 
 Prepare wire declarations and durable context from the same catalogue. Admit
 model/context changes atomically before issuance. Pre-output retries retain that
-preparation; compaction/reset prepares again. Clamp output ceilings to remaining
-capacity. Custom routes may declare positive context/output limits; Host persists
-them with the route and captures them in the bound agent, including after reopen.
+preparation; compaction/reset prepares again. Reserve 8192 tokens of estimation
+headroom, capped at half a declared window, and use that same usable capacity for
+request admission, summary sizing and recent-context retention. Clamp output
+ceilings to remaining capacity. Custom routes may declare positive context/output
+limits; Host persists them with the route and captures them in the bound agent,
+including after reopen.
 Unknown custom context stays unknown. Catalog limits cannot be overridden under
 the catalog identity. Exhausting the dispatched output budget is not itself context
 pressure.

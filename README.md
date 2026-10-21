@@ -582,9 +582,12 @@ When configuring a custom route, add `--context-window 65536` and
 positive token limits are saved with the route and restored on model selection
 and Session reopen; catalog limits cannot be overridden. An omitted custom
 context window stays unknown; omitted output keeps the 8192-token ceiling.
-The shared agent clamps output to remaining estimated capacity. Instructions,
-history and its safety reserve can still make a request too large. Unknown keys
-in saved route configuration are rejected rather than silently ignored.
+The shared agent clamps output to remaining estimated capacity. Its 8192-token
+headroom reserve is capped at half the declared window, so small windows can admit
+small requests rather than losing their entire capacity to the reserve. Instructions
+and history can still make a request too large; the full coding loadout is not
+guaranteed to fit a small window. Unknown keys in saved route configuration are
+rejected rather than silently ignored.
 For a custom OpenRouter model, use `--wire openrouter-chat`. This route retains
 plain reasoning or ordered structured `reasoning_details` across tool calls;
 the generic `chat-completions` route does not assume that contract. Qualify a

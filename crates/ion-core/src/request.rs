@@ -212,6 +212,14 @@ impl PreparedRequest {
 }
 
 impl AgentLimits {
+    pub(crate) fn usable_context_tokens(self) -> Option<u32> {
+        self.context_window_tokens.map(|window| {
+            // Keep the established reserve where it fits, but do not consume
+            // more than half of a small model's entire context as headroom.
+            window - (window / 2).min(8_192)
+        })
+    }
+
     pub(crate) fn controls(self, reasoning: Reasoning, with_tools: bool) -> GenerationControls {
         GenerationControls {
             max_output_tokens: if with_tools {
@@ -240,10 +248,10 @@ impl AgentLimits {
         if bytes > self.max_request_bytes || ceiling == 0 {
             return None;
         }
-        let Some(window) = self.context_window_tokens else {
+        let Some(capacity) = self.usable_context_tokens() else {
             return Some(ceiling);
         };
-        let available = u64::from(window).saturating_sub(estimated_input.saturating_add(8_192));
+        let available = u64::from(capacity).saturating_sub(estimated_input);
         (available > 0).then(|| ceiling.min(available as u32))
     }
 

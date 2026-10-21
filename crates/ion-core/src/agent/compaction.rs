@@ -73,10 +73,8 @@ impl Agent {
     pub(super) fn keep_bytes(&self) -> usize {
         let model_budget = self
             .limits
-            .context_window_tokens
-            .map_or(usize::MAX, |window| {
-                (window.saturating_sub(8_192) as usize).saturating_mul(3)
-            });
+            .usable_context_tokens()
+            .map_or(usize::MAX, |tokens| (tokens as usize).saturating_mul(3));
         self.limits.max_request_bytes.min(model_budget) / 2
     }
 
