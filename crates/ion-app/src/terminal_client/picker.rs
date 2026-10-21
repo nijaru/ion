@@ -20,6 +20,7 @@ pub(super) enum PickerValue {
     Session(PathBuf),
     Model(ModelRef),
     Fork(ForkPickerValue),
+    Context(super::navigation::ContextPickerValue),
     File {
         path: String,
         start: usize,

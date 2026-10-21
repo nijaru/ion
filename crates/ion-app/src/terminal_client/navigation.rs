@@ -14,6 +14,100 @@ use crate::display_text::fit_line;
 
 const MAX_MODEL_METADATA_WIDTH: usize = 96;
 
+#[derive(Debug)]
+pub(super) struct CommittedContextRefresh(anyhow::Error);
+
+impl std::fmt::Display for CommittedContextRefresh {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            formatter,
+            "Context selection committed but display refresh failed; reopen the saved Session before continuing: {:#}",
+            self.0
+        )
+    }
+}
+impl std::error::Error for CommittedContextRefresh {}
+
+pub(super) struct ContextPickerValue {
+    expected: ion_core::ContextPosition,
+    point: ion_core::ContextPoint,
+}
+
+pub(super) fn apply_context(
+    runtime: &mut SessionControl<EditorDraft>,
+    ui: &mut Frontend,
+    value: ContextPickerValue,
+) -> Result<()> {
+    runtime.navigate_context(value.expected, value.point.head_entry)?;
+    // A client projection failure cannot undo a committed cursor. Stop this
+    // terminal rather than accept another prompt against a stale conversation.
+    ui.refresh_session(runtime.session())
+        .map_err(CommittedContextRefresh)?;
+    let restore_error = if value.point.restore_input {
+        ui.restore_input(value.point.message).err()
+    } else {
+        None
+    };
+    ui.status = if let Some(error) = restore_error {
+        format!("Context selected; {error}; draft retained; workspace files unchanged")
+    } else {
+        "Context selected; /tree returns to preserved alternatives; workspace files unchanged"
+            .into()
+    };
+    Ok(())
+}
+
+pub(super) fn tree(
+    runtime: &mut SessionControl<EditorDraft>,
+    ui: &mut Frontend,
+    args: &str,
+) -> Result<()> {
+    let view = runtime.session().view()?;
+    let expected = view.context_position();
+    let points = view.context_points();
+    if !args.is_empty() {
+        let entry = args.parse::<u64>().context("use /tree [ENTRY]")?;
+        let point = points
+            .into_iter()
+            .find(|point| point.entry == entry)
+            .context("selected message does not exist or is not a complete boundary")?;
+        return apply_context(runtime, ui, ContextPickerValue { expected, point });
+    }
+    let items = points
+        .into_iter()
+        .rev()
+        .map(|point| PickerItem {
+            label: format!(
+                "{} entry {} · {} · {}",
+                if point.selected_path {
+                    "[path]"
+                } else {
+                    "[alternative]"
+                },
+                point.entry,
+                if point.restore_input {
+                    "edit before"
+                } else if point.message.role == ion_ai::Role::Tool {
+                    "after tool group"
+                } else {
+                    "continue after"
+                },
+                plain(&crate::preview_input(&point.message))
+            ),
+            detail: Some("Changes model context only; workspace files remain current".into()),
+            value: PickerValue::Context(ContextPickerValue { expected, point }),
+        })
+        .collect::<Vec<_>>();
+    anyhow::ensure!(!items.is_empty(), "no messages to explore");
+    ui.pickers.open(Picker {
+        title: "Explore context (files unchanged)",
+        query: String::new(),
+        selected: 0,
+        items,
+    });
+    Ok(())
+}
+
 pub(super) struct ForkPickerValue {
     pub point: ForkPoint,
     pub restore: Option<Message>,

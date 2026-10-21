@@ -137,6 +137,7 @@ struct Frontend {
     cursor: usize,
     recovery: EditorRecovery,
     history_session: Option<PathBuf>,
+    history_selection: u64,
     history_published_items: usize,
     pending_history_target: usize,
     pending_history_banner: Option<String>,
@@ -542,10 +543,13 @@ fn last_committed_answer(view: &SessionView) -> Result<String> {
             _ => None,
         })
         .collect();
+    let selected: HashSet<_> = view.context_path.iter().copied().collect();
     view.entries
         .iter()
+        .enumerate()
         .rev()
-        .find_map(|entry| match entry {
+        .filter(|(offset, _)| selected.contains(&(*offset as u64 + 1)))
+        .find_map(|(_, entry)| match entry {
             SessionEntry::Assistant { turn, message, .. } if completed.contains(turn) => {
                 let text = message
                     .content
@@ -695,6 +699,7 @@ fn handle_command(
                 "Cloned conversation as {id}; both sessions use the same working directory"
             ));
         }
+        Some(Builtin::Tree) => navigation::tree(runtime, ui, args)?,
         Some(Builtin::Fork) => navigation::fork(runtime, ui, args)?,
         Some(Builtin::ForkAfter) => navigation::fork_after(runtime, ui, args)?,
         Some(Builtin::Resume) => navigation::resume(runtime, ui, args)?,
@@ -1010,16 +1015,29 @@ impl Frontend {
         let history = TranscriptProjection::from_session(view);
         let session_path = session.path().to_path_buf();
         let same_session = self.history_session.as_ref() == Some(&session_path);
-        if !same_session {
+        let selection = view
+            .entries
+            .iter()
+            .rposition(|entry| matches!(entry, SessionEntry::ContextSelected { .. }))
+            .map_or(0, |offset| offset as u64 + 1);
+        let same_history = same_session && self.history_selection == selection;
+        if !same_history {
             // Text recovery belongs to the unsent draft baseline, not the
             // Session's durable facts. Same-Session resync must preserve it.
-            self.reset_edit_baseline();
+            if !same_session {
+                self.reset_edit_baseline();
+            }
             self.output = output::Output::default();
             let had_previous_session = self.history_session.is_some();
             let label = session.id().to_string();
             let tail = resume_history_tail(&history.items);
             self.history_published_items = tail.start;
-            self.pending_history_banner = if !history.items.is_empty() {
+            self.pending_history_banner = if same_session {
+                Some(format!(
+                    "— selected context at entry {} · alternatives retained · files unchanged —",
+                    view.context_position().head_entry
+                ))
+            } else if !history.items.is_empty() {
                 Some(if tail.omitted_turns > 0 {
                     format!(
                         "— resumed session {label} · {} earlier turn(s) retained —",
@@ -1046,6 +1064,7 @@ impl Frontend {
         }
         self.pending_history_target = history.items.len();
         self.history_session = Some(session_path);
+        self.history_selection = selection;
         self.history = history;
         if let Some(details) = &mut self.details {
             details.invalidate();

@@ -31,11 +31,11 @@ pub use delegation::{
 pub use input::{AcceptedInput, InputBudget, InputReservation};
 pub use invocation::{ToolInvocation, ToolOccurrence, ToolOrigin};
 pub use session::{
-    AuthorityScope, ForkPoint, ModelContextSnapshot, RecoveryBinding, RecoveryPoint, RecoveryState,
-    RequestKey, RequestReceipt, Session as CodingSession, SessionEntry,
-    SessionError as CodingSessionError, SessionInputPreview, SessionMetadata, SessionView,
-    StoredToolActivity, SubmissionRequest, TurnEndReason, TurnSummary, UnobservedUserShell,
-    UserShellOutcome,
+    AuthorityScope, ContextPoint, ContextPosition, ForkPoint, ModelContextSnapshot,
+    PreparedNavigation, RecoveryBinding, RecoveryPoint, RecoveryState, RequestKey, RequestReceipt,
+    Session as CodingSession, SessionEntry, SessionError as CodingSessionError,
+    SessionInputPreview, SessionMetadata, SessionView, StoredToolActivity, SubmissionRequest,
+    TurnEndReason, TurnSummary, UnobservedUserShell, UserShellOutcome,
 };
 pub use tool_set::{
     ToolActivity, ToolActivityKind, ToolCatalog, ToolDefinition, ToolExecutor, ToolExposure,

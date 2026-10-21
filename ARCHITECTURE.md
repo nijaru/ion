@@ -59,9 +59,9 @@ must be considered explicitly rather than hidden under broad claims of parity:
 - **Coding context:** broader search/provider coverage and richer document retrieval; login-shell startup
   state capture beyond explicit command setup; non-image document/media support; summary-quality
   aids beyond original-evidence retrieval.
-- **Continuity:** Pi-style in-file tree navigation and branch summaries versus
-  Ion's independent conversation copies; richer export/share formats; history and
-  artifact retention policy.
+- **Continuity:** optional branch-recall summaries and labels; richer export/share
+  formats; history and artifact retention policy. Basic context navigation and
+  independent conversation copies have distinct contracts below.
 - **Customization:** packaged user-installable contributions, arbitrary command
   handlers, lifecycle/policy consumers, external renderers, themes and configurable
   keybindings. Named executable commands and Rust/MCP tools do not deliver all of
@@ -270,8 +270,24 @@ replacement retain cancellation/join custody and cannot publish stale results.
 Selection does not submit a prompt or repair history. Both before/after fork
 pickers use committed Turn facts; before restores editable input without sending,
 and after requires a recorded end. Do not infer Session ancestry from matching
-content or timestamps. Pi's in-file branch tree is a distinct storage contract,
-not implied by Ion's independent copies or a saved-Session browser.
+content or timestamps.
+
+Context navigation selects a parent-linked path within the same logical Session;
+execution facts, Turn IDs, tool occurrences, deliveries and child ownership remain
+in one append-only ledger. Selection is durable without another prompt. Core owns
+valid complete call/result cuts and a Session/revision/head token; shared control
+holds the engine gate through resource/model preflight, commit and publication.
+A stale preview or definite precommit failure leaves selection unchanged; a
+postcommit publication failure requires reload, not an assumed rollback. Interrupted
+facts close conservatively in the same transaction, never by replaying effects.
+User-message selection restores editable typed input without submission; assistant
+and settled tool-group points continue after their observations. Library, RPC and
+terminal callers share this owner. Background outcomes retain their initiating
+occurrence, not the currently displayed path. Navigation does not restore files,
+transfer work, widen grants or generate summaries. It clears request calibration
+and old opaque continuation; historical context is not current executor authority.
+Human conversation/export and model context follow the selected path; inspection
+and evidence retrieval retain original global coordinates and all alternatives.
 
 ## Managed delegation and coordination
 
@@ -648,7 +664,7 @@ historical calls.
 Retrievable records contain historical conversation text and tool evidence, not
 provider replay, human thinking, image bytes, private direct-shell commands/output
 or application/context configuration. Omitted media are identified, not encoded
-into text. Compaction identifies its exact covered entry range; withheld output
+into text. Compaction identifies its covered selected-path prefix and global end coordinate; withheld output
 has a stable locator. Guidance names `history` only when the frozen loadout makes
 it available. Reopen and copies use their actual committed history; inherited
 coordinates confer no execution authority. Historical observations and summaries

@@ -251,7 +251,11 @@ fn fork_copies_literal_prefix_and_coordinates_but_not_parent_ownership_or_config
         });
         assert!(
             matches!(
-                project(ambiguous.iter().map(Ok), ProjectionMode::Metadata),
+                project(
+                    ambiguous.iter().map(Ok),
+                    ProjectionMode::Metadata,
+                    &|entry| Ok(ambiguous[(entry - 1) as usize].clone())
+                ),
                 Err(SessionError::InvalidHistory)
             ),
             "one logical child cannot have two parent bindings"

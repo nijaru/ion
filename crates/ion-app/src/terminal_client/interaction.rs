@@ -169,6 +169,9 @@ pub(super) async fn dispatch_command(
             }
             Ok(false) => {}
             Err(error) => {
+                if error.is::<super::navigation::CommittedContextRefresh>() {
+                    return Err(error);
+                }
                 if let Some(source) = source {
                     ui.restore_editor(source);
                 }
@@ -193,6 +196,15 @@ pub(super) fn apply_picker(
         return Ok(());
     }
     let result = match value {
+        PickerValue::Context(value) => {
+            if let Err(error) = super::navigation::apply_context(runtime, ui, value) {
+                if error.is::<super::navigation::CommittedContextRefresh>() {
+                    return Err(error);
+                }
+                ui.status = format!("{error:#}");
+            }
+            return Ok(());
+        }
         PickerValue::Fork(value) => {
             return match apply_fork(runtime, ui, value) {
                 Ok(()) => Ok(()),

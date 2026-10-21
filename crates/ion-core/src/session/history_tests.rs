@@ -191,7 +191,10 @@ fn compaction_keeps_original_tool_output_bounded_states_and_utf8_pages() {
             _ => None,
         })
         .unwrap();
-    assert!(summary.contains(&format!("entries 1 through {}", plan.through_entry)));
+    assert!(summary.contains(&format!(
+        "selected context through entry {}",
+        plan.through_entry
+    )));
     assert!(!summary.contains("HISTORY_NEEDLE_START"));
     let tool_entry = view
         .entries

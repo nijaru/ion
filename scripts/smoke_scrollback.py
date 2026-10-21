@@ -255,7 +255,9 @@ with tempfile.TemporaryDirectory(prefix="ion-scrollback-") as temporary:
         # At 40 columns the help response is longer than that entire region.
         tmux("resize-window", "-t", "ion", "-x", "40", "-y", "12")
         time.sleep(0.4)
-        head, tail = "/help/new/clone/fork[TURN]", "excludesitfrommodelcontext"
+        # Identify both ends of one help publication, not the changing command
+        # inventory between them (for example /tree before /fork).
+        head, tail = "/help/new/clone/", "excludesitfrommodelcontext"
 
         def help_counts():
             text = "".join(tmux("capture-pane", "-p", "-t", "ion", "-S", "-").split())

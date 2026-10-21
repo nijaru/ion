@@ -90,7 +90,7 @@ use clone or fork to copy a conversation. Opening and quitting an empty chat doe
 not displace the latest conversation in `--continue` or `sessions`. An
 existing session uses its recorded directory, and an explicit `--cwd` must
 match it. Headless runs print the
-session ID to stderr. In the TUI, `/new`, `/clone`, `/fork`, `/fork-after`, `/resume`, `/name`, `/session`,
+session ID to stderr. In the TUI, `/new`, `/clone`, `/tree`, `/fork`, `/fork-after`, `/resume`, `/name`, `/session`,
 `/model` and `/compact` manage the conversation; `/login PROVIDER` and `/logout PROVIDER`
 manage saved keys. `/tasks` lists application-owned background Sessions; use
 `/tasks result ID`, `/tasks cancel ID` and `/tasks acknowledge ID` to inspect,
@@ -110,7 +110,7 @@ Ion retains and joins its scan before starting another scan. An in-flight
 filesystem/metadata call cannot be interrupted. Dismissed results cannot overwrite
 a newer picker. Browsing does not submit input or repair history;
 confirming a selection switches through idle shared control. This is a flat
-catalog, not inferred fork ancestry or Pi's in-file branch tree.
+catalog, not inferred fork ancestry; `/tree` explores context paths within a Session.
 
 Use `--reasoning high` for headless/chat/RPC startup or manual compaction,
 `/reasoning high` in an idle terminal, or RPC
@@ -244,6 +244,12 @@ permanent footer rows; `/session` exposes Session/context detail on demand.
 Cloning copies committed conversation and context into a new session with
 independent future turns. Both sessions still use the same live working
 directory; cloning does not copy or restore files.
+`/tree` opens a recent-message picker, marking the selected path and preserved
+alternatives; `/tree ENTRY` selects directly. User points restore editable input
+and images without sending; assistant and settled tool-group points continue after
+their observations. Selection uses idle shared control, keeps the same Session ID,
+and survives reopening without another prompt. It does not undo files or generate
+a summary. `inspect` retains all raw facts; conversation export follows the selected path.
 `/fork` opens a searchable Turn picker and restores the selected prompt and
 images, including each image's coordinate note, in a new Session;
 `/fork TURN` selects directly. Oversized prompts or multipart input that the
@@ -319,13 +325,17 @@ Session. Keep reading progress records with that Turn ID until `turn_end`
 reports `completed`, `cancelled` or `failed`; a response alone is not the
 answer. `final` is the committed answer. Other commands are `steer`,
 `follow_up`, `submit_request`, `get_request`, `clear_queue`, `abort`, `get_state`,
-`inspect`, `list_sessions`, `list_turns`, `list_models`,
+`inspect`, `get_context`, `navigate_context`, `list_sessions`, `list_turns`, `list_models`,
 `list_resources`, `reload_resources`, `shell`, `compact`, `set_model`, `new_session`,
 `clone_session`, `fork`, `switch_session`, `set_reasoning`, `get_background`,
 `cancel_background`, `acknowledge_background` and `set_name`.
 `set_name.name` must be a string; null or omission clears it. `fork.after` must
 be a boolean when present and defaults to false when omitted. Wrong field types
 are rejected before mutation.
+`get_context` returns a `position` token and message points with stable `entry`
+and selectable `head_entry` coordinates. `navigate_context` requires that token
+as `expected` and a `head_entry`; stale previews fail rather than discard newer
+work. It changes context without submitting input or changing files.
 `get_state.reasoning` reports the active Session's generation preference.
 `prompt`, `steer` and `follow_up` accept `images` as an array of local paths (relative to the
 Session's working directory) or inline `{ "mime_type": "image/png", "data": "BASE64" }`

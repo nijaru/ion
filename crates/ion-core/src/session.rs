@@ -27,6 +27,11 @@ use tokio_util::sync::CancellationToken;
 
 pub(crate) mod code_inspection;
 mod context;
+mod navigation;
+#[cfg(test)]
+mod navigation_tests;
+use navigation::{ContextIndex, restore_context};
+pub use navigation::{ContextPoint, ContextPosition, PreparedNavigation};
 mod delegation;
 #[cfg(test)]
 mod delegation_background_tests;
@@ -70,6 +75,10 @@ struct Header {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "kind", content = "data", rename_all = "snake_case")]
 pub enum SessionEntry {
+    /// Select a validated historical context without rewriting execution facts.
+    ContextSelected {
+        head_entry: u64,
+    },
     ReasoningSelected {
         reasoning: Reasoning,
     },
@@ -243,6 +252,8 @@ pub struct SessionView {
     pub name: Option<String>,
     pub entries: Vec<SessionEntry>,
     pub messages: Vec<Message>,
+    /// Original entry coordinates on the selected context path, in order.
+    pub context_path: Vec<u64>,
     pub unfinished_turn: Option<u64>,
     pub unfinished_user_shell: Option<UnobservedUserShell>,
     pub last_end: Option<(u64, TurnEndReason)>,
@@ -267,9 +278,12 @@ pub struct TurnSummary {
 impl SessionView {
     /// Conversation display, including user commands kept out of model context.
     pub fn display_messages(&self) -> Vec<Message> {
+        let selected: BTreeSet<_> = self.context_path.iter().copied().collect();
         projected_entry_messages(&self.entries, true)
             .into_iter()
-            .flatten()
+            .enumerate()
+            .filter(|(index, _)| selected.contains(&(*index as u64 + 1)))
+            .filter_map(|(_, message)| message)
             .collect()
     }
 
@@ -281,8 +295,12 @@ impl SessionView {
     pub fn turns(&self) -> Vec<TurnSummary> {
         let mut turns: Vec<TurnSummary> = Vec::new();
         let mut reasoning = Reasoning::ProviderDefault;
+        let mut reasoning_at = vec![reasoning];
         for entry in &self.entries {
             match entry {
+                SessionEntry::ContextSelected { head_entry } => {
+                    reasoning = reasoning_at[*head_entry as usize]
+                }
                 SessionEntry::ReasoningSelected {
                     reasoning: selected,
                 } => reasoning = *selected,
@@ -304,6 +322,7 @@ impl SessionView {
                 }
                 _ => {}
             }
+            reasoning_at.push(reasoning);
         }
         turns
     }
@@ -382,15 +401,20 @@ impl State {
         new_settled: &mut Vec<u64>,
     ) -> Result<(), SessionError> {
         match entry {
+            SessionEntry::ContextSelected { .. } => {
+                if self.active.is_some() || self.pending_shell.is_some() || !self.pending.is_empty()
+                {
+                    return Err(SessionError::InvalidHistory);
+                }
+            }
             // Selection owns only future-request preferences. The operation gate
             // excludes live execution; unfinished history can await recovery.
             SessionEntry::ReasoningSelected { reasoning } => {
                 reasoning
                     .validate()
                     .map_err(|_| SessionError::InvalidHistory)?;
-                self.reasoning = *reasoning;
             }
-            SessionEntry::ModelSelected { model } => self.select_model(model),
+            SessionEntry::ModelSelected { .. } => {}
             SessionEntry::EffectiveModelChanged { turn, model } => {
                 if self.active != Some(*turn)
                     || !self.pending.is_empty()
@@ -398,7 +422,6 @@ impl State {
                 {
                     return Err(SessionError::InvalidHistory);
                 }
-                self.select_effective_model(model);
             }
             SessionEntry::ProviderReplayRebased { turn } => {
                 if self.active != Some(*turn)
@@ -407,7 +430,6 @@ impl State {
                 {
                     return Err(SessionError::InvalidHistory);
                 }
-                self.replay_epoch_start = self.sequence + 1;
             }
             SessionEntry::ModelContextChanged { turn, context } => {
                 if self.active != Some(*turn)
@@ -417,7 +439,6 @@ impl State {
                 {
                     return Err(SessionError::InvalidHistory);
                 }
-                self.last_context = Some(context.clone());
             }
             SessionEntry::UserShellAdmitted {
                 command,
@@ -489,7 +510,6 @@ impl State {
                 {
                     return Err(SessionError::InvalidHistory);
                 }
-                self.compaction = Some((*through_entry, summary.clone()));
             }
             SessionEntry::TurnResumed { turn, checkpoint } => {
                 if self.active != Some(*turn)
@@ -502,7 +522,6 @@ impl State {
             SessionEntry::TurnStarted {
                 turn,
                 input,
-                model,
                 recovery,
                 ..
             } => {
@@ -518,7 +537,6 @@ impl State {
                 self.prefix_bound_in_turn = false;
                 self.recovery = recovery.clone();
                 self.last_id = *turn;
-                self.select_model(model);
                 messages.push(ProjectedMessage::new(self.sequence + 1, input.clone()));
             }
             SessionEntry::Steering { turn, input } => {
@@ -535,8 +553,8 @@ impl State {
                 message,
                 tool_activities,
                 execution,
-                usage,
                 termination,
+                ..
             } => {
                 if self.active != Some(*turn)
                     || !self.pending.is_empty()
@@ -548,9 +566,6 @@ impl State {
                         .is_some_and(|model| model != &execution.route.effective)
                 {
                     return Err(SessionError::InvalidHistory);
-                }
-                if self.last_effective_model.is_none() {
-                    self.last_effective_model = Some(execution.route.effective.clone());
                 }
                 if matches!(termination, ResponseTermination::Incomplete(_))
                     && (!matches!(
@@ -608,8 +623,6 @@ impl State {
                     .provider_replay
                     .as_ref()
                     .is_some_and(|replay| replay.prefix_bound);
-                self.last_execution = Some(execution.clone());
-                self.last_usage = Some(*usage);
                 if self.pending.is_empty() {
                     new_settled.push(self.sequence + 1);
                 }
@@ -696,6 +709,7 @@ impl State {
                 new_settled.push(self.sequence + 1);
             }
         }
+        self.apply_context(entry);
         self.sequence += 1;
         Ok(())
     }
@@ -726,6 +740,7 @@ struct HistoryProjection {
     messages: Vec<ProjectedMessage>,
     context_changes: Vec<ModelContextChange>,
     child_records: ChildRecordIndex,
+    context_index: ContextIndex,
 }
 
 struct Store {
@@ -737,6 +752,7 @@ struct Store {
     // not retain or reproject historical tool payloads on each model request.
     context_changes: Vec<ModelContextChange>,
     child_records: ChildRecordIndex,
+    context_index: ContextIndex,
     // Process-local capacity evidence. Reopen, fork and clone start cold; this
     // is never serialized into Session history.
     calibration: Option<RequestCalibration>,
@@ -776,7 +792,9 @@ impl Session {
         id: uuid::Uuid,
         entries: &[SessionEntry],
     ) -> Result<Self, SessionError> {
-        let projection = project(entries.iter().map(Ok), ProjectionMode::Full)?;
+        let projection = project(entries.iter().map(Ok), ProjectionMode::Full, &|entry| {
+            Ok(entries[(entry - 1) as usize].clone())
+        })?;
         let encoded = entries
             .iter()
             .map(encode_entry)
@@ -820,6 +838,7 @@ impl Session {
                 messages: projection.messages,
                 context_changes: projection.context_changes,
                 child_records: projection.child_records,
+                context_index: projection.context_index,
                 calibration: None,
                 live_backgrounds: BTreeMap::new(),
             }),
@@ -842,6 +861,7 @@ impl Session {
             messages,
             context_changes,
             child_records,
+            context_index,
             ..
         } = project_connection(&connection, ProjectionMode::Full)?;
         prepare_writer(&connection)?;
@@ -853,6 +873,7 @@ impl Session {
                 messages,
                 context_changes,
                 child_records,
+                context_index,
                 calibration: None,
                 live_backgrounds: BTreeMap::new(),
             }),
@@ -882,6 +903,25 @@ impl Session {
         }
         drop(source);
         self.copy_entries_to(path.as_ref(), entries)
+    }
+
+    /// Preferences of the exact prefix a fork will copy, not merely those at
+    /// Turn admission. Idle recovery/preferences can change before a Turn ends.
+    pub fn fork_preferences(
+        &self,
+        point: ForkPoint,
+    ) -> Result<(ModelRef, Reasoning), SessionError> {
+        let source = self.store.lock().map_err(|_| SessionError::Poisoned)?;
+        let (entries, selected_model) = fork_prefix(&source.connection, point)?;
+        let projection = project(entries.iter().map(Ok), ProjectionMode::Metadata, &|entry| {
+            Ok(entries[(entry - 1) as usize].clone())
+        })?;
+        Ok((
+            selected_model
+                .or(projection.state.last_model)
+                .ok_or(SessionError::InvalidForkPoint)?,
+            projection.state.reasoning,
+        ))
     }
 
     fn copy_entries_to(
@@ -933,12 +973,18 @@ impl Session {
         let header = read_header(&connection)?;
         let entries = read_entries(&connection)?;
         let HistoryProjection {
-            state, messages, ..
-        } = project(entries.iter().map(Ok), ProjectionMode::Full)?;
+            state,
+            messages,
+            context_index,
+            ..
+        } = project(entries.iter().map(Ok), ProjectionMode::Full, &|entry| {
+            Ok(entries[(entry - 1) as usize].clone())
+        })?;
         Ok(SessionView {
             id: header.id,
             cwd: header.cwd,
             name: header.name,
+            context_path: context_index.path(context_index.head()),
             entries,
             messages: messages.into_iter().map(|record| record.message).collect(),
             unfinished_turn: state.active,
@@ -1267,6 +1313,7 @@ impl Session {
             id: header.id,
             cwd: header.cwd,
             name: header.name,
+            context_path: store.context_index.path(store.context_index.head()),
             entries,
             messages: store
                 .messages
@@ -1874,6 +1921,7 @@ fn pending_settlement(
 }
 
 fn append(store: &mut Store, entries: &[SessionEntry]) -> Result<(), SessionError> {
+    let mut replacement = None;
     let mut candidate = store.state.clone();
     // A shared pending shell owns the final context message. Seed only that
     // slot so candidate settlement can replace it without rebuilding history.
@@ -1895,8 +1943,27 @@ fn append(store: &mut Store, entries: &[SessionEntry]) -> Result<(), SessionErro
     let mut new_settled = Vec::new();
     let encoded = entries
         .iter()
-        .map(|entry| {
+        .enumerate()
+        .map(|(offset, entry)| {
             candidate.apply(entry, &mut new_messages, &store.settled, &mut new_settled)?;
+            if let SessionEntry::ContextSelected { head_entry } = entry {
+                if replacement.is_some() || offset + 1 != entries.len() {
+                    return Err(SessionError::InvalidHistory);
+                }
+                let navigation::RestoredContext {
+                    state,
+                    messages,
+                    settled,
+                    changes,
+                } = restore_context(
+                    &store.context_index,
+                    *head_entry,
+                    ProjectionMode::Full,
+                    &|entry| navigation::read_entry(&store.connection, entry),
+                )?;
+                candidate.restore_context(state);
+                replacement = Some((messages, settled, changes));
+            }
             if let SessionEntry::ModelContextChanged { context, .. } = entry {
                 new_context_changes.push(ModelContextChange {
                     after_message: message_start + new_messages.len(),
@@ -1915,6 +1982,7 @@ fn append(store: &mut Store, entries: &[SessionEntry]) -> Result<(), SessionErro
     for entry in entries {
         sequence += 1;
         store.child_records.observe(sequence, entry);
+        store.context_index.observe(entry);
         if let SessionEntry::DelegationSettled { child, .. } = entry {
             store.live_backgrounds.remove(child);
         }
@@ -1922,7 +1990,8 @@ fn append(store: &mut Store, entries: &[SessionEntry]) -> Result<(), SessionErro
     if entries.iter().any(|entry| {
         matches!(
             entry,
-            SessionEntry::Compacted { .. }
+            SessionEntry::ContextSelected { .. }
+                | SessionEntry::Compacted { .. }
                 | SessionEntry::ProviderReplayRebased { .. }
                 | SessionEntry::EffectiveModelChanged { .. }
                 | SessionEntry::ModelSelected { .. }
@@ -1933,12 +2002,18 @@ fn append(store: &mut Store, entries: &[SessionEntry]) -> Result<(), SessionErro
         store.calibration = None;
     }
     store.state = candidate;
-    store.settled.extend(new_settled);
-    if replace_pending_message {
-        store.messages.pop();
+    if let Some((messages, settled, changes)) = replacement {
+        store.messages = messages;
+        store.settled = settled;
+        store.context_changes = changes;
+    } else {
+        store.settled.extend(new_settled);
+        if replace_pending_message {
+            store.messages.pop();
+        }
+        store.messages.extend(new_messages);
+        store.context_changes.extend(new_context_changes);
     }
-    store.messages.extend(new_messages);
-    store.context_changes.extend(new_context_changes);
     Ok(())
 }
 
@@ -1954,7 +2029,7 @@ fn summary_message(through_entry: u64, summary: &str) -> Message {
     Message {
         role: Role::User,
         content: vec![Content::Text(format!(
-            "Earlier conversation summary (entries 1 through {through_entry} were compacted from model context; their original committed records remain in Session history):\n{summary}"
+            "Earlier conversation summary (selected context through entry {through_entry} was compacted; original committed records remain in Session history):\n{summary}"
         ))],
         provider_replay: None,
     }
@@ -2077,6 +2152,7 @@ fn message_from_entry(coordinate: u64, entry: &SessionEntry) -> Option<Message> 
         | SessionEntry::ProviderReplayRebased { .. }
         | SessionEntry::ModelContextChanged { .. }
         | SessionEntry::TurnResumed { .. }
+        | SessionEntry::ContextSelected { .. }
         | SessionEntry::CacheWarm { .. }
         | SessionEntry::Compacted { .. }
         | SessionEntry::TurnEnded { .. } => None,
@@ -2151,18 +2227,21 @@ fn project_connection(
     project(
         rows.map(|body| Ok(serde_json::from_slice::<SessionEntry>(&body?)?)),
         mode,
+        &|entry| navigation::read_entry(connection, entry),
     )
 }
 
 fn project<E: Borrow<SessionEntry>>(
     entries: impl IntoIterator<Item = Result<E, SessionError>>,
     mode: ProjectionMode,
+    read: &impl Fn(u64) -> Result<SessionEntry, SessionError>,
 ) -> Result<HistoryProjection, SessionError> {
     let mut state = State::default();
     let mut settled = BTreeSet::new();
     let mut messages = Vec::new();
     let mut context_changes = Vec::new();
     let mut child_records = ChildRecordIndex::default();
+    let mut context_index = ContextIndex::default();
     let mut turns = 0usize;
     let mut request_keys = BTreeSet::new();
     let mut delegation_children = BTreeSet::new();
@@ -2190,6 +2269,14 @@ fn project<E: Borrow<SessionEntry>>(
         }
         let mut new_settled = Vec::new();
         state.apply(entry, &mut messages, &settled, &mut new_settled)?;
+        if let SessionEntry::ContextSelected { head_entry } = entry {
+            let restored = restore_context(&context_index, *head_entry, mode, read)?;
+            state.restore_context(restored.state);
+            messages = restored.messages;
+            settled = restored.settled;
+            context_changes = restored.changes;
+        }
+        context_index.observe(entry);
         if matches!(mode, ProjectionMode::Full) {
             child_records.observe(state.sequence, entry);
         }
@@ -2231,6 +2318,7 @@ fn project<E: Borrow<SessionEntry>>(
         messages,
         context_changes,
         child_records,
+        context_index,
     })
 }
 
@@ -2354,6 +2442,10 @@ fn lock(path: &Path) -> Result<SessionLock, SessionError> {
 
 #[derive(Debug, Error)]
 pub enum SessionError {
+    #[error("context changed since this preview; inspect history again")]
+    StaleContextPosition,
+    #[error("context selection must use a committed, complete call/result boundary")]
+    InvalidContextPoint,
     #[error("authority scope must be nonblank, at most 1024 bytes, without control characters")]
     InvalidAuthorityScope,
     #[error("continuation authority or executable declarations changed or are unavailable")]
@@ -2930,7 +3022,10 @@ mod tests {
         entries.push(SessionEntry::ModelSelected {
             model: model.clone(),
         });
-        let pending = project(entries.iter().map(Ok), ProjectionMode::Metadata).unwrap();
+        let pending = project(entries.iter().map(Ok), ProjectionMode::Metadata, &|entry| {
+            Ok(entries[(entry - 1) as usize].clone())
+        })
+        .unwrap();
         assert_eq!(pending.messages.len(), 1);
         assert_eq!(pending.state.last_model, Some(model));
         assert!(pending.state.pending_shell.is_some());
@@ -2943,7 +3038,10 @@ mod tests {
             .unwrap();
         let settlement = session.view().unwrap().entries.pop().unwrap();
         entries.push(settlement);
-        let settled = project(entries.iter().map(Ok), ProjectionMode::Metadata).unwrap();
+        let settled = project(entries.iter().map(Ok), ProjectionMode::Metadata, &|entry| {
+            Ok(entries[(entry - 1) as usize].clone())
+        })
+        .unwrap();
         assert!(settled.messages.is_empty());
         assert!(settled.state.pending_shell.is_none());
         assert_eq!(
@@ -2954,7 +3052,9 @@ mod tests {
         entries.push(entries.last().unwrap().clone());
         for mode in [ProjectionMode::Full, ProjectionMode::Metadata] {
             assert!(matches!(
-                project(entries.iter().map(Ok), mode),
+                project(entries.iter().map(Ok), mode, &|entry| Ok(entries
+                    [(entry - 1) as usize]
+                    .clone())),
                 Err(SessionError::InvalidHistory)
             ));
         }

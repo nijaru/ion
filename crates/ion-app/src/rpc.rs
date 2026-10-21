@@ -145,6 +145,17 @@ impl Control {
                 }
                 "inspect" => inspection::to_value(&self.host.session().view()?),
                 "list_sessions" => Ok(json!(self.host.catalog().list()?.iter().map(|item| json!({"id":item.id,"name":item.name,"preview":item.preview,"turns":item.turns,"model":item.model})).collect::<Vec<_>>())),
+                "get_context" => {
+                    let view = self.host.session().view()?;
+                    Ok(json!({"position":view.context_position(),"points":view.context_points().iter().map(|point| json!({"entry":point.entry,"head_entry":point.head_entry,"restore_input":point.restore_input,"selected_path":point.selected_path,"preview":preview_input(&point.message)})).collect::<Vec<_>>()}))
+                }
+                "navigate_context" => {
+                    self.idle()?;
+                    let expected: ion_core::ContextPosition = serde_json::from_value(value.get("expected").context("expected context position is required")?.clone())?;
+                    let head = value.get("head_entry").and_then(Value::as_u64).context("head_entry must be an unsigned integer")?;
+                    let position = self.host.navigate_context(expected, head)?;
+                    Ok(json!({"position":position,"files_unchanged":true}))
+                }
                 "list_turns" => Ok(json!(self.host.session().view()?.turns().iter().map(|item| json!({"turn":item.turn,"preview":preview_input(&item.input),"ended":item.end.is_some()})).collect::<Vec<_>>())),
                 "list_models" => Ok(json!(self.services.models().choices(self.services.credentials())?.iter().map(|item| json!({"provider":item.selected.provider,"model":item.selected.model,"label":item.label,"image_input":item.selected.image_input})).collect::<Vec<_>>())),
                 "list_resources" => Ok(json!({"skills":self.host.resources().skills().map(|item| json!({"name":item.name,"description":item.description})).collect::<Vec<_>>(),"prompts":self.host.resources().templates().map(|item| json!({"name":item.name,"description":item.description})).collect::<Vec<_>>(),"diagnostics":self.host.resources().diagnostics().iter().map(|item| json!({"path":item.path,"message":item.message})).collect::<Vec<_>>()})),

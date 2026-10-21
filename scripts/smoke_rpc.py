@@ -507,6 +507,47 @@ with tempfile.TemporaryDirectory(prefix="ion-rpc-") as temporary:
         selected = read(reopened)
         assert selected["success"] and selected["data"]["model"]["provider"] == "rpc-alt", selected
         assert selected["data"]["reasoning"] == "high", selected
+
+        # Context selection is the same shared-control operation as the terminal
+        # picker. Verify actual next-request context, not just a reported cursor.
+        send(reopened, {"id": "navigation-source", "type": "inspect"})
+        navigation_source = read(reopened)["data"]
+        send(reopened, {"id": "context-source", "type": "get_context"})
+        source_context = read(reopened)["data"]
+        source_position = source_context["position"]
+        first_point = next(point for point in source_context["points"] if point["restore_input"])
+        marker = workspace / "navigation-state.txt"
+        marker.write_text("current files are not historical context\n")
+        calls_before_navigation = len(requests)
+        send(reopened, {"id": "navigate-before", "type": "navigate_context", "expected": source_position, "head_entry": first_point["head_entry"]})
+        navigation = read(reopened)
+        assert navigation["success"] and navigation["data"]["position"]["session"] == session, navigation
+        send(reopened, {"id": "navigate-stale", "type": "navigate_context", "expected": source_position, "head_entry": source_position["head_entry"]})
+        assert not read(reopened)["success"], "stale preview changed context"
+        assert len(requests) == calls_before_navigation, "navigation requested a summary/generation"
+        send(reopened, {"id": "alternate", "type": "prompt", "message": "NAVIGATION_ALTERNATE"})
+        assert until(reopened, lambda r: r["type"] == "turn_end")[-1]["status"] == "completed"
+        actual_messages = json.dumps(requests[-1]["messages"])
+        assert "NAVIGATION_ALTERNATE" in actual_messages and "Switched session" not in actual_messages, actual_messages
+        send(reopened, {"id": "context-alternate", "type": "get_context"})
+        alternate_context = read(reopened)["data"]
+        assert any(not point["selected_path"] for point in alternate_context["points"]), alternate_context
+        send(reopened, {"id": "navigate-return", "type": "navigate_context", "expected": alternate_context["position"], "head_entry": source_position["head_entry"]})
+        returned_position = read(reopened)["data"]["position"]
+        assert marker.read_text() == "current files are not historical context\n"
+        send(reopened, {"id": "returned-context", "type": "inspect"})
+        returned_view = read(reopened)["data"]
+        assert returned_view["entries"][:len(navigation_source["entries"])] == navigation_source["entries"]
+        assert "NAVIGATION_ALTERNATE" in str(returned_view["entries"])
+        assert "NAVIGATION_ALTERNATE" not in str(returned_view["messages"])
+        calls_before_reopen = len(requests)
+        reopened.stdin.close()
+        assert reopened.wait(timeout=8) == 0, reopened.stderr.read()
+        reopened = subprocess.Popen([binary, "--cwd", workspace, "--session", session, "rpc"], env=env, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, bufsize=0)
+        assert read(reopened)["type"] == "ready"
+        send(reopened, {"id": "durable-context", "type": "get_context"})
+        assert read(reopened)["data"]["position"] == returned_position, "selection without another prompt was lost on reopen"
+        assert len(requests) == calls_before_reopen
         reopened.stdin.close()
         assert reopened.wait(timeout=8) == 0, reopened.stderr.read()
         closing = subprocess.Popen([binary, "--cwd", workspace, "rpc"], env=env, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, bufsize=0)
@@ -776,6 +817,9 @@ with tempfile.TemporaryDirectory(prefix="ion-rpc-") as temporary:
         if child and child.poll() is None:
             child.kill()
             child.wait()
+        if "reopened" in locals() and reopened.poll() is None:
+            reopened.kill()
+            reopened.wait()
         server.shutdown()
         server.server_close()
         thread.join(timeout=5)

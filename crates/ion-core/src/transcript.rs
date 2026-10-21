@@ -90,7 +90,11 @@ pub struct TranscriptProjection {
 impl TranscriptProjection {
     pub fn from_session(view: &SessionView) -> Self {
         let mut builder = TranscriptBuilder::default();
+        let selected: std::collections::BTreeSet<_> = view.context_path.iter().copied().collect();
         for (entry_index, entry) in view.entries.iter().enumerate() {
+            if !selected.contains(&(entry_index as u64 + 1)) {
+                continue;
+            }
             match entry {
                 SessionEntry::TurnStarted { turn, input, .. } => {
                     builder.push_user(Some(*turn), false, input);
@@ -158,7 +162,8 @@ impl TranscriptProjection {
                         }));
                 }
                 SessionEntry::TurnEnded { .. } => builder.close_group(),
-                SessionEntry::ModelSelected { .. }
+                SessionEntry::ContextSelected { .. }
+                | SessionEntry::ModelSelected { .. }
                 | SessionEntry::ReasoningSelected { .. }
                 | SessionEntry::EffectiveModelChanged { .. }
                 | SessionEntry::ProviderReplayRebased { .. }
@@ -823,6 +828,7 @@ mod tests {
                     reason: TurnEndReason::Completed,
                 },
             ],
+            context_path: (1..=9).collect(),
             messages: Vec::new(),
             unfinished_turn: None,
             unfinished_user_shell: None,

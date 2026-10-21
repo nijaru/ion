@@ -1,7 +1,7 @@
 //! Immutable service preflight and prepare-before-publish binding replacement.
 use std::{fs, path::PathBuf, sync::Arc};
 
-use anyhow::{Context, Result, ensure};
+use anyhow::{Result, ensure};
 use ion_ai::ModelRef;
 use ion_core::{CodingAgent, CodingSession, ForkPoint};
 use serde::Serialize;
@@ -246,29 +246,45 @@ impl<M: Serialize + Send + 'static> SessionControl<M> {
         self.ensure_replaceable()?;
         let previous = self.setup.session.clone();
         let _idle = previous.reserve_idle()?;
-        let turn = match point {
-            ForkPoint::BeforeTurn(turn) | ForkPoint::AfterTurn(turn) => turn,
-        };
-        let selected_turn = previous
-            .view()?
-            .turns()
-            .into_iter()
-            .find(|item| item.turn == turn)
-            .context("selected Turn does not exist")?;
+        let (model, reasoning) = previous.fork_preferences(point)?;
         let resources = self.setup.application.resources(previous.cwd())?;
         let commands = self.setup.application.commands(previous.cwd())?;
         let runtime = self.setup.application.runtime(
             previous.cwd(),
-            Some(&selected_turn.model),
+            Some(&model),
             self.setup.questions.clone(),
         )?;
-        validate_model(&runtime, Some(&selected_turn.model))?;
-        runtime.agent.validate_reasoning(selected_turn.reasoning)?;
+        validate_model(&runtime, Some(&model))?;
+        runtime.agent.validate_reasoning(reasoning)?;
         let path = self.setup.catalog.new_path()?;
         let session = Arc::new(previous.fork_to(&path, point)?);
         let id = session.id().to_string();
         self.publish(session, runtime, resources, commands);
         Ok(id)
+    }
+
+    /// Prepare a historical context under the same engine gate as commit. A
+    /// failed preflight leaves both the current binding and selection unchanged.
+    pub fn navigate_context(
+        &mut self,
+        expected: ion_core::ContextPosition,
+        head_entry: u64,
+    ) -> Result<ion_core::ContextPosition> {
+        self.ensure_replaceable()?;
+        let session = self.setup.session.clone();
+        let mut navigation = session.prepare_navigation(expected, head_entry)?;
+        let resources = self.setup.application.resources(session.cwd())?;
+        let commands = self.setup.application.commands(session.cwd())?;
+        let runtime = self.setup.application.runtime(
+            session.cwd(),
+            navigation.model(),
+            self.setup.questions.clone(),
+        )?;
+        validate_model(&runtime, navigation.model())?;
+        runtime.agent.validate_reasoning(navigation.reasoning())?;
+        let position = navigation.commit()?;
+        self.publish(session.clone(), runtime, resources, commands);
+        Ok(position)
     }
 
     pub fn switch_session(&mut self, path: PathBuf) -> Result<()> {

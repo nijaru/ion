@@ -388,6 +388,7 @@ fn copy_uses_the_last_completed_answer() {
             },
             assistant(2, "partial"),
         ],
+        context_path: vec![1, 2, 3],
         messages: vec![],
         unfinished_turn: Some(2),
         unfinished_user_shell: None,

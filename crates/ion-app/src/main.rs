@@ -941,9 +941,21 @@ fn preview_input(input: &Message) -> String {
         .iter()
         .find_map(|part| match part {
             Content::Text(text) if !text.trim().is_empty() => Some(text.as_str()),
+            Content::ToolResult(result) => Some(result.name.as_str()),
+            Content::ToolCall(call) => Some(call.name.as_str()),
             _ => None,
         })
-        .unwrap_or("[image]");
+        .unwrap_or(
+            if input
+                .content
+                .iter()
+                .any(|part| matches!(part, Content::Image(_)))
+            {
+                "[image]"
+            } else {
+                "[no text]"
+            },
+        );
     text.lines()
         .next()
         .unwrap_or("")

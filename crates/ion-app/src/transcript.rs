@@ -18,7 +18,23 @@ pub fn render(view: &SessionView) -> String {
     if let Some(name) = &view.name {
         let _ = writeln!(text, "Name: {name}");
     }
+    if view
+        .entries
+        .iter()
+        .any(|entry| matches!(entry, SessionEntry::ContextSelected { .. }))
+    {
+        let _ = writeln!(
+            text,
+            "Session: {}\nSelected context: through entry {} (other paths omitted; selection does not restore files)",
+            view.id,
+            view.context_position().head_entry
+        );
+    }
+    let selected: std::collections::BTreeSet<_> = view.context_path.iter().copied().collect();
     for (entry_index, entry) in view.entries.iter().enumerate() {
+        if !selected.contains(&(entry_index as u64 + 1)) {
+            continue;
+        }
         match entry {
             SessionEntry::TurnStarted { turn, input, .. } => {
                 let _ = write!(text, "\nTurn {turn} · user\n");
@@ -141,7 +157,8 @@ pub fn render(view: &SessionView) -> String {
             SessionEntry::ProviderReplayRebased { .. } => {
                 let _ = writeln!(text, "\nProvider reasoning context reset");
             }
-            SessionEntry::CacheWarm { .. }
+            SessionEntry::ContextSelected { .. }
+            | SessionEntry::CacheWarm { .. }
             | SessionEntry::ModelContextChanged { .. }
             | SessionEntry::TurnResumed { .. }
             | SessionEntry::ModelSelected { .. }
@@ -264,6 +281,7 @@ mod tests {
                     reason: TurnEndReason::Cancelled,
                 },
             ],
+            context_path: vec![1, 2],
             messages: vec![],
             unfinished_turn: None,
             unfinished_user_shell: None,

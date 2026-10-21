@@ -251,7 +251,10 @@ with tempfile.TemporaryDirectory(prefix="ion-fork-") as temporary:
         image_session = image_turn.stderr.split("[session: ")[1].split("]")[0]
         original = requests[-1]["messages"][-1]["content"]
         assert [part["type"] for part in original] == ["text", "text", "image_url"]
-        for mode in ("inline", "fullscreen"):
+        image_view = json.loads(ion("--session", image_session, "inspect").stdout)
+        image_entry = next(index + 1 for index, entry in enumerate(image_view["entries"]) if entry["kind"] == "turn_started")
+        image_affinity = requests[-1]["session_id"]
+        for command, notice, mode in ((command, notice, mode) for command, notice in ((b"/fork 1\r", b"Forked as"), (f"/tree {image_entry}\r".encode(), b"Context selected")) for mode in ("inline", "fullscreen")):
             master, slave = pty.openpty()
             fcntl.ioctl(slave, termios.TIOCSWINSZ, struct.pack("HHHH", 30, 100, 0, 0))
             child = subprocess.Popen([binary, "--cwd", workspace, "--session", image_session, "--tui-mode", mode, "chat"], env={**env, "TERM": "xterm-256color"}, stdin=slave, stdout=slave, stderr=slave, preexec_fn=attach_terminal)
@@ -274,16 +277,18 @@ with tempfile.TemporaryDirectory(prefix="ion-fork-") as temporary:
                         if b"\x1b[6n" in data:
                             os.write(master, b"\x1b[2;1R")
                     if b"\xe2\x80\xba" in output and not fork_sent:
-                        os.write(master, b"/fork 1\r")
+                        os.write(master, command)
                         fork_sent = True
-                    if fork_sent and b"Forked as" in output and not submit_sent:
+                    if fork_sent and notice in output and not submit_sent:
                         assert len(requests) == before, "fork dispatched restored input"
                         os.write(master, b"\r")
                         output.clear()
                         submit_sent = True
                     if submit_sent and len(requests) > before and b"FORK_OK" in output and not quit_sent:
                         assert len(requests) == before + 1
-                        assert requests[-1]["messages"][-1]["content"] == original, "fork changed prompt/image-note associations"
+                        assert requests[-1]["messages"][-1]["content"] == original, "history selection changed prompt/image-note associations"
+                        if command.startswith(b"/tree"):
+                            assert requests[-1]["session_id"] == image_affinity, "context navigation changed logical transport affinity"
                         # Visible answer text can precede Host settlement.
                         # Explicit quit joins either state; Ctrl-C only stops active work.
                         os.write(master, b"\x04")
@@ -298,7 +303,10 @@ with tempfile.TemporaryDirectory(prefix="ion-fork-") as temporary:
                     child.kill()
                     child.wait(timeout=5)
                 os.close(master)
-        print("Ion fork/clone, provider affinity, terminal control and image-note restoration: OK")
+        tree_view = json.loads(ion("--session", image_session, "inspect").stdout)
+        assert tree_view["entries"][:len(image_view["entries"])] == image_view["entries"], "tree rewrote original facts"
+        assert len([entry for entry in tree_view["entries"] if entry["kind"] == "context_selected"]) == 2
+        print("Ion fork/clone, durable context navigation, provider affinity, terminal control and image-note restoration: OK")
     finally:
         server.shutdown()
         server.server_close()

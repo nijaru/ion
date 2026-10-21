@@ -639,6 +639,7 @@ async fn unfinished_history_anchors_are_stable_on_initial_load_and_reinspection(
             view.unfinished_turn = Some(2);
             view.entries.push(started(2, "UNFINISHED_VISIBLE"));
         }
+        view.context_path = (1..=view.entries.len() as u64).collect();
         let mut ui = Frontend::default();
         // Initial refresh and later reconciliation must use the same stable
         // prefix, even before anything has been physically published.
@@ -708,6 +709,85 @@ async fn clipboard_image_keeps_typed_coordinates_and_refuses_unsupported_routes(
         .is_err()
     );
     assert_eq!(ui.images.len(), 1);
+    fixture.control.shutdown().await;
+}
+
+#[tokio::test]
+async fn context_selection_restarts_publication_without_losing_an_unsent_draft() {
+    let mut fixture = Fixture::new();
+    let model = fixture.control.agent().model().clone();
+    let mut selected_image = ion_ai::normalize_rgba(1, 1, vec![0, 255, 0, 255]).unwrap();
+    selected_image.note = Some("selected tree image".into());
+    let input = Message::user_input("!literal historical input".into(), [selected_image]);
+    let mut view = fixture.control.session().view().unwrap();
+    view.entries = vec![
+        SessionEntry::TurnStarted {
+            turn: 1,
+            input,
+            model: model.clone(),
+            request: None,
+            recovery: None,
+        },
+        SessionEntry::Assistant {
+            turn: 1,
+            message: Message {
+                role: ion_ai::Role::Assistant,
+                content: vec![Content::Text("ORIGINAL_TREE_ANSWER".into())],
+                provider_replay: None,
+            },
+            tool_activities: Vec::new(),
+            execution: ion_ai::ModelExecution {
+                route: ion_ai::ModelRoute::direct(model, ion_ai::ModelRouteReason::UserRequest),
+                returned_model: None,
+            },
+            usage: ion_ai::Usage::unknown(),
+            termination: ion_ai::ResponseTermination::Completed,
+        },
+        SessionEntry::TurnEnded {
+            turn: 1,
+            reason: TurnEndReason::Completed,
+        },
+    ];
+    view.context_path = vec![1, 2, 3];
+    let mut ui = Frontend::default();
+    ui.load_history(fixture.control.session(), &view);
+    ui.finish_history_commit();
+    assert_eq!(ui.history_published_items, 2);
+    ui.draft = "unsent draft".into();
+    ui.cursor = 4;
+    ui.images = vec![image("unsent tree image")];
+    view.entries
+        .push(SessionEntry::ContextSelected { head_entry: 0 });
+    view.context_path.clear();
+    ui.load_history(fixture.control.session(), &view);
+    assert_eq!(ui.history_published_items, 0);
+    assert!(ui.history.items.is_empty());
+    assert!(
+        ui.pending_history_banner
+            .as_ref()
+            .unwrap()
+            .contains("files unchanged")
+    );
+    let _rows = ui.pending_history_rows(80);
+    assert_eq!((ui.draft.as_str(), ui.cursor), ("unsent draft", 4));
+    assert_note(&ui.images[0], "unsent tree image");
+    assert!(
+        last_committed_answer(&view).is_err(),
+        "copy cannot leak an unselected answer"
+    );
+    view.entries
+        .push(SessionEntry::ContextSelected { head_entry: 2 });
+    view.context_path = vec![1, 2];
+    ui.load_history(fixture.control.session(), &view);
+    assert_eq!(
+        ui.draft, "unsent draft",
+        "assistant selection must not overwrite an unsent draft"
+    );
+    assert_eq!(ui.history.items.len(), 2);
+    assert_eq!(
+        last_committed_answer(&view).unwrap(),
+        "ORIGINAL_TREE_ANSWER"
+    );
     fixture.control.shutdown().await;
 }
 

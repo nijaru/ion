@@ -184,7 +184,9 @@ impl Session {
         };
         // Resolve/validate the chosen cut before committing intent or creating
         // any child file. Keep the captured prefix outside tool-waiter custody.
-        let projection = project(context.iter().map(Ok), ProjectionMode::Metadata)?;
+        let projection = project(context.iter().map(Ok), ProjectionMode::Metadata, &|entry| {
+            Ok(context[(entry - 1) as usize].clone())
+        })?;
         if projection.state.active.is_some() || projection.state.pending_shell.is_some() {
             return Err(SessionError::InvalidForkPoint);
         }

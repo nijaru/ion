@@ -27,6 +27,7 @@ struct Inspection {
     entries: Vec<SessionEntry>,
     #[serde(serialize_with = "omit_each")]
     messages: Vec<Message>,
+    context_path: Vec<u64>,
     unfinished_turn: Option<u64>,
     unfinished_user_shell: Option<UnobservedUserShell>,
     last_end: Option<(u64, TurnEndReason)>,
@@ -47,6 +48,9 @@ struct Inspection {
     rename_all = "snake_case"
 )]
 enum EntryInspection {
+    ContextSelected {
+        head_entry: u64,
+    },
     ReasoningSelected {
         reasoning: Reasoning,
     },
@@ -483,6 +487,7 @@ mod tests {
             id: Default::default(),
             cwd: Some(PathBuf::from("/inspection-fixture")),
             name: Some("inspect".into()),
+            context_path: (1..=entries.len() as u64).collect(),
             entries,
             messages,
             unfinished_turn: Some(1),

@@ -77,6 +77,51 @@ async fn explicit_service_environment_skips_user_settings_and_serves_named_comma
 }
 
 #[tokio::test]
+async fn navigation_preflights_and_commits_before_publishing_resources_or_preferences() {
+    let root =
+        std::env::temp_dir().join(format!("ion-navigation-binding-{}", uuid::Uuid::now_v7()));
+    let cwd = root.join("work");
+    fs::create_dir_all(&cwd).unwrap();
+    fs::write(cwd.join("AGENTS.md"), "ORIGINAL_NAVIGATION_RULE").unwrap();
+    let host = Arc::new(Host::new(root.join("config"), root.join("state")));
+    let selected = host.models().save_default(&route("one")).unwrap();
+    let path = host.sessions(Some(cwd.clone())).new_path().unwrap();
+    let session = Arc::new(CodingSession::create(&path, Some(&cwd)).unwrap());
+    let mut binding = control(host, session.clone(), selected);
+    binding.select_reasoning(ion_ai::Reasoning::High).unwrap();
+    let before = session.context_position().unwrap();
+    let moved = root.join("moved-work");
+    fs::rename(&cwd, &moved).unwrap();
+    assert!(binding.navigate_context(before, 0).is_err());
+    assert_eq!(session.context_position().unwrap(), before);
+    fs::rename(&moved, &cwd).unwrap();
+    fs::write(cwd.join("AGENTS.md"), "CHANGED_NAVIGATION_RULE").unwrap();
+    let fault = rusqlite::Connection::open(&path).unwrap();
+    fault.execute_batch("CREATE TRIGGER reject_navigation BEFORE INSERT ON entries BEGIN SELECT RAISE(ABORT, 'injected'); END;").unwrap();
+    assert!(binding.navigate_context(before, 0).is_err());
+    assert_eq!(session.context_position().unwrap(), before);
+    assert_eq!(session.reasoning().unwrap(), ion_ai::Reasoning::High);
+    assert!(binding.instructions().contains("ORIGINAL_NAVIGATION_RULE"));
+    assert!(!binding.instructions().contains("CHANGED_NAVIGATION_RULE"));
+    fault
+        .execute_batch("DROP TRIGGER reject_navigation")
+        .unwrap();
+    drop(fault);
+    let selected = binding.navigate_context(before, 0).unwrap();
+    assert_eq!(selected.session, session.id());
+    assert_eq!(selected.head_entry, 0);
+    assert_eq!(
+        session.reasoning().unwrap(),
+        ion_ai::Reasoning::ProviderDefault
+    );
+    assert!(binding.instructions().contains("CHANGED_NAVIGATION_RULE"));
+    binding.shutdown().await;
+    drop(binding);
+    drop(session);
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[tokio::test]
 async fn direct_shell_preflights_before_recovery_or_admission() {
     let root = std::env::temp_dir().join(format!("ion-control-{}", uuid::Uuid::now_v7()));
     let cwd = root.join("work");
