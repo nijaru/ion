@@ -22,7 +22,8 @@ pub(super) const REPLY_SLOTS: usize = 32;
 ///
 /// When a lane is exhausted, commands are consumed without effects and counted
 /// in a coalesced publication_gap (not an unbounded list of rejected IDs). Two
-/// reserved control slots keep abort/clear_queue available behind bulk replies.
+/// reserved control slots keep abort/clear_queue and question replies available
+/// behind bulk replies.
 /// Abort always conveys stop intent even if its own reply lane is exhausted;
 /// such an unacknowledged abort has its own counter in the gap. No capacity refusal
 /// starts work. Clients must reconcile gaps, not assume exactly-once requests.
@@ -39,8 +40,12 @@ pub(super) async fn connection<R: AsyncBufRead + Unpin, W: AsyncWrite + Unpin>(
     let background = control.host.background();
     let mut background_revision = 0;
     let result: Result<()> = async {
+        // Bind the actual transport consumer before admitting any work. Setup
+        // failures still pass through the same unconditional stop/join below.
+        control.question_responder = control.host.attach_question_responder()?;
         loop {
             control.publish_gap(&mut output)?;
+            control.publish_question_change(&mut output)?;
             tokio::select! {
                 published = output.advance(), if output.has_pending() => { published?; }
                 update = control.host.next(), if poll_host => {
@@ -63,8 +68,8 @@ pub(super) async fn connection<R: AsyncBufRead + Unpin, W: AsyncWrite + Unpin>(
                     };
                     let command = value.as_ref().ok().filter(|value| value.is_object() && value.get("id").is_none_or(Value::is_string)).and_then(|value| value.get("type")).and_then(Value::as_str).unwrap_or("parse");
                     let pool = match command {
-                        "abort" | "clear_queue" | "cancel_background" => &controls,
-                        "get_context" | "inspect" | "get_request" | "get_background" | "acknowledge_background" | "list_sessions" | "list_turns" | "list_models" | "list_resources" => &inspections,
+                        "abort" | "clear_queue" | "cancel_background" | "answer_question" | "cancel_question" => &controls,
+                        "get_question" | "get_context" | "inspect" | "get_request" | "get_background" | "acknowledge_background" | "list_sessions" | "list_turns" | "list_models" | "list_resources" => &inspections,
                         _ => &replies,
                     };
                     let Some(credit) = pool.acquire() else {

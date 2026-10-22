@@ -77,9 +77,10 @@ OS sandboxes or credential boundaries: user `!` shell commands and host-side
 application effects remain separate. A managed child inherits the initiating
 application's selection. `tool_search` is added only when the selection allows it
 and selected deferred tools need discovery. `--read-only` cannot be combined with
-`--tools` or `--exclude-tools`. Terminal coding also includes
-`ask_user_question` when its question responder is configured; headless and RPC
-coding do not declare that tool.
+`--tools` or `--exclude-tools`. Terminal and RPC coding also include
+`ask_user_question` through their live responder; one-shot headless coding has no
+answer channel and omits it. Unattended RPC clients can use
+`--exclude-tools ask_user_question`.
 
 `--cwd PATH` chooses a working directory. By default, a run starts a new
 session; `--continue` reopens the most recently active one in that directory.
@@ -328,7 +329,8 @@ prompt response includes a Turn ID and confirms that the input entered the
 Session. Keep reading progress records with that Turn ID until `turn_end`
 reports `completed`, `cancelled` or `failed`; a response alone is not the
 answer. `final` is the committed answer. Other commands are `steer`,
-`follow_up`, `submit_request`, `get_request`, `clear_queue`, `abort`, `get_state`,
+`follow_up`, `submit_request`, `get_request`, `get_question`, `answer_question`,
+`cancel_question`, `clear_queue`, `abort`, `get_state`,
 `inspect`, `get_context`, `navigate_context`, `list_sessions`, `list_turns`, `list_models`,
 `list_resources`, `reload_resources`, `shell`, `compact`, `set_model`, `new_session`,
 `clone_session`, `fork`, `switch_session`, `set_reasoning`, `get_background`,
@@ -401,7 +403,10 @@ context-fit or process-memory guarantees.
 
 Output pressure alone never cancels work. `ready.publication` advertises a
 32-command reply window; two control slots and one inspection slot are separate.
-History and navigation queries, including `get_context`, share the inspection slot.
+History, navigation and question queries, including `get_context` and
+`get_question`, share the inspection slot. Question answers and batch cancellation
+use the reserved control slots, so bulk replies cannot consume their admission
+capacity; exhausted control slots refuse them without applying the decision.
 Credits remain held through lifecycle settlement and physical reply delivery.
 Provisional output has an 8 MiB high-water mark. Overflow emits `publication_gap`:
 discard incomplete progress and reconcile with `inspect` and reliable settlement.
@@ -1275,13 +1280,13 @@ that escaped descendants have stopped. `--read-only` excludes this capability.
 
 ## Typed questions
 
-Interactive terminal coding offers `ask_user_question` within the current Turn.
+Terminal and bidirectional RPC coding offer `ask_user_question` within the current Turn.
 A request contains `questions`: 1–4 single-select questions, each with question
-text and 2–6 `{label, description?}` options. The dialog adds **Type something.**
+text and 2–6 `{label, description?}` options. The terminal dialog adds **Type something.**
 for custom text; do not author that label or **Other** as an option. Multiselect,
 headers and rich previews are not implemented.
 
-Use Up/Down and Enter to choose. A custom answer supports Unicode editing and
+In the terminal, use Up/Down and Enter to choose. A custom answer supports Unicode editing and
 paste; Enter accepts it and Shift-Enter adds a newline. Answers advance through
 the batch and submit together. Esc cancels the whole questionnaire with an
 explicit cancellation observation; the model may continue without an answer.
@@ -1309,9 +1314,36 @@ returns unavailability rather than waiting or auto-answering. The tool also
 requires a Turn admitted through shared control: a genuine Core origin alone does
 not supply its owning Turn's stop authority, including inside Code Mode.
 
-Headless, RPC and managed coding children omit this capability. Rust applications
-can configure the same typed Host port and responder through shared control;
-terminal presentation is its first consumer, not a separate agent runtime.
+RPC emits `question_changed` with `resync: "get_question"` when the live view
+changes. This is a coalesced invalidation, not the request itself: call
+`get_question` to retrieve `data.question`, either null or an object with
+`request` (a UUID nonce), `questions` and Core `origin` provenance. A notification
+can reflect an already closed request. The connection retains one pending
+invalidation under output pressure; keep handling it independently of provisional
+model progress or `publication_gap` records.
+
+For a live request, substitute its nonce and submit one answer per question:
+
+```json
+{"type":"get_question","id":"q"}
+{"type":"answer_question","id":"a","request":"QUESTION_UUID","answers":[{"kind":"option","index":1}]}
+{"type":"cancel_question","id":"c","request":"QUESTION_UUID"}
+```
+
+An answer is either `{"kind":"option","index":N}` (zero-based) or
+`{"kind":"text","text":"custom answer"}`. Do not send a label or other extra
+fields. `answer_question` and `cancel_question` return `disposition: "submitted"`:
+the decision was handed to the live Host waiter, not necessarily committed yet.
+Continue reading ordinary tool observations and `turn_end`. Cancellation dismisses
+only the batch and may allow dependent work; use `abort` to stop the Turn.
+Malformed, incomplete, stale and duplicate decisions fail without replacing a
+valid pending request. EOF or broken I/O stops/joins the Turn; a new connection
+cannot answer a historical request. Neither the nonce alone nor copied `origin`
+fields grant authority without the connection's live responder lease.
+
+One-shot headless execution and managed coding children omit this capability.
+Rust applications can configure the same typed Host port and responder through
+shared control. Terminal and RPC are consumers of it, not separate agent runtimes.
 Explicit tool selection applies to direct calls and Code Mode as usual.
 
 ## Coding subagents

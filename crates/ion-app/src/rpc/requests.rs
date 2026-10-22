@@ -54,13 +54,3 @@ fn request_key(value: &Value) -> Result<RequestKey> {
     serde_json::from_value(value.get("key").context("key is required")?.clone())
         .context("invalid request key")
 }
-
-fn fields(value: &Value, allowed: &[&str]) -> Result<()> {
-    for field in value.as_object().expect("validated RPC object").keys() {
-        ensure!(
-            allowed.contains(&field.as_str()),
-            "unexpected field: {field}"
-        );
-    }
-    Ok(())
-}

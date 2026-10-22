@@ -271,13 +271,16 @@ async fn original_typed_input_and_protocol_id_survive_clear_queue() {
 }
 
 #[tokio::test]
-async fn context_navigation_shares_the_single_stalled_inspection_lane() {
+async fn context_and_question_pulls_share_the_single_stalled_inspection_lane() {
     use std::future::Future;
 
     for (first, second) in [
         ("get_context", "get_context"),
         ("inspect", "get_context"),
         ("get_context", "inspect"),
+        ("get_question", "get_question"),
+        ("inspect", "get_question"),
+        ("get_question", "get_context"),
     ] {
         let mut fixture = Fixture::new();
         let commands = format!(
@@ -509,7 +512,7 @@ async fn actual_io_failures_join_native_work_and_preserve_healthy_recovery() {
 }
 
 #[tokio::test]
-async fn passive_overflow_discards_suffix_without_stopping_core() {
+async fn passive_overflow_retains_question_invalidation_without_stopping_core() {
     let mut fixture = Fixture::new();
     let mut control = fixture.take();
     started_shell(&mut control, &fixture.root).await;
@@ -531,6 +534,12 @@ async fn passive_overflow_discards_suffix_without_stopping_core() {
             .unwrap();
     }
     assert!(control.suppress_activity);
+    for _ in 0..3 {
+        control
+            .update(ControlUpdate::QuestionChanged, &mut output)
+            .unwrap();
+        control.publish_question_change(&mut output).unwrap();
+    }
     // Publication saturation has not requested stop; the actual shell remains
     // owned and busy until this explicit foreground shutdown.
     assert!(control.host.is_busy());
@@ -552,9 +561,20 @@ async fn passive_overflow_discards_suffix_without_stopping_core() {
     }
     output.finish().await.unwrap();
     control.publish_gap(&mut output).unwrap();
+    control.publish_question_change(&mut output).unwrap();
+    output.finish().await.unwrap();
+    control.publish_question_change(&mut output).unwrap();
     output.finish().await.unwrap();
     drop(output);
     let records = records(&bytes);
+    let changes: Vec<_> = records
+        .iter()
+        .filter(|record| record["type"] == "question_changed")
+        .collect();
+    assert_eq!(
+        changes,
+        vec![&json!({"type":"question_changed","resync":"get_question"})]
+    );
     assert!(!records.iter().any(|record| record["type"] == "text_delta"));
     assert_eq!(
         records

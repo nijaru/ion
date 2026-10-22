@@ -801,7 +801,8 @@ reject stale answers. Question cancellation is an explicit result, not a fabrica
 answer. Turn stop or responder loss releases the waiter without new dependent
 dispatch. Answers are untrusted data, never steering, credentials or permission.
 Without a responder, omit the capability or return explicit unavailability; do not
-auto-answer. RPC needs a real typed request/reply consumer before advertising it.
+auto-answer. Terminal and bidirectional RPC coding connect an actual responder
+before admitting work; one-shot headless execution has no answer channel.
 
 `ask_user_question` accepts one batch of 1–4 single-select questions, each with
 2–6 labeled options and optional descriptions; the responder supplies a separate
@@ -812,8 +813,9 @@ an unseen dialog. A non-clone responder lease and request nonce authorize the
 reply; display coordinates or copied origins alone do not. The optional question
 port is supplied by application configuration and retained across idle binding
 replacement, never implicitly inherited by managed children. A new binding
-invalidates old request identities. Headless and current RPC coding do not declare
-the tool; terminal coding connects the actual responder before admission.
+invalidates old request identities. One-shot headless and managed coding children
+do not declare the tool. Existing explicit tool selection also applies in RPC;
+unattended clients can exclude `ask_user_question`.
 
 Esc cancels the questionnaire with an explicit ordinary tool observation; it need
 not stop the Turn. Ctrl-C stops the Turn. Losing a responder while a request waits
@@ -824,6 +826,19 @@ loss revoke pending requests independently of a retained UI handle. Answers beco
 only committed tool observations, not new user/steering messages. Pending request
 state is live Host custody, included in complete authorized pull inspection but
 not a durable Session ledger; change notifications only invalidate that view.
+
+RPC holds the same non-clone consumer lease for the foreground connection.
+`question_changed` is a coalesced invalidation; `get_question` pulls the current
+request or null through the shared inspection lane. The request carries its nonce
+and Core origin, not copied answer authority. `answer_question` submits one typed
+answer per question against that nonce; `cancel_question` cancels only the batch.
+Reject malformed, stale and duplicate replies without changing the live request.
+These replies use reserved control publication capacity rather than bulk reply
+slots; a capacity refusal has no answer/cancel effect. Success acknowledges live
+handoff, not durable tool-result commit or Turn completion. Retain at most one
+pending invalidation under output pressure, independently of lost model progress.
+EOF or I/O failure follows ordinary foreground stop/join; reconnecting does not
+restore a dialog or authorize an answer from historical provenance.
 
 The question view preserves the draft and defers to an existing picker, detail
 view or attached PTY until that owner releases input. Its selected choice or text

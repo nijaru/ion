@@ -109,6 +109,11 @@ def until(child, predicate):
             return records
 
 
+def read_response(child):
+    # Sequential command replies can interleave with live-view invalidations.
+    return until(child, lambda record: record["type"] == "response")[-1]
+
+
 def until_all(child, *predicates):
     records = []
     remaining = list(predicates)
@@ -193,11 +198,11 @@ with tempfile.TemporaryDirectory(prefix="ion-rpc-") as temporary:
         try:
             assert read(probe)["type"] == "ready"
             send(probe, {"id": "text-list", "type": "list_sessions"})
-            entries = read(probe)["data"]
+            entries = read_response(probe)["data"]
             entry = next(item for item in entries if item["id"] == exact["id"])
             assert entry["model"]["model"] == model_id, entry
             send(probe, {"id": "text-inspect", "type": "inspect"})
-            assert read(probe)["data"] == exact
+            assert read_response(probe)["data"] == exact
         finally:
             probe.stdin.close()
             assert probe.wait(timeout=8) == 0, probe.stderr.read()
@@ -234,48 +239,48 @@ with tempfile.TemporaryDirectory(prefix="ion-rpc-") as temporary:
 
         child.stdin.write(b"{bad}\n")
         child.stdin.flush()
-        assert read(child)["command"] == "parse"
+        assert read_response(child)["command"] == "parse"
         send(child, {"id": "resources", "type": "list_resources"})
-        resources = read(child)
+        resources = read_response(child)
         assert resources["id"] == "resources" and resources["success"]
         assert resources["data"]["prompts"][0]["name"] == "check"
 
         send(child, {"id": "missing-image", "type": "prompt", "message": "Look", "images": ["missing.png"]})
-        rejected = read(child)
+        rejected = read_response(child)
         assert rejected["id"] == "missing-image" and rejected["success"] is False
         returned = read(child)
         assert returned["type"] == "uncommitted_prompt" and returned["id"] == "missing-image", returned
         returned_prompt(returned, "Look", [{"Path": "missing.png"}])
         send(child, {"id": "empty-state", "type": "get_state"})
-        assert read(child)["data"]["entries"] == 0
+        assert read_response(child)["data"]["entries"] == 0
 
         before_shell = len(requests)
         for command in ({"command": "  "}, {"command": "touch forbidden", "exclude_from_context": "false"}):
             send(child, {"id": "invalid-shell", "type": "shell", **command})
-            refused = read(child)
+            refused = read_response(child)
             assert refused["id"] == "invalid-shell" and not refused["success"], refused
         for identity, excluded in (("RPC_SHELL_SHARED", False), ("RPC_SHELL_PRIVATE", True)):
             send(child, {"id": identity, "type": "shell", "command": f"printf '{identity}\\n'", "exclude_from_context": excluded})
-            ack = read(child)
+            ack = read_response(child)
             assert ack["id"] == identity and ack["success"] and ack["data"]["disposition"] == "started", ack
             ended = until(child, lambda r: r["type"] == "shell_end")[-1]
             assert ended["id"] == identity and ended["status"] == "completed", ended
             assert ended["outcome"]["kind"] == "observed" and not ended["outcome"]["is_error"], ended
             assert ended["outcome"]["output"]["stdout"] == identity + "\n", ended
         send(child, {"id": "exit-error", "type": "shell", "command": "printf failure >&2; exit 7", "exclude_from_context": True})
-        assert read(child)["success"]
+        assert read_response(child)["success"]
         ended = until(child, lambda r: r["type"] == "shell_end")[-1]
         assert ended["id"] == "exit-error" and ended["status"] == "failed" and ended["outcome"]["is_error"], ended
         assert ended["outcome"]["output"]["exit_code"] == 7 and ended["outcome"]["output"]["stderr"] == "failure", ended
         assert len(requests) == before_shell, "direct shell requested model generation"
 
         send(child, {"id": "reasoning-high", "type": "set_reasoning", "effort": "high"})
-        chosen = read(child)
+        chosen = read_response(child)
         assert chosen["success"] and chosen["data"]["reasoning"] == "high", chosen
         send(child, {"id": "reasoning-unsupported", "type": "set_reasoning", "effort": "budget:128"})
-        assert not read(child)["success"]
+        assert not read_response(child)["success"]
         send(child, {"id": "reasoning-state", "type": "get_state"})
-        assert read(child)["data"]["reasoning"] == "high"
+        assert read_response(child)["data"]["reasoning"] == "high"
         assert len(requests) == before_shell, "reasoning selection requested generation"
         send(child, {"id": "first", "type": "prompt", "message": "/check RPC"})
         records = until(child, lambda r: r["type"] == "turn_end")
@@ -302,27 +307,27 @@ with tempfile.TemporaryDirectory(prefix="ion-rpc-") as temporary:
         assert "RPC_SHELL_PRIVATE" not in str(requests[0]["messages"]), requests[0]["messages"]
 
         send(child, {"id": "metadata-name", "type": "set_name", "name": "RPC_METADATA"})
-        assert read(child)["success"]
+        assert read_response(child)["success"]
         send(child, {"id": "metadata-before", "type": "inspect"})
-        metadata_before = read(child)["data"]
+        metadata_before = read_response(child)["data"]
         for field in (42, False, [], {}):
             send(child, {"id": "invalid-name", "type": "set_name", "name": field})
-            refused = read(child)
+            refused = read_response(child)
             assert not refused["success"], refused
         first_turn = accepted[0]["data"]["turn"]
         for field in ("true", 1, None, [], {}):
             send(child, {"id": "invalid-fork", "type": "fork", "turn": first_turn, "after": field})
-            refused = read(child)
+            refused = read_response(child)
             assert not refused["success"], refused
         send(child, {"id": "metadata-after", "type": "inspect"})
-        metadata_after = read(child)["data"]
+        metadata_after = read_response(child)["data"]
         assert metadata_after["name"] == "RPC_METADATA"
         assert metadata_after["entries"] == metadata_before["entries"], (metadata_before, metadata_after)
         send(child, {"id": "metadata-state", "type": "get_state"})
-        assert read(child)["data"]["session"] == session, "malformed fork switched Session"
+        assert read_response(child)["data"]["session"] == session, "malformed fork switched Session"
         for clear in ({"name": None}, {}):
             send(child, {"id": "clear-name", "type": "set_name", **clear})
-            cleared = read(child)
+            cleared = read_response(child)
             assert cleared["success"] and cleared["data"]["name"] is None, cleared
 
         send(child, {"id": "fragment-parent", "type": "prompt", "message": "SLOW"})
@@ -335,7 +340,7 @@ with tempfile.TemporaryDirectory(prefix="ion-rpc-") as temporary:
         assert records[-1]["status"] == "completed", records
         child.stdin.write(fragmented[-2:] + b"\n")
         child.stdin.flush()
-        state = read(child)
+        state = read_response(child)
         assert state.get("id") == "fragment-state" and state["success"], state
         assert state["data"]["busy"] is False, state
 
@@ -346,7 +351,7 @@ with tempfile.TemporaryDirectory(prefix="ion-rpc-") as temporary:
             seeded = until(child, lambda record: record["type"] == "turn_end")[-1]
             assert seeded["status"] == "completed", seeded
         send(child, {"id": "compact", "type": "compact"})
-        compact_ack = read(child)
+        compact_ack = read_response(child)
         assert compact_ack["id"] == "compact" and compact_ack["success"]
         assert compact_ack["data"]["disposition"] == "started", compact_ack
         compact_records = until(child, lambda r: r["type"] == "compact_end")
@@ -362,7 +367,7 @@ with tempfile.TemporaryDirectory(prefix="ion-rpc-") as temporary:
 
         inline = {"mime_type": "image/png", "data": base64.b64encode(tiny_png()).decode()}
         send(child, {"id": "bad-inline", "type": "prompt", "message": "Look", "images": [{**inline, "mime_type": "image/jpeg"}]})
-        rejected = read(child)
+        rejected = read_response(child)
         assert rejected["id"] == "bad-inline" and rejected["success"] is False
         send(child, {"id": "inline", "type": "prompt", "message": "", "images": [inline]})
         records = until(child, lambda r: r["type"] == "turn_end")
@@ -371,7 +376,7 @@ with tempfile.TemporaryDirectory(prefix="ion-rpc-") as temporary:
         assert len(latest) == 1 and latest[0]["type"] == "image_url", latest
         assert latest[0]["image_url"]["url"].startswith("data:image/png;base64,"), latest
         send(child, {"id": "inline-inspect", "type": "inspect"})
-        inspected = read(child)
+        inspected = read_response(child)
         assert inspected["success"] and "base64 image data omitted" in str(inspected["data"])
 
         send(child, {"id": "follow-parent", "type": "prompt", "message": "SLOW"})
@@ -437,11 +442,11 @@ with tempfile.TemporaryDirectory(prefix="ion-rpc-") as temporary:
         assert latest[0] == {"type": "text", "text": "Inspect the image"}, latest
         assert latest[1]["type"] == "image_url" and latest[1]["image_url"]["url"].startswith("data:image/png;base64,"), latest
         send(child, {"id": "vision-inspect", "type": "inspect"})
-        inspected = read(child)
+        inspected = read_response(child)
         assert inspected["success"] and "base64 image data omitted" in str(inspected["data"])
 
         send(child, {"id": "state", "type": "get_state"})
-        state = read(child)
+        state = read_response(child)
         assert state["id"] == "state" and state["data"]["busy"] is False
         send(child, {"id": "slow", "type": "prompt", "message": "SLOW"})
         until(child, lambda r: r.get("id") == "slow")
@@ -464,10 +469,10 @@ with tempfile.TemporaryDirectory(prefix="ion-rpc-") as temporary:
         assert records[-1]["status"] == "cancelled", records
 
         send(child, {"id": "model-alt", "type": "set_model", "provider": "rpc-alt", "model": "alt-model"})
-        changed = read(child)
+        changed = read_response(child)
         assert changed["success"] and changed["data"]["model"]["provider"] == "rpc-alt", changed
         send(child, {"id": "model-inspect", "type": "inspect"})
-        inspected = read(child)
+        inspected = read_response(child)
         assert inspected["success"] and inspected["data"]["last_model"]["provider"] == "rpc-alt", inspected
         source_before_clone = inspected["data"]
         def logical_id(path):
@@ -478,40 +483,40 @@ with tempfile.TemporaryDirectory(prefix="ion-rpc-") as temporary:
             connection.execute("CREATE TRIGGER refuse_model BEFORE INSERT ON entries BEGIN SELECT RAISE(ABORT, 'injected model publication failure'); END")
         try:
             send(child, {"id": "model-write-failed", "type": "set_model", "provider": "rpc-smoke", "model": "rpc-model"})
-            refused = read(child)
+            refused = read_response(child)
             assert not refused["success"], refused
             send(child, {"id": "model-after-write-fault", "type": "get_state"})
-            retained = read(child)["data"]
+            retained = read_response(child)["data"]
             assert retained["model"]["provider"] == "rpc-alt" and retained["reasoning"] == "high", retained
             send(child, {"id": "facts-after-write-fault", "type": "inspect"})
-            assert read(child)["data"]["entries"] == source_before_clone["entries"]
+            assert read_response(child)["data"]["entries"] == source_before_clone["entries"]
         finally:
             with sqlite3.connect(database) as connection:
                 connection.execute("DROP TRIGGER refuse_model")
 
         send(child, {"id": "clone", "type": "clone_session"})
-        cloned = read(child)
+        cloned = read_response(child)
         assert cloned["success"] and cloned["data"]["session"] != session, cloned
         assert cloned["data"]["model"]["provider"] == "rpc-alt", cloned
         send(child, {"id": "clone-inspect", "type": "inspect"})
-        clone_view = read(child)
+        clone_view = read_response(child)
         assert clone_view["success"], clone_view
         assert clone_view["data"]["entries"] == source_before_clone["entries"], clone_view
         assert clone_view["data"]["cwd"] == source_before_clone["cwd"], clone_view
         assert clone_view["data"]["last_model"]["provider"] == "rpc-alt", clone_view
         assert clone_view["data"]["reasoning"] == "High", clone_view
         send(child, {"id": "clone-source", "type": "switch_session", "session": session})
-        source_again = read(child)
+        source_again = read_response(child)
         assert source_again["success"] and source_again["data"]["session"] == session, source_again
         assert source_again["data"]["model"]["provider"] == "rpc-alt", source_again
 
         (prompts / "late.md").write_text("A later prompt.\n")
         send(child, {"id": "new", "type": "new_session"})
-        fresh = read(child)
+        fresh = read_response(child)
         assert fresh["success"] and fresh["data"]["session"] != session, fresh
         assert fresh["data"]["model"]["provider"] == "rpc-smoke", fresh
         send(child, {"id": "new-resources", "type": "list_resources"})
-        updated = read(child)
+        updated = read_response(child)
         assert updated["success"] and {prompt["name"] for prompt in updated["data"]["prompts"]} == {"check", "late"}, updated
         send(child, {"id": "fresh-prompt", "type": "prompt", "message": "Fresh session"})
         assert until(child, lambda r: r["type"] == "turn_end")[-1]["status"] == "completed"
@@ -521,20 +526,20 @@ with tempfile.TemporaryDirectory(prefix="ion-rpc-") as temporary:
         workspace.rename(moved)
         try:
             send(child, {"id": "switch-unavailable", "type": "switch_session", "session": session})
-            failed = read(child)
+            failed = read_response(child)
             assert failed["id"] == "switch-unavailable" and failed["success"] is False, failed
             send(child, {"id": "state-after-failed-switch", "type": "get_state"})
-            unchanged = read(child)
+            unchanged = read_response(child)
             assert unchanged["success"] and unchanged["data"]["session"] == fresh["data"]["session"], unchanged
             assert unchanged["data"]["model"]["provider"] == "rpc-smoke", unchanged
         finally:
             moved.rename(workspace)
         send(child, {"id": "switch", "type": "switch_session", "session": session})
-        switched = read(child)
+        switched = read_response(child)
         assert switched["success"] and switched["data"]["session"] == session, switched
         assert switched["data"]["model"]["provider"] == "rpc-alt", switched
         send(child, {"id": "switch-same", "type": "switch_session", "session": session})
-        same = read(child)
+        same = read_response(child)
         assert same["success"] and same["data"]["session"] == session, same
         send(child, {"id": "switched-prompt", "type": "prompt", "message": "Switched session"})
         assert until(child, lambda r: r["type"] == "turn_end")[-1]["status"] == "completed"
@@ -545,39 +550,39 @@ with tempfile.TemporaryDirectory(prefix="ion-rpc-") as temporary:
         reopened = subprocess.Popen([binary, "--cwd", workspace, "--session", session, "rpc"], env=env, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, bufsize=0)
         assert read(reopened)["type"] == "ready"
         send(reopened, {"id": "reopened-model", "type": "get_state"})
-        selected = read(reopened)
+        selected = read_response(reopened)
         assert selected["success"] and selected["data"]["model"]["provider"] == "rpc-alt", selected
         assert selected["data"]["reasoning"] == "high", selected
 
         # Context selection is the same shared-control operation as the terminal
         # picker. Verify actual next-request context, not just a reported cursor.
         send(reopened, {"id": "navigation-source", "type": "inspect"})
-        navigation_source = read(reopened)["data"]
+        navigation_source = read_response(reopened)["data"]
         send(reopened, {"id": "context-source", "type": "get_context"})
-        source_context = read(reopened)["data"]
+        source_context = read_response(reopened)["data"]
         source_position = source_context["position"]
         first_point = next(point for point in source_context["points"] if point["restore_input"])
         marker = workspace / "navigation-state.txt"
         marker.write_text("current files are not historical context\n")
         calls_before_navigation = len(requests)
         send(reopened, {"id": "navigate-before", "type": "navigate_context", "expected": source_position, "head_entry": first_point["head_entry"]})
-        navigation = read(reopened)
+        navigation = read_response(reopened)
         assert navigation["success"] and navigation["data"]["position"]["session"] == session, navigation
         send(reopened, {"id": "navigate-stale", "type": "navigate_context", "expected": source_position, "head_entry": source_position["head_entry"]})
-        assert not read(reopened)["success"], "stale preview changed context"
+        assert not read_response(reopened)["success"], "stale preview changed context"
         assert len(requests) == calls_before_navigation, "navigation requested a summary/generation"
         send(reopened, {"id": "alternate", "type": "prompt", "message": "NAVIGATION_ALTERNATE"})
         assert until(reopened, lambda r: r["type"] == "turn_end")[-1]["status"] == "completed"
         actual_messages = json.dumps(requests[-1]["messages"])
         assert "NAVIGATION_ALTERNATE" in actual_messages and "Switched session" not in actual_messages, actual_messages
         send(reopened, {"id": "context-alternate", "type": "get_context"})
-        alternate_context = read(reopened)["data"]
+        alternate_context = read_response(reopened)["data"]
         assert any(not point["selected_path"] for point in alternate_context["points"]), alternate_context
         send(reopened, {"id": "navigate-return", "type": "navigate_context", "expected": alternate_context["position"], "head_entry": source_position["head_entry"]})
-        returned_position = read(reopened)["data"]["position"]
+        returned_position = read_response(reopened)["data"]["position"]
         assert marker.read_text() == "current files are not historical context\n"
         send(reopened, {"id": "returned-context", "type": "inspect"})
-        returned_view = read(reopened)["data"]
+        returned_view = read_response(reopened)["data"]
         assert returned_view["entries"][:len(navigation_source["entries"])] == navigation_source["entries"]
         assert "NAVIGATION_ALTERNATE" in str(returned_view["entries"])
         assert "NAVIGATION_ALTERNATE" not in str(returned_view["messages"])
@@ -587,7 +592,7 @@ with tempfile.TemporaryDirectory(prefix="ion-rpc-") as temporary:
         reopened = subprocess.Popen([binary, "--cwd", workspace, "--session", session, "rpc"], env=env, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, bufsize=0)
         assert read(reopened)["type"] == "ready"
         send(reopened, {"id": "durable-context", "type": "get_context"})
-        assert read(reopened)["data"]["position"] == returned_position, "selection without another prompt was lost on reopen"
+        assert read_response(reopened)["data"]["position"] == returned_position, "selection without another prompt was lost on reopen"
         assert len(requests) == calls_before_reopen
         reopened.stdin.close()
         assert reopened.wait(timeout=8) == 0, reopened.stderr.read()
@@ -778,7 +783,7 @@ with tempfile.TemporaryDirectory(prefix="ion-rpc-") as temporary:
                 send(pressure, {"id": "seed", "type": "prompt", "message": seed})
                 assert until(pressure, lambda record: record["type"] == "turn_end")[-1]["status"] == "completed"
                 send(pressure, {"id": "shell", "type": "shell", "command": "printf '%s\\n' $$ > pressure.pid; touch pressure.ready; exec sleep 30"})
-                assert read(pressure)["success"]
+                assert read_response(pressure)["success"]
                 deadline = time.monotonic() + 8
                 while not (pressure_workspace / "pressure.ready").exists() and time.monotonic() < deadline:
                     time.sleep(0.01)

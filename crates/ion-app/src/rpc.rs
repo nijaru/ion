@@ -19,6 +19,7 @@ use crate::{
 mod connection;
 mod input;
 mod lifecycle;
+mod questions;
 mod requests;
 #[cfg(test)]
 mod tests;
@@ -51,6 +52,9 @@ struct OperationReply {
 struct Control {
     services: Arc<ion_host::Host>,
     host: SessionControl<RpcMetadata>,
+    question_responder: Option<ion_host::QuestionResponder>,
+    /// One coalesced invalidation, not another owner of the live request.
+    question_changed: bool,
     correlations: BTreeMap<InputId, Correlation>,
     turn_reply: Option<OperationReply>,
     /// Publication loss invalidates the whole remaining provisional stream,
@@ -65,6 +69,8 @@ impl Control {
         Self {
             services,
             host: setup.into_control::<RpcMetadata>(),
+            question_responder: None,
+            question_changed: false,
             correlations: BTreeMap::new(),
             turn_reply: None,
             suppress_activity: false,
@@ -118,6 +124,9 @@ impl Control {
             match command {
                 "submit_request" => self.submit_request(&value, id.clone(), credit.clone()),
                 "get_request" => self.get_request(&value),
+                "get_question" => self.get_question(&value),
+                "answer_question" => self.answer_question(&value),
+                "cancel_question" => self.cancel_question(&value),
                 "clear_queue" => {
                     self.host.clear_queue();
                     // Recovery arrives as reliable Returned updates, not a
@@ -314,6 +323,16 @@ pub async fn run(setup: SessionSetup, services: Arc<ion_host::Host>) -> Result<(
         return connection::startup_failure(&mut control, error).await;
     }
     connection::connection(control, CommandReader::new(BufReader::new(input)), output).await
+}
+
+fn fields(value: &Value, allowed: &[&str]) -> Result<()> {
+    for field in value.as_object().expect("validated RPC object").keys() {
+        ensure!(
+            allowed.contains(&field.as_str()),
+            "unexpected field: {field}"
+        );
+    }
+    Ok(())
 }
 
 fn required_string<'a>(value: &'a Value, field: &str) -> Result<&'a str> {
