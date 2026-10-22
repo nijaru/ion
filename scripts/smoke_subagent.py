@@ -320,7 +320,7 @@ os.write(2, b'MERGED_STDERR\\n')
                         if user == "PARENT_BG_EOF":
                             arguments["task"] += " " + "x" * 64000
                         if user == "PARENT_BG_WAIT":
-                            code = "const r=await tools.subagent(" + json.dumps(arguments) + "); await tools.exec({command:'while [ ! -f CHILD_BG_WAIT.ready ]; do sleep 0.01; done; touch parent.work',timeout_ms:10000}); const joined=await tools.subagent({action:'wait',child:r.value.child_session}); const same=await tools.subagent({action:'status',child:r.value.child_session}); const ack=await tools.subagent({action:'acknowledge',child:r.value.child_session}); return {joined:joined.value,same:same.value,ack:ack.value};"
+                            code = "const r=await tools.subagent(" + json.dumps(arguments) + "); await tools.exec({command:'while [ ! -f CHILD_BG_WAIT.ready ]; do sleep 0.01; done; touch parent.work',timeout_ms:10000}); const joined=await tools.subagent({action:'wait',children:[r.value.child_session]}); const same=await tools.subagent({action:'status',child:r.value.child_session}); const ack=await tools.subagent({action:'acknowledge',child:r.value.child_session}); return {joined:joined.value.children[0],same:same.value,ack:ack.value};"
                             delta = call("code_mode", {"code":code})
                         elif user == "PARENT_COMPOSED":
                             delta = call("code_mode", {"code":"const r=await tools.subagent(" + json.dumps(arguments) + "); return r.value;"})

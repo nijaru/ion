@@ -1,6 +1,6 @@
 //! Bounded application ownership of transferred Sessions, independent of readers.
 use std::{
-    collections::BTreeMap,
+    collections::{BTreeMap, BTreeSet},
     future::poll_fn,
     path::Path,
     pin::Pin,
@@ -9,6 +9,7 @@ use std::{
         atomic::{AtomicBool, AtomicU64, Ordering},
     },
     task::{Context, Poll, Wake, Waker},
+    time::Duration,
 };
 
 use anyhow::{Result, ensure};
@@ -99,6 +100,14 @@ pub struct BackgroundChildSnapshot {
     /// Actual retained operation joined, not merely visible child completion.
     pub joined: bool,
     pub error: Option<String>,
+}
+/// Non-consuming selection snapshot after any join or expiry of one wait budget.
+/// Expiry and dropping this report do not stop or acknowledge selected children.
+#[derive(Clone, Serialize)]
+pub struct BackgroundWait {
+    pub wait_expired: bool,
+    /// All selected children, in requested order, including still-running jobs.
+    pub children: Vec<BackgroundChildSnapshot>,
 }
 impl Child {
     fn snapshot(&self) -> BackgroundChildSnapshot {
@@ -328,23 +337,49 @@ impl BackgroundOwner {
         })
         .await;
     }
-    /// Borrowed wait for one actual owned job. Parent cancellation can select
-    /// away from this without stopping the independently transferred child.
-    pub async fn wait(&self, id: uuid::Uuid) -> Result<BackgroundChildSnapshot> {
+    /// Borrowed wait for any selected actual join under one shared budget.
+    /// Resolve the entire selection before returning even an already-ready result.
+    /// Cancellation or expiry leaves independent operations and reports in custody.
+    /// Zero duration polls retained joins; callers choose their own budget policy.
+    pub async fn wait(&self, ids: &[uuid::Uuid], timeout: Duration) -> Result<BackgroundWait> {
+        ensure!(
+            !ids.is_empty() && ids.len() <= self.shared.capacity,
+            "wait requires 1..={} selected children",
+            self.shared.capacity
+        );
+        ensure!(
+            ids.iter().collect::<BTreeSet<_>>().len() == ids.len(),
+            "wait requires unique child IDs"
+        );
+        let deadline = tokio::time::Instant::now()
+            .checked_add(timeout)
+            .ok_or_else(|| anyhow::anyhow!("wait budget exceeds the clock range"))?;
         loop {
             let revision = self.revision();
-            let joined = {
+            let report = {
                 let state = self.shared.lock();
-                let child = state.children.get(&id).ok_or_else(|| {
-                    anyhow::anyhow!("child is not owned here (unknown or acknowledged)")
-                })?;
-                child.operation.is_none().then(|| child.snapshot())
+                let children = ids
+                    .iter()
+                    .map(|id| {
+                        state.children.get(id).ok_or_else(|| {
+                            anyhow::anyhow!("child is not owned here (unknown or acknowledged)")
+                        })
+                    })
+                    .collect::<Result<Vec<_>>>()?;
+                let ready = children.iter().any(|child| child.operation.is_none());
+                (ready || tokio::time::Instant::now() >= deadline).then(|| BackgroundWait {
+                    wait_expired: !ready,
+                    children: children.into_iter().map(Child::snapshot).collect(),
+                })
             };
-            if let Some(child) = joined {
-                self.check()?;
-                return Ok(child);
+            self.check()?;
+            if let Some(report) = report {
+                return Ok(report);
             }
-            self.changed(revision).await;
+            tokio::select! {
+                _ = self.changed(revision) => {},
+                () = tokio::time::sleep_until(deadline) => {},
+            }
         }
     }
     pub fn request_stop(&self, id: uuid::Uuid) -> Result<()> {

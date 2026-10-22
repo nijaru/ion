@@ -932,8 +932,12 @@ child. Explicit `cancel` stops one child; application shutdown closes admission,
 stops its children and joins their full Host controls. Drop requests stop; finish
 `join_shutdown().await` before destroying the runtime, which returns the retained
 infrastructure error. Cancelled maintenance/shutdown waits retain tasks and
-results. `maintain()` joins without consuming; `wait(child)` returns one joined
-report without acknowledging it; `child()`/`jobs()` inspect retained status;
+results. `maintain()` joins without consuming; `wait(&children, timeout)` returns
+all selected statuses when any job joins or the shared budget expires, without
+acknowledging them. The `BackgroundWait` result includes `wait_expired` and
+`children` in requested order; zero duration polls already-retained joins.
+An empty, duplicate, unknown or acknowledged selection fails, even alongside a
+ready result. `child()`/`jobs()` inspect retained status;
 only `take(child)` releases a joined result's capacity. Capacity bounds
 reservations, running jobs and unread results together (1–64 slots), not history,
 encoded bytes or RSS. Changes are published through a revision plus notification;
@@ -1394,10 +1398,21 @@ child/outcome locator and request receipt. Background `start` returns only after
 responsibility has transferred to the coding application's owner; it is not a
 completion claim and survives parent stop, parent-Session switch and reload, but
 not application shutdown. `list` and `status` inspect retained application jobs;
-`wait` waits for one joined report without consuming it; `cancel` explicitly
-stops one child; `acknowledge` releases one joined result's capacity without
-deleting its committed facts. A cancelled wait does not stop a background child
-or prevent other waiters from observing its joined report.
+`cancel` explicitly stops one child; `acknowledge` releases one joined result's
+capacity without deleting its committed facts.
+
+Use `{"action":"wait","children":["<child-id>","<another-id>"],"timeout_ms":300000}`
+to wait until **any** selected child joins. `children` requires 1–64 unique owned
+IDs. The optional shared wait budget defaults to five minutes and accepts 1–600000
+milliseconds. The result is `{wait_expired, children}`: every selected child's
+receipt/status in requested order, including still-running jobs. A joined failure
+also wakes the wait and marks its output as an error; expiry alone is not an error.
+An unknown or acknowledged ID rejects the whole selection, even if another is ready.
+
+Expiry or cancellation stops only this wait; it neither cancels children nor sets
+an execution deadline. Reports remain readable until explicit acknowledgement. Wait again only
+on still-running IDs; including an already-joined job returns immediately. Other
+waiters keep their independent subscriptions and may read the same joined report.
 
 A joined answer is the child's actual original final visible text, retained after
 full Host/Core joining of the requested completed Turn. It is not reconstructed

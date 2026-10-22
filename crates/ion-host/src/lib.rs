@@ -15,7 +15,7 @@ mod control;
 mod credentials;
 pub use background::{
     BackgroundChildSnapshot, BackgroundDestination, BackgroundJobStatus, BackgroundOwner,
-    BackgroundSnapshot, BackgroundSummary,
+    BackgroundSnapshot, BackgroundSummary, BackgroundWait,
 };
 mod delegation;
 mod edit_diff;

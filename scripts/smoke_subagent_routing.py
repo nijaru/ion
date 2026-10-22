@@ -102,7 +102,7 @@ with tempfile.TemporaryDirectory(prefix="ion-subagent-routing-") as temporary:
                     retargeted.add("parent")
                     arguments = {"action": "start", "task": "CHILD_" + current["name"], **current["arguments"]}
                     if current["fork"]:
-                        code = "const r=await tools.subagent(" + json.dumps(arguments) + "); const w=await tools.subagent({action:'wait',child:r.value.child_session}); return w.value;"
+                        code = "const r=await tools.subagent(" + json.dumps(arguments) + "); const w=await tools.subagent({action:'wait',children:[r.value.child_session]}); return w.value.children[0];"
                         delta = tool("code_mode", {"code": code})
                     else:
                         delta = tool("subagent", arguments)

@@ -39,17 +39,20 @@ async fn cancelled_result_wait_retains_original_answer_until_acknowledgement() {
     f.start();
     background::drain(&mut f.control).await;
     let child = owner.jobs()[0].child;
+    let selected = [child];
     assert!(
-        tokio::time::timeout(Duration::from_millis(20), owner.wait(child))
-            .await
-            .is_err()
+        tokio::time::timeout(
+            Duration::from_millis(20),
+            owner.wait(&selected, Duration::from_secs(5)),
+        )
+        .await
+        .is_err()
     );
     assert!(owner.child(child).is_some());
     f.effect.release.notify_one();
-    let joined = tokio::time::timeout(Duration::from_secs(5), owner.wait(child))
-        .await
-        .unwrap()
-        .unwrap();
+    let mut report = owner.wait(&selected, Duration::from_secs(5)).await.unwrap();
+    assert!(!report.wait_expired);
+    let joined = report.children.pop().unwrap();
     assert!(joined.joined);
     assert!(
         matches!(&joined.receipt.outcome, Some(DelegationOutcome::Joined { answer: Some(answer), error: None, .. }) if answer == "two")
@@ -57,7 +60,7 @@ async fn cancelled_result_wait_retains_original_answer_until_acknowledgement() {
     let revision = owner.revision();
     assert_eq!(owner.take(child).unwrap().unwrap(), joined.receipt);
     assert_ne!(owner.changed(revision).await, revision);
-    assert!(owner.wait(child).await.is_err());
+    assert!(owner.wait(&selected, Duration::ZERO).await.is_err());
     let permit = background::reserve(&owner).unwrap();
     drop(permit);
     owner.join_shutdown().await.unwrap();

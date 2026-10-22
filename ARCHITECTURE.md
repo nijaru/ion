@@ -351,10 +351,20 @@ implied.
 
 Model-facing coding actions are start/list/status/wait/cancel/acknowledge. A
 background start receipt means committed responsibility transfer, not completion.
-Wait and status return retained typed outcomes without consuming them;
-concurrent waiters have independent notification subscriptions, and cancelling
-one does not strand another or relinquish operation custody. Acknowledgement
-releases only joined capacity. A child's original visible answer
+Wait and status return retained typed outcomes without consuming them. Wait
+selects 1–64 unique owned children and returns all selected statuses, in requested
+order, when any actual operation joins or one shared absolute wait budget expires.
+Validate the entire selection before returning even a ready report. The coding
+wait budget defaults to five minutes and accepts 1–600000 milliseconds; the shared
+Host API accepts a caller-supplied duration, including zero for retained-join
+polling. Unrelated invalidations do not refresh it. `wait_expired` means none of
+the selected operations had joined when sampled, not child execution timeout or
+cancellation. A joined failure also satisfies wait-any and remains a failure.
+
+Concurrent waiters have independent notification subscriptions; cancelling or
+expiring one neither strands another nor relinquishes operation custody. Waiting
+does not stop children, change execution deadlines or acknowledge results.
+Acknowledgement releases only joined capacity. A child's original visible answer
 is retained only when its requested Turn completed and full Host/Core joining
 succeeded. Failure clears it; it is never reconstructed by reopening storage.
 Notifications are invalidations, not result delivery or completion proof.

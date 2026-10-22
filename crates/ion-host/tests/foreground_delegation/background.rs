@@ -1,4 +1,5 @@
 use super::*;
+use futures_util::FutureExt;
 use ion_core::{BackgroundSlot, DelegationContext, ForkPoint, RequestKey};
 use ion_host::BackgroundOwner;
 use std::time::Duration;
@@ -405,6 +406,107 @@ async fn cancelling_the_active_parent_after_transfer_does_not_cancel_the_child()
 }
 
 #[tokio::test]
+async fn wait_any_expires_without_stop_and_returns_a_joined_cancellation_before_running_work() {
+    let owner = Arc::new(BackgroundOwner::new(3).unwrap());
+    let mut fixtures: [Fixture; 2] = std::array::from_fn(|_| {
+        Fixture::with_owner(
+            Wait::Join,
+            true,
+            false,
+            DelegationContext::Fresh,
+            Some(owner.clone()),
+        )
+    });
+    for fixture in &mut fixtures {
+        fixture.start();
+        drain(&mut fixture.control).await;
+        let mut started = fixture.effect.started.subscribe();
+        started.wait_for(|started| *started).await.unwrap();
+    }
+    let selected = fixtures.each_ref().map(|fixture| {
+        fixture.session.view().unwrap().delegations()[0]
+            .record
+            .child
+    });
+    tokio::time::pause();
+    let mut wait = Box::pin(owner.wait(&selected, Duration::from_millis(100)));
+    assert!(wait.as_mut().now_or_never().is_none());
+    tokio::time::sleep(Duration::from_millis(40)).await;
+    let permit = reserve(&owner).unwrap();
+    assert!(wait.as_mut().now_or_never().is_none());
+    tokio::time::sleep(Duration::from_millis(40)).await;
+    drop(permit);
+    assert!(wait.as_mut().now_or_never().is_none());
+    let report = tokio::time::timeout(Duration::from_millis(30), wait.as_mut()).await;
+    tokio::time::resume();
+    let report = report
+        .expect("unrelated custody changes must not reset the budget")
+        .unwrap();
+    assert!(report.wait_expired);
+    assert!(report.children.iter().all(|child| !child.joined));
+    assert!(
+        fixtures
+            .iter()
+            .all(|fixture| !*fixture.effect.stopped.borrow())
+    );
+
+    let mut stopped = fixtures[1].effect.stopped.subscribe();
+    owner.request_stop(selected[1]).unwrap();
+    tokio::time::timeout(Duration::from_secs(5), stopped.wait_for(|stopped| *stopped))
+        .await
+        .unwrap()
+        .unwrap();
+    fixtures[1].effect.release.notify_one();
+    let report = owner.wait(&selected, Duration::from_secs(5)).await.unwrap();
+    assert!(!report.wait_expired);
+    assert_eq!(report.children[0].receipt.record.child, selected[0]);
+    assert!(!report.children[0].joined);
+    let cancelled = &report.children[1];
+    assert_eq!(cancelled.receipt.record.child, selected[1]);
+    assert!(cancelled.joined);
+    assert!(matches!(
+        &cancelled.receipt.outcome,
+        Some(DelegationOutcome::Joined { receipt: Some(receipt), answer: None, .. })
+            if receipt.end == Some(TurnEndReason::Cancelled)
+    ));
+    assert!(!*fixtures[0].effect.stopped.borrow());
+    for invalid in [
+        vec![],
+        vec![selected[1], selected[1]],
+        vec![selected[1], uuid::Uuid::nil()],
+    ] {
+        assert!(owner.wait(&invalid, Duration::ZERO).await.is_err());
+    }
+    let report = owner
+        .wait(&[selected[1], selected[0]], Duration::ZERO)
+        .await
+        .unwrap();
+    assert!(!report.wait_expired);
+    assert_eq!(report.children[0].receipt, cancelled.receipt);
+    assert_eq!(owner.take(selected[1]).unwrap().unwrap(), cancelled.receipt);
+    assert!(owner.wait(&selected, Duration::ZERO).await.is_err());
+
+    fixtures[0].effect.release.notify_one();
+    let report = owner
+        .wait(&[selected[0]], Duration::from_secs(5))
+        .await
+        .unwrap();
+    assert!(!report.wait_expired);
+    assert!(matches!(
+        &report.children[0].receipt.outcome,
+        Some(DelegationOutcome::Joined { answer: Some(answer), .. }) if answer == "two"
+    ));
+    owner.take(selected[0]).unwrap().unwrap();
+    owner.join_shutdown().await.unwrap();
+    for mut fixture in fixtures {
+        fixture.control.shutdown().await;
+        let root = fixture.root.clone();
+        drop(fixture);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+}
+
+#[tokio::test]
 async fn background_waiters_keep_completion_when_the_last_waiter_is_cancelled() {
     for cancel_last in [false, true] {
         let owner = Arc::new(BackgroundOwner::new(1).unwrap());
@@ -427,10 +529,11 @@ async fn background_waiters_keep_completion_when_the_last_waiter_is_cancelled() 
             let finished = finished.clone();
             let (send, receive) = tokio::sync::oneshot::channel();
             tasks.push(tokio::spawn(async move {
-                let wait = owner.wait(child);
+                let selected = [child];
+                let wait = owner.wait(&selected, Duration::from_secs(5));
                 tokio::pin!(wait);
                 let mut send = Some(send);
-                let joined = std::future::poll_fn(|cx| {
+                let mut report = std::future::poll_fn(|cx| {
                     let result = std::future::Future::poll(wait.as_mut(), cx);
                     if result.is_pending()
                         && let Some(send) = send.take()
@@ -441,6 +544,8 @@ async fn background_waiters_keep_completion_when_the_last_waiter_is_cancelled() 
                 })
                 .await
                 .unwrap();
+                assert!(!report.wait_expired);
+                let joined = report.children.pop().unwrap();
                 assert!(joined.joined);
                 assert!(matches!(
                     joined.receipt.outcome,

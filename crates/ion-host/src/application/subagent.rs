@@ -2,6 +2,7 @@
 use std::{
     path::{Path, PathBuf},
     sync::Arc,
+    time::Duration,
 };
 
 use anyhow::{Result, ensure};
@@ -16,6 +17,9 @@ use serde_json::{Value, json};
 
 use super::{Application, ApplicationRuntime, CodingApplication, CodingRole};
 use crate::{BackgroundChildSnapshot, BackgroundOwner, Resources, Selection, SessionDelegation};
+
+const DEFAULT_WAIT_MS: u64 = 300_000;
+const MAX_WAIT_MS: u64 = 600_000;
 
 pub(super) struct Subagent {
     application: Arc<ChildApplication>,
@@ -107,12 +111,17 @@ impl CodingToolSource for Subagent {
             }}),
         ];
         choices.push(json!({"type":"object","additionalProperties":false,"required":["action"],"properties":{"action":{"const":"list"}}}));
-        for action in ["status", "wait", "cancel", "acknowledge"] {
+        choices.push(json!({"type":"object","additionalProperties":false,"required":["action","children"],"properties":{
+            "action":{"const":"wait"},
+            "children":{"type":"array","items":{"type":"string","format":"uuid"},"minItems":1,"maxItems":64,"uniqueItems":true},
+            "timeout_ms":{"type":"integer","minimum":1,"maximum":MAX_WAIT_MS,"default":DEFAULT_WAIT_MS,"description":"One shared wait budget, not a child execution deadline. Returns all selected reports/statuses when any child joins, or expires with children still running. No cancellation or acknowledgement."}
+        }}));
+        for action in ["status", "cancel", "acknowledge"] {
             choices.push(json!({"type":"object","additionalProperties":false,"required":["action","child"],"properties":{"action":{"const":action},"child":{"type":"string","format":"uuid"}}}));
         }
         let mut definition = ToolDefinition::external(ToolSpec {
             name: "subagent".into(),
-            description: "Managed coding Sessions. start(task, mode=foreground, context={type:fresh}, model?, reasoning?) inherits this request's captured route/reasoning unless explicitly overridden. model is an exact provider/model from the known catalog or configured routes, using that route's credential policy; reasoning uses default/off/low/medium/high/budget:TOKENS. No silent route/effort fallback; overrides affect only the new child, not this parent or user configuration. Workspace, resources and selected tools remain inherited; no automatic recursive built-in or sandbox/conflict isolation. context={type:fork} copies the settled committed prefix BEFORE the initiating Turn (not its unfinished conversation); optional point selects an earlier before_turn/after_turn boundary, validated by Core. Background start acknowledges committed ownership transfer, NOT completion: it survives parent stop and Session changes, not application shutdown. list/status inspect retained application jobs; wait joins one without consuming it; cancel explicitly stops that child; acknowledge releases a joined result's capacity. Parent stop cancels a wait, not transferred work. Use wait/status before depending on results; answers are child claims, not independent verification. Results and original answers remain in committed relationship facts. Unknown/acknowledged IDs grant no authority or replay. No automatic retries. Normal headless runs drain owned work before exit; quit/EOF/interruption stops and joins it.".into(),
+            description: "Managed coding Sessions. start(task, mode=foreground, context={type:fresh}, model?, reasoning?) inherits this request's captured route/reasoning unless explicitly overridden. model is an exact provider/model from the known catalog or configured routes, using that route's credential policy. No silent route/effort fallback; overrides affect only the new child, not this parent or user configuration. Workspace, resources and selected tools remain inherited; no automatic recursive built-in or sandbox/conflict isolation. context={type:fork} copies the settled committed prefix BEFORE the initiating Turn (not its unfinished conversation); optional point selects an earlier before_turn/after_turn boundary, validated by Core. Background start acknowledges committed ownership transfer, NOT completion: it survives parent stop and Session changes, not application shutdown. list/status inspect retained application jobs; wait(children, timeout_ms=300000) returns all selected reports/statuses when any joins, or wait_expired=true after the shared budget (1..600000 ms), without consuming results or stopping children. Wait again only on still-running IDs; cancel explicitly stops that child; acknowledge releases a joined result's capacity. Parent stop cancels a wait, not transferred work. Use wait/status before depending on results; answers are child claims, not independent verification. Results and original answers remain in committed relationship facts. Unknown/acknowledged IDs grant no authority or replay. No automatic retries. Normal headless runs drain owned work before exit; quit/EOF/interruption stops and joins it.".into(),
             input_schema: json!({"type":"object","oneOf":choices}),
         });
         definition.presentation =
@@ -154,7 +163,9 @@ enum Input {
         child: uuid::Uuid,
     },
     Wait {
-        child: uuid::Uuid,
+        children: Vec<uuid::Uuid>,
+        #[serde(default = "default_wait_ms")]
+        timeout_ms: u64,
     },
     Cancel {
         child: uuid::Uuid,
@@ -162,6 +173,9 @@ enum Input {
     Acknowledge {
         child: uuid::Uuid,
     },
+}
+fn default_wait_ms() -> u64 {
+    DEFAULT_WAIT_MS
 }
 fn output(value: Value, is_error: bool) -> CodingToolOutput {
     CodingToolOutput {
@@ -309,11 +323,30 @@ impl ToolExecutor for Subagent {
                     Some(child) => child_output(child),
                     None => failure("child is not owned here (unknown or acknowledged)"),
                 },
-                Input::Wait { child } => tokio::select! {
-                    biased;
-                    () = invocation.stop().cancelled() => failure("wait stopped; background child remains owned"),
-                    result = self.owner.wait(child) => match result { Ok(child) => child_output(child), Err(error) => failure(error) }
-                },
+                Input::Wait {
+                    children,
+                    timeout_ms,
+                } => {
+                    if !(1..=MAX_WAIT_MS).contains(&timeout_ms) {
+                        return failure("wait timeout_ms must be 1..=600000");
+                    }
+                    tokio::select! {
+                        biased;
+                        () = invocation.stop().cancelled() => failure("wait stopped; background children remain owned"),
+                        result = self.owner.wait(&children, Duration::from_millis(timeout_ms)) => match result {
+                            Ok(report) => {
+                                let mut is_error = false;
+                                let children: Vec<_> = report.children.into_iter().map(|child| {
+                                    let child = child_output(child);
+                                    is_error |= child.is_error;
+                                    child.value
+                                }).collect();
+                                output(json!({"wait_expired":report.wait_expired,"children":children}), is_error)
+                            },
+                            Err(error) => failure(error),
+                        }
+                    }
+                }
                 Input::Cancel { child } => match self.owner.request_stop(child) {
                     Ok(()) => output(json!({"child_session":child,"stop_requested":true}), false),
                     Err(error) => failure(error),

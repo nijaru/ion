@@ -39,6 +39,7 @@ vt100 = "0.16.2"
 
 [dev-dependencies]
 rusqlite = "0.40.2"
+tokio = { workspace = true, features = ["test-util"] }
 
 [lints]
 workspace = true
