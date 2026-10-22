@@ -217,8 +217,9 @@ with tempfile.TemporaryDirectory(prefix="ion-rpc-questions-") as temporary:
             client.send({"type": "get_state", "id": f"bulk-{index}"})
         client.send({"type": "answer_question", "id": "answer", "request": nonce, "answers": answers})
         deadline = time.monotonic() + 8
-        while not (client.cwd / "question-effect.txt").exists():
-            assert time.monotonic() < deadline, "bulk publication blocked the question answer"
+        effect = client.cwd / "question-effect.txt"
+        while not effect.exists() or effect.read_bytes() != b"dependent\n":
+            assert time.monotonic() < deadline, "bulk publication blocked the completed dependent effect"
             time.sleep(0.01)
         assert (client.cwd / "question-effect.txt").read_text() == "dependent\n"
         settled = client.through(lambda record: record["type"] == "turn_end")
