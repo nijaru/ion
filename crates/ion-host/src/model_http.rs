@@ -28,6 +28,7 @@ use crate::{CredentialResolver, catalog::ModelCapabilities};
 mod anthropic;
 mod chat;
 mod controls;
+mod errors;
 mod limits;
 mod tool_ids;
 #[cfg(test)]
@@ -40,6 +41,9 @@ use anthropic::{
 };
 use chat::{ChatState, chat_body};
 use controls::control_fields;
+use errors::{
+    anthropic_sse_error, chat_stream_error, classify_status_error, provider_error_detail_value,
+};
 use limits::{ResponseBudget, StreamBudget};
 use tool_ids::ToolIds;
 
@@ -402,56 +406,6 @@ fn append_error_prefix(body: &mut Vec<u8>, chunk: &[u8]) {
     body.extend_from_slice(&chunk[..retained]);
 }
 
-fn classify_status_error(status: u16, value: Option<&Value>) -> ProviderErrorKind {
-    let code = value.and_then(|value| {
-        value
-            .pointer("/error/code")
-            .and_then(Value::as_str)
-            .or_else(|| value.pointer("/error/type").and_then(Value::as_str))
-            .or_else(|| value.get("code").and_then(Value::as_str))
-            .or_else(|| value.get("type").and_then(Value::as_str))
-    });
-    if status == 429
-        && matches!(
-            code,
-            Some("insufficient_quota" | "billing_hard_limit_reached")
-        )
-    {
-        return ProviderErrorKind::Quota;
-    }
-    if matches!(status, 400 | 413) {
-        if matches!(
-            code,
-            Some(
-                "context_length_exceeded"
-                    | "model_context_window_exceeded"
-                    | "context_window_exceeded"
-                    | "request_too_large"
-            )
-        ) {
-            return ProviderErrorKind::ContextLength;
-        }
-        let message = value.and_then(|value| {
-            value
-                .pointer("/error/message")
-                .and_then(Value::as_str)
-                .or_else(|| value.get("message").and_then(Value::as_str))
-        });
-        if message.is_some_and(is_context_error_message) {
-            return ProviderErrorKind::ContextLength;
-        }
-    }
-    match status {
-        401 => ProviderErrorKind::Authentication,
-        403 => ProviderErrorKind::Permission,
-        408 => ProviderErrorKind::Timeout,
-        429 => ProviderErrorKind::RateLimited,
-        503 | 529 => ProviderErrorKind::Overloaded,
-        500..=599 => ProviderErrorKind::Server,
-        _ => ProviderErrorKind::InvalidRequest,
-    }
-}
-
 fn parse_retry_after(headers: &HeaderMap) -> Option<u64> {
     if let Some(value) = headers
         .get("retry-after-ms")
@@ -473,81 +427,6 @@ fn parse_retry_after(headers: &HeaderMap) -> Option<u64> {
             .try_into()
             .unwrap_or(u64::MAX),
     )
-}
-
-fn is_context_error_message(message: &str) -> bool {
-    let lower = message.to_ascii_lowercase();
-    [
-        "context length",
-        "context window",
-        "prompt is too long",
-        "prompt too long",
-        "available context size",
-        "request_too_large",
-    ]
-    .iter()
-    .any(|part| lower.contains(part))
-}
-
-fn provider_error_detail_value(value: &Value) -> Option<String> {
-    let summary = value
-        .pointer("/error/message")
-        .and_then(Value::as_str)
-        .or_else(|| value.get("message").and_then(Value::as_str))
-        .or_else(|| value.pointer("/error/code").and_then(Value::as_str));
-    // Routers can wrap the actionable upstream reason in metadata while
-    // supplying only a generic message. Retain text, never arbitrary metadata.
-    let upstream = value
-        .pointer("/error/metadata/raw")
-        .or_else(|| value.pointer("/metadata/raw"))
-        .and_then(Value::as_str)
-        .filter(|raw| !raw.trim().is_empty() && Some(*raw) != summary);
-    let separator = if summary.is_some() && upstream.is_some() {
-        ": "
-    } else {
-        ""
-    };
-    let detail: String = summary
-        .unwrap_or("")
-        .chars()
-        .chain(separator.chars())
-        .chain(upstream.unwrap_or("").chars())
-        .filter(|ch| !ch.is_control())
-        .take(500)
-        .collect();
-    (!detail.is_empty()).then_some(detail)
-}
-
-fn chat_stream_error(value: &Value) -> ProviderError {
-    let code = &value["error"]["code"];
-    let kind = if let Some(status) = code.as_u64().and_then(|code| u16::try_from(code).ok()) {
-        classify_status_error(status, Some(value))
-    } else {
-        match code
-            .as_str()
-            .or_else(|| value.pointer("/error/type").and_then(Value::as_str))
-        {
-            Some("server_error") => ProviderErrorKind::Server,
-            Some("rate_limit_exceeded" | "rate_limited") => ProviderErrorKind::RateLimited,
-            Some("insufficient_quota" | "billing_hard_limit_reached") => ProviderErrorKind::Quota,
-            Some(
-                "context_length_exceeded"
-                | "model_context_window_exceeded"
-                | "context_window_exceeded"
-                | "request_too_large",
-            ) => ProviderErrorKind::ContextLength,
-            _ => ProviderErrorKind::Transport,
-        }
-    };
-    let message = provider_error_detail_value(value).map_or_else(
-        || "provider sent a stream error".to_owned(),
-        |detail| format!("provider stream error: {detail}"),
-    );
-    ProviderError {
-        kind,
-        message,
-        retry_after_ms: None,
-    }
 }
 
 fn error(kind: ProviderErrorKind, message: &str) -> ProviderError {
@@ -1673,6 +1552,11 @@ mod tests {
             ),
             (
                 400,
+                json!({"error":{"code":"","type":"context_length_exceeded"}}),
+                ProviderErrorKind::ContextLength,
+            ),
+            (
+                400,
                 json!({"error":{"code":"invalid_api_key"}}),
                 ProviderErrorKind::InvalidRequest,
             ),
@@ -1686,6 +1570,21 @@ mod tests {
                 400,
                 json!({"error":{"message":"Prompt is too long"}}),
                 ProviderErrorKind::ContextLength,
+            ),
+            (
+                400,
+                json!({"message":"Provider returned error","metadata":{"raw":"Maximum context length exceeded"}}),
+                ProviderErrorKind::ContextLength,
+            ),
+            (
+                400,
+                json!({"error":{"message":"Provider returned error","metadata":{"raw":{"message":"Maximum context length exceeded"}}}}),
+                ProviderErrorKind::InvalidRequest,
+            ),
+            (
+                429,
+                json!({"error":{"message":"Context limit mentioned in a rate-limit response"}}),
+                ProviderErrorKind::RateLimited,
             ),
             (
                 429,
@@ -1704,6 +1603,81 @@ mod tests {
             provider_error_detail_value(&json!({"error":{"message":"bad\nrequest"}})).as_deref(),
             Some("badrequest")
         );
+    }
+
+    #[test]
+    fn context_rejection_kind_survives_wrapping_and_display_truncation() {
+        for (code, message, raw) in [
+            (
+                json!(400),
+                "Provider returned error".to_owned(),
+                "This model's maximum context length is 1050000 tokens.",
+            ),
+            (
+                Value::Null,
+                "input length and max_tokens exceed context limit: 199000 + 8192 > 200000"
+                    .to_owned(),
+                "",
+            ),
+            (
+                json!(""),
+                "Input length 12345 exceeds the maximum allowed input length of 8192 tokens."
+                    .to_owned(),
+                "",
+            ),
+            (
+                Value::Null,
+                "Generic provider information. ".repeat(30),
+                "Prompt is too long",
+            ),
+        ] {
+            let value = json!({"error":{
+                "code":code,"type":"invalid_request_error","message":message,"metadata":{"raw":raw}
+            }});
+            assert_eq!(
+                classify_status_error(400, Some(&value)),
+                ProviderErrorKind::ContextLength
+            );
+            assert_eq!(
+                chat_stream_error(&value).kind,
+                ProviderErrorKind::ContextLength
+            );
+            assert_eq!(
+                anthropic_sse_error(&value).kind,
+                ProviderErrorKind::ContextLength
+            );
+            assert!(provider_error_detail_value(&value).unwrap().chars().count() <= 500);
+        }
+        let untyped = json!({"error":{"message":"Provider returned error","metadata":{"raw":"Prompt is too long"}}});
+        assert_eq!(
+            chat_stream_error(&untyped).kind,
+            ProviderErrorKind::ContextLength
+        );
+        for (code, expected) in [
+            ("rate_limit_exceeded", ProviderErrorKind::RateLimited),
+            ("insufficient_quota", ProviderErrorKind::Quota),
+            ("server_error", ProviderErrorKind::Server),
+        ] {
+            assert_eq!(
+                chat_stream_error(&json!({"error":{
+                    "code":code,"message":"Failure while checking context limit"
+                }}))
+                .kind,
+                expected
+            );
+        }
+        for (kind, expected) in [
+            ("rate_limit_error", ProviderErrorKind::RateLimited),
+            ("authentication_error", ProviderErrorKind::Authentication),
+        ] {
+            assert_eq!(
+                anthropic_sse_error(&json!({"error":{
+                    "type":kind,"message":"Failure while checking context limit"
+                }}))
+                .kind,
+                expected
+            );
+        }
     }
 
     #[test]

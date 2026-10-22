@@ -271,6 +271,60 @@ async fn original_typed_input_and_protocol_id_survive_clear_queue() {
 }
 
 #[tokio::test]
+async fn context_navigation_shares_the_single_stalled_inspection_lane() {
+    use std::future::Future;
+
+    for (first, second) in [
+        ("get_context", "get_context"),
+        ("inspect", "get_context"),
+        ("get_context", "inspect"),
+    ] {
+        let mut fixture = Fixture::new();
+        let commands = format!(
+            "{}\n{}\n",
+            json!({"type":first,"id":"one"}),
+            json!({"type":second,"id":"two"})
+        );
+        let (writer, mut reader) = tokio::io::duplex(1);
+        let pending = connection::connection(
+            fixture.take(),
+            CommandReader::new(BufReader::new(commands.as_bytes())),
+            Output::new(writer),
+        );
+        tokio::pin!(pending);
+        // Process the ready commands before any consumer can release the first
+        // reply's credit. Even an empty Session reply cannot fit this pipe.
+        std::future::poll_fn(|context| {
+            assert!(matches!(pending.as_mut().poll(context), Poll::Pending));
+            Poll::Ready(())
+        })
+        .await;
+        let reading = tokio::spawn(async move {
+            let mut bytes = Vec::new();
+            reader.read_to_end(&mut bytes).await.unwrap();
+            bytes
+        });
+        pending.await.unwrap();
+        let records = records(&reading.await.unwrap());
+        let replies: Vec<_> = records
+            .iter()
+            .filter(|record| record["type"] == "response")
+            .collect();
+        assert_eq!(replies.len(), 1, "{first}/{second}: {records:?}");
+        assert_eq!(replies[0]["id"], "one");
+        assert_eq!(replies[0]["success"], true);
+        assert_eq!(
+            records
+                .iter()
+                .filter(|record| record["type"] == "publication_gap")
+                .map(|record| record["commands_not_admitted"].as_u64().unwrap())
+                .sum::<u64>(),
+            1
+        );
+    }
+}
+
+#[tokio::test]
 async fn stalled_inspection_does_not_block_abort_or_eof_join() {
     for abort in [false, true] {
         let mut fixture = Fixture::new();

@@ -745,7 +745,9 @@ async fn ending_a_child_scope_joins_and_reclaims_capacity_for_the_parent() {
     );
     submit(&parent_agent, &parent, "parent").await.unwrap();
     let output = process_outputs(&parent).pop().unwrap();
-    until(&root.join("reused")).await;
+    // Shell redirection creates the file before printf writes. Do not stop
+    // the reused slot until its independent native effect is observable.
+    until_file(&root.join("reused"), "reused").await;
     owner.join_shutdown().await.unwrap();
     parent.shutdown().await.unwrap();
     assert_eq!(output["started"], true, "{output}");

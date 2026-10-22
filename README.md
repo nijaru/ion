@@ -401,6 +401,7 @@ context-fit or process-memory guarantees.
 
 Output pressure alone never cancels work. `ready.publication` advertises a
 32-command reply window; two control slots and one inspection slot are separate.
+History and navigation queries, including `get_context`, share the inspection slot.
 Credits remain held through lifecycle settlement and physical reply delivery.
 Provisional output has an 8 MiB high-water mark. Overflow emits `publication_gap`:
 discard incomplete progress and reconcile with `inspect` and reliable settlement.
@@ -1117,8 +1118,9 @@ substantial memory. There is no aggregate Session memory quota.
 
 Ion summarizes settled history when its request
 nears a known model's context window or exceeds its transport bound, and can
-retry one model request after a provider reports context overflow. The raw
-conversation remains inspectable; `compact` and `/compact` also trigger this
+retry one model request after a provider reports context overflow. Classification
+uses admitted upstream error text even when its displayed diagnostic is clipped.
+The raw conversation remains inspectable; `compact` and `/compact` also trigger this
 explicitly. Longer saved histories are summarized in bounded steps when one
 summary request cannot fit. If a provider rejects a summary for context size before
 any generated output, Ion retries strictly smaller settled prefixes on the same

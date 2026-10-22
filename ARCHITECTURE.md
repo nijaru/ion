@@ -719,7 +719,8 @@ authority and configuration; passive recovery eligibility is not that attestatio
 Logical selection, effective model, returned identity and usage remain distinct. Model
 epochs survive reopen, including A → B → A; routing policy is not correctness state.
 
-Adapters own framing, errors and opaque provider continuation. Bound transport/
+Adapters own framing, errors and opaque provider continuation. Recoverable error
+identity must not depend on clipping its diagnostic presentation. Bound transport/
 framing work separately from newly retained decoded output and replay; comments,
 repeated snapshots and accounting alone do not replenish progress allowance.
 Preserve or reject opaque data explicitly rather than truncating it to fit.

@@ -23,12 +23,28 @@ from pathlib import Path
 root = Path(__file__).resolve().parent.parent
 binary = Path(os.environ.get("ION_SMOKE_BIN", root / "target/debug/ion"))
 requests = []
+summary_requests = []
 
 
 class Handler(BaseHTTPRequestHandler):
     def do_POST(self):
         body = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
         requests.append(body)
+        if any(message.get("role") == "system" and isinstance(message.get("content"), str)
+               and message["content"].startswith("Summarize the coding conversation")
+               for message in body["messages"]):
+            summary_requests.append(body)
+            if len(summary_requests) == 1:
+                # Recovery must use the upstream reason even beyond the bounded
+                # diagnostic prefix, not treat the router's generic text as final.
+                payload = json.dumps({"error": {"code": 400, "message": "Provider returned error. " * 30,
+                    "metadata": {"raw": "Input length and max_tokens exceed context limit"}}}).encode()
+                self.send_response(400)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(payload)))
+                self.end_headers()
+                self.wfile.write(payload)
+                return
         users = [message for message in body["messages"] if message.get("role") == "user"]
         slow = bool(users) and "SLOW" in str(users[-1].get("content"))
         self.send_response(200)
@@ -323,6 +339,12 @@ with tempfile.TemporaryDirectory(prefix="ion-rpc-") as temporary:
         assert state.get("id") == "fragment-state" and state["success"], state
         assert state["data"]["busy"] is False, state
 
+        # Shrinking needs more than one eligible settled prefix; a refusal at
+        # the smallest cut must remain an error rather than repeat that input.
+        for index in range(4):
+            send(child, {"id": f"capacity-seed-{index}", "type": "prompt", "message": f"CAPACITY_SEED_{index} " * 64})
+            seeded = until(child, lambda record: record["type"] == "turn_end")[-1]
+            assert seeded["status"] == "completed", seeded
         send(child, {"id": "compact", "type": "compact"})
         compact_ack = read(child)
         assert compact_ack["id"] == "compact" and compact_ack["success"]
@@ -330,6 +352,12 @@ with tempfile.TemporaryDirectory(prefix="ion-rpc-") as temporary:
         compact_records = until(child, lambda r: r["type"] == "compact_end")
         assert compact_records[-1]["id"] == "compact"
         assert compact_records[-1]["status"] == "completed", compact_records
+        reductions = [record for record in compact_records if record["type"] == "context_compaction_retry"]
+        assert len(reductions) == 1 and reductions[0]["next_through_entry"] < reductions[0]["through_entry"], compact_records
+        assert len(summary_requests) >= 2, "wrapped rejection did not reach summary recovery"
+        assert len(json.dumps(summary_requests[1]["messages"])) < len(json.dumps(summary_requests[0]["messages"])), "summary input did not shrink"
+        assert all(request["model"] == summary_requests[0]["model"] and not request.get("tools")
+                   for request in summary_requests), summary_requests
         assert requests[-1]["reasoning_effort"] == "high" and not requests[-1].get("tools"), requests[-1]
 
         inline = {"mime_type": "image/png", "data": base64.b64encode(tiny_png()).decode()}

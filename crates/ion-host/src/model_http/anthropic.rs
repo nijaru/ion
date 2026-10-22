@@ -2,32 +2,6 @@
 use super::*;
 use sha2::{Digest, Sha256};
 
-pub(super) fn anthropic_sse_error(value: &Value) -> ProviderError {
-    let detail = provider_error_detail_value(value);
-    let kind = if detail.as_deref().is_some_and(is_context_error_message) {
-        ProviderErrorKind::ContextLength
-    } else {
-        match value.pointer("/error/type").and_then(Value::as_str) {
-            Some("authentication_error") => ProviderErrorKind::Authentication,
-            Some("permission_error") => ProviderErrorKind::Permission,
-            Some("invalid_request_error") => ProviderErrorKind::InvalidRequest,
-            Some("rate_limit_error") => ProviderErrorKind::RateLimited,
-            Some("overloaded_error") => ProviderErrorKind::Overloaded,
-            Some("timeout_error") => ProviderErrorKind::Timeout,
-            Some("api_error") => ProviderErrorKind::Server,
-            _ => ProviderErrorKind::Transport,
-        }
-    };
-    ProviderError {
-        kind,
-        message: detail.map_or_else(
-            || "provider sent an SSE error".into(),
-            |detail| format!("provider sent an SSE error: {detail}"),
-        ),
-        retry_after_ms: None,
-    }
-}
-
 /// Replay the original assistant block array only when it still projects to
 /// the committed provider-neutral message. A changed visible tool call or
 /// answer cannot inherit an old signature.
