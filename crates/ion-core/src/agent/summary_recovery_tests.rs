@@ -16,6 +16,16 @@ struct CapacityService {
     requests: Mutex<Vec<ModelRequest>>,
 }
 
+fn history_records(request: &ModelRequest) -> usize {
+    request.messages[0]
+        .content
+        .iter()
+        .filter(
+            |part| matches!(part, Content::Text(text) if text.starts_with("Historical record:\n")),
+        )
+        .count()
+}
+
 impl ModelService for CapacityService {
     fn stream<'a>(
         &'a self,
@@ -23,7 +33,7 @@ impl ModelService for CapacityService {
     ) -> BoxFuture<'a, Result<ModelStream, ProviderError>> {
         Box::pin(async move {
             let summary = request.route.reason == ModelRouteReason::Auxiliary;
-            let rejected = summary && request.messages[0].content.len() > self.max_records;
+            let rejected = summary && history_records(&request) > self.max_records;
             self.requests.lock().unwrap().push(request);
             let capacity = || ProviderError {
                 kind: ProviderErrorKind::ContextLength,
@@ -133,14 +143,14 @@ async fn automatic_compaction_shrinks_provider_rejected_summary_prefixes() {
             .iter()
             .filter(|request| request.route.reason == ModelRouteReason::Auxiliary)
             .collect::<Vec<_>>();
-        assert!(summaries[0].messages[0].content.len() > 3);
+        assert!(history_records(summaries[0]) > 3);
         assert_eq!(result.unwrap(), "continued", "{rejection:?}");
         assert!(after.entries.starts_with(&before));
         assert!(after.compacted_through.is_some());
         assert_eq!(requests.len(), summaries.len() + 1);
         for pair in summaries.windows(2) {
-            if pair[0].messages[0].content.len() > 3 {
-                assert!(pair[1].messages[0].content.len() < pair[0].messages[0].content.len());
+            if history_records(pair[0]) > 3 {
+                assert!(history_records(pair[1]) < history_records(pair[0]));
             }
         }
         for request in summaries {
@@ -215,11 +225,13 @@ async fn summary_recovery_stops_without_replacing_context_on_refusal_output_or_c
                 );
             } else {
                 assert!(requests.len() > 1);
-                assert!(requests.windows(2).all(|pair| {
-                    pair[1].messages[0].content.len() < pair[0].messages[0].content.len()
-                }));
+                assert!(
+                    requests
+                        .windows(2)
+                        .all(|pair| { history_records(&pair[1]) < history_records(&pair[0]) })
+                );
                 // The smallest settled prefix is one complete user/assistant exchange.
-                assert_eq!(requests.last().unwrap().messages[0].content.len(), 2);
+                assert_eq!(history_records(requests.last().unwrap()), 2);
             }
         }
     }

@@ -644,8 +644,10 @@ effects, not fabricated outcomes. Prose and summaries are claims, not verificati
 Context projection, branching and compaction have one owner. Compaction changes
 context, not history; commit complete call/result cuts atomically and retain the
 old projection when cancelled before commit. Preserve retrieval coordinates without
-replay or implicit evidence injection. Measure continuation quality, not compression
-alone.
+replay or implicit evidence injection. Summary requests frame historical records as
+data and place the current summary task after all records and typed images; charge
+that framing in prefix admission. These cues do not establish semantic truth or
+prompt-injection resistance. Measure continuation quality, not compression alone.
 
 The coding application supplies a read-only `history` tool for recovering committed
 evidence after compaction or withheld output. Other applications opt in explicitly;

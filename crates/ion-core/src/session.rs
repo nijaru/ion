@@ -3936,6 +3936,29 @@ mod tests {
     fn compaction_changes_only_the_model_projection_and_survives_reopen() {
         let (root, path) = fixture();
         let session = Session::create(&path, Some(&root)).unwrap();
+        let assert_input_budget = || {
+            let plan = session
+                .compaction_plan(0, usize::MAX, true, u64::MAX)
+                .unwrap()
+                .unwrap();
+            let input = crate::summary::input(plan.messages, true).unwrap();
+            let bytes = serde_json::to_vec(&input.content).unwrap().len();
+            assert_eq!(
+                session
+                    .compaction_plan(0, bytes, true, u64::MAX)
+                    .unwrap()
+                    .unwrap()
+                    .through_entry,
+                plan.through_entry
+            );
+            assert!(
+                session
+                    .compaction_plan(0, bytes - 1, true, u64::MAX)
+                    .unwrap()
+                    .is_none(),
+                "the sole settled prefix must include framing exactly once, including a prior summary"
+            );
+        };
         let model = ModelRef {
             provider: "test".into(),
             model: "test".into(),
@@ -3961,6 +3984,7 @@ mod tests {
             .unwrap();
         assert_eq!(plan.through_entry, 3);
         assert_eq!(plan.messages.len(), 2);
+        assert_input_budget();
         assert!(
             session
                 .record_compaction(1, "invalid".into(), test_execution(), Usage::unknown())
@@ -3989,6 +4013,7 @@ mod tests {
             .unwrap();
         assert_eq!(session.messages().unwrap().len(), 4);
         assert_eq!(session.context_messages().unwrap().len(), 3);
+        assert_input_budget();
         drop(session);
         let reopened = Session::open(&path).unwrap();
         assert_eq!(reopened.context_messages().unwrap().len(), 3);

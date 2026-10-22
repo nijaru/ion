@@ -73,13 +73,13 @@ impl Session {
             .transpose()?
             .map_or(0, |bytes| bytes + 1);
         let suffix_budget = keep_bytes.saturating_sub(summary_bytes);
-        let mut prefix_bytes = match &store.state.compaction {
-            Some((through, summary)) => {
-                crate::summary::content_bytes(&summary_message(*through, summary), summary_images)?
-                    .saturating_add(1)
-            }
-            None => 1,
-        };
+        let mut prefix_bytes = crate::summary::framing_bytes()?;
+        if let Some((through, summary)) = &store.state.compaction {
+            prefix_bytes = prefix_bytes.saturating_add(crate::summary::content_bytes(
+                &summary_message(*through, summary),
+                summary_images,
+            )?);
+        }
         let mut prefix_fits = Vec::new();
         let mut prefix = projected.iter().peekable();
         for &boundary in store.settled.range((previous + 1)..) {

@@ -1130,9 +1130,9 @@ the smallest cut is rejected or on cancellation. Failed attempts are not retried
 after any generated output, including opaque reasoning. Each successful chunk
 remains committed if a later chunk fails.
 
-Summary requests treat the selected prefix as historical data, exclude opaque
-replay and human thinking, and carry its images
-as typed attachments when the summary model supports them. Text-only summary
+Summary requests frame the selected prefix as historical data and place the current
+summary task after its records and images. They exclude opaque replay and human
+thinking, and carry images as typed attachments when the summary model supports them. Text-only summary
 models receive explicit image-omission notices instead of base64 transcript text.
 The compacted model projection names the exact one-based committed entry range it
 replaced. Summaries are model-generated and can be wrong; the raw facts remain

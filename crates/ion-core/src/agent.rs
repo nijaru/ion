@@ -2905,7 +2905,7 @@ mod tests {
                         return None;
                     };
                     let record: serde_json::Value =
-                        serde_json::from_str(text.split_once('\n').unwrap().1).unwrap();
+                        serde_json::from_str(text.strip_prefix("Historical record:\n")?).unwrap();
                     (record["role"] == "Tool").then(|| record["content"][0]["ToolResult"].clone())
                 })
                 .unwrap();
@@ -5211,9 +5211,25 @@ mod tests {
         std::fs::create_dir(&root).unwrap();
         let session =
             Arc::new(CodingSession::create(root.join("session.sqlite"), Some(&root)).unwrap());
+        // Two settled exchanges leave a smaller valid summary cut. A single
+        // oversized exchange need not fit once historical framing is charged.
+        for task in ["first", "second"] {
+            let (turn, _) = session.begin_turn(task.into(), model()).unwrap();
+            session
+                .record_assistant(
+                    turn,
+                    Message {
+                        role: Role::Assistant,
+                        content: vec![Content::Text("x".repeat(1_100))],
+                        provider_replay: None,
+                    },
+                    Usage::unknown(),
+                    false,
+                )
+                .unwrap();
+        }
         let scripts = Arc::new(ScriptedModelService::new([
-            response(vec![Content::Text("x".repeat(2_200))]),
-            response(vec![Content::Text("First task completed.".into())]),
+            response(vec![Content::Text("Earlier task completed.".into())]),
             response(vec![Content::Text("continued".into())]),
         ]));
         let agent = Agent::new(scripts.clone(), Arc::new(TestTools::new(&root)), model())
@@ -5223,16 +5239,6 @@ mod tests {
                 max_request_bytes: 3_200,
                 ..AgentLimits::default()
             });
-        agent
-            .submit(
-                session.clone(),
-                "first".into(),
-                "test".into(),
-                CancellationToken::new(),
-                |_| {},
-            )
-            .await
-            .unwrap();
         let steering = Arc::new(SteeringInbox::new(
             agent.limits(),
             crate::InputBudget::default(),
@@ -5242,7 +5248,7 @@ mod tests {
         let result = agent
             .submit_with_steering(
                 session.clone(),
-                "second".into(),
+                "next".into(),
                 "test".into(),
                 CancellationToken::new(),
                 steering.clone(),
@@ -5255,11 +5261,11 @@ mod tests {
             .await;
         let requests = scripts.requests();
         assert_eq!(
-            requests[2].messages.last(),
+            requests[1].messages.last(),
             Some(&user_text(guidance.into()))
         );
-        assert_eq!(requests.len(), 3);
-        assert!(requests[1].tools.is_empty());
+        assert_eq!(requests.len(), 2);
+        assert!(requests[0].tools.is_empty());
         assert_eq!(result.unwrap(), "continued");
         assert!(steering.take_uncommitted().is_empty());
         assert!(session.view().unwrap().compacted_through.is_some());
@@ -5335,7 +5341,9 @@ mod tests {
                 assert!(cuts[0] < cuts[1]);
                 assert_eq!(requests.len(), 2);
                 assert_eq!(
-                    requests[0].messages[0].content.len(),
+                    requests[0].messages[0].content.iter().filter(|part| {
+                        matches!(part, Content::Text(text) if text.starts_with("Historical record:\n"))
+                    }).count(),
                     2,
                     "the first settled Turn must remain a candidate"
                 );
