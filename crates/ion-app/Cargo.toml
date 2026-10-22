@@ -23,6 +23,7 @@ serde_json = "1.0.151"
 shlex = "2.0.1"
 tokio = { workspace = true, features = ["net"] }
 tokio-util.workspace = true
+two-face = { version = "=0.5.2", default-features = false, features = ["syntect-onig"] }
 unicode-segmentation = "1.13.3"
 unicode-width = "0.2.2"
 uuid = { version = "1.25.0", features = ["v7"] }

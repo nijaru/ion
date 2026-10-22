@@ -188,8 +188,18 @@ source inspection, saved Session facts, copy and export retain original Markdown
 Pipe tables retain inline styles and column alignment, wrapping cells to fit.
 When columns cannot remain legible, rows become header/value fields instead of
 clipping their values. Already-published inline tables follow the emulator's native
-reflow rather than being rebuilt. Syntax highlighting and other Markdown extensions
-are not implemented.
+reflow rather than being rebuilt. Fenced code with a recognized language label
+uses bundled syntax grammars (including Rust, Python, shell, JavaScript,
+TypeScript/TSX, JSON and TOML). Only the first word of the label selects a grammar;
+there is no language inference, file lookup or download. Multiline comments and
+strings retain their syntax state within each block. Highlighting uses terminal
+palette colors, without backgrounds or faint text. Unlabeled, unknown and explicit
+`text`/`plain` blocks remain literal code. Blocks over 32 KiB or with a line over
+2 KiB also remain literal to limit synchronous grammar work; no text is omitted.
+Syntax styles use the same control-safe grapheme wrapping and publication path
+as other assistant text, in inline and fullscreen views. `ion syntax-licenses`
+prints bundled grammar notices without initializing model or Session services.
+Other Markdown extensions are not implemented.
 
 Successful native edits and writes record a unified patch from the previous
 text and the published text, alongside both digests where applicable. A created

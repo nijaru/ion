@@ -928,6 +928,12 @@ tables wrap recognized cells with header emphasis and column alignment; narrow
 viewports stack header/value fields rather than clipping values. Share inline
 styles, link/control safety and grapheme wrapping with ordinary assistant text;
 keep original model text in Session facts, source inspection, copy and export.
+Assistant fenced-code syntax styles are presentation-only: use bundled grammars
+selected by an explicit language token, preserve multiline state within the block,
+and never infer a language, read a source path or fetch definitions. Bound synchronous
+grammar work without omitting code; unsupported or over-limit blocks stay literal.
+Token spans must pass through the same control-safe grapheme wrapping and physical
+publication as ordinary text. User prompts and tool observations remain literal.
 Publish settled content once. Terminal-local command output and diagnostics share
 an ordered presentation log anchored to stable Session prefixes, not a clipped
 composer surface or synthetic Session/model facts. Inline publication acknowledges

@@ -1,6 +1,7 @@
 //! Assistant-only Markdown presentation. No HTML renderer, fetches or terminal links.
-use pulldown_cmark::{CodeBlockKind, Event, Options, Parser, Tag, TagEnd};
+use pulldown_cmark::{Event, Options, Parser, Tag, TagEnd};
 
+mod code;
 mod table;
 use ratatui::{
     style::{Modifier, Style},
@@ -37,10 +38,10 @@ pub(super) fn render(rows: &mut Vec<Line<'static>>, source: &str, width: usize) 
     let mut view = View::new(rows, width, Style::default());
     let mut events = Parser::new_ext(source, Options::ENABLE_TABLES);
     while let Some(event) = events.next() {
-        if let Event::Start(Tag::Table(alignments)) = event {
-            view.table(&mut events, alignments);
-        } else {
-            view.event(event);
+        match event {
+            Event::Start(Tag::Table(alignments)) => view.table(&mut events, alignments),
+            Event::Start(Tag::CodeBlock(kind)) => view.code_block(&mut events, kind),
+            event => view.event(event),
         }
     }
     view.flush();
@@ -191,20 +192,6 @@ impl<'a> View<'a> {
                 let continuation = " ".repeat(UnicodeWidthStr::width(marker.as_str()));
                 self.push_prefix(marker, continuation);
             }
-            Tag::CodeBlock(kind) => {
-                self.flush();
-                if let CodeBlockKind::Fenced(info) = kind
-                    && !info.is_empty()
-                {
-                    self.spans.push(Span::styled(
-                        format!("code · {info}"),
-                        style(Role::Secondary),
-                    ));
-                    self.flush();
-                }
-                self.push_prefix("  ".into(), "  ".into());
-                self.styles.push(self.style().patch(style(Role::Code)));
-            }
             Tag::Link { dest_url, .. } | Tag::Image { dest_url, .. } => {
                 self.links.push((dest_url.into_string(), self.spans.len()));
                 self.styles.push(self.style().patch(style(Role::Link)));
@@ -245,18 +232,6 @@ impl<'a> View<'a> {
             TagEnd::List(_) => {
                 self.flush();
                 self.lists.pop();
-                self.separate();
-            }
-            TagEnd::CodeBlock => {
-                // A parser-supplied final newline terminates the block, not an extra row.
-                if let Some(span) = self.spans.last_mut()
-                    && span.content.ends_with('\n')
-                {
-                    span.content.to_mut().pop();
-                }
-                self.flush();
-                self.prefixes.pop();
-                self.styles.pop();
                 self.separate();
             }
             TagEnd::Link | TagEnd::Image => {
@@ -431,6 +406,73 @@ mod tests {
         );
         assert!(!text.contains("SECRET"));
         assert!(!text.chars().any(|ch| ch.is_control() && ch != '\n'));
+    }
+
+    #[test]
+    fn fenced_languages_highlight_tokens_and_keep_multiline_state_local() {
+        let rows = view(
+            "```RuSt title\nfn main() {\n/* comment\nstill comment */\nlet name = \"界e\u{0301}\";\n}\n```\n\nafter\n\n```rust\nlet n = 42;\n```",
+            80,
+        );
+        let token_style = |text: &str| {
+            rows.iter()
+                .flat_map(|row| &row.spans)
+                .find(|span| span.content.contains(text))
+                .unwrap_or_else(|| panic!("missing {text}: {rows:?}"))
+                .style
+        };
+        assert_ne!(token_style("fn"), token_style("main"));
+        assert_eq!(token_style("comment"), token_style("still comment"));
+        assert_ne!(token_style("still comment"), token_style("let"));
+        assert_eq!(token_style("after"), Style::default());
+        for label in ["python", "sh", "typescript", "tsx", "json", "toml"] {
+            let rows = view(&format!("```{label}\nvalue = \"literal\"\n```"), 80);
+            assert!(
+                rows.iter().flat_map(|row| &row.spans).any(|span| {
+                    span.content.contains("literal") && span.style.fg == Some(Color::Green)
+                }),
+                "{label}: {rows:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn highlighted_code_wraps_safely_without_changing_text_or_following_prose() {
+        let source =
+            "> - ```rust\n>   let e\u{0301} = \"界\u{1b}[2J\";\n>   \t// tail\n>   ```\n\nplain";
+        for width in [1, 2, 7, 20, 80] {
+            let rows = view(source, width);
+            let text = rows.iter().map(ToString::to_string).collect::<String>();
+            assert!(rows.iter().all(|row| row.width() <= width));
+            assert!(!text.chars().any(char::is_control));
+            assert!(text.contains("e\u{0301}"), "{text}");
+            assert!(text.ends_with("plain"), "{text}");
+            assert_eq!(
+                rows.last().unwrap().spans.last().unwrap().style,
+                Style::default()
+            );
+            if width == 80 {
+                assert!(text.contains("│     let e\u{0301} = \"界�[2J\";"), "{text}");
+            }
+        }
+        for (body, expected) in [("", vec!["code · rust"]), ("\n", vec!["code · rust", "  "])] {
+            let rows = view(&format!("```rust\n{body}```"), 80);
+            assert_eq!(
+                rows.iter().map(ToString::to_string).collect::<Vec<_>>(),
+                expected
+            );
+        }
+        for label in ["", "unknown-language", "text"] {
+            let rows = view(&format!("```{label}\nlet n = 42;\n\n```"), 80);
+            assert!(
+                rows.iter()
+                    .flat_map(|row| &row.spans)
+                    .filter(|span| !span.content.trim().is_empty()
+                        && !span.content.starts_with("code ·"))
+                    .all(|span| span.style.fg == Some(Color::Magenta))
+            );
+            assert_eq!(rows.last().unwrap().to_string(), "  ");
+        }
     }
 
     #[test]

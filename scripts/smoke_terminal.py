@@ -465,6 +465,8 @@ with tempfile.TemporaryDirectory(prefix="ion-terminal-") as temporary:
             plain_output = re.sub(rb"\x1b\[[0-9;?]*[A-Za-z]", b"", bytes(output))
             assert b"MARKDOWN_BOLD and literal_code docs (https://example.org/ion)" in plain_output, "assistant Markdown was not rendered"
             assert b"TABLE_CELL \xe2\x94\x82 TABLE_VISIBLE" in plain_output, "assistant table was not laid out"
+            assert b"fn syntax_probe()" in plain_output and b'"SYNTAX_LITERAL"; // syntax comment' in plain_output, "syntax rendering changed code text"
+            assert b'\x1b[32m"SYNTAX_LITERAL"' in output, "syntax string color did not reach terminal publication"
             assert b"-sample data" in plain_output and b"+sample data updated" in plain_output, "actual edit patch was not rendered"
             assert b"+created by ion" in plain_output, "actual write patch was not rendered"
             assert "• ".encode() in output, "semantic activity group header was not rendered"
@@ -481,6 +483,8 @@ with tempfile.TemporaryDirectory(prefix="ion-terminal-") as temporary:
             inspected = subprocess.run([binary, "--cwd", workspace, "--session", session_id, "inspect"], env=env, check=True, capture_output=True)
             entries = json.loads(inspected.stdout)["entries"]
             assert "**MARKDOWN_BOLD**" in str(entries), "formatted view replaced the original saved Markdown"
+            code_source = '```rust\nfn syntax_probe() {\n    let message = "SYNTAX_LITERAL"; // syntax comment\n}\n```'
+            assert any(code_source in part.get("Text", "") for entry in entries if entry["kind"] == "assistant" for part in entry["data"]["message"]["content"]), "syntax rendering changed committed code"
             diffs = [entry["data"]["result"]["outcome"]["output"]["value"]["diff"] for entry in entries if entry["kind"] == "tool_result" and entry["data"]["result"]["outcome"]["state"] == "observed" and "diff" in entry["data"]["result"]["outcome"]["output"]["value"]]
             assert len(diffs) == 2 and all(not diff["truncated"] for diff in diffs), diffs
             assert "-sample data\n-second token\n+sample data updated\n+second token updated\n" in diffs[0]["text"], diffs
@@ -488,6 +492,7 @@ with tempfile.TemporaryDirectory(prefix="ion-terminal-") as temporary:
             exported = subprocess.run([binary, "--cwd", workspace, "--session", session_id, "export"], env=env, check=True, capture_output=True, text=True).stdout
             assert "**MARKDOWN_BOLD**" in exported, "export lost the original Markdown source"
             assert "| TABLE_CELL | TABLE_VISIBLE |" in exported, "export lost the original table source"
+            assert "\n".join(f"  {line}" for line in code_source.splitlines()) in exported, "export lost code source"
             source = [line for line in listing.splitlines() if "\t\t2 turn(s)" in line]
             assert len(source) == 1, listing
             original = subprocess.run([binary, "--cwd", workspace, "--session", source[0].split("\t")[0], "inspect"], env=env, check=True, capture_output=True)

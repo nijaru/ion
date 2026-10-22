@@ -10,6 +10,12 @@ pub(crate) enum Role {
     Warning,
     Running,
     Code,
+    SyntaxKeyword,
+    SyntaxString,
+    SyntaxNumber,
+    SyntaxFunction,
+    SyntaxType,
+    SyntaxComment,
     Link,
     Added,
     Removed,
@@ -34,6 +40,14 @@ pub(crate) fn style(role: Role) -> Style {
             .add_modifier(Modifier::BOLD),
         Role::Link | Role::Hunk => Style::default().fg(Color::Cyan),
         Role::Code => Style::default().fg(Color::Magenta),
+        Role::SyntaxKeyword => Style::default()
+            .fg(Color::Magenta)
+            .add_modifier(Modifier::BOLD),
+        Role::SyntaxString => Style::default().fg(Color::Green),
+        Role::SyntaxNumber => Style::default().fg(Color::Blue),
+        Role::SyntaxFunction => Style::default().fg(Color::Cyan),
+        Role::SyntaxType => Style::default().fg(Color::Yellow),
+        Role::SyntaxComment => Style::default().add_modifier(Modifier::ITALIC),
         Role::Added => Style::default().fg(Color::Green),
         Role::Removed => Style::default().fg(Color::Red),
     }

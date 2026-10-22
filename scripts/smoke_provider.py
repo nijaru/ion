@@ -109,7 +109,7 @@ class Handler(BaseHTTPRequestHandler):
             elif count == 4:
                 assert body["messages"][-1]["role"] == "tool"
                 assert "sample data updated" in body["messages"][-1]["content"]
-                delta, finish = {"content": "# TASK_COMPLETE\n\n**MARKDOWN_BOLD** and `literal_code` [docs](https://example.org/ion)\n\n> - nested preview\n\n| Field | Result |\n| --- | --- |\n| TABLE_CELL | TABLE_VISIBLE |" if require_steering else "TASK_COMPLETE"}, "stop"
+                delta, finish = {"content": "# TASK_COMPLETE\n\n**MARKDOWN_BOLD** and `literal_code` [docs](https://example.org/ion)\n\n> - nested preview\n\n| Field | Result |\n| --- | --- |\n| TABLE_CELL | TABLE_VISIBLE |\n\n```rust\nfn syntax_probe() {\n    let message = \"SYNTAX_LITERAL\"; // syntax comment\n}\n```\n\nSYNTAX_AFTER" if require_steering else "TASK_COMPLETE"}, "stop"
             elif count == 5:
                 assert len([m for m in body["messages"] if m["role"] == "user"]) == (3 if require_steering else 2)
                 delta, finish = {"content": "RESUMED"}, "stop"

@@ -89,6 +89,8 @@ enum Action {
     /// Private clipboard transfer helper; never initializes model or Session services.
     #[command(name = "__clipboard-read", hide = true)]
     ClipboardRead,
+    /// Print license notices for bundled syntax definitions (no model or Session setup).
+    SyntaxLicenses,
     /// List models Ion can route to; account access may differ.
     Models { query: Option<String> },
     /// Select a catalog model, or configure a custom compatible endpoint.
@@ -298,11 +300,24 @@ async fn run_cli(cli: Cli) -> Result<()> {
         bail!("--json requires `run PROMPT` or `--print PROMPT`");
     }
     let tool_selection = parse_tool_selection(&cli)?;
+    if matches!(cli.action, Some(Action::SyntaxLicenses)) {
+        ensure!(
+            cli.print.is_none(),
+            "--print cannot be combined with a subcommand"
+        );
+        let mut notices = String::from("# Bundled syntax definitions\n\n");
+        for license in two_face::acknowledgement::listing().for_syntaxes() {
+            license.write_md(&mut notices);
+        }
+        return Ok(io::stdout().lock().write_all(notices.as_bytes())?);
+    }
     let host = Arc::new(Host::from_environment()?);
     let credentials = host.credentials();
     let models = host.models();
     match cli.action {
-        Some(Action::ClipboardRead) => unreachable!("clipboard helper handled before Host setup"),
+        Some(Action::ClipboardRead | Action::SyntaxLicenses) => {
+            unreachable!("standalone command handled before Host setup")
+        }
         Some(_) if cli.print.is_some() => bail!("--print cannot be combined with a subcommand"),
         Some(Action::Models { query }) => {
             let query = query.unwrap_or_default().to_ascii_lowercase();
