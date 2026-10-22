@@ -36,6 +36,8 @@ jobs:
         run: python3 scripts/smoke_delegation.py
       - name: Coding subagent consumer smoke
         run: python3 scripts/smoke_subagent.py
+      - name: Coding child route and reasoning smoke
+        run: python3 scripts/smoke_subagent_routing.py
       - name: Retained service attachment SDK smoke
         run: target/debug/examples/service "$(mktemp -d)"
       - name: Embedded SDK custody smoke

@@ -323,11 +323,20 @@ feature gate imposed on the reusable engine. Restricted applications still choos
 their own complete capabilities. Child coding roles do not automatically enable
 further delegation.
 
-Unless explicitly configured otherwise, a coding child uses the initiating
-request's selected model route and reasoning, the same workspace and the coding
-resources/tools. Fresh context does not reset execution preferences. Context,
-model, environment and authority remain independently configurable by Host;
-model arguments select only choices the application has authorized.
+A coding child defaults to the initiating request's captured model route and
+reasoning. `start` may explicitly select an exact `provider/model` from the known
+catalog or configured routes and independently override reasoning. Inherited
+reasoning remains inherited even with another model; unsupported controls, unknown
+routes and missing required access fail preflight before child admission. There
+is no fallback or additional child-route allowlist. Same-identity overrides retain
+the captured route; a different route is resolved and captured before admission.
+Overrides do not change the parent binding or operator configuration. Receipts
+report the actual child model and reasoning.
+
+The child retains the same workspace and selected coding resources/tools; model
+arguments cannot supply endpoints, credentials, tool grants or arbitrary authority.
+Fresh context does not reset execution preferences. General Host recipes still
+configure context, model, environment and authority independently.
 
 Fresh context and foreground waiting are defaults; an explicit fork selects an
 eligible committed prefix, and background execution transfers to the coding

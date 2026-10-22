@@ -98,6 +98,8 @@ impl CodingToolSource for Subagent {
             json!({"type":"object","additionalProperties":false,"required":["action","task"],"properties":{
                 "action":{"const":"start"}, "task":{"type":"string","minLength":1,"maxLength":65536},
                 "mode":{"enum":["foreground","background"],"default":"foreground"},
+                "model":{"type":"string","description":"Exact provider/model identifier from the known catalog or configured routes; omitted inherits the captured parent route. No endpoints or credentials."},
+                "reasoning":{"type":"string","description":"Generation effort for the child: default, off, low, medium, high or budget:TOKENS. Omitted inherits the parent's effort, even with a different model. Unsupported controls fail before child admission."},
                 "context":{"oneOf":[
                     {"type":"object","additionalProperties":false,"required":["type"],"properties":{"type":{"const":"fresh"}}},
                     {"type":"object","additionalProperties":false,"required":["type"],"properties":{"type":{"const":"fork"},"point":point}}
@@ -110,7 +112,7 @@ impl CodingToolSource for Subagent {
         }
         let mut definition = ToolDefinition::external(ToolSpec {
             name: "subagent".into(),
-            description: "Managed coding Sessions. start(task, mode=foreground, context={type:fresh}) inherits this request's selected route/reasoning, workspace, resources and tools; no automatic recursive built-in or sandbox/conflict isolation. context={type:fork} copies the settled committed prefix BEFORE the initiating Turn (not its unfinished conversation); optional point selects an earlier before_turn/after_turn boundary, validated by Core. Background start acknowledges committed ownership transfer, NOT completion: it survives parent stop and Session changes, not application shutdown. list/status inspect retained application jobs; wait joins one without consuming it; cancel explicitly stops that child; acknowledge releases a joined result's capacity. Parent stop cancels a wait, not transferred work. Use wait/status before depending on results; answers are child claims, not independent verification. Results and original answers remain in committed relationship facts. Unknown/acknowledged IDs grant no authority or replay. No automatic retries. Normal headless runs drain owned work before exit; quit/EOF/interruption stops and joins it.".into(),
+            description: "Managed coding Sessions. start(task, mode=foreground, context={type:fresh}, model?, reasoning?) inherits this request's captured route/reasoning unless explicitly overridden. model is an exact provider/model from the known catalog or configured routes, using that route's credential policy; reasoning uses default/off/low/medium/high/budget:TOKENS. No silent route/effort fallback; overrides affect only the new child, not this parent or user configuration. Workspace, resources and selected tools remain inherited; no automatic recursive built-in or sandbox/conflict isolation. context={type:fork} copies the settled committed prefix BEFORE the initiating Turn (not its unfinished conversation); optional point selects an earlier before_turn/after_turn boundary, validated by Core. Background start acknowledges committed ownership transfer, NOT completion: it survives parent stop and Session changes, not application shutdown. list/status inspect retained application jobs; wait joins one without consuming it; cancel explicitly stops that child; acknowledge releases a joined result's capacity. Parent stop cancels a wait, not transferred work. Use wait/status before depending on results; answers are child claims, not independent verification. Results and original answers remain in committed relationship facts. Unknown/acknowledged IDs grant no authority or replay. No automatic retries. Normal headless runs drain owned work before exit; quit/EOF/interruption stops and joins it.".into(),
             input_schema: json!({"type":"object","oneOf":choices}),
         });
         definition.presentation =
@@ -144,6 +146,8 @@ enum Input {
         mode: Mode,
         #[serde(default)]
         context: Context,
+        model: Option<String>,
+        reasoning: Option<String>,
     },
     List,
     Status {
@@ -188,6 +192,7 @@ fn receipt_output(
     let is_error = error.is_some() || (joined && !completed);
     output(
         json!({"child_session":receipt.record.child,"path":receipt.record.path,"context":receipt.record.spec.context,
+        "model":receipt.record.spec.model,"reasoning":receipt.record.spec.reasoning.to_string(),
         "transferred":receipt.transferred,"joined":joined,"outcome":receipt.outcome,"error":error}),
         is_error,
     )
@@ -214,12 +219,57 @@ impl ToolExecutor for Subagent {
                     task,
                     mode,
                     context,
+                    model,
+                    reasoning: requested_reasoning,
                 } => {
                     if task.trim().is_empty() || task.len() > 65536 {
                         return failure(
                             "subagent task must be nonblank and at most 65536 UTF-8 bytes",
                         );
                     }
+                    let reasoning = match requested_reasoning {
+                        Some(value) => match value.parse() {
+                            Ok(reasoning) => reasoning,
+                            Err(error) => return failure(error),
+                        },
+                        None => reasoning,
+                    };
+                    let application = if let Some(model) = model {
+                        let Some((provider, model)) = model
+                            .split_once('/')
+                            .filter(|(provider, model)| !provider.is_empty() && !model.is_empty())
+                        else {
+                            return failure(
+                                "subagent model must be an exact provider/model identifier",
+                            );
+                        };
+                        let identity = ModelRef {
+                            provider: provider.into(),
+                            model: model.into(),
+                        };
+                        // Same-identity selection must retain per-invocation overrides
+                        // and cannot be redirected by later model-store changes.
+                        let selected = if identity == self.application.selected.identity() {
+                            self.application.selected.clone()
+                        } else {
+                            match self
+                                .application
+                                .coding
+                                .host
+                                .models()
+                                .resolve_identity(&identity)
+                            {
+                                Ok(selected) => selected,
+                                Err(error) => return failure(error),
+                            }
+                        };
+                        Arc::new(ChildApplication {
+                            coding: self.application.coding.clone(),
+                            selected,
+                        })
+                    } else {
+                        self.application.clone()
+                    };
                     let context = match context {
                         Context::Fresh => DelegationContext::Fresh,
                         Context::Fork { point } => DelegationContext::Fork {
@@ -230,8 +280,8 @@ impl ToolExecutor for Subagent {
                         context,
                         directory: self.directory.clone(),
                         cwd: Some(self.cwd.clone()),
-                        application: self.application.clone(),
-                        model: Some(self.application.selected.identity()),
+                        model: Some(application.selected.identity()),
+                        application,
                         reasoning,
                         authority: self.authority.clone(),
                     };

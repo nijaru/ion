@@ -1371,12 +1371,23 @@ optional `mode` (`foreground`, the default, or `background`), and optional
 committed prefix before the initiating Turn, not the active conversation, and an
 explicit `point` may select an earlier `before_turn` or `after_turn` boundary.
 Core validates and captures that cut in the admission transaction. The child
-inherits the initiating request's selected model route, including invocation-local
-overrides, and its reasoning. It also inherits the same workspace, project/home
-resources, native and supplied external tools (MCP for the CLI), and the
-application's Code Mode setting. It does not automatically enable another
-built-in subagent. Model arguments cannot choose tools, credentials, model,
-workspace or arbitrary authority.
+defaults to the initiating request's captured model route, including invocation-local
+overrides, and its reasoning. Optional `model` selects an exact `provider/model`
+from the known catalog or configured routes; optional `reasoning` accepts the same
+values as `--reasoning`. For example, `{"action":"start","task":"Review the change",
+"model":"deepseek/deepseek-flash","reasoning":"low"}` creates an independently
+routed reviewer. It uses the chosen route's credential policy and may incur its
+charges. There is no extra child-route allowlist. Omitted reasoning inherits even
+with another model; unsupported effort or unavailable routes fail before child
+admission, without fallback. Selecting the parent's exact identity retains its
+captured route, not a later model-store edit. Overrides do not change the parent
+or saved configuration. Start/status/wait receipts include actual model and effort.
+
+The child also inherits the same workspace, project/home resources, selected
+native and supplied external tools (MCP for the CLI), and the application's Code
+Mode setting. It does not automatically enable another built-in subagent. Model
+arguments cannot choose tools, endpoints, credentials, workspace or arbitrary
+authority.
 
 Foreground `start` joins execution and cleanup before returning the typed
 child/outcome locator and request receipt. Background `start` returns only after
