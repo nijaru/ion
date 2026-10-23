@@ -23,7 +23,7 @@ pub enum ChildActivity {
 /// Ephemeral, possibly provisional observation. Only the owner's `joined` flag
 /// attests full joining; silence, elapsed time and text do not establish success.
 #[derive(Clone, Debug, Serialize)]
-pub struct ChildProgressSnapshot {
+pub struct ChildActivitySnapshot {
     pub child_session: uuid::Uuid,
     pub request: RequestKey,
     pub elapsed_ms: u64,
@@ -33,6 +33,13 @@ pub struct ChildProgressSnapshot {
     /// Top-level tool name only, at most 256 UTF-8 bytes. No arguments/results.
     pub current_tool: Option<String>,
     pub stopping: bool,
+}
+
+/// Activity metadata plus bounded, explicitly provisional visible text.
+#[derive(Clone, Debug, Serialize)]
+pub struct ChildProgressSnapshot {
+    #[serde(flatten)]
+    pub status: ChildActivitySnapshot,
     /// Latest visible text only: provisional child-authored data, never an answer.
     pub provisional_output: Option<DelegationPartialOutput>,
 }
@@ -167,19 +174,32 @@ impl ChildProgress {
         self.lock().visible.output()
     }
 
+    /// Content-free metadata without copying provisional or committed output.
+    pub fn activity(&self) -> Option<ChildActivitySnapshot> {
+        self.lock().activity_snapshot()
+    }
+
     /// Null until the actual callback starts. This is not durable recovery data.
     pub fn snapshot(&self) -> Option<ChildProgressSnapshot> {
         let state = self.lock();
-        let (child_session, request, started) = state.binding.as_ref()?;
         Some(ChildProgressSnapshot {
+            status: state.activity_snapshot()?,
+            provisional_output: state.visible.output(),
+        })
+    }
+}
+
+impl State {
+    fn activity_snapshot(&self) -> Option<ChildActivitySnapshot> {
+        let (child_session, request, started) = self.binding.as_ref()?;
+        Some(ChildActivitySnapshot {
             child_session: *child_session,
             request: request.clone(),
-            elapsed_ms: state.elapsed_ms.unwrap_or_else(|| elapsed(*started)),
-            last_activity_at_ms: state.last_activity_at_ms,
-            activity: state.activity,
-            current_tool: state.current_tool.clone(),
-            stopping: state.stopping,
-            provisional_output: state.visible.output(),
+            elapsed_ms: self.elapsed_ms.unwrap_or_else(|| elapsed(*started)),
+            last_activity_at_ms: self.last_activity_at_ms,
+            activity: self.activity,
+            current_tool: self.current_tool.clone(),
+            stopping: self.stopping,
         })
     }
 }
@@ -272,13 +292,14 @@ mod tests {
             text: "PRIVATE_THOUGHT".into(),
         });
         let thinking = progress.snapshot().unwrap();
+        assert!(thinking.provisional_output.is_none());
+        let thinking = thinking.status;
         assert_eq!(thinking.child_session, child);
         assert_eq!(thinking.request, request);
         assert_eq!(thinking.activity, Some(ChildActivity::Thinking));
-        assert!(thinking.provisional_output.is_none());
         assert!(thinking.last_activity_at_ms.is_some());
         tokio::time::advance(Duration::from_secs(10)).await;
-        let silent = progress.snapshot().unwrap();
+        let silent = progress.activity().unwrap();
         assert_eq!(silent.elapsed_ms, 10_000);
         assert_eq!(silent.last_activity_at_ms, thinking.last_activity_at_ms);
         assert_eq!(silent.activity, thinking.activity);
@@ -289,8 +310,11 @@ mod tests {
             activity: ion_core::ToolActivity::external("PRIVATE_SUBJECT"),
         });
         let tool = progress.snapshot().unwrap();
-        assert_eq!(tool.activity, Some(ChildActivity::Tool));
-        assert_eq!(tool.current_tool.as_deref(), Some("🚀".repeat(64).as_str()));
+        assert_eq!(tool.status.activity, Some(ChildActivity::Tool));
+        assert_eq!(
+            tool.status.current_tool.as_deref(),
+            Some("🚀".repeat(64).as_str())
+        );
         assert!(tool.provisional_output.is_none());
         let encoded = serde_json::to_string(&tool).unwrap();
         for hidden in ["PRIVATE_THOUGHT", "PRIVATE_ARGUMENT", "PRIVATE_SUBJECT"] {
@@ -298,13 +322,23 @@ mod tests {
         }
         progress.stop(10_000);
         tokio::time::advance(Duration::from_secs(60)).await;
-        let stopped = progress.snapshot().unwrap();
+        let stopped = progress.activity().unwrap();
         assert!(stopped.stopping);
         assert_eq!(stopped.elapsed_ms, 10_000);
-        assert_eq!(stopped.last_activity_at_ms, tool.last_activity_at_ms);
+        assert_eq!(stopped.last_activity_at_ms, tool.status.last_activity_at_ms);
         assert!(stopped.activity.is_none() && stopped.current_tool.is_none());
         progress.settle(Some("last visible text"));
-        assert_eq!(progress.snapshot().unwrap().elapsed_ms, 10_000);
+        assert_eq!(progress.activity().unwrap().elapsed_ms, 10_000);
         assert_eq!(progress.output().unwrap().text, "last visible text");
+        assert!(
+            !serde_json::to_string(&progress.activity().unwrap())
+                .unwrap()
+                .contains("last visible text")
+        );
+        assert!(
+            serde_json::to_string(&progress.snapshot().unwrap())
+                .unwrap()
+                .contains("last visible text")
+        );
     }
 }

@@ -11,7 +11,7 @@ use ion_core::{
 use crate::{Application, ControlUpdate, SessionCatalog, SessionSetup};
 
 mod progress;
-pub use progress::{ChildActivity, ChildProgress, ChildProgressSnapshot};
+pub use progress::{ChildActivity, ChildActivitySnapshot, ChildProgress, ChildProgressSnapshot};
 mod report;
 
 mod steering;

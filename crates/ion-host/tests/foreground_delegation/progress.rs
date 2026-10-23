@@ -24,7 +24,7 @@ async fn live_observations_invalidate_without_readers_and_do_not_own_execution()
             if live
                 .progress
                 .as_ref()
-                .is_some_and(|progress| progress.activity == Some(ChildActivity::Tool))
+                .is_some_and(|progress| progress.status.activity == Some(ChildActivity::Tool))
             {
                 assert!(!live.joined && live.receipt.outcome.is_none());
                 break;
@@ -36,13 +36,14 @@ async fn live_observations_invalidate_without_readers_and_do_not_own_execution()
     .unwrap();
     let reader = f.delegate.progress.lock().unwrap().clone().unwrap();
     let live = reader.snapshot().unwrap();
+    assert!(live.provisional_output.is_none());
+    let live = live.status;
     assert_eq!(live.child_session, record.child);
     assert_eq!(live.request, record.request_key());
     assert_eq!(live.current_tool.as_deref(), Some("effect"));
-    assert!(live.provisional_output.is_none());
     tokio::time::pause();
     tokio::time::advance(Duration::from_secs(2)).await;
-    let silent = owner.run(record.run).unwrap().progress.unwrap();
+    let silent = owner.run(record.run).unwrap().progress.unwrap().status;
     assert_eq!(silent.last_activity_at_ms, live.last_activity_at_ms);
     assert!(silent.elapsed_ms >= live.elapsed_ms + 2000);
     tokio::time::resume();
@@ -52,13 +53,13 @@ async fn live_observations_invalidate_without_readers_and_do_not_own_execution()
         .await
         .unwrap()
         .unwrap();
-    let stopping = reader.snapshot().unwrap();
+    let stopping = reader.activity().unwrap();
     assert!(stopping.stopping && stopping.activity.is_none());
     assert!(!owner.run(record.run).unwrap().joined);
     assert!(owner.take(record.run).is_none());
     tokio::time::pause();
     tokio::time::advance(Duration::from_secs(60)).await;
-    assert_eq!(reader.snapshot().unwrap().elapsed_ms, stopping.elapsed_ms);
+    assert_eq!(reader.activity().unwrap().elapsed_ms, stopping.elapsed_ms);
     tokio::time::resume();
 
     f.effect.release.notify_one();
@@ -75,10 +76,10 @@ async fn live_observations_invalidate_without_readers_and_do_not_own_execution()
     assert_eq!(*elapsed_ms, Some(stopping.elapsed_ms));
     let acknowledged = owner.take(record.run).unwrap().unwrap();
     assert_eq!(
-        acknowledged.progress.unwrap().elapsed_ms,
+        acknowledged.progress.unwrap().status.elapsed_ms,
         stopping.elapsed_ms
     );
-    assert_eq!(reader.snapshot().unwrap().elapsed_ms, stopping.elapsed_ms);
+    assert_eq!(reader.activity().unwrap().elapsed_ms, stopping.elapsed_ms);
     // Even an actual retained observation grant cannot pin the child writer.
     let reopened = CodingSession::open(&record.path).unwrap();
     assert_eq!(reopened.id(), record.child);

@@ -382,6 +382,11 @@ Owner invalidation signals observation changes, not joining. This read-only hand
 holds no Session writer or execution/cancellation grant, and survives acknowledgement
 only as ephemeral observation data, not recovery authority. Core's joined outcome
 remains the durable result; no live progress is written as relationship facts.
+Terminal `/tasks` consumes content-free metadata without copying child output;
+`/tasks status` explicitly requests the bounded provisional preview. Both render
+through the same literal, control-safe inline/fullscreen notice path and remain
+terminal-local output, never model input. Stopping is still unjoined, errors
+precede previews, and result/acknowledgement still require actual joining.
 
 Timeout is a failed relationship with no answer, not a rewrite of the child's
 ordinary Turn end. Infrastructure failures remain fatal even alongside timeout.

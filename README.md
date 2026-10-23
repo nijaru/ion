@@ -93,9 +93,13 @@ existing session uses its recorded directory, and an explicit `--cwd` must
 match it. Headless runs print the
 session ID to stderr. In the TUI, `/new`, `/clone`, `/tree`, `/fork`, `/fork-after`, `/resume`, `/name`, `/session`,
 `/model` and `/compact` manage the conversation; `/login PROVIDER` and `/logout PROVIDER`
-manage saved keys. `/tasks` lists application-owned background Sessions; use
-`/tasks result ID`, `/tasks cancel ID` and `/tasks acknowledge ID` to inspect,
-stop or release joined custody without deleting committed facts. The TUI model picker searches catalog and configured
+manage saved keys. `/tasks` lists application-owned background runs with content-free
+activity, elapsed time and absolute last-observed activity. `/tasks status ID` adds
+the bounded, literal provisional preview and error cause without waiting or
+acknowledging. Thinking content and tool arguments/results stay hidden; previews
+are not answers or committed facts. `/tasks result ID` requires actual joining;
+`/tasks cancel ID` requests stop but cleanup may remain unjoined. Use
+`/tasks acknowledge ID` to release joined custody without deleting committed facts. The TUI model picker searches catalog and configured
 custom routes. A resumed session restores its model; `ion use` sets the
 default for new sessions. Custom routes and that default are published together
 in `~/.ion/models.json`, with concurrent saves serialized. Ion keeps user

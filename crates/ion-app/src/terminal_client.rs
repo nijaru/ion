@@ -42,6 +42,7 @@ mod navigation;
 mod output;
 mod picker;
 mod question;
+mod tasks;
 use clipboard_input::*;
 use composer::input_window;
 use editing::{Edit, vertical_cursor};
@@ -767,58 +768,7 @@ fn handle_command(
             let owner = runtime
                 .background()
                 .context("application has no background owner")?;
-            if args.is_empty() {
-                let jobs = owner.jobs();
-                if jobs.is_empty() {
-                    ui.print("No retained background tasks".into());
-                }
-                for job in jobs {
-                    ui.print(format!(
-                        "{} · {} · parent {} · {:?}{} · {}",
-                        job.id,
-                        if job.joined { "joined" } else { "unjoined" },
-                        job.parent,
-                        job.end,
-                        job.error
-                            .map(|error| format!(" · {error}"))
-                            .unwrap_or_default(),
-                        job.path.display()
-                    ));
-                }
-            } else {
-                let (action, id) = args
-                    .split_once(char::is_whitespace)
-                    .context("use /tasks [result|cancel|acknowledge UUID]")?;
-                let child = id.trim().parse::<uuid::Uuid>()?;
-                match action {
-                    "result" => {
-                        let report = owner
-                            .run(child)
-                            .context("child is not owned here (unknown or acknowledged)")?;
-                        anyhow::ensure!(report.joined, "child has not joined");
-                        let outcome = report
-                            .receipt
-                            .outcome
-                            .context("joined without a committed outcome; inspect Session facts")?;
-                        ui.print(format!(
-                            "Child {child} · observed outcome\n{}",
-                            serde_json::to_string_pretty(&outcome)?
-                        ));
-                    }
-                    "cancel" => {
-                        owner.request_stop(child)?;
-                        ui.status = format!("Stop requested for {child}");
-                    }
-                    "acknowledge" => {
-                        let report = owner.take(child).context("no joined result to acknowledge (running, unknown or already acknowledged)")??;
-                        ui.print(format!(
-                            "Acknowledged {child}; committed facts remain at {}",
-                            report.receipt.record.path.display()
-                        ));
-                    }
-                    _ => anyhow::bail!("use /tasks [result|cancel|acknowledge UUID]"),
-                }
-            }
+            tasks::command(ui, &owner, args)?;
         }
         Some(Builtin::Commands) => {
             if !args.is_empty() {

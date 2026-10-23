@@ -337,7 +337,7 @@ fn duration_label(duration: Duration) -> String {
     }
 }
 
-fn utc_timestamp(seconds: u64) -> Option<String> {
+pub(super) fn utc_timestamp(seconds: u64) -> Option<String> {
     let days = i64::try_from(seconds / 86_400).ok()?;
     let remainder = seconds % 86_400;
     let (year, month, day) = civil_from_days(days);

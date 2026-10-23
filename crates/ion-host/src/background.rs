@@ -12,7 +12,9 @@ use std::{
     time::Duration,
 };
 
-use crate::{ChildProgress, ChildProgressSnapshot, ChildSteering, ChildSteeringReport};
+use crate::{
+    ChildActivitySnapshot, ChildProgress, ChildProgressSnapshot, ChildSteering, ChildSteeringReport,
+};
 use anyhow::{Result, ensure};
 use ion_core::{
     BackgroundJob, BackgroundSlot, BackgroundStartError, CodingSession, CodingSessionError,
@@ -105,6 +107,7 @@ pub struct BackgroundJobStatus {
     pub joined: bool,
     pub end: Option<ion_core::TurnEndReason>,
     pub error: Option<String>,
+    pub progress: Option<ChildActivitySnapshot>,
 }
 #[derive(Clone, Serialize)]
 pub struct BackgroundSummary {
@@ -277,6 +280,7 @@ impl BackgroundOwner {
                     path: receipt.record.path.clone(),
                     joined: run.operation.is_none(),
                     end,
+                    progress: run.progress.as_ref().and_then(ChildProgress::activity),
                     error: run
                         .result
                         .as_ref()
