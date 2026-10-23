@@ -505,7 +505,7 @@ server.serve_forever()
 }
 
 #[tokio::test]
-async fn oversized_http_event_fails_the_call_with_the_framing_reason() {
+async fn oversized_http_event_preserves_the_framing_reason_for_tools_and_resources() {
     use std::process::Stdio;
     use tokio::{
         io::{AsyncBufReadExt, BufReader},
@@ -516,13 +516,16 @@ async fn oversized_http_event_fails_the_call_with_the_framing_reason() {
     let server = r#"
 import json
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from pathlib import Path
 
 class Handler(BaseHTTPRequestHandler):
     protocol_version = "HTTP/1.1"
     def do_POST(self):
         request = json.loads(self.rfile.read(int(self.headers['Content-Length'])))
         method = request.get('method')
-        if method == 'tools/call':
+        if method in ('tools/call', 'resources/read', 'resources/list', 'resources/templates/list'):
+            with Path('calls').open('a') as observed:
+                observed.write(method + '\n')
             body = b'data: ' + b'x' * (17 * 1024 * 1024) + b'\n\n'
             try:
                 self.send_response(200)
@@ -536,7 +539,7 @@ class Handler(BaseHTTPRequestHandler):
             return
         if method == 'initialize':
             result = {'protocolVersion': request['params']['protocolVersion'],
-                      'capabilities': {'tools': {}}, 'serverInfo': {'name': 'http', 'version': '1'}}
+                      'capabilities': {'tools': {}, 'resources': {}}, 'serverInfo': {'name': 'http', 'version': '1'}}
         elif method == 'tools/list':
             result = {'tools': [{'name': 'probe', 'inputSchema': {'type': 'object'}}]}
         else:
@@ -580,30 +583,84 @@ server.serve_forever()
             }),
         )
         .unwrap();
-    let startup = McpTools::connect(&config, &root).await;
-    assert!(startup.diagnostics.is_empty(), "{:?}", startup.diagnostics);
-    let source = startup.tools.unwrap();
-    let issued = ion_core::ToolSet::new([source.clone() as Arc<dyn CodingToolSource>]).snapshot();
-    let call = ToolCall {
-        id: "http-sse".into(),
-        name: issued.specs()[0].name.clone(),
-        arguments: json!({}),
-        raw_arguments: None,
-    };
-    let output = tokio::time::timeout(
-        Duration::from_secs(30),
-        issued.execute_untracked(&call, CancellationToken::new()),
-    )
-    .await
-    .expect("oversized SSE response left the call waiting");
-    source.shutdown().await.unwrap();
+    let mut outputs = Vec::new();
+    for (name, arguments) in [
+        ("mcp__4_http__probe", json!({})),
+        (
+            "read_mcp_resource",
+            json!({"server":"http", "uri":"fixture://oversized"}),
+        ),
+        ("list_mcp_resources", json!({"server":"http"})),
+        ("list_mcp_resource_templates", json!({"server":"http"})),
+    ] {
+        // A framing failure retires its connection. Each operation gets a fresh
+        // connection to the same real server, not a retry of the failed request.
+        let startup = McpTools::connect(&config, &root).await;
+        assert!(startup.diagnostics.is_empty(), "{:?}", startup.diagnostics);
+        let source = startup.tools.unwrap();
+        let issued =
+            ion_core::ToolSet::new([source.clone() as Arc<dyn CodingToolSource>]).snapshot();
+        let call = ToolCall {
+            id: "http-sse".into(),
+            name: name.into(),
+            arguments,
+            raw_arguments: None,
+        };
+        let mut work = issued.execute_untracked(&call, CancellationToken::new());
+        assert!(futures_util::poll!(&mut work).is_pending());
+        let server = &source.servers[0];
+        tokio::time::timeout(Duration::from_secs(30), async {
+            loop {
+                let lease = server.client.read().await;
+                let connection = lease.as_ref().unwrap();
+                if connection.transport_failure().is_some() {
+                    break;
+                }
+                drop(lease);
+                tokio::time::sleep(Duration::from_millis(5)).await;
+            }
+        })
+        .await
+        .expect("oversized response did not retire the transport");
+        // The invocation still holds its read lease and has not observed the
+        // failed response. Queue retirement's writer before polling it again.
+        let closing = source.shutdown();
+        tokio::pin!(closing);
+        assert!(futures_util::poll!(&mut closing).is_pending());
+        tokio::time::timeout(Duration::from_secs(2), async {
+            while server.client.try_read().is_ok() {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("retirement did not queue its connection write lease");
+        let (closed, output) = tokio::time::timeout(Duration::from_secs(30), async {
+            tokio::join!(closing, work)
+        })
+        .await
+        .expect("oversized SSE response left the call waiting");
+        closed.unwrap();
+        outputs.push((name, output));
+    }
     process.kill().await.unwrap();
+    let calls = fs::read_to_string(root.join("calls")).unwrap();
     fs::remove_dir_all(root).unwrap();
+    assert_eq!(
+        calls.lines().collect::<Vec<_>>(),
+        [
+            "tools/call",
+            "resources/read",
+            "resources/list",
+            "resources/templates/list",
+        ]
+    );
     // The SDK reports a generic transport closure for a terminated stream;
-    // the recorded framing reason must reach the tool observation instead.
-    assert!(output.is_error, "{:?}", output.value);
-    let error = output.value["error"].as_str().unwrap_or_default();
-    assert!(error.contains("framing failed"), "{error}");
+    // the recorded framing reason must reach every model-facing operation.
+    for (name, output) in outputs {
+        assert!(output.is_error, "{name}: {:?}", output.value);
+        let error = output.value["error"].as_str().unwrap_or_default();
+        assert!(error.contains("framing failed"), "{name}: {error}");
+    }
 }
 
 #[test]

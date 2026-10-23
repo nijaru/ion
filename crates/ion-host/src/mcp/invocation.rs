@@ -5,7 +5,6 @@ use std::{
     os::unix::fs::OpenOptionsExt,
     path::PathBuf,
     sync::Arc,
-    time::Duration,
 };
 
 use anyhow::Result as AnyResult;
@@ -14,17 +13,14 @@ use ion_ai::{
     BoxFuture, ImageContent, ImageMime, LoadedImage, MAX_SOURCE_BYTES, ToolCall, normalize_image,
 };
 use ion_core::{CodingToolOutput, ToolExecutor};
-use rmcp::{
-    model::{
-        CallToolRequest, CallToolRequestParams, CallToolResult, ClientRequest, ContentBlock,
-        ServerResult,
-    },
-    service::PeerRequestOptions,
+use rmcp::model::{
+    CallToolRequest, CallToolRequestParams, CallToolResult, ClientRequest, ContentBlock,
+    ServerResult,
 };
 use serde_json::json;
 use tokio_util::sync::CancellationToken;
 
-use super::{Server, send::Completion, tool_error};
+use super::{Server, request::RequestError, tool_error};
 
 /// Original identity and connection are frozen with the model-visible definition.
 pub(super) struct McpExecutor {
@@ -80,113 +76,26 @@ impl McpExecutor {
                 "MCP tool arguments must be an object".to_owned(),
             ));
         };
-        let mut request = ClientRequest::CallToolRequest(CallToolRequest::new(
+        let request = ClientRequest::CallToolRequest(CallToolRequest::new(
             CallToolRequestParams::new(self.original_name.clone()).with_arguments(args.clone()),
         ));
-        let sent = Completion::attach(&mut request);
-        let client = tokio::select! {
-            biased;
-            () = self.server.retiring.cancelled() => return Err(self.closed()),
-            () = stop.cancelled() => return Err(self.cancelled(call)),
-            client = self.server.client.read() => client,
-        };
-        let mut handle = {
-            let Some(connection) = client.as_ref() else {
-                return Err(self.closed());
-            };
-            // No subscriptions, timeout watchers or awaited work follow queue
-            // admission with no_options. A cancelled pending admission has not
-            // issued a request; an admitted one returns its owned handle.
-            tokio::select! {
-                biased;
-                () = self.server.retiring.cancelled() => return Err(self.closed()),
-                () = stop.cancelled() => return Err(self.cancelled(call)),
-                handle = connection.client.send_cancellable_request(request, PeerRequestOptions::no_options()) => {
-                    handle.map_err(|error| self.failed(error))?
-                }
-            }
-        };
-        // Hold the connection through observation, as before. Stop releases it
-        // before retirement; the handle still retains the exact original peer.
-        let response = tokio::select! {
-            biased;
-            response = &mut handle.rx => response,
-            () = self.server.retiring.cancelled() => {
-                drop(client);
-                let cleanup = self.server.shutdown().await;
-                let _ = sent.await;
-                cleanup.map_err(|cleanup| self.failed(cleanup))?;
-                return Err(self.failed("connection retired; effects may be unknown"));
-            }
-            () = stop.cancelled() => {
-                drop(client);
-                let stopping = async {
-                    tokio::join!(sent, handle.cancel(Some("Ion operation cancelled".into())))
-                };
-                tokio::pin!(stopping);
-                // This is a graceful local flush deadline, not an execution
-                // timeout or a promise that the remote operation has stopped.
-                match tokio::time::timeout(Duration::from_secs(3), &mut stopping).await {
-                    Ok((_, Ok(()))) => {}
-                    Ok((_, Err(error))) => {
-                        self.server.shutdown().await.map_err(|cleanup| self.failed(cleanup))?;
-                        return Err(self.failed(error));
+        let (response, cleanup_error) =
+            self.server
+                .request(request, &stop)
+                .await
+                .map_err(|error| match error {
+                    RequestError::Closed => {
+                        tool_error(format!("MCP server {} is closed", self.server.name))
                     }
-                    Err(_) => {
-                        // A partial native frame or pending HTTP POST cannot be
-                        // abandoned while keeping its connection usable.
-                        let cleanup = self.server.shutdown().await;
-                        let _ = stopping.await;
-                        cleanup.map_err(|cleanup| self.failed(cleanup))?;
+                    RequestError::Cancelled => tool_error(format!(
+                        "MCP tool {} cancelled; effects may be unknown",
+                        call.name
+                    )),
+                    RequestError::Retired => {
+                        self.failed("connection retired; effects may be unknown")
                     }
-                }
-                return Err(self.cancelled(call));
-            }
-        };
-        drop(client);
-        // A response can race the SDK send task's completion. Keep that local
-        // task owned too; retirement interrupts stuck POSTs without discarding
-        // the response that has already been observed.
-        let mut sent = sent;
-        let closing = async {
-            tokio::select! {
-                () = stop.cancelled() => {}
-                () = self.server.retiring.cancelled() => {}
-            }
-        };
-        let cleanup_error = tokio::select! {
-            biased;
-            _ = &mut sent => None,
-            () = closing => {
-                let cleanup = self.server.shutdown().await;
-                let _ = sent.await;
-                cleanup.err().map(|error| format!("{error:#}"))
-            }
-        };
-        // A framing failure retires the connection; rmcp then reports that
-        // stream termination as a request-specific transport-closed error. The
-        // recorded reason is the useful observation for both closure shapes.
-        let response = match response {
-            Ok(response) => match response {
-                Ok(message) => message,
-                Err(error) => {
-                    let reason = self
-                        .server
-                        .transport_failure()
-                        .await
-                        .unwrap_or_else(|| error.to_string());
-                    return Err(self.failed(reason));
-                }
-            },
-            Err(_) => {
-                let reason = self
-                    .server
-                    .transport_failure()
-                    .await
-                    .unwrap_or_else(|| "transport closed".to_owned());
-                return Err(self.failed(reason));
-            }
-        };
+                    RequestError::Failed(error) => self.failed(error),
+                })?;
         match response {
             ServerResult::CallToolResult(result) => Ok((result, cleanup_error)),
             ServerResult::InputRequiredResult(_) => Err(self.failed(
@@ -200,21 +109,10 @@ impl McpExecutor {
         }
     }
 
-    fn closed(&self) -> CodingToolOutput {
-        tool_error(format!("MCP server {} is closed", self.server.name))
-    }
-
     fn failed(&self, error: impl std::fmt::Display) -> CodingToolOutput {
         tool_error(format!(
             "MCP server {} tool call failed: {error}",
             self.server.name
-        ))
-    }
-
-    fn cancelled(&self, call: &ToolCall) -> CodingToolOutput {
-        tool_error(format!(
-            "MCP tool {} cancelled; effects may be unknown",
-            call.name
         ))
     }
 }

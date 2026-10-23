@@ -695,7 +695,8 @@ retain their transport's stricter 16 MiB default and cannot exceed the aggregate
 64 MiB per-message ceiling. Reject overflow rather than truncate a message into a different
 observation; do not reconnect and repeat an effectful call. An unanswered call on
 a failed transport may already have executed. These are transport budgets, not
-model-context or artifact quotas.
+model-context or artifact quotas. Tool and resource requests retain a recorded
+framing rejection even when connection shutdown joins concurrently.
 
 Conversion preserves the server's observed error/success flag, supported text and
 structured data even when another block cannot be delivered. Unsupported media or

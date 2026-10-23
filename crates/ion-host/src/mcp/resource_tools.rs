@@ -1,12 +1,10 @@
 //! Model-facing MCP resources: bounded read-only listing and reading.
 use std::{
-    fmt::Display,
     fs::{self, OpenOptions},
     io::Write,
     os::unix::fs::OpenOptionsExt,
     path::PathBuf,
     sync::Arc,
-    time::Duration,
 };
 
 use futures_util::future::join_all;
@@ -15,19 +13,16 @@ use ion_core::{
     CodingToolOutput, ToolDefinition, ToolExecutor, ToolExposure, ToolInvocation, ToolPresentation,
     ToolRegistration,
 };
-use rmcp::{
-    model::{
-        ClientRequest, ListResourceTemplatesRequest, ListResourcesRequest, PaginatedRequestParams,
-        ReadResourceRequest, ReadResourceRequestParams, Resource, ResourceContents,
-        ResourceTemplate, ServerResult,
-    },
-    service::PeerRequestOptions,
+use rmcp::model::{
+    ClientRequest, ListResourceTemplatesRequest, ListResourcesRequest, PaginatedRequestParams,
+    ReadResourceRequest, ReadResourceRequestParams, Resource, ResourceContents, ResourceTemplate,
+    ServerResult,
 };
 use serde::Deserialize;
 use serde_json::{Map, Value, json};
 use tokio_util::sync::CancellationToken;
 
-use super::{Server, invocation::save_full_mcp_output, send::Completion, tool_error};
+use super::{Server, invocation::save_full_mcp_output, request::RequestError, tool_error};
 
 const LIST_RESOURCES: &str = "list_mcp_resources";
 const LIST_TEMPLATES: &str = "list_mcp_resource_templates";
@@ -314,7 +309,10 @@ async fn list_page(
         }
         Kind::Read => return Err("internal MCP resource request kind mismatch".into()),
     };
-    let (result, cleanup_error) = read_only_request(server, request, stop).await?;
+    let (result, cleanup_error) = server
+        .request(request, stop)
+        .await
+        .map_err(|error| request_error(server, error))?;
     match (kind, result) {
         (Kind::Resources, ServerResult::ListResourcesResult(result)) => Ok((
             result
@@ -401,9 +399,9 @@ async fn read(
     let request = ClientRequest::ReadResourceRequest(ReadResourceRequest::new(
         ReadResourceRequestParams::new(uri),
     ));
-    let (result, cleanup_error) = match read_only_request(server, request, stop).await {
+    let (result, cleanup_error) = match server.request(request, stop).await {
         Ok(result) => result,
-        Err(error) => return tool_error(error),
+        Err(error) => return tool_error(request_error(server, error)),
     };
     let ServerResult::ReadResourceResult(result) = result else {
         return tool_error(format!(
@@ -589,103 +587,20 @@ fn resource_server<'a>(servers: &'a [Arc<Server>], name: &str) -> Result<&'a Arc
     })
 }
 
-/// Read-only MCP operations still own local dispatch through observation. A
-/// cancellation that cannot flush retires the connection rather than leaving a
-/// pending request on a reusable peer.
-async fn read_only_request(
-    server: &Server,
-    mut request: ClientRequest,
-    stop: &CancellationToken,
-) -> Result<(ServerResult, Option<String>), String> {
-    let sent = Completion::attach(&mut request);
-    let client = tokio::select! {
-        biased;
-        () = server.retiring.cancelled() => return Err(closed(server)),
-        () = stop.cancelled() => return Err(cancelled(server)),
-        client = server.client.read() => client,
-    };
-    let mut handle = {
-        let Some(connection) = client.as_ref() else {
-            return Err(closed(server));
-        };
-        tokio::select! {
-            biased;
-            () = server.retiring.cancelled() => return Err(closed(server)),
-            () = stop.cancelled() => return Err(cancelled(server)),
-            handle = connection.client.send_cancellable_request(
-                request,
-                PeerRequestOptions::no_options(),
-            ) => handle.map_err(|error| failed(server, error))?,
+fn request_error(server: &Server, error: RequestError) -> String {
+    let reason = match error {
+        RequestError::Closed => return format!("MCP server {} is closed", server.name),
+        RequestError::Cancelled => {
+            return format!(
+                "MCP server {} resource request was cancelled; the server may still be reading",
+                server.name
+            );
         }
+        RequestError::Retired => "connection retired; the resource read is unknown".into(),
+        RequestError::Failed(error) => error,
     };
-    let response = tokio::select! {
-        biased;
-        response = &mut handle.rx => response,
-        () = server.retiring.cancelled() => {
-            drop(client);
-            let cleanup = server.shutdown().await;
-            let _ = sent.await;
-            cleanup.map_err(|cleanup| failed(server, cleanup))?;
-            return Err(failed(server, "connection retired; the resource read is unknown"));
-        }
-        () = stop.cancelled() => {
-            drop(client);
-            let stopping = async {
-                tokio::join!(sent, handle.cancel(Some("Ion operation cancelled".into())))
-            };
-            tokio::pin!(stopping);
-            match tokio::time::timeout(Duration::from_secs(3), &mut stopping).await {
-                Ok((_, Ok(()))) => {}
-                Ok((_, Err(error))) => {
-                    server.shutdown().await.map_err(|cleanup| failed(server, cleanup))?;
-                    return Err(failed(server, error));
-                }
-                Err(_) => {
-                    let cleanup = server.shutdown().await;
-                    let _ = stopping.await;
-                    cleanup.map_err(|cleanup| failed(server, cleanup))?;
-                }
-            }
-            return Err(cancelled(server));
-        }
-    };
-    drop(client);
-    let mut sent = sent;
-    let closing = async {
-        tokio::select! {
-            () = stop.cancelled() => {}
-            () = server.retiring.cancelled() => {}
-        }
-    };
-    let cleanup_error = tokio::select! {
-        biased;
-        _ = &mut sent => None,
-        () = closing => {
-            let cleanup = server.shutdown().await;
-            let _ = sent.await;
-            cleanup.err().map(|error| format!("{error:#}"))
-        }
-    };
-    let response = response
-        .map_err(|_| closed(server))?
-        .map_err(|error| failed(server, error))?;
-    Ok((response, cleanup_error))
-}
-
-fn closed(server: &Server) -> String {
-    format!("MCP server {} is closed", server.name)
-}
-
-fn failed(server: &Server, error: impl Display) -> String {
     format!(
-        "MCP server {} resource request failed: {error}",
-        server.name
-    )
-}
-
-fn cancelled(server: &Server) -> String {
-    format!(
-        "MCP server {} resource request was cancelled; the server may still be reading",
+        "MCP server {} resource request failed: {reason}",
         server.name
     )
 }

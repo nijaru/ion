@@ -832,7 +832,8 @@ a later shutdown joins the same task instead of reporting an already-taken
 connection as clean. Incoming messages are bounded before decoding: one stdio
 JSON line or HTTP JSON/error body may be at most 64 MiB, and an SSE event stays
 within the transport's 16 MiB default and that 64 MiB ceiling. Oversize input is
-rejected rather than truncated into a different observation. A rejected stdio
+rejected rather than truncated into a different observation. Tool and resource
+errors preserve the framing reason, including during concurrent shutdown. A rejected stdio
 line or SSE event retires that connection, so Ion cannot resume and replay it;
 an oversize HTTP JSON/error body fails that request. Neither case reconnects and
 repeats a possibly executed call, and lost transport errors surface after one

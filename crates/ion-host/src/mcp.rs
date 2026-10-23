@@ -32,6 +32,7 @@ mod connection;
 mod framing;
 mod http;
 mod invocation;
+mod request;
 mod resource_tools;
 mod send;
 mod stderr;
@@ -267,14 +268,6 @@ impl Server {
     fn attach_stderr(&self, output: &mut CodingToolOutput) {
         if let Some(snapshot) = self.stderr.as_ref().and_then(|log| log.snapshot()) {
             output.value["server_stderr"][&self.name] = snapshot;
-        }
-    }
-
-    /// Why an HTTP transport retired itself, if framing rejected input.
-    async fn transport_failure(&self) -> Option<String> {
-        match &*self.client.read().await {
-            Some(connection) => connection.transport_failure(),
-            None => None,
         }
     }
 
