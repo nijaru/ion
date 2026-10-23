@@ -768,12 +768,12 @@ exercise_active_band()
 
 
 def exercise_questions():
-    """Real built client questions: option, custom Unicode, cancel and Ctrl-C."""
+    """Real client single/multi questions: choices, empty, custom, cancel and stop."""
     with tempfile.TemporaryDirectory(prefix="ion-questions-") as temporary:
         work = Path(temporary)
         env = {name: value for name, value in os.environ.items() if name in ("PATH", "SHELL", "TMPDIR")}
         env.update(HOME=str(work / "home"), ION_HOME=str(work / "ion"), XDG_CONFIG_HOME=str(work / "config"), XDG_STATE_HOME=str(work / "state"), TERM="xterm-256color")
-        for mode in ("select", "custom", "cancel", "stop"):
+        for mode in ("select", "custom", "cancel", "stop", "multi", "multi-empty", "multi-custom", "multi-cancel", "multi-stop"):
             workspace = work / mode
             workspace.mkdir()
             port_file, trace = work / f"port-{mode}", work / f"requests-{mode}"
@@ -826,18 +826,37 @@ def exercise_questions():
                     if mode == "select":
                         os.write(master, b"\x1b[B\r")
                         wait(lambda: b"QUESTION_DONE" in plain(), "selected answer effect")
-                    elif mode == "custom":
+                    elif mode == "multi":
+                        os.write(master, b"\x1b[B ")  # Beta first.
+                        wait(lambda: b"[x] Beta" in plain(), "multi checkbox")
+                        assert not (workspace / "question-effect.txt").exists()
+                        os.write(master, b"\x1b[A\r\r ")  # Toggle Alpha on/off/on.
+                        os.write(master, b"\x1b[B\x1b[B\x1b[B\r")  # Explicit Next.
+                        wait(lambda: b"QUESTION_DONE" in plain(), "multiple answer effect")
+                    elif mode == "multi-empty":
+                        os.write(master, b"\x1b[B\x1b[B\x1b[B\r")
+                        wait(lambda: b"QUESTION_DONE" in plain(), "explicit empty answer effect")
+                    elif mode in ("custom", "multi-custom"):
+                        if mode == "multi-custom":
+                            os.write(master, b" ")
+                            wait(lambda: b"[x] Alpha" in plain(), "checked before custom")
                         os.write(master, b"\x1b[B\x1b[B\r")
                         wait(lambda: b"Enter answer" in plain(), "custom editor")
                         os.write(master, "café 🦀\r".encode())
                         wait(lambda: b"QUESTION_DONE" in plain(), "custom answer effect")
-                    elif mode == "cancel":
+                    elif mode in ("cancel", "multi-cancel"):
+                        if mode == "multi-cancel":
+                            os.write(master, b" ")
+                            wait(lambda: b"[x] Alpha" in plain(), "checked before cancel")
                         os.write(master, b"\x1b")
                         wait(lambda: b"CANCEL_OBSERVED" in plain(), "cancelled batch continuation")
                     else:
+                        if mode == "multi-stop":
+                            os.write(master, b" ")
+                            wait(lambda: b"[x] Alpha" in plain(), "checked before stop")
                         os.write(master, b"\x03")
                         wait(lambda: b"Question closed" in plain(), "Ctrl-C stopped question Turn")
-                    if mode != "stop":
+                    if mode not in ("stop", "multi-stop"):
                         wait(lambda: b"state=done:app=ion" in output or b"state=idle:app=ion" in output, "settled program status")
                         os.write(master, b"\x04")
                     else:
@@ -856,11 +875,12 @@ def exercise_questions():
                     os.close(master)
 
                 records = [json.loads(line) for line in trace.read_text().splitlines() if line.strip()]
-                if mode in ("select", "custom"):
+                answered = mode in ("select", "custom", "multi", "multi-empty", "multi-custom")
+                if answered:
                     assert len(records) == 3, (mode, len(records))
-                    expected = "SELECTED:Beta" if mode == "select" else "CUSTOM:café 🦀"
+                    expected = {"select": "SELECTED:Beta", "multi": "MULTI:Alpha,Beta", "multi-empty": "MULTI:none"}.get(mode, "CUSTOM:café 🦀")
                     assert (workspace / "question-effect.txt").read_text() == expected
-                elif mode == "cancel":
+                elif mode in ("cancel", "multi-cancel"):
                     assert len(records) == 2, (mode, len(records))
                     assert not (workspace / "question-effect.txt").exists()
                 else:
@@ -878,7 +898,7 @@ def exercise_questions():
                     assert outcome["state"] == "observed", outcome
                     outcomes.append(outcome["output"]["value"])
                 assert outcomes, (mode, inspected)
-                if mode in ("select", "custom"):
+                if answered:
                     assert outcomes[-1]["status"] == "answered", outcomes[-1]
                 else:
                     assert outcomes[-1]["status"] == "cancelled", outcomes[-1]
@@ -891,7 +911,7 @@ def exercise_questions():
                 diagnostics = server.stderr.read()
                 if diagnostics:
                     print(f"question provider {mode} stderr:\n{diagnostics.decode(errors='replace')}", file=sys.stderr)
-    print("Ion typed questions: option, custom Unicode, cancel, Ctrl-C stop, status and independent effects: OK")
+    print("Ion typed questions: single/multi, explicit empty, custom Unicode, cancel, Ctrl-C stop, status and independent effects: OK")
 
 
 exercise_questions()

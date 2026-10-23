@@ -1356,13 +1356,17 @@ that escaped descendants have stopped. `--read-only` excludes this capability.
 ## Typed questions
 
 Terminal and bidirectional RPC coding offer `ask_user_question` within the current Turn.
-A request contains `questions`: 1–4 single-select questions, each with question
-text and 2–6 `{label, description?}` options. The terminal dialog adds **Type something.**
-for custom text; do not author that label or **Other** as an option. Multiselect,
-headers and rich previews are not implemented.
+A request contains `questions`: 1–4 questions, each with question text and 2–6
+`{label, description?}` options. Set `multi_select: true` when multiple choices are
+valid; omission defaults to single-select. The dialog adds **Type something.**
+for a custom answer in either mode and **Next** for multi-select confirmation;
+do not author those labels or **Other** as options. Headers and rich previews
+are not implemented.
 
-In the terminal, use Up/Down and Enter to choose. A custom answer supports Unicode editing and
-paste; Enter accepts it and Shift-Enter adds a newline. Answers advance through
+In the terminal, use Up/Down and Enter to choose. Multi-select uses Space or Enter
+to toggle checkboxes without submitting; choose **Next** to confirm, including an
+explicit empty selection. A custom answer replaces all checkbox choices and
+supports Unicode editing and paste; Enter accepts it and Shift-Enter adds a newline. Answers advance through
 the batch and submit together. Esc cancels the whole questionnaire with an
 explicit cancellation observation; the model may continue without an answer.
 Ctrl-C stops the Turn. The dialog preserves the composer draft and waits for an
@@ -1372,7 +1376,9 @@ keystrokes or revoking a terminal lease.
 Answers become ordinary committed tool observations, not steering, new user
 messages, approval or permission. An answered result carries an `answers` array:
 question ordinals are one-based, option indices are zero-based, and selected
-labels come from the original request. A live responder lease and request nonce reject
+labels come from the original request. Multi-select results use `kind: "options"`
+with an `options` array of `{option, label}` entries in request order; an empty
+array means none, not cancellation. A live responder lease and request nonce reject
 stale/duplicate replies; requests carry their Core Session/Turn/tool occurrence.
 Losing the responder while a question waits stops that Turn before releasing the
 waiter. Shutdown revokes requests even if a caller retains its responder handle.
@@ -1405,9 +1411,11 @@ For a live request, substitute its nonce and submit one answer per question:
 {"type":"cancel_question","id":"c","request":"QUESTION_UUID"}
 ```
 
-An answer is either `{"kind":"option","index":N}` (zero-based) or
-`{"kind":"text","text":"custom answer"}`. Do not send a label or other extra
-fields. `answer_question` and `cancel_question` return `disposition: "submitted"`:
+An answer is `{"kind":"option","index":N}` for single-select,
+`{"kind":"options","indices":[2,0]}` for multi-select, or
+`{"kind":"text","text":"custom answer"}` for either mode. Indices are zero-based;
+multi-select accepts an empty array but rejects duplicates and out-of-range values.
+Do not send labels or other extra fields. `answer_question` and `cancel_question` return `disposition: "submitted"`:
 the decision was handed to the live Host waiter, not necessarily committed yet.
 Continue reading ordinary tool observations and `turn_end`. Cancellation dismisses
 only the batch and may allow dependent work; use `abort` to stop the Turn.

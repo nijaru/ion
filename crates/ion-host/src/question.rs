@@ -23,7 +23,8 @@ pub const MAX_REQUEST_BYTES: usize = 64 * 1024;
 pub const MAX_ANSWER_BYTES: usize = 4096;
 pub const MAX_ANSWER_BATCH_BYTES: usize = 48 * 1024;
 pub const SYNTHETIC_TEXT_LABEL: &str = "Type something.";
-pub(crate) const RESERVED_LABELS: [&str; 2] = ["Other", SYNTHETIC_TEXT_LABEL];
+pub const SYNTHETIC_NEXT_LABEL: &str = "Next";
+pub(crate) const RESERVED_LABELS: [&str; 3] = ["Other", SYNTHETIC_TEXT_LABEL, SYNTHETIC_NEXT_LABEL];
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 pub struct QuestionOption {
@@ -35,6 +36,7 @@ pub struct QuestionOption {
 pub struct Question {
     pub question: String,
     pub options: Vec<QuestionOption>,
+    pub multi_select: bool,
 }
 
 /// Opaque live request identity. A responder must present both its lease and
@@ -67,8 +69,16 @@ pub struct PendingQuestion {
 /// custom text is preserved exactly after nonempty/byte validation.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum QuestionAnswer {
-    Option { index: usize },
-    Text { text: String },
+    Option {
+        index: usize,
+    },
+    /// Multi-select only. Empty explicitly means no options; never cancellation.
+    Options {
+        indices: Vec<usize>,
+    },
+    Text {
+        text: String,
+    },
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -79,10 +89,20 @@ pub(crate) enum CompletedAnswer {
         option: usize,
         label: String,
     },
+    Options {
+        question: usize,
+        options: Vec<CompletedOption>,
+    },
     Text {
         question: usize,
         text: String,
     },
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub(crate) struct CompletedOption {
+    option: usize,
+    label: String,
 }
 
 #[derive(Debug, Serialize)]
@@ -710,6 +730,11 @@ fn validate_answers(
             QuestionAnswer::Option {
                 index: option_index,
             } => {
+                if question.multi_select {
+                    return Err(QuestionError::InvalidAnswer(
+                        "a multi-select question requires option indices or custom text",
+                    ));
+                }
                 let Some(option) = question.options.get(*option_index) else {
                     return Err(QuestionError::InvalidAnswer(
                         "option index is outside this question",
@@ -719,6 +744,40 @@ fn validate_answers(
                     question: index + 1,
                     option: *option_index,
                     label: option.label.clone(),
+                }
+            }
+            QuestionAnswer::Options { indices } => {
+                if !question.multi_select {
+                    return Err(QuestionError::InvalidAnswer(
+                        "a single-select question requires one option or custom text",
+                    ));
+                }
+                if indices.len() > question.options.len() {
+                    return Err(QuestionError::InvalidAnswer("too many option indices"));
+                }
+                let mut indices = indices.clone();
+                indices.sort_unstable();
+                if indices.windows(2).any(|pair| pair[0] == pair[1]) {
+                    return Err(QuestionError::InvalidAnswer("duplicate option index"));
+                }
+                let options =
+                    indices
+                        .into_iter()
+                        .map(|option| {
+                            let selected = question.options.get(option).ok_or(
+                                QuestionError::InvalidAnswer(
+                                    "option index is outside this question",
+                                ),
+                            )?;
+                            Ok(CompletedOption {
+                                option,
+                                label: selected.label.clone(),
+                            })
+                        })
+                        .collect::<Result<Vec<_>, QuestionError>>()?;
+                CompletedAnswer::Options {
+                    question: index + 1,
+                    options,
                 }
             }
             QuestionAnswer::Text { text } => {

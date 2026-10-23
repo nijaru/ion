@@ -1,6 +1,6 @@
 //! Typed RPC translation for the shared Host's single live responder lease.
 use super::*;
-use ion_host::{MAX_ANSWER_BYTES, MAX_QUESTIONS, QuestionAnswer, QuestionRequestId};
+use ion_host::{MAX_ANSWER_BYTES, MAX_OPTIONS, MAX_QUESTIONS, QuestionAnswer, QuestionRequestId};
 use serde::Deserialize;
 use tokio::io::AsyncWrite;
 
@@ -8,6 +8,7 @@ use tokio::io::AsyncWrite;
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 enum Answer<'a> {
     Option { index: usize },
+    Options { indices: Vec<usize> },
     Text { text: &'a str },
 }
 
@@ -29,6 +30,10 @@ impl Control {
             .map(|answer| {
                 Ok(match Answer::deserialize(answer)? {
                     Answer::Option { index } => QuestionAnswer::Option { index },
+                    Answer::Options { indices } => {
+                        ensure!(indices.len() <= MAX_OPTIONS, "too many option indices");
+                        QuestionAnswer::Options { indices }
+                    }
                     Answer::Text { text } => {
                         ensure!(
                             text.len() <= MAX_ANSWER_BYTES,

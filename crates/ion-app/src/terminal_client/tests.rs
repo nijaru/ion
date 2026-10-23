@@ -889,6 +889,7 @@ fn question_modal_preserves_composer_draft_images_and_defers_to_other_views() {
     let request = ion_host::QuestionRequestId(uuid::Uuid::now_v7());
     let questions = vec![ion_host::Question {
         question: "Continue?".into(),
+        multi_select: false,
         options: vec![
             ion_host::QuestionOption {
                 label: "Yes".into(),

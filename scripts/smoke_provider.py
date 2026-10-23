@@ -147,6 +147,7 @@ class Handler(BaseHTTPRequestHandler):
             calls = [("question-1", "ask_user_question", {
                 "questions": [{
                     "question": "Which route should the fixture take?",
+                    "multi_select": questions.startswith("multi"),
                     "options": [
                         {"label": "Alpha", "description": "first"},
                         {"label": "Beta", "description": "second"},
@@ -169,11 +170,20 @@ class Handler(BaseHTTPRequestHandler):
                 assert result["status"] == "answered", result
                 assert result["answers"] == [{"kind": "option", "question": 1, "option": 1, "label": "Beta"}], result
                 effect = "SELECTED:Beta"
-            elif mode == "custom":
+            elif mode == "multi":
+                assert result["status"] == "answered", result
+                assert result["answers"] == [{"kind": "options", "question": 1, "options": [
+                    {"option": 0, "label": "Alpha"}, {"option": 1, "label": "Beta"}
+                ]}], result
+                effect = "MULTI:Alpha,Beta"
+            elif mode == "multi-empty":
+                assert result == {"status": "answered", "answers": [{"kind": "options", "question": 1, "options": []}]}, result
+                effect = "MULTI:none"
+            elif mode in ("custom", "multi-custom"):
                 assert result["status"] == "answered", result
                 assert result["answers"] == [{"kind": "text", "question": 1, "text": "café 🦀"}], result
                 effect = "CUSTOM:café 🦀"
-            elif mode == "cancel":
+            elif mode in ("cancel", "multi-cancel"):
                 assert result["status"] == "cancelled" and result["reason"] == "user_cancelled", result
                 delta, finish = {"content": "CANCEL_OBSERVED"}, "stop"
                 question_count = 3

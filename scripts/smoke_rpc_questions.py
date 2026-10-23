@@ -18,11 +18,15 @@ binary = Path(os.environ.get("ION_SMOKE_BIN", root / "target/debug/ion"))
 questions = [
     {"question": "Which route?", "options": [{"label": "Alpha"}, {"label": "Beta", "description": "second"}]},
     {"question": "Which detail?", "options": [{"label": "One"}, {"label": "Two"}]},
+    {"question": "Which features?", "multi_select": True, "options": [{"label": "Read"}, {"label": "Write"}, {"label": "Search"}]},
+    {"question": "Anything else?", "multi_select": True, "options": [{"label": "One"}, {"label": "Two"}]},
 ]
-answers = [{"kind": "option", "index": 1}, {"kind": "text", "text": "  café 🦀\n  "}]
+answers = [{"kind": "option", "index": 1}, {"kind": "text", "text": "  café 🦀\n  "}, {"kind": "options", "indices": [2, 0]}, {"kind": "options", "indices": []}]
 expected_answers = [
     {"kind": "option", "question": 1, "option": 1, "label": "Beta"},
     {"kind": "text", "question": 2, "text": "  café 🦀\n  "},
+    {"kind": "options", "question": 3, "options": [{"option": 0, "label": "Read"}, {"option": 2, "label": "Search"}]},
+    {"kind": "options", "question": 4, "options": []},
 ]
 requests, errors = [], []
 
@@ -121,7 +125,8 @@ class Client:
     def question(self, padding=""):
         self.send({"type": "prompt", "id": "prompt", "message": "ASK_QUESTIONS" + padding})
         while True:
-            self.through(lambda record: record["type"] == "question_changed")
+            records = self.through(lambda record: record["type"] in ("question_changed", "turn_end"))
+            assert records[-1]["type"] == "question_changed", ("Turn ended without a pending question", records)
             reply = self.command("get_question")
             assert reply["success"], reply
             pending = reply["data"]["question"]
@@ -129,6 +134,7 @@ class Client:
                 break
         for actual, expected in zip(pending["questions"], questions, strict=True):
             assert actual["question"] == expected["question"], pending
+            assert actual["multi_select"] == expected.get("multi_select", False), pending
             assert actual["options"] == [dict(label=option["label"], description=option.get("description")) for option in expected["options"]], pending
         assert pending["origin"]["session"] == self.session, pending
         assert not (self.cwd / "question-effect.txt").exists(), "dependent call ran before the answer"
@@ -202,7 +208,20 @@ with tempfile.TemporaryDirectory(prefix="ion-rpc-questions-") as temporary:
             {"kind": "text", "text": "  "}, {"kind": "text", "text": "é" * 2049},
             {"kind": "text", "text": False}, {"kind": "unknown", "text": "ignored"},
         ]:
-            invalid.append({**valid, "answers": [answers[0], answer]})
+            invalid.append({**valid, "answers": [answers[0], answer, *answers[2:]]})
+        for index, answer in [
+            (0, {"kind": "options", "indices": [0]}),  # wrong mode
+            (2, {"kind": "option", "index": 0}),
+            (2, {"kind": "options", "indices": [0, 0]}),
+            (2, {"kind": "options", "indices": [3]}),
+            (2, {"kind": "options", "indices": [0, 1, 2, 0]}),
+            (2, {"kind": "options", "indices": [True]}),
+            (2, {"kind": "options", "indices": [1.0]}),
+            (2, {"kind": "options", "indices": [-1]}),
+            (2, {"kind": "options", "indices": None}),
+            (2, {"kind": "options", "indices": [0], "labels": ["forged"]}),
+        ]:
+            invalid.append({**valid, "answers": [*answers[:index], answer, *answers[index + 1:]]})
         for command in invalid:
             reply = client.command(command.pop("type"), **command)
             assert not reply["success"], reply

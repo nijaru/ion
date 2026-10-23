@@ -951,10 +951,16 @@ Without a responder, omit the capability or return explicit unavailability; do n
 auto-answer. Terminal and bidirectional RPC coding connect an actual responder
 before admitting work; one-shot headless execution has no answer channel.
 
-`ask_user_question` accepts one batch of 1–4 single-select questions, each with
-2–6 labeled options and optional descriptions; the responder supplies a separate
-free-text choice. Bound request, option and answer sizes, validate replies against
-the exact live request, and accept the whole batch atomically. Only one batch may
+`ask_user_question` accepts one batch of 1–4 questions, each with 2–6 labeled
+options and optional descriptions. Optional `multi_select` defaults to false;
+true permits an explicit set of unique option indices, including an empty set
+meaning none rather than cancellation. Replies must match the question's mode;
+labels and canonical request order come from the immutable live request, not the
+responder. A separate free-text answer replaces all choices in either mode.
+Multi-select toggles remain unsent UI state until explicit Next confirmation;
+model-authored options cannot impersonate Next or Type something. Bound request,
+option and answer sizes, validate against the exact live request, and accept the
+whole batch atomically. Only one batch may
 wait on a control owner; concurrent asks fail explicitly rather than queue behind
 an unseen dialog. A non-clone responder lease and request nonce authorize the
 reply; display coordinates or copied origins alone do not. The optional question

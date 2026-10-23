@@ -1,7 +1,8 @@
 //! Typed question modal: presentation, bounded editor and lease-bound answers.
 //! Question custody itself remains in ion-host.
 use ion_host::{
-    MAX_ANSWER_BYTES, Question, QuestionAnswer, QuestionRequestId, SYNTHETIC_TEXT_LABEL,
+    MAX_ANSWER_BYTES, Question, QuestionAnswer, QuestionRequestId, SYNTHETIC_NEXT_LABEL,
+    SYNTHETIC_TEXT_LABEL,
 };
 use ion_terminal::{KeyCode, KeyEvent, Modifiers};
 use ratatui::text::Line;
@@ -16,8 +17,9 @@ pub(super) struct QuestionModal {
     request: QuestionRequestId,
     questions: Vec<Question>,
     index: usize,
-    /// Model option indices followed by the synthetic free-text row.
+    /// Focused row: options, free text, then Next for multi-select.
     selected: usize,
+    checked: Vec<usize>,
     editor: Option<TextEditor>,
     answers: Vec<QuestionAnswer>,
     status: String,
@@ -47,6 +49,7 @@ impl QuestionModal {
             questions,
             index: 0,
             selected: 0,
+            checked: Vec::new(),
             editor: None,
             answers: Vec::new(),
             status: String::new(),
@@ -86,7 +89,7 @@ impl QuestionModal {
                 code: KeyCode::Down,
                 modifiers,
             } if modifiers.is_empty() || modifiers == Modifiers::ALT => {
-                let last = self.current_options().len();
+                let last = self.current_options().len() + usize::from(self.multi_select());
                 self.selected = (self.selected + 1).min(last);
                 self.status.clear();
                 QuestionAction::None
@@ -95,6 +98,15 @@ impl QuestionModal {
                 code: KeyCode::Enter,
                 modifiers,
             } if modifiers.is_empty() => self.confirm(),
+            KeyEvent {
+                code: KeyCode::Char(' '),
+                modifiers,
+            } if modifiers.is_empty() && self.multi_select() => {
+                if self.selected < self.current_options().len() {
+                    self.toggle();
+                }
+                QuestionAction::None
+            }
             _ => QuestionAction::None,
         }
     }
@@ -121,10 +133,39 @@ impl QuestionModal {
             self.open_editor();
             return QuestionAction::None;
         }
-        self.answers.push(QuestionAnswer::Option {
-            index: self.selected,
-        });
+        if self.multi_select() {
+            if self.selected < options {
+                self.toggle();
+                return QuestionAction::None;
+            }
+            self.answers.push(QuestionAnswer::Options {
+                indices: (0..options)
+                    .filter(|index| self.checked.contains(index))
+                    .collect(),
+            });
+        } else {
+            self.answers.push(QuestionAnswer::Option {
+                index: self.selected,
+            });
+        }
         self.advance()
+    }
+
+    fn multi_select(&self) -> bool {
+        self.questions[self.index].multi_select
+    }
+
+    fn toggle(&mut self) {
+        if let Some(position) = self
+            .checked
+            .iter()
+            .position(|index| *index == self.selected)
+        {
+            self.checked.remove(position);
+        } else {
+            self.checked.push(self.selected);
+        }
+        self.status.clear();
     }
 
     fn open_editor(&mut self) {
@@ -218,6 +259,7 @@ impl QuestionModal {
     }
 
     fn advance(&mut self) -> QuestionAction {
+        self.checked.clear();
         if self.index + 1 < self.questions.len() {
             self.index += 1;
             self.selected = 0;
@@ -286,7 +328,20 @@ impl QuestionModal {
                 focus = content.len();
             }
             let marker = if index == self.selected { "› " } else { "  " };
-            push_wrapped(&mut content, &format!("{marker}{}", option.label), width);
+            let checkbox = if question.multi_select {
+                if self.checked.contains(&index) {
+                    "[x] "
+                } else {
+                    "[ ] "
+                }
+            } else {
+                ""
+            };
+            push_wrapped(
+                &mut content,
+                &format!("{marker}{checkbox}{}", option.label),
+                width,
+            );
             if let Some(description) = &option.description {
                 push_prefixed(&mut content, "    ", "    ", description, width);
             }
@@ -305,6 +360,20 @@ impl QuestionModal {
             &format!("{marker}{SYNTHETIC_TEXT_LABEL}"),
             width,
         );
+
+        if question.multi_select {
+            let marker = if self.selected == synthetic + 1 {
+                focus = content.len();
+                "› "
+            } else {
+                "  "
+            };
+            push_wrapped(
+                &mut content,
+                &format!("{marker}{SYNTHETIC_NEXT_LABEL}"),
+                width,
+            );
+        }
 
         let mut cursor = None;
         if let Some(editor) = &self.editor {
@@ -327,6 +396,8 @@ impl QuestionModal {
         let editing = self.editor.is_some();
         let controls = if editing {
             "Enter answer · Shift-Enter newline · Esc cancel · Ctrl-C stops Turn"
+        } else if question.multi_select {
+            "Up/Down move · Space/Enter toggle · Next confirm · Esc cancel · Ctrl-C stop"
         } else {
             "Up/Down choose · Enter select · Esc cancel · Ctrl-C stops Turn"
         };
@@ -371,6 +442,7 @@ mod tests {
             vec![
                 Question {
                     question: "Choose a route".into(),
+                    multi_select: false,
                     options: vec![
                         QuestionOption {
                             label: "Alpha".into(),
@@ -384,6 +456,7 @@ mod tests {
                 },
                 Question {
                     question: "Custom?".into(),
+                    multi_select: false,
                     options: vec![
                         QuestionOption {
                             label: "Yes".into(),
@@ -421,6 +494,74 @@ mod tests {
     }
 
     #[test]
+    fn multi_select_toggles_without_advancing_until_explicit_next() {
+        let mut modal = modal();
+        modal.questions[0].multi_select = true;
+        let down = KeyEvent::new(KeyCode::Down, Modifiers::NONE);
+        let space = KeyEvent::new(KeyCode::Char(' '), Modifiers::NONE);
+        modal.key(down);
+        modal.key(space); // Beta first, output must still follow request order.
+        modal.key(KeyEvent::new(KeyCode::Up, Modifiers::NONE));
+        modal.key(enter());
+        modal.key(enter()); // Undo Alpha, then select it again.
+        modal.key(space);
+        assert!(modal.answers.is_empty());
+        assert_eq!(modal.index, 0);
+        let rows = modal.render(80, 16).rows;
+        assert!(rows.iter().any(|row| row.to_string().contains("[x] Alpha")));
+        assert!(rows.iter().any(|row| row.to_string().contains("[x] Beta")));
+        for _ in 0..3 {
+            modal.key(down);
+        }
+        assert_eq!(modal.selected, 3);
+        modal.key(space); // Next is not a checkable option.
+        let rows = modal.render(24, 2).rows;
+        assert!(rows.iter().any(|row| row.to_string().contains("› Next")));
+        assert!(matches!(modal.key(enter()), QuestionAction::None));
+        assert_eq!(
+            modal.answers,
+            vec![QuestionAnswer::Options {
+                indices: vec![0, 1]
+            }]
+        );
+        assert_eq!(modal.index, 1);
+        assert!(modal.checked.is_empty());
+        assert!(
+            matches!(modal.key(enter()), QuestionAction::Answer(_, ref answers)
+            if answers == &vec![QuestionAnswer::Options { indices: vec![0,1] }, QuestionAnswer::Option { index: 0 }])
+        );
+    }
+
+    #[test]
+    fn multi_select_empty_is_explicit_and_custom_text_replaces_checkboxes() {
+        for custom in [false, true] {
+            let mut modal = modal();
+            modal.questions.truncate(1);
+            modal.questions[0].multi_select = true;
+            if custom {
+                modal.key(enter());
+            }
+            for _ in 0..2 {
+                modal.key(KeyEvent::new(KeyCode::Down, Modifiers::NONE));
+            }
+            let expected = if custom {
+                modal.key(enter());
+                modal.paste("  different 🦀  ");
+                QuestionAnswer::Text {
+                    text: "  different 🦀  ".into(),
+                }
+            } else {
+                modal.key(KeyEvent::new(KeyCode::Down, Modifiers::NONE));
+                QuestionAnswer::Options { indices: vec![] }
+            };
+            assert!(
+                matches!(modal.key(enter()), QuestionAction::Answer(_, ref answers) if answers == &vec![expected])
+            );
+            assert!(modal.checked.is_empty());
+        }
+    }
+
+    #[test]
     fn custom_editor_is_bounded_and_preserves_exact_unicode() {
         let mut modal = modal();
         modal.key(KeyEvent::new(KeyCode::Down, Modifiers::NONE));
@@ -445,8 +586,9 @@ mod tests {
 
     #[test]
     fn tiny_width_disables_submission_and_never_claims_invisible_selection() {
-        for width in [1, 2] {
+        for (width, multi_select) in [(1, false), (2, false), (1, true), (2, true)] {
             let mut modal = modal();
+            modal.questions[0].multi_select = multi_select;
             let frame = modal.render(width, 1);
             assert_eq!(frame.rows.len(), 1);
             assert!(frame.cursor.is_none());
