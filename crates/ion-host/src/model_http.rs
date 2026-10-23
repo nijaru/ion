@@ -1,6 +1,5 @@
 //! HTTP model transports. Provider wire formats stay outside Session state.
 use std::{
-    borrow::Cow,
     collections::{BTreeMap, BTreeSet},
     sync::Arc,
     time::Duration,
@@ -26,26 +25,30 @@ use tokio_util::sync::CancellationToken;
 use crate::{CredentialResolver, catalog::ModelCapabilities};
 
 mod anthropic;
+mod anthropic_request;
 mod chat;
+mod chat_request;
 mod controls;
 mod errors;
 mod limits;
 mod tool_ids;
-#[cfg(test)]
-use anthropic::anthropic_body;
+mod transcript;
+use anthropic::AnthropicState;
 #[cfg(test)]
 use anthropic::anthropic_replay_notices;
-use anthropic::{
-    AnthropicState, anthropic_body_for_route, anthropic_body_prefix_digest,
-    anthropic_body_uses_inline_tools, managed_anthropic_thinking, validated_anthropic_replay,
+#[cfg(test)]
+use anthropic_request::anthropic_body;
+use anthropic_request::{
+    anthropic_body_for_route, anthropic_body_prefix_digest, anthropic_body_uses_inline_tools,
+    managed_anthropic_thinking,
 };
-use chat::{ChatState, chat_body};
+use chat::ChatState;
+use chat_request::chat_body;
 use controls::control_fields;
 use errors::{
     anthropic_sse_error, chat_stream_error, classify_status_error, provider_error_detail_value,
 };
 use limits::{ResponseBudget, StreamBudget};
-use tool_ids::ToolIds;
 
 const MAX_FRAME: usize = 256 * 1024;
 const MAX_ERROR_BODY: usize = 16 * 1024;
@@ -600,275 +603,6 @@ fn valid_identifier(name: &str) -> bool {
         && name
             .bytes()
             .all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-')
-}
-
-#[derive(Debug, Clone)]
-struct AnthropicTimelinePlan {
-    initial: ModelContextState,
-    changes: BTreeMap<usize, Vec<Value>>,
-}
-
-/// Keep provider call IDs alongside their results. Some reasoning signatures
-/// bind to the original function-call identity during continuation.
-fn wire_messages(request: &ModelRequest, wire: HttpWire) -> Result<Vec<Value>, ProviderError> {
-    wire_messages_with_anthropic_context(request, wire, None)
-}
-
-fn wire_messages_with_anthropic_context(
-    request: &ModelRequest,
-    wire: HttpWire,
-    context_plan: Option<&AnthropicTimelinePlan>,
-) -> Result<Vec<Value>, ProviderError> {
-    let anthropic = !wire.is_chat();
-    let mut messages = Vec::new();
-    let mut pending = BTreeMap::new();
-    let mut ids = ToolIds::default();
-    let mut tool_images = Vec::new();
-    for (message_index, message) in request.messages.iter().enumerate() {
-        let reasoning_content = match &message.provider_replay {
-            Some(_) if message.role != Role::Assistant => {
-                return Err(invalid("provider replay requires an assistant message"));
-            }
-            Some(replay) if !replay.is_compatible_with(&request.route.effective.provider) => {
-                return Err(unsupported(
-                    "provider replay belongs to a different provider",
-                ));
-            }
-            Some(replay)
-                if matches!(wire, HttpWire::DeepSeekChat | HttpWire::MiMoChat)
-                    && replay.kind == CHAT_REASONING_CONTENT_REPLAY =>
-            {
-                Some(
-                    replay
-                        .data
-                        .as_str()
-                        .ok_or_else(|| invalid("invalid reasoning-content replay"))?,
-                )
-            }
-            Some(replay)
-                if wire == HttpWire::OpenRouterChat
-                    && replay.kind == OPENROUTER_PLAIN_REASONING_REPLAY =>
-            {
-                Some(
-                    replay
-                        .data
-                        .as_str()
-                        .ok_or_else(|| invalid("invalid OpenRouter reasoning replay"))?,
-                )
-            }
-            Some(replay)
-                if wire == HttpWire::OpenRouterChat && replay.kind == OPENROUTER_DETAILS_REPLAY =>
-            {
-                if !valid_openrouter_details(&replay.data) {
-                    return Err(invalid("invalid OpenRouter reasoning replay"));
-                }
-                None
-            }
-            Some(replay)
-                if wire == HttpWire::AnthropicMessages
-                    && replay.kind == ANTHROPIC_CONTENT_REPLAY =>
-            {
-                None
-            }
-            Some(_) => {
-                return Err(unsupported(
-                    "provider replay is incompatible with route or wire encoding; explicitly compact or start a new Session",
-                ));
-            }
-            None => None,
-        };
-        if message.content.is_empty() {
-            return Err(invalid("empty transcript message"));
-        }
-        if message.role != Role::Tool && !pending.is_empty() {
-            return Err(invalid("unanswered tool calls"));
-        }
-        if !anthropic && message.role != Role::Tool && !tool_images.is_empty() {
-            append_chat_tool_images(&mut messages, &mut tool_images);
-        }
-        let mut text = String::new();
-        let mut blocks = Vec::new();
-        let mut user_blocks = Vec::new();
-        let mut has_image = false;
-        let mut calls = Vec::new();
-        let mut results = Vec::new();
-        for item in &message.content {
-            match (message.role, item) {
-                (Role::Assistant, Content::Thinking(_)) => {}
-                (Role::User | Role::Assistant, Content::Text(part)) => {
-                    text.push_str(part);
-                    if message.role == Role::User && !part.is_empty() {
-                        user_blocks.push(json!({"type":"text","text":part}));
-                    }
-                    if anthropic && !part.is_empty() {
-                        blocks.push(json!({"type":"text","text":part}));
-                    }
-                }
-                (Role::User, Content::Image(image)) => {
-                    image
-                        .validate()
-                        .map_err(|_| invalid("invalid image data in transcript"))?;
-                    has_image = true;
-                    if anthropic {
-                        blocks.push(json!({"type":"image","source":{
-                            "type":"base64","media_type":image.mime_type().as_str(),"data":image.data()
-                        }}));
-                    } else {
-                        user_blocks.push(json!({"type":"image_url","image_url":{
-                            "url":format!("data:{};base64,{}", image.mime_type().as_str(), image.data())
-                        }}));
-                    }
-                }
-                (Role::Assistant, Content::ToolCall(call)) => {
-                    if !valid_identifier(&call.name)
-                        || !call.arguments.is_object()
-                        || call.id.is_empty()
-                        || pending.contains_key(call.id.as_str())
-                    {
-                        return Err(invalid("invalid or duplicate tool call"));
-                    }
-                    let wire_id = if anthropic {
-                        ids.for_call(&call.id, message.provider_replay.is_some())?
-                    } else {
-                        Cow::Borrowed(call.id.as_str())
-                    };
-                    if anthropic {
-                        blocks.push(json!({"type":"tool_use","id":wire_id,"name":call.name,"input":call.arguments}));
-                    } else {
-                        calls.push(json!({"id":wire_id,"type":"function","function":{"name":call.name,"arguments":call.arguments.to_string()}}));
-                    }
-                    pending.insert(call.id.as_str(), (call.name.as_str(), wire_id));
-                }
-                (Role::Tool, Content::ToolResult(result)) => {
-                    let Some((name, wire_id)) = pending.remove(result.call_id.as_str()) else {
-                        return Err(invalid("orphan or duplicate tool result"));
-                    };
-                    if result.name != name {
-                        return Err(invalid("tool result name does not match call"));
-                    }
-                    if anthropic {
-                        let mut content =
-                            vec![json!({"type":"text","text":result.result.to_string()})];
-                        for image in &result.images {
-                            image
-                                .validate()
-                                .map_err(|_| invalid("invalid tool image data in transcript"))?;
-                            content.push(json!({"type":"image","source":{
-                                "type":"base64","media_type":image.mime_type().as_str(),"data":image.data()
-                            }}));
-                        }
-                        blocks.push(json!({"type":"tool_result","tool_use_id":wire_id,"content":content,"is_error":result.is_error}));
-                    } else {
-                        results.push(json!({"role":"tool","tool_call_id":wire_id,"content":chat::tool_result_content(result)?}));
-                        for image in &result.images {
-                            image
-                                .validate()
-                                .map_err(|_| invalid("invalid tool image data in transcript"))?;
-                            tool_images.push(json!({"type":"image_url","image_url":{
-                                "url":format!("data:{};base64,{}", image.mime_type().as_str(), image.data())
-                            }}));
-                        }
-                    }
-                }
-                _ => return Err(invalid("content does not match transcript role")),
-            }
-        }
-        if anthropic {
-            if let Some(replay) = &message.provider_replay {
-                blocks = validated_anthropic_replay(
-                    &replay.data,
-                    &message.content,
-                    request,
-                    &messages,
-                    context_plan.map(|plan| &plan.initial),
-                )?;
-            }
-            if blocks.is_empty() {
-                return Err(invalid("empty Anthropic message"));
-            }
-            let role = if message.role == Role::Assistant {
-                "assistant"
-            } else {
-                "user"
-            };
-            if let Some(previous) = messages
-                .last_mut()
-                .filter(|m: &&mut Value| m["role"] == role)
-            {
-                previous["content"]
-                    .as_array_mut()
-                    .expect("constructed content array")
-                    .extend(blocks);
-            } else {
-                messages.push(json!({"role":role,"content":blocks}));
-            }
-            if let Some(change_blocks) = context_plan
-                .and_then(|plan| plan.changes.get(&(message_index + 1)))
-                .filter(|blocks| !blocks.is_empty())
-            {
-                messages.push(json!({"role":"system","content":change_blocks}));
-            }
-        } else if message.role == Role::Tool {
-            messages.extend(results);
-        } else {
-            let role = if message.role == Role::Assistant {
-                "assistant"
-            } else {
-                "user"
-            };
-            let content = if has_image {
-                Value::Array(user_blocks)
-            } else if text.is_empty() {
-                Value::Null
-            } else {
-                json!(text)
-            };
-            let mut value = json!({"role":role,"content":content});
-            if !calls.is_empty() {
-                value["tool_calls"] = Value::Array(calls);
-            }
-            if let Some(reasoning) = reasoning_content {
-                let field = if wire == HttpWire::OpenRouterChat {
-                    "reasoning"
-                } else {
-                    "reasoning_content"
-                };
-                value[field] = json!(reasoning);
-            } else if message.role == Role::Assistant
-                && !request.tools.is_empty()
-                && matches!(wire, HttpWire::DeepSeekChat | HttpWire::MiMoChat)
-            {
-                value["reasoning_content"] = json!("");
-            }
-            if let Some(replay) = &message.provider_replay
-                && replay.kind == OPENROUTER_DETAILS_REPLAY
-            {
-                value["reasoning_details"] = replay.data.clone();
-            }
-            messages.push(value);
-        }
-    }
-    if !anthropic && !tool_images.is_empty() {
-        append_chat_tool_images(&mut messages, &mut tool_images);
-    }
-    if !pending.is_empty() {
-        return Err(invalid("unanswered tool calls"));
-    }
-    if anthropic
-        && (messages[0]["role"] != "user"
-            || messages
-                .last()
-                .is_some_and(|message| message["role"] == "assistant"))
-    {
-        return Err(unsupported("Anthropic assistant prefill is unsupported"));
-    }
-    Ok(messages)
-}
-
-fn append_chat_tool_images(messages: &mut Vec<Value>, images: &mut Vec<Value>) {
-    let mut content = vec![json!({"type":"text","text":"Attached image(s) from tool result:"})];
-    content.append(images);
-    messages.push(json!({"role":"user","content":content}));
 }
 
 fn validate_output(request: &ModelRequest, response: &ModelResponse) -> Result<(), ProviderError> {
@@ -1461,12 +1195,14 @@ mod tests {
         }))
         .unwrap();
         let mut request = request();
+        request.instructions = None;
         request.messages[0].content = vec![
             Content::Text("inspect".into()),
             Content::Image(image.clone()),
             Content::Text("and explain".into()),
         ];
-        let chat = wire_messages(&request, HttpWire::ChatCompletions).unwrap();
+        let chat = chat_body(&request, HttpWire::ChatCompletions).unwrap();
+        let chat = &chat["messages"];
         assert_eq!(chat[0]["content"][0]["text"], "inspect");
         assert!(
             chat[0]["content"][1]["image_url"]["url"]
@@ -1475,7 +1211,8 @@ mod tests {
                 .starts_with("data:image/png;base64,")
         );
         assert_eq!(chat[0]["content"][2]["text"], "and explain");
-        let anthropic = wire_messages(&request, HttpWire::AnthropicMessages).unwrap();
+        let anthropic = anthropic_body(&request, false).unwrap();
+        let anthropic = &anthropic["messages"];
         assert_eq!(anthropic[0]["content"][0]["text"], "inspect");
         assert_eq!(
             anthropic[0]["content"][1]["source"]["media_type"],
@@ -1484,11 +1221,13 @@ mod tests {
         assert_eq!(anthropic[0]["content"][2]["text"], "and explain");
 
         request.messages[0].content = vec![Content::Text(String::new()), Content::Image(image)];
-        let chat = wire_messages(&request, HttpWire::ChatCompletions).unwrap();
+        let chat = chat_body(&request, HttpWire::ChatCompletions).unwrap();
+        let chat = &chat["messages"];
         let chat_parts = chat[0]["content"].as_array().unwrap();
         assert_eq!(chat_parts.len(), 1);
         assert_eq!(chat_parts[0]["type"], "image_url");
-        let anthropic = wire_messages(&request, HttpWire::AnthropicMessages).unwrap();
+        let anthropic = anthropic_body(&request, false).unwrap();
+        let anthropic = &anthropic["messages"];
         assert_eq!(anthropic[0]["content"].as_array().unwrap().len(), 1);
     }
 
@@ -1934,6 +1673,15 @@ mod tests {
                 ["function"]["arguments"],
             "{}"
         );
+        let mut duplicate = request.clone();
+        let call = duplicate.messages[1].content[0].clone();
+        duplicate.messages[1].content.push(call);
+        for result in [
+            chat_body(&duplicate, HttpWire::ChatCompletions),
+            anthropic_body(&duplicate, true),
+        ] {
+            assert_eq!(result.unwrap_err().kind, ProviderErrorKind::InvalidRequest);
+        }
         request.messages[2].content = vec![Content::ToolResult(ToolResult {
             call_id: "wrong".into(),
             name: "read".into(),
@@ -1942,6 +1690,56 @@ mod tests {
             is_error: true,
         })];
         assert!(chat_body(&request, HttpWire::ChatCompletions).is_err());
+    }
+
+    #[test]
+    fn replay_cannot_cross_wire_or_provider_boundaries() {
+        let mut request = request();
+        request.messages.push(Message {
+            role: Role::Assistant,
+            content: vec![Content::Text("answer".into())],
+            provider_replay: None,
+        });
+        request
+            .messages
+            .push(Message::user_input("next".into(), []));
+        for (kind, data, native) in [
+            (CHAT_REASONING_CONTENT_REPLAY, json!("private"), false),
+            (
+                ANTHROPIC_CONTENT_REPLAY,
+                json!({
+                    "blocks":[{"type":"text","text":"answer"}],
+                    "prefix_sha256":"0".repeat(64)
+                }),
+                true,
+            ),
+        ] {
+            request.messages[1].provider_replay = Some(ProviderReplay::new("test", kind, data));
+            let chat = chat_body(&request, HttpWire::DeepSeekChat);
+            let anthropic = anthropic_body(&request, false);
+            let (compatible, incompatible) = if native {
+                (anthropic, chat)
+            } else {
+                (chat, anthropic)
+            };
+            assert!(compatible.is_ok());
+            assert_eq!(
+                incompatible.unwrap_err().kind,
+                ProviderErrorKind::Unsupported
+            );
+
+            request.messages[1]
+                .provider_replay
+                .as_mut()
+                .unwrap()
+                .provider = "other".into();
+            for result in [
+                chat_body(&request, HttpWire::DeepSeekChat),
+                anthropic_body(&request, false),
+            ] {
+                assert_eq!(result.unwrap_err().kind, ProviderErrorKind::Unsupported);
+            }
+        }
     }
 
     #[test]
