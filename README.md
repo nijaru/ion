@@ -864,8 +864,10 @@ omitted from listings. A read returns text and normalized images; text-like
 blobs (`text/*`, JSON, `+json` or `+xml`) become text, and other binary content
 is saved to a private temporary file whose path is returned. Resource
 observations use the same bounded inline result and private full-output snapshot
-as tool results. These operations are read-only and are never retried; a
-cancellation that cannot flush within three seconds retires that connection.
+as tool results. Tool and resource conversion, including private-file writes,
+runs off async workers and remains joined if cancellation arrives after the
+response. Resource operations are read-only and are never retried; a cancellation
+that cannot flush within three seconds retires that connection.
 Large text or structured results include a bounded preview and a
 `full_output_path` to a private JSON file containing the complete result;
 oversized structured content is omitted from the inline preview and marked

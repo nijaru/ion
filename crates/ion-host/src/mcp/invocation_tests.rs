@@ -1,5 +1,5 @@
 use super::*;
-use invocation::convert_tool_result;
+use conversion::convert_tool_result;
 use ion_ai::ToolCall;
 use rmcp::model::CallToolResult;
 use std::path::PathBuf;
@@ -868,7 +868,7 @@ fn failed_artifact_write_reports_error_and_removes_partial_file() {
     let root = std::env::temp_dir().join(format!("ion-mcp-artifact-{}", uuid::Uuid::now_v7()));
     fs::create_dir(&root).unwrap();
     let path = root.join("raw.json");
-    let failure = invocation::write_private_artifact(path.clone(), |file| {
+    let failure = conversion::write_private_artifact(path.clone(), |file| {
         file.write_all(b"{\"content\": [")?;
         Err(anyhow::anyhow!("simulated artifact failure"))
     });

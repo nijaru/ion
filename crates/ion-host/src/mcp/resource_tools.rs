@@ -1,11 +1,5 @@
 //! Model-facing MCP resources: bounded read-only listing and reading.
-use std::{
-    fs::{self, OpenOptions},
-    io::Write,
-    os::unix::fs::OpenOptionsExt,
-    path::PathBuf,
-    sync::Arc,
-};
+use std::{io::Write, path::PathBuf, sync::Arc};
 
 use futures_util::future::join_all;
 use ion_ai::{BoxFuture, ImageContent, ImageMime, ToolCall, normalize_image};
@@ -22,7 +16,12 @@ use serde::Deserialize;
 use serde_json::{Map, Value, json};
 use tokio_util::sync::CancellationToken;
 
-use super::{Server, invocation::save_full_mcp_output, request::RequestError, tool_error};
+use super::{
+    Server,
+    conversion::{self, save_full_mcp_output},
+    request::RequestError,
+    tool_error,
+};
 
 const LIST_RESOURCES: &str = "list_mcp_resources";
 const LIST_TEMPLATES: &str = "list_mcp_resource_templates";
@@ -229,54 +228,61 @@ async fn list(
                 Ok(page) => page,
                 Err(error) => return tool_error(error),
             };
-        let mut value = Map::new();
-        value.insert("server".into(), Value::String(server.name.clone()));
-        value.insert(list_key(kind).into(), Value::Array(items));
-        if let Some(cursor) = next_cursor {
-            value.insert("nextCursor".into(), Value::String(cursor));
-        }
-        if let Some(error) = cleanup_error {
-            value.insert("cleanupError".into(), Value::String(error));
-        }
-        let mut output = bound_read_result(Value::Object(value), Vec::new(), false);
-        if output.value.get("truncated").is_some_and(Value::is_boolean)
-            && let Some(object) = output.value.as_object_mut()
-        {
-            object.insert("server".into(), Value::String(server.name.clone()));
-        }
-        return output;
+        let name = server.name.clone();
+        return conversion::run(move || {
+            let mut value = Map::new();
+            value.insert("server".into(), Value::String(name.clone()));
+            value.insert(list_key(kind).into(), Value::Array(items));
+            if let Some(cursor) = next_cursor {
+                value.insert("nextCursor".into(), Value::String(cursor));
+            }
+            if let Some(error) = cleanup_error {
+                value.insert("cleanupError".into(), Value::String(error));
+            }
+            let mut output = bound_read_result(Value::Object(value), Vec::new(), false);
+            if output.value.get("truncated").is_some_and(Value::is_boolean)
+                && let Some(object) = output.value.as_object_mut()
+            {
+                object.insert("server".into(), Value::String(name));
+            }
+            output
+        })
+        .await;
     }
 
     let mut visible: Vec<_> = servers.iter().filter(|server| server.resources).collect();
     visible.sort_by(|left, right| left.name.cmp(&right.name));
     let pages = join_all(visible.into_iter().map(|server| async move {
         let result = list_all(server, kind, stop).await;
-        (server, result)
+        (server.name.clone(), result)
     }))
     .await;
-    let mut items = Vec::new();
-    let mut errors = Vec::new();
-    let mut warnings = Vec::new();
-    for (server, result) in pages {
-        match result {
-            Ok((mut page, cleanup_error)) => {
-                items.append(&mut page);
-                if let Some(error) = cleanup_error {
-                    warnings.push(json!({"server":server.name, "error":error}));
+    conversion::run(move || {
+        let mut items = Vec::new();
+        let mut errors = Vec::new();
+        let mut warnings = Vec::new();
+        for (server, result) in pages {
+            match result {
+                Ok((mut page, cleanup_error)) => {
+                    items.append(&mut page);
+                    if let Some(error) = cleanup_error {
+                        warnings.push(json!({"server":server, "error":error}));
+                    }
                 }
+                Err(error) => errors.push(json!({"server":server, "error":error})),
             }
-            Err(error) => errors.push(json!({"server":server.name, "error":error})),
         }
-    }
-    let mut value = Map::new();
-    value.insert(list_key(kind).into(), Value::Array(items));
-    if !errors.is_empty() {
-        value.insert("errors".into(), Value::Array(errors));
-    }
-    if !warnings.is_empty() {
-        value.insert("warnings".into(), Value::Array(warnings));
-    }
-    bound_read_result(Value::Object(value), Vec::new(), false)
+        let mut value = Map::new();
+        value.insert(list_key(kind).into(), Value::Array(items));
+        if !errors.is_empty() {
+            value.insert("errors".into(), Value::Array(errors));
+        }
+        if !warnings.is_empty() {
+            value.insert("warnings".into(), Value::Array(warnings));
+        }
+        bound_read_result(Value::Object(value), Vec::new(), false)
+    })
+    .await
 }
 
 fn list_key(kind: Kind) -> &'static str {
@@ -313,14 +319,15 @@ async fn list_page(
         .request(request, stop)
         .await
         .map_err(|error| request_error(server, error))?;
-    match (kind, result) {
+    let name = server.name.clone();
+    conversion::run(move || match (kind, result) {
         (Kind::Resources, ServerResult::ListResourcesResult(result)) => Ok((
             result
                 .resources
                 .iter()
                 .filter(|resource| !is_mcp_app(&resource.uri, resource.mime_type.as_deref()))
                 .map(|resource| {
-                    serde_json::to_value(listed_resource(&server.name, resource))
+                    serde_json::to_value(listed_resource(&name, resource))
                         .expect("a listed resource is serializable")
                 })
                 .collect(),
@@ -335,7 +342,7 @@ async fn list_page(
                     !is_mcp_app(&template.uri_template, template.mime_type.as_deref())
                 })
                 .map(|template| {
-                    serde_json::to_value(listed_template(&server.name, template))
+                    serde_json::to_value(listed_template(&name, template))
                         .expect("a listed resource template is serializable")
                 })
                 .collect(),
@@ -344,9 +351,10 @@ async fn list_page(
         )),
         _ => Err(format!(
             "MCP server {} returned an unexpected response for its resource listing",
-            server.name
+            name
         )),
-    }
+    })
+    .await
 }
 
 async fn list_all(
@@ -409,12 +417,23 @@ async fn read(
             server.name
         ));
     };
-    let conversion = match convert_read_contents(result.contents) {
+    let name = server.name.clone();
+    let uri = uri.to_owned();
+    conversion::run(move || read_result(&name, &uri, result.contents, cleanup_error)).await
+}
+
+fn read_result(
+    server: &str,
+    uri: &str,
+    contents: Vec<ResourceContents>,
+    cleanup_error: Option<String>,
+) -> CodingToolOutput {
+    let conversion = match convert_read_contents(contents) {
         Ok(conversion) => conversion,
-        Err(error) => return tool_error(format!("MCP server {} {error}", server.name)),
+        Err(error) => return tool_error(format!("MCP server {server} {error}")),
     };
     let mut value = Map::new();
-    value.insert("server".into(), Value::String(server.name.clone()));
+    value.insert("server".into(), Value::String(server.into()));
     value.insert("uri".into(), Value::String(uri.into()));
     value.insert("contents".into(), Value::Array(conversion.contents));
     if !conversion.warnings.is_empty() {
@@ -436,7 +455,7 @@ async fn read(
     if output.value.get("truncated").is_some_and(Value::is_boolean)
         && let Some(object) = output.value.as_object_mut()
     {
-        object.insert("server".into(), Value::String(server.name.clone()));
+        object.insert("server".into(), Value::String(server.into()));
         object.insert("uri".into(), Value::String(uri.into()));
     }
     output
@@ -691,27 +710,14 @@ fn bound_read_result(value: Value, images: Vec<ImageContent>, failed: bool) -> C
     }
 }
 
-fn save_resource_blob(bytes: &[u8], uri: &str) -> std::io::Result<PathBuf> {
-    let mut nonce = [0u8; 16];
-    getrandom::fill(&mut nonce).map_err(|error| {
-        std::io::Error::other(format!("cannot name MCP resource file: {error}"))
-    })?;
-    let path = std::env::temp_dir().join(format!(
-        "ion-mcp-resource-{}-{:032x}{}",
-        std::process::id(),
-        u128::from_ne_bytes(nonce),
-        extension_of(uri)
-    ));
-    let mut file = OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .mode(0o600)
-        .open(&path)?;
-    if let Err(error) = file.write_all(bytes) {
-        let _ = fs::remove_file(path);
-        return Err(error);
-    }
-    Ok(path)
+fn save_resource_blob(bytes: &[u8], uri: &str) -> anyhow::Result<PathBuf> {
+    conversion::write_private_artifact(
+        conversion::private_artifact_path("ion-mcp-resource", &extension_of(uri))?,
+        |file| {
+            file.write_all(bytes)?;
+            Ok(())
+        },
+    )
 }
 
 fn extension_of(uri: &str) -> String {

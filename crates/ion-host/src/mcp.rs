@@ -29,6 +29,7 @@ use tokio_util::sync::CancellationToken;
 
 mod config;
 mod connection;
+mod conversion;
 mod framing;
 mod http;
 mod invocation;
@@ -498,7 +499,7 @@ async fn read_native_snapshot(path: &str) -> Value {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use invocation::convert_tool_result;
+    use conversion::convert_tool_result;
     use ion_ai::ToolCall;
     use rmcp::model::{CallToolResult, ContentBlock};
     use std::os::unix::fs::PermissionsExt;
@@ -575,17 +576,24 @@ for line in sys.stdin:
     }
 
     #[test]
-    fn observed_result_waits_for_worker_through_cancellation_and_connection_shutdown() {
+    fn observed_results_wait_for_workers_through_cancellation_and_connection_shutdown() {
         let runtime = tokio::runtime::Builder::new_current_thread()
             .enable_all()
             .max_blocking_threads(1)
             .build()
             .unwrap();
         runtime.block_on(async {
-            let root = std::env::temp_dir().join(format!("ion-mcp-settlement-{}", uuid::Uuid::now_v7()));
-            fs::create_dir(&root).unwrap();
-            let config = McpConfig::new(&root);
-            let server = r#"
+            for (name, arguments, method, saved_field) in [
+                ("mcp__10_settlement__probe", json!({}), "tools/call", "/content"),
+                ("read_mcp_resource", json!({"server":"settlement", "uri":"mem://observed"}), "resources/read", "/contents/0/text"),
+                ("list_mcp_resources", json!({"server":"settlement"}), "resources/list", "/resources/0/name"),
+                ("list_mcp_resource_templates", json!({"server":"settlement"}), "resources/templates/list", "/resourceTemplates/0/name"),
+                ("list_mcp_resources", json!({}), "resources/list", "/resources/0/name"),
+            ] {
+                let root = std::env::temp_dir().join(format!("ion-mcp-settlement-{}", uuid::Uuid::now_v7()));
+                fs::create_dir(&root).unwrap();
+                let config = McpConfig::new(&root);
+                let server = r#"
 import json, sys
 from pathlib import Path
 for line in sys.stdin:
@@ -595,87 +603,102 @@ for line in sys.stdin:
     method = request["method"]
     if method == "initialize":
         result = {"protocolVersion": request["params"]["protocolVersion"],
-                  "capabilities": {"tools": {"listChanged": True}}, "serverInfo": {"name": "settlement", "version": "1"}}
+                  "capabilities": {"tools": {"listChanged": True}, "resources": {}},
+                  "serverInfo": {"name": "settlement", "version": "1"}}
     elif method == "tools/list":
         result = {"tools": [{"name": "probe", "inputSchema": {"type": "object"}}]}
     elif method == "tools/call":
-        with Path("effects").open("a") as effects:
-            effects.write("ONCE\n")
         result = {"content": [{"type": "text", "text": "x" * 70000}],
                   "structuredContent": {"observed": 7}, "isError": True}
+    elif method == "resources/read":
+        result = {"contents": [{"uri": "mem://observed", "mimeType": "text/plain", "text": "x" * 70000}]}
+    elif method == "resources/list":
+        result = {"resources": [{"uri": "mem://observed", "name": "x" * 70000}]}
+    elif method == "resources/templates/list":
+        result = {"resourceTemplates": [{"uriTemplate": "mem://{id}", "name": "x" * 70000}]}
     else:
         continue
     print(json.dumps({"jsonrpc": "2.0", "id": request["id"], "result": result}), flush=True)
-    if method == "tools/call":
+    if method in ("tools/call", "resources/read", "resources/list", "resources/templates/list"):
+        with Path("requests").open("a") as requests:
+            requests.write(method + "\n")
         print(json.dumps({"jsonrpc": "2.0", "method": "notifications/tools/list_changed"}), flush=True)
 "#;
-            config.add("settlement", McpServer::Stdio(McpStdioServer {
-                command: "python3".into(), args: vec!["-c".into(), server.into()],
-                exposure: McpExposure::Direct,
-            })).unwrap();
-            let startup = McpTools::connect(&config, &root).await;
-            assert!(startup.diagnostics.is_empty(), "{:?}", startup.diagnostics);
-            let source = startup.tools.unwrap();
-            let issued = ion_core::ToolSet::new([source.clone() as Arc<dyn CodingToolSource>]).snapshot();
-            let (entered, started) = tokio::sync::oneshot::channel();
-            let (release, held) = tokio::sync::oneshot::channel::<()>();
-            let blocker = tokio::task::spawn_blocking(move || {
-                let _ = entered.send(());
-                let _ = held.blocking_recv();
-            });
-            started.await.unwrap();
-            let stop = CancellationToken::new();
-            let task_stop = stop.clone();
-            let mut work = tokio::spawn(async move {
-                issued.execute_untracked(&ToolCall {
-                    id: "observed".into(), name: "mcp__10_settlement__probe".into(),
-                    arguments: json!({}), raw_arguments: None,
-                }, task_stop).await
-            });
-            // The effect file precedes the response and cannot prove local
-            // observation. This ordered notification is handled only after the
-            // peer has routed that response to its request handle. Shutdown may
-            // interrupt unanswered calls, but must retain this observed result
-            // and must not wait for its queued local conversion worker.
-            let observed = tokio::time::timeout(Duration::from_secs(2), async {
-                while source.servers[0].tool_list_version.load(Ordering::Acquire) == 0 {
-                    tokio::time::sleep(Duration::from_millis(5)).await;
+                config.add("settlement", McpServer::Stdio(McpStdioServer {
+                    command: "python3".into(), args: vec!["-c".into(), server.into()],
+                    exposure: McpExposure::Direct,
+                })).unwrap();
+                let startup = McpTools::connect(&config, &root).await;
+                assert!(startup.diagnostics.is_empty(), "{:?}", startup.diagnostics);
+                let source = startup.tools.unwrap();
+                let issued = ion_core::ToolSet::new([source.clone() as Arc<dyn CodingToolSource>]).snapshot();
+                let (entered, started) = tokio::sync::oneshot::channel();
+                let (release, held) = tokio::sync::oneshot::channel::<()>();
+                let blocker = tokio::task::spawn_blocking(move || {
+                    let _ = entered.send(());
+                    let _ = held.blocking_recv();
+                });
+                started.await.unwrap();
+                let stop = CancellationToken::new();
+                let task_stop = stop.clone();
+                let mut work = tokio::spawn(async move {
+                    issued.execute_untracked(&ToolCall {
+                        id: "observed".into(), name: name.into(),
+                        arguments, raw_arguments: None,
+                    }, task_stop).await
+                });
+                // The ordered notification follows routing of the response to
+                // its request handle. Conversion must release the connection
+                // but remain pending while the only blocking worker is held.
+                let observed = tokio::time::timeout(Duration::from_secs(2), async {
+                    while source.servers[0].tool_list_version.load(Ordering::Acquire) == 0 {
+                        tokio::time::sleep(Duration::from_millis(5)).await;
+                    }
+                }).await;
+                let closing = source.shutdown();
+                tokio::pin!(closing);
+                let closed = tokio::time::timeout(Duration::from_secs(4), &mut closing).await;
+                let independent = closed.is_ok();
+                let early = tokio::time::timeout(Duration::from_millis(10), &mut work).await.ok();
+                let pending = early.is_none();
+                stop.cancel();
+                // Poll the cancelled invocation while conversion is still
+                // blocked; checking is_finished immediately would not yield.
+                let after_stop = if pending {
+                    tokio::time::timeout(Duration::from_millis(10), &mut work).await.ok()
+                } else {
+                    None
+                };
+                let still_pending = pending && after_stop.is_none();
+                drop(release);
+                blocker.await.unwrap();
+                // Rescue a timed-out close only after releasing conversion;
+                // never drop a partial cleanup join on a failing assertion.
+                let cleanup = match closed {
+                    Ok(result) => result,
+                    Err(_) => tokio::time::timeout(Duration::from_secs(4), &mut closing)
+                        .await.expect("conversion release did not unblock cleanup"),
+                };
+                let output = match early.or(after_stop) {
+                    Some(output) => output.unwrap(),
+                    None => work.await.unwrap(),
+                };
+                let requests = fs::read_to_string(root.join("requests")).unwrap();
+                fs::remove_dir_all(root).unwrap();
+                let path = output.value["full_output_path"].as_str().unwrap();
+                let saved: Value = serde_json::from_slice(&fs::read(path).unwrap()).unwrap();
+                fs::remove_file(path).unwrap();
+                assert!(observed.is_ok(), "{name}: peer did not observe the ordered response");
+                cleanup.unwrap();
+                assert!(independent, "{name}: conversion held the MCP connection");
+                assert!(pending && still_pending, "{name}: result bypassed owned blocking dispatch");
+                assert_eq!(requests, format!("{method}\n"));
+                assert_eq!(output.is_error, method == "tools/call", "{name}: observed outcome changed during cancellation");
+                assert_eq!(saved.pointer(saved_field).unwrap(), &json!("x".repeat(70000)));
+                if method == "tools/call" {
+                    assert_eq!(saved["structured_content"]["observed"], 7);
                 }
-            }).await;
-            let closing = source.shutdown();
-            tokio::pin!(closing);
-            let closed = tokio::time::timeout(Duration::from_secs(4), &mut closing).await;
-            let independent = closed.is_ok();
-            let early = tokio::time::timeout(Duration::from_millis(10), &mut work).await;
-            let pending = early.is_err();
-            stop.cancel();
-            let still_pending = !work.is_finished();
-            drop(release);
-            blocker.await.unwrap();
-            // If the early close probe failed, release conversion before
-            // rescuing its retained cleanup future; never drop a partial join.
-            let cleanup = match closed {
-                Ok(result) => result,
-                Err(_) => tokio::time::timeout(Duration::from_secs(4), &mut closing)
-                    .await.expect("conversion release did not unblock cleanup"),
-            };
-            let output = match early {
-                Ok(output) => output.unwrap(),
-                Err(_) => work.await.unwrap(),
-            };
-            let effects = fs::read_to_string(root.join("effects")).unwrap();
-            fs::remove_dir_all(root).unwrap();
-            let path = output.value["full_output_path"].as_str().unwrap();
-            let saved: Value = serde_json::from_slice(&fs::read(path).unwrap()).unwrap();
-            fs::remove_file(path).unwrap();
-            assert!(observed.is_ok(), "peer did not observe the ordered response");
-            cleanup.unwrap();
-            assert!(independent, "conversion held the MCP connection");
-            assert!(pending && still_pending, "MCP result bypassed owned blocking dispatch");
-            assert_eq!(effects, "ONCE\n");
-            assert!(output.is_error, "original server error must survive cancellation");
-            assert_eq!(saved["content"], "x".repeat(70000));
-            assert_eq!(saved["structured_content"]["observed"], 7);
+            }
         });
     }
 

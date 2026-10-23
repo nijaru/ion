@@ -686,8 +686,10 @@ request boundaries; possibly effectful invocations are never transparently
 retried. MCP shutdown retires every peer before joining connection cleanup;
 in-flight requests release read leases without requiring a remote response or
 caller cancellation. Concurrent closers join the same cleanup. Unanswered effects
-remain unknown; already observed results retain their original outcome through
-local conversion, separately owned by the calling operation.
+remain unknown. Already observed tool and resource results retain their original
+outcome through local conversion. Run image processing, listing materialization
+and artifact writes off async workers; calling operations retain and join this
+work through cancellation, independently of connection cleanup.
 
 Enforce incoming MCP budgets before framing or decoding can allocate an unbounded
 message: at most 64 MiB per stdio JSON line or HTTP JSON/error body. SSE events
