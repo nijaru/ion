@@ -568,9 +568,9 @@ impl BackgroundSlot for BackgroundDestination {
     fn owner(&self) -> uuid::Uuid {
         self.shared.id
     }
-    fn reserve(&mut self) -> std::result::Result<(), String> {
+    fn reserve(&mut self) -> std::result::Result<CancellationToken, String> {
         if self.reserved {
-            return Ok(());
+            return Ok(self.shared.stop.child_token());
         }
         tokio::runtime::Handle::try_current().map_err(|error| error.to_string())?;
         let mut state = self.shared.lock();
@@ -583,11 +583,11 @@ impl BackgroundSlot for BackgroundDestination {
         state.reserved += 1;
         self.reserved = true;
         self.shared.invalidate();
-        Ok(())
+        Ok(self.shared.stop.child_token())
     }
     fn install(
         mut self: Box<Self>,
-        job: BackgroundJob,
+        job: &mut BackgroundJob,
     ) -> std::result::Result<DelegationReceipt, BackgroundStartError> {
         let mut state = self.shared.lock();
         if !self.reserved {
@@ -607,12 +607,11 @@ impl BackgroundSlot for BackgroundDestination {
         }
         let parent = Arc::downgrade(job.parent());
         let weak = Arc::downgrade(&self.shared);
-        let (receipt, operation) =
-            job.start(self.shared.id, self.shared.stop.child_token(), move || {
-                if let Some(shared) = weak.upgrade() {
-                    shared.close(true);
-                }
-            })?;
+        let (receipt, operation) = job.start(self.shared.id, move || {
+            if let Some(shared) = weak.upgrade() {
+                shared.close(true);
+            }
+        })?;
         state.runs.insert(
             receipt.record.run,
             Run {

@@ -26,6 +26,19 @@ impl PreparedDelegation {
         self.task
             .in_background(owner.destination().with_steering(self.steering))
     }
+
+    /// Join within a budget, transferring the same execution and its grant only
+    /// if it still needs joining at expiry. Capacity is reserved before work.
+    pub fn in_background_after(
+        self,
+        owner: &BackgroundOwner,
+        join_timeout: std::time::Duration,
+    ) -> DelegationTask {
+        self.task.in_background_after(
+            owner.destination().with_steering(self.steering),
+            join_timeout,
+        )
+    }
 }
 
 #[derive(Clone, Serialize)]

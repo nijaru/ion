@@ -305,6 +305,21 @@ outcome must be available without parsing prose or overwriting previous reports.
   before the parent releases it. Detaching a handle is not a transfer. Parent
   cancellation and service shutdown have distinct, documented scopes.
 
+A bounded foreground join reserves a live background destination before intent.
+Its record names an intended owner, not an already-committed transfer. The budget
+starts at live Core admission, includes child materialization/control setup, and
+excludes synchronous recipe preflight. Prefer actual full completion to a ready
+join expiry. Otherwise commit transfer before releasing the parent, moving the
+same pinned callback, run, request, stop scope and steering grant. Do not restart
+work, reload authority or refresh an execution deadline. Until transfer, parent
+stop cancels and fully joins even beyond the join budget. An abandoned result
+waiter retains foreground joining rather than silently transferring. A stop or
+waiter closure observed before transfer prevents it; one racing commit may lose.
+Refused/failed installation must leave started execution with the gateway to stop
+and join, preserving infrastructure failure. Completion without transfer releases
+the reservation and retains no background report. A transferred result occupies
+capacity until explicit acknowledgement.
+
 Host supervises children using the same engine and shared control. Recovery keeps
 unknown child effects explicit and reconciles the relationship before redispatch.
 Fresh context and an explicit fork are different. Neither automatically grants
@@ -401,8 +416,15 @@ authority. General Host recipes configure target, model, environment and authori
 independently. Workspace selection and exclusive Session writers are not filesystem
 isolation or all-descendant quiescence.
 
-Fresh context and foreground waiting are defaults; an explicit fork selects an
-eligible committed prefix. `start(resume=path)` instead reuses a settled Session
+Fresh context and bounded foreground joining are defaults. Coding foreground
+`start` uses `join_timeout_ms`, default 60000 with 1–600000 milliseconds allowed.
+It reserves application capacity before starting. Before expiry it returns the
+fully joined result without transfer; otherwise it returns the same running `id`
+with `join_expired: true` after committed transfer. This is not execution timeout
+or success; use wait/status rather than starting replacement work. Explicit
+background mode rejects a join budget and transfers immediately. Generic Host
+recipes retain unbounded foreground by default or select their own duration.
+An explicit fork selects an eligible committed prefix. `start(resume=path)` instead reuses a settled Session
 under a new run, requires its original cwd, and is mutually exclusive with context
 copying. Both locator and cwd accept at most 4096 UTF-8 bytes. As with a fresh
 start, omitted route/reasoning inherit the current request's captured configuration,

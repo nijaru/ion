@@ -9,6 +9,7 @@ use tokio_util::sync::CancellationToken;
 use crate::{AuthorityScope, CodingSession, RequestReceipt, SubmissionRequest, ToolOccurrence};
 
 mod background;
+mod execution;
 pub use background::{BackgroundJob, BackgroundSlot, BackgroundStartError};
 pub(crate) mod gateway;
 #[cfg(test)]
@@ -212,7 +213,12 @@ pub(crate) type DelegationWork = Box<
 pub struct DelegationTask {
     pub(crate) spec: DelegationSpec,
     pub(crate) work: DelegationWork,
-    pub(crate) background: Option<Box<dyn BackgroundSlot>>,
+    pub(crate) background: Option<BackgroundTransfer>,
+}
+
+pub(crate) struct BackgroundTransfer {
+    slot: Box<dyn BackgroundSlot>,
+    join_timeout: std::time::Duration,
 }
 
 impl DelegationTask {
@@ -239,17 +245,35 @@ impl DelegationTask {
     /// Explicit live transfer destination. Core reconciles first, then asks
     /// Host to reserve custody before committing intent. Exact repeats need no
     /// extra capacity; dropping unadmitted work releases any reservation.
-    pub fn in_background(mut self, slot: impl BackgroundSlot + 'static) -> Self {
-        self.background = Some(Box::new(slot));
+    pub fn in_background(self, slot: impl BackgroundSlot + 'static) -> Self {
+        self.in_background_after(slot, std::time::Duration::ZERO)
+    }
+
+    /// Reserve a destination before admission, then join the same child until
+    /// this observation budget expires. Completion wins a ready expiry race.
+    /// Until transfer commits, parent stop still stops and fully joins the child.
+    /// Expiry transfers the existing pinned callback, never starts it again or
+    /// changes its execution deadline. An abandoned waiter keeps foreground
+    /// joining custody instead of triggering an unobserved handoff. Zero requests
+    /// immediate background start.
+    pub fn in_background_after(
+        mut self,
+        slot: impl BackgroundSlot + 'static,
+        join_timeout: std::time::Duration,
+    ) -> Self {
+        self.background = Some(BackgroundTransfer {
+            slot: Box::new(slot),
+            join_timeout,
+        });
         self
     }
 
     pub(crate) fn ownership(&self) -> DelegationOwnership {
         self.background
             .as_ref()
-            .map_or(DelegationOwnership::Foreground, |slot| {
+            .map_or(DelegationOwnership::Foreground, |transfer| {
                 DelegationOwnership::Background {
-                    owner: slot.owner(),
+                    owner: transfer.slot.owner(),
                 }
             })
     }

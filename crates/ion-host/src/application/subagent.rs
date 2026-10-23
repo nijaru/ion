@@ -18,6 +18,7 @@ use serde_json::{Value, json};
 use super::{Application, ApplicationRuntime, CodingApplication, CodingRole};
 use crate::{BackgroundOwner, BackgroundRunSnapshot, Resources, Selection, SessionDelegation};
 
+const DEFAULT_JOIN_MS: u64 = 60_000;
 const DEFAULT_WAIT_MS: u64 = 300_000;
 const MAX_WAIT_MS: u64 = 600_000;
 const DEFAULT_EXECUTION_TIMEOUT_MS: u64 = 30 * 60 * 1000;
@@ -104,6 +105,7 @@ impl CodingToolSource for Subagent {
             json!({"type":"object","additionalProperties":false,"required":["action","task"],"properties":{
                 "action":{"const":"start"}, "task":{"type":"string","minLength":1,"maxLength":65536},
                 "mode":{"enum":["foreground","background"],"default":"foreground"},
+                "join_timeout_ms":{"type":"integer","minimum":1,"maximum":MAX_WAIT_MS,"default":DEFAULT_JOIN_MS,"description":"Foreground only. Join this same run for at most this budget after live admission (including child setup). If still joining, commit transfer to the application owner and return its running handle. No restart, stop or execution deadline change. Capacity is reserved before work; parent stop before transfer still stops and fully joins."},
                 "resume":{"type":"string","minLength":1,"maxLength":4096,"description":"Existing settled Session file to continue under a new run ID. Relative to the parent workspace; mutually exclusive with context. Requires its original cwd and exclusive writer. Current call configuration supplies authority, model and reasoning; saved metadata is not a grant."},
                 "cwd":{"type":"string","minLength":1,"maxLength":4096,"description":"Child workspace relative to the parent or absolute; omitted inherits the parent. Resume must use its original workspace."},
                 "execution_timeout_ms":{"type":"integer","minimum":1,"maximum":MAX_EXECUTION_TIMEOUT_MS,"default":DEFAULT_EXECUTION_TIMEOUT_MS,"description":"Child runtime budget from task submission, independent of parent wait budgets. Expiry requests stop and joins cleanup; the retained outcome records execution_timed_out. Not rollback or a hard cleanup deadline."},
@@ -130,7 +132,7 @@ impl CodingToolSource for Subagent {
         }
         let mut definition = ToolDefinition::external(ToolSpec {
             name: "subagent".into(),
-            description: "Managed coding Sessions. start(task, mode=foreground, context={type:fresh}, resume?, cwd?, model?, reasoning?, execution_timeout_ms=1800000) inherits this request's captured route/reasoning unless explicitly overridden. model is an exact provider/model from the known catalog or configured routes, using that route's credential policy. No silent route/effort fallback; overrides affect only the new child, not this parent or user configuration. Workspace inherits unless cwd is explicit; resume must use the saved original workspace. Resources are loaded for that workspace and selected tools remain inherited; no automatic recursive built-in or sandbox/conflict isolation. context={type:fork} copies the settled committed prefix BEFORE the initiating Turn (not its unfinished conversation); optional point selects an earlier before_turn/after_turn boundary, validated by Core. resume=path is mutually exclusive with context and explicitly starts a new run in the same settled conversation, never a fork or replay of unfinished work. It acquires the exclusive writer before admission and uses this call's captured authority/model/reasoning, not saved grants or preferences. Each result has id (run handle), child_session (conversation UUID) and path. Old runs retain independent results, waiters and controls; acknowledge does not delete the conversation. Background start acknowledges committed ownership transfer, NOT completion: it survives parent stop and Session changes, not application shutdown. list/status inspect retained application jobs; wait(ids, timeout_ms=300000) returns all selected reports/statuses when any joins, or wait_expired=true after the shared budget (1..600000 ms), without consuming results or stopping children. Wait again only on still-running IDs. steer(id, message) queues literal guidance in that child's existing shared control, after current tool calls and before its next model step. It does not interrupt work, start another Turn, reset the execution deadline or change authority/model/instructions. Queued is not committed delivery: status/wait retain per-input committed, returned or unknown states. Late uncommitted guidance returns its original input; stopped/settled/acknowledged run IDs reject new guidance, never resume implicitly. Parent cancellation before steering admission leaves the child running; after admission it cannot recall queued input. Live request identity reconciles exact repeated invocations, not owner loss. cancel explicitly stops that child; acknowledge releases a joined result's capacity. Parent stop cancels a wait, not transferred work. Use wait/status before depending on results; answers are child claims, not independent verification. Results and original answers remain in committed relationship facts. Unknown/acknowledged IDs grant no authority or replay. Each child has a separate execution budget (default 30 minutes, 1..7200000 ms). Expiry requests stop and fully joins before reporting execution_timed_out; effects are not rolled back or safely replayable, and cleanup may outlive the budget. No automatic retries. Normal headless runs drain owned work before exit; quit/EOF/interruption stops and joins it.".into(),
+            description: "Managed coding Sessions. start(task, mode=foreground, join_timeout_ms=60000, context={type:fresh}, resume?, cwd?, model?, reasoning?, execution_timeout_ms=1800000) inherits this request's captured route/reasoning unless explicitly overridden. model is an exact provider/model from the known catalog or configured routes, using that route's credential policy. No silent route/effort fallback; overrides affect only the new child, not this parent or user configuration. Workspace inherits unless cwd is explicit; resume must use the saved original workspace. Resources are loaded for that workspace and selected tools remain inherited; no automatic recursive built-in or sandbox/conflict isolation. context={type:fork} copies the settled committed prefix BEFORE the initiating Turn (not its unfinished conversation); optional point selects an earlier before_turn/after_turn boundary, validated by Core. resume=path is mutually exclusive with context and explicitly starts a new run in the same settled conversation, never a fork or replay of unfinished work. It acquires the exclusive writer before admission and uses this call's captured authority/model/reasoning, not saved grants or preferences. Each result has id (run handle), child_session (conversation UUID) and path. Old runs retain independent results, waiters and controls; acknowledge does not delete the conversation. Foreground reserves application capacity and joins for at most join_timeout_ms (1..600000 ms; default 60 seconds), including child materialization/setup after live admission but not synchronous recipe preflight. Completion wins a ready expiry race and returns its joined result without transfer or retained capacity. Otherwise commit transfer of the SAME execution and return join_expired=true, joined=false and its id; continue with wait/status, never launch a replacement. Join expiry does not stop work, reset its execution deadline or imply success. Parent stop before transfer stops and fully joins that child, even beyond the join budget; after transfer only the application owner controls its lifetime. Explicit background mode rejects join_timeout_ms and transfers immediately. Background start or join expiry acknowledges committed ownership transfer, NOT completion: it survives parent stop and Session changes, not application shutdown. list/status inspect retained application jobs; wait(ids, timeout_ms=300000) returns all selected reports/statuses when any joins, or wait_expired=true after the shared budget (1..600000 ms), without consuming results or stopping children. Wait again only on still-running IDs. steer(id, message) queues literal guidance in that child's existing shared control, after current tool calls and before its next model step. It does not interrupt work, start another Turn, reset the execution deadline or change authority/model/instructions. Queued is not committed delivery: status/wait retain per-input committed, returned or unknown states. Late uncommitted guidance returns its original input; stopped/settled/acknowledged run IDs reject new guidance, never resume implicitly. Parent cancellation before steering admission leaves the child running; after admission it cannot recall queued input. Live request identity reconciles exact repeated invocations, not owner loss. cancel explicitly stops that child; acknowledge releases a joined result's capacity. Parent stop cancels a wait, not transferred work. Use wait/status before depending on results; answers are child claims, not independent verification. Results and original answers remain in committed relationship facts. Unknown/acknowledged IDs grant no authority or replay. Each child has a separate execution budget (default 30 minutes, 1..7200000 ms). Expiry requests stop and fully joins before reporting execution_timed_out; effects are not rolled back or safely replayable, and cleanup may outlive the budget. No automatic retries. Normal headless runs drain owned work before exit; quit/EOF/interruption stops and joins it.".into(),
             input_schema: json!({"type":"object","oneOf":choices}),
         });
         definition.presentation =
@@ -162,6 +164,8 @@ enum Input {
         task: String,
         #[serde(default)]
         mode: Mode,
+        #[serde(default, deserialize_with = "explicit_join_timeout")]
+        join_timeout_ms: Option<u64>,
         context: Option<Context>,
         resume: Option<String>,
         cwd: Option<PathBuf>,
@@ -189,6 +193,12 @@ enum Input {
     Acknowledge {
         id: uuid::Uuid,
     },
+}
+// Missing means use policy; an explicitly supplied null is not an integer budget.
+fn explicit_join_timeout<'de, D: serde::Deserializer<'de>>(
+    deserializer: D,
+) -> Result<Option<u64>, D::Error> {
+    u64::deserialize(deserializer).map(Some)
 }
 fn default_execution_timeout_ms() -> u64 {
     DEFAULT_EXECUTION_TIMEOUT_MS
@@ -255,6 +265,7 @@ impl ToolExecutor for Subagent {
                 Input::Start {
                     task,
                     mode,
+                    join_timeout_ms,
                     context,
                     resume,
                     cwd,
@@ -262,6 +273,12 @@ impl ToolExecutor for Subagent {
                     reasoning: requested_reasoning,
                     execution_timeout_ms,
                 } => {
+                    if join_timeout_ms.is_some_and(|ms| !(1..=MAX_WAIT_MS).contains(&ms)) {
+                        return failure("join_timeout_ms must be 1..=600000");
+                    }
+                    if matches!(mode, Mode::Background) && join_timeout_ms.is_some() {
+                        return failure("join_timeout_ms applies only to foreground start");
+                    }
                     if !(1..=MAX_EXECUTION_TIMEOUT_MS).contains(&execution_timeout_ms) {
                         return failure("execution_timeout_ms must be 1..=7200000");
                     }
@@ -358,14 +375,22 @@ impl ToolExecutor for Subagent {
                         Ok(task) => task,
                         Err(error) => return failure(error),
                     };
-                    let task = match mode {
-                        Mode::Foreground => task.task,
-                        Mode::Background => task.in_background(&self.owner),
+                    let join_timeout_ms = matches!(mode, Mode::Foreground)
+                        .then(|| join_timeout_ms.unwrap_or(DEFAULT_JOIN_MS));
+                    let task = match join_timeout_ms {
+                        Some(ms) => {
+                            task.in_background_after(&self.owner, Duration::from_millis(ms))
+                        }
+                        None => task.in_background(&self.owner),
                     };
                     match invocation.delegate(task).await {
                         Ok(receipt) => {
                             let joined = receipt.outcome.is_some();
-                            receipt_output(receipt, joined, None)
+                            let join_expired = join_timeout_ms.is_some() && receipt.transferred;
+                            let mut output = receipt_output(receipt, joined, None);
+                            output.value["join_timeout_ms"] = json!(join_timeout_ms);
+                            output.value["join_expired"] = json!(join_expired);
+                            output
                         }
                         Err(error) => failure(error),
                     }

@@ -317,6 +317,8 @@ os.write(2, b'MERGED_STDERR\\n')
                             arguments["context"] = {"type":"fork"}
                         if user.startswith("PARENT_BG_"):
                             arguments["mode"] = "background"
+                        if user == "PARENT_BG_IDLE":
+                            arguments.update(mode="foreground", join_timeout_ms=50)
                         if user == "PARENT_BG_EOF":
                             arguments["task"] += " " + "x" * 64000
                         if user == "PARENT_BG_WAIT":
@@ -332,6 +334,9 @@ os.write(2, b'MERGED_STDERR\\n')
                                 delta["tool_calls"].append(native)
                     else:
                         assert "PRIVATE_CHILD_TOOL" not in json.dumps(body)
+                        if user == "PARENT_BG_IDLE":
+                            returned = json.loads(body["messages"][-1]["content"])["result"]
+                            assert returned["join_expired"] and returned["transferred"] and not returned["joined"], returned
                         if user == "PARENT_PROCESS_RESOURCE":
                             pid = marker_pid("CHILD_PROCESS_RESOURCE")
                             assert dead(pid), "child answer was released before its process scope joined"
@@ -483,7 +488,8 @@ os.write(2, b'MERGED_STDERR\\n')
             admitted = next(entry["data"]["record"] for entry in entries if entry["kind"] == "delegation_admitted")
             assert admitted["child"] == child_header["id"] == result["child_session"]
             assert admitted["site"]["session"] == parent_header["id"]
-            assert admitted["ownership"] == "foreground" and admitted["spec"]["target"] == {"type":"fresh","directory":str(child_path.parent)}
+            assert set(admitted["ownership"]) == {"background"} and not result["transferred"]
+            assert admitted["spec"]["target"] == {"type":"fresh","directory":str(child_path.parent)}
             assert admitted["spec"]["reasoning"] == ("Low" if composed else "High")
             assert child_entries[0] == {"kind":"child_session_of","data":{"record":admitted}}
             assert Path(child_header["cwd"]).samefile(workspace)

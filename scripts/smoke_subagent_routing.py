@@ -190,7 +190,8 @@ with tempfile.TemporaryDirectory(prefix="ion-subagent-routing-") as temporary:
                 assert transfer == {"run": admitted[0]["run"], "owner": owner}
                 assert result["transferred"]
             else:
-                assert admitted[0]["ownership"] == "foreground"
+                assert set(admitted[0]["ownership"]) == {"background"}
+                assert not any(entry["kind"] == "delegation_transferred" for entry in facts(parent))
         print("coding child routing: inherited/cross/same routes, independent effort, credentials/limits, captured bindings, fork/background/Code Mode, effects and pre-admission refusals: OK")
     finally:
         server.shutdown()

@@ -280,12 +280,12 @@ impl ion_core::BackgroundSlot for BeforeTransfer {
     fn owner(&self) -> uuid::Uuid {
         self.permit.owner()
     }
-    fn reserve(&mut self) -> Result<(), String> {
+    fn reserve(&mut self) -> Result<tokio_util::sync::CancellationToken, String> {
         self.permit.reserve()
     }
     fn install(
         self: Box<Self>,
-        job: ion_core::BackgroundJob,
+        job: &mut ion_core::BackgroundJob,
     ) -> Result<ion_core::DelegationReceipt, ion_core::BackgroundStartError> {
         if let Some(stop) = self.stop {
             stop.cancel();

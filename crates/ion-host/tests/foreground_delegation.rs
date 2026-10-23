@@ -28,6 +28,8 @@ mod application_scope;
 mod background;
 #[path = "foreground_delegation/deadline.rs"]
 mod deadline;
+#[path = "foreground_delegation/join.rs"]
+mod join;
 #[path = "foreground_delegation/steering.rs"]
 mod steering;
 
@@ -110,11 +112,15 @@ impl ToolExecutor for Effect {
 enum Wait {
     Join,
     Abandon,
+    AbandonBounded(std::time::Duration),
     Repeat,
     Panic,
     HoldAfterTransfer,
     StopBeforeTransfer,
     CloseBeforeTransfer,
+    Bounded(std::time::Duration),
+    StopAtHandoff,
+    CloseAtHandoff,
 }
 struct Delegate {
     child: SessionDelegation,
@@ -176,6 +182,19 @@ impl ToolExecutor for Delegate {
                                     close: Some(owner.clone()),
                                 })
                             }
+                            Wait::Bounded(budget) | Wait::AbandonBounded(budget) => {
+                                task.in_background_after(permit, budget)
+                            }
+                            Wait::StopAtHandoff | Wait::CloseAtHandoff => task.in_background_after(
+                                background::BeforeTransfer {
+                                    permit,
+                                    stop: matches!(self.wait, Wait::StopAtHandoff)
+                                        .then(|| invocation.stop().clone()),
+                                    close: matches!(self.wait, Wait::CloseAtHandoff)
+                                        .then(|| owner.clone()),
+                                },
+                                std::time::Duration::from_secs(2),
+                            ),
                             _ => task.in_background(permit),
                         }
                     }
@@ -183,7 +202,7 @@ impl ToolExecutor for Delegate {
                 }
             };
             let result = match self.wait {
-                Wait::Abandon => {
+                Wait::Abandon | Wait::AbandonBounded(_) => {
                     let mut started = self.effect.started.subscribe();
                     tokio::select! {
                         result = invocation.delegate(task()) => result,
@@ -195,7 +214,10 @@ impl ToolExecutor for Delegate {
                 | Wait::Panic
                 | Wait::HoldAfterTransfer
                 | Wait::StopBeforeTransfer
-                | Wait::CloseBeforeTransfer => invocation.delegate(task()).await,
+                | Wait::CloseBeforeTransfer
+                | Wait::Bounded(_)
+                | Wait::StopAtHandoff
+                | Wait::CloseAtHandoff => invocation.delegate(task()).await,
             };
             if let Ok(receipt) = result {
                 if matches!(self.wait, Wait::HoldAfterTransfer) {

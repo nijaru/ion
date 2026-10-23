@@ -942,6 +942,17 @@ wait. Exact repeated specifications reconcile; different work, ownership mode or
 owner epoch at that invocation conflicts. `SessionView::delegations()` and
 `parent_delegation()` expose typed relationships without parsing tool prose.
 
+For bounded foreground joining, retain a Host `BackgroundOwner` and use
+`recipe.prepare(input)?.in_background_after(&owner, Duration::from_secs(60))`.
+Core reserves capacity before intent, then joins until completion or that budget.
+Full completion wins a ready expiry race and releases the reservation without a
+background report. At expiry the same pinned execution transfers, retaining its
+run/request, live control and original execution deadline. Parent stop before
+transfer still stops and joins it; abandoning the result waiter retains foreground
+joining, not an implicit handoff. A refused/failed transfer also stops and joins
+already-started work before release. This budget includes child setup after live
+admission, not synchronous recipe preflight; zero selects immediate transfer.
+
 For background work, retain a Host `BackgroundOwner` and choose its live
 destination: `recipe.prepare(input)?.in_background(&owner)`. The
 coding application owns one owner for its lifetime, shared across runtime reload
@@ -1441,9 +1452,17 @@ the captured command environment and the application's Code Mode setting remain
 inherited. It does not automatically enable another built-in subagent. Model
 arguments cannot choose tools, endpoints, credentials or arbitrary authority.
 
-Foreground `start` joins execution and cleanup before returning the typed
-child/outcome locator and request receipt. Background `start` returns only after
-responsibility has transferred to the coding application's owner; it is not a
+Foreground `start` joins for up to `join_timeout_ms` (default 60000; 1–600000 ms).
+It reserves application capacity before starting and includes child setup after
+live admission, not synchronous recipe preflight. Full completion returns the
+joined outcome with `join_expired: false`, without transfer or a retained slot.
+If still joining at expiry, it transfers the **same run**, returns `join_expired:
+true` and `joined: false`, and continues under the returned `id`. Use wait/status;
+never relaunch it because the join expired. This does not stop work or reset its
+execution deadline. Before transfer, parent stop still stops and fully joins it;
+cleanup may outlast the join budget. Background `start` rejects `join_timeout_ms`
+and transfers immediately. Either transfer is acknowledged only after committed
+responsibility passes to the coding application's owner; it is not a
 completion claim and survives parent stop, parent-Session switch and reload, but
 not application shutdown. `list` and `status` inspect retained application jobs;
 `cancel` explicitly stops one child; `acknowledge` releases one joined result's
@@ -1477,8 +1496,7 @@ contains the original uncommitted input. Guidance cannot be recalled after
 admission, even if the parent stops waiting. Cancelling readiness leaves the child
 running. New guidance to a stopped, settled, unknown or acknowledged run fails;
 it never implicitly resumes it. Named persistent conversations, unfinished-child
-recovery, foreground join-to-background handoff and completion inbox delivery
-remain unfinished.
+recovery and completion inbox delivery remain unfinished.
 
 `start` accepts `execution_timeout_ms`, defaulting to 1800000 (30 minutes), with
 1–7200000 milliseconds allowed. This bounds child model/tool execution from task
