@@ -1,4 +1,5 @@
 use super::*;
+use ion_ai::ModelRef;
 use ion_core::{
     ActivityGroup, ActivityResult, ActivityState, ToolActivity, ToolActivityKind,
     ToolResultProjection, TranscriptActivity, TranscriptMessage, TranscriptPart,
@@ -583,7 +584,7 @@ fn command_completion_edits_without_dispatch_or_argument_loss() {
     assert!(ui.recovered.is_empty());
     assert_eq!(ui.history_published_items, 7);
     assert!(
-        matches!(ui.key(KeyEvent::new(KeyCode::Enter, Modifiers::NONE), None, None), Action::Command(command) if command == "/help")
+        matches!(ui.key(KeyEvent::new(KeyCode::Enter, Modifiers::NONE), None, None), Action::Command(CommandInput::Editor(source)) if source.literal == "/help " && source.cursor == 6)
     );
 
     ui.insert("  /help focus 🦀");
@@ -627,7 +628,7 @@ fn command_completion_edits_without_dispatch_or_argument_loss() {
     assert!(ui.completion.rows(80, 1).is_empty());
     // A menu that cannot fit is not an invisible keyboard target.
     assert!(
-        matches!(ui.key(KeyEvent::new(KeyCode::Enter, Modifiers::NONE), None, None), Action::Command(command) if command == "/re")
+        matches!(ui.key(KeyEvent::new(KeyCode::Enter, Modifiers::NONE), None, None), Action::Command(CommandInput::Editor(source)) if source.literal == "/re" && source.cursor == 3)
     );
 }
 
@@ -779,7 +780,7 @@ fn resource_completion_preserves_literal_commands_and_terminal_control_names() {
     assert_eq!(ui.draft, "/zzmenu-check ");
     ui.insert("concurrency");
     assert!(
-        matches!(ui.key(KeyEvent::new(KeyCode::Enter, Modifiers::NONE), Some(&resources), None), Action::Command(command) if command == "/zzmenu-check concurrency")
+        matches!(ui.key(KeyEvent::new(KeyCode::Enter, Modifiers::NONE), Some(&resources), None), Action::Command(CommandInput::Editor(source)) if source.literal == "/zzmenu-check concurrency" && source.cursor == source.literal.len())
     );
     assert_eq!(ui.history_published_items, 7);
     ui.insert("/zzmenu-au");

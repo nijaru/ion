@@ -5,7 +5,7 @@ use ion_ai::Role;
 use std::fs;
 use std::{
     collections::{HashSet, VecDeque},
-    path::{Path, PathBuf},
+    path::PathBuf,
 };
 
 use crate::display_text::{fit_line, push_wrapped};
@@ -13,15 +13,13 @@ use crate::terminal_commands::{Builtin, Completion};
 use crate::transcript_detail::{DetailView, tools};
 use crate::transcript_render::kind_label;
 use anyhow::{Context, Result};
-use ion_ai::{Content, Message, ModelRef};
+use ion_ai::{Content, Message};
 use ion_core::{
     CodingSession, LiveTranscript, SessionEntry, SessionView, TranscriptItem, TranscriptProjection,
     TurnEndReason,
 };
 use ion_host::image_input::{ImageSource, LoadedImage};
-use ion_host::{
-    CredentialStatus, CredentialStore, Delivery, QuestionResponder, Resources, SessionControl,
-};
+use ion_host::{CredentialStore, Delivery, QuestionResponder, Resources};
 use ion_terminal::{
     Frame, InputEvent, KeyCode, KeyEvent, Modifiers, MouseKind, ProgramStatus, Screen,
     TerminalSession,
@@ -33,6 +31,7 @@ use tokio_util::sync::CancellationToken;
 mod activity;
 mod attach;
 mod clipboard_input;
+mod command;
 mod composer;
 mod draft;
 mod editing;
@@ -44,10 +43,11 @@ mod picker;
 mod question;
 mod tasks;
 use clipboard_input::*;
+use command::{CommandInput, dispatch_command};
 use composer::input_window;
 use editing::{Edit, vertical_cursor};
 use editor_recovery::EditorRecovery;
-use interaction::{apply_picker, dispatch_command, submit_editor};
+use interaction::{apply_picker, submit_editor};
 use picker::{Picker, PickerItem, PickerValue, Pickers};
 use question::{QuestionAction, QuestionModal};
 
@@ -99,11 +99,6 @@ impl ProgramStatusState {
         self.published = Some(status);
         Ok(())
     }
-}
-
-pub(super) struct CommandInput {
-    command: String,
-    source: Option<EditorDraft>,
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, clap::ValueEnum)]
@@ -322,12 +317,6 @@ pub async fn chat(init: ChatInit) -> Result<()> {
                         continue;
                     }
                     let cursor = ui.cursor;
-                    let raw_command = (key.code == KeyCode::Enter
-                        && !key.modifiers.contains(Modifiers::SHIFT)
-                        && !key.modifiers.contains(Modifiers::CONTROL)
-                        && !key.modifiers.contains(Modifiers::ALT)
-                        && ui.draft.trim_start().starts_with('/'))
-                        .then(|| EditorDraft { literal: ui.draft.clone(), cursor });
                     match ui.key(
                         key,
                         Some(runtime.resources()),
@@ -370,7 +359,7 @@ pub async fn chat(init: ChatInit) -> Result<()> {
                                 terminal,
                                 screen,
                                 &mut program,
-                                CommandInput { command, source: raw_command },
+                                command,
                             )
                             .await?;
                         },
@@ -587,240 +576,6 @@ async fn edit_draft_in_terminal(
     Ok(edited.map(|edited| ui.replace_draft_atomic(edited)))
 }
 
-fn handle_command(
-    runtime: &mut SessionControl<EditorDraft>,
-    services: &ion_host::Host,
-    ui: &mut Frontend,
-    command: &str,
-) -> Result<bool> {
-    let (name, args) = command
-        .split_once(char::is_whitespace)
-        .unwrap_or((command, ""));
-    let args = args.trim();
-    match Builtin::parse(name) {
-        Some(Builtin::Help) => ui.print(Builtin::help()),
-        Some(Builtin::Settings) => ui.output_settings(args)?,
-        Some(Builtin::Reasoning) => {
-            if args.is_empty() {
-                ui.print(format!("Generation effort: {}. Use /reasoning default|off|low|medium|high|budget:TOKENS; route support varies", runtime.session().reasoning()?));
-            } else {
-                let reasoning = args
-                    .parse::<ion_ai::Reasoning>()
-                    .map_err(anyhow::Error::msg)?;
-                runtime.select_reasoning(reasoning)?;
-                ui.status = format!("Generation effort: {reasoning}");
-            }
-        }
-        Some(Builtin::Tui) => match args {
-            "" => ui.print(format!(
-                "TUI mode: {}. Use /tui inline or /tui fullscreen",
-                ui.mode.label()
-            )),
-            "inline" | "regular" => {
-                ui.mode = TuiMode::Inline;
-                ui.scroll = 0;
-                ui.status = "Inline TUI · native terminal scrollback".into();
-            }
-            "fullscreen" => {
-                ui.mode = TuiMode::Fullscreen;
-                ui.scroll = 0;
-                ui.fullscreen_rows = 0;
-                ui.status = "Fullscreen TUI · PageUp/PageDown or mouse wheel scrolls".into();
-            }
-            _ => anyhow::bail!("use /tui inline or /tui fullscreen"),
-        },
-        Some(Builtin::Image) => {
-            anyhow::ensure!(!args.is_empty(), "use /image PATH");
-            ion_host::image_input::require_image_input(
-                runtime.agent().model(),
-                runtime.agent().limits().image_input,
-            )?;
-            ui.attach_image(ImageSource::Path(PathBuf::from(args)));
-        }
-        Some(Builtin::Skills) => ui.print(
-            runtime
-                .resources()
-                .skills()
-                .map(|skill| format!("{} — {}", skill.name, skill.description))
-                .collect::<Vec<_>>()
-                .join("\n"),
-        ),
-        Some(Builtin::Prompts) => ui.print(
-            runtime
-                .resources()
-                .templates()
-                .map(|template| format!("/{} — {}", template.name, template.description))
-                .collect::<Vec<_>>()
-                .join("\n"),
-        ),
-        Some(Builtin::Reload) => {
-            runtime.reload_resources()?;
-            ui.print(format!(
-                "Reloaded resources and commands ({} diagnostic(s))",
-                runtime.resources().diagnostics().len() + runtime.commands().diagnostics().len()
-            ));
-        }
-        Some(Builtin::Session) => {
-            let view = runtime.session().view()?;
-            ui.print(format!(
-                "Session {} · {} turn(s) · {} · {}",
-                runtime.session().path().display(),
-                view.entries
-                    .iter()
-                    .filter(|entry| matches!(entry, ion_core::SessionEntry::TurnStarted { .. }))
-                    .count(),
-                view.name.as_deref().unwrap_or("unnamed"),
-                context_label(&view, runtime.agent().limits().context_window_tokens),
-            ));
-        }
-        Some(Builtin::Export) => {
-            anyhow::ensure!(!args.is_empty(), "use /export PATH");
-            let target = Path::new(args);
-            let target = if target.is_absolute() {
-                target.to_owned()
-            } else {
-                runtime
-                    .session()
-                    .cwd()
-                    .context("relative export path requires a working directory")?
-                    .join(target)
-            };
-            crate::transcript::save_new(&runtime.session().view()?, &target)?;
-            ui.status = format!("Transcript saved to {}", target.display());
-        }
-        Some(Builtin::New) => {
-            runtime.new_session()?;
-            ui.refresh_session(runtime.session())?;
-            ui.print("Started a new session".into());
-        }
-        Some(Builtin::Clone) => {
-            let id = runtime.clone_session()?;
-            ui.refresh_session(runtime.session())?;
-            ui.print(format!(
-                "Cloned conversation as {id}; both sessions use the same working directory"
-            ));
-        }
-        Some(Builtin::Tree) => navigation::tree(runtime, ui, args)?,
-        Some(Builtin::Fork) => navigation::fork(runtime, ui, args)?,
-        Some(Builtin::ForkAfter) => navigation::fork_after(runtime, ui, args)?,
-        Some(Builtin::Resume) => navigation::resume(runtime, ui, args)?,
-        Some(Builtin::Name) => {
-            if args.is_empty() {
-                ui.print(
-                    runtime
-                        .session()
-                        .view()?
-                        .name
-                        .unwrap_or_else(|| "Session has no name".into()),
-                );
-            } else {
-                runtime.session().set_name(Some(args))?;
-                ui.refresh_session(runtime.session())?;
-            }
-        }
-        Some(Builtin::Model) => {
-            if !args.is_empty() {
-                let (provider, model) =
-                    args.split_once('/').context("use /model PROVIDER/MODEL")?;
-                runtime.select_model(ModelRef {
-                    provider: provider.into(),
-                    model: model.into(),
-                })?;
-                ui.status = format!("Selected {args}");
-            } else {
-                let items = services
-                    .models()
-                    .choices(services.credentials())?
-                    .into_iter()
-                    .map(|choice| {
-                        let option = choice.selected;
-                        Ok(PickerItem {
-                            label: format!(
-                                "{}/{}  {}  {}",
-                                option.provider,
-                                option.model,
-                                choice.label,
-                                if choice.credential == CredentialStatus::Missing {
-                                    "no credential"
-                                } else {
-                                    "ready"
-                                }
-                            ),
-                            detail: None,
-                            value: PickerValue::Model(option.identity()),
-                        })
-                    })
-                    .collect::<Result<Vec<_>>>()?;
-                ui.pickers.open(Picker {
-                    title: "Choose model",
-                    query: String::new(),
-                    selected: 0,
-                    items,
-                });
-            }
-        }
-        Some(Builtin::Logout) => {
-            anyhow::ensure!(!args.is_empty(), "use /logout PROVIDER");
-            services.credentials().remove(args)?;
-            ui.status = format!("Removed saved {args} credential");
-        }
-        Some(Builtin::Tasks) => {
-            let owner = runtime
-                .background()
-                .context("application has no background owner")?;
-            tasks::command(ui, &owner, args)?;
-        }
-        Some(Builtin::Commands) => {
-            if !args.is_empty() {
-                anyhow::bail!("use /commands");
-            }
-            let catalog = runtime.commands();
-            let mut lines = Vec::new();
-            for command in catalog.iter() {
-                lines.push(format!(
-                    "/command:{} — {} · {}",
-                    command.name, command.description, command.origin
-                ));
-            }
-            for diagnostic in catalog.diagnostics() {
-                lines.push(format!("[commands: {diagnostic}]"));
-            }
-            ui.print(if lines.is_empty() {
-                "No enabled user commands. Configure commands.json or a trusted project .ion/commands.json".into()
-            } else {
-                lines.join("\n")
-            });
-        }
-        Some(Builtin::Tools) => ui.list_tools(),
-        Some(Builtin::Tool) => {
-            let number = if args.is_empty() {
-                tools(&ui.history).count()
-            } else {
-                args.parse::<usize>().context("use /tool [N]")?
-            };
-            ui.open_details(Some(number));
-        }
-        Some(kind) => anyhow::bail!("use {}", kind.usage()),
-        None => {
-            // Recognition only: Host expands exactly once when it admits the
-            // original Prompt, including while an operation is active.
-            if runtime
-                .resources()
-                .skills()
-                .any(|skill| name.strip_prefix("/skill:") == Some(skill.name.as_str()))
-                || runtime
-                    .resources()
-                    .templates()
-                    .any(|template| name.strip_prefix('/') == Some(template.name.as_str()))
-            {
-                return Ok(true);
-            }
-            anyhow::bail!("Unknown command: {name}. Type /help");
-        }
-    }
-    Ok(false)
-}
-
 fn context_label(view: &ion_core::SessionView, window: Option<u32>) -> String {
     let mut label = match (view.last_usage.and_then(|usage| usage.input_tokens), window) {
         (Some(input), Some(window)) => format!("input {input}/{window} tokens"),
@@ -900,7 +655,7 @@ enum Action {
     Recover,
     PasteClipboard,
     CopyDetail,
-    Command(String),
+    Command(CommandInput),
     Pick(PickerValue),
     Quit,
 }
@@ -1264,11 +1019,15 @@ impl Frontend {
             KeyEvent {
                 code: KeyCode::Char('x'),
                 modifiers,
-            } if modifiers.contains(Modifiers::CONTROL) => Action::Command("/copy".into()),
+            } if modifiers.contains(Modifiers::CONTROL) => {
+                Action::Command(CommandInput::Shortcut(Builtin::Copy))
+            }
             KeyEvent {
                 code: KeyCode::Char('g'),
                 modifiers,
-            } if modifiers.contains(Modifiers::CONTROL) => Action::Command("/editor".into()),
+            } if modifiers.contains(Modifiers::CONTROL) => {
+                Action::Command(CommandInput::Shortcut(Builtin::Editor))
+            }
             KeyEvent {
                 code: KeyCode::Char('v'),
                 modifiers,
@@ -1344,7 +1103,10 @@ impl Frontend {
                     if Builtin::parse(syntax) == Some(Builtin::Quit) {
                         Action::Quit
                     } else if syntax.starts_with('/') {
-                        Action::Command(syntax.to_owned())
+                        Action::Command(CommandInput::Editor(EditorDraft {
+                            literal: prompt,
+                            cursor,
+                        }))
                     } else if let Some(command) = syntax.strip_prefix("!!") {
                         Action::Shell {
                             command: command.trim().to_owned(),

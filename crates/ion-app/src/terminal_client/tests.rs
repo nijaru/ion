@@ -2,7 +2,8 @@
 //! stop/acceptance races and decoder lifetimes; do not duplicate those internals.
 use super::activity::OperationKind;
 use super::*;
-use ion_host::{ControlUpdate, Host, OperationOutcome, SavedSelection, Wire};
+use ion_ai::ModelRef;
+use ion_host::{ControlUpdate, Host, OperationOutcome, SavedSelection, SessionControl, Wire};
 use std::sync::Arc;
 
 #[test]
@@ -148,6 +149,71 @@ impl Drop for Fixture {
     }
 }
 
+#[test]
+fn command_actions_own_exact_editor_sources() {
+    for (literal, prefix) in [
+        (" \t/model missing🦀  ", " \t/model missing🦀"),
+        (
+            "  /command:check 'two words' 🦀  ",
+            "  /command:check 'two ",
+        ),
+        (" /quit argument ", " /quit ar"),
+    ] {
+        let cursor = prefix.len();
+        let mut ui = Frontend {
+            draft: literal.into(),
+            cursor,
+            images: vec![image("attached")],
+            ..Frontend::default()
+        };
+        let Action::Command(CommandInput::Editor(source)) =
+            ui.key(KeyEvent::new(KeyCode::Enter, Modifiers::NONE), None, None)
+        else {
+            panic!("entered command must carry its original editor source");
+        };
+        assert_eq!(source.literal, literal);
+        assert_eq!(source.cursor, cursor);
+        assert!(ui.draft.is_empty());
+        assert_eq!(ui.cursor, 0);
+        assert_eq!(ui.images.len(), 1);
+        assert_note(&ui.images[0], "attached");
+        ui.restore_editor(source);
+        assert_eq!(ui.draft, literal);
+        assert_eq!(ui.cursor, cursor);
+    }
+    for literal in ["/quit", "  /exit  "] {
+        let mut ui = Frontend {
+            draft: literal.into(),
+            cursor: literal.len(),
+            ..Frontend::default()
+        };
+        assert!(matches!(
+            ui.key(KeyEvent::new(KeyCode::Enter, Modifiers::NONE), None, None),
+            Action::Quit
+        ));
+    }
+}
+
+#[test]
+fn command_shortcuts_leave_editor_text_cursor_and_attachments_owned_by_editor() {
+    for (key, builtin) in [('x', Builtin::Copy), ('g', Builtin::Editor)] {
+        let mut ui = Frontend {
+            draft: "unsent 🦀 draft".into(),
+            cursor: 3,
+            images: vec![image("unsent")],
+            ..Frontend::default()
+        };
+        assert!(matches!(
+            ui.key(KeyEvent::new(KeyCode::Char(key), Modifiers::CONTROL), None, None),
+            Action::Command(CommandInput::Shortcut(command)) if command == builtin
+        ));
+        assert_eq!(ui.draft, "unsent 🦀 draft");
+        assert_eq!(ui.cursor, 3);
+        assert_eq!(ui.images.len(), 1);
+        assert_note(&ui.images[0], "unsent");
+    }
+}
+
 #[tokio::test]
 async fn command_namespace_completes_and_never_becomes_a_model_prompt_or_queue() {
     let mut fixture = Fixture::new();
@@ -176,7 +242,8 @@ async fn command_namespace_completes_and_never_becomes_a_model_prompt_or_queue()
             None,
             Some(fixture.control.commands())
         ),
-        Action::Command(command) if command == "/command:check a b"
+        Action::Command(CommandInput::Editor(source))
+            if source.literal == "/command:check a b" && source.cursor == source.literal.len()
     ));
     assert!(!fixture.control.is_busy());
 
@@ -198,7 +265,14 @@ async fn help_output_is_complete_publication_not_clipped_composer_chrome() {
     let expected = notice_rows(&Builtin::help(), 39);
     assert!(expected.len() > LIVE_REGION_MAX_ROWS);
     for _ in 0..2 {
-        assert!(!handle_command(&mut fixture.control, &fixture.host, &mut ui, "/help").unwrap());
+        command::handle_builtin(
+            &mut fixture.control,
+            &fixture.host,
+            &mut ui,
+            Builtin::Help,
+            "",
+        )
+        .unwrap();
         let pending = ui.pending_history_rows(40);
         assert!(
             pending.windows(expected.len()).any(|rows| rows == expected),
