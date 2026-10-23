@@ -84,6 +84,7 @@ pub(super) fn pending_for(
                 cwd: None,
                 model,
                 reasoning: Reasoning::ProviderDefault,
+                execution_timeout_ms: None,
                 authority: AuthorityScope::new("child/v1").unwrap(),
                 input: Message::user_input("child".into(), []),
             },
@@ -291,9 +292,35 @@ fn repeated_child_identity_is_invalid_even_without_the_derived_index() {
 }
 
 #[test]
+fn deadline_settlement_cannot_hide_failure_or_retain_a_successful_answer() {
+    for answer in [None, Some("not an on-time answer".into())] {
+        let (root, session, _, record) = pending(false);
+        let outcome = DelegationOutcome::Joined {
+            execution_timed_out: true,
+            receipt: Some(crate::RequestReceipt {
+                session: record.child,
+                key: crate::delegation::request_key(record.child),
+                turn: 1,
+                end: Some(TurnEndReason::Completed),
+            }),
+            error: answer.as_ref().map(|_| "deadline exceeded".into()),
+            answer,
+        };
+        assert!(matches!(
+            session.settle_delegation(&record, outcome),
+            Err(SessionError::InvalidHistory)
+        ));
+        assert!(session.view().unwrap().delegations()[0].outcome.is_none());
+        drop(session);
+        fs::remove_dir_all(root).unwrap();
+    }
+}
+
+#[test]
 fn conservative_recovery_preserves_joined_relationships() {
     let (root, session, _, record) = pending(false);
     let outcome = DelegationOutcome::Joined {
+        execution_timed_out: false,
         receipt: None,
         error: Some("stopped before materialization".into()),
         answer: None,

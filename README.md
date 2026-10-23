@@ -894,7 +894,16 @@ not a live lease, capability grant, replay permission or evidence of settlement.
 Rust applications can prepare a child with Host's
 `SessionDelegation` and request it through `ToolInvocation::delegate`. Its
 private live admission port is separate from the historical origin. The complete
-child application, authority assertion and environment are explicit. Choose
+child application, authority assertion and environment are explicit.
+`execution_timeout_ms: Some(ms)` sets a positive runtime budget from linked child
+request submission, after materialization/preflight; `None` leaves that policy to
+the application. Progress and parent waits do not refresh it. Expiry requests
+ordinary stop, then joins control and native process cleanup; cleanup may outlive
+the budget. The joined relationship records `execution_timed_out` independently
+of execution or infrastructure errors, without rewriting the child's Turn end or
+inferring timeout from owner loss. Custom `DelegationTask` callbacks return
+`DelegationCompletion` and must attest/enforce the same lifecycle contract.
+Choose
 `DelegationContext::Fresh` or `Fork { point }`, with `ForkPoint::BeforeTurn(n)` or
 `ForkPoint::AfterTurn(n)` selecting the actual parent's committed prefix. An unfinished Turn is not an after-Turn
 boundary; an invalid choice is refused before intent or child files.
@@ -1401,6 +1410,18 @@ not application shutdown. `list` and `status` inspect retained application jobs;
 `cancel` explicitly stops one child; `acknowledge` releases one joined result's
 capacity without deleting its committed facts.
 
+`start` accepts `execution_timeout_ms`, defaulting to 1800000 (30 minutes), with
+1–7200000 milliseconds allowed. This bounds child model/tool execution from task
+submission after preflight, not how long a parent waits. For example,
+`{"action":"start","task":"Inspect the parser","mode":"background","execution_timeout_ms":120000}`
+starts a child with a two-minute execution budget. Its receipt includes the applied
+budget. Expiry requests stop and fully joins before reporting
+`outcome.execution_timed_out: true`; the child's ordinary Turn end remains visible
+alongside it. Explicit cancellation is not relabelled as a timeout. Cleanup can
+outlive the budget: this is neither a hard cleanup deadline nor rollback, proof of
+remote quiescence or permission to repeat uncertain effects. A timed-out child has
+no successful answer, even if an independent cleanup failure also occurs.
+
 Use `{"action":"wait","children":["<child-id>","<another-id>"],"timeout_ms":300000}`
 to wait until **any** selected child joins. `children` requires 1–64 unique owned
 IDs. The optional shared wait budget defaults to five minutes and accepts 1–600000
@@ -1410,8 +1431,8 @@ also wakes the wait and marks its output as an error; expiry alone is not an err
 An unknown or acknowledged ID rejects the whole selection, even if another is ready.
 
 Expiry or cancellation stops only this wait; it neither cancels children nor sets
-an execution deadline. Reports remain readable until explicit acknowledgement. Wait again only
-on still-running IDs; including an already-joined job returns immediately. Other
+an execution deadline. Reports remain readable until explicit acknowledgement.
+Wait again only on still-running IDs; including an already-joined job returns immediately. Other
 waiters keep their independent subscriptions and may read the same joined report.
 
 A joined answer is the child's actual original final visible text, retained after
@@ -1424,7 +1445,8 @@ Managed files live under the workspace catalog's `children/`, outside automatic
 `--continue` root selection; use the returned path to inspect or explicitly open
 one. The same workspace is not conflict isolation, and native tools retain host
 permissions. Parent stop and foreground client EOF stop/join their owned children;
-background children require explicit cancel or application shutdown. Cancellation
+background children stop on their execution deadline, explicit cancel or
+application shutdown. Cancellation
 does not roll back effects. Normal headless completion lets delegated agents
 finish, then stops and joins managed programs. Interruption, RPC EOF and terminal
 quit stop and join both. These are

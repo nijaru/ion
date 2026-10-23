@@ -35,6 +35,7 @@ async fn cancelled_result_wait_retains_original_answer_until_acknowledgement() {
         false,
         ion_core::DelegationContext::Fresh,
         Some(owner.clone()),
+        None,
     );
     f.start();
     background::drain(&mut f.control).await;
@@ -79,6 +80,7 @@ async fn application_failure_stops_parent_without_a_host_result_reader() {
         false,
         ion_core::DelegationContext::Fresh,
         Some(owner.clone()),
+        None,
     );
     f.control = SessionSetup::new(
         f.session.clone(),

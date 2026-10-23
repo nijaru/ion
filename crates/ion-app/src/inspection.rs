@@ -166,12 +166,13 @@ struct DelegationInspection {
 
 #[derive(Serialize)]
 #[serde(remote = "ion_core::DelegationSpec")]
-struct ForegroundInspection {
+struct DelegationSpecInspection {
     context: ion_core::DelegationContext,
     directory: PathBuf,
     cwd: Option<PathBuf>,
     model: ModelRef,
     reasoning: Reasoning,
+    execution_timeout_ms: Option<u64>,
     authority: ion_core::AuthorityScope,
     #[serde(serialize_with = "omit")]
     input: Message,
@@ -276,7 +277,7 @@ projection!(
     ChildOutcome => ChildInspection,
     CodingToolOutput => OutputInspection,
     ion_core::DelegationRecord => DelegationInspection,
-    ion_core::DelegationSpec => ForegroundInspection,
+    ion_core::DelegationSpec => DelegationSpecInspection,
 );
 
 impl Serialize for OmitImages<'_, ImageContent> {
@@ -586,6 +587,7 @@ mod tests {
                 cwd: None,
                 model: view.last_model.clone().unwrap(),
                 reasoning: Reasoning::ProviderDefault,
+                execution_timeout_ms: None,
                 authority: ion_core::AuthorityScope::new("inspection/v1").unwrap(),
                 input,
             },

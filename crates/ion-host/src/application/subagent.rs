@@ -20,6 +20,8 @@ use crate::{BackgroundChildSnapshot, BackgroundOwner, Resources, Selection, Sess
 
 const DEFAULT_WAIT_MS: u64 = 300_000;
 const MAX_WAIT_MS: u64 = 600_000;
+const DEFAULT_EXECUTION_TIMEOUT_MS: u64 = 30 * 60 * 1000;
+const MAX_EXECUTION_TIMEOUT_MS: u64 = 2 * 60 * 60 * 1000;
 
 pub(super) struct Subagent {
     application: Arc<ChildApplication>,
@@ -102,6 +104,7 @@ impl CodingToolSource for Subagent {
             json!({"type":"object","additionalProperties":false,"required":["action","task"],"properties":{
                 "action":{"const":"start"}, "task":{"type":"string","minLength":1,"maxLength":65536},
                 "mode":{"enum":["foreground","background"],"default":"foreground"},
+                "execution_timeout_ms":{"type":"integer","minimum":1,"maximum":MAX_EXECUTION_TIMEOUT_MS,"default":DEFAULT_EXECUTION_TIMEOUT_MS,"description":"Child runtime budget from task submission, independent of parent wait budgets. Expiry requests stop and joins cleanup; the retained outcome records execution_timed_out. Not rollback or a hard cleanup deadline."},
                 "model":{"type":"string","description":"Exact provider/model identifier from the known catalog or configured routes; omitted inherits the captured parent route. No endpoints or credentials."},
                 "reasoning":{"type":"string","description":"Generation effort for the child: default, off, low, medium, high or budget:TOKENS. Omitted inherits the parent's effort, even with a different model. Unsupported controls fail before child admission."},
                 "context":{"oneOf":[
@@ -121,7 +124,7 @@ impl CodingToolSource for Subagent {
         }
         let mut definition = ToolDefinition::external(ToolSpec {
             name: "subagent".into(),
-            description: "Managed coding Sessions. start(task, mode=foreground, context={type:fresh}, model?, reasoning?) inherits this request's captured route/reasoning unless explicitly overridden. model is an exact provider/model from the known catalog or configured routes, using that route's credential policy. No silent route/effort fallback; overrides affect only the new child, not this parent or user configuration. Workspace, resources and selected tools remain inherited; no automatic recursive built-in or sandbox/conflict isolation. context={type:fork} copies the settled committed prefix BEFORE the initiating Turn (not its unfinished conversation); optional point selects an earlier before_turn/after_turn boundary, validated by Core. Background start acknowledges committed ownership transfer, NOT completion: it survives parent stop and Session changes, not application shutdown. list/status inspect retained application jobs; wait(children, timeout_ms=300000) returns all selected reports/statuses when any joins, or wait_expired=true after the shared budget (1..600000 ms), without consuming results or stopping children. Wait again only on still-running IDs; cancel explicitly stops that child; acknowledge releases a joined result's capacity. Parent stop cancels a wait, not transferred work. Use wait/status before depending on results; answers are child claims, not independent verification. Results and original answers remain in committed relationship facts. Unknown/acknowledged IDs grant no authority or replay. No automatic retries. Normal headless runs drain owned work before exit; quit/EOF/interruption stops and joins it.".into(),
+            description: "Managed coding Sessions. start(task, mode=foreground, context={type:fresh}, model?, reasoning?, execution_timeout_ms=1800000) inherits this request's captured route/reasoning unless explicitly overridden. model is an exact provider/model from the known catalog or configured routes, using that route's credential policy. No silent route/effort fallback; overrides affect only the new child, not this parent or user configuration. Workspace, resources and selected tools remain inherited; no automatic recursive built-in or sandbox/conflict isolation. context={type:fork} copies the settled committed prefix BEFORE the initiating Turn (not its unfinished conversation); optional point selects an earlier before_turn/after_turn boundary, validated by Core. Background start acknowledges committed ownership transfer, NOT completion: it survives parent stop and Session changes, not application shutdown. list/status inspect retained application jobs; wait(children, timeout_ms=300000) returns all selected reports/statuses when any joins, or wait_expired=true after the shared budget (1..600000 ms), without consuming results or stopping children. Wait again only on still-running IDs; cancel explicitly stops that child; acknowledge releases a joined result's capacity. Parent stop cancels a wait, not transferred work. Use wait/status before depending on results; answers are child claims, not independent verification. Results and original answers remain in committed relationship facts. Unknown/acknowledged IDs grant no authority or replay. Each child has a separate execution budget (default 30 minutes, 1..7200000 ms). Expiry requests stop and fully joins before reporting execution_timed_out; effects are not rolled back or safely replayable, and cleanup may outlive the budget. No automatic retries. Normal headless runs drain owned work before exit; quit/EOF/interruption stops and joins it.".into(),
             input_schema: json!({"type":"object","oneOf":choices}),
         });
         definition.presentation =
@@ -157,6 +160,8 @@ enum Input {
         context: Context,
         model: Option<String>,
         reasoning: Option<String>,
+        #[serde(default = "default_execution_timeout_ms")]
+        execution_timeout_ms: u64,
     },
     List,
     Status {
@@ -173,6 +178,9 @@ enum Input {
     Acknowledge {
         child: uuid::Uuid,
     },
+}
+fn default_execution_timeout_ms() -> u64 {
+    DEFAULT_EXECUTION_TIMEOUT_MS
 }
 fn default_wait_ms() -> u64 {
     DEFAULT_WAIT_MS
@@ -195,6 +203,7 @@ fn receipt_output(
     let completed = matches!(
         &receipt.outcome,
         Some(DelegationOutcome::Joined {
+            execution_timed_out: false,
             receipt: Some(RequestReceipt {
                 end: Some(TurnEndReason::Completed),
                 ..
@@ -207,6 +216,7 @@ fn receipt_output(
     output(
         json!({"child_session":receipt.record.child,"path":receipt.record.path,"context":receipt.record.spec.context,
         "model":receipt.record.spec.model,"reasoning":receipt.record.spec.reasoning.to_string(),
+        "execution_timeout_ms":receipt.record.spec.execution_timeout_ms,
         "transferred":receipt.transferred,"joined":joined,"outcome":receipt.outcome,"error":error}),
         is_error,
     )
@@ -235,7 +245,11 @@ impl ToolExecutor for Subagent {
                     context,
                     model,
                     reasoning: requested_reasoning,
+                    execution_timeout_ms,
                 } => {
+                    if !(1..=MAX_EXECUTION_TIMEOUT_MS).contains(&execution_timeout_ms) {
+                        return failure("execution_timeout_ms must be 1..=7200000");
+                    }
                     if task.trim().is_empty() || task.len() > 65536 {
                         return failure(
                             "subagent task must be nonblank and at most 65536 UTF-8 bytes",
@@ -297,6 +311,7 @@ impl ToolExecutor for Subagent {
                         model: Some(application.selected.identity()),
                         application,
                         reasoning,
+                        execution_timeout_ms: Some(execution_timeout_ms),
                         authority: self.authority.clone(),
                     };
                     let task = match recipe.prepare(Message::user_input(task, [])) {

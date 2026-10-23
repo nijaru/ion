@@ -92,14 +92,18 @@ impl State {
             }
             SessionEntry::DelegationSettled { child, outcome } => {
                 if let DelegationOutcome::Joined {
+                    execution_timed_out,
                     receipt,
                     error,
-                    answer: Some(_),
+                    answer,
                 } = outcome
-                    && (error.is_some()
-                        || receipt
-                            .as_ref()
-                            .is_none_or(|receipt| receipt.end != Some(TurnEndReason::Completed)))
+                    && ((*execution_timed_out && error.is_none())
+                        || (answer.is_some()
+                            && (*execution_timed_out
+                                || error.is_some()
+                                || receipt.as_ref().is_none_or(|receipt| {
+                                    receipt.end != Some(TurnEndReason::Completed)
+                                }))))
                 {
                     return Err(SessionError::InvalidHistory);
                 }

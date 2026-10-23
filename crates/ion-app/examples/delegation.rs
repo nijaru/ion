@@ -116,7 +116,7 @@ impl ToolExecutor for Delegate {
             match invocation.delegate(task).await {
                 Ok(receipt) => {
                     let failed = !receipt.transferred
-                        && !matches!(&receipt.outcome, Some(DelegationOutcome::Joined { receipt: Some(receipt), error: None, answer: Some(_) }) if receipt.end == Some(TurnEndReason::Completed));
+                        && !matches!(&receipt.outcome, Some(DelegationOutcome::Joined { execution_timed_out: false, receipt: Some(receipt), error: None, answer: Some(_) }) if receipt.end == Some(TurnEndReason::Completed));
                     output(
                         serde_json::to_value(receipt).expect("receipt serialization"),
                         failed,
@@ -265,6 +265,7 @@ async fn main() -> Result<()> {
             }),
             model: Some(model("child")),
             reasoning: Reasoning::ProviderDefault,
+            execution_timeout_ms: None,
             authority: AuthorityScope::new("example-child/environment/v1")?,
         },
     });
@@ -357,7 +358,7 @@ async fn main() -> Result<()> {
             ensure!(child_service.requests().is_empty() && service.requests().len() == 1, "recovery dispatched child work");
             ensure!(view.last_end == Some((parent_turn + u64::from(!resume), TurnEndReason::Completed)), "wrong recovery Turn");
         } else {
-            ensure!(matches!(&links[0].outcome, Some(DelegationOutcome::Joined { receipt: Some(receipt), error: None, answer: Some(_) }) if receipt.end == Some(TurnEndReason::Completed)), "child did not settle");
+            ensure!(matches!(&links[0].outcome, Some(DelegationOutcome::Joined { execution_timed_out: false, receipt: Some(receipt), error: None, answer: Some(_) }) if receipt.end == Some(TurnEndReason::Completed)), "child did not settle");
             ensure!(child_service.requests().len() == 2 && service.requests().len() == 2 + usize::from(fork), "unexpected requests");
             let requests = child_service.requests();
             ensure!(requests[0].instructions.as_deref() == Some("child-only instructions") && requests[0].tools.len() == 1 && requests[0].tools[0].name == "effect", "parent configuration inherited");

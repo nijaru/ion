@@ -1,11 +1,11 @@
 //! Explicit child recipes use ordinary assembly and shared Session control.
-use std::{path::PathBuf, sync::Arc};
+use std::{path::PathBuf, sync::Arc, time::Duration};
 
 use anyhow::{Result, ensure};
 use ion_ai::{Message, ModelRef, Reasoning};
 use ion_core::{
-    AuthorityScope, CodingAgentError, CodingSessionError, DelegationFailure, DelegationSpec,
-    DelegationTask,
+    AuthorityScope, CodingAgentError, CodingSessionError, DelegationCompletion, DelegationFailure,
+    DelegationSpec, DelegationTask,
 };
 
 use crate::{Application, ControlUpdate, OperationOutcome, SessionCatalog, SessionSetup};
@@ -26,6 +26,9 @@ pub struct SessionDelegation {
     pub application: Arc<dyn Application>,
     pub model: Option<ModelRef>,
     pub reasoning: Reasoning,
+    /// Runtime budget from linked child request submission; `None` leaves policy
+    /// to this application. Expiry requests stop and still joins all cleanup.
+    pub execution_timeout_ms: Option<u64>,
     pub authority: AuthorityScope,
 }
 
@@ -38,6 +41,15 @@ impl SessionDelegation {
             self.directory.is_absolute(),
             "child directory must be absolute"
         );
+        if let Some(ms) = self.execution_timeout_ms {
+            ensure!(ms != 0, "child execution timeout must be positive");
+            ensure!(
+                tokio::time::Instant::now()
+                    .checked_add(Duration::from_millis(ms))
+                    .is_some(),
+                "child execution timeout exceeds the clock range"
+            );
+        }
         let cwd = self.cwd.as_deref().map(std::fs::canonicalize).transpose()?;
         ensure!(
             cwd.as_ref().is_none_or(|cwd| cwd.is_dir()),
@@ -55,85 +67,125 @@ impl SessionDelegation {
             cwd: cwd.clone(),
             model: runtime.agent.model().clone(),
             reasoning: self.reasoning,
+            execution_timeout_ms: self.execution_timeout_ms,
             authority: self.authority.clone(),
             input,
         };
         let catalog = SessionCatalog::new(self.directory.clone(), cwd);
         let application = self.application.clone();
         let reasoning = self.reasoning;
+        let execution_timeout_ms = self.execution_timeout_ms;
         DelegationTask::new(spec, move |child, request, stop| {
             Box::pin(async move {
-                let child_id = child.id();
-                let processes = runtime.processes.clone();
-                let setup = SessionSetup::from_prepared(
-                    child,
-                    catalog,
-                    application,
-                    resources,
-                    runtime,
-                    Some(reasoning),
-                    None,
-                )
-                .map_err(|error| DelegationFailure::Infrastructure(error.to_string()))?;
-                let mut control = setup.into_control::<()>();
-                let admission =
-                    control.submit_linked_request(&request.key, request.input, (), stop.clone());
-                let mut failure = admission
-                    .err()
-                    .map(|rejected| admission_failure(rejected.reason));
-                while control.is_busy() {
-                    tokio::select! {
-                        biased;
-                        () = stop.cancelled() => { control.request_stop(); break; }
-                        _ = control.maintain() => {}
-                    }
-                }
-                // Completion facts precede Host settlement. Always join the whole
-                // owner, even after admission refusal or a parent stop.
-                let report = control.shutdown().await;
-                // The child cannot transfer a process grant by returning its ID.
-                // Close this quiescent scope before releasing its answer, even
-                // when its Core Turn ended normally or its waiter was cancelled.
-                if let Some(processes) = processes
-                    && let Err(error) = processes.close_session(child_id).await
-                {
-                    retain_failure(
-                        &mut failure,
-                        DelegationFailure::Infrastructure(error.to_string()),
+                // Keep deadline provenance even if stop/join or cleanup fails.
+                let mut execution_timed_out = false;
+                let result = async {
+                    let child_id = child.id();
+                    let processes = runtime.processes.clone();
+                    let setup = SessionSetup::from_prepared(
+                        child,
+                        catalog,
+                        application,
+                        resources,
+                        runtime,
+                        Some(reasoning),
+                        None,
+                    )
+                    .map_err(|error| DelegationFailure::Infrastructure(error.to_string()))?;
+                    let mut control = setup.into_control::<()>();
+                    let deadline = execution_timeout_ms
+                        .map(|ms| {
+                            tokio::time::Instant::now()
+                                .checked_add(Duration::from_millis(ms))
+                                .ok_or_else(|| {
+                                    DelegationFailure::Execution(
+                                        "child execution timeout exceeds the clock range".into(),
+                                    )
+                                })
+                        })
+                        .transpose()?;
+                    let admission = control.submit_linked_request(
+                        &request.key,
+                        request.input,
+                        (),
+                        stop.clone(),
                     );
-                }
-                let mut answer = None;
-                for update in report.updates {
-                    if let ControlUpdate::Settled(settlement) = update
-                        && let OperationOutcome::Turn(outcome) = settlement.outcome
+                    let mut failure = admission
+                        .err()
+                        .map(|rejected| admission_failure(rejected.reason));
                     {
-                        match outcome {
-                            Ok(text) => answer = Some(text),
-                            Err(error) => {
-                                let error = if infrastructure(&error) {
-                                    DelegationFailure::Infrastructure(error.to_string())
-                                } else {
-                                    DelegationFailure::Execution(error.to_string())
-                                };
-                                retain_failure(&mut failure, error);
+                        let expires = async {
+                            match deadline {
+                                Some(deadline) => tokio::time::sleep_until(deadline).await,
+                                None => std::future::pending().await,
+                            }
+                        };
+                        tokio::pin!(expires);
+                        while control.is_busy() {
+                            tokio::select! {
+                                biased;
+                                () = stop.cancelled() => { control.request_stop(); break; }
+                                () = &mut expires => {
+                                    execution_timed_out = true;
+                                    control.request_stop();
+                                    break;
+                                }
+                                _ = control.maintain() => {}
                             }
                         }
                     }
+                    // Completion facts precede Host settlement. Always join the whole
+                    // owner, even after admission refusal or a parent stop.
+                    let report = control.shutdown().await;
+                    // The child cannot transfer a process grant by returning its ID.
+                    // Close this quiescent scope before releasing its answer, even
+                    // when its Core Turn ended normally or its waiter was cancelled.
+                    if let Some(processes) = processes
+                        && let Err(error) = processes.close_session(child_id).await
+                    {
+                        retain_failure(
+                            &mut failure,
+                            DelegationFailure::Infrastructure(error.to_string()),
+                        );
+                    }
+                    let mut answer = None;
+                    for update in report.updates {
+                        if let ControlUpdate::Settled(settlement) = update
+                            && let OperationOutcome::Turn(outcome) = settlement.outcome
+                        {
+                            match outcome {
+                                Ok(text) => answer = Some(text),
+                                Err(error) => {
+                                    let error = if infrastructure(&error) {
+                                        DelegationFailure::Infrastructure(error.to_string())
+                                    } else {
+                                        DelegationFailure::Execution(error.to_string())
+                                    };
+                                    retain_failure(&mut failure, error);
+                                }
+                            }
+                        }
+                    }
+                    for error in report.cleanup_errors {
+                        retain_failure(
+                            &mut failure,
+                            DelegationFailure::Infrastructure(error.to_string()),
+                        );
+                    }
+                    if let Some(failure) = failure {
+                        return Err(failure);
+                    }
+                    answer.map(Some).ok_or_else(|| {
+                        DelegationFailure::Infrastructure(
+                            "child control joined without its successful answer".into(),
+                        )
+                    })
                 }
-                for error in report.cleanup_errors {
-                    retain_failure(
-                        &mut failure,
-                        DelegationFailure::Infrastructure(error.to_string()),
-                    );
+                .await;
+                DelegationCompletion {
+                    result,
+                    execution_timed_out,
                 }
-                if let Some(failure) = failure {
-                    return Err(failure);
-                }
-                answer.map(Some).ok_or_else(|| {
-                    DelegationFailure::Infrastructure(
-                        "child control joined without its successful answer".into(),
-                    )
-                })
             })
         })
         .map_err(anyhow::Error::msg)

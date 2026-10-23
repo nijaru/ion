@@ -26,6 +26,8 @@ use tokio::sync::{Notify, watch};
 mod application_scope;
 #[path = "foreground_delegation/background.rs"]
 mod background;
+#[path = "foreground_delegation/deadline.rs"]
+mod deadline;
 
 struct App {
     agent: Arc<CodingAgent>,
@@ -136,6 +138,7 @@ impl ToolExecutor for Delegate {
                             cwd: None,
                             model: model("child"),
                             reasoning: self.child.reasoning,
+                            execution_timeout_ms: self.child.execution_timeout_ms,
                             authority: self.child.authority.clone(),
                             input,
                         },
@@ -272,7 +275,7 @@ impl Fixture {
         composed: bool,
         context: ion_core::DelegationContext,
     ) -> Self {
-        Self::with_owner(wait, block, composed, context, None)
+        Self::with_owner(wait, block, composed, context, None, None)
     }
     fn with_owner(
         wait: Wait,
@@ -280,6 +283,26 @@ impl Fixture {
         composed: bool,
         context: ion_core::DelegationContext,
         owner: Option<Arc<ion_host::BackgroundOwner>>,
+        execution_timeout_ms: Option<u64>,
+    ) -> Self {
+        Self::with_child_service(
+            wait,
+            block,
+            composed,
+            context,
+            owner,
+            execution_timeout_ms,
+            None,
+        )
+    }
+    fn with_child_service(
+        wait: Wait,
+        block: bool,
+        composed: bool,
+        context: ion_core::DelegationContext,
+        owner: Option<Arc<ion_host::BackgroundOwner>>,
+        execution_timeout_ms: Option<u64>,
+        child_service: Option<Arc<dyn ion_ai::ModelService>>,
     ) -> Self {
         let root = std::env::temp_dir().join(format!("ion-foreground-{}", uuid::Uuid::now_v7()));
         std::fs::create_dir(&root).unwrap();
@@ -300,7 +323,7 @@ impl Fixture {
             ]),
         ]));
         let child_agent = Arc::new(CodingAgent::with_tool_set(
-            child.clone(),
+            child_service.unwrap_or_else(|| child.clone()),
             Arc::new(ToolSet::new([
                 if matches!(context, ion_core::DelegationContext::Fork { .. }) {
                     Arc::new(DeferredChildTools(effect.clone())) as Arc<dyn CodingToolSource>
@@ -323,6 +346,7 @@ impl Fixture {
                 }),
                 model: None,
                 reasoning: ion_ai::Reasoning::ProviderDefault,
+                execution_timeout_ms,
                 authority: AuthorityScope::new("fixture-child/v1").unwrap(),
             },
             owner,
@@ -434,7 +458,7 @@ async fn fresh_foreground_child_reconciles_without_inheriting_parent_configurati
     assert_eq!(f.child.requests().len(), 2);
     assert_eq!(view.last_end, Some((1, TurnEndReason::Completed)));
     assert!(
-        matches!(&links[0].outcome, Some(DelegationOutcome::Joined { receipt: Some(receipt), error: None, answer: Some(_) })
+        matches!(&links[0].outcome, Some(DelegationOutcome::Joined { execution_timed_out: false, receipt: Some(receipt), error: None, answer: Some(_) })
         if receipt.session == links[0].record.child && receipt.end == Some(TurnEndReason::Completed))
     );
     let Some(DelegationOutcome::Joined { answer, .. }) = &links[0].outcome else {

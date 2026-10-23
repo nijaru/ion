@@ -310,6 +310,23 @@ Fresh context and an explicit fork are different. Neither automatically grants
 parent secrets; confidentiality requires actual capability/environment isolation.
 Code Mode's nested tool calls are not child-agent Sessions.
 
+Execution budgets belong to the shared Host child lifecycle, not a tool's
+borrowed result wait or a client loop. `DelegationSpec.execution_timeout_ms`
+records the positive optional policy; `SessionDelegation` arms one monotonic
+deadline at linked request submission after preflight/materialization. Control
+progress and parent wait budgets never refresh it. Already-observed settlement
+ends execution timing; when stop and expiry are both ready, stop takes precedence.
+Expiry requests ordinary stop and fully joins control and native cleanup, without
+imposing a second cleanup deadline or discarding started work.
+
+A joined relationship retains typed `execution_timed_out` provenance separately
+from execution/infrastructure errors. Trusted callbacks return
+`DelegationCompletion`, enforcing their specified budget and attesting actual
+expiry; Core never infers it from strings or elapsed wall time after owner loss.
+Timeout is a failed relationship with no answer, not a rewrite of the child's
+ordinary Turn end. Infrastructure failures remain fatal even alongside timeout.
+Lost custody remains `Unknown`, not timed out, rolled back or safe to replay.
+
 A swarm coordinator may choose roles, topology, message routing, budgets and
 scheduling. Ion supplies execution identity, authority, observable relationships,
 stop/join and outcomes. Concurrent agents sharing files need conflict policy;
@@ -331,7 +348,10 @@ routes and missing required access fail preflight before child admission. There
 is no fallback or additional child-route allowlist. Same-identity overrides retain
 the captured route; a different route is resolved and captured before admission.
 Overrides do not change the parent binding or operator configuration. Receipts
-report the actual child model and reasoning.
+report the actual child model and reasoning. Coding `start` additionally sets a
+child execution budget, default 30 minutes with `execution_timeout_ms` accepting
+1–7200000. This applies to foreground and background children independently of
+parent waits; general Host recipes choose their own positive optional budget.
 
 The child retains the same workspace and selected coding resources/tools; model
 arguments cannot supply endpoints, credentials, tool grants or arbitrary authority.

@@ -37,7 +37,14 @@ async fn transfer_survives_parent_work_and_shutdown_and_retains_unread_results()
         },
     ] {
         let owner = Arc::new(BackgroundOwner::new(1).unwrap());
-        let mut f = Fixture::with_owner(Wait::Repeat, true, false, context, Some(owner.clone()));
+        let mut f = Fixture::with_owner(
+            Wait::Repeat,
+            true,
+            false,
+            context,
+            Some(owner.clone()),
+            None,
+        );
         if matches!(context, DelegationContext::Fork { .. }) {
             f.control
                 .submit_request(
@@ -105,7 +112,7 @@ async fn transfer_survives_parent_work_and_shutdown_and_retains_unread_results()
         );
         let receipt = owner.take(child).unwrap().unwrap();
         assert!(
-            matches!(receipt.outcome, Some(DelegationOutcome::Joined { receipt: Some(ref receipt), error: None, answer: Some(_) }) if receipt.end == Some(TurnEndReason::Completed))
+            matches!(receipt.outcome, Some(DelegationOutcome::Joined { execution_timed_out: false, receipt: Some(ref receipt), error: None, answer: Some(_) }) if receipt.end == Some(TurnEndReason::Completed))
         );
         let reused = reserve(&owner).unwrap();
         assert!(
@@ -133,6 +140,7 @@ async fn owner_shutdown_is_joined_even_when_its_wait_is_cancelled() {
         false,
         DelegationContext::Fresh,
         Some(owner.clone()),
+        None,
     );
     f.start();
     drain(&mut f.control).await;
@@ -178,6 +186,7 @@ async fn transfer_failure_cannot_be_caught_to_continue_and_creates_no_child() {
         false,
         DelegationContext::Fresh,
         Some(owner.clone()),
+        None,
     );
     f.trigger("delegation_transferred");
     f.start();
@@ -205,6 +214,7 @@ async fn late_settlement_failure_closes_owner_without_any_result_reader() {
         false,
         DelegationContext::Fresh,
         Some(owner.clone()),
+        None,
     );
     f.start();
     drain(&mut f.control).await;
@@ -246,6 +256,7 @@ async fn panic_closes_owner_and_stops_siblings_without_a_result_reader() {
         false,
         DelegationContext::Fresh,
         Some(owner.clone()),
+        None,
     );
     sibling.start();
     drain(&mut sibling.control).await;
@@ -258,6 +269,7 @@ async fn panic_closes_owner_and_stops_siblings_without_a_result_reader() {
         false,
         DelegationContext::Fresh,
         Some(owner.clone()),
+        None,
     );
     panics.start();
     drain(&mut panics.control).await;
@@ -334,6 +346,7 @@ async fn cancellation_and_owner_close_before_transfer_refuse_cold_work() {
             false,
             DelegationContext::Fresh,
             Some(owner.clone()),
+            None,
         );
         f.start();
         let report = f.settle().await;
@@ -371,6 +384,7 @@ async fn cancelling_the_active_parent_after_transfer_does_not_cancel_the_child()
         false,
         DelegationContext::Fresh,
         Some(owner.clone()),
+        None,
     );
     let mut started = f.effect.started.subscribe();
     f.start();
@@ -397,7 +411,7 @@ async fn cancelling_the_active_parent_after_transfer_does_not_cancel_the_child()
     let child = owner.snapshot().children[0].receipt.record.child;
     let receipt = owner.take(child).unwrap().unwrap();
     assert!(
-        matches!(receipt.outcome, Some(DelegationOutcome::Joined { receipt: Some(ref receipt), error: None, answer: Some(_) }) if receipt.end == Some(TurnEndReason::Completed))
+        matches!(receipt.outcome, Some(DelegationOutcome::Joined { execution_timed_out: false, receipt: Some(ref receipt), error: None, answer: Some(_) }) if receipt.end == Some(TurnEndReason::Completed))
     );
     owner.join_shutdown().await.unwrap();
     let root = f.root.clone();
@@ -415,6 +429,7 @@ async fn wait_any_expires_without_stop_and_returns_a_joined_cancellation_before_
             false,
             DelegationContext::Fresh,
             Some(owner.clone()),
+            None,
         )
     });
     for fixture in &mut fixtures {
@@ -516,6 +531,7 @@ async fn background_waiters_keep_completion_when_the_last_waiter_is_cancelled() 
             false,
             DelegationContext::Fresh,
             Some(owner.clone()),
+            None,
         );
         f.start();
         drain(&mut f.control).await;

@@ -14,6 +14,7 @@ fn spec(root: &Path) -> DelegationSpec {
             model: "child".into(),
         },
         reasoning: Reasoning::Off,
+        execution_timeout_ms: None,
         authority: AuthorityScope::new("explicit-child/environment/v1").unwrap(),
         input: Message::user_input("new child task".into(), []),
     }
@@ -140,6 +141,7 @@ fn fork_copies_literal_prefix_and_coordinates_but_not_parent_ownership_or_config
             .settle_delegation(
                 &historical,
                 DelegationOutcome::Joined {
+                    execution_timed_out: false,
                     receipt: None,
                     error: Some("stopped before materialization".into()),
                     answer: None,

@@ -32,6 +32,8 @@ pub struct DelegationSpec {
     pub cwd: Option<PathBuf>,
     pub model: ModelRef,
     pub reasoning: Reasoning,
+    /// Host-enforced runtime budget from child request submission, not a wait budget.
+    pub execution_timeout_ms: Option<u64>,
     pub authority: AuthorityScope,
     pub input: Message,
 }
@@ -47,6 +49,7 @@ impl DelegationSpec {
             }
             && self.cwd.as_ref().is_none_or(|cwd| cwd.is_absolute())
             && self.reasoning.validate().is_ok()
+            && self.execution_timeout_ms.is_none_or(|ms| ms != 0)
             && crate::session::valid_user_message(&self.input)
     }
 }
@@ -90,6 +93,10 @@ pub enum DelegationOutcome {
     /// Host control, preparation and Core work have joined. A missing receipt or
     /// Turn end is NOT successful execution, rollback or descendant quiescence.
     Joined {
+        /// Host observed the execution deadline before child control settled.
+        /// Distinct from wait expiry, explicit stop and unknown effects; cleanup
+        /// has still joined, and its independent failures remain in `error`.
+        execution_timed_out: bool,
         receipt: Option<RequestReceipt>,
         error: Option<String>,
         /// Visible text of the requested child's committed final response,
@@ -115,19 +122,28 @@ pub enum DelegationFailure {
     Infrastructure(String),
 }
 
+/// Fully joined Host observation. Deadline provenance survives a simultaneous
+/// execution or infrastructure failure; it is never inferred from error text.
+pub struct DelegationCompletion {
+    pub result: Result<Option<String>, DelegationFailure>,
+    pub execution_timed_out: bool,
+}
+
 pub(crate) type DelegationWork = Box<
     dyn FnOnce(
             Arc<CodingSession>,
             SubmissionRequest,
             CancellationToken,
-        ) -> BoxFuture<'static, Result<Option<String>, DelegationFailure>>
+        ) -> BoxFuture<'static, DelegationCompletion>
         + Send,
 >;
 
 /// A cold, owned Host supervision callback. It must use the child Session's
 /// ordinary engine and finish shared-control shutdown (including preparation)
-/// before returning its original visible answer, if any. Core observes that
-/// answer only with the requested completed Turn and successful full joining;
+/// before returning its original visible answer, if any. It must enforce any
+/// specified execution budget and attest actual deadline expiry separately from
+/// failure, stopping and fully joining rather than dropping started work. Core
+/// observes that answer only with the requested completed Turn and successful full joining;
 /// trusted Host code attests the output, just as it attests the environment.
 /// Construction and dropping an unadmitted task execute no
 /// child work. Core retains the callback independently of the tool's waiter.
@@ -146,7 +162,7 @@ impl DelegationTask {
             Arc<CodingSession>,
             SubmissionRequest,
             CancellationToken,
-        ) -> BoxFuture<'static, Result<Option<String>, DelegationFailure>>
+        ) -> BoxFuture<'static, DelegationCompletion>
         + Send
         + 'static,
     ) -> Result<Self, String> {

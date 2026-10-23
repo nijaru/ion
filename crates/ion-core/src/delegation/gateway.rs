@@ -89,7 +89,7 @@ impl Gateway {
                                             BackgroundStartError::Refused(message) => (message, None),
                                             BackgroundStartError::Infrastructure(error) => (error.to_string(), Some(error)),
                                         };
-                                        let outcome = DelegationOutcome::Joined { receipt: None, error: Some(message.clone()), answer: None };
+                                        let outcome = DelegationOutcome::Joined { execution_timed_out: false, receipt: None, error: Some(message.clone()), answer: None };
                                         if let Err(error) = parent.settle_delegation(&record, outcome.clone()) {
                                             fault = Some(error);
                                         } else { fault = infrastructure; }
@@ -153,6 +153,7 @@ pub(super) async fn run_child(
     if stop.is_cancelled() {
         return (
             DelegationOutcome::Joined {
+                execution_timed_out: false,
                 receipt: None,
                 error: Some("stopped before child materialization".into()),
                 answer: None,
@@ -169,6 +170,7 @@ pub(super) async fn run_child(
             );
             return (
                 DelegationOutcome::Joined {
+                    execution_timed_out: false,
                     receipt: None,
                     error: Some(message.clone()),
                     answer: None,
@@ -181,13 +183,16 @@ pub(super) async fn run_child(
     let key = submission.key.clone();
     // The callback receives the already-linked scope before child admission;
     // Host must use it rather than start with an independent fresh token.
-    let result = work(child.clone(), submission, stop).await;
+    let completion = work(child.clone(), submission, stop).await;
     let shutdown = child.shutdown().await;
     let receipt = child.reconcile_request(&key, &record.spec.input);
     let mut infrastructure = None;
     let mut errors = Vec::new();
     let mut answer = None;
-    match result {
+    if completion.execution_timed_out {
+        errors.push("child execution deadline exceeded".into());
+    }
+    match completion.result {
         Ok(observed) => answer = observed,
         Err(DelegationFailure::Execution(error)) => errors.push(error),
         Err(DelegationFailure::Infrastructure(error)) => {
@@ -226,6 +231,7 @@ pub(super) async fn run_child(
     }
     (
         DelegationOutcome::Joined {
+            execution_timed_out: completion.execution_timed_out,
             receipt,
             error: (!errors.is_empty()).then(|| errors.join("; ")),
             answer,
