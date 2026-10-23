@@ -1,29 +1,32 @@
 //! Latest bounded visible response. Gaps/retries never splice unrelated prefixes.
-use ion_ai::Content;
-use ion_core::{CodingAgentEvent as AgentEvent, DelegationFailure, DelegationPartialOutput};
+use ion_core::{DelegationFailure, DelegationPartialOutput};
 
 use crate::{ControlUpdate, Observation, OperationOutcome};
 
 #[derive(Default)]
 pub(super) struct ChildReport {
-    committed: Option<DelegationPartialOutput>,
-    streaming: Option<DelegationPartialOutput>,
-    suppress: bool,
-    gap: bool,
+    pub progress: super::ChildProgress,
     pub failure: Option<DelegationFailure>,
     answer: Option<String>,
 }
 
 impl ChildReport {
+    pub fn new(progress: super::ChildProgress) -> Self {
+        Self {
+            progress,
+            failure: None,
+            answer: None,
+        }
+    }
+
     pub fn observe(&mut self, update: ControlUpdate<()>) {
         match update {
             ControlUpdate::Activity(Observation::Gap { skipped }) if skipped != 0 => {
-                self.committed = None;
-                self.streaming = None;
-                self.gap = true;
-                self.suppress = true;
+                self.progress.gap();
             }
-            ControlUpdate::Activity(Observation::Event { event, .. }) => self.observe_event(&event),
+            ControlUpdate::Activity(Observation::Event { event, .. }) => {
+                self.progress.observe(&event)
+            }
             ControlUpdate::Settled(settlement) => {
                 if let OperationOutcome::Turn(outcome) = settlement.outcome {
                     self.settled(outcome);
@@ -38,14 +41,11 @@ impl ChildReport {
             Ok(text) => {
                 // Reliable settlement supersedes a lost progress prefix. Keep
                 // its bounded visible text even if subsequent cleanup fails.
-                let mut output = DelegationPartialOutput::default();
-                output.push_text(&text);
-                self.committed = Some(output);
-                self.streaming = None;
-                self.gap = false;
+                self.progress.settle(Some(&text));
                 self.answer = Some(text);
             }
             Err(error) => {
+                self.progress.settle(None);
                 let failure = if super::infrastructure(&error) {
                     DelegationFailure::Infrastructure(error.to_string())
                 } else {
@@ -56,60 +56,12 @@ impl ChildReport {
         }
     }
 
-    fn observe_event(&mut self, event: &AgentEvent) {
-        match event {
-            AgentEvent::TextDelta(text) if !self.suppress => {
-                self.gap = false;
-                self.streaming.get_or_insert_default().push_text(text);
-            }
-            AgentEvent::AssistantCommitted { content, .. } => {
-                let mut output = DelegationPartialOutput::default();
-                for (index, text) in content
-                    .iter()
-                    .filter_map(|part| {
-                        if let Content::Text(text) = part {
-                            Some(text)
-                        } else {
-                            None
-                        }
-                    })
-                    .enumerate()
-                {
-                    if index != 0 {
-                        output.push_text("\n");
-                    }
-                    output.push_text(text);
-                }
-                self.committed = Some(output);
-                self.streaming = None;
-                self.suppress = false;
-                self.gap = false;
-            }
-            AgentEvent::ResponseRestarted => {
-                self.streaming = None;
-                self.suppress = false;
-            }
-            _ => {}
-        }
-    }
-
     pub fn fail(&mut self, failure: DelegationFailure) {
         super::retain_failure(&mut self.failure, failure);
     }
 
     pub fn output(&self) -> Option<DelegationPartialOutput> {
-        self.streaming
-            .as_ref()
-            .filter(|output| !output.text.is_empty())
-            .or(self.committed.as_ref())
-            .cloned()
-            .filter(|output| !output.text.is_empty())
-            .or_else(|| {
-                self.gap.then_some(DelegationPartialOutput {
-                    observation_gap: true,
-                    ..Default::default()
-                })
-            })
+        self.progress.output()
     }
 
     pub fn take_result(&mut self) -> Result<Option<String>, DelegationFailure> {
@@ -127,10 +79,11 @@ impl ChildReport {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use ion_core::MAX_DELEGATION_PARTIAL_BYTES;
+    use ion_ai::Content;
+    use ion_core::{CodingAgentEvent as AgentEvent, MAX_DELEGATION_PARTIAL_BYTES};
 
     fn event(report: &mut ChildReport, event: AgentEvent) {
-        report.observe_event(&event);
+        report.progress.observe(&event);
     }
 
     #[test]

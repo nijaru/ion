@@ -61,7 +61,10 @@ pub use control::{
     SteeringStatus, TurnSteering, UpdateSnapshot, UserInput,
 };
 pub use credentials::{CredentialResolutionError, CredentialResolver};
-pub use delegation::{ChildSteering, ChildSteeringReport, PreparedDelegation, SessionDelegation};
+pub use delegation::{
+    ChildActivity, ChildProgress, ChildProgressSnapshot, ChildSteering, ChildSteeringReport,
+    PreparedDelegation, SessionDelegation,
+};
 pub use local_tools::LocalTools;
 pub use mcp::{
     McpConfig, McpExposure, McpHttpServer, McpServer, McpStartup, McpStdioServer, McpTools,

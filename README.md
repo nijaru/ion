@@ -1523,8 +1523,25 @@ Discarded retry text is not combined with a new response, and missing progress
 is flagged instead of joining an orphan suffix. The same failed report remains
 available in status, wait, acknowledgement and committed relationship inspection.
 Successful runs have `partial_output: null` and their independently validated
-answer. Running partial-output previews and separately bounded startup remain
-unfinished.
+answer. Separately bounded startup remains unfinished.
+
+Owned `status`, `list` and `wait` reports include ephemeral `progress` once
+the actual child starts: `child_session`/`request`, live `elapsed_ms`, observed UTC
+`last_activity_at_ms`, `activity` (`model`, `thinking`, `text`, `tool` or null),
+`current_tool` (name only, at most 256 UTF-8 bytes), `stopping`, and
+`provisional_output` under the same 50 KiB/gap/truncation rules. Thinking activity
+does not expose thought text; tool activity does not expose arguments/results.
+Status reads and quiet waits do not change last activity or refresh execution
+deadlines. Silence alone is not evidence of a stall. Elapsed freezes at observed
+stop/settlement even when cleanup remains unjoined. Only `joined` attests full
+joining; preview text is not a successful answer or a committed fact.
+
+SDK callers can retain `PreparedDelegation.progress` without retaining a child
+writer or task. The standard background helpers attach it to the actual owner;
+manual destination assembly uses `with_progress` alongside `with_steering`.
+RPC `get_background` exposes the same view and successful
+`acknowledge_background` returns its final progress with the receipt/steering.
+Live progress is not persisted or recoverable after process loss.
 
 Use `{"action":"wait","ids":["<run-id>","<another-id>"],"timeout_ms":300000}`
 to wait until **any** selected run joins. `ids` requires 1–64 unique owned

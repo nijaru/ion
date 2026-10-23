@@ -371,6 +371,18 @@ Success has its independently validated original answer and no duplicate partial
 report. Core validates bounded failed observations and retains them with timing
 and timeout/error facts through inspection, wait and acknowledgement.
 
+Host also exposes the same bounded observation while the child runs through
+`PreparedDelegation.progress` and retained owner snapshots. It carries actual
+child/request coordinates, observed UTC last-activity time, content-free activity,
+a bounded top-level tool name and explicitly `provisional_output`. No thinking
+text, tool arguments/results or images enter this projection. Reads compute live
+elapsed time but never refresh activity or a deadline; observed stop/settlement
+freezes elapsed before cleanup. Silence is not a stall verdict or heartbeat.
+Owner invalidation signals observation changes, not joining. This read-only handle
+holds no Session writer or execution/cancellation grant, and survives acknowledgement
+only as ephemeral observation data, not recovery authority. Core's joined outcome
+remains the durable result; no live progress is written as relationship facts.
+
 Timeout is a failed relationship with no answer, not a rewrite of the child's
 ordinary Turn end. Infrastructure failures remain fatal even alongside timeout.
 Lost custody remains `Unknown`, not timed out, rolled back or safe to replay.

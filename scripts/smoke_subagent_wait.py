@@ -121,7 +121,13 @@ try {
         assert held["id"] == slow and not held["joined"]
         assert ready["id"] == fast and ready["joined"]
         assert ready["outcome"]["answer"] == "ANSWER_FAST", ready
-        assert result["repeated"]["value"] == {"wait_expired": False, "runs": [ready, held]}
+        repeated = result["repeated"]["value"]
+        assert not repeated["wait_expired"]
+        again_ready, again_held = repeated["runs"]
+        assert again_ready == ready
+        assert again_held["progress"]["elapsed_ms"] >= held["progress"]["elapsed_ms"]
+        assert again_held == held | {"progress": held["progress"] | {
+            "elapsed_ms": again_held["progress"]["elapsed_ms"]}}
         assert all(item["is_error"] and "error" in item["value"] for item in result["invalid"])
         assert result["ack"]["value"] == ready and not result["ack"]["is_error"]
         assert result["absent"]["is_error"], result["absent"]

@@ -30,6 +30,8 @@ mod background;
 mod deadline;
 #[path = "foreground_delegation/join.rs"]
 mod join;
+#[path = "foreground_delegation/progress.rs"]
+mod progress;
 #[path = "foreground_delegation/report.rs"]
 mod report;
 #[path = "foreground_delegation/steering.rs"]
@@ -130,6 +132,7 @@ struct Delegate {
     effect: Arc<Effect>,
     wait: Wait,
     steering: std::sync::Mutex<Option<ion_host::ChildSteering>>,
+    progress: std::sync::Mutex<Option<ion_host::ChildProgress>>,
 }
 impl CodingToolSource for Delegate {
     fn registrations(self: Arc<Self>) -> Vec<ToolRegistration> {
@@ -141,7 +144,7 @@ impl ToolExecutor for Delegate {
         Box::pin(async move {
             let task = || {
                 let input = Message::user_input("count two characters".into(), []);
-                let (task, steering) = if matches!(self.wait, Wait::Panic) {
+                let (task, steering, progress) = if matches!(self.wait, Wait::Panic) {
                     (
                         ion_core::DelegationTask::new(
                             ion_core::DelegationSpec {
@@ -157,18 +160,27 @@ impl ToolExecutor for Delegate {
                         )
                         .unwrap(),
                         None,
+                        None,
                     )
                 } else {
                     let prepared = self.child.prepare(input).unwrap();
                     *self.steering.lock().unwrap() = Some(prepared.steering.clone());
-                    (prepared.task, Some(prepared.steering))
+                    *self.progress.lock().unwrap() = Some(prepared.progress.clone());
+                    (
+                        prepared.task,
+                        Some(prepared.steering),
+                        Some(prepared.progress),
+                    )
                 };
                 match &self.owner {
                     Some(owner) => {
-                        let permit = match steering {
+                        let mut permit = match steering {
                             Some(steering) => owner.destination().with_steering(steering),
                             None => owner.destination(),
                         };
+                        if let Some(progress) = progress {
+                            permit = permit.with_progress(progress);
+                        }
                         match self.wait {
                             Wait::StopBeforeTransfer => {
                                 task.in_background(background::BeforeTransfer {
@@ -393,6 +405,7 @@ impl Fixture {
             effect: effect.clone(),
             wait,
             steering: std::sync::Mutex::new(None),
+            progress: std::sync::Mutex::new(None),
         });
         let first = if composed {
             call(

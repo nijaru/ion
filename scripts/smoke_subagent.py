@@ -544,6 +544,13 @@ os.write(2, b'MERGED_STDERR\\n')
         job = state["runs"][0]
         child_id = job["receipt"]["record"]["run"]
         assert not job["joined"] and job["receipt"]["transferred"]
+        until(lambda: rpc.request("get_background")["data"]["background"]["runs"][0].get("progress", {}).get("activity") == "tool",
+              "live child tool activity missing")
+        observed = rpc.request("get_background")["data"]["background"]["runs"][0]["progress"]
+        assert observed["child_session"] == job["receipt"]["record"]["child"]
+        assert observed["request"] == {"scope":"ion.delegation","id":child_id}
+        assert observed["current_tool"] == "exec" and observed["last_activity_at_ms"] > 0
+        assert observed["provisional_output"] is None
         rpc.settled(1, "completed")
         # Abort a different active parent operation, not the transferred child.
         rpc.send("prompt", message="PARENT_BUSY")
@@ -561,9 +568,13 @@ os.write(2, b'MERGED_STDERR\\n')
         revision = rpc.request("get_background")["data"]["background"]["revision"]
         (workspace / "CHILD_BG_IDLE.release").touch()
         rpc.wait(lambda record: record.get("type") == "background_changed" and record["revision"] > revision)
+        until(lambda: rpc.request("get_background")["data"]["background"]["runs"][0]["joined"],
+              "invalidation is not actual joining")
         joined = rpc.request("get_background")["data"]["background"]["runs"][0]
         assert joined["joined"] and joined["receipt"]["outcome"]["answer"] == "CHILD_ANSWER_CHILD_BG_IDLE"
-        assert rpc.request("acknowledge_background", run=child_id)["success"]
+        assert joined["progress"]["elapsed_ms"] == joined["receipt"]["outcome"]["elapsed_ms"]
+        acknowledged = rpc.request("acknowledge_background", run=child_id)
+        assert acknowledged["success"] and acknowledged["data"]["progress"] == joined["progress"]
         assert rpc.request("get_background")["data"]["background"]["runs"] == []
         assert not rpc.request("cancel_background", run=child_id)["success"]
         # Explicit child cancellation does not close the application or its

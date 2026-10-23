@@ -12,7 +12,7 @@ use std::{
     time::Duration,
 };
 
-use crate::{ChildSteering, ChildSteeringReport};
+use crate::{ChildProgress, ChildProgressSnapshot, ChildSteering, ChildSteeringReport};
 use anyhow::{Result, ensure};
 use ion_core::{
     BackgroundJob, BackgroundSlot, BackgroundStartError, CodingSession, CodingSessionError,
@@ -53,8 +53,8 @@ impl Wake for CompletionWake {
 }
 
 // A weak invalidator cannot form a cycle through job control and its receipts.
-struct SteeringWake(Weak<Shared>);
-impl Wake for SteeringWake {
+struct ObservationWake(Weak<Shared>);
+impl Wake for ObservationWake {
     fn wake(self: Arc<Self>) {
         self.wake_by_ref();
     }
@@ -77,11 +77,13 @@ struct Run {
     operation: Option<Operation<DelegationReceipt, CodingSessionError>>,
     result: Option<Result<DelegationReceipt, CodingSessionError>>,
     steering: Option<ChildSteering>,
+    progress: Option<ChildProgress>,
 }
 
 /// Cold live destination, not serialized authority.
 pub struct BackgroundDestination {
     steering: Option<ChildSteering>,
+    progress: Option<ChildProgress>,
     shared: Arc<Shared>,
     reserved: bool,
 }
@@ -117,6 +119,7 @@ pub struct BackgroundRunSnapshot {
     pub joined: bool,
     pub error: Option<String>,
     pub steering: Vec<ChildSteeringReport>,
+    pub progress: Option<ChildProgressSnapshot>,
 }
 /// Infrastructure acknowledgement retains the complete view as well as its
 /// original typed cause; releasing custody must not discard returned guidance.
@@ -158,6 +161,7 @@ impl Run {
                 .unwrap_or(&self.receipt)
                 .clone(),
             joined: self.operation.is_none(),
+            progress: self.progress.as_ref().and_then(ChildProgress::snapshot),
             steering: self
                 .steering
                 .as_ref()
@@ -195,6 +199,7 @@ impl BackgroundOwner {
     pub fn destination(&self) -> BackgroundDestination {
         BackgroundDestination {
             steering: None,
+            progress: None,
             shared: self.shared.clone(),
             reserved: false,
         }
@@ -497,12 +502,14 @@ impl BackgroundOwner {
             .steering
             .as_ref()
             .map_or_else(Vec::new, ChildSteering::snapshot);
+        let progress = run.progress.as_ref().and_then(ChildProgress::snapshot);
         let result = match run.result.expect("joined run retains its result") {
             Ok(receipt) => Ok(BackgroundRunSnapshot {
                 receipt,
                 joined: true,
                 error: None,
                 steering,
+                progress,
             }),
             Err(error) => Err(BackgroundRunFailure {
                 run: BackgroundRunSnapshot {
@@ -510,6 +517,7 @@ impl BackgroundOwner {
                     joined: true,
                     error: Some(error.to_string()),
                     steering,
+                    progress,
                 },
                 error,
             }),
@@ -557,6 +565,12 @@ impl Drop for BackgroundDestination {
     }
 }
 impl BackgroundDestination {
+    /// Attach the read-only observation belonging to this prepared child.
+    /// Snapshot coordinates identify the actual observed Session/request.
+    pub fn with_progress(mut self, progress: ChildProgress) -> Self {
+        self.progress = Some(progress);
+        self
+    }
     /// Attach the matching prepared live grant; actual run identity is checked
     /// again before steering. Serializable job coordinates alone grant no control.
     pub fn with_steering(mut self, steering: ChildSteering) -> Self {
@@ -601,7 +615,12 @@ impl BackgroundSlot for BackgroundDestination {
             ));
         }
         if let Some(steering) = &self.steering {
-            steering.observe_changes(Waker::from(Arc::new(SteeringWake(Arc::downgrade(
+            steering.observe_changes(Waker::from(Arc::new(ObservationWake(Arc::downgrade(
+                &self.shared,
+            )))));
+        }
+        if let Some(progress) = &self.progress {
+            progress.observe_changes(Waker::from(Arc::new(ObservationWake(Arc::downgrade(
                 &self.shared,
             )))));
         }
@@ -620,6 +639,7 @@ impl BackgroundSlot for BackgroundDestination {
                 operation: Some(operation),
                 result: None,
                 steering: self.steering.take(),
+                progress: self.progress.take(),
             },
         );
         state.reserved -= 1;

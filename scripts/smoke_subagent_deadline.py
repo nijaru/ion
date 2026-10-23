@@ -88,8 +88,24 @@ try {
   await tools.subagent({action:'cancel',id:cancelled.value.id});
   const stopped = await tools.subagent({action:'wait',ids:[cancelled.value.id],timeout_ms:10000});
   const foreground = await start('FOREGROUND',{execution_timeout_ms:3000});
-  const streaming = await start('STREAM',{execution_timeout_ms:3000});
-  return {invalid,expired,survivor,brief,first,retained,checked,survived,stopped,foreground,streaming};
+  const stream = await start('STREAM',{mode:'background',execution_timeout_ms:3000});
+  let live;
+  for (let attempt=0; attempt<12; attempt++) {
+    const view = await tools.subagent({action:'status',id:stream.value.id});
+    if (view.value.progress?.provisional_output?.truncated) { live=view.value; break; }
+    await tools.subagent({action:'wait',ids:[stream.value.id],timeout_ms:100});
+  }
+  if (!live) return {missing_live_progress:true};
+  const [silent] = (await tools.subagent({action:'wait',ids:[stream.value.id],timeout_ms:30})).value.runs;
+  // Check the entire actual preview without multiplying large copies in this
+  // parent's own returned test context.
+  const preview_exact = live.progress.provisional_output.text === '🚀'.repeat(12800);
+  const compact = value => ({...value,progress:{...value.progress,
+    provisional_output:{...value.progress.provisional_output,text:'(checked separately)'}}});
+  const streaming = await tools.subagent({action:'wait',ids:[stream.value.id],timeout_ms:10000});
+  return {invalid,expired,survivor,brief,first,retained,checked,survived,stopped,foreground,
+    streaming:{is_error:streaming.is_error,value:streaming.value.runs[0]},
+    live:compact(live),silent:compact(silent),preview_exact};
 } finally {
   await Promise.all(['EXPIRE','SURVIVE','CANCEL','FOREGROUND'].map(release));
 }
@@ -204,6 +220,25 @@ try {
         assert streamed['elapsed_ms'] >= 3000
         assert streamed['partial_output'] == {'text':'🚀'*12800,'truncated':True,'observation_gap':False}
         assert requests.count('STREAM') == 1, requests
+        live, silent = result['live'], result['silent']
+        assert not live['joined'] and live['outcome'] is None
+        observed = live['progress']
+        assert observed['child_session'] == live['child_session']
+        assert observed['request'] == {'scope':'ion.delegation','id':live['id']}
+        assert observed['activity'] == 'text' and observed['current_tool'] is None
+        assert observed['last_activity_at_ms'] > 0 and not observed['stopping']
+        assert result['preview_exact'] and observed['provisional_output']['truncated']
+        assert not silent['joined'] and silent['outcome'] is None
+        assert silent['progress']['last_activity_at_ms'] == observed['last_activity_at_ms']
+        assert silent['progress']['elapsed_ms'] > observed['elapsed_ms']
+        assert streaming['progress']['stopping']
+        assert streaming['progress']['elapsed_ms'] == streamed['elapsed_ms']
+        assert streaming['progress']['provisional_output'] == streamed['partial_output']
+        # Waiting for the first timeout never turns the sibling tool's activity
+        # into a heartbeat, answer, or completed effect.
+        assert running['progress']['activity'] == 'tool'
+        assert running['progress']['current_tool'] == 'exec'
+        assert running['progress']['provisional_output']['text'] == 'VISIBLE_SURVIVE'
         assert requests.count("SURVIVE") == 2 and requests.count("PARENT") == 2, requests
         for name in ("EXPIRE", "CANCEL", "FOREGROUND"):
             assert requests.count(name) == 1, requests
@@ -225,7 +260,7 @@ try {
         assert len(admissions) == len(outcomes) == 5, (admissions, outcomes)
         for receipt in (timed_out, survived, cancelled, foreground, streaming):
             assert outcomes[receipt["id"]] == receipt["outcome"]
-        print("coding deadlines: foreground/background native joining, independent expiry/cancellation; bounded visible committed/provisional reports, elapsed runtime and typed facts retained: OK")
+        print("coding deadlines: foreground/background native joining, independent expiry/cancellation; bounded live progress/quiet timestamps and committed/provisional reports, elapsed runtime and typed facts retained: OK")
     finally:
         stream_release.set()
         server.shutdown()

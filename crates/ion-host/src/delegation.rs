@@ -10,6 +10,8 @@ use ion_core::{
 
 use crate::{Application, ControlUpdate, SessionCatalog, SessionSetup};
 
+mod progress;
+pub use progress::{ChildActivity, ChildProgress, ChildProgressSnapshot};
 mod report;
 
 mod steering;
@@ -80,13 +82,15 @@ impl SessionDelegation {
         let reasoning = self.reasoning;
         let execution_timeout_ms = self.execution_timeout_ms;
         let (steering, ready) = ChildSteering::new(runtime.agent.limits());
+        let progress = ChildProgress::default();
+        let observed = progress.clone();
         let task = DelegationTask::new(spec, move |child, request, stop| {
             Box::pin(async move {
                 // Runtime ends at observed stop/settlement, not after sweeping
                 // descendants. Both the report and timeout cause survive cleanup.
                 let mut execution_timed_out = false;
                 let mut elapsed_ms = None;
-                let mut report = report::ChildReport::default();
+                let mut report = report::ChildReport::new(observed);
                 let result = async {
                     let child_id = child.id();
                     let processes = runtime.processes.clone();
@@ -102,6 +106,9 @@ impl SessionDelegation {
                     .map_err(|error| DelegationFailure::Infrastructure(error.to_string()))?;
                     let mut control = setup.into_control::<()>();
                     let started = tokio::time::Instant::now();
+                    report
+                        .progress
+                        .start(child_id, request.key.clone(), started);
                     let elapsed = || {
                         u64::try_from(started.elapsed().as_millis())
                             .expect("monotonic runtime fits milliseconds")
@@ -141,25 +148,32 @@ impl SessionDelegation {
                         tokio::select! {
                             biased;
                             () = stop.cancelled(), if !stopping => {
-                                elapsed_ms = Some(elapsed());
+                                let runtime = elapsed();
+                                elapsed_ms = Some(runtime);
+                                report.progress.stop(runtime);
                                 stopping = true;
                                 control.request_shutdown();
                             }
                             () = &mut expires, if !stopping => {
-                                elapsed_ms = Some(elapsed());
+                                let runtime = elapsed();
+                                elapsed_ms = Some(runtime);
+                                report.progress.stop(runtime);
                                 execution_timed_out = true;
                                 stopping = true;
                                 control.request_shutdown();
                             }
                             update = control.next() => {
                                 if matches!(update, ControlUpdate::Settled(_)) {
-                                    elapsed_ms.get_or_insert_with(elapsed);
+                                    let runtime = *elapsed_ms.get_or_insert_with(elapsed);
+                                    report.progress.freeze(runtime);
                                 }
                                 report.observe(update);
                             }
                         }
                     }
-                    elapsed_ms.get_or_insert_with(elapsed);
+                    report
+                        .progress
+                        .freeze(*elapsed_ms.get_or_insert_with(elapsed));
                     // Still join the whole owner and collect reliable settlements.
                     // Unlike shutdown's discarded provisional stream, next() above
                     // preserves safe visible progress while stopped cleanup joins.
@@ -187,7 +201,11 @@ impl SessionDelegation {
             })
         })
         .map_err(anyhow::Error::msg)?;
-        Ok(PreparedDelegation { task, steering })
+        Ok(PreparedDelegation {
+            task,
+            steering,
+            progress,
+        })
     }
 }
 

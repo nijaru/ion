@@ -19,12 +19,17 @@ pub(super) type Readiness = watch::Sender<Ready>;
 pub struct PreparedDelegation {
     pub task: DelegationTask,
     pub steering: ChildSteering,
+    pub progress: super::ChildProgress,
 }
 impl PreparedDelegation {
     /// Transfer execution and its matching control grant to the same owner.
     pub fn in_background(self, owner: &BackgroundOwner) -> DelegationTask {
-        self.task
-            .in_background(owner.destination().with_steering(self.steering))
+        self.task.in_background(
+            owner
+                .destination()
+                .with_steering(self.steering)
+                .with_progress(self.progress),
+        )
     }
 
     /// Join within a budget, transferring the same execution and its grant only
@@ -35,7 +40,10 @@ impl PreparedDelegation {
         join_timeout: std::time::Duration,
     ) -> DelegationTask {
         self.task.in_background_after(
-            owner.destination().with_steering(self.steering),
+            owner
+                .destination()
+                .with_steering(self.steering)
+                .with_progress(self.progress),
             join_timeout,
         )
     }
