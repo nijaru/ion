@@ -8,15 +8,15 @@ use std::{
 use anyhow::{Result, ensure};
 use ion_ai::{BoxFuture, Message, ModelRef, ToolSpec};
 use ion_core::{
-    AuthorityScope, CodingToolOutput, CodingToolSource, DelegationContext, DelegationOutcome,
-    DelegationReceipt, ForkPoint, RequestReceipt, ToolActivityKind, ToolDefinition, ToolExecutor,
+    AuthorityScope, CodingToolOutput, CodingToolSource, DelegationOutcome, DelegationReceipt,
+    DelegationTarget, ForkPoint, RequestReceipt, ToolActivityKind, ToolDefinition, ToolExecutor,
     ToolInvocation, ToolPresentation, ToolRegistration, TurnEndReason,
 };
 use serde::Deserialize;
 use serde_json::{Value, json};
 
 use super::{Application, ApplicationRuntime, CodingApplication, CodingRole};
-use crate::{BackgroundChildSnapshot, BackgroundOwner, Resources, Selection, SessionDelegation};
+use crate::{BackgroundOwner, BackgroundRunSnapshot, Resources, Selection, SessionDelegation};
 
 const DEFAULT_WAIT_MS: u64 = 300_000;
 const MAX_WAIT_MS: u64 = 600_000;
@@ -104,6 +104,8 @@ impl CodingToolSource for Subagent {
             json!({"type":"object","additionalProperties":false,"required":["action","task"],"properties":{
                 "action":{"const":"start"}, "task":{"type":"string","minLength":1,"maxLength":65536},
                 "mode":{"enum":["foreground","background"],"default":"foreground"},
+                "resume":{"type":"string","minLength":1,"maxLength":4096,"description":"Existing settled Session file to continue under a new run ID. Relative to the parent workspace; mutually exclusive with context. Requires its original cwd and exclusive writer. Current call configuration supplies authority, model and reasoning; saved metadata is not a grant."},
+                "cwd":{"type":"string","minLength":1,"maxLength":4096,"description":"Child workspace relative to the parent or absolute; omitted inherits the parent. Resume must use its original workspace."},
                 "execution_timeout_ms":{"type":"integer","minimum":1,"maximum":MAX_EXECUTION_TIMEOUT_MS,"default":DEFAULT_EXECUTION_TIMEOUT_MS,"description":"Child runtime budget from task submission, independent of parent wait budgets. Expiry requests stop and joins cleanup; the retained outcome records execution_timed_out. Not rollback or a hard cleanup deadline."},
                 "model":{"type":"string","description":"Exact provider/model identifier from the known catalog or configured routes; omitted inherits the captured parent route. No endpoints or credentials."},
                 "reasoning":{"type":"string","description":"Generation effort for the child: default, off, low, medium, high or budget:TOKENS. Omitted inherits the parent's effort, even with a different model. Unsupported controls fail before child admission."},
@@ -114,21 +116,21 @@ impl CodingToolSource for Subagent {
             }}),
         ];
         choices.push(json!({"type":"object","additionalProperties":false,"required":["action"],"properties":{"action":{"const":"list"}}}));
-        choices.push(json!({"type":"object","additionalProperties":false,"required":["action","children"],"properties":{
+        choices.push(json!({"type":"object","additionalProperties":false,"required":["action","ids"],"properties":{
             "action":{"const":"wait"},
-            "children":{"type":"array","items":{"type":"string","format":"uuid"},"minItems":1,"maxItems":64,"uniqueItems":true},
+            "ids":{"type":"array","items":{"type":"string","format":"uuid"},"minItems":1,"maxItems":64,"uniqueItems":true},
             "timeout_ms":{"type":"integer","minimum":1,"maximum":MAX_WAIT_MS,"default":DEFAULT_WAIT_MS,"description":"One shared wait budget, not a child execution deadline. Returns all selected reports/statuses when any child joins, or expires with children still running. No cancellation or acknowledgement."}
         }}));
-        choices.push(json!({"type":"object","additionalProperties":false,"required":["action","child","message"],"properties":{
-            "action":{"const":"steer"}, "child":{"type":"string","format":"uuid"},
+        choices.push(json!({"type":"object","additionalProperties":false,"required":["action","id","message"],"properties":{
+            "action":{"const":"steer"}, "id":{"type":"string","format":"uuid"},
             "message":{"type":"string","minLength":1,"maxLength":65536,"description":"Literal guidance for the owned running child, queued at the existing safe model-step boundary. No new Turn, route, instructions or authority. Queued is not committed; inspect steering status for commitment or returned input."}
         }}));
         for action in ["status", "cancel", "acknowledge"] {
-            choices.push(json!({"type":"object","additionalProperties":false,"required":["action","child"],"properties":{"action":{"const":action},"child":{"type":"string","format":"uuid"}}}));
+            choices.push(json!({"type":"object","additionalProperties":false,"required":["action","id"],"properties":{"action":{"const":action},"id":{"type":"string","format":"uuid"}}}));
         }
         let mut definition = ToolDefinition::external(ToolSpec {
             name: "subagent".into(),
-            description: "Managed coding Sessions. start(task, mode=foreground, context={type:fresh}, model?, reasoning?, execution_timeout_ms=1800000) inherits this request's captured route/reasoning unless explicitly overridden. model is an exact provider/model from the known catalog or configured routes, using that route's credential policy. No silent route/effort fallback; overrides affect only the new child, not this parent or user configuration. Workspace, resources and selected tools remain inherited; no automatic recursive built-in or sandbox/conflict isolation. context={type:fork} copies the settled committed prefix BEFORE the initiating Turn (not its unfinished conversation); optional point selects an earlier before_turn/after_turn boundary, validated by Core. Background start acknowledges committed ownership transfer, NOT completion: it survives parent stop and Session changes, not application shutdown. list/status inspect retained application jobs; wait(children, timeout_ms=300000) returns all selected reports/statuses when any joins, or wait_expired=true after the shared budget (1..600000 ms), without consuming results or stopping children. Wait again only on still-running IDs. steer(child, message) queues literal guidance in that child's existing shared control, after current tool calls and before its next model step. It does not interrupt work, start another Turn, reset the execution deadline or change authority/model/instructions. Queued is not committed delivery: status/wait retain per-input committed, returned or unknown states. Late uncommitted guidance returns its original input; stopped/settled/acknowledged children reject new guidance, never resume implicitly. Parent cancellation before steering admission leaves the child running; after admission it cannot recall queued input. Live request identity reconciles exact repeated invocations, not owner loss. cancel explicitly stops that child; acknowledge releases a joined result's capacity. Parent stop cancels a wait, not transferred work. Use wait/status before depending on results; answers are child claims, not independent verification. Results and original answers remain in committed relationship facts. Unknown/acknowledged IDs grant no authority or replay. Each child has a separate execution budget (default 30 minutes, 1..7200000 ms). Expiry requests stop and fully joins before reporting execution_timed_out; effects are not rolled back or safely replayable, and cleanup may outlive the budget. No automatic retries. Normal headless runs drain owned work before exit; quit/EOF/interruption stops and joins it.".into(),
+            description: "Managed coding Sessions. start(task, mode=foreground, context={type:fresh}, resume?, cwd?, model?, reasoning?, execution_timeout_ms=1800000) inherits this request's captured route/reasoning unless explicitly overridden. model is an exact provider/model from the known catalog or configured routes, using that route's credential policy. No silent route/effort fallback; overrides affect only the new child, not this parent or user configuration. Workspace inherits unless cwd is explicit; resume must use the saved original workspace. Resources are loaded for that workspace and selected tools remain inherited; no automatic recursive built-in or sandbox/conflict isolation. context={type:fork} copies the settled committed prefix BEFORE the initiating Turn (not its unfinished conversation); optional point selects an earlier before_turn/after_turn boundary, validated by Core. resume=path is mutually exclusive with context and explicitly starts a new run in the same settled conversation, never a fork or replay of unfinished work. It acquires the exclusive writer before admission and uses this call's captured authority/model/reasoning, not saved grants or preferences. Each result has id (run handle), child_session (conversation UUID) and path. Old runs retain independent results, waiters and controls; acknowledge does not delete the conversation. Background start acknowledges committed ownership transfer, NOT completion: it survives parent stop and Session changes, not application shutdown. list/status inspect retained application jobs; wait(ids, timeout_ms=300000) returns all selected reports/statuses when any joins, or wait_expired=true after the shared budget (1..600000 ms), without consuming results or stopping children. Wait again only on still-running IDs. steer(id, message) queues literal guidance in that child's existing shared control, after current tool calls and before its next model step. It does not interrupt work, start another Turn, reset the execution deadline or change authority/model/instructions. Queued is not committed delivery: status/wait retain per-input committed, returned or unknown states. Late uncommitted guidance returns its original input; stopped/settled/acknowledged run IDs reject new guidance, never resume implicitly. Parent cancellation before steering admission leaves the child running; after admission it cannot recall queued input. Live request identity reconciles exact repeated invocations, not owner loss. cancel explicitly stops that child; acknowledge releases a joined result's capacity. Parent stop cancels a wait, not transferred work. Use wait/status before depending on results; answers are child claims, not independent verification. Results and original answers remain in committed relationship facts. Unknown/acknowledged IDs grant no authority or replay. Each child has a separate execution budget (default 30 minutes, 1..7200000 ms). Expiry requests stop and fully joins before reporting execution_timed_out; effects are not rolled back or safely replayable, and cleanup may outlive the budget. No automatic retries. Normal headless runs drain owned work before exit; quit/EOF/interruption stops and joins it.".into(),
             input_schema: json!({"type":"object","oneOf":choices}),
         });
         definition.presentation =
@@ -160,8 +162,9 @@ enum Input {
         task: String,
         #[serde(default)]
         mode: Mode,
-        #[serde(default)]
-        context: Context,
+        context: Option<Context>,
+        resume: Option<String>,
+        cwd: Option<PathBuf>,
         model: Option<String>,
         reasoning: Option<String>,
         #[serde(default = "default_execution_timeout_ms")]
@@ -169,22 +172,22 @@ enum Input {
     },
     List,
     Status {
-        child: uuid::Uuid,
+        id: uuid::Uuid,
     },
     Wait {
-        children: Vec<uuid::Uuid>,
+        ids: Vec<uuid::Uuid>,
         #[serde(default = "default_wait_ms")]
         timeout_ms: u64,
     },
     Steer {
-        child: uuid::Uuid,
+        id: uuid::Uuid,
         message: String,
     },
     Cancel {
-        child: uuid::Uuid,
+        id: uuid::Uuid,
     },
     Acknowledge {
-        child: uuid::Uuid,
+        id: uuid::Uuid,
     },
 }
 fn default_execution_timeout_ms() -> u64 {
@@ -222,14 +225,14 @@ fn receipt_output(
     );
     let is_error = error.is_some() || (joined && !completed);
     output(
-        json!({"child_session":receipt.record.child,"path":receipt.record.path,"context":receipt.record.spec.context,
+        json!({"id":receipt.record.run,"child_session":receipt.record.child,"path":receipt.record.path,"target":receipt.record.spec.target,
         "model":receipt.record.spec.model,"reasoning":receipt.record.spec.reasoning.to_string(),
         "execution_timeout_ms":receipt.record.spec.execution_timeout_ms,
         "transferred":receipt.transferred,"joined":joined,"outcome":receipt.outcome,"error":error}),
         is_error,
     )
 }
-fn child_output(child: BackgroundChildSnapshot) -> CodingToolOutput {
+fn child_output(child: BackgroundRunSnapshot) -> CodingToolOutput {
     let mut output = receipt_output(child.receipt, child.joined, child.error);
     output.value["steering"] = json!(child.steering);
     output
@@ -253,6 +256,8 @@ impl ToolExecutor for Subagent {
                     task,
                     mode,
                     context,
+                    resume,
+                    cwd,
                     model,
                     reasoning: requested_reasoning,
                     execution_timeout_ms,
@@ -308,16 +313,41 @@ impl ToolExecutor for Subagent {
                     } else {
                         self.application.clone()
                     };
-                    let context = match context {
-                        Context::Fresh => DelegationContext::Fresh,
-                        Context::Fork { point } => DelegationContext::Fork {
-                            point: point.unwrap_or(ForkPoint::BeforeTurn(origin.turn())),
-                        },
+                    if resume.is_some() && context.is_some() {
+                        return failure("resume and context are mutually exclusive");
+                    }
+                    let target = if let Some(path) = resume {
+                        if path.is_empty() || path.len() > 4096 {
+                            return failure("resume must be 1..=4096 UTF-8 bytes");
+                        }
+                        match DelegationTarget::resume(self.cwd.join(path)) {
+                            Ok(target) => target,
+                            Err(error) => return failure(error),
+                        }
+                    } else {
+                        match context.unwrap_or_default() {
+                            Context::Fresh => DelegationTarget::Fresh {
+                                directory: self.directory.clone(),
+                            },
+                            Context::Fork { point } => DelegationTarget::Fork {
+                                directory: self.directory.clone(),
+                                point: point.unwrap_or(ForkPoint::BeforeTurn(origin.turn())),
+                            },
+                        }
+                    };
+                    let cwd = match cwd {
+                        Some(path)
+                            if path.as_os_str().is_empty()
+                                || path.as_os_str().as_encoded_bytes().len() > 4096 =>
+                        {
+                            return failure("cwd must be 1..=4096 UTF-8 bytes");
+                        }
+                        Some(path) => self.cwd.join(path),
+                        None => self.cwd.clone(),
                     };
                     let recipe = SessionDelegation {
-                        context,
-                        directory: self.directory.clone(),
-                        cwd: Some(self.cwd.clone()),
+                        target,
+                        cwd: Some(cwd),
                         model: Some(application.selected.identity()),
                         application,
                         reasoning,
@@ -340,13 +370,13 @@ impl ToolExecutor for Subagent {
                         Err(error) => failure(error),
                     }
                 }
-                Input::Steer { child, message } => {
+                Input::Steer { id, message } => {
                     if message.trim().is_empty() || message.len() > 65536 {
                         return failure(
                             "steering message must be nonblank and at most 65536 UTF-8 bytes",
                         );
                     }
-                    let id = format!(
+                    let request_id = format!(
                         "{}:{}:{}:{}:{:?}",
                         origin.session(),
                         origin.turn(),
@@ -354,21 +384,22 @@ impl ToolExecutor for Subagent {
                         origin.occurrence().ordinal,
                         origin.composed_child()
                     );
-                    let request = ion_core::RequestKey::new("ion.delegation.steering".into(), id)
-                        .expect("fixed namespace and engine coordinates fit request-key bounds");
+                    let request =
+                        ion_core::RequestKey::new("ion.delegation.steering".into(), request_id)
+                            .expect(
+                                "fixed namespace and engine coordinates fit request-key bounds",
+                            );
                     match self
                         .owner
                         .steer(
-                            child,
+                            id,
                             &request,
                             &Message::user_input(message, []),
                             invocation.stop(),
                         )
                         .await
                     {
-                        Ok(report) => {
-                            output(json!({"child_session":child,"steering":report}), false)
-                        }
+                        Ok(report) => output(json!({"id":id,"steering":report}), false),
                         Err(error) => failure(error),
                     }
                 }
@@ -376,41 +407,38 @@ impl ToolExecutor for Subagent {
                     json!({"revision":self.owner.revision(),"summary":self.owner.summary(),"jobs":self.owner.jobs()}),
                     false,
                 ),
-                Input::Status { child } => match self.owner.child(child) {
+                Input::Status { id } => match self.owner.run(id) {
                     Some(child) => child_output(child),
                     None => failure("child is not owned here (unknown or acknowledged)"),
                 },
-                Input::Wait {
-                    children,
-                    timeout_ms,
-                } => {
+                Input::Wait { ids, timeout_ms } => {
                     if !(1..=MAX_WAIT_MS).contains(&timeout_ms) {
                         return failure("wait timeout_ms must be 1..=600000");
                     }
                     tokio::select! {
                         biased;
                         () = invocation.stop().cancelled() => failure("wait stopped; background children remain owned"),
-                        result = self.owner.wait(&children, Duration::from_millis(timeout_ms)) => match result {
+                        result = self.owner.wait(&ids, Duration::from_millis(timeout_ms)) => match result {
                             Ok(report) => {
                                 let mut is_error = false;
-                                let children: Vec<_> = report.children.into_iter().map(|child| {
+                                let runs: Vec<_> = report.runs.into_iter().map(|child| {
                                     let child = child_output(child);
                                     is_error |= child.is_error;
                                     child.value
                                 }).collect();
-                                output(json!({"wait_expired":report.wait_expired,"children":children}), is_error)
+                                output(json!({"wait_expired":report.wait_expired,"runs":runs}), is_error)
                             },
                             Err(error) => failure(error),
                         }
                     }
                 }
-                Input::Cancel { child } => match self.owner.request_stop(child) {
-                    Ok(()) => output(json!({"child_session":child,"stop_requested":true}), false),
+                Input::Cancel { id } => match self.owner.request_stop(id) {
+                    Ok(()) => output(json!({"id":id,"stop_requested":true}), false),
                     Err(error) => failure(error),
                 },
-                Input::Acknowledge { child } => match self.owner.take(child) {
+                Input::Acknowledge { id } => match self.owner.take(id) {
                     Some(Ok(report)) => child_output(report),
-                    Some(Err(error)) => child_output(error.child),
+                    Some(Err(error)) => child_output(error.run),
                     None => failure(
                         "no joined result to acknowledge (running, unknown or already acknowledged)",
                     ),

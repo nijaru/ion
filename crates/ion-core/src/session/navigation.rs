@@ -83,19 +83,19 @@ impl ContextIndex {
             }
             SessionEntry::TurnEnded { .. } => settled = true,
             SessionEntry::DelegationAdmitted { record } => {
-                self.admitted.insert(record.child, record.site);
+                self.admitted.insert(record.run, record.site);
             }
-            SessionEntry::DelegationTransferred { child, .. } => {
-                if let Some(site) = self.admitted.remove(child) {
-                    self.backgrounds.insert(*child, site);
+            SessionEntry::DelegationTransferred { run, .. } => {
+                if let Some(site) = self.admitted.remove(run) {
+                    self.backgrounds.insert(*run, site);
                 }
             }
-            SessionEntry::DelegationSettled { child, .. } => {
+            SessionEntry::DelegationSettled { run, .. } => {
                 detached = self
                     .backgrounds
-                    .remove(child)
+                    .remove(run)
                     .map(|site| site.tool.assistant_entry);
-                self.admitted.remove(child);
+                self.admitted.remove(run);
             }
             _ => {}
         }

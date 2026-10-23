@@ -14,7 +14,7 @@ async fn deadline_stops_but_joins_and_retains_provenance_after_infrastructure_fa
             },
             true,
             false,
-            ion_core::DelegationContext::Fresh,
+            None,
             background.then(|| owner.clone()),
             Some(60_000),
         );
@@ -37,7 +37,7 @@ async fn deadline_stops_but_joins_and_retains_provenance_after_infrastructure_fa
         if fault {
             owner
                 .steer(
-                    record.child,
+                    record.run,
                     &ion_core::RequestKey::new("deadline-fixture".into(), "guidance".into())
                         .unwrap(),
                     &guidance,
@@ -60,8 +60,8 @@ async fn deadline_stops_but_joins_and_retains_provenance_after_infrastructure_fa
             .unwrap();
         assert!(f.session.view().unwrap().delegations()[0].outcome.is_none());
         if background {
-            assert!(!owner.child(record.child).unwrap().joined);
-            assert!(owner.take(record.child).is_none());
+            assert!(!owner.run(record.run).unwrap().joined);
+            assert!(owner.take(record.run).is_none());
         } else {
             assert!(f.control.is_busy());
         }
@@ -69,7 +69,7 @@ async fn deadline_stops_but_joins_and_retains_provenance_after_infrastructure_fa
 
         f.effect.release.notify_one();
         if background {
-            let joined = owner.wait(&[record.child], Duration::from_secs(5)).await;
+            let joined = owner.wait(&[record.run], Duration::from_secs(5)).await;
             assert_eq!(joined.is_err(), fault);
             assert_eq!(owner.check().is_err(), fault);
         } else {
@@ -79,7 +79,7 @@ async fn deadline_stops_but_joins_and_retains_provenance_after_infrastructure_fa
         // error from wait is not permission to abandon the original owner.
         assert_eq!(owner.join_shutdown().await.is_err(), fault);
         if background {
-            assert!(owner.child(record.child).unwrap().joined);
+            assert!(owner.run(record.run).unwrap().joined);
         }
         let outcome = f.session.view().unwrap().delegations()[0].outcome.clone();
         let Some(DelegationOutcome::Joined {
@@ -108,13 +108,13 @@ async fn deadline_stops_but_joins_and_retains_provenance_after_infrastructure_fa
         assert_eq!(f.child.requests().len(), 1);
         if fault {
             let failure = owner
-                .take(record.child)
+                .take(record.run)
                 .unwrap()
                 .err()
                 .expect("typed infrastructure failure");
-            assert!(failure.child.joined);
-            assert_eq!(failure.child.error, Some(failure.error.to_string()));
-            assert!(matches!(&failure.child.steering[0].status,
+            assert!(failure.run.joined);
+            assert_eq!(failure.run.error, Some(failure.error.to_string()));
+            assert!(matches!(&failure.run.steering[0].status,
                 ion_host::SteeringStatus::Returned { input: ion_host::UserInput::Message(message), reason: ion_host::ReturnSnapshot::Stopped } if message == &guidance));
             assert!(
                 owner.check().is_err(),
@@ -155,7 +155,7 @@ async fn model_progress_does_not_refresh_the_execution_deadline() {
         Wait::Join,
         false,
         false,
-        ion_core::DelegationContext::Fresh,
+        None,
         None,
         Some(60_000),
         Some(Arc::new(ProgressModel(progress))),
@@ -192,7 +192,7 @@ async fn explicit_stop_wins_over_unobserved_expiry_and_cleanup_has_no_new_deadli
         Wait::Join,
         true,
         false,
-        ion_core::DelegationContext::Fresh,
+        None,
         Some(owner.clone()),
         Some(60_000),
     );
@@ -201,17 +201,17 @@ async fn explicit_stop_wins_over_unobserved_expiry_and_cleanup_has_no_new_deadli
     f.start();
     background::drain(&mut f.control).await;
     started.wait_for(|started| *started).await.unwrap();
-    let id = f.session.view().unwrap().delegations()[0].record.child;
+    let id = f.session.view().unwrap().delegations()[0].record.run;
     owner.request_stop(id).unwrap();
     tokio::time::pause();
     tokio::time::sleep(Duration::from_secs(120)).await;
     stopped.wait_for(|stopped| *stopped).await.unwrap();
-    assert!(!owner.child(id).unwrap().joined);
+    assert!(!owner.run(id).unwrap().joined);
     tokio::time::resume();
     f.effect.release.notify_one();
     let report = owner.wait(&[id], Duration::from_secs(5)).await.unwrap();
     assert!(matches!(
-        &report.children[0].receipt.outcome,
+        &report.runs[0].receipt.outcome,
         Some(DelegationOutcome::Joined {
             execution_timed_out: false, receipt: Some(receipt), answer: None, ..
         }) if receipt.end == Some(TurnEndReason::Cancelled)

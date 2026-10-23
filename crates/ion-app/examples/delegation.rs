@@ -250,14 +250,16 @@ async fn main() -> Result<()> {
     let tools = Arc::new(Delegate {
         owner: background.then(|| owner.clone()),
         child: SessionDelegation {
-            context: if fork {
-                ion_core::DelegationContext::Fork {
+            target: if fork {
+                ion_core::DelegationTarget::Fork {
+                    directory: root.join("children"),
                     point: ion_core::ForkPoint::AfterTurn(1),
                 }
             } else {
-                ion_core::DelegationContext::Fresh
+                ion_core::DelegationTarget::Fresh {
+                    directory: root.join("children"),
+                }
             },
-            directory: root.join("children"),
             cwd: None,
             application: Arc::new(App {
                 agent: child_agent,
@@ -344,8 +346,8 @@ async fn main() -> Result<()> {
                 std::future::pending::<()>().await;
             }
             release.notify_one();
-            while !owner.snapshot().children[0].joined { owner.maintain().await; }
-            owner.take(link.record.child).context("missing retained background result")??;
+            while !owner.snapshot().runs[0].joined { owner.maintain().await; }
+            owner.take(link.record.run).context("missing retained background result")??;
         }
         let view = session.view()?;
         let links = view.delegations();

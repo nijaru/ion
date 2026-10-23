@@ -280,8 +280,8 @@ optional `after: true`.
 Session IDs are immutable UUIDs stored in the header, independent of filenames
 and provider affinity. Renaming a closed database does not change its ID; clone
 and fork create new identities without inheriting external delivery receipts or continuation grants.
-This unreleased branch uses Session format 16; earlier development Session
-files are not reopened. Tool activity classification used by the transcript is
+This unreleased branch uses Session format 17; earlier development Session
+files are rejected, not automatically migrated or replayed. Tool activity classification used by the transcript is
 stored with each assistant tool-call batch, so resumed history is not
 reinterpreted through the currently installed tool catalog.
 For headless integrations, `--json` works with `run PROMPT` or `--print PROMPT`.
@@ -390,8 +390,10 @@ including while busy or after reopening. Different text under the same key is an
 error. A new key requires idle, drained control; it is not queued.
 `get_request` returns `data.receipt` or null without repairing history or dispatching
 work. It shares the inspection reply slot. `get_background` returns the application
-owner's retained job/result snapshot; `cancel_background` explicitly stops one
-child; `acknowledge_background` releases one joined result's capacity. The
+owner's retained `runs` snapshot. `cancel_background` and
+`acknowledge_background` take `run: "<run-uuid>"`, not a conversation UUID; the
+former requests stop and the latter releases a joined report's capacity without
+deleting its saved conversation. The
 independent `background_changed` record is an invalidation, not a result or a
 completion proof. An `end` of null does not prove liveness:
 process loss leaves unfinished facts until new explicit work closes them
@@ -907,10 +909,15 @@ the budget. The joined relationship records `execution_timed_out` independently
 of execution or infrastructure errors, without rewriting the child's Turn end or
 inferring timeout from owner loss. Custom `DelegationTask` callbacks return
 `DelegationCompletion` and must attest/enforce the same lifecycle contract.
-Choose
-`DelegationContext::Fresh` or `Fork { point }`, with `ForkPoint::BeforeTurn(n)` or
-`ForkPoint::AfterTurn(n)` selecting the actual parent's committed prefix. An unfinished Turn is not an after-Turn
-boundary; an invalid choice is refused before intent or child files.
+Choose `DelegationTarget::Fresh { directory }` or `Fork { directory, point }`,
+with `ForkPoint::BeforeTurn(n)` or `ForkPoint::AfterTurn(n)` selecting the actual
+parent's committed prefix. An unfinished Turn is not an after-Turn boundary;
+an invalid choice is refused before intent or child files. To reuse a settled
+conversation, use `DelegationTarget::resume(path)?` with a new explicit recipe
+and its original cwd. This resolves a locator/identity, not a continuation grant;
+Core acquires its exclusive writer and rechecks identity, workspace and settlement
+before committing new intent. Active Turns, pending shells or unresolved owned
+background work require explicit reconciliation first.
 
 Forking copies historical conversation/context facts, including instructions,
 tool output and opaque provider material. Applications must authorize that
@@ -923,7 +930,12 @@ and explicit preferences append after the prefix in the header's initialization
 transaction; inherited delivery keys, continuation grants and child ownership
 are not transferred.
 
-Core records a stable child identity and relationship before materialization.
+Core records a distinct `DelegationRecord.run` for each managed request and its
+stable `child` conversation UUID before materialization. Resume appends a new
+binding and request to the same Session; old receipts, request keys, context
+alternatives and outcomes remain intact. Current instructions, routes, credentials
+and grants come from the new recipe, never saved ancestry. The latest
+`parent_delegation()` is historical request provenance, not live authority.
 Tasks default to foreground: parent stop propagates, and supervision joins shared
 control and started work before parent settlement—even if the tool abandons its
 wait. Exact repeated specifications reconcile; different work, ownership mode or
@@ -945,23 +957,24 @@ child. Explicit `cancel` stops one child; application shutdown closes admission,
 stops its children and joins their full Host controls. Drop requests stop; finish
 `join_shutdown().await` before destroying the runtime, which returns the retained
 infrastructure error. Cancelled maintenance/shutdown waits retain tasks and
-results. `maintain()` joins without consuming; `wait(&children, timeout)` returns
+results. `maintain()` joins without consuming; `wait(&ids, timeout)` returns
 all selected statuses when any job joins or the shared budget expires, without
 acknowledging them. The `BackgroundWait` result includes `wait_expired` and
-`children` in requested order; zero duration polls already-retained joins.
+`runs` in requested order; zero duration polls already-retained joins.
 An empty, duplicate, unknown or acknowledged selection fails, even alongside a
-ready result. `child()`/`jobs()` inspect retained status;
-only `take(child)` releases a joined result's capacity, returning its complete
+ready result. `run(id)`/`jobs()` inspect retained status by run ID;
+only `take(id)` releases a joined result's capacity, returning its complete
 final snapshot atomically, including steering reports. An infrastructure error
-returns `BackgroundChildFailure` with both that snapshot and the typed cause.
+returns `BackgroundRunFailure` with both its `run` snapshot and the typed cause.
 Capacity bounds reservations, running jobs and unread results together (1–64 slots), not history,
 encoded bytes or RSS. Changes are published through a revision plus notification;
 clients still reconcile snapshots rather than treating notification as delivery.
 Snapshots are privileged custody views, not an authenticated remote service or
 atomic Core/Host snapshots.
 
-`owner.steer(child, &request_key, &message, &stop).await` uses the grant captured
-with that actual job. Live request keys reconcile identical input within that
+`owner.steer(id, &request_key, &message, &stop).await` uses the grant captured
+with that actual run, checked against both its Session and request identity.
+An old run's stop or control grant cannot follow a later run in the same Session. Live request keys reconcile identical input within that
 child's retained controller; conflicting input fails. Keys are not authority or
 durable replay permission after owner loss. Status snapshots include `steering`
 reports with local input IDs and `queued`, `committed`, `returned` or `unknown`
@@ -1403,8 +1416,9 @@ Restricted applications still choose their own complete `Application` recipe.
 
 The tool has explicit actions: `start`, `list`, `status`, `wait`, `steer`, `cancel` and
 `acknowledge`. `start` accepts a self-contained `task` of at most 64 KiB UTF-8,
-optional `mode` (`foreground`, the default, or `background`), and optional
-`context`. Fresh context is the default; `{"type":"fork"}` copies the settled
+optional `mode` (`foreground`, the default, or `background`), optional `cwd`
+(defaulting to the parent workspace), and either `context` or `resume`.
+Fresh context is the default; `{"type":"fork"}` copies the settled
 committed prefix before the initiating Turn, not the active conversation, and an
 explicit `point` may select an earlier `before_turn` or `after_turn` boundary.
 Core validates and captures that cut in the admission transaction. The child
@@ -1420,11 +1434,12 @@ admission, without fallback. Selecting the parent's exact identity retains its
 captured route, not a later model-store edit. Overrides do not change the parent
 or saved configuration. Start/status/wait receipts include actual model and effort.
 
-The child also inherits the same workspace, project/home resources, selected
-native and supplied external tools (MCP for the CLI), and the application's Code
-Mode setting. It does not automatically enable another built-in subagent. Model
-arguments cannot choose tools, endpoints, credentials, workspace or arbitrary
-authority.
+A child uses the parent workspace unless `cwd` explicitly selects another
+directory, absolute or relative to the parent. Project/home resources are loaded
+for that workspace. Selected native and supplied external tools (MCP for the CLI),
+the captured command environment and the application's Code Mode setting remain
+inherited. It does not automatically enable another built-in subagent. Model
+arguments cannot choose tools, endpoints, credentials or arbitrary authority.
 
 Foreground `start` joins execution and cleanup before returning the typed
 child/outcome locator and request receipt. Background `start` returns only after
@@ -1434,7 +1449,24 @@ not application shutdown. `list` and `status` inspect retained application jobs;
 `cancel` explicitly stops one child; `acknowledge` releases one joined result's
 capacity without deleting its committed facts.
 
-Use `{"action":"steer","child":"<child-id>","message":"Focus on the parser"}`
+Every receipt has an `id` for the run, a stable `child_session` conversation UUID
+and its `path`. `status`, `steer`, `cancel` and `acknowledge` take `id`; waits take
+`ids`. Several runs can share one conversation while retaining independent
+reports and controls. Each unread run still occupies its own custody slot.
+
+Use `{"action":"start","task":"Check the remaining edge case","resume":"/absolute/child.sqlite","cwd":"/original/workspace","mode":"background"}`
+to start a new run in a saved conversation, including after acknowledgement or an
+application restart. `resume` and `context` are mutually exclusive; relative paths
+resolve against the parent workspace. `resume` and `cwd` accept at most 4096 UTF-8
+bytes. Resume requires the original workspace, a free exclusive writer and settled
+history; active Turns, pending shells or unresolved owned background work are
+refused before new intent. It does not recover an unfinished child or replay old
+effects. Existing child Sessions are already durable; there is no persistence flag.
+Model, reasoning, resources and grants come from the current call's captured recipe,
+not saved preferences or ancestry. No old run is overwritten or implicitly
+acknowledged, and its controller cannot steer the new run.
+
+Use `{"action":"steer","id":"<run-id>","message":"Focus on the parser"}`
 to guide an owned running background child. Guidance is literal, nonblank text of
 at most 64 KiB UTF-8; it does not expand commands/resources, change the captured
 route or authority, interrupt current tools, reset a deadline or start another
@@ -1443,9 +1475,10 @@ is initially `queued`, not committed delivery; `status` and `wait` retain its in
 ID and subsequent `committed`, `returned` or `unknown` status. A returned report
 contains the original uncommitted input. Guidance cannot be recalled after
 admission, even if the parent stops waiting. Cancelling readiness leaves the child
-running. New guidance to a stopped, settled, unknown or acknowledged child fails;
-it never implicitly resumes it. Persistent named conversations, explicit child
-follow-up/resume and completion inbox delivery remain unfinished.
+running. New guidance to a stopped, settled, unknown or acknowledged run fails;
+it never implicitly resumes it. Named persistent conversations, unfinished-child
+recovery, foreground join-to-background handoff and completion inbox delivery
+remain unfinished.
 
 `start` accepts `execution_timeout_ms`, defaulting to 1800000 (30 minutes), with
 1–7200000 milliseconds allowed. This bounds child model/tool execution from task
@@ -1459,10 +1492,10 @@ outlive the budget: this is neither a hard cleanup deadline nor rollback, proof 
 remote quiescence or permission to repeat uncertain effects. A timed-out child has
 no successful answer, even if an independent cleanup failure also occurs.
 
-Use `{"action":"wait","children":["<child-id>","<another-id>"],"timeout_ms":300000}`
-to wait until **any** selected child joins. `children` requires 1–64 unique owned
-IDs. The optional shared wait budget defaults to five minutes and accepts 1–600000
-milliseconds. The result is `{wait_expired, children}`: every selected child's
+Use `{"action":"wait","ids":["<run-id>","<another-id>"],"timeout_ms":300000}`
+to wait until **any** selected run joins. `ids` requires 1–64 unique owned
+run IDs. The optional shared wait budget defaults to five minutes and accepts 1–600000
+milliseconds. The result is `{wait_expired, runs}`: every selected run's
 receipt/status in requested order, including still-running jobs. A joined failure
 also wakes the wait and marks its output as an error; expiry alone is not an error.
 An unknown or acknowledged ID rejects the whole selection, even if another is ready.

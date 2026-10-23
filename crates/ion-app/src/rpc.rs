@@ -83,12 +83,12 @@ impl Control {
         self.host.session_id()
     }
     fn cancel_background(&self, value: &Value) -> Result<Value> {
-        let child = required_string(value, "child")?.parse::<uuid::Uuid>()?;
+        let run = required_string(value, "run")?.parse::<uuid::Uuid>()?;
         self.host
             .background()
             .context("application has no background owner")?
-            .request_stop(child)?;
-        Ok(json!({"child":child,"stop_requested":true}))
+            .request_stop(run)?;
+        Ok(json!({"run":run,"stop_requested":true}))
     }
 
     fn idle(&self) -> Result<()> {
@@ -147,9 +147,9 @@ impl Control {
                 "get_background" => Ok(json!({"background":self.host.background().map(|owner| owner.snapshot())})),
                 "cancel_background" => self.cancel_background(&value),
                 "acknowledge_background" => {
-                    let child = required_string(&value, "child")?.parse::<uuid::Uuid>()?;
+                    let run = required_string(&value, "run")?.parse::<uuid::Uuid>()?;
                     let owner = self.host.background().context("application has no background owner")?;
-                    let result = owner.take(child).context("no joined result to acknowledge (running, unknown or already acknowledged)")??;
+                    let result = owner.take(run).context("no joined result to acknowledge (running, unknown or already acknowledged)")??;
                     Ok(json!({"receipt":result.receipt,"steering":result.steering}))
                 }
                 "inspect" => inspection::to_value(&self.host.session().view()?),

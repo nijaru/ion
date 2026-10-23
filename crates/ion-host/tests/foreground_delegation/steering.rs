@@ -43,7 +43,7 @@ async fn steering_commit_invalidates_owner_before_child_join_without_retaining_a
         Wait::Join,
         true,
         false,
-        ion_core::DelegationContext::Fresh,
+        None,
         Some(owner.clone()),
         None,
         Some(model.clone()),
@@ -55,7 +55,7 @@ async fn steering_commit_invalidates_owner_before_child_join_without_retaining_a
         .wait_for(|started| *started)
         .await
         .unwrap();
-    let child = f.session.view().unwrap().delegations()[0].record.child;
+    let child = f.session.view().unwrap().delegations()[0].record.run;
     let message = Message::user_input("live guidance".into(), []);
     let report = owner
         .steer(child, &key("owned"), &message, &CancellationToken::new())
@@ -80,7 +80,7 @@ async fn steering_commit_invalidates_owner_before_child_join_without_retaining_a
         .wait_for(|entered| *entered)
         .await
         .unwrap();
-    let snapshot = owner.child(child).unwrap();
+    let snapshot = owner.run(child).unwrap();
     assert!(!snapshot.joined);
     assert!(matches!(
         snapshot.steering[0].status,
@@ -92,7 +92,7 @@ async fn steering_commit_invalidates_owner_before_child_join_without_retaining_a
             .wait(&[child], Duration::from_secs(5))
             .await
             .unwrap()
-            .children[0]
+            .runs[0]
             .joined
     );
     f.settle().await;
@@ -161,7 +161,7 @@ async fn foreground_sdk_grant_reconciles_inputs_and_never_reopens_a_settled_chil
         Wait::Join,
         true,
         false,
-        ion_core::DelegationContext::Fresh,
+        None,
         None,
         None,
         Some(service.clone()),

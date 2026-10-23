@@ -28,24 +28,24 @@ with tempfile.TemporaryDirectory(prefix="ion-subagent-wait-") as temporary:
 const start = task => tools.subagent({action:'start',task,mode:'background'});
 const release = child => tools.write({path:child+'.release',content:'release'});
 const [slow, fast] = await Promise.all([start('SLOW'),start('FAST')]);
-const ids = [slow.value.child_session,fast.value.child_session];
+const ids = [slow.value.id,fast.value.id];
 try {
-  const expired = await tools.subagent({action:'wait',children:ids,timeout_ms:10});
+  const expired = await tools.subagent({action:'wait',ids:ids,timeout_ms:10});
   if (expired.is_error) return {unsupported:expired.value};
   await release('FAST');
-  const first = await tools.subagent({action:'wait',children:ids,timeout_ms:5000});
-  const repeated = await tools.subagent({action:'wait',children:[ids[1],ids[0]],timeout_ms:1});
+  const first = await tools.subagent({action:'wait',ids:ids,timeout_ms:5000});
+  const repeated = await tools.subagent({action:'wait',ids:[ids[1],ids[0]],timeout_ms:1});
   const invalid = [];
   for (const args of [
-    {children:[ids[1],'00000000-0000-0000-0000-000000000000']},
-    {children:[ids[1],ids[1]]},{children:[]},
-    {children:[ids[0]],timeout_ms:0},{children:[ids[0]],timeout_ms:600001}
+    {ids:[ids[1],'00000000-0000-0000-0000-000000000000']},
+    {ids:[ids[1],ids[1]]},{ids:[]},
+    {ids:[ids[0]],timeout_ms:0},{ids:[ids[0]],timeout_ms:600001}
   ]) invalid.push(await tools.subagent({action:'wait',...args}));
-  const ack = await tools.subagent({action:'acknowledge',child:ids[1]});
-  const absent = await tools.subagent({action:'wait',children:[ids[1]],timeout_ms:1});
+  const ack = await tools.subagent({action:'acknowledge',id:ids[1]});
+  const absent = await tools.subagent({action:'wait',ids:[ids[1]],timeout_ms:1});
   await release('SLOW');
-  const last = await tools.subagent({action:'wait',children:[ids[0]]});
-  const retained = await tools.subagent({action:'status',child:ids[0]});
+  const last = await tools.subagent({action:'wait',ids:[ids[0]]});
+  const retained = await tools.subagent({action:'status',id:ids[0]});
   return {ids,expired,first,repeated,invalid,ack,absent,last,retained};
 } finally {
   await Promise.all([release('FAST'),release('SLOW')]);
@@ -113,22 +113,22 @@ try {
         slow, fast = result["ids"]
         expired = result["expired"]
         assert not expired["is_error"] and expired["value"]["wait_expired"], expired
-        assert [child["child_session"] for child in expired["value"]["children"]] == [slow, fast]
-        assert all(not child["joined"] for child in expired["value"]["children"])
+        assert [child["id"] for child in expired["value"]["runs"]] == [slow, fast]
+        assert all(not child["joined"] for child in expired["value"]["runs"])
         first = result["first"]
         assert not first["is_error"] and not first["value"]["wait_expired"], first
-        held, ready = first["value"]["children"]
-        assert held["child_session"] == slow and not held["joined"]
-        assert ready["child_session"] == fast and ready["joined"]
+        held, ready = first["value"]["runs"]
+        assert held["id"] == slow and not held["joined"]
+        assert ready["id"] == fast and ready["joined"]
         assert ready["outcome"]["answer"] == "ANSWER_FAST", ready
-        assert result["repeated"]["value"] == {"wait_expired": False, "children": [ready, held]}
+        assert result["repeated"]["value"] == {"wait_expired": False, "runs": [ready, held]}
         assert all(item["is_error"] and "error" in item["value"] for item in result["invalid"])
         assert result["ack"]["value"] == ready and not result["ack"]["is_error"]
         assert result["absent"]["is_error"], result["absent"]
         last = result["last"]
         assert not last["is_error"] and not last["value"]["wait_expired"], last
-        [joined] = last["value"]["children"]
-        assert joined["child_session"] == slow and joined["joined"]
+        [joined] = last["value"]["runs"]
+        assert joined["id"] == slow and joined["joined"]
         assert joined["outcome"]["answer"] == "ANSWER_SLOW"
         assert result["retained"]["value"] == joined
         assert child_requests.count("FAST") == child_requests.count("SLOW") == 2, child_requests
@@ -137,7 +137,7 @@ try {
         parent = next(path for path in Path(env["ION_HOME"]).rglob("*.sqlite") if path.parent.name != "children")
         with closing(sqlite3.connect(f"file:{parent}?mode=ro", uri=True)) as db:
             entries = [json.loads(row[0]) for row in db.execute("SELECT body FROM entries ORDER BY seq")]
-        admissions = [entry["data"]["record"]["child"] for entry in entries if entry["kind"] == "delegation_admitted"]
+        admissions = [entry["data"]["record"]["run"] for entry in entries if entry["kind"] == "delegation_admitted"]
         outcomes = [entry["data"] for entry in entries if entry["kind"] == "delegation_settled"]
         assert set(admissions) == {slow, fast} and len(outcomes) == 2, (admissions, outcomes)
         print("coding wait-any: expiry preserves work, first completion wins, reports retained, selection validated, default wait joins; HTTP/effects/facts verified: OK")

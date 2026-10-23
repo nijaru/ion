@@ -41,7 +41,7 @@ struct Shared {
 }
 
 // Retain only the notification source, not Shared: Operations store this waker,
-// so retaining Shared here would create a cycle through its children.
+// so retaining Shared here would create a cycle through its runs.
 struct CompletionWake(Arc<Notify>);
 impl Wake for CompletionWake {
     fn wake(self: Arc<Self>) {
@@ -68,10 +68,10 @@ impl Wake for SteeringWake {
 #[derive(Default)]
 struct State {
     reserved: usize,
-    children: BTreeMap<uuid::Uuid, Child>,
+    runs: BTreeMap<uuid::Uuid, Run>,
     failures: Vec<String>,
 }
-struct Child {
+struct Run {
     receipt: DelegationReceipt,
     parent: Weak<CodingSession>,
     operation: Option<Operation<DelegationReceipt, CodingSessionError>>,
@@ -93,11 +93,11 @@ pub struct BackgroundSnapshot {
     pub closed: bool,
     pub failed: bool,
     pub reserved: usize,
-    pub children: Vec<BackgroundChildSnapshot>,
+    pub runs: Vec<BackgroundRunSnapshot>,
 }
 #[derive(Clone, Serialize)]
 pub struct BackgroundJobStatus {
-    pub child: uuid::Uuid,
+    pub id: uuid::Uuid,
     pub parent: uuid::Uuid,
     pub path: std::path::PathBuf,
     pub joined: bool,
@@ -111,46 +111,46 @@ pub struct BackgroundSummary {
     pub reserved: usize,
 }
 #[derive(Clone, Serialize)]
-pub struct BackgroundChildSnapshot {
+pub struct BackgroundRunSnapshot {
     pub receipt: DelegationReceipt,
-    /// Actual retained operation joined, not merely visible child completion.
+    /// Actual retained operation joined, not merely visible run completion.
     pub joined: bool,
     pub error: Option<String>,
     pub steering: Vec<ChildSteeringReport>,
 }
 /// Infrastructure acknowledgement retains the complete view as well as its
 /// original typed cause; releasing custody must not discard returned guidance.
-pub struct BackgroundChildFailure {
-    pub child: BackgroundChildSnapshot,
+pub struct BackgroundRunFailure {
+    pub run: BackgroundRunSnapshot,
     pub error: CodingSessionError,
 }
-impl std::fmt::Debug for BackgroundChildFailure {
+impl std::fmt::Debug for BackgroundRunFailure {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         self.error.fmt(f)
     }
 }
-impl std::fmt::Display for BackgroundChildFailure {
+impl std::fmt::Display for BackgroundRunFailure {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         self.error.fmt(f)
     }
 }
-impl std::error::Error for BackgroundChildFailure {
+impl std::error::Error for BackgroundRunFailure {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         Some(&self.error)
     }
 }
 
 /// Non-consuming selection snapshot after any join or expiry of one wait budget.
-/// Expiry and dropping this report do not stop or acknowledge selected children.
+/// Expiry and dropping this report do not stop or acknowledge selected runs.
 #[derive(Clone, Serialize)]
 pub struct BackgroundWait {
     pub wait_expired: bool,
-    /// All selected children, in requested order, including still-running jobs.
-    pub children: Vec<BackgroundChildSnapshot>,
+    /// All selected runs, in requested order, including still-running jobs.
+    pub runs: Vec<BackgroundRunSnapshot>,
 }
-impl Child {
-    fn snapshot(&self) -> BackgroundChildSnapshot {
-        BackgroundChildSnapshot {
+impl Run {
+    fn snapshot(&self) -> BackgroundRunSnapshot {
+        BackgroundRunSnapshot {
             receipt: self
                 .result
                 .as_ref()
@@ -215,11 +215,7 @@ impl BackgroundOwner {
     }
     pub fn has_work(&self) -> bool {
         let state = self.shared.lock();
-        state.reserved != 0
-            || state
-                .children
-                .values()
-                .any(|child| child.operation.is_some())
+        state.reserved != 0 || state.runs.values().any(|run| run.operation.is_some())
     }
     /// Sticky after acknowledgement. Joining enriches an early task-loss signal
     /// with original operation errors; neither a reader nor a tool can clear it.
@@ -249,21 +245,21 @@ impl BackgroundOwner {
             closed,
             failed,
             reserved: state.reserved,
-            children: state.children.values().map(Child::snapshot).collect(),
+            runs: state.runs.values().map(Run::snapshot).collect(),
         }
     }
     /// Job coordinates/status without copying tasks or successful answers.
     pub fn jobs(&self) -> Vec<BackgroundJobStatus> {
         self.shared
             .lock()
-            .children
+            .runs
             .values()
-            .map(|child| {
-                let receipt = child
+            .map(|run| {
+                let receipt = run
                     .result
                     .as_ref()
                     .and_then(|result| result.as_ref().ok())
-                    .unwrap_or(&child.receipt);
+                    .unwrap_or(&run.receipt);
                 let (end, error) = match &receipt.outcome {
                     Some(ion_core::DelegationOutcome::Joined { receipt, error, .. }) => {
                         (receipt.as_ref().and_then(|r| r.end.clone()), error.clone())
@@ -271,12 +267,12 @@ impl BackgroundOwner {
                     _ => (None, None),
                 };
                 BackgroundJobStatus {
-                    child: receipt.record.child,
+                    id: receipt.record.run,
                     parent: receipt.record.site.session,
                     path: receipt.record.path.clone(),
-                    joined: child.operation.is_none(),
+                    joined: run.operation.is_none(),
                     end,
-                    error: child
+                    error: run
                         .result
                         .as_ref()
                         .and_then(|r| r.as_ref().err())
@@ -290,27 +286,27 @@ impl BackgroundOwner {
     pub fn summary(&self) -> BackgroundSummary {
         let state = self.shared.lock();
         let running = state
-            .children
+            .runs
             .values()
-            .filter(|child| child.operation.is_some())
+            .filter(|run| run.operation.is_some())
             .count();
         BackgroundSummary {
             running,
-            joined: state.children.len() - running,
+            joined: state.runs.len() - running,
             reserved: state.reserved,
         }
     }
-    pub fn child(&self, child: uuid::Uuid) -> Option<BackgroundChildSnapshot> {
-        self.shared.lock().children.get(&child).map(Child::snapshot)
+    pub fn run(&self, run: uuid::Uuid) -> Option<BackgroundRunSnapshot> {
+        self.shared.lock().runs.get(&run).map(Run::snapshot)
     }
     /// Reuse an actual retained parent while a transferred task holds its writer.
     /// Weak handles do not let unread results pin a writer after settlement.
     pub(crate) fn parent(&self, path: &Path) -> Option<Arc<CodingSession>> {
         self.shared
             .lock()
-            .children
+            .runs
             .values()
-            .filter_map(|child| child.parent.upgrade())
+            .filter_map(|run| run.parent.upgrade())
             .find(|parent| parent.path() == path)
     }
     /// Cancellation-safe invalidation, including when every parent is idle.
@@ -328,9 +324,9 @@ impl BackgroundOwner {
             let running = self
                 .shared
                 .lock()
-                .children
+                .runs
                 .values()
-                .any(|child| child.operation.is_some());
+                .any(|run| run.operation.is_some());
             if running {
                 tokio::select! { () = &mut notified => {}, () = self.maintain() => {} }
             } else {
@@ -351,16 +347,16 @@ impl BackgroundOwner {
             let mut completed = false;
             let mut busy = false;
             let mut failures = Vec::new();
-            for child in state.children.values_mut() {
-                if let Some(operation) = &mut child.operation {
+            for run in state.runs.values_mut() {
+                if let Some(operation) = &mut run.operation {
                     match Pin::new(operation).poll(&mut operation_context) {
                         Poll::Pending => busy = true,
                         Poll::Ready(result) => {
                             if let Err(error) = &result {
                                 failures.push(error.to_string());
                             }
-                            child.operation = None;
-                            child.result = Some(result);
+                            run.operation = None;
+                            run.result = Some(result);
                             completed = true;
                         }
                     }
@@ -388,12 +384,12 @@ impl BackgroundOwner {
     pub async fn wait(&self, ids: &[uuid::Uuid], timeout: Duration) -> Result<BackgroundWait> {
         ensure!(
             !ids.is_empty() && ids.len() <= self.shared.capacity,
-            "wait requires 1..={} selected children",
+            "wait requires 1..={} selected runs",
             self.shared.capacity
         );
         ensure!(
             ids.iter().collect::<BTreeSet<_>>().len() == ids.len(),
-            "wait requires unique child IDs"
+            "wait requires unique run IDs"
         );
         let deadline = tokio::time::Instant::now()
             .checked_add(timeout)
@@ -402,18 +398,18 @@ impl BackgroundOwner {
             let revision = self.revision();
             let report = {
                 let state = self.shared.lock();
-                let children = ids
+                let runs = ids
                     .iter()
                     .map(|id| {
-                        state.children.get(id).ok_or_else(|| {
-                            anyhow::anyhow!("child is not owned here (unknown or acknowledged)")
+                        state.runs.get(id).ok_or_else(|| {
+                            anyhow::anyhow!("run is not owned here (unknown or acknowledged)")
                         })
                     })
                     .collect::<Result<Vec<_>>>()?;
-                let ready = children.iter().any(|child| child.operation.is_none());
+                let ready = runs.iter().any(|run| run.operation.is_none());
                 (ready || tokio::time::Instant::now() >= deadline).then(|| BackgroundWait {
                     wait_expired: !ready,
-                    children: children.into_iter().map(Child::snapshot).collect(),
+                    runs: runs.into_iter().map(Run::snapshot).collect(),
                 })
             };
             self.check()?;
@@ -430,32 +426,37 @@ impl BackgroundOwner {
     /// A joined job can reconcile a prior key, never admit another input/Turn.
     pub async fn steer(
         &self,
-        child: uuid::Uuid,
+        run: uuid::Uuid,
         request: &ion_core::RequestKey,
         input: &ion_ai::Message,
         stop: &CancellationToken,
     ) -> Result<ChildSteeringReport> {
         self.ensure_open()?;
-        let steering = self
-            .shared
-            .lock()
-            .children
-            .get(&child)
-            .ok_or_else(|| anyhow::anyhow!("child is not owned here (unknown or acknowledged)"))?
-            .steering
-            .clone()
-            .ok_or_else(|| anyhow::anyhow!("this child has no live steering grant"))?;
+        let (expected, steering) = {
+            let state = self.shared.lock();
+            let run = state.runs.get(&run).ok_or_else(|| {
+                anyhow::anyhow!("run is not owned here (unknown or acknowledged)")
+            })?;
+            let steering = run
+                .steering
+                .clone()
+                .ok_or_else(|| anyhow::anyhow!("this run has no live steering grant"))?;
+            (
+                (run.receipt.record.child, run.receipt.record.request_key()),
+                steering,
+            )
+        };
         steering
-            .steer_child(Some(child), request, input, stop)
+            .steer_run(Some(expected), request, input, stop)
             .await
     }
     pub fn request_stop(&self, id: uuid::Uuid) -> Result<()> {
         let state = self.shared.lock();
-        let child = state
-            .children
+        let run = state
+            .runs
             .get(&id)
-            .ok_or_else(|| anyhow::anyhow!("child is not owned here (unknown or acknowledged)"))?;
-        if let Some(operation) = &child.operation {
+            .ok_or_else(|| anyhow::anyhow!("run is not owned here (unknown or acknowledged)"))?;
+        if let Some(operation) = &run.operation {
             operation.request_stop();
         }
         self.shared.invalidate();
@@ -465,7 +466,7 @@ impl BackgroundOwner {
         let _state = self.shared.lock();
         self.shared.close(false);
     }
-    /// Natural completion without stopping children. Interrupted waits retain all
+    /// Natural completion without stopping runs. Interrupted waits retain all
     /// operations/results; the application must still explicitly close and join.
     pub async fn drain(&self) -> Result<(), CodingSessionError> {
         loop {
@@ -485,27 +486,27 @@ impl BackgroundOwner {
     /// with releasing custody. Infrastructure failures retain their typed cause.
     pub fn take(
         &self,
-        child: uuid::Uuid,
-    ) -> Option<Result<BackgroundChildSnapshot, BackgroundChildFailure>> {
+        run: uuid::Uuid,
+    ) -> Option<Result<BackgroundRunSnapshot, BackgroundRunFailure>> {
         let mut state = self.shared.lock();
-        if state.children.get(&child)?.operation.is_some() {
+        if state.runs.get(&run)?.operation.is_some() {
             return None;
         }
-        let child = state.children.remove(&child)?;
-        let steering = child
+        let run = state.runs.remove(&run)?;
+        let steering = run
             .steering
             .as_ref()
             .map_or_else(Vec::new, ChildSteering::snapshot);
-        let result = match child.result.expect("joined child retains its result") {
-            Ok(receipt) => Ok(BackgroundChildSnapshot {
+        let result = match run.result.expect("joined run retains its result") {
+            Ok(receipt) => Ok(BackgroundRunSnapshot {
                 receipt,
                 joined: true,
                 error: None,
                 steering,
             }),
-            Err(error) => Err(BackgroundChildFailure {
-                child: BackgroundChildSnapshot {
-                    receipt: child.receipt,
+            Err(error) => Err(BackgroundRunFailure {
+                run: BackgroundRunSnapshot {
+                    receipt: run.receipt,
                     joined: true,
                     error: Some(error.to_string()),
                     steering,
@@ -556,7 +557,7 @@ impl Drop for BackgroundDestination {
     }
 }
 impl BackgroundDestination {
-    /// Attach the matching prepared live grant; actual child identity is checked
+    /// Attach the matching prepared live grant; actual run identity is checked
     /// again before steering. Serializable job coordinates alone grant no control.
     pub fn with_steering(mut self, steering: ChildSteering) -> Self {
         self.steering = Some(steering);
@@ -576,7 +577,7 @@ impl BackgroundSlot for BackgroundDestination {
         if self.shared.closed.load(Ordering::SeqCst) {
             return Err("background owner is closed".into());
         }
-        if state.reserved + state.children.len() == self.shared.capacity {
+        if state.reserved + state.runs.len() == self.shared.capacity {
             return Err("background custody is full".into());
         }
         state.reserved += 1;
@@ -612,9 +613,9 @@ impl BackgroundSlot for BackgroundDestination {
                     shared.close(true);
                 }
             })?;
-        state.children.insert(
-            receipt.record.child,
-            Child {
+        state.runs.insert(
+            receipt.record.run,
+            Run {
                 receipt: receipt.clone(),
                 parent,
                 operation: Some(operation),

@@ -1,13 +1,14 @@
 use super::*;
 use crate::{
-    ChildIntent, ChildOutcome, DelegationContext, DelegationOutcome, DelegationSite, DelegationSpec,
+    ChildIntent, ChildOutcome, DelegationOutcome, DelegationSite, DelegationSpec, DelegationTarget,
 };
 use ion_ai::{Content, ProviderReplay, ToolCall};
 
 fn spec(root: &Path) -> DelegationSpec {
     DelegationSpec {
-        context: DelegationContext::Fresh,
-        directory: root.join("children"),
+        target: DelegationTarget::Fresh {
+            directory: root.join("children"),
+        },
         cwd: None,
         model: ModelRef {
             provider: "child".into(),
@@ -187,7 +188,10 @@ fn fork_copies_literal_prefix_and_coordinates_but_not_parent_ownership_or_config
         let site = assistant(&parent, 2, "delegate");
         let original = parent.view().unwrap().entries;
         let mut child_spec = spec(&root);
-        child_spec.context = DelegationContext::Fork { point };
+        child_spec.target = DelegationTarget::Fork {
+            directory: root.join("children"),
+            point,
+        };
         let workspace = root.join("explicit-child-workspace");
         fs::create_dir(&workspace).unwrap();
         let workspace = workspace.canonicalize().unwrap();
@@ -217,11 +221,18 @@ fn fork_copies_literal_prefix_and_coordinates_but_not_parent_ownership_or_config
                 *request = None;
             }
         }
+        let crate::delegation::ChildMaterialization::New(prefix) = context else {
+            panic!("fork creates a new conversation")
+        };
         assert_eq!(
-            context, expected,
+            &prefix, &expected,
             "capture must be the literal cut, not ordinary fork's preference augmentation"
         );
-        let child = Session::materialize_delegation(&record, context.clone()).unwrap();
+        let child = Session::materialize_delegation(
+            &record,
+            crate::delegation::ChildMaterialization::New(prefix.clone()),
+        )
+        .unwrap();
         let view = child.view().unwrap();
         assert_eq!(&view.entries[..cutoff], expected);
         assert!(
@@ -260,16 +271,20 @@ fn fork_copies_literal_prefix_and_coordinates_but_not_parent_ownership_or_config
                 ),
                 Err(SessionError::InvalidHistory)
             ),
-            "one logical child cannot have two parent bindings"
+            "a creation binding cannot be replayed onto existing history"
         );
         let copy = child.clone_to(root.join("copy.sqlite")).unwrap();
         assert!(copy.view().unwrap().parent_delegation().is_none());
         drop(copy);
         drop(child);
         // Same header and link are insufficient if the copied prefix differs.
-        let exact = Session::materialize_delegation(&record, context.clone()).unwrap();
+        let exact = Session::materialize_delegation(
+            &record,
+            crate::delegation::ChildMaterialization::New(prefix.clone()),
+        )
+        .unwrap();
         drop(exact);
-        let mut wrong = context;
+        let mut wrong = prefix;
         if let SessionEntry::UserShellSettled {
             outcome: UserShellOutcome::Observed { output, .. },
             ..
@@ -281,7 +296,10 @@ fn fork_copies_literal_prefix_and_coordinates_but_not_parent_ownership_or_config
             *output = serde_json::json!("different history");
         }
         assert!(matches!(
-            Session::materialize_delegation(&record, wrong),
+            Session::materialize_delegation(
+                &record,
+                crate::delegation::ChildMaterialization::New(wrong)
+            ),
             Err(SessionError::InvalidHistory)
         ));
         drop((parent, ancestor));

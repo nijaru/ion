@@ -79,8 +79,9 @@ pub(super) fn pending_for(
                 composed_child: composed.then_some(0),
             },
             DelegationSpec {
-                context: crate::DelegationContext::Fresh,
-                directory: root.join("children"),
+                target: crate::DelegationTarget::Fresh {
+                    directory: root.join("children"),
+                },
                 cwd: None,
                 model,
                 reasoning: Reasoning::ProviderDefault,
@@ -140,7 +141,7 @@ fn recovery_orders_lost_relationships_before_tools_and_rolls_back_as_one_batch()
             SessionEntry::TurnResumed { turn: 1, .. }
         ));
         assert!(
-            matches!(suffix[1], SessionEntry::DelegationSettled { child, outcome: DelegationOutcome::Unknown } if child == record.child)
+            matches!(suffix[1], SessionEntry::DelegationSettled { run, outcome: DelegationOutcome::Unknown } if run == record.run)
         );
         if composed {
             assert!(matches!(
@@ -174,8 +175,12 @@ fn recovery_orders_lost_relationships_before_tools_and_rolls_back_as_one_batch()
 #[test]
 fn materialization_uses_only_the_committed_identity_and_binding() {
     let (root, session, _, record) = pending(false);
-    let materialize =
-        |record: &crate::DelegationRecord| Session::materialize_delegation(record, Vec::new());
+    let materialize = |record: &crate::DelegationRecord| {
+        Session::materialize_delegation(
+            record,
+            crate::delegation::ChildMaterialization::New(Vec::new()),
+        )
+    };
     let child = materialize(&record).unwrap();
     assert_eq!(child.id(), record.child);
     assert_eq!(
@@ -237,58 +242,63 @@ fn materialization_uses_only_the_committed_identity_and_binding() {
 }
 
 #[test]
-fn repeated_child_identity_is_invalid_even_without_the_derived_index() {
-    let (root, session, _, mut record) = pending(false);
-    let (turn, _) = session
-        .begin_turn("fresh work".into(), record.spec.model.clone())
-        .unwrap();
-    session
-        .record_assistant(
-            turn,
-            Message {
-                role: Role::Assistant,
-                content: vec![Content::ToolCall(ToolCall {
-                    id: "next".into(),
-                    name: "delegate".into(),
-                    arguments: serde_json::json!({}),
-                    raw_arguments: None,
-                })],
-                provider_replay: None,
-            },
-            Usage::unknown(),
-            false,
-        )
-        .unwrap();
-    record.site.turn = turn;
-    record.site.tool = session.tool_occurrence(turn, "next").unwrap();
-    let entry = SessionEntry::DelegationAdmitted { record };
-    // The candidate is otherwise legal at this second occurrence. The derived
-    // index is not the authority for uniqueness across historical relationships.
-    let mut state = session.store.lock().unwrap().state.clone();
-    state
-        .apply(&entry, &mut Vec::new(), &BTreeSet::new(), &mut Vec::new())
-        .unwrap();
-    drop(session);
-    let connection = Connection::open(root.join("parent.sqlite")).unwrap();
-    connection
-        .execute_batch("DROP INDEX delegation_children")
-        .unwrap();
-    connection
-        .execute(
-            "INSERT INTO entries(body) VALUES (?1)",
-            params![serde_json::to_vec(&entry).unwrap()],
-        )
-        .unwrap();
-    drop(connection);
-    assert!(matches!(
-        Session::open(root.join("parent.sqlite")),
-        Err(SessionError::InvalidHistory)
-    ));
-    assert!(matches!(
-        Session::inspect_metadata(root.join("parent.sqlite")),
-        Err(SessionError::InvalidHistory)
-    ));
-    fs::remove_dir_all(root).unwrap();
+fn repeated_run_or_creation_identity_is_invalid_even_without_derived_indexes() {
+    for repeat_run in [false, true] {
+        let (root, session, _, mut record) = pending(false);
+        if !repeat_run {
+            record.run = uuid::Uuid::new_v4();
+        }
+        let (turn, _) = session
+            .begin_turn("fresh work".into(), record.spec.model.clone())
+            .unwrap();
+        session
+            .record_assistant(
+                turn,
+                Message {
+                    role: Role::Assistant,
+                    content: vec![Content::ToolCall(ToolCall {
+                        id: "next".into(),
+                        name: "delegate".into(),
+                        arguments: serde_json::json!({}),
+                        raw_arguments: None,
+                    })],
+                    provider_replay: None,
+                },
+                Usage::unknown(),
+                false,
+            )
+            .unwrap();
+        record.site.turn = turn;
+        record.site.tool = session.tool_occurrence(turn, "next").unwrap();
+        let entry = SessionEntry::DelegationAdmitted { record };
+        // The candidate is otherwise legal at this second occurrence. The derived
+        // index is not the authority for uniqueness across historical relationships.
+        let mut state = session.store.lock().unwrap().state.clone();
+        state
+            .apply(&entry, &mut Vec::new(), &BTreeSet::new(), &mut Vec::new())
+            .unwrap();
+        drop(session);
+        let connection = Connection::open(root.join("parent.sqlite")).unwrap();
+        connection
+            .execute_batch("DROP INDEX delegation_runs; DROP INDEX delegation_created_children")
+            .unwrap();
+        connection
+            .execute(
+                "INSERT INTO entries(body) VALUES (?1)",
+                params![serde_json::to_vec(&entry).unwrap()],
+            )
+            .unwrap();
+        drop(connection);
+        assert!(matches!(
+            Session::open(root.join("parent.sqlite")),
+            Err(SessionError::InvalidHistory)
+        ));
+        assert!(matches!(
+            Session::inspect_metadata(root.join("parent.sqlite")),
+            Err(SessionError::InvalidHistory)
+        ));
+        fs::remove_dir_all(root).unwrap();
+    }
 }
 
 #[test]
@@ -299,7 +309,7 @@ fn deadline_settlement_cannot_hide_failure_or_retain_a_successful_answer() {
             execution_timed_out: true,
             receipt: Some(crate::RequestReceipt {
                 session: record.child,
-                key: crate::delegation::request_key(record.child),
+                key: crate::delegation::request_key(record.run),
                 turn: 1,
                 end: Some(TurnEndReason::Completed),
             }),

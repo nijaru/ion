@@ -23,8 +23,7 @@ pub use steering::{ChildSteering, ChildSteeringReport, PreparedDelegation};
 /// `PreparedDelegation::in_background` to retain its matching live control grant.
 /// Core reserves custody only after exact reconciliation and before new admission.
 pub struct SessionDelegation {
-    pub context: ion_core::DelegationContext,
-    pub directory: PathBuf,
+    pub target: ion_core::DelegationTarget,
     pub cwd: Option<PathBuf>,
     pub application: Arc<dyn Application>,
     pub model: Option<ModelRef>,
@@ -40,10 +39,11 @@ impl SessionDelegation {
     /// admission. The returned task is cold and owns everything needed to join
     /// preparation, Core execution and shutdown outside the tool's borrowed wait.
     pub fn prepare(&self, input: Message) -> Result<PreparedDelegation> {
-        ensure!(
-            self.directory.is_absolute(),
-            "child directory must be absolute"
-        );
+        let directory = self
+            .target
+            .directory()
+            .filter(|path| path.is_absolute())
+            .ok_or_else(|| anyhow::anyhow!("child target directory must be absolute"))?;
         if let Some(ms) = self.execution_timeout_ms {
             ensure!(ms != 0, "child execution timeout must be positive");
             ensure!(
@@ -65,8 +65,7 @@ impl SessionDelegation {
         crate::binding::validate_model(&runtime, self.model.as_ref())?;
         runtime.agent.validate_reasoning(self.reasoning)?;
         let spec = DelegationSpec {
-            context: self.context,
-            directory: self.directory.clone(),
+            target: self.target.clone(),
             cwd: cwd.clone(),
             model: runtime.agent.model().clone(),
             reasoning: self.reasoning,
@@ -74,7 +73,7 @@ impl SessionDelegation {
             authority: self.authority.clone(),
             input,
         };
-        let catalog = SessionCatalog::new(self.directory.clone(), cwd);
+        let catalog = SessionCatalog::new(directory.to_path_buf(), cwd);
         let application = self.application.clone();
         let reasoning = self.reasoning;
         let execution_timeout_ms = self.execution_timeout_ms;
@@ -115,7 +114,7 @@ impl SessionDelegation {
                         stop.clone(),
                     );
                     if let Some(port) = control.steering() {
-                        ready.send_replace(Some((child_id, port)));
+                        ready.send_replace(Some((child_id, request.key.clone(), port)));
                     }
                     let mut failure = admission
                         .err()

@@ -11,7 +11,7 @@ use tokio_util::sync::CancellationToken;
 
 use crate::{BackgroundOwner, InputId, SteeringReceipt, SteeringStatus, TurnSteering};
 
-type Ready = Option<(uuid::Uuid, TurnSteering<()>)>;
+type Ready = Option<(uuid::Uuid, RequestKey, TurnSteering<()>)>;
 pub(super) type Readiness = watch::Sender<Ready>;
 
 /// The task and its live control grant belong to the same prepared application.
@@ -95,11 +95,11 @@ impl ChildSteering {
         input: &Message,
         stop: &CancellationToken,
     ) -> Result<ChildSteeringReport> {
-        self.steer_child(None, request, input, stop).await
+        self.steer_run(None, request, input, stop).await
     }
-    pub(crate) async fn steer_child(
+    pub(crate) async fn steer_run(
         &self,
-        expected: Option<uuid::Uuid>,
+        expected: Option<(uuid::Uuid, RequestKey)>,
         request: &RequestKey,
         input: &Message,
         stop: &CancellationToken,
@@ -111,10 +111,12 @@ impl ChildSteering {
         loop {
             ensure!(!stop.is_cancelled(), "steering stopped; child continues");
             let ready = readiness.borrow_and_update().clone();
-            if let Some((child, port)) = ready {
+            if let Some((child, run, port)) = ready {
                 ensure!(
-                    expected.is_none_or(|expected| expected == child),
-                    "child control grant does not match its owned job"
+                    expected
+                        .as_ref()
+                        .is_none_or(|(session, request)| *session == child && *request == run),
+                    "child control grant does not match its owned run"
                 );
                 let mut submissions = self
                     .submissions

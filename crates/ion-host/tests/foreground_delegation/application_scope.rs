@@ -29,17 +29,10 @@ async fn idle_invalidation_waits_cover_reservation_release_and_closure() {
 #[tokio::test]
 async fn cancelled_result_wait_retains_original_answer_until_acknowledgement() {
     let owner = Arc::new(BackgroundOwner::new(1).unwrap());
-    let mut f = Fixture::with_owner(
-        Wait::Join,
-        true,
-        false,
-        ion_core::DelegationContext::Fresh,
-        Some(owner.clone()),
-        None,
-    );
+    let mut f = Fixture::with_owner(Wait::Join, true, false, None, Some(owner.clone()), None);
     f.start();
     background::drain(&mut f.control).await;
-    let child = owner.jobs()[0].child;
+    let child = owner.jobs()[0].id;
     let selected = [child];
     assert!(
         tokio::time::timeout(
@@ -49,11 +42,11 @@ async fn cancelled_result_wait_retains_original_answer_until_acknowledgement() {
         .await
         .is_err()
     );
-    assert!(owner.child(child).is_some());
+    assert!(owner.run(child).is_some());
     f.effect.release.notify_one();
     let mut report = owner.wait(&selected, Duration::from_secs(5)).await.unwrap();
     assert!(!report.wait_expired);
-    let joined = report.children.pop().unwrap();
+    let joined = report.runs.pop().unwrap();
     assert!(joined.joined);
     assert!(
         matches!(&joined.receipt.outcome, Some(DelegationOutcome::Joined { answer: Some(answer), error: None, .. }) if answer == "two")
@@ -78,7 +71,7 @@ async fn application_failure_stops_parent_without_a_host_result_reader() {
         Wait::HoldAfterTransfer,
         true,
         false,
-        ion_core::DelegationContext::Fresh,
+        None,
         Some(owner.clone()),
         None,
     );
@@ -124,7 +117,7 @@ async fn application_failure_stops_parent_without_a_host_result_reader() {
         |update| matches!(update, ControlUpdate::Settled(settlement) if matches!(settlement.outcome, OperationOutcome::Turn(Err(_))))
     ));
     owner.join_shutdown().await.unwrap_err();
-    let child = owner.jobs()[0].child;
+    let child = owner.jobs()[0].id;
     assert!(owner.take(child).unwrap().is_err());
     assert!(
         owner.check().is_err(),

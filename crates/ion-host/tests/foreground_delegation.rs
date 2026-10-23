@@ -137,8 +137,7 @@ impl ToolExecutor for Delegate {
                     (
                         ion_core::DelegationTask::new(
                             ion_core::DelegationSpec {
-                                context: self.child.context,
-                                directory: self.child.directory.clone(),
+                                target: self.child.target.clone(),
                                 cwd: None,
                                 model: model("child"),
                                 reasoning: self.child.reasoning,
@@ -279,13 +278,13 @@ struct Fixture {
 }
 impl Fixture {
     fn new(wait: Wait, block: bool, composed: bool) -> Self {
-        Self::with_context(wait, block, composed, ion_core::DelegationContext::Fresh)
+        Self::with_context(wait, block, composed, None)
     }
     fn with_context(
         wait: Wait,
         block: bool,
         composed: bool,
-        context: ion_core::DelegationContext,
+        context: Option<ion_core::ForkPoint>,
     ) -> Self {
         Self::with_owner(wait, block, composed, context, None, None)
     }
@@ -293,7 +292,7 @@ impl Fixture {
         wait: Wait,
         block: bool,
         composed: bool,
-        context: ion_core::DelegationContext,
+        context: Option<ion_core::ForkPoint>,
         owner: Option<Arc<ion_host::BackgroundOwner>>,
         execution_timeout_ms: Option<u64>,
     ) -> Self {
@@ -311,7 +310,7 @@ impl Fixture {
         wait: Wait,
         block: bool,
         composed: bool,
-        context: ion_core::DelegationContext,
+        context: Option<ion_core::ForkPoint>,
         owner: Option<Arc<ion_host::BackgroundOwner>>,
         execution_timeout_ms: Option<u64>,
         child_service: Option<Arc<dyn ion_ai::ModelService>>,
@@ -336,20 +335,25 @@ impl Fixture {
         ]));
         let child_agent = Arc::new(CodingAgent::with_tool_set(
             child_service.unwrap_or_else(|| child.clone()),
-            Arc::new(ToolSet::new([
-                if matches!(context, ion_core::DelegationContext::Fork { .. }) {
-                    Arc::new(DeferredChildTools(effect.clone())) as Arc<dyn CodingToolSource>
-                } else {
-                    effect.clone() as Arc<dyn CodingToolSource>
-                },
-            ])),
+            Arc::new(ToolSet::new([if context.is_some() {
+                Arc::new(DeferredChildTools(effect.clone())) as Arc<dyn CodingToolSource>
+            } else {
+                effect.clone() as Arc<dyn CodingToolSource>
+            }])),
             model("child"),
         ));
         let background = owner.is_some();
         let delegate = Arc::new(Delegate {
             child: SessionDelegation {
-                context,
-                directory: root.join("children"),
+                target: match context {
+                    Some(point) => ion_core::DelegationTarget::Fork {
+                        directory: root.join("children"),
+                        point,
+                    },
+                    None => ion_core::DelegationTarget::Fresh {
+                        directory: root.join("children"),
+                    },
+                },
                 cwd: None,
                 application: Arc::new(App {
                     agent: child_agent,
@@ -375,7 +379,7 @@ impl Fixture {
             call("delegate", json!({"parent":"forged"}))
         };
         let mut scripts = Vec::new();
-        if matches!(context, ion_core::DelegationContext::Fork { .. }) {
+        if context.is_some() {
             scripts.push(response(vec![Content::Text("historical answer".into())]));
         }
         scripts.extend([
@@ -527,12 +531,7 @@ async fn forked_child_shares_only_the_chosen_history_and_current_child_capabilit
         ion_core::ForkPoint::AfterTurn(1),
         ion_core::ForkPoint::BeforeTurn(2),
     ] {
-        let mut f = Fixture::with_context(
-            Wait::Repeat,
-            false,
-            false,
-            ion_core::DelegationContext::Fork { point },
-        );
+        let mut f = Fixture::with_context(Wait::Repeat, false, false, Some(point));
         let source_key = ion_core::RequestKey::new("source".into(), "history".into()).unwrap();
         f.control
             .submit_request(
@@ -565,10 +564,10 @@ async fn forked_child_shares_only_the_chosen_history_and_current_child_capabilit
         assert_eq!(f.effect.calls.load(Ordering::SeqCst), 1);
         let links = f.session.view().unwrap().delegations();
         assert_eq!(links.len(), 1);
-        assert_eq!(
-            links[0].record.spec.context,
-            ion_core::DelegationContext::Fork { point }
-        );
+        assert!(matches!(
+            links[0].record.spec.target,
+            ion_core::DelegationTarget::Fork { point: actual, .. } if actual == point
+        ));
         assert_eq!(links[0].record.site.turn, 2);
         let child = CodingSession::open(&links[0].record.path).unwrap();
         assert_eq!(

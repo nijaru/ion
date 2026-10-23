@@ -42,9 +42,9 @@ while not (root/(name+'.release')).exists():
     failures, requests = [], []
     code = """
 const ids = [];
-const start = async (task, extra={}) => { const r=await tools.subagent({action:'start',task,mode:'background',...extra}); ids.push(r.value.child_session); return r.value.child_session; };
-const steer = (child,message) => tools.subagent({action:'steer',child,message});
-const wait = child => tools.subagent({action:'wait',children:[child],timeout_ms:10000});
+const start = async (task, extra={}) => { const r=await tools.subagent({action:'start',task,mode:'background',...extra}); ids.push(r.value.id); return r.value.id; };
+const steer = (child,message) => tools.subagent({action:'steer',id:child,message});
+const wait = child => tools.subagent({action:'wait',ids:[child],timeout_ms:10000});
 const ready = name => tools.exec({command:'while [ ! -f '+name+'.ready ]; do sleep 0.01; done',timeout_ms:10000});
 try {
   const worker=await start('WORKER'), cancel=await start('CANCEL');
@@ -52,19 +52,19 @@ try {
   const first=await steer(worker,GUIDANCE);
   if (first.is_error) return {unsupported:first};
   const second=await steer(worker,GUIDANCE);
-  const queued=await tools.subagent({action:'status',child:worker});
+  const queued=await tools.subagent({action:'status',id:worker});
   const invalid=[];
   for (const message of ['   ','é'.repeat(40000)]) invalid.push(await steer(worker,message));
   invalid.push(await steer('00000000-0000-0000-0000-000000000000','no grant'));
-  invalid.push(await tools.subagent({action:'steer',child:worker,message:'no route grant',model:'smoke/other'}));
+  invalid.push(await tools.subagent({action:'steer',id:worker,message:'no route grant',model:'smoke/other'}));
   const cancelledGuidance=await steer(cancel,'return cancelled guidance');
-  await tools.subagent({action:'cancel',child:cancel});
+  await tools.subagent({action:'cancel',id:cancel});
   const cancelled=await wait(cancel);
-  const cancelledAck=await tools.subagent({action:'acknowledge',child:cancel});
+  const cancelledAck=await tools.subagent({action:'acknowledge',id:cancel});
   await tools.write({path:'WORKER.release',content:'release'});
   const joined=await wait(worker);
   const settled=await steer(worker,'must not start another Turn');
-  await tools.subagent({action:'acknowledge',child:worker});
+  await tools.subagent({action:'acknowledge',id:worker});
   const absent=await steer(worker,'acknowledged is not authority');
   const deadline=await start('DEADLINE',{execution_timeout_ms:3000});
   await ready('DEADLINE');
@@ -72,7 +72,7 @@ try {
   const expired=await wait(deadline);
   return {worker,cancel,deadline,first,second,queued,invalid,cancelledGuidance,cancelled,cancelledAck,joined,settled,absent,deadlineGuidance,expired};
 } finally {
-  for (const child of ids) await tools.subagent({action:'cancel',child});
+  for (const child of ids) await tools.subagent({action:'cancel',id:child});
   for (const name of ['WORKER','CANCEL','DEADLINE']) await tools.write({path:name+'.release',content:'cleanup'});
 }
 """.replace("GUIDANCE", json.dumps(GUIDANCE))
@@ -143,13 +143,13 @@ try {
         assert all(r["status"]["state"] == "queued" for r in result["queued"]["value"]["steering"])
         assert all(r["is_error"] for r in result["invalid"])
         assert result["settled"]["is_error"] and result["absent"]["is_error"]
-        [joined] = result["joined"]["value"]["children"]
+        [joined] = result["joined"]["value"]["runs"]
         assert joined["joined"] and joined["outcome"]["answer"] == "GUIDED_ANSWER", joined
         assert len(joined["steering"]) == 2
         assert all(r["status"]["state"] == "committed" and r["status"]["acceptance"]["turn"] == 1 for r in joined["steering"])
-        assert result['cancelledAck']['value'] == result['cancelled']['value']['children'][0], result['cancelledAck']
+        assert result['cancelledAck']['value'] == result['cancelled']['value']['runs'][0], result['cancelledAck']
         for name, message, timed_out in (("cancelled", "return cancelled guidance", False), ("expired", "return expired guidance", True)):
-            [child] = result[name]["value"]["children"]
+            [child] = result[name]["value"]["runs"]
             assert child["joined"] and child["outcome"]["execution_timed_out"] == timed_out, child
             assert child["outcome"]["answer"] is None and child["outcome"]["receipt"]["end"] == "cancelled"
             [guidance] = child["steering"]
@@ -168,7 +168,7 @@ try {
             with closing(sqlite3.connect(f"file:{record['path']}?mode=ro", uri=True)) as db:
                 facts = [json.loads(r[0]) for r in db.execute("SELECT body FROM entries ORDER BY seq")]
             steering = [e["data"]["input"] for e in facts if e["kind"] == "steering"]
-            assert steering == ([{"role": "User", "content": [{"Text": GUIDANCE}], "provider_replay": None}] * 2 if record["child"] == result["worker"] else [])
+            assert steering == ([{"role": "User", "content": [{"Text": GUIDANCE}], "provider_replay": None}] * 2 if record["run"] == result["worker"] else [])
             assert len([e for e in facts if e["kind"] == "turn_started"]) == 1, "steering must never start another Turn"
         for path in workspace.glob("*.pid"):
             pid = int(path.read_text())

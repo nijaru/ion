@@ -40,7 +40,7 @@ fn transferred_children_reconcile_without_a_live_turn_and_copies_never_acquire_t
                 let view = copy.view().unwrap();
                 assert!(view.delegations().is_empty());
                 assert!(!view.entries[before..].iter().any(|entry| matches!(entry,
-                    SessionEntry::DelegationSettled { child, .. } if *child == record.child)));
+                    SessionEntry::DelegationSettled { run, .. } if *run == record.run)));
             }
         }
         let point = session.recovery_state().unwrap().map(|state| state.point);
@@ -86,7 +86,7 @@ fn transferred_children_reconcile_without_a_live_turn_and_copies_never_acquire_t
             Some(DelegationOutcome::Unknown)
         );
         let suffix = &after.entries[before.entries.len()..];
-        let unknown = suffix.iter().position(|entry| matches!(entry, SessionEntry::DelegationSettled { child, outcome: DelegationOutcome::Unknown } if *child == record.child)).unwrap();
+        let unknown = suffix.iter().position(|entry| matches!(entry, SessionEntry::DelegationSettled { run, outcome: DelegationOutcome::Unknown } if *run == record.run)).unwrap();
         let dependent = suffix
             .iter()
             .position(|entry| {

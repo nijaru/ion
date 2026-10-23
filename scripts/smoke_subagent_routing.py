@@ -102,7 +102,7 @@ with tempfile.TemporaryDirectory(prefix="ion-subagent-routing-") as temporary:
                     retargeted.add("parent")
                     arguments = {"action": "start", "task": "CHILD_" + current["name"], **current["arguments"]}
                     if current["fork"]:
-                        code = "const r=await tools.subagent(" + json.dumps(arguments) + "); const w=await tools.subagent({action:'wait',children:[r.value.child_session]}); return w.value.children[0];"
+                        code = "const r=await tools.subagent(" + json.dumps(arguments) + "); const w=await tools.subagent({action:'wait',ids:[r.value.id]}); return w.value.runs[0];"
                         delta = tool("code_mode", {"code": code})
                     else:
                         delta = tool("subagent", arguments)
@@ -187,7 +187,7 @@ with tempfile.TemporaryDirectory(prefix="ion-subagent-routing-") as temporary:
             if current["fork"]:
                 owner = admitted[0]["ownership"]["background"]["owner"]
                 transfer = next(entry["data"] for entry in facts(parent) if entry["kind"] == "delegation_transferred")
-                assert transfer == {"child": admitted[0]["child"], "owner": owner}
+                assert transfer == {"run": admitted[0]["run"], "owner": owner}
                 assert result["transferred"]
             else:
                 assert admitted[0]["ownership"] == "foreground"

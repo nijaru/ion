@@ -136,11 +136,11 @@ enum EntryInspection {
         record: ion_core::DelegationRecord,
     },
     DelegationTransferred {
-        child: uuid::Uuid,
+        run: uuid::Uuid,
         owner: uuid::Uuid,
     },
     DelegationSettled {
-        child: uuid::Uuid,
+        run: uuid::Uuid,
         outcome: ion_core::DelegationOutcome,
     },
     ChildSessionOf {
@@ -156,6 +156,7 @@ enum EntryInspection {
 #[derive(Serialize)]
 #[serde(remote = "ion_core::DelegationRecord")]
 struct DelegationInspection {
+    run: uuid::Uuid,
     site: ion_core::DelegationSite,
     child: uuid::Uuid,
     path: PathBuf,
@@ -167,8 +168,7 @@ struct DelegationInspection {
 #[derive(Serialize)]
 #[serde(remote = "ion_core::DelegationSpec")]
 struct DelegationSpecInspection {
-    context: ion_core::DelegationContext,
-    directory: PathBuf,
+    target: ion_core::DelegationTarget,
     cwd: Option<PathBuf>,
     model: ModelRef,
     reasoning: Reasoning,
@@ -569,6 +569,7 @@ mod tests {
         );
         let child = uuid::Uuid::new_v4();
         let record = ion_core::DelegationRecord {
+            run: uuid::Uuid::new_v4(),
             site: ion_core::DelegationSite {
                 session: view.id,
                 turn: 1,
@@ -582,8 +583,9 @@ mod tests {
             path: PathBuf::from("/inspection-fixture").join(format!("{child}.sqlite")),
             ownership: ion_core::DelegationOwnership::Foreground,
             spec: ion_core::DelegationSpec {
-                context: ion_core::DelegationContext::Fresh,
-                directory: PathBuf::from("/inspection-fixture"),
+                target: ion_core::DelegationTarget::Fresh {
+                    directory: PathBuf::from("/inspection-fixture"),
+                },
                 cwd: None,
                 model: view.last_model.clone().unwrap(),
                 reasoning: Reasoning::ProviderDefault,

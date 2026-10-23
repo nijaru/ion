@@ -35,7 +35,7 @@ pub enum BackgroundStartError {
 pub struct BackgroundJob {
     pub(super) parent: Arc<CodingSession>,
     pub(super) record: DelegationRecord,
-    pub(super) context: Vec<crate::SessionEntry>,
+    pub(super) prepared: ChildMaterialization,
     pub(super) work: DelegationWork,
     pub(super) parent_stop: CancellationToken,
 }
@@ -109,7 +109,7 @@ impl BackgroundJob {
                     let _lease = lease;
                     let mut failure = failure;
                     let (outcome, infrastructure) =
-                        run_child(self.record.clone(), self.context, self.work, stop).await;
+                        run_child(self.record.clone(), self.prepared, self.work, stop).await;
                     let result = self
                         .parent
                         .settle_delegation(&self.record, outcome.clone())

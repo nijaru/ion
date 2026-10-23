@@ -38,6 +38,8 @@ mod delegation_background_tests;
 #[cfg(test)]
 mod delegation_fork_tests;
 #[cfg(test)]
+mod delegation_resume_tests;
+#[cfg(test)]
 mod delegation_tests;
 pub(crate) mod history;
 mod recovery;
@@ -53,7 +55,7 @@ pub use recovery::{AuthorityScope, RecoveryBinding, RecoveryPoint, RecoveryState
 pub(crate) use submission::TurnAdmission;
 pub use submission::{RequestKey, RequestReceipt, SubmissionRequest};
 
-const FORMAT_VERSION: u32 = 16;
+const FORMAT_VERSION: u32 = 17;
 // An 8 MiB raw prompt or streamed response can grow up to sixfold when JSON
 // escapes control characters. Keep the storage bound above that encoded size.
 const MAX_ENTRY_BYTES: usize = 64 * 1024 * 1024;
@@ -175,14 +177,14 @@ pub enum SessionEntry {
         record: crate::DelegationRecord,
     },
     DelegationTransferred {
-        child: uuid::Uuid,
+        run: uuid::Uuid,
         owner: uuid::Uuid,
     },
     DelegationSettled {
-        child: uuid::Uuid,
+        run: uuid::Uuid,
         outcome: crate::DelegationOutcome,
     },
-    /// Atomically initialized with the child's immutable logical identity.
+    /// Actual request binding; a reused conversation retains earlier bindings.
     ChildSessionOf {
         record: crate::DelegationRecord,
     },
@@ -361,7 +363,7 @@ struct State {
     prefix_bound_in_turn: bool,
     recovery: Option<RecoveryBinding>,
     pending: Vec<PendingTool>,
-    backgrounds: BTreeMap<uuid::Uuid, crate::DelegationSite>,
+    backgrounds: BTreeMap<uuid::Uuid, delegation::DelegationLink>,
     last_id: u64,
     last_end: Option<(u64, TurnEndReason)>,
     last_model: Option<ModelRef>,
@@ -852,7 +854,12 @@ impl Session {
     pub fn open(path: impl AsRef<Path>) -> Result<Self, SessionError> {
         let path = database_path(path.as_ref())?;
         let lock = lock(&path)?;
-        let connection = Connection::open(&path)?;
+        // A disappearing resume target must fail, not create a new empty file
+        // between path validation and SQLite opening it.
+        let connection = Connection::open_with_flags(
+            &path,
+            OpenFlags::default().difference(OpenFlags::SQLITE_OPEN_CREATE),
+        )?;
         configure_connection(&connection)?;
         let header = read_header(&connection)?;
         let HistoryProjection {
@@ -1807,15 +1814,15 @@ impl Store {
         self.state
             .backgrounds
             .iter()
-            .filter(|(child, site)| {
-                site.session == session
+            .filter(|(run, link)| {
+                link.site.session == session
                     && self
                         .live_backgrounds
-                        .get(child)
+                        .get(run)
                         .is_none_or(|lease| lease.strong_count() == 0)
             })
-            .map(|(child, _)| SessionEntry::DelegationSettled {
-                child: *child,
+            .map(|(run, _)| SessionEntry::DelegationSettled {
+                run: *run,
                 outcome: crate::DelegationOutcome::Unknown,
             })
             .collect()
@@ -1983,8 +1990,8 @@ fn append(store: &mut Store, entries: &[SessionEntry]) -> Result<(), SessionErro
         sequence += 1;
         store.child_records.observe(sequence, entry);
         store.context_index.observe(entry);
-        if let SessionEntry::DelegationSettled { child, .. } = entry {
-            store.live_backgrounds.remove(child);
+        if let SessionEntry::DelegationSettled { run, .. } = entry {
+            store.live_backgrounds.remove(run);
         }
     }
     if entries.iter().any(|entry| {
@@ -2244,8 +2251,10 @@ fn project<E: Borrow<SessionEntry>>(
     let mut context_index = ContextIndex::default();
     let mut turns = 0usize;
     let mut request_keys = BTreeSet::new();
-    let mut delegation_children = BTreeSet::new();
-    let mut child_bindings = BTreeSet::new();
+    let mut delegation_runs = BTreeSet::new();
+    let mut created_delegations = BTreeSet::new();
+    let mut binding_runs = BTreeSet::new();
+    let mut created_children = BTreeSet::new();
     let mut first_input = None;
     for entry in entries {
         let entry = entry?;
@@ -2258,12 +2267,16 @@ fn project<E: Borrow<SessionEntry>>(
             return Err(SessionError::InvalidHistory);
         }
         if let SessionEntry::DelegationAdmitted { record } = entry
-            && !delegation_children.insert(record.child)
+            && (!delegation_runs.insert(record.run)
+                || (!matches!(record.spec.target, crate::DelegationTarget::Resume { .. })
+                    && !created_delegations.insert(record.child)))
         {
             return Err(SessionError::InvalidHistory);
         }
         if let SessionEntry::ChildSessionOf { record } = entry
-            && !child_bindings.insert(record.child)
+            && (!binding_runs.insert(record.run)
+                || (!matches!(record.spec.target, crate::DelegationTarget::Resume { .. })
+                    && !created_children.insert(record.child)))
         {
             return Err(SessionError::InvalidHistory);
         }
@@ -2395,7 +2408,9 @@ fn initialize_new(connection: &Connection) -> Result<(), SessionError> {
     prepare_writer(connection)?;
     connection.execute_batch("CREATE TABLE session (id INTEGER PRIMARY KEY CHECK(id=1), header BLOB NOT NULL); CREATE TABLE entries (seq INTEGER PRIMARY KEY, body BLOB NOT NULL);
 CREATE UNIQUE INDEX request_keys ON entries(json_extract(body, '$.data.request.scope'), json_extract(body, '$.data.request.id')) WHERE json_extract(body, '$.kind') = 'turn_started' AND json_extract(body, '$.data.request') IS NOT NULL;
-CREATE UNIQUE INDEX delegation_children ON entries(json_extract(body, '$.data.record.child')) WHERE json_extract(body, '$.kind') = 'delegation_admitted';
+CREATE UNIQUE INDEX delegation_runs ON entries(json_extract(body, '$.data.record.run')) WHERE json_extract(body, '$.kind') = 'delegation_admitted';
+CREATE UNIQUE INDEX delegation_created_children ON entries(json_extract(body, '$.data.record.child')) WHERE json_extract(body, '$.kind') = 'delegation_admitted' AND json_extract(body, '$.data.record.spec.target.type') IN ('fresh', 'fork');
+CREATE UNIQUE INDEX child_bindings ON entries(json_extract(body, '$.data.record.run')) WHERE json_extract(body, '$.kind') = 'child_session_of';
 CREATE INDEX turn_ends ON entries(json_extract(body, '$.data.turn')) WHERE json_extract(body, '$.kind') = 'turn_ended';")?;
     Ok(())
 }
@@ -2454,6 +2469,8 @@ pub enum SessionError {
     StaleRecoveryPoint,
     #[error("delegation infrastructure failed: {0}")]
     DelegationInfrastructure(String),
+    #[error("child resume refused: {0}")]
+    DelegationTargetUnavailable(String),
     #[error("session does not exist")]
     NotFound,
     #[error("session has an active operation")]
@@ -2930,7 +2947,7 @@ mod tests {
         // Inject corruption below normal JSON-index validation, not a valid append.
         connection
             .execute_batch(
-                "DROP INDEX request_keys; DROP INDEX turn_ends; DROP INDEX delegation_children;",
+                "DROP INDEX request_keys; DROP INDEX turn_ends; DROP INDEX delegation_runs; DROP INDEX delegation_created_children; DROP INDEX child_bindings;",
             )
             .unwrap();
         connection

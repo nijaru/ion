@@ -44,6 +44,8 @@ jobs:
         run: python3 scripts/smoke_subagent_deadline.py
       - name: Live coding child steering smoke
         run: python3 scripts/smoke_subagent_steering.py
+      - name: Retained coding child conversation resume smoke
+        run: python3 scripts/smoke_subagent_resume.py
       - name: Retained service attachment SDK smoke
         run: target/debug/examples/service "$(mktemp -d)"
       - name: Embedded SDK custody smoke

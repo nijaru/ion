@@ -73,10 +73,10 @@ impl Gateway {
                     }
                     let ownership = task.ownership();
                     match parent.admit_delegation(self.site, task.spec, ownership) {
-                        Ok((record, context)) => {
+                        Ok((record, prepared)) => {
                             if let Some(slot) = task.background {
                                 let result = slot.install(BackgroundJob {
-                                    parent: parent.clone(), record: record.clone(), context,
+                                    parent: parent.clone(), record: record.clone(), prepared,
                                     work: task.work, parent_stop: stop.clone(),
                                 });
                                 match result {
@@ -100,10 +100,13 @@ impl Gateway {
                                 }
                             } else {
                                 let child_stop = stop.child_token();
-                                running = Some(Box::pin(run_child(record.clone(), context, task.work, child_stop)));
+                                running = Some(Box::pin(run_child(record.clone(), prepared, task.work, child_stop)));
                                 receipt = Some(DelegationReceipt { record, transferred: false, outcome: None });
                                 reply = Some(sender);
                             }
+                        }
+                        Err(SessionError::DelegationTargetUnavailable(message)) => {
+                            let _ = sender.send(Err(message));
                         }
                         Err(SessionError::InvalidForkPoint) => {
                             let _ = sender.send(Err("invalid fork point".into()));
@@ -146,7 +149,7 @@ impl Gateway {
 
 pub(super) async fn run_child(
     record: DelegationRecord,
-    context: Vec<crate::SessionEntry>,
+    prepared: ChildMaterialization,
     work: DelegationWork,
     stop: CancellationToken,
 ) -> Completion {
@@ -161,8 +164,8 @@ pub(super) async fn run_child(
             None,
         );
     }
-    let child = match CodingSession::materialize_delegation(&record, context) {
-        Ok(child) => Arc::new(child),
+    let child = match CodingSession::materialize_delegation(&record, prepared) {
+        Ok(child) => child,
         Err(error) => {
             let message = format!(
                 "child materialization failed at {}: {error}",

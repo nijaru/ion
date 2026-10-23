@@ -75,18 +75,18 @@ try {
     start('SURVIVE',{mode:'background'})
   ]);
   if (expired.is_error || survivor.is_error) return {unsupported:[expired,survivor]};
-  const ids = [expired.value.child_session,survivor.value.child_session];
+  const ids = [expired.value.id,survivor.value.id];
   await tools.exec({command:'while [ ! -f EXPIRE.ready ] || [ ! -f SURVIVE.ready ]; do sleep 0.01; done',timeout_ms:10000});
-  const brief = await tools.subagent({action:'wait',children:ids,timeout_ms:10});
-  const first = await tools.subagent({action:'wait',children:ids,timeout_ms:10000});
-  const retained = await tools.subagent({action:'status',child:ids[0]});
+  const brief = await tools.subagent({action:'wait',ids:ids,timeout_ms:10});
+  const first = await tools.subagent({action:'wait',ids:ids,timeout_ms:10000});
+  const retained = await tools.subagent({action:'status',id:ids[0]});
   const checked = await tools.exec({command:CHECK_COMMAND,timeout_ms:10000});
   await release('SURVIVE');
-  const survived = await tools.subagent({action:'wait',children:[ids[1]],timeout_ms:10000});
+  const survived = await tools.subagent({action:'wait',ids:[ids[1]],timeout_ms:10000});
   const cancelled = await start('CANCEL',{mode:'background',execution_timeout_ms:7200000});
   await tools.exec({command:'while [ ! -f CANCEL.ready ]; do sleep 0.01; done',timeout_ms:10000});
-  await tools.subagent({action:'cancel',child:cancelled.value.child_session});
-  const stopped = await tools.subagent({action:'wait',children:[cancelled.value.child_session],timeout_ms:10000});
+  await tools.subagent({action:'cancel',id:cancelled.value.id});
+  const stopped = await tools.subagent({action:'wait',ids:[cancelled.value.id],timeout_ms:10000});
   const foreground = await start('FOREGROUND',{execution_timeout_ms:3000});
   return {invalid,expired,survivor,brief,first,retained,checked,survived,stopped,foreground};
 } finally {
@@ -158,13 +158,13 @@ try {
         assert result["survivor"]["value"]["execution_timeout_ms"] == 1800000
         assert result["brief"]["value"]["wait_expired"] and not result["brief"]["is_error"]
         assert result["first"]["is_error"] and not result["first"]["value"]["wait_expired"]
-        timed_out, running = result["first"]["value"]["children"]
+        timed_out, running = result["first"]["value"]["runs"]
         assert timed_out["joined"] and not running["joined"], result["first"]
         assert result["retained"]["value"] == timed_out and result["retained"]["is_error"]
         assert not result["checked"]["is_error"] and (workspace / 'JOIN_OBSERVED').exists(), result["checked"]
-        [survived] = result["survived"]["value"]["children"]
+        [survived] = result["survived"]["value"]["runs"]
         assert not result["survived"]["is_error"] and survived["outcome"]["answer"] == "SURVIVOR_ANSWER"
-        [cancelled] = result["stopped"]["value"]["children"]
+        [cancelled] = result["stopped"]["value"]["runs"]
         foreground = result["foreground"]["value"]
         for receipt, expired in [(timed_out, True), (cancelled, False), (foreground, True)]:
             assert receipt["joined"] and receipt["outcome"]["kind"] == "joined", receipt
@@ -190,10 +190,10 @@ try {
         inspected = json.loads(run('--session', str(parent), 'inspect').stdout)
         assert inspected['entries'] == entries, 'CLI inspection dropped deadline facts'
         admissions = [entry["data"]["record"] for entry in entries if entry["kind"] == "delegation_admitted"]
-        outcomes = {entry["data"]["child"]: entry["data"]["outcome"] for entry in entries if entry["kind"] == "delegation_settled"}
+        outcomes = {entry["data"]["run"]: entry["data"]["outcome"] for entry in entries if entry["kind"] == "delegation_settled"}
         assert len(admissions) == len(outcomes) == 4, (admissions, outcomes)
         for receipt in (timed_out, survived, cancelled, foreground):
-            assert outcomes[receipt["child_session"]] == receipt["outcome"]
+            assert outcomes[receipt["id"]] == receipt["outcome"]
         print("coding deadlines: foreground/background stop and join native descendants; wait expiry and cancellation remain distinct, sibling/default budget survive, typed facts retained: OK")
     finally:
         server.shutdown()

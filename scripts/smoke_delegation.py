@@ -79,7 +79,7 @@ def main():
                 transfers = [entry for entry in entries if entry["kind"] == "delegation_transferred"]
                 if background:
                     assert len(transfers) == 1
-                    assert transfers[0]["data"] == {"child": record["child"], "owner": record["ownership"]["background"]["owner"]}
+                    assert transfers[0]["data"] == {"run": record["run"], "owner": record["ownership"]["background"]["owner"]}
                     assert any(entry["kind"] == "turn_ended" and entry["data"]["turn"] == (2 if fork else 1) and entry["data"]["reason"] == "completed" for entry in entries), "parent was not joined before background owner loss"
                 else:
                     assert not transfers and record["ownership"] == "foreground"
@@ -94,10 +94,10 @@ def main():
                         if entry["kind"] == "turn_started":
                             entry["data"].pop("request", None)
                     assert child_entries[:len(prefix)] == prefix, "copied coordinates or context changed"
-                    assert record["spec"]["context"] == {"fork": {"point": {"after_turn": 1}}}
+                    assert record["spec"]["target"] == {"type": "fork", "directory": str(state / "children"), "point": {"after_turn": 1}}
                 else:
                     prefix = []
-                    assert record["spec"]["context"] == "fresh"
+                    assert record["spec"]["target"] == {"type": "fresh", "directory": str(state / "children")}
                 assert child_entries[len(prefix)] == {"kind": "child_session_of", "data": {"record": record}}
                 child_turn = 2 if fork else 1
                 assert any(entry["kind"] == "assistant" and entry["data"]["turn"] == child_turn for entry in child_entries)
@@ -107,7 +107,7 @@ def main():
                 assert after_header["id"] == parent_header["id"]
                 assert [entry["data"]["record"] for entry in after if entry["kind"] == "delegation_admitted"] == records
                 index = next(index for index, entry in enumerate(after) if entry["kind"] == "delegation_settled")
-                assert after[index]["data"] == {"child": record["child"], "outcome": {"kind": "unknown"}}
+                assert after[index]["data"] == {"run": record["run"], "outcome": {"kind": "unknown"}}
                 expected_next = "turn_started" if background else "tool_result"
                 assert after[index + 1]["kind"] == expected_next, "unknown relationship must precede dependent admission/settlement"
                 if background:

@@ -320,7 +320,7 @@ os.write(2, b'MERGED_STDERR\\n')
                         if user == "PARENT_BG_EOF":
                             arguments["task"] += " " + "x" * 64000
                         if user == "PARENT_BG_WAIT":
-                            code = "const r=await tools.subagent(" + json.dumps(arguments) + "); await tools.exec({command:'while [ ! -f CHILD_BG_WAIT.ready ]; do sleep 0.01; done; touch parent.work',timeout_ms:10000}); const joined=await tools.subagent({action:'wait',children:[r.value.child_session]}); const same=await tools.subagent({action:'status',child:r.value.child_session}); const ack=await tools.subagent({action:'acknowledge',child:r.value.child_session}); return {joined:joined.value.children[0],same:same.value,ack:ack.value};"
+                            code = "const r=await tools.subagent(" + json.dumps(arguments) + "); await tools.exec({command:'while [ ! -f CHILD_BG_WAIT.ready ]; do sleep 0.01; done; touch parent.work',timeout_ms:10000}); const joined=await tools.subagent({action:'wait',ids:[r.value.id]}); const same=await tools.subagent({action:'status',id:r.value.id}); const ack=await tools.subagent({action:'acknowledge',id:r.value.id}); return {joined:joined.value.runs[0],same:same.value,ack:ack.value};"
                             delta = call("code_mode", {"code":code})
                         elif user == "PARENT_COMPOSED":
                             delta = call("code_mode", {"code":"const r=await tools.subagent(" + json.dumps(arguments) + "); return r.value;"})
@@ -483,7 +483,7 @@ os.write(2, b'MERGED_STDERR\\n')
             admitted = next(entry["data"]["record"] for entry in entries if entry["kind"] == "delegation_admitted")
             assert admitted["child"] == child_header["id"] == result["child_session"]
             assert admitted["site"]["session"] == parent_header["id"]
-            assert admitted["ownership"] == "foreground" and admitted["spec"]["context"] == "fresh"
+            assert admitted["ownership"] == "foreground" and admitted["spec"]["target"] == {"type":"fresh","directory":str(child_path.parent)}
             assert admitted["spec"]["reasoning"] == ("Low" if composed else "High")
             assert child_entries[0] == {"kind":"child_session_of","data":{"record":admitted}}
             assert Path(child_header["cwd"]).samefile(workspace)
@@ -507,7 +507,7 @@ os.write(2, b'MERGED_STDERR\\n')
         command(env, workspace, "--session", str(parent_path), "--reasoning", "high", "run", "PARENT_FORK")
         entries = facts(parent_path)[1]
         link = next(entry["data"]["record"] for entry in entries if entry["kind"] == "delegation_admitted")
-        assert link["spec"]["context"] == {"fork":{"point":{"before_turn":2}}}
+        assert link["spec"]["target"] == {"type":"fork","directory":str(Path(link["path"]).parent),"point":{"before_turn":2}}
         assert link["spec"]["reasoning"] == "High"
 
         # Parent and child actually overlap, then wait/status/ack return one report.
@@ -535,8 +535,8 @@ os.write(2, b'MERGED_STDERR\\n')
         parent_path = parent_for(rpc.ready["session"])
         until(lambda: root_ended(parent_path), "background parent did not finish")
         state = rpc.request("get_background")["data"]["background"]
-        job = state["children"][0]
-        child_id = job["receipt"]["record"]["child"]
+        job = state["runs"][0]
+        child_id = job["receipt"]["record"]["run"]
         assert not job["joined"] and job["receipt"]["transferred"]
         rpc.settled(1, "completed")
         # Abort a different active parent operation, not the transferred child.
@@ -555,21 +555,21 @@ os.write(2, b'MERGED_STDERR\\n')
         revision = rpc.request("get_background")["data"]["background"]["revision"]
         (workspace / "CHILD_BG_IDLE.release").touch()
         rpc.wait(lambda record: record.get("type") == "background_changed" and record["revision"] > revision)
-        joined = rpc.request("get_background")["data"]["background"]["children"][0]
+        joined = rpc.request("get_background")["data"]["background"]["runs"][0]
         assert joined["joined"] and joined["receipt"]["outcome"]["answer"] == "CHILD_ANSWER_CHILD_BG_IDLE"
-        assert rpc.request("acknowledge_background", child=child_id)["success"]
-        assert rpc.request("get_background")["data"]["background"]["children"] == []
-        assert not rpc.request("cancel_background", child=child_id)["success"]
+        assert rpc.request("acknowledge_background", run=child_id)["success"]
+        assert rpc.request("get_background")["data"]["background"]["runs"] == []
+        assert not rpc.request("cancel_background", run=child_id)["success"]
         # Explicit child cancellation does not close the application or its
         # parent Session. Its cancelled result remains available until ack.
         rpc.send("prompt", message="PARENT_BG_CANCEL")
         cancelled_pid = marker_pid("CHILD_BG_CANCEL")
-        cancel_job = rpc.request("get_background")["data"]["background"]["children"][0]
-        cancel_id = cancel_job["receipt"]["record"]["child"]
-        assert rpc.request("cancel_background", child=cancel_id)["success"]
+        cancel_job = rpc.request("get_background")["data"]["background"]["runs"][0]
+        cancel_id = cancel_job["receipt"]["record"]["run"]
+        assert rpc.request("cancel_background", run=cancel_id)["success"]
         until(lambda: dead(cancelled_pid), "explicit child cancellation did not join native work")
-        until(lambda: rpc.request("get_background")["data"]["background"]["children"][0]["joined"], "cancelled child not retained")
-        cancelled = rpc.request("get_background")["data"]["background"]["children"][0]
+        until(lambda: rpc.request("get_background")["data"]["background"]["runs"][0]["joined"], "cancelled child not retained")
+        cancelled = rpc.request("get_background")["data"]["background"]["runs"][0]
         assert cancelled["receipt"]["outcome"]["receipt"]["end"] == "cancelled"
         assert cancelled["receipt"]["outcome"]["answer"] is None
         until(lambda: not rpc.request("get_state")["data"]["busy"], "parent launch did not settle")

@@ -27,8 +27,7 @@ pub struct DelegationSite {
 /// not inherit live configuration, workspace, permissions or credentials.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct DelegationSpec {
-    pub context: DelegationContext,
-    pub directory: PathBuf,
+    pub target: DelegationTarget,
     pub cwd: Option<PathBuf>,
     pub model: ModelRef,
     pub reasoning: Reasoning,
@@ -40,13 +39,7 @@ pub struct DelegationSpec {
 
 impl DelegationSpec {
     pub(crate) fn valid(&self) -> bool {
-        self.directory.is_absolute()
-            && match self.context {
-                DelegationContext::Fresh => true,
-                DelegationContext::Fork {
-                    point: crate::ForkPoint::BeforeTurn(turn) | crate::ForkPoint::AfterTurn(turn),
-                } => turn != 0,
-            }
+        self.target.valid()
             && self.cwd.as_ref().is_none_or(|cwd| cwd.is_absolute())
             && self.reasoning.validate().is_ok()
             && self.execution_timeout_ms.is_none_or(|ms| ms != 0)
@@ -54,16 +47,74 @@ impl DelegationSpec {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum DelegationContext {
-    Fresh,
-    /// Share the actual parent's committed conversation/context prefix, including
-    /// historical instructions and tool output as data, not executable authority.
-    /// Applications must authorize this disclosure; it is not secret scrubbing.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum DelegationTarget {
+    Fresh {
+        directory: PathBuf,
+    },
+    /// Share the actual parent's settled context prefix as data, not authority.
     Fork {
+        directory: PathBuf,
         point: crate::ForkPoint,
     },
+    /// Locator and expected logical identity, never authority to continue work.
+    /// A new captured application must authorize disclosure and a new request.
+    Resume {
+        path: PathBuf,
+        session: uuid::Uuid,
+    },
+}
+
+impl DelegationTarget {
+    /// Resolve an existing conversation without taking execution ownership.
+    /// Admission later acquires its exclusive writer and rechecks identity and
+    /// settlement. A saved path/header cannot supply the application's authority.
+    pub fn resume(path: impl AsRef<std::path::Path>) -> Result<Self, crate::CodingSessionError> {
+        let path = path.as_ref().canonicalize()?;
+        let session = CodingSession::inspect_id(&path)?;
+        Ok(Self::Resume { path, session })
+    }
+
+    pub(crate) fn valid(&self) -> bool {
+        match self {
+            Self::Fresh { directory } => directory.is_absolute(),
+            Self::Fork { directory, point } => {
+                directory.is_absolute()
+                    && match point {
+                        crate::ForkPoint::BeforeTurn(turn) | crate::ForkPoint::AfterTurn(turn) => {
+                            *turn != 0
+                        }
+                    }
+            }
+            Self::Resume { path, session } => {
+                path.is_absolute() && path.parent().is_some() && !session.is_nil()
+            }
+        }
+    }
+
+    pub fn directory(&self) -> Option<&std::path::Path> {
+        match self {
+            Self::Fresh { directory } | Self::Fork { directory, .. } => Some(directory),
+            Self::Resume { path, .. } => path.parent(),
+        }
+    }
+
+    pub(crate) fn path(&self, child: uuid::Uuid) -> PathBuf {
+        match self {
+            Self::Fresh { directory } | Self::Fork { directory, .. } => {
+                directory.join(format!("{child}.sqlite"))
+            }
+            Self::Resume { path, .. } => path.clone(),
+        }
+    }
+}
+
+/// A resume holds the actual exclusive writer before parent intent is committed.
+/// New files are still materialized only after that intent.
+pub(crate) enum ChildMaterialization {
+    New(Vec<crate::SessionEntry>),
+    Resume(Arc<CodingSession>),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -78,11 +129,20 @@ pub enum DelegationOwnership {
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct DelegationRecord {
+    /// One managed request, distinct from the reusable child conversation.
+    pub run: uuid::Uuid,
     pub site: DelegationSite,
     pub child: uuid::Uuid,
     pub path: PathBuf,
     pub ownership: DelegationOwnership,
     pub spec: DelegationSpec,
+}
+
+impl DelegationRecord {
+    /// Correlation data for this run's request, not permission to dispatch it.
+    pub fn request_key(&self) -> crate::RequestKey {
+        request_key(self.run)
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -202,15 +262,15 @@ pub(crate) struct DelegationRequest {
 
 pub(crate) type AdmissionPort = mpsc::Sender<DelegationRequest>;
 
-pub(crate) fn request_key(child: uuid::Uuid) -> crate::RequestKey {
-    crate::RequestKey::new("ion.delegation".into(), child.to_string())
+pub(crate) fn request_key(run: uuid::Uuid) -> crate::RequestKey {
+    crate::RequestKey::new("ion.delegation".into(), run.to_string())
         .expect("UUID and fixed namespace satisfy request-key bounds")
 }
 
-/// One child request namespace per recorded child identity, not a transport ID.
+/// One request namespace per managed run, not per reusable Session or transport.
 pub(crate) fn request(record: &DelegationRecord) -> SubmissionRequest {
     SubmissionRequest {
-        key: request_key(record.child),
+        key: record.request_key(),
         input: record.spec.input.clone(),
     }
 }

@@ -291,11 +291,12 @@ and evidence retrieval retain original global coordinates and all alternatives.
 
 ## Managed delegation and coordination
 
-A managed subagent is another Session plus an explicit owned relationship. Record
-stable parent/child identity, the initiating occurrence, chosen context and
-capability/environment scope, ownership mode and observed outcome. Creation,
-restart and redelivery must find the same delegation, not accidentally spawn a
-second child. Parentage must be available to clients without parsing prose.
+A managed subagent uses an ordinary Session and explicit owned runs. Record each
+run's stable identity separately from its reusable child conversation, initiating
+occurrence, target/context, capability/environment scope, ownership and outcome.
+Exact redelivery at an invocation reconciles the recorded run; a new request has
+a new run and request key even when it reuses a Session. Parentage and every run's
+outcome must be available without parsing prose or overwriting previous reports.
 
 - **Foreground:** child work participates in parent settlement. Stop propagates;
   started child work joins before parent settlement. Cancelling a wait does not
@@ -309,6 +310,24 @@ unknown child effects explicit and reconciles the relationship before redispatch
 Fresh context and an explicit fork are different. Neither automatically grants
 parent secrets; confidentiality requires actual capability/environment isolation.
 Code Mode's nested tool calls are not child-agent Sessions.
+
+Explicit resume starts a new run in the same settled conversation, not a fork,
+replay or adoption of an earlier owner. A fresh authenticated application captures
+runtime, resources, route and grants before admission; saved paths, UUIDs, settings
+and ancestry supply no authority. Resolve the expected Session identity, acquire
+its exclusive writer and recheck identity, original cwd and settlement before
+committing parent intent. Reject the active parent as its own child, live writers,
+active Turns, pending shells and unresolved owned background work. This entrypoint
+does not implement unfinished-child recovery. Keep the writer through actual
+control/Core/native cleanup, so a later run cannot overlap that cleanup.
+
+Append the new managed request binding and applied model/reasoning without
+rewriting prior facts, request keys or selected context alternatives. Several
+runs may share one Session; settlements validate both its UUID and the requested
+run's key. An older completed receipt cannot satisfy a newer request. Old runs
+retain independent waiters, stop/control scopes and unread reports, each counting
+against custody until acknowledged. Acknowledgement releases report capacity,
+not the saved conversation. Child bindings are historical provenance, not grants.
 
 Execution budgets belong to the shared Host child lifecycle, not a tool's
 borrowed result wait or a client loop. `DelegationSpec.execution_timeout_ms`
@@ -329,8 +348,8 @@ Lost custody remains `Unknown`, not timed out, rolled back or safe to replay.
 
 Live child guidance uses the same Host input custody as root steering. A prepared
 Host recipe returns its cold task and an ephemeral control grant; background
-transfer retains the matching grant with the actual job and verifies child
-identity before admission. A grant is fenced to one model operation and stop scope,
+transfer retains the matching grant with the actual run and verifies both child
+Session and run request identity before admission. A grant is fenced to one model operation and stop scope,
 not a Session UUID or a serialized lease. It cannot follow rebinding or start a
 later Turn. There is no second steering queue, agent loop or direct Core-inbox
 bypass. Literal inputs share existing admission capacity, byte reservations and
@@ -374,14 +393,21 @@ child execution budget, default 30 minutes with `execution_timeout_ms` accepting
 1–7200000. This applies to foreground and background children independently of
 parent waits; general Host recipes choose their own positive optional budget.
 
-The child retains the same workspace and selected coding resources/tools; model
-arguments cannot supply endpoints, credentials, tool grants or arbitrary authority.
-Fresh context does not reset execution preferences. General Host recipes still
-configure context, model, environment and authority independently.
+The workspace defaults to the parent's; explicit `cwd` selects an absolute path
+or one relative to the parent. Load project/home resources for that workspace,
+retaining the captured command environment and selected native/external tools.
+Model arguments cannot supply endpoints, credentials, tool grants or arbitrary
+authority. General Host recipes configure target, model, environment and authority
+independently. Workspace selection and exclusive Session writers are not filesystem
+isolation or all-descendant quiescence.
 
 Fresh context and foreground waiting are defaults; an explicit fork selects an
-eligible committed prefix, and background execution transfers to the coding
-application's managed owner. The delegation destination is shared across runtime
+eligible committed prefix. `start(resume=path)` instead reuses a settled Session
+under a new run, requires its original cwd, and is mutually exclusive with context
+copying. Both locator and cwd accept at most 4096 UTF-8 bytes. As with a fresh
+start, omitted route/reasoning inherit the current request's captured configuration,
+not the saved child's preferences; explicit overrides receive the same preflight.
+Background execution transfers to the coding application's managed owner. The delegation destination is shared across runtime
 reload and binding replacement, not captured by child recipes. Parent cancellation,
 explicit child cancellation and application shutdown have distinct scopes.
 Parent Session shutdown does not stop transferred background children.
@@ -392,8 +418,10 @@ implied.
 
 Model-facing coding actions are start/list/status/wait/steer/cancel/acknowledge. A
 background start receipt means committed responsibility transfer, not completion.
-Wait and status return retained typed outcomes without consuming them. Wait
-selects 1–64 unique owned children and returns all selected statuses, in requested
+Receipts expose `id` as the run handle and `child_session` as the conversation
+UUID. Status/steer/cancel/acknowledge take `id`; wait takes `ids`, never conversation
+identity. Wait and status return retained typed outcomes without consuming them.
+Wait selects 1–64 unique owned runs and returns all selected statuses, in requested
 order, when any actual operation joins or one shared absolute wait budget expires.
 Validate the entire selection before returning even a ready report. The coding
 wait budget defaults to five minutes and accepts 1–600000 milliseconds; the shared
@@ -409,11 +437,11 @@ Acknowledgement releases only joined capacity. A child's original visible answer
 is retained only when its requested Turn completed and full Host/Core joining
 succeeded. Failure clears it; it is never reconstructed by reopening storage.
 Notifications are invalidations, not result delivery or completion proof.
-Coding `steer(child, message)` targets a live owned background child with nonblank
+Coding `steer(id, message)` targets a live owned background run with nonblank
 literal guidance of at most 64 KiB UTF-8. It neither changes captured model,
 resources/instructions or authority nor resets the execution deadline. Stopped,
-settled, unknown and acknowledged children reject new guidance; no implicit
-follow-up/resume is introduced. The general Host control grant is also available
+settled, unknown and acknowledged run IDs reject new guidance; steering never
+implicitly resumes a conversation. The general Host control grant is also available
 to a foreground child's application caller.
 
 Do not fabricate user instructions or successful answers to deliver

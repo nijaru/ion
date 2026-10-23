@@ -1,6 +1,6 @@
 use super::*;
 use futures_util::FutureExt;
-use ion_core::{BackgroundSlot, DelegationContext, ForkPoint, RequestKey};
+use ion_core::{BackgroundSlot, ForkPoint, RequestKey};
 use ion_host::BackgroundOwner;
 use std::time::Duration;
 
@@ -30,12 +30,7 @@ pub(super) async fn drain(control: &mut SessionControl) {
 
 #[tokio::test]
 async fn transfer_survives_parent_work_and_shutdown_and_retains_unread_results() {
-    for context in [
-        DelegationContext::Fresh,
-        DelegationContext::Fork {
-            point: ForkPoint::AfterTurn(1),
-        },
-    ] {
+    for context in [None, Some(ForkPoint::AfterTurn(1))] {
         let owner = Arc::new(BackgroundOwner::new(1).unwrap());
         let mut f = Fixture::with_owner(
             Wait::Repeat,
@@ -45,7 +40,7 @@ async fn transfer_survives_parent_work_and_shutdown_and_retains_unread_results()
             Some(owner.clone()),
             None,
         );
-        if matches!(context, DelegationContext::Fork { .. }) {
+        if context.is_some() {
             f.control
                 .submit_request(
                     &RequestKey::new("source".into(), "history".into()).unwrap(),
@@ -63,7 +58,7 @@ async fn transfer_survives_parent_work_and_shutdown_and_retains_unread_results()
         assert_eq!(links.len(), 1);
         assert!(links[0].transferred);
         assert!(links[0].outcome.is_none());
-        let child = links[0].record.child;
+        let child = links[0].record.run;
         assert_eq!(
             owner.snapshot().reserved,
             0,
@@ -100,7 +95,7 @@ async fn transfer_survives_parent_work_and_shutdown_and_retains_unread_results()
         );
         f.effect.release.notify_one();
         tokio::time::timeout(Duration::from_secs(5), async {
-            while !owner.snapshot().children[0].joined {
+            while !owner.snapshot().runs[0].joined {
                 owner.maintain().await;
             }
         })
@@ -134,19 +129,12 @@ async fn transfer_survives_parent_work_and_shutdown_and_retains_unread_results()
 #[tokio::test]
 async fn owner_shutdown_is_joined_even_when_its_wait_is_cancelled() {
     let owner = Arc::new(BackgroundOwner::new(1).unwrap());
-    let mut f = Fixture::with_owner(
-        Wait::Join,
-        true,
-        false,
-        DelegationContext::Fresh,
-        Some(owner.clone()),
-        None,
-    );
+    let mut f = Fixture::with_owner(Wait::Join, true, false, None, Some(owner.clone()), None);
     f.start();
     drain(&mut f.control).await;
     let mut started = f.effect.started.subscribe();
     started.wait_for(|started| *started).await.unwrap();
-    let child = f.session.view().unwrap().delegations()[0].record.child;
+    let child = f.session.view().unwrap().delegations()[0].record.run;
     let mut stopped = f.effect.stopped.subscribe();
     assert!(
         tokio::time::timeout(Duration::from_millis(20), owner.join_shutdown())
@@ -155,7 +143,7 @@ async fn owner_shutdown_is_joined_even_when_its_wait_is_cancelled() {
     );
     stopped.wait_for(|stopped| *stopped).await.unwrap();
     assert!(reserve(&owner).is_err());
-    assert!(!owner.snapshot().children[0].joined);
+    assert!(!owner.snapshot().runs[0].joined);
     assert!(owner.take(child).is_none());
     assert!(f.session.view().unwrap().delegations()[0].outcome.is_none());
     f.effect.release.notify_one();
@@ -180,20 +168,13 @@ async fn owner_shutdown_is_joined_even_when_its_wait_is_cancelled() {
 #[tokio::test]
 async fn transfer_failure_cannot_be_caught_to_continue_and_creates_no_child() {
     let owner = Arc::new(BackgroundOwner::new(1).unwrap());
-    let mut f = Fixture::with_owner(
-        Wait::Join,
-        false,
-        false,
-        DelegationContext::Fresh,
-        Some(owner.clone()),
-        None,
-    );
+    let mut f = Fixture::with_owner(Wait::Join, false, false, None, Some(owner.clone()), None);
     f.trigger("delegation_transferred");
     f.start();
     let report = f.settle().await;
     assert_eq!(f.effect.calls.load(Ordering::SeqCst), 0);
     assert!(!f.root.join("children").exists());
-    assert!(owner.snapshot().children.is_empty());
+    assert!(owner.snapshot().runs.is_empty());
     assert_eq!(owner.snapshot().reserved, 0);
     assert_eq!(f.parent.requests().len(), 1);
     assert!(report.updates.iter().any(|update| matches!(update, ControlUpdate::Settled(settlement)
@@ -208,20 +189,13 @@ async fn transfer_failure_cannot_be_caught_to_continue_and_creates_no_child() {
 #[tokio::test]
 async fn late_settlement_failure_closes_owner_without_any_result_reader() {
     let owner = Arc::new(BackgroundOwner::new(2).unwrap());
-    let mut f = Fixture::with_owner(
-        Wait::Join,
-        true,
-        false,
-        DelegationContext::Fresh,
-        Some(owner.clone()),
-        None,
-    );
+    let mut f = Fixture::with_owner(Wait::Join, true, false, None, Some(owner.clone()), None);
     f.start();
     drain(&mut f.control).await;
     let mut started = f.effect.started.subscribe();
     started.wait_for(|started| *started).await.unwrap();
     f.trigger("delegation_settled");
-    let child = f.session.view().unwrap().delegations()[0].record.child;
+    let child = f.session.view().unwrap().delegations()[0].record.run;
     f.effect.release.notify_one();
     // Do not poll maintain, join or any result. The lifetime failure guard closes
     // admission independently of those readers, after the actual failed commit.
@@ -250,27 +224,14 @@ async fn late_settlement_failure_closes_owner_without_any_result_reader() {
 #[tokio::test]
 async fn panic_closes_owner_and_stops_siblings_without_a_result_reader() {
     let owner = Arc::new(BackgroundOwner::new(2).unwrap());
-    let mut sibling = Fixture::with_owner(
-        Wait::Join,
-        true,
-        false,
-        DelegationContext::Fresh,
-        Some(owner.clone()),
-        None,
-    );
+    let mut sibling = Fixture::with_owner(Wait::Join, true, false, None, Some(owner.clone()), None);
     sibling.start();
     drain(&mut sibling.control).await;
     let mut started = sibling.effect.started.subscribe();
     started.wait_for(|started| *started).await.unwrap();
     let mut stopped = sibling.effect.stopped.subscribe();
-    let mut panics = Fixture::with_owner(
-        Wait::Panic,
-        false,
-        false,
-        DelegationContext::Fresh,
-        Some(owner.clone()),
-        None,
-    );
+    let mut panics =
+        Fixture::with_owner(Wait::Panic, false, false, None, Some(owner.clone()), None);
     panics.start();
     drain(&mut panics.control).await;
     tokio::time::timeout(Duration::from_secs(5), stopped.wait_for(|stopped| *stopped))
@@ -290,17 +251,17 @@ async fn panic_closes_owner_and_stops_siblings_without_a_result_reader() {
         .unwrap()
         .unwrap_err();
     let snapshot = owner.snapshot();
-    assert!(snapshot.children.iter().all(|child| child.joined));
+    assert!(snapshot.runs.iter().all(|child| child.joined));
     assert_eq!(
         snapshot
-            .children
+            .runs
             .iter()
             .filter(|child| child.error.is_some())
             .count(),
         1
     );
-    for child in snapshot.children {
-        let _result = owner.take(child.receipt.record.child).unwrap();
+    for child in snapshot.runs {
+        let _result = owner.take(child.receipt.record.run).unwrap();
     }
     assert!(owner.snapshot().failed);
     let roots = [sibling.root.clone(), panics.root.clone()];
@@ -340,14 +301,7 @@ impl ion_core::BackgroundSlot for BeforeTransfer {
 async fn cancellation_and_owner_close_before_transfer_refuse_cold_work() {
     for wait in [Wait::StopBeforeTransfer, Wait::CloseBeforeTransfer] {
         let owner = Arc::new(BackgroundOwner::new(1).unwrap());
-        let mut f = Fixture::with_owner(
-            wait,
-            false,
-            false,
-            DelegationContext::Fresh,
-            Some(owner.clone()),
-            None,
-        );
+        let mut f = Fixture::with_owner(wait, false, false, None, Some(owner.clone()), None);
         f.start();
         let report = f.settle().await;
         assert!(report.cleanup_errors.is_empty());
@@ -361,7 +315,7 @@ async fn cancellation_and_owner_close_before_transfer_refuse_cold_work() {
         assert!(!f.root.join("children").exists());
         assert_eq!(f.effect.calls.load(Ordering::SeqCst), 0);
         assert_eq!(owner.snapshot().reserved, 0);
-        assert!(owner.snapshot().children.is_empty());
+        assert!(owner.snapshot().runs.is_empty());
         let expected = if matches!(wait, Wait::StopBeforeTransfer) {
             TurnEndReason::Cancelled
         } else {
@@ -382,7 +336,7 @@ async fn cancelling_the_active_parent_after_transfer_does_not_cancel_the_child()
         Wait::HoldAfterTransfer,
         true,
         false,
-        DelegationContext::Fresh,
+        None,
         Some(owner.clone()),
         None,
     );
@@ -402,13 +356,13 @@ async fn cancelling_the_active_parent_after_transfer_does_not_cancel_the_child()
     assert!(f.session.view().unwrap().delegations()[0].outcome.is_none());
     f.effect.release.notify_one();
     tokio::time::timeout(Duration::from_secs(5), async {
-        while !owner.snapshot().children[0].joined {
+        while !owner.snapshot().runs[0].joined {
             owner.maintain().await;
         }
     })
     .await
     .unwrap();
-    let child = owner.snapshot().children[0].receipt.record.child;
+    let child = owner.snapshot().runs[0].receipt.record.run;
     let receipt = owner.take(child).unwrap().unwrap().receipt;
     assert!(
         matches!(receipt.outcome, Some(DelegationOutcome::Joined { execution_timed_out: false, receipt: Some(ref receipt), error: None, answer: Some(_) }) if receipt.end == Some(TurnEndReason::Completed))
@@ -423,14 +377,7 @@ async fn cancelling_the_active_parent_after_transfer_does_not_cancel_the_child()
 async fn wait_any_expires_without_stop_and_returns_a_joined_cancellation_before_running_work() {
     let owner = Arc::new(BackgroundOwner::new(3).unwrap());
     let mut fixtures: [Fixture; 2] = std::array::from_fn(|_| {
-        Fixture::with_owner(
-            Wait::Join,
-            true,
-            false,
-            DelegationContext::Fresh,
-            Some(owner.clone()),
-            None,
-        )
+        Fixture::with_owner(Wait::Join, true, false, None, Some(owner.clone()), None)
     });
     for fixture in &mut fixtures {
         fixture.start();
@@ -438,11 +385,9 @@ async fn wait_any_expires_without_stop_and_returns_a_joined_cancellation_before_
         let mut started = fixture.effect.started.subscribe();
         started.wait_for(|started| *started).await.unwrap();
     }
-    let selected = fixtures.each_ref().map(|fixture| {
-        fixture.session.view().unwrap().delegations()[0]
-            .record
-            .child
-    });
+    let selected = fixtures
+        .each_ref()
+        .map(|fixture| fixture.session.view().unwrap().delegations()[0].record.run);
     tokio::time::pause();
     let mut wait = Box::pin(owner.wait(&selected, Duration::from_millis(100)));
     assert!(wait.as_mut().now_or_never().is_none());
@@ -458,7 +403,7 @@ async fn wait_any_expires_without_stop_and_returns_a_joined_cancellation_before_
         .expect("unrelated custody changes must not reset the budget")
         .unwrap();
     assert!(report.wait_expired);
-    assert!(report.children.iter().all(|child| !child.joined));
+    assert!(report.runs.iter().all(|child| !child.joined));
     assert!(
         fixtures
             .iter()
@@ -474,10 +419,10 @@ async fn wait_any_expires_without_stop_and_returns_a_joined_cancellation_before_
     fixtures[1].effect.release.notify_one();
     let report = owner.wait(&selected, Duration::from_secs(5)).await.unwrap();
     assert!(!report.wait_expired);
-    assert_eq!(report.children[0].receipt.record.child, selected[0]);
-    assert!(!report.children[0].joined);
-    let cancelled = &report.children[1];
-    assert_eq!(cancelled.receipt.record.child, selected[1]);
+    assert_eq!(report.runs[0].receipt.record.run, selected[0]);
+    assert!(!report.runs[0].joined);
+    let cancelled = &report.runs[1];
+    assert_eq!(cancelled.receipt.record.run, selected[1]);
     assert!(cancelled.joined);
     assert!(matches!(
         &cancelled.receipt.outcome,
@@ -497,7 +442,7 @@ async fn wait_any_expires_without_stop_and_returns_a_joined_cancellation_before_
         .await
         .unwrap();
     assert!(!report.wait_expired);
-    assert_eq!(report.children[0].receipt, cancelled.receipt);
+    assert_eq!(report.runs[0].receipt, cancelled.receipt);
     assert_eq!(
         owner.take(selected[1]).unwrap().unwrap().receipt,
         cancelled.receipt
@@ -511,7 +456,7 @@ async fn wait_any_expires_without_stop_and_returns_a_joined_cancellation_before_
         .unwrap();
     assert!(!report.wait_expired);
     assert!(matches!(
-        &report.children[0].receipt.outcome,
+        &report.runs[0].receipt.outcome,
         Some(DelegationOutcome::Joined { answer: Some(answer), .. }) if answer == "two"
     ));
     owner.take(selected[0]).unwrap().unwrap();
@@ -528,19 +473,12 @@ async fn wait_any_expires_without_stop_and_returns_a_joined_cancellation_before_
 async fn background_waiters_keep_completion_when_the_last_waiter_is_cancelled() {
     for cancel_last in [false, true] {
         let owner = Arc::new(BackgroundOwner::new(1).unwrap());
-        let mut f = Fixture::with_owner(
-            Wait::Join,
-            true,
-            false,
-            DelegationContext::Fresh,
-            Some(owner.clone()),
-            None,
-        );
+        let mut f = Fixture::with_owner(Wait::Join, true, false, None, Some(owner.clone()), None);
         f.start();
         drain(&mut f.control).await;
         let mut started = f.effect.started.subscribe();
         started.wait_for(|started| *started).await.unwrap();
-        let child = f.session.view().unwrap().delegations()[0].record.child;
+        let child = f.session.view().unwrap().delegations()[0].record.run;
         let (finished, mut completions) = watch::channel(0);
         let mut tasks = Vec::new();
         for _ in 0..2 {
@@ -564,7 +502,7 @@ async fn background_waiters_keep_completion_when_the_last_waiter_is_cancelled() 
                 .await
                 .unwrap();
                 assert!(!report.wait_expired);
-                let joined = report.children.pop().unwrap();
+                let joined = report.runs.pop().unwrap();
                 assert!(joined.joined);
                 assert!(matches!(
                     joined.receipt.outcome,

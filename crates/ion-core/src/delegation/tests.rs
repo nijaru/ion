@@ -61,8 +61,7 @@ async fn delegation_requires_live_authority_and_a_valid_context() {
     let task = |context| {
         DelegationTask::new(
             DelegationSpec {
-                context,
-                directory: root.join("children"),
+                target: context,
                 cwd: None,
                 model: model.clone(),
                 reasoning: Reasoning::ProviderDefault,
@@ -77,7 +76,9 @@ async fn delegation_requires_live_authority_and_a_valid_context() {
     let untracked = crate::ToolInvocation::untracked(&call, CancellationToken::new());
     assert!(
         untracked
-            .delegate(task(DelegationContext::Fresh))
+            .delegate(task(DelegationTarget::Fresh {
+                directory: root.join("children")
+            }))
             .await
             .is_err()
     );
@@ -95,7 +96,8 @@ async fn delegation_requires_live_authority_and_a_valid_context() {
         .run(
             &session,
             &live,
-            invocation.delegate(task(DelegationContext::Fork {
+            invocation.delegate(task(DelegationTarget::Fork {
+                directory: root.join("children"),
                 point: crate::ForkPoint::AfterTurn(1),
             })),
         )
@@ -111,7 +113,9 @@ async fn delegation_requires_live_authority_and_a_valid_context() {
     );
     assert!(
         invocation
-            .delegate(task(DelegationContext::Fresh))
+            .delegate(task(DelegationTarget::Fresh {
+                directory: root.join("children")
+            }))
             .await
             .is_err(),
         "a surviving historical invocation cannot revive its closed port"
@@ -132,7 +136,9 @@ async fn delegation_requires_live_authority_and_a_valid_context() {
             .run(
                 &session,
                 &stop,
-                invocation.delegate(task(DelegationContext::Fresh))
+                invocation.delegate(task(DelegationTarget::Fresh {
+                    directory: root.join("children")
+                }))
             )
             .await
             .unwrap()

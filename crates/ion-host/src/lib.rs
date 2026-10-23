@@ -14,8 +14,8 @@ mod command_environment;
 mod control;
 mod credentials;
 pub use background::{
-    BackgroundChildFailure, BackgroundChildSnapshot, BackgroundDestination, BackgroundJobStatus,
-    BackgroundOwner, BackgroundSnapshot, BackgroundSummary, BackgroundWait,
+    BackgroundDestination, BackgroundJobStatus, BackgroundOwner, BackgroundRunFailure,
+    BackgroundRunSnapshot, BackgroundSnapshot, BackgroundSummary, BackgroundWait,
 };
 mod delegation;
 mod edit_diff;

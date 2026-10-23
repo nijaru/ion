@@ -775,7 +775,7 @@ fn handle_command(
                 for job in jobs {
                     ui.print(format!(
                         "{} · {} · parent {} · {:?}{} · {}",
-                        job.child,
+                        job.id,
                         if job.joined { "joined" } else { "unjoined" },
                         job.parent,
                         job.end,
@@ -793,7 +793,7 @@ fn handle_command(
                 match action {
                     "result" => {
                         let report = owner
-                            .child(child)
+                            .run(child)
                             .context("child is not owned here (unknown or acknowledged)")?;
                         anyhow::ensure!(report.joined, "child has not joined");
                         let outcome = report
