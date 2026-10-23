@@ -20,6 +20,8 @@ use tokio_util::sync::CancellationToken;
 use crate::{SessionSetup, image_input::ImageSource, question::TurnStopScope};
 
 mod admission;
+mod custody;
+use custody::{Custody, Input, InputContent, InputState, PendingInput, turn_observer};
 mod input;
 mod question;
 mod snapshot;
@@ -39,134 +41,6 @@ fn identity() -> u64 {
     NEXT_ID
         .try_update(Ordering::Relaxed, Ordering::Relaxed, |id| id.checked_add(1))
         .expect("Host identity exhausted")
-}
-
-struct Input<M> {
-    delivery: Delivery,
-    original: Option<UserInput>,
-    metadata: M,
-    reservation: InputReservation,
-    prepared: Option<AcceptedInput<InputId>>,
-    inflight: Option<InputReservation>,
-    instructions: String,
-    expanded: Option<String>,
-    acceptance: Option<InputAcceptance>,
-    withdrawn: Option<ReturnReason>,
-    steering_status: Option<SteeringMonitor>,
-}
-struct Custody<M> {
-    inputs: BTreeMap<InputId, Input<M>>,
-    updates: VecDeque<ControlUpdate<M>>,
-    steering_order: VecDeque<InputId>,
-    occupied: usize,
-    steering_target: Option<SteeringTarget>,
-}
-impl<M> Default for Custody<M> {
-    fn default() -> Self {
-        Self {
-            inputs: BTreeMap::new(),
-            updates: VecDeque::new(),
-            steering_order: VecDeque::new(),
-            occupied: 0,
-            steering_target: None,
-        }
-    }
-}
-impl<M> Custody<M> {
-    fn accept(&mut self, id: InputId, operation: OperationId, turn: u64) {
-        let input = self
-            .inputs
-            .get_mut(&id)
-            .expect("accepted input retains Host custody");
-        let acceptance = InputAcceptance { operation, turn };
-        input.acceptance = Some(acceptance);
-        if let Some(status) = &input.steering_status {
-            status.publish(SteeringStatus::Committed { acceptance });
-        }
-        input.withdrawn = None;
-        // Crucially before any fallible/provisional publication. Metadata remains
-        // separately budgeted until reliable settlement delivery.
-        input.original = None;
-        input.prepared = None;
-        input.inflight = None;
-        input.expanded = None;
-        input.instructions = String::new();
-        self.updates.push_back(ControlUpdate::Accepted {
-            id,
-            operation,
-            turn,
-        });
-    }
-    fn return_input(&mut self, id: InputId, reason: ReturnReason) {
-        let input = self
-            .inputs
-            .remove(&id)
-            .expect("returned input retains Host custody");
-        debug_assert!(input.acceptance.is_none());
-        if let Some(status) = &input.steering_status {
-            status.publish(SteeringStatus::Returned {
-                input: input
-                    .original
-                    .as_ref()
-                    .expect("unaccepted original")
-                    .clone(),
-                reason: ReturnSnapshot::from(&reason),
-            });
-        }
-        self.updates
-            .push_back(ControlUpdate::Returned(ReturnedInput {
-                id,
-                delivery: input.delivery,
-                input: input.original.expect("unaccepted original"),
-                metadata: input.metadata,
-                reason,
-                preparation_error: None,
-                reservation: Some(input.reservation),
-            }));
-    }
-    fn pop(&mut self) -> Option<ControlUpdate<M>> {
-        let mut update = self.updates.pop_front()?;
-        self.occupied -= update.release();
-        Some(update)
-    }
-}
-
-fn turn_observer<M: Send + 'static>(
-    custody: Arc<Mutex<Custody<M>>>,
-    observations: broadcast::Sender<Observation>,
-    root: Option<InputId>,
-    operation: OperationId,
-) -> impl FnMut(AgentEvent) + Send + 'static {
-    move |event| {
-        match &event {
-            AgentEvent::TurnAccepted { turn } => {
-                lock(&custody).accept(root.expect("new Turn retains a root"), operation, *turn);
-            }
-            AgentEvent::SteeringCommitted { turn, .. } => {
-                let mut custody = lock(&custody);
-                let id = custody
-                    .steering_order
-                    .pop_front()
-                    .expect("Core commits controlled FIFO steering");
-                custody.accept(id, operation, *turn);
-            }
-            AgentEvent::TurnEnded { .. } => {
-                let mut custody = lock(&custody);
-                if custody
-                    .steering_target
-                    .as_ref()
-                    .is_some_and(|target| target.operation == operation)
-                {
-                    custody.steering_target = None;
-                }
-            }
-            _ => {}
-        }
-        let _ = observations.send(Observation::Event {
-            operation,
-            event: Arc::new(event),
-        });
-    }
 }
 
 struct Active<M> {
@@ -293,7 +167,10 @@ impl<M: Serialize + Send + 'static> SessionControl<M> {
         let mut pending_steering = 0;
         let mut pending_follow_ups = 0;
         for (&id, input) in &custody.inputs {
-            if input.acceptance.is_some() || input.withdrawn.is_some() || active_root == Some(id) {
+            let Some(pending) = input.pending() else {
+                continue;
+            };
+            if pending.withdrawn.is_some() || active_root == Some(id) {
                 continue;
             }
             match input.delivery {
@@ -339,7 +216,7 @@ impl<M: Serialize + Send + 'static> SessionControl<M> {
             active
                 .root
                 .and_then(|id| custody.inputs.get(&id))
-                .and_then(|input| input.acceptance.map(|accepted| accepted.turn))
+                .and_then(|input| input.acceptance().map(|accepted| accepted.turn))
         })
     }
     fn work_stop(&self) -> CancellationToken {
@@ -453,17 +330,18 @@ impl<M: Serialize + Send + 'static> SessionControl<M> {
         let accepted_ids: Vec<_> = custody
             .inputs
             .iter()
-            .filter_map(|(&id, input)| input.acceptance.is_some().then_some(id))
+            .filter_map(|(&id, input)| input.acceptance().is_some().then_some(id))
             .collect();
         let mut accepted = Vec::new();
         for id in accepted_ids {
             let input = custody.inputs.remove(&id).unwrap();
+            let acceptance = input
+                .acceptance()
+                .expect("accepted metadata retains its Turn");
             accepted.push(AcceptedMetadata {
                 id,
                 metadata: input.metadata,
-                acceptance: input
-                    .acceptance
-                    .expect("accepted metadata retains its Turn"),
+                acceptance,
                 reservation: Some(input.reservation),
             });
         }
@@ -480,12 +358,8 @@ impl<M: Serialize + Send + 'static> SessionControl<M> {
             );
         }
         if outcome.failed() {
-            for input in custody
-                .inputs
-                .values_mut()
-                .filter(|input| input.acceptance.is_none())
-            {
-                input.withdrawn = Some(ReturnReason::Stopped);
+            for pending in custody.inputs.values_mut().filter_map(Input::pending_mut) {
+                pending.withdrawn = Some(ReturnReason::Stopped);
             }
             if let Some((_, preparation)) = &self.preparing {
                 preparation.request_stop();
@@ -576,7 +450,7 @@ impl<M> Drop for SessionControl<M> {
         let mut custody = lock(&self.custody);
         custody.steering_target = None;
         for input in custody.inputs.values() {
-            if input.acceptance.is_none()
+            if input.pending().is_some()
                 && let Some(status) = &input.steering_status
             {
                 status.publish(SteeringStatus::Unknown);

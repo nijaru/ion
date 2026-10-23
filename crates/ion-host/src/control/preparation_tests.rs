@@ -179,6 +179,11 @@ fn preparation_overlaps_turns_but_a_late_steer_never_retargets() {
         model.wait_calls(1).await;
         let target = fixture.control.current_operation().unwrap();
         let steer = fixture.control.submit(Delivery::Steer(target), image_prompt(), meta("  literal 🦀\n")).unwrap();
+        let snapshot = fixture.control.snapshot(|_| ()).unwrap();
+        let input = snapshot.inputs.iter().find(|input| input.id == steer).unwrap();
+        assert_eq!(input.phase, InputCustodyPhase::PendingPreparation);
+        assert!(matches!(&input.original, Some(UserInput::Prompt { text, images })
+            if text == "  original image\n" && matches!(&images[..], [ImageSource::Encoded { data, .. }] if data == PNG)));
         fixture.control.submit(Delivery::FollowUp, prompt("explicit next"), meta("followup")).unwrap();
         model.release();
         let (_, first) = settle(&mut fixture.control).await;

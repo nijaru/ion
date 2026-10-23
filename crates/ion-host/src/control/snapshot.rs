@@ -165,21 +165,29 @@ impl<M: Serialize + Send + 'static> SessionControl<M> {
         let inputs = custody
             .inputs
             .iter()
-            .map(|(&id, input)| InputSnapshot {
-                id,
-                delivery: input.delivery,
-                phase: if let Some(acceptance) = input.acceptance {
-                    InputCustodyPhase::Acknowledged(acceptance)
-                } else if input.inflight.is_some() || custody.steering_order.contains(&id) {
-                    InputCustodyPhase::InFlight
-                } else if input.prepared.is_some() {
-                    InputCustodyPhase::Prepared
-                } else {
-                    InputCustodyPhase::PendingPreparation
-                },
-                original: input.original.clone(),
-                metadata: metadata(&input.metadata),
-                withdrawal: input.withdrawn.as_ref().map(ReturnSnapshot::from),
+            .map(|(&id, input)| {
+                let (phase, original, withdrawal) = match &input.state {
+                    InputState::Accepted(acceptance) => {
+                        (InputCustodyPhase::Acknowledged(*acceptance), None, None)
+                    }
+                    InputState::Pending(pending) => (
+                        match pending.content {
+                            InputContent::Images(_) => InputCustodyPhase::PendingPreparation,
+                            InputContent::Ready(_) => InputCustodyPhase::Prepared,
+                            InputContent::Transferred { .. } => InputCustodyPhase::InFlight,
+                        },
+                        Some(pending.original.clone()),
+                        pending.withdrawn.as_ref().map(ReturnSnapshot::from),
+                    ),
+                };
+                InputSnapshot {
+                    id,
+                    delivery: input.delivery,
+                    phase,
+                    original,
+                    metadata: metadata(&input.metadata),
+                    withdrawal,
+                }
             })
             .collect();
         let operation_metadata = self.active.as_ref().and_then(|active| {

@@ -315,24 +315,28 @@ async fn acceptance_custody_precedes_progress_and_steering_uses_fifo_ids() {
     model.release();
     // Committed steering causes another model request, even with a final reply.
     model.wait_calls(2).await;
-    {
-        let custody = lock(&fixture.control.custody);
-        for id in [root, first, second] {
-            let input = &custody.inputs[&id];
-            assert!(input.acceptance.is_some());
-            assert!(input.original.is_none());
-            assert!(input.inflight.is_none());
-        }
-        let ids = custody
-            .updates
-            .iter()
-            .filter_map(|update| match update {
-                ControlUpdate::Accepted { id, .. } => Some(*id),
-                _ => None,
+    let snapshot = fixture.control.snapshot(|m| m.literal.clone()).unwrap();
+    for id in [root, first, second] {
+        let input = snapshot.inputs.iter().find(|input| input.id == id).unwrap();
+        assert_eq!(
+            input.phase,
+            InputCustodyPhase::Acknowledged(InputAcceptance {
+                operation: op,
+                turn: 1
             })
-            .collect::<Vec<_>>();
-        assert_eq!(ids, [root, first, second]);
+        );
+        assert!(input.original.is_none());
+        assert!(input.withdrawal.is_none());
     }
+    let ids = snapshot
+        .updates
+        .iter()
+        .filter_map(|update| match update {
+            UpdateSnapshot::Accepted { id, .. } => Some(*id),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(ids, [root, first, second]);
     // Stop racing committed steering cannot turn it back into recoverable input.
     fixture.control.clear_queue();
     fixture.control.request_stop();

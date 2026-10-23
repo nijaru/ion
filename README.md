@@ -413,8 +413,8 @@ key and exact text, not a new identity or assumed exactly-once tool effects.
 
 Inputs share a process-local 32 MiB allowance for originals, prepared messages and
 client metadata, plus 64 retained admission/result slots. Route/image checks apply
-before acknowledgement. Accepted metadata stays reserved through settlement;
-returned input stays reserved until handoff. These are custody bounds, not
+before acknowledgement. Execution completion does not release unread settlement
+metadata; it stays reserved until handoff, as does returned input. These are custody bounds, not
 context-fit or process-memory guarantees.
 
 Output pressure alone never cancels work. `ready.publication` advertises a

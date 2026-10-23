@@ -115,8 +115,12 @@ async fn joined_inbox_reconciliation_preserves_consumed_guidance_after_acknowled
     {
         let mut custody = lock(&f.control.custody);
         let input = custody.inputs.get_mut(&receipt.id).unwrap();
-        input.acceptance = None;
-        input.original = Some(UserInput::Message(message));
+        input.state = InputState::Pending(Box::new(PendingInput {
+            original: UserInput::Message(message),
+            instructions: String::new(),
+            content: InputContent::Transferred { _reservation: None },
+            withdrawn: None,
+        }));
         input
             .steering_status
             .as_ref()

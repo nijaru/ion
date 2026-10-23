@@ -3,8 +3,12 @@ use super::*;
 
 struct Admission {
     reservation: InputReservation,
-    expanded: Option<String>,
-    prepared: Option<Message>,
+    content: AdmissionContent,
+}
+
+enum AdmissionContent {
+    Images(String),
+    Ready(Message),
 }
 
 impl<M: Serialize + Send + 'static> SessionControl<M> {
@@ -23,14 +27,8 @@ impl<M: Serialize + Send + 'static> SessionControl<M> {
             })),
             Ok(Admission {
                 reservation,
-                expanded,
-                prepared,
+                content,
             }) => {
-                let phase = if prepared.is_some() {
-                    InputPhase::Queued
-                } else {
-                    InputPhase::Preparing
-                };
                 let mut custody = lock(&self.custody);
                 // A live steering producer may have filled capacity during validation.
                 if custody.occupied == MAX_ADMISSIONS {
@@ -43,21 +41,25 @@ impl<M: Serialize + Send + 'static> SessionControl<M> {
                 }
                 // Identity order is admission order, not validation start order.
                 let id = InputId(identity());
-                let prepared = match prepared
-                    .map(|message| {
-                        self.budget
+                let (content, phase) = match content {
+                    AdmissionContent::Images(text) => {
+                        (InputContent::Images(text), InputPhase::Preparing)
+                    }
+                    AdmissionContent::Ready(message) => {
+                        match self
+                            .budget
                             .admit(message, id, self.setup.runtime.agent.limits())
-                    })
-                    .transpose()
-                {
-                    Ok(prepared) => prepared,
-                    Err(reason) => {
-                        return Err(Box::new(RejectedInput {
-                            delivery,
-                            input,
-                            metadata,
-                            reason: reason.into(),
-                        }));
+                        {
+                            Ok(prepared) => (InputContent::Ready(prepared), InputPhase::Queued),
+                            Err(reason) => {
+                                return Err(Box::new(RejectedInput {
+                                    delivery,
+                                    input,
+                                    metadata,
+                                    reason: reason.into(),
+                                }));
+                            }
+                        }
                     }
                 };
                 custody.occupied += 1;
@@ -65,15 +67,14 @@ impl<M: Serialize + Send + 'static> SessionControl<M> {
                     id,
                     Input {
                         delivery,
-                        original: Some(input),
                         metadata,
                         reservation,
-                        prepared,
-                        inflight: None,
-                        instructions: self.setup.resources.instructions().to_owned(),
-                        expanded,
-                        acceptance: None,
-                        withdrawn: None,
+                        state: InputState::Pending(Box::new(PendingInput {
+                            original: input,
+                            instructions: self.setup.resources.instructions().to_owned(),
+                            content,
+                            withdrawn: None,
+                        })),
                         steering_status: None,
                     },
                 );
@@ -138,11 +139,13 @@ impl<M: Serialize + Send + 'static> SessionControl<M> {
                 }));
             }
         };
-        let prepared = match self.budget.admit(
-            admission.prepared.expect("literal messages are prepared"),
-            id,
-            self.setup.runtime.agent.limits(),
-        ) {
+        let AdmissionContent::Ready(message) = admission.content else {
+            unreachable!("literal messages are prepared")
+        };
+        let prepared = match self
+            .budget
+            .admit(message, id, self.setup.runtime.agent.limits())
+        {
             Ok(prepared) => prepared,
             Err(reason) => {
                 return Err(Box::new(RejectedInput {
@@ -165,15 +168,16 @@ impl<M: Serialize + Send + 'static> SessionControl<M> {
             id,
             Input {
                 delivery: Delivery::Start,
-                original: Some(original),
                 metadata,
                 reservation: admission.reservation,
-                prepared: None,
-                inflight: Some(inflight),
-                instructions: instructions.clone(),
-                expanded: None,
-                acceptance: None,
-                withdrawn: None,
+                state: InputState::Pending(Box::new(PendingInput {
+                    original,
+                    instructions: instructions.clone(),
+                    content: InputContent::Transferred {
+                        _reservation: Some(inflight),
+                    },
+                    withdrawn: None,
+                })),
                 steering_status: None,
             },
         );
@@ -235,7 +239,12 @@ impl<M: Serialize + Send + 'static> SessionControl<M> {
                     }
                     Err(reason) => Err(Box::new(RejectedInput {
                         delivery: Delivery::Start,
-                        input: input.original.expect("unaccepted original"),
+                        input: match input.state {
+                            InputState::Pending(pending) => pending.original,
+                            InputState::Accepted(_) => {
+                                unreachable!("rejected request was not accepted")
+                            }
+                        },
                         metadata: input.metadata,
                         reason: reason.into(),
                     })),
@@ -349,8 +358,8 @@ impl<M: Serialize + Send + 'static> SessionControl<M> {
             }
         }
         let limits = self.setup.runtime.agent.limits();
-        let (message, expanded, ready) = match input {
-            UserInput::Message(message) => (message.clone(), None, true),
+        let (message, expanded) = match input {
+            UserInput::Message(message) => (message.clone(), None),
             UserInput::Prompt { text, images } => {
                 ensure!(
                     !text.trim().is_empty() || !images.is_empty(),
@@ -390,17 +399,17 @@ impl<M: Serialize + Send + 'static> SessionControl<M> {
                 };
                 (
                     Message::user_input(reserve_text, []),
-                    Some(expanded),
-                    images.is_empty(),
+                    (!images.is_empty()).then_some(expanded),
                 )
             }
         };
         let reservation = self.budget.reserve(&message, &(input, metadata), limits)?;
-        let prepared = if ready { Some(message) } else { None };
         Ok(Admission {
             reservation,
-            expanded,
-            prepared,
+            content: match expanded {
+                Some(text) => AdmissionContent::Images(text),
+                None => AdmissionContent::Ready(message),
+            },
         })
     }
 

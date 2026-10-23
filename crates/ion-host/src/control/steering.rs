@@ -144,15 +144,14 @@ impl<M: Serialize + Send + 'static> TurnSteering<M> {
             id,
             Input {
                 delivery,
-                original: Some(input),
                 metadata,
                 reservation,
-                prepared: Some(prepared),
-                inflight: None,
-                instructions: String::new(),
-                expanded: None,
-                acceptance: None,
-                withdrawn: None,
+                state: InputState::Pending(Box::new(PendingInput {
+                    original: input,
+                    instructions: String::new(),
+                    content: InputContent::Ready(prepared),
+                    withdrawn: None,
+                })),
                 steering_status: Some(SteeringMonitor {
                     status,
                     changed: changed.clone(),

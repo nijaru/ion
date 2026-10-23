@@ -130,6 +130,8 @@ provide alternate engines.
 Input custody is a transfer protocol, not a requirement to store every stage in
 one queue. Shared control retains originals until Core confirms committed
 acceptance; Core may hold transferred steering until an atomic assistant/input commit.
+Acknowledgement releases the pending payload before provisional publication;
+metadata remains in reliable custody until explicit settlement delivery.
 Only the current custodian can dispatch or return an input. An application
 coordinator may compose runs, not implement a second model → tools → model loop.
 

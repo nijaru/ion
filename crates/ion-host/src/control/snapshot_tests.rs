@@ -33,6 +33,12 @@ async fn snapshots_retain_bounded_recovery_without_consuming_owner_results() {
             )
             .unwrap();
     }
+    let queued = control.snapshot(|m| m.literal.clone()).unwrap();
+    for input in queued.inputs.iter().filter(|input| input.id != root) {
+        assert_eq!(input.phase, InputCustodyPhase::Prepared);
+        assert!(matches!(input.original, Some(UserInput::Message(_))));
+        assert!(input.withdrawal.is_none());
+    }
     control.clear_queue();
     model.wait_calls(1).await;
     model.release();
@@ -99,6 +105,70 @@ async fn snapshots_retain_bounded_recovery_without_consuming_owner_results() {
     }
     assert_eq!(model.calls.load(Ordering::SeqCst), 2);
     control.shutdown().await;
+}
+
+#[tokio::test]
+async fn acknowledged_metadata_keeps_its_byte_reservation_until_settlement_transfer() {
+    let model = Model::new(1);
+    let mut fixture = Fixture::new(model.clone(), false);
+    let message = Message::user_input("root".into(), []);
+    let input = UserInput::Message(message.clone());
+    let metadata = meta(&"m".repeat(8192));
+    let retained = serde_json::to_vec(&(&message, &(&input, &metadata)))
+        .unwrap()
+        .len();
+    // Room for the separately admitted root message, but not this 2 KiB probe
+    // while the original metadata reservation remains in Host custody.
+    let budget = InputBudget::new(retained + 1024);
+    fixture.control.budget = budget.clone();
+    let probe = || {
+        budget.admit(
+            Message::user_input("p".repeat(2048), []),
+            (),
+            AgentLimits::default(),
+        )
+    };
+    let root = fixture
+        .control
+        .submit(Delivery::Start, input, metadata)
+        .unwrap();
+    model.wait_calls(1).await;
+    let snapshot = fixture.control.snapshot(|_| ()).unwrap();
+    assert!(matches!(
+        snapshot.inputs[0].phase,
+        InputCustodyPhase::Acknowledged(_)
+    ));
+    assert!(matches!(
+        probe(),
+        Err(CodingAgentError::InputQueueFull { .. })
+    ));
+
+    model.release();
+    tokio::time::timeout(Duration::from_secs(5), async {
+        while fixture.control.is_busy() {
+            fixture.control.maintain().await;
+        }
+    })
+    .await
+    .unwrap();
+    assert!(matches!(
+        probe(),
+        Err(CodingAgentError::InputQueueFull { .. })
+    ));
+    let mut accepted = Vec::new();
+    while let Some(update) = fixture.control.take_update() {
+        if let ControlUpdate::Settled(settlement) = update {
+            accepted.extend(settlement.accepted);
+        }
+    }
+    assert_eq!(accepted.len(), 1);
+    assert_eq!(accepted[0].id, root);
+    assert_eq!(accepted[0].metadata.literal, "m".repeat(8192));
+    assert!(
+        probe().is_ok(),
+        "only explicit transfer releases Host byte custody"
+    );
+    fixture.control.shutdown().await;
 }
 
 #[tokio::test]

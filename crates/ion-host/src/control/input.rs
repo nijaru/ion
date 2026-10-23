@@ -16,12 +16,8 @@ impl<M: Serialize + Send + 'static> SessionControl<M> {
             preparing.request_stop();
         }
         let mut custody = lock(&self.custody);
-        for input in custody
-            .inputs
-            .values_mut()
-            .filter(|input| input.acceptance.is_none())
-        {
-            input.withdrawn = Some(ReturnReason::Stopped);
+        for pending in custody.inputs.values_mut().filter_map(Input::pending_mut) {
+            pending.withdrawn = Some(ReturnReason::Stopped);
         }
         drop(custody);
         self.withdraw_inbox(ReturnReason::Stopped);
@@ -33,11 +29,11 @@ impl<M: Serialize + Send + 'static> SessionControl<M> {
         let mut custody = lock(&self.custody);
         let active_root = self.active.as_ref().and_then(|active| active.root);
         for (&id, input) in &mut custody.inputs {
-            if input.acceptance.is_none()
-                && input.delivery != Delivery::Start
+            if input.delivery != Delivery::Start
                 && active_root != Some(id)
+                && let Some(pending) = input.pending_mut()
             {
-                input.withdrawn = Some(ReturnReason::Cleared);
+                pending.withdrawn = Some(ReturnReason::Cleared);
             }
         }
         if let Some((id, preparation)) = &self.preparing
@@ -61,11 +57,15 @@ impl<M: Serialize + Send + 'static> SessionControl<M> {
             let mut custody = lock(&self.custody);
             let (&id, input) = custody.inputs.iter_mut().rev().find(|(id, input)| {
                 input.delivery == Delivery::FollowUp
-                    && input.acceptance.is_none()
-                    && input.withdrawn.is_none()
+                    && input
+                        .pending()
+                        .is_some_and(|pending| pending.withdrawn.is_none())
                     && active_root != Some(**id)
             })?;
-            input.withdrawn = Some(ReturnReason::Cleared);
+            input
+                .pending_mut()
+                .expect("selected pending follow-up")
+                .withdrawn = Some(ReturnReason::Cleared);
             id
         };
         if let Some((preparing, preparation)) = &self.preparing
@@ -109,8 +109,8 @@ impl<M: Serialize + Send + 'static> SessionControl<M> {
             .inputs
             .iter()
             .filter_map(|(&id, input)| {
-                (input.acceptance.is_none()
-                    && input.withdrawn.is_some()
+                let pending = input.pending()?;
+                (pending.withdrawn.is_some()
                     && !custody.steering_order.contains(&id)
                     && self
                         .preparing
@@ -128,6 +128,8 @@ impl<M: Serialize + Send + 'static> SessionControl<M> {
                 .inputs
                 .get_mut(&id)
                 .unwrap()
+                .pending_mut()
+                .expect("selected pending withdrawal")
                 .withdrawn
                 .take()
                 .unwrap();
@@ -141,7 +143,7 @@ impl<M: Serialize + Send + 'static> SessionControl<M> {
             .iter()
             .filter_map(|(&id, input)| match input.delivery {
                 Delivery::Steer(target)
-                    if input.acceptance.is_none()
+                    if input.pending().is_some()
                         && self.current_operation() != Some(target)
                         && self
                             .preparing
@@ -159,15 +161,15 @@ impl<M: Serialize + Send + 'static> SessionControl<M> {
 
         // Preparation overlaps Core execution and never occupies Core's slot.
         if self.preparing.is_none()
-            && let Some((&id, input)) = custody.inputs.iter().find(|(_, input)| {
-                input.acceptance.is_none()
-                    && input.prepared.is_none()
-                    && input.expanded.is_some()
-                    && input.withdrawn.is_none()
-                    && input.original.is_some()
+            && let Some((id, pending, text)) = custody.inputs.iter().find_map(|(&id, input)| {
+                let pending = input.pending()?;
+                let InputContent::Images(text) = &pending.content else {
+                    return None;
+                };
+                pending.withdrawn.is_none().then_some((id, pending, text))
             })
         {
-            let UserInput::Prompt { images, .. } = input.original.as_ref().unwrap() else {
+            let UserInput::Prompt { images, .. } = &pending.original else {
                 unreachable!("only raw prompts need preparation")
             };
             let mut sources = images.clone();
@@ -183,7 +185,7 @@ impl<M: Serialize + Send + 'static> SessionControl<M> {
                         .join(&*path);
                 }
             }
-            let text = input.expanded.as_ref().unwrap().clone();
+            let text = text.clone();
             let model = self.setup.runtime.agent.model().clone();
             let limits = self.setup.runtime.agent.limits();
             self.preparing = Some((
@@ -209,21 +211,25 @@ impl<M: Serialize + Send + 'static> SessionControl<M> {
                 .iter()
                 .filter_map(|(&id, input)| {
                     (input.delivery == Delivery::Steer(active.id)
-                        && input.acceptance.is_none()
-                        && !custody.steering_order.contains(&id))
+                        && input.pending().is_some_and(|pending| {
+                            !matches!(pending.content, InputContent::Transferred { .. })
+                        }))
                     .then_some(id)
                 })
                 .collect();
             for id in ids {
-                let input = custody.inputs.get_mut(&id).unwrap();
-                if input.withdrawn.is_some() {
+                let pending = custody
+                    .inputs
+                    .get_mut(&id)
+                    .unwrap()
+                    .pending_mut()
+                    .expect("selected pending steering");
+                if pending.withdrawn.is_some() {
                     continue;
                 }
-                let Some(prepared) = input.prepared.take() else {
+                let Some(prepared) = pending.take_ready() else {
                     break;
                 };
-                // Prevent the preparation scan from treating transferred input as raw.
-                input.expanded = None;
                 custody.steering_order.push_back(id);
                 active.inbox.push_admitted(prepared);
             }
@@ -231,25 +237,32 @@ impl<M: Serialize + Send + 'static> SessionControl<M> {
         if self.active.is_none() && !self.closed && !self.stop_requested {
             let next = self.starting.or_else(|| {
                 custody.inputs.iter().find_map(|(&id, input)| {
-                    (input.delivery == Delivery::FollowUp && input.withdrawn.is_none())
-                        .then(|| (id, OperationId(identity())))
+                    (input.delivery == Delivery::FollowUp
+                        && input
+                            .pending()
+                            .is_some_and(|pending| pending.withdrawn.is_none()))
+                    .then(|| (id, OperationId(identity())))
                 })
             });
             if let Some((root, operation)) = next
                 && let Some(prepared) = custody
                     .inputs
                     .get_mut(&root)
-                    .and_then(|input| input.prepared.take())
+                    .and_then(|input| input.pending_mut()?.take_ready())
             {
                 let (message, _, reservation) = prepared.into_parts();
                 // Core owns its message; the Host original and metadata remain
                 // until the post-persistence callback, without text matching.
-                let input = custody.inputs.get_mut(&root).unwrap();
-                input.inflight = Some(reservation);
-                // Transferred roots are no longer preparation candidates, even
-                // before Core's durable acceptance callback releases the original.
-                input.expanded = None;
-                let instructions = input.instructions.clone();
+                let pending = custody
+                    .inputs
+                    .get_mut(&root)
+                    .unwrap()
+                    .pending_mut()
+                    .expect("dispatched root retains its original until acceptance");
+                pending.content = InputContent::Transferred {
+                    _reservation: Some(reservation),
+                };
+                let instructions = pending.instructions.clone();
                 let inbox = Arc::new(SteeringInbox::new(
                     self.setup.runtime.agent.limits(),
                     self.budget.clone(),
@@ -298,10 +311,14 @@ impl<M: Serialize + Send + 'static> SessionControl<M> {
             .inputs
             .get_mut(&id)
             .expect("preparation retains original");
-        let reason = input.withdrawn.take().or_else(|| {
+        let delivery = input.delivery;
+        let pending = input
+            .pending_mut()
+            .expect("preparation precedes acknowledgement");
+        let reason = pending.withdrawn.take().or_else(|| {
             if self.stop_requested || self.closed {
                 Some(ReturnReason::Stopped)
-            } else if let Delivery::Steer(target) = input.delivery {
+            } else if let Delivery::Steer(target) = delivery {
                 (self.active.as_ref().map(|active| active.id) != Some(target)
                     && self.starting.map(|(_, op)| op) != Some(target))
                 .then_some(ReturnReason::TurnEnded)
@@ -321,8 +338,7 @@ impl<M: Serialize + Send + 'static> SessionControl<M> {
                     .admit(message, id, self.setup.runtime.agent.limits())?)
             }) {
                 Ok(prepared) => {
-                    let delivery = input.delivery;
-                    input.prepared = Some(prepared);
+                    pending.content = InputContent::Ready(prepared);
                     custody.updates.push_back(ControlUpdate::Input {
                         id,
                         delivery,
