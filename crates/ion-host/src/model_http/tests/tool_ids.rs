@@ -122,7 +122,7 @@ fn later_unsigned_id_collisions_do_not_rewrite_an_earlier_wire_prefix() {
 }
 
 fn signed_call(request: &ModelRequest, id: &str) -> Message {
-    let mut state = AnthropicState::default();
+    let mut state = anthropic_state(request);
     for event in [
         json!({"type":"message_start","message":{"type":"message","role":"assistant",
             "model":"test-model","content":[],"stop_reason":null,

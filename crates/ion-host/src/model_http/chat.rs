@@ -25,7 +25,7 @@ pub(super) fn chat_body(request: &ModelRequest, wire: HttpWire) -> Result<Value,
     }
     messages.extend(wire_messages(request, wire)?);
     body["model"] = json!(request.route.effective.model);
-    body["messages"] = json!(messages);
+    body["messages"] = Value::Array(messages);
     body["stream"] = json!(true);
     body["stream_options"] = json!({"include_usage":true});
     if wire == HttpWire::OpenRouterChat

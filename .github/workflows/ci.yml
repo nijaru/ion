@@ -56,6 +56,8 @@ jobs:
         run: sudo apt-get update && sudo apt-get install -y tmux
       - name: Headless coding and recovery smoke
         run: bash scripts/smoke.sh && python3 scripts/smoke_headless.py
+      - name: Anthropic signed replay and migration smoke
+        run: python3 scripts/smoke_anthropic.py
       - name: Fixed coding qualification smoke
         run: python3 scripts/smoke_coding.py
       - name: Native web retrieval smoke

@@ -879,7 +879,9 @@ Preserve or reject opaque data explicitly rather than truncating it to fit.
 Human-readable
 thinking differs from signatures/encrypted replay and returns to providers only
 through adapter-owned replay. It counts as observed output whether displayed or
-not. Preserve signed prefixes or report reset/incompatibility; never reset inside
+not. Capture replay fingerprints from the prepared wire request, not a later
+reconstruction of neutral history. Preserve signed prefixes or report
+reset/incompatibility; never reset inside
 an outstanding signed exchange. Destination adapters may alias unsigned migrated
 tool IDs, pairing calls/results through their original identities without changing
 committed facts. Allocate collision-free aliases without rebinding earlier encoded

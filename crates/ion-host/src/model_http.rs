@@ -213,9 +213,11 @@ impl ModelService for HttpModelService {
                 body["cache_control"] = json!({"type":"ephemeral"});
             }
             let inline_tools = anthropic_body_uses_inline_tools(&body);
-            let anthropic_prefix = (self.wire == HttpWire::AnthropicMessages)
-                .then(|| anthropic_body_prefix_digest(&body))
-                .transpose()?;
+            let mut decoder = if self.wire.is_chat() {
+                Decoder::Chat(ChatState::new(self.wire))
+            } else {
+                Decoder::Anthropic(AnthropicState::new(anthropic_body_prefix_digest(&body)?))
+            };
             // Dropping this future drops credential lookup. The caller owns cancellation;
             // no provider request is spawned into an independent task.
             let key = self
@@ -330,7 +332,6 @@ impl ModelService for HttpModelService {
                 let mut bytes = response.bytes_stream();
                 let mut frame = Vec::new();
                 let mut budget = StreamBudget::default();
-                let mut decoder = if wire.is_chat() { Decoder::Chat(ChatState::new(wire)) } else { Decoder::Anthropic(AnthropicState::new(anthropic_prefix)) };
                 while let Some(next) = tokio::time::timeout(PROVIDER_IDLE_TIMEOUT, bytes.next())
                     .await
                     .map_err(|_| error(ProviderErrorKind::Timeout, "provider stream idle timeout"))? {
@@ -1057,6 +1058,11 @@ mod tests {
         }
     }
 
+    fn anthropic_state(request: &ModelRequest) -> AnthropicState {
+        let body = anthropic_body(request, true).unwrap();
+        AnthropicState::new(anthropic_body_prefix_digest(&body).unwrap())
+    }
+
     #[test]
     fn openrouter_conversation_affinity_is_explicit_and_wire_scoped() {
         let mut request = request();
@@ -1750,7 +1756,7 @@ mod tests {
 
     #[test]
     fn anthropic_sse_error_keeps_provider_reason_and_kind() {
-        let mut decoder = Decoder::Anthropic(AnthropicState::default());
+        let mut decoder = Decoder::Anthropic(anthropic_state(&request()));
         let error = decode_frame(
             b"event: error\ndata: {\"type\":\"error\",\"error\":{\"type\":\"overloaded_error\",\"message\":\"Too busy\"}}\n\n",
             &mut decoder,
@@ -1761,7 +1767,7 @@ mod tests {
         assert_eq!(error.kind, ProviderErrorKind::Overloaded);
         assert!(error.message.contains("Too busy"));
 
-        let mut decoder = Decoder::Anthropic(AnthropicState::default());
+        let mut decoder = Decoder::Anthropic(anthropic_state(&request()));
         let error = decode_frame(
             b"event: error\ndata: {\"type\":\"error\",\"error\":{\"type\":\"rate_limit_error\",\"message\":\"Slow down\"}}\n\n",
             &mut decoder,
@@ -1775,7 +1781,7 @@ mod tests {
 
     #[test]
     fn anthropic_unknown_sse_event_does_not_interrupt_a_message() {
-        let mut decoder = Decoder::Anthropic(AnthropicState::default());
+        let mut decoder = Decoder::Anthropic(anthropic_state(&request()));
         assert!(
             decode_frame(
                 b"event: future_event\ndata: {\"type\":\"future_event\"}\n\n",
@@ -3017,7 +3023,7 @@ mod tests {
     #[test]
     fn anthropic_projects_only_human_initial_and_streamed_thinking() {
         let request = request();
-        let mut state = AnthropicState::default();
+        let mut state = anthropic_state(&request);
         let mut projected = Vec::new();
         let mut response = None;
         for event in [
@@ -3073,9 +3079,45 @@ mod tests {
     }
 
     #[test]
+    fn anthropic_plain_replay_checks_projection_without_binding_the_prefix() {
+        let mut request = request();
+        request.instructions = Some("different context".into());
+        let blocks = json!([{"type":"text","text":"answer"}]);
+        request.messages.push(Message {
+            role: Role::Assistant,
+            content: vec![Content::Text("answer".into())],
+            provider_replay: Some(ProviderReplay::new(
+                &request.route.effective.provider,
+                ANTHROPIC_CONTENT_REPLAY,
+                json!({"blocks":blocks, "prefix_sha256":"0".repeat(64)}),
+            )),
+        });
+        request
+            .messages
+            .push(Message::user_input("next".into(), []));
+        assert_eq!(
+            anthropic_body(&request, true).unwrap()["messages"][1]["content"],
+            blocks
+        );
+
+        request.messages[1].content[0] = Content::Text("edited".into());
+        assert_eq!(
+            anthropic_body(&request, true).unwrap_err().kind,
+            ProviderErrorKind::InvalidRequest
+        );
+        request.messages[1].content[0] = Content::Text("answer".into());
+        request.messages[1].provider_replay.as_mut().unwrap().data["prefix_sha256"] =
+            json!("invalid");
+        assert_eq!(
+            anthropic_body(&request, true).unwrap_err().kind,
+            ProviderErrorKind::InvalidRequest
+        );
+    }
+
+    #[test]
     fn anthropic_signed_blocks_survive_tool_continuation_and_reopen() {
         let mut request = request();
-        let mut state = AnthropicState::default();
+        let mut state = anthropic_state(&request);
         let events = [
             json!({"type":"message_start","message":{"type":"message","role":"assistant",
                 "model":"returned","content":[],"stop_reason":null,
@@ -3184,8 +3226,8 @@ mod tests {
 
     #[test]
     fn anthropic_unsigned_thinking_is_rejected_before_completion() {
-        let mut state = AnthropicState::default();
         let request = request();
+        let mut state = anthropic_state(&request);
         for event in [
             json!({"type":"message_start","message":{"type":"message","role":"assistant",
                 "model":"returned","content":[],"stop_reason":null,
@@ -3206,8 +3248,8 @@ mod tests {
 
     #[test]
     fn signed_anthropic_tool_with_invalid_json_does_not_enter_history() {
-        let mut state = AnthropicState::default();
         let request = request();
+        let mut state = anthropic_state(&request);
         for event in [
             json!({"type":"message_start","message":{"type":"message","role":"assistant",
                 "model":"returned","content":[],"stop_reason":null,
@@ -3314,7 +3356,7 @@ mod tests {
     #[test]
     fn anthropic_partial_usage_delta_keeps_previous_counts() {
         let request = request();
-        let mut state = AnthropicState::default();
+        let mut state = anthropic_state(&request);
         state
             .accept(&json!({"type":"message_start","message":{"type":"message","role":"assistant","model":"returned","content":[],"stop_reason":null,"usage":{"input_tokens":3,"output_tokens":0}}}), &request)
             .unwrap();
@@ -3335,7 +3377,7 @@ mod tests {
             matches!(&completed[0], ModelStreamEvent::Completed(response) if response.usage == Usage::known(3, 2))
         );
 
-        let mut state = AnthropicState::default();
+        let mut state = anthropic_state(&request);
         state
             .accept(&json!({"type":"message_start","message":{"type":"message","role":"assistant","model":"returned","content":[],"stop_reason":null,"usage":{"input_tokens":3,"output_tokens":0}}}), &request)
             .unwrap();
@@ -3351,7 +3393,7 @@ mod tests {
     #[test]
     fn anthropic_multiple_message_deltas_need_consistent_stop_reason() {
         let request = request();
-        let mut state = AnthropicState::default();
+        let mut state = anthropic_state(&request);
         state
             .accept(&json!({"type":"message_start","message":{"type":"message","role":"assistant","model":"returned","content":[],"stop_reason":null,"usage":{"input_tokens":3,"output_tokens":0}}}), &request)
             .unwrap();

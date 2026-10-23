@@ -62,30 +62,24 @@ pub(super) fn validated_anthropic_replay(
     if visible.next().is_some() {
         return Err(invalid("Anthropic replay omitted visible content"));
     }
-    let prefix_digest = match digest_context {
-        Some(context) => anthropic_prefix_digest_for(context, preceding)?,
-        None => anthropic_prefix_digest(request, preceding)?,
-    };
     if blocks.iter().any(|block| {
         matches!(
             block["type"].as_str(),
             Some("thinking" | "redacted_thinking")
         )
-    }) && prefix_digest != digest
-    {
-        return Err(error(
-            ProviderErrorKind::ReplayContextChanged,
-            "Anthropic signed thinking prefix changed",
-        ));
+    }) {
+        let (instructions, tools) = digest_context.map_or(
+            (request.instructions.as_deref(), request.tools.as_slice()),
+            |context| (context.instructions.as_deref(), context.tools.as_slice()),
+        );
+        if anthropic_prefix_digest(instructions, tools, preceding)? != digest {
+            return Err(error(
+                ProviderErrorKind::ReplayContextChanged,
+                "Anthropic signed thinking prefix changed",
+            ));
+        }
     }
     Ok(blocks.clone())
-}
-
-fn anthropic_context_state(request: &ModelRequest) -> ModelContextState {
-    ModelContextState {
-        instructions: request.instructions.clone(),
-        tools: request.tools.clone(),
-    }
 }
 
 fn anthropic_tool_definition(tool: &ToolSpec) -> Value {
@@ -96,36 +90,24 @@ fn anthropic_tool_definition(tool: &ToolSpec) -> Value {
     })
 }
 
-fn anthropic_context_fields(context: &ModelContextState) -> (Option<Value>, Option<Value>) {
-    let system = context
-        .instructions
-        .as_deref()
+fn anthropic_context_fields(
+    instructions: Option<&str>,
+    tools: &[ToolSpec],
+) -> (Option<Value>, Option<Value>) {
+    let system = instructions
         .filter(|instructions| !instructions.is_empty())
         .map(|instructions| json!(instructions));
-    let tools = (!context.tools.is_empty()).then(|| {
-        Value::Array(
-            context
-                .tools
-                .iter()
-                .map(anthropic_tool_definition)
-                .collect(),
-        )
-    });
+    let tools = (!tools.is_empty())
+        .then(|| Value::Array(tools.iter().map(anthropic_tool_definition).collect()));
     (system, tools)
 }
 
 fn anthropic_prefix_digest(
-    request: &ModelRequest,
+    instructions: Option<&str>,
+    tools: &[ToolSpec],
     preceding: &[Value],
 ) -> Result<String, ProviderError> {
-    anthropic_prefix_digest_for(&anthropic_context_state(request), preceding)
-}
-
-fn anthropic_prefix_digest_for(
-    context: &ModelContextState,
-    preceding: &[Value],
-) -> Result<String, ProviderError> {
-    let (system, tools) = anthropic_context_fields(context);
+    let (system, tools) = anthropic_context_fields(instructions, tools);
     digest_anthropic_prefix(system.as_ref(), tools.as_ref(), preceding)
 }
 
@@ -231,8 +213,20 @@ fn digest_anthropic_prefix(
     tools: Option<&Value>,
     preceding: &[Value],
 ) -> Result<String, ProviderError> {
-    let encoded = serde_json::to_vec(&json!({"system":system,"tools":tools,"messages":preceding}))
-        .map_err(|_| invalid("cannot encode Anthropic replay prefix"))?;
+    // Match the previous sorted-key JSON encoding so persisted replay digests
+    // stay valid, without deep-cloning the preceding wire transcript into a Value.
+    #[derive(serde::Serialize)]
+    struct Prefix<'a> {
+        messages: &'a [Value],
+        system: Option<&'a Value>,
+        tools: Option<&'a Value>,
+    }
+    let encoded = serde_json::to_vec(&Prefix {
+        messages: preceding,
+        system,
+        tools,
+    })
+    .map_err(|_| invalid("cannot encode Anthropic replay prefix"))?;
     Ok(format!("{:x}", Sha256::digest(encoded)))
 }
 
@@ -263,14 +257,19 @@ pub(super) fn anthropic_body_for_route(
         context_plan.as_ref(),
     )?;
     body["model"] = json!(request.route.effective.model);
-    body["messages"] = json!(messages);
+    body["messages"] = Value::Array(messages);
     body["stream"] = json!(true);
 
-    let current_context = anthropic_context_state(request);
-    let top_level_context = context_plan
-        .as_ref()
-        .map_or(&current_context, |plan| &plan.initial);
-    let (system, tools) = anthropic_context_fields(top_level_context);
+    let (instructions, top_level_tools) = context_plan.as_ref().map_or(
+        (request.instructions.as_deref(), request.tools.as_slice()),
+        |plan| {
+            (
+                plan.initial.instructions.as_deref(),
+                plan.initial.tools.as_slice(),
+            )
+        },
+    );
+    let (system, tools) = anthropic_context_fields(instructions, top_level_tools);
     if let Some(system) = system {
         body["system"] = system;
     }
@@ -279,7 +278,7 @@ pub(super) fn anthropic_body_for_route(
     }
     // Inline additions can make tools available without any leading definitions.
     // Historical definitions still need restrictions even when later removed.
-    if !current_context.tools.is_empty() || !top_level_context.tools.is_empty() {
+    if !request.tools.is_empty() || !top_level_tools.is_empty() {
         let mut choice = match &request.controls.tool_choice {
             ToolChoice::None => json!({"type":"none"}),
             ToolChoice::Auto => json!({"type":"auto"}),
@@ -335,11 +334,10 @@ enum AnthropicBlock {
         wire: Value,
     },
 }
-#[derive(Default)]
 pub(super) struct AnthropicState {
     pub(super) budget: ResponseBudget,
     model: Option<String>,
-    pub(super) prefix_digest: Option<String>,
+    prefix_digest: String,
     blocks: Vec<AnthropicBlock>,
     thinking_blocks: usize,
     /// The matching response blocks, retained verbatim apart from applying
@@ -390,10 +388,22 @@ pub(super) fn anthropic_replay_notices(transformations: Option<&Value>) -> Vec<M
 }
 
 impl AnthropicState {
-    pub(super) fn new(prefix_digest: Option<String>) -> Self {
+    pub(super) fn new(prefix_digest: String) -> Self {
         Self {
             prefix_digest,
-            ..Self::default()
+            budget: ResponseBudget::default(),
+            model: None,
+            blocks: Vec::new(),
+            thinking_blocks: 0,
+            wire_blocks: Vec::new(),
+            ids: BTreeSet::new(),
+            finish: None,
+            in_message_delta: false,
+            input_transformations: None,
+            input: 0,
+            output: 0,
+            cache_creation: None,
+            cache_read: None,
         }
     }
 
@@ -872,14 +882,7 @@ impl AnthropicState {
                             ProviderReplay::new(
                                 &request.route.effective.provider,
                                 ANTHROPIC_CONTENT_REPLAY,
-                                json!({"blocks":wire_blocks,"prefix_sha256":
-                                match &self.prefix_digest {
-                                    Some(digest) => digest.clone(),
-                                    None => anthropic_prefix_digest(
-                                        request,
-                                        &wire_messages(request, HttpWire::AnthropicMessages)?,
-                                    )?,
-                                }}),
+                                json!({"blocks":wire_blocks,"prefix_sha256":self.prefix_digest}),
                             )
                             .with_prefix_binding(prefix_bound),
                         ),
@@ -901,12 +904,33 @@ impl AnthropicState {
 }
 
 #[cfg(test)]
-mod cache_usage_tests {
+mod tests {
     use super::*;
 
     #[test]
+    fn replay_prefix_fingerprints_preserve_persisted_wire_bytes() {
+        // Independently checked with Python hashlib over canonical compact JSON.
+        for (body, expected) in [
+            (
+                json!({
+                    "messages":[{"role":"user","content":[{"type":"text","text":"hi α"}]}],
+                    "system":"rules",
+                    "tools":[{"name":"inspect","description":"read only","input_schema":{"type":"object"}}]
+                }),
+                "764b62dcd7b0a47807f736925bee00ad0772424c6287989752e42bb7d4ad7c77",
+            ),
+            (
+                json!({"messages":[],"system":null,"tools":null}),
+                "d6fd557e955c6e0dd86a9ff861a2f8f8d216d145f84c791fe26aa25adf901029",
+            ),
+        ] {
+            assert_eq!(anthropic_body_prefix_digest(&body).unwrap(), expected);
+        }
+    }
+
+    #[test]
     fn anthropic_usage_preserves_cache_read_and_write_buckets() {
-        let mut state = AnthropicState::default();
+        let mut state = AnthropicState::new("0".repeat(64));
         state
             .update_usage(
                 &json!({

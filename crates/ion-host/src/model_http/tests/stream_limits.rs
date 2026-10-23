@@ -88,7 +88,7 @@ fn decoded_limits_cover_text_arguments_and_both_reasoning_channels() {
         ("signature_delta", "signature"),
         ("input_json_delta", "partial_json"),
     ] {
-        let mut state = AnthropicState::default();
+        let mut state = anthropic_state(&request());
         let start = json!({"type":"message_start","message":{"type":"message","role":"assistant","model":"test-model","content":[],"stop_reason":null,"usage":{"input_tokens":1,"output_tokens":0}}});
         state.accept(&start, &request()).unwrap();
         let block = match kind {
@@ -143,7 +143,7 @@ fn comments_and_repeated_metadata_do_not_refresh_progress() {
 #[test]
 fn anthropic_transformations_charge_changed_but_not_identical_snapshots() {
     let transformations = json!([{"type":"thinking_dropped","reason":"prefix_binding_mismatch","payload":"x".repeat(128 * 1024)}]);
-    let mut state = AnthropicState::default();
+    let mut state = anthropic_state(&request());
     state.accept(&json!({"type":"message_start","message":{"type":"message","role":"assistant","model":"test-model","content":[],"stop_reason":null,"usage":{"input_tokens":1,"output_tokens":0},"input_transformations":transformations}}), &request()).unwrap();
     let before = state.budget.used;
     let mut delta = json!({"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":0},"input_transformations":transformations});
