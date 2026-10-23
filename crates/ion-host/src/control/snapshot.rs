@@ -39,7 +39,7 @@ pub struct InputSnapshot<T> {
     pub withdrawal: Option<ReturnSnapshot>,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Clone, Debug, Serialize)]
 pub enum ReturnSnapshot {
     Stopped,
     Cleared,

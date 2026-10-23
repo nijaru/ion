@@ -30,7 +30,21 @@ async fn deadline_stops_but_joins_and_retains_provenance_after_infrastructure_fa
         }
         let record = f.session.view().unwrap().delegations()[0].record.clone();
         assert_eq!(record.spec.execution_timeout_ms, Some(60_000));
+        let guidance = Message::user_input(
+            "preserve guidance through infrastructure failure".into(),
+            [],
+        );
         if fault {
+            owner
+                .steer(
+                    record.child,
+                    &ion_core::RequestKey::new("deadline-fixture".into(), "guidance".into())
+                        .unwrap(),
+                    &guidance,
+                    &tokio_util::sync::CancellationToken::new(),
+                )
+                .await
+                .unwrap();
             rusqlite::Connection::open(&record.path).unwrap().execute_batch(
                 "CREATE TRIGGER fail_end BEFORE INSERT ON entries WHEN json_extract(NEW.body,'$.kind') = 'turn_ended' BEGIN SELECT RAISE(FAIL, 'injected child settlement failure'); END;"
             ).unwrap();
@@ -92,6 +106,21 @@ async fn deadline_stops_but_joins_and_retains_provenance_after_infrastructure_fa
         );
         assert_eq!(f.effect.calls.load(Ordering::SeqCst), 1);
         assert_eq!(f.child.requests().len(), 1);
+        if fault {
+            let failure = owner
+                .take(record.child)
+                .unwrap()
+                .err()
+                .expect("typed infrastructure failure");
+            assert!(failure.child.joined);
+            assert_eq!(failure.child.error, Some(failure.error.to_string()));
+            assert!(matches!(&failure.child.steering[0].status,
+                ion_host::SteeringStatus::Returned { input: ion_host::UserInput::Message(message), reason: ion_host::ReturnSnapshot::Stopped } if message == &guidance));
+            assert!(
+                owner.check().is_err(),
+                "acknowledgement cannot clear the infrastructure fence"
+            );
+        }
         f.control.shutdown().await;
         let root = f.root.clone();
         drop((f, owner));

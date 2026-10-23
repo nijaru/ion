@@ -28,6 +28,8 @@ mod application_scope;
 mod background;
 #[path = "foreground_delegation/deadline.rs"]
 mod deadline;
+#[path = "foreground_delegation/steering.rs"]
+mod steering;
 
 struct App {
     agent: Arc<CodingAgent>,
@@ -119,6 +121,7 @@ struct Delegate {
     owner: Option<Arc<ion_host::BackgroundOwner>>,
     effect: Arc<Effect>,
     wait: Wait,
+    steering: std::sync::Mutex<Option<ion_host::ChildSteering>>,
 }
 impl CodingToolSource for Delegate {
     fn registrations(self: Arc<Self>) -> Vec<ToolRegistration> {
@@ -130,27 +133,35 @@ impl ToolExecutor for Delegate {
         Box::pin(async move {
             let task = || {
                 let input = Message::user_input("count two characters".into(), []);
-                let task = if matches!(self.wait, Wait::Panic) {
-                    ion_core::DelegationTask::new(
-                        ion_core::DelegationSpec {
-                            context: self.child.context,
-                            directory: self.child.directory.clone(),
-                            cwd: None,
-                            model: model("child"),
-                            reasoning: self.child.reasoning,
-                            execution_timeout_ms: self.child.execution_timeout_ms,
-                            authority: self.child.authority.clone(),
-                            input,
-                        },
-                        |_, _, _| Box::pin(async { panic!("injected child supervisor panic") }),
+                let (task, steering) = if matches!(self.wait, Wait::Panic) {
+                    (
+                        ion_core::DelegationTask::new(
+                            ion_core::DelegationSpec {
+                                context: self.child.context,
+                                directory: self.child.directory.clone(),
+                                cwd: None,
+                                model: model("child"),
+                                reasoning: self.child.reasoning,
+                                execution_timeout_ms: self.child.execution_timeout_ms,
+                                authority: self.child.authority.clone(),
+                                input,
+                            },
+                            |_, _, _| Box::pin(async { panic!("injected child supervisor panic") }),
+                        )
+                        .unwrap(),
+                        None,
                     )
-                    .unwrap()
                 } else {
-                    self.child.prepare(input).unwrap()
+                    let prepared = self.child.prepare(input).unwrap();
+                    *self.steering.lock().unwrap() = Some(prepared.steering.clone());
+                    (prepared.task, Some(prepared.steering))
                 };
                 match &self.owner {
                     Some(owner) => {
-                        let permit = owner.destination();
+                        let permit = match steering {
+                            Some(steering) => owner.destination().with_steering(steering),
+                            None => owner.destination(),
+                        };
                         match self.wait {
                             Wait::StopBeforeTransfer => {
                                 task.in_background(background::BeforeTransfer {
@@ -197,14 +208,14 @@ impl ToolExecutor for Delegate {
                         .child
                         .prepare(Message::user_input("different input".into(), []))
                         .unwrap();
-                    assert!(invocation.delegate(different).await.is_err());
+                    assert!(invocation.delegate(different.task).await.is_err());
                     if self.owner.is_some() {
                         let other = ion_host::BackgroundOwner::new(1).unwrap();
                         let changed_owner = self
                             .child
                             .prepare(Message::user_input("count two characters".into(), []))
                             .unwrap()
-                            .in_background(other.destination());
+                            .in_background(&other);
                         assert!(invocation.delegate(changed_owner).await.is_err());
                     }
                 }
@@ -264,6 +275,7 @@ struct Fixture {
     child: Arc<ScriptedModelService>,
     effect: Arc<Effect>,
     control: SessionControl,
+    delegate: Arc<Delegate>,
 }
 impl Fixture {
     fn new(wait: Wait, block: bool, composed: bool) -> Self {
@@ -352,6 +364,7 @@ impl Fixture {
             owner,
             effect: effect.clone(),
             wait,
+            steering: std::sync::Mutex::new(None),
         });
         let first = if composed {
             call(
@@ -374,7 +387,7 @@ impl Fixture {
         }
         let parent = Arc::new(ScriptedModelService::new(scripts));
         let tools = ToolSet::new([
-            delegate as Arc<dyn CodingToolSource>,
+            delegate.clone() as Arc<dyn CodingToolSource>,
             effect.clone() as Arc<dyn CodingToolSource>,
         ]);
         let tools = if composed {
@@ -411,6 +424,7 @@ impl Fixture {
             child,
             effect,
             control,
+            delegate,
         }
     }
     fn start(&mut self) {

@@ -1031,7 +1031,6 @@ impl Agent {
                         Vec::new(),
                     )
                 };
-                prepared.record_observed_input(session, &execution, response.usage)?;
                 observe(AgentEvent::AssistantCommitted {
                     turn,
                     content: committed_content,
@@ -1041,6 +1040,8 @@ impl Agent {
                 for input in committed_steering {
                     observe(AgentEvent::SteeringCommitted { turn, input });
                 }
+                // Persistence acknowledgements precede fallible calibration.
+                prepared.record_observed_input(session, &execution, response.usage)?;
                 assistant_seen_in_turn = true;
                 if complete {
                     observe(AgentEvent::TurnEnded {

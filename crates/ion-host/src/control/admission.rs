@@ -4,7 +4,7 @@ use super::*;
 struct Admission {
     reservation: InputReservation,
     expanded: Option<String>,
-    prepared: Option<AcceptedInput<InputId>>,
+    prepared: Option<Message>,
 }
 
 impl<M: Serialize + Send + 'static> SessionControl<M> {
@@ -14,8 +14,7 @@ impl<M: Serialize + Send + 'static> SessionControl<M> {
         input: UserInput,
         metadata: M,
     ) -> Result<InputId, Box<RejectedInput<M>>> {
-        let id = InputId(identity());
-        match self.admit(id, delivery, &input, &metadata) {
+        match self.admit(delivery, &input, &metadata) {
             Err(reason) => Err(Box::new(RejectedInput {
                 delivery,
                 input,
@@ -33,6 +32,34 @@ impl<M: Serialize + Send + 'static> SessionControl<M> {
                     InputPhase::Preparing
                 };
                 let mut custody = lock(&self.custody);
+                // A live steering producer may have filled capacity during validation.
+                if custody.occupied == MAX_ADMISSIONS {
+                    return Err(Box::new(RejectedInput {
+                        delivery,
+                        input,
+                        metadata,
+                        reason: anyhow::anyhow!("session result/admission capacity is full"),
+                    }));
+                }
+                // Identity order is admission order, not validation start order.
+                let id = InputId(identity());
+                let prepared = match prepared
+                    .map(|message| {
+                        self.budget
+                            .admit(message, id, self.setup.runtime.agent.limits())
+                    })
+                    .transpose()
+                {
+                    Ok(prepared) => prepared,
+                    Err(reason) => {
+                        return Err(Box::new(RejectedInput {
+                            delivery,
+                            input,
+                            metadata,
+                            reason: reason.into(),
+                        }));
+                    }
+                };
                 custody.occupied += 1;
                 custody.inputs.insert(
                     id,
@@ -47,6 +74,7 @@ impl<M: Serialize + Send + 'static> SessionControl<M> {
                         expanded,
                         acceptance: None,
                         withdrawn: None,
+                        steering_status: None,
                     },
                 );
                 custody.updates.push_back(ControlUpdate::Input {
@@ -99,7 +127,7 @@ impl<M: Serialize + Send + 'static> SessionControl<M> {
         }
         let id = InputId(identity());
         let original = UserInput::Message(input);
-        let admission = match self.admit(id, Delivery::Start, &original, &metadata) {
+        let admission = match self.admit(Delivery::Start, &original, &metadata) {
             Ok(admission) => admission,
             Err(reason) => {
                 return Err(Box::new(RejectedInput {
@@ -110,10 +138,22 @@ impl<M: Serialize + Send + 'static> SessionControl<M> {
                 }));
             }
         };
-        let (message, _, inflight) = admission
-            .prepared
-            .expect("literal messages are prepared")
-            .into_parts();
+        let prepared = match self.budget.admit(
+            admission.prepared.expect("literal messages are prepared"),
+            id,
+            self.setup.runtime.agent.limits(),
+        ) {
+            Ok(prepared) => prepared,
+            Err(reason) => {
+                return Err(Box::new(RejectedInput {
+                    delivery: Delivery::Start,
+                    input: original,
+                    metadata,
+                    reason: reason.into(),
+                }));
+            }
+        };
+        let (message, _, inflight) = prepared.into_parts();
         let operation = OperationId(identity());
         let inbox = Arc::new(SteeringInbox::new(
             self.setup.runtime.agent.limits(),
@@ -134,6 +174,7 @@ impl<M: Serialize + Send + 'static> SessionControl<M> {
                 expanded: None,
                 acceptance: None,
                 withdrawn: None,
+                steering_status: None,
             },
         );
         // Hold custody until the callback has a complete root to acknowledge.
@@ -145,7 +186,7 @@ impl<M: Serialize + Send + 'static> SessionControl<M> {
                 input: message,
             },
             instructions,
-            stop,
+            stop.clone(),
             Some(inbox.clone()),
             turn_observer(
                 self.custody.clone(),
@@ -163,6 +204,10 @@ impl<M: Serialize + Send + 'static> SessionControl<M> {
                 custody
                     .updates
                     .push_back(ControlUpdate::Dispatched { id, operation });
+                custody.steering_target = Some(SteeringTarget {
+                    operation,
+                    stop: stop.clone(),
+                });
                 self.stop_requested = false;
                 self.active = Some(Active {
                     id: operation,
@@ -229,11 +274,13 @@ impl<M: Serialize + Send + 'static> SessionControl<M> {
         ));
         let stop = self.work_stop();
         let turn_stop = self.bind_turn_stop(stop.clone());
+        // Publish the lease under the same fence as acceptance/end callbacks.
+        let mut custody = lock(&self.custody);
         let result = self.setup.runtime.agent.resume_turn(
             self.setup.session.clone(),
             point,
             self.setup.resources.instructions().to_owned(),
-            stop,
+            stop.clone(),
             Some(inbox.clone()),
             turn_observer(
                 self.custody.clone(),
@@ -245,11 +292,14 @@ impl<M: Serialize + Send + 'static> SessionControl<M> {
         let (point, work) = match result {
             Ok(value) => value,
             Err(error) => {
+                drop(custody);
                 self.restore_turn_stop(turn_stop);
                 return Err((metadata, error.into()));
             }
         };
-        lock(&self.custody).occupied += 1;
+        custody.occupied += 1;
+        custody.steering_target = Some(SteeringTarget { operation, stop });
+        drop(custody);
         self.stop_requested = false;
         self.active = Some(Active {
             id: operation,
@@ -263,13 +313,7 @@ impl<M: Serialize + Send + 'static> SessionControl<M> {
         Ok(RecoveryAdmission { operation, point })
     }
 
-    fn admit(
-        &self,
-        id: InputId,
-        delivery: Delivery,
-        input: &UserInput,
-        metadata: &M,
-    ) -> Result<Admission> {
+    fn admit(&self, delivery: Delivery, input: &UserInput, metadata: &M) -> Result<Admission> {
         if let Some(owner) = self.background() {
             owner.ensure_open()?;
         }
@@ -352,11 +396,7 @@ impl<M: Serialize + Send + 'static> SessionControl<M> {
             }
         };
         let reservation = self.budget.reserve(&message, &(input, metadata), limits)?;
-        let prepared = if ready {
-            Some(self.budget.admit(message, id, limits)?)
-        } else {
-            None
-        };
+        let prepared = if ready { Some(message) } else { None };
         Ok(Admission {
             reservation,
             expanded,

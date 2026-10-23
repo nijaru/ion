@@ -5,6 +5,7 @@ impl<M: Serialize + Send + 'static> SessionControl<M> {
     /// Stop intent is retained even if Core has already completed successfully.
     pub fn request_stop(&mut self) {
         self.stop_requested = true;
+        lock(&self.custody).steering_target = None;
         if let Some(questions) = &self.setup.questions {
             questions.cancel_pending(self.owner, "stopped");
         }
@@ -263,6 +264,10 @@ impl<M: Serialize + Send + 'static> SessionControl<M> {
                 let turn_stop = self
                     .bind_turn_stop(stop.clone())
                     .map(|binding| binding.scope());
+                custody.steering_target = Some(SteeringTarget {
+                    operation,
+                    stop: stop.clone(),
+                });
                 let work = self.setup.runtime.agent.submit_message_with_steering(
                     self.setup.session.clone(),
                     message,

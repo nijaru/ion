@@ -24,6 +24,9 @@ mod input;
 mod question;
 mod snapshot;
 pub use snapshot::*;
+mod steering;
+pub use steering::*;
+use steering::{SteeringMonitor, SteeringTarget};
 #[cfg(test)]
 mod tests;
 mod types;
@@ -49,12 +52,14 @@ struct Input<M> {
     expanded: Option<String>,
     acceptance: Option<InputAcceptance>,
     withdrawn: Option<ReturnReason>,
+    steering_status: Option<SteeringMonitor>,
 }
 struct Custody<M> {
     inputs: BTreeMap<InputId, Input<M>>,
     updates: VecDeque<ControlUpdate<M>>,
     steering_order: VecDeque<InputId>,
     occupied: usize,
+    steering_target: Option<SteeringTarget>,
 }
 impl<M> Default for Custody<M> {
     fn default() -> Self {
@@ -63,6 +68,7 @@ impl<M> Default for Custody<M> {
             updates: VecDeque::new(),
             steering_order: VecDeque::new(),
             occupied: 0,
+            steering_target: None,
         }
     }
 }
@@ -72,7 +78,11 @@ impl<M> Custody<M> {
             .inputs
             .get_mut(&id)
             .expect("accepted input retains Host custody");
-        input.acceptance = Some(InputAcceptance { operation, turn });
+        let acceptance = InputAcceptance { operation, turn };
+        input.acceptance = Some(acceptance);
+        if let Some(status) = &input.steering_status {
+            status.publish(SteeringStatus::Committed { acceptance });
+        }
         input.withdrawn = None;
         // Crucially before any fallible/provisional publication. Metadata remains
         // separately budgeted until reliable settlement delivery.
@@ -93,6 +103,16 @@ impl<M> Custody<M> {
             .remove(&id)
             .expect("returned input retains Host custody");
         debug_assert!(input.acceptance.is_none());
+        if let Some(status) = &input.steering_status {
+            status.publish(SteeringStatus::Returned {
+                input: input
+                    .original
+                    .as_ref()
+                    .expect("unaccepted original")
+                    .clone(),
+                reason: ReturnSnapshot::from(&reason),
+            });
+        }
         self.updates
             .push_back(ControlUpdate::Returned(ReturnedInput {
                 id,
@@ -129,6 +149,16 @@ fn turn_observer<M: Send + 'static>(
                     .pop_front()
                     .expect("Core commits controlled FIFO steering");
                 custody.accept(id, operation, *turn);
+            }
+            AgentEvent::TurnEnded { .. } => {
+                let mut custody = lock(&custody);
+                if custody
+                    .steering_target
+                    .as_ref()
+                    .is_some_and(|target| target.operation == operation)
+                {
+                    custody.steering_target = None;
+                }
             }
             _ => {}
         }
@@ -177,6 +207,7 @@ pub struct SessionControl<M = ()> {
     pub(crate) setup: SessionSetup,
     custody: Arc<Mutex<Custody<M>>>,
     budget: InputBudget,
+    input_changes: Arc<tokio::sync::Notify>,
     active: Option<Active<M>>,
     preparing: Option<(InputId, crate::preparation::Preparation)>,
     /// An initial prompt has operation identity even while its images prepare.
@@ -215,6 +246,7 @@ impl<M: Serialize + Send + 'static> SessionControl<M> {
             setup,
             custody: Arc::new(Mutex::new(Custody::default())),
             budget: InputBudget::default(),
+            input_changes: Arc::new(tokio::sync::Notify::new()),
             active: None,
             preparing: None,
             starting: None,
@@ -342,53 +374,38 @@ impl<M: Serialize + Send + 'static> SessionControl<M> {
             Settled(OperationOutcome),
             Activity(Observation),
             Question,
+            Input,
         }
-        let progress = match (&mut self.preparing, &mut self.active) {
-            // Drain bounded ready observations before consuming completion, so
-            // healthy readers do not lose an entire fast operation's activity.
-            // Preparation remains first: a busy stream cannot starve admission.
-            (Some((_, preparation)), Some(active)) => tokio::select! {
-                biased;
-                result = preparation.join() => Progress::Prepared(result),
-                Some(observation) = self.observer.next() => Progress::Activity(observation),
-                result = active.work.join() => Progress::Settled(result),
-                Some(()) = async {
-                    match self.question_changes.as_mut() {
-                        Some(changes) => changes.changed().await.ok(),
-                        None => Some(()),
-                    }
-                }, if self.question_changes.is_some() => Progress::Question,
-            },
-            (Some((_, preparation)), None) => tokio::select! {
-                biased;
-                result = preparation.join() => Progress::Prepared(result),
-                Some(observation) = self.observer.next() => Progress::Activity(observation),
-            },
-            (None, Some(active)) => tokio::select! {
-                biased;
-                Some(observation) = self.observer.next() => Progress::Activity(observation),
-                result = active.work.join() => Progress::Settled(result),
-                Some(()) = async {
-                    match self.question_changes.as_mut() {
-                        Some(changes) => changes.changed().await.ok(),
-                        None => Some(()),
-                    }
-                }, if self.question_changes.is_some() => Progress::Question,
-            },
-            (None, None) => return None,
+        if self.preparing.is_none() && self.active.is_none() {
+            return None;
+        }
+        // Preparation and newly queued intent precede activity, so a busy stream
+        // cannot starve admission. Drain ready observations before completion.
+        let progress = tokio::select! {
+            biased;
+            result = async { self.preparing.as_mut().expect("enabled preparation").1.join().await },
+                if self.preparing.is_some() => Progress::Prepared(result),
+            () = self.input_changes.notified() => Progress::Input,
+            Some(observation) = self.observer.next() => Progress::Activity(observation),
+            result = async { self.active.as_mut().expect("enabled operation").work.join().await },
+                if self.active.is_some() => Progress::Settled(result),
+            Some(()) = async {
+                self.question_changes.as_mut().expect("enabled question observer").changed().await.ok()
+            }, if self.question_changes.is_some() => Progress::Question,
         };
         // No await after consuming either completion until it is safely retained.
         match progress {
             Progress::Prepared(result) => self.finish_preparation(result),
             Progress::Settled(result) => self.finish_operation(result),
             Progress::Activity(observation) => return Some(observation),
-            Progress::Question => {}
+            Progress::Question | Progress::Input => {}
         }
         self.advance();
         None
     }
 
     fn finish_operation(&mut self, outcome: OperationOutcome) {
+        lock(&self.custody).steering_target = None;
         let active = self.active.take().expect("retained Core operation");
         self.clear_turn_stop(active.turn_stop);
         // Settlement supersedes any unread provisional stream for this owner.
@@ -420,6 +437,17 @@ impl<M: Serialize + Send + 'static> SessionControl<M> {
                 } else {
                     ReturnReason::TurnEnded
                 },
+            );
+        }
+        // Core removes an inbox entry only after persistence. Once joined, any
+        // transferred entry absent from the returned inbox is committed even if
+        // an observer failed before publishing its acknowledgement. Never return
+        // that guidance as unaccepted or make it eligible for replay.
+        while let Some(id) = custody.steering_order.pop_front() {
+            custody.accept(
+                id,
+                active.id,
+                turn.expect("consumed steering has an acknowledged Turn"),
             );
         }
         let accepted_ids: Vec<_> = custody
@@ -545,6 +573,16 @@ impl<M: Serialize + Send + 'static> SessionControl<M> {
 
 impl<M> Drop for SessionControl<M> {
     fn drop(&mut self) {
+        let mut custody = lock(&self.custody);
+        custody.steering_target = None;
+        for input in custody.inputs.values() {
+            if input.acceptance.is_none()
+                && let Some(status) = &input.steering_status
+            {
+                status.publish(SteeringStatus::Unknown);
+            }
+        }
+        drop(custody);
         if let Some(questions) = &self.setup.questions {
             questions.close(self.owner, "control_dropped");
         }

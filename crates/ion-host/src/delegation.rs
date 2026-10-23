@@ -10,15 +10,18 @@ use ion_core::{
 
 use crate::{Application, ControlUpdate, OperationOutcome, SessionCatalog, SessionSetup};
 
+mod steering;
+pub use steering::{ChildSteering, ChildSteeringReport, PreparedDelegation};
+
 /// Explicit child recipe, independent of the parent configuration. The caller
 /// authenticates this scope and attests its actual environment and authority.
 /// Context sharing is explicit, separate from live model/tools/workspace and
 /// credentials. Forking shares historical context facts (including instructions
 /// and tool outputs), not execution grants; authorize that disclosure. Matching
 /// deferred child definitions can regain exposure without adding parent executors.
-/// Tasks default to foreground joining. For explicit transfer, pass
-/// `BackgroundOwner::destination()` to `DelegationTask::in_background`; Core
-/// reserves custody only after exact reconciliation and before new admission.
+/// Use the prepared task for foreground joining, or transfer it with
+/// `PreparedDelegation::in_background` to retain its matching live control grant.
+/// Core reserves custody only after exact reconciliation and before new admission.
 pub struct SessionDelegation {
     pub context: ion_core::DelegationContext,
     pub directory: PathBuf,
@@ -36,7 +39,7 @@ impl SessionDelegation {
     /// Preflight captures the complete runtime/resources before relationship
     /// admission. The returned task is cold and owns everything needed to join
     /// preparation, Core execution and shutdown outside the tool's borrowed wait.
-    pub fn prepare(&self, input: Message) -> Result<DelegationTask> {
+    pub fn prepare(&self, input: Message) -> Result<PreparedDelegation> {
         ensure!(
             self.directory.is_absolute(),
             "child directory must be absolute"
@@ -75,7 +78,8 @@ impl SessionDelegation {
         let application = self.application.clone();
         let reasoning = self.reasoning;
         let execution_timeout_ms = self.execution_timeout_ms;
-        DelegationTask::new(spec, move |child, request, stop| {
+        let (steering, ready) = ChildSteering::new(runtime.agent.limits());
+        let task = DelegationTask::new(spec, move |child, request, stop| {
             Box::pin(async move {
                 // Keep deadline provenance even if stop/join or cleanup fails.
                 let mut execution_timed_out = false;
@@ -110,6 +114,9 @@ impl SessionDelegation {
                         (),
                         stop.clone(),
                     );
+                    if let Some(port) = control.steering() {
+                        ready.send_replace(Some((child_id, port)));
+                    }
                     let mut failure = admission
                         .err()
                         .map(|rejected| admission_failure(rejected.reason));
@@ -188,7 +195,8 @@ impl SessionDelegation {
                 }
             })
         })
-        .map_err(anyhow::Error::msg)
+        .map_err(anyhow::Error::msg)?;
+        Ok(PreparedDelegation { task, steering })
     }
 }
 

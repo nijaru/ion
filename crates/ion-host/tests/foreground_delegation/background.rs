@@ -110,7 +110,7 @@ async fn transfer_survives_parent_work_and_shutdown_and_retains_unread_results()
             reserve(&owner).is_err(),
             "unread joined result still consumes capacity"
         );
-        let receipt = owner.take(child).unwrap().unwrap();
+        let receipt = owner.take(child).unwrap().unwrap().receipt;
         assert!(
             matches!(receipt.outcome, Some(DelegationOutcome::Joined { execution_timed_out: false, receipt: Some(ref receipt), error: None, answer: Some(_) }) if receipt.end == Some(TurnEndReason::Completed))
         );
@@ -163,7 +163,7 @@ async fn owner_shutdown_is_joined_even_when_its_wait_is_cancelled() {
         .await
         .unwrap()
         .unwrap();
-    let receipt = owner.take(child).unwrap().unwrap();
+    let receipt = owner.take(child).unwrap().unwrap().receipt;
     assert!(
         matches!(receipt.outcome, Some(DelegationOutcome::Joined { receipt: Some(ref receipt), .. }) if receipt.end == Some(TurnEndReason::Cancelled))
     );
@@ -409,7 +409,7 @@ async fn cancelling_the_active_parent_after_transfer_does_not_cancel_the_child()
     .await
     .unwrap();
     let child = owner.snapshot().children[0].receipt.record.child;
-    let receipt = owner.take(child).unwrap().unwrap();
+    let receipt = owner.take(child).unwrap().unwrap().receipt;
     assert!(
         matches!(receipt.outcome, Some(DelegationOutcome::Joined { execution_timed_out: false, receipt: Some(ref receipt), error: None, answer: Some(_) }) if receipt.end == Some(TurnEndReason::Completed))
     );
@@ -498,7 +498,10 @@ async fn wait_any_expires_without_stop_and_returns_a_joined_cancellation_before_
         .unwrap();
     assert!(!report.wait_expired);
     assert_eq!(report.children[0].receipt, cancelled.receipt);
-    assert_eq!(owner.take(selected[1]).unwrap().unwrap(), cancelled.receipt);
+    assert_eq!(
+        owner.take(selected[1]).unwrap().unwrap().receipt,
+        cancelled.receipt
+    );
     assert!(owner.wait(&selected, Duration::ZERO).await.is_err());
 
     fixtures[0].effect.release.notify_one();
@@ -591,7 +594,7 @@ async fn background_waiters_keep_completion_when_the_last_waiter_is_cancelled() 
         for task in tasks {
             task.await.unwrap();
         }
-        let receipt = owner.take(child).unwrap().unwrap();
+        let receipt = owner.take(child).unwrap().unwrap().receipt;
         assert!(matches!(
             receipt.outcome,
             Some(DelegationOutcome::Joined { answer: Some(ref answer), .. })

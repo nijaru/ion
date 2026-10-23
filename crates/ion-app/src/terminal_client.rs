@@ -810,10 +810,10 @@ fn handle_command(
                         ui.status = format!("Stop requested for {child}");
                     }
                     "acknowledge" => {
-                        let receipt = owner.take(child).context("no joined result to acknowledge (running, unknown or already acknowledged)")??;
+                        let report = owner.take(child).context("no joined result to acknowledge (running, unknown or already acknowledged)")??;
                         ui.print(format!(
                             "Acknowledged {child}; committed facts remain at {}",
-                            receipt.record.path.display()
+                            report.receipt.record.path.display()
                         ));
                     }
                     _ => anyhow::bail!("use /tasks [result|cancel|acknowledge UUID]"),

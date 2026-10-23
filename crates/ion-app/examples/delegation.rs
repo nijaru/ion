@@ -109,9 +109,9 @@ impl ToolExecutor for Delegate {
                 Err(error) => return output(json!(error.to_string()), true),
             };
             let task = if let Some(owner) = &self.owner {
-                task.in_background(owner.destination())
+                task.in_background(owner)
             } else {
-                task
+                task.task
             };
             match invocation.delegate(task).await {
                 Ok(receipt) => {

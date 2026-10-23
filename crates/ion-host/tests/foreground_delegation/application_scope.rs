@@ -59,7 +59,7 @@ async fn cancelled_result_wait_retains_original_answer_until_acknowledgement() {
         matches!(&joined.receipt.outcome, Some(DelegationOutcome::Joined { answer: Some(answer), error: None, .. }) if answer == "two")
     );
     let revision = owner.revision();
-    assert_eq!(owner.take(child).unwrap().unwrap(), joined.receipt);
+    assert_eq!(owner.take(child).unwrap().unwrap().receipt, joined.receipt);
     assert_ne!(owner.changed(revision).await, revision);
     assert!(owner.wait(&selected, Duration::ZERO).await.is_err());
     let permit = background::reserve(&owner).unwrap();

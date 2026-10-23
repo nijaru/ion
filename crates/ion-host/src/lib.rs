@@ -14,8 +14,8 @@ mod command_environment;
 mod control;
 mod credentials;
 pub use background::{
-    BackgroundChildSnapshot, BackgroundDestination, BackgroundJobStatus, BackgroundOwner,
-    BackgroundSnapshot, BackgroundSummary, BackgroundWait,
+    BackgroundChildFailure, BackgroundChildSnapshot, BackgroundDestination, BackgroundJobStatus,
+    BackgroundOwner, BackgroundSnapshot, BackgroundSummary, BackgroundWait,
 };
 mod delegation;
 mod edit_diff;
@@ -57,11 +57,11 @@ pub use control::{
     InputAcceptance, InputCustodyPhase, InputId, InputPhase, InputSnapshot, Observation,
     OperationId, OperationKind, OperationOutcome, OperationState, OutcomeSnapshot,
     RecoveryAdmission, RejectedInput, RequestAdmission, ReturnReason, ReturnSnapshot,
-    ReturnedInput, SessionControl, Settlement, ShutdownReport, SnapshotCursor, UpdateSnapshot,
-    UserInput,
+    ReturnedInput, SessionControl, Settlement, ShutdownReport, SnapshotCursor, SteeringReceipt,
+    SteeringStatus, TurnSteering, UpdateSnapshot, UserInput,
 };
 pub use credentials::{CredentialResolutionError, CredentialResolver};
-pub use delegation::SessionDelegation;
+pub use delegation::{ChildSteering, ChildSteeringReport, PreparedDelegation, SessionDelegation};
 pub use local_tools::LocalTools;
 pub use mcp::{
     McpConfig, McpExposure, McpHttpServer, McpServer, McpStartup, McpStdioServer, McpTools,

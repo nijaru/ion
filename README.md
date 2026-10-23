@@ -894,7 +894,11 @@ not a live lease, capability grant, replay permission or evidence of settlement.
 Rust applications can prepare a child with Host's
 `SessionDelegation` and request it through `ToolInvocation::delegate`. Its
 private live admission port is separate from the historical origin. The complete
-child application, authority assertion and environment are explicit.
+child application, authority assertion and environment are explicit. `prepare`
+returns `PreparedDelegation { task, steering }`: pass `task` for foreground work,
+retaining a clone of `steering` when another caller needs to guide it. Its
+`steer(&request_key, &message, &stop).await` waits for readiness without starting
+work itself, then queues literal input through the child's shared control.
 `execution_timeout_ms: Some(ms)` sets a positive runtime budget from linked child
 request submission, after materialization/preflight; `None` leaves that policy to
 the application. Progress and parent waits do not refresh it. Expiry requests
@@ -927,7 +931,7 @@ owner epoch at that invocation conflicts. `SessionView::delegations()` and
 `parent_delegation()` expose typed relationships without parsing tool prose.
 
 For background work, retain a Host `BackgroundOwner` and choose its live
-destination: `recipe.prepare(input)?.in_background(owner.destination())`. The
+destination: `recipe.prepare(input)?.in_background(&owner)`. The
 coding application owns one owner for its lifetime, shared across runtime reload
 and binding replacement; a child recipe does not capture it. Core reconciles
 exact repeats first, then reserves Host custody before admitting new work. Even a
@@ -947,12 +951,32 @@ acknowledging them. The `BackgroundWait` result includes `wait_expired` and
 `children` in requested order; zero duration polls already-retained joins.
 An empty, duplicate, unknown or acknowledged selection fails, even alongside a
 ready result. `child()`/`jobs()` inspect retained status;
-only `take(child)` releases a joined result's capacity. Capacity bounds
-reservations, running jobs and unread results together (1–64 slots), not history,
+only `take(child)` releases a joined result's capacity, returning its complete
+final snapshot atomically, including steering reports. An infrastructure error
+returns `BackgroundChildFailure` with both that snapshot and the typed cause.
+Capacity bounds reservations, running jobs and unread results together (1–64 slots), not history,
 encoded bytes or RSS. Changes are published through a revision plus notification;
 clients still reconcile snapshots rather than treating notification as delivery.
 Snapshots are privileged custody views, not an authenticated remote service or
 atomic Core/Host snapshots.
+
+`owner.steer(child, &request_key, &message, &stop).await` uses the grant captured
+with that actual job. Live request keys reconcile identical input within that
+child's retained controller; conflicting input fails. Keys are not authority or
+durable replay permission after owner loss. Status snapshots include `steering`
+reports with local input IDs and `queued`, `committed`, `returned` or `unknown`
+states. Committed means saved Session input, not proof a model request consumed or
+understood it. Returned reports preserve original literal input and its reason;
+control lost before joining stays unknown. Reports share the Host's 64 input/result
+allowance, including the root, rather than adding another input queue. Queue and
+status changes invalidate the owner without retaining a borrowed waiter.
+
+For another shared-control consumer, `SessionControl::steering()` returns a
+`TurnSteering` grant for its current model operation. `submit(message, metadata)`
+uses ordinary custody and returns a `SteeringReceipt` with `status()` and `changed()`.
+It cannot start another Turn or follow the control into a replacement binding.
+Dropping a receipt never withdraws admitted input; the controlling owner still
+drives transfer, stop, return and joining.
 
 A foreground child's actual original answer is retained with its joined
 relationship only after full Host/Core joining and a completed requested Turn.
@@ -1377,7 +1401,7 @@ no enabling flag. `CodingApplication` retains this policy through reload and
 binding replacement; supplied external registrations can override coding defaults.
 Restricted applications still choose their own complete `Application` recipe.
 
-The tool has explicit actions: `start`, `list`, `status`, `wait`, `cancel` and
+The tool has explicit actions: `start`, `list`, `status`, `wait`, `steer`, `cancel` and
 `acknowledge`. `start` accepts a self-contained `task` of at most 64 KiB UTF-8,
 optional `mode` (`foreground`, the default, or `background`), and optional
 `context`. Fresh context is the default; `{"type":"fork"}` copies the settled
@@ -1409,6 +1433,19 @@ completion claim and survives parent stop, parent-Session switch and reload, but
 not application shutdown. `list` and `status` inspect retained application jobs;
 `cancel` explicitly stops one child; `acknowledge` releases one joined result's
 capacity without deleting its committed facts.
+
+Use `{"action":"steer","child":"<child-id>","message":"Focus on the parser"}`
+to guide an owned running background child. Guidance is literal, nonblank text of
+at most 64 KiB UTF-8; it does not expand commands/resources, change the captured
+route or authority, interrupt current tools, reset a deadline or start another
+Turn. It joins the existing safe model-step boundary. The reply's `steering.status`
+is initially `queued`, not committed delivery; `status` and `wait` retain its input
+ID and subsequent `committed`, `returned` or `unknown` status. A returned report
+contains the original uncommitted input. Guidance cannot be recalled after
+admission, even if the parent stops waiting. Cancelling readiness leaves the child
+running. New guidance to a stopped, settled, unknown or acknowledged child fails;
+it never implicitly resumes it. Persistent named conversations, explicit child
+follow-up/resume and completion inbox delivery remain unfinished.
 
 `start` accepts `execution_timeout_ms`, defaulting to 1800000 (30 minutes), with
 1–7200000 milliseconds allowed. This bounds child model/tool execution from task

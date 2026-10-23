@@ -15,6 +15,8 @@ use tokio::sync::{Notify, Semaphore};
 mod preparation;
 #[path = "snapshot_tests.rs"]
 mod snapshots;
+#[path = "steering_tests.rs"]
+mod steering;
 
 // Deliberately neither Clone, Deserialize, nor Sync: UI/protocol metadata is
 // moved, never cloned into executors or model content.
@@ -100,14 +102,19 @@ impl ModelService for Model {
     }
 }
 
-struct Fixture {
+struct Fixture<M = Metadata> {
     root: PathBuf,
     host: Arc<Host>,
     selected: crate::Selection,
-    control: SessionControl<Metadata>,
+    control: SessionControl<M>,
 }
 impl Fixture {
     fn new(model: Arc<Model>, images: bool) -> Self {
+        Self::with_metadata(model, images)
+    }
+}
+impl<M: Serialize + Send + 'static> Fixture<M> {
+    fn with_metadata(model: Arc<Model>, images: bool) -> Self {
         let root = std::env::temp_dir().join(format!("ion-control-test-{}", uuid::Uuid::now_v7()));
         fs::create_dir_all(&root).unwrap();
         let host = Arc::new(Host::new(root.join("config"), root.join("state")));
@@ -153,7 +160,7 @@ impl Fixture {
         )).unwrap();
     }
 }
-impl Drop for Fixture {
+impl<M> Drop for Fixture<M> {
     fn drop(&mut self) {
         let _ = fs::remove_dir_all(&self.root);
     }

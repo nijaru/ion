@@ -119,12 +119,16 @@ impl CodingToolSource for Subagent {
             "children":{"type":"array","items":{"type":"string","format":"uuid"},"minItems":1,"maxItems":64,"uniqueItems":true},
             "timeout_ms":{"type":"integer","minimum":1,"maximum":MAX_WAIT_MS,"default":DEFAULT_WAIT_MS,"description":"One shared wait budget, not a child execution deadline. Returns all selected reports/statuses when any child joins, or expires with children still running. No cancellation or acknowledgement."}
         }}));
+        choices.push(json!({"type":"object","additionalProperties":false,"required":["action","child","message"],"properties":{
+            "action":{"const":"steer"}, "child":{"type":"string","format":"uuid"},
+            "message":{"type":"string","minLength":1,"maxLength":65536,"description":"Literal guidance for the owned running child, queued at the existing safe model-step boundary. No new Turn, route, instructions or authority. Queued is not committed; inspect steering status for commitment or returned input."}
+        }}));
         for action in ["status", "cancel", "acknowledge"] {
             choices.push(json!({"type":"object","additionalProperties":false,"required":["action","child"],"properties":{"action":{"const":action},"child":{"type":"string","format":"uuid"}}}));
         }
         let mut definition = ToolDefinition::external(ToolSpec {
             name: "subagent".into(),
-            description: "Managed coding Sessions. start(task, mode=foreground, context={type:fresh}, model?, reasoning?, execution_timeout_ms=1800000) inherits this request's captured route/reasoning unless explicitly overridden. model is an exact provider/model from the known catalog or configured routes, using that route's credential policy. No silent route/effort fallback; overrides affect only the new child, not this parent or user configuration. Workspace, resources and selected tools remain inherited; no automatic recursive built-in or sandbox/conflict isolation. context={type:fork} copies the settled committed prefix BEFORE the initiating Turn (not its unfinished conversation); optional point selects an earlier before_turn/after_turn boundary, validated by Core. Background start acknowledges committed ownership transfer, NOT completion: it survives parent stop and Session changes, not application shutdown. list/status inspect retained application jobs; wait(children, timeout_ms=300000) returns all selected reports/statuses when any joins, or wait_expired=true after the shared budget (1..600000 ms), without consuming results or stopping children. Wait again only on still-running IDs; cancel explicitly stops that child; acknowledge releases a joined result's capacity. Parent stop cancels a wait, not transferred work. Use wait/status before depending on results; answers are child claims, not independent verification. Results and original answers remain in committed relationship facts. Unknown/acknowledged IDs grant no authority or replay. Each child has a separate execution budget (default 30 minutes, 1..7200000 ms). Expiry requests stop and fully joins before reporting execution_timed_out; effects are not rolled back or safely replayable, and cleanup may outlive the budget. No automatic retries. Normal headless runs drain owned work before exit; quit/EOF/interruption stops and joins it.".into(),
+            description: "Managed coding Sessions. start(task, mode=foreground, context={type:fresh}, model?, reasoning?, execution_timeout_ms=1800000) inherits this request's captured route/reasoning unless explicitly overridden. model is an exact provider/model from the known catalog or configured routes, using that route's credential policy. No silent route/effort fallback; overrides affect only the new child, not this parent or user configuration. Workspace, resources and selected tools remain inherited; no automatic recursive built-in or sandbox/conflict isolation. context={type:fork} copies the settled committed prefix BEFORE the initiating Turn (not its unfinished conversation); optional point selects an earlier before_turn/after_turn boundary, validated by Core. Background start acknowledges committed ownership transfer, NOT completion: it survives parent stop and Session changes, not application shutdown. list/status inspect retained application jobs; wait(children, timeout_ms=300000) returns all selected reports/statuses when any joins, or wait_expired=true after the shared budget (1..600000 ms), without consuming results or stopping children. Wait again only on still-running IDs. steer(child, message) queues literal guidance in that child's existing shared control, after current tool calls and before its next model step. It does not interrupt work, start another Turn, reset the execution deadline or change authority/model/instructions. Queued is not committed delivery: status/wait retain per-input committed, returned or unknown states. Late uncommitted guidance returns its original input; stopped/settled/acknowledged children reject new guidance, never resume implicitly. Parent cancellation before steering admission leaves the child running; after admission it cannot recall queued input. Live request identity reconciles exact repeated invocations, not owner loss. cancel explicitly stops that child; acknowledge releases a joined result's capacity. Parent stop cancels a wait, not transferred work. Use wait/status before depending on results; answers are child claims, not independent verification. Results and original answers remain in committed relationship facts. Unknown/acknowledged IDs grant no authority or replay. Each child has a separate execution budget (default 30 minutes, 1..7200000 ms). Expiry requests stop and fully joins before reporting execution_timed_out; effects are not rolled back or safely replayable, and cleanup may outlive the budget. No automatic retries. Normal headless runs drain owned work before exit; quit/EOF/interruption stops and joins it.".into(),
             input_schema: json!({"type":"object","oneOf":choices}),
         });
         definition.presentation =
@@ -171,6 +175,10 @@ enum Input {
         children: Vec<uuid::Uuid>,
         #[serde(default = "default_wait_ms")]
         timeout_ms: u64,
+    },
+    Steer {
+        child: uuid::Uuid,
+        message: String,
     },
     Cancel {
         child: uuid::Uuid,
@@ -222,7 +230,9 @@ fn receipt_output(
     )
 }
 fn child_output(child: BackgroundChildSnapshot) -> CodingToolOutput {
-    receipt_output(child.receipt, child.joined, child.error)
+    let mut output = receipt_output(child.receipt, child.joined, child.error);
+    output.value["steering"] = json!(child.steering);
+    output
 }
 impl ToolExecutor for Subagent {
     fn execute<'a>(&'a self, invocation: ToolInvocation<'a>) -> BoxFuture<'a, CodingToolOutput> {
@@ -319,13 +329,45 @@ impl ToolExecutor for Subagent {
                         Err(error) => return failure(error),
                     };
                     let task = match mode {
-                        Mode::Foreground => task,
-                        Mode::Background => task.in_background(self.owner.destination()),
+                        Mode::Foreground => task.task,
+                        Mode::Background => task.in_background(&self.owner),
                     };
                     match invocation.delegate(task).await {
                         Ok(receipt) => {
                             let joined = receipt.outcome.is_some();
                             receipt_output(receipt, joined, None)
+                        }
+                        Err(error) => failure(error),
+                    }
+                }
+                Input::Steer { child, message } => {
+                    if message.trim().is_empty() || message.len() > 65536 {
+                        return failure(
+                            "steering message must be nonblank and at most 65536 UTF-8 bytes",
+                        );
+                    }
+                    let id = format!(
+                        "{}:{}:{}:{}:{:?}",
+                        origin.session(),
+                        origin.turn(),
+                        origin.occurrence().assistant_entry,
+                        origin.occurrence().ordinal,
+                        origin.composed_child()
+                    );
+                    let request = ion_core::RequestKey::new("ion.delegation.steering".into(), id)
+                        .expect("fixed namespace and engine coordinates fit request-key bounds");
+                    match self
+                        .owner
+                        .steer(
+                            child,
+                            &request,
+                            &Message::user_input(message, []),
+                            invocation.stop(),
+                        )
+                        .await
+                    {
+                        Ok(report) => {
+                            output(json!({"child_session":child,"steering":report}), false)
                         }
                         Err(error) => failure(error),
                     }
@@ -367,8 +409,8 @@ impl ToolExecutor for Subagent {
                     Err(error) => failure(error),
                 },
                 Input::Acknowledge { child } => match self.owner.take(child) {
-                    Some(Ok(receipt)) => receipt_output(receipt, true, None),
-                    Some(Err(error)) => failure(error),
+                    Some(Ok(report)) => child_output(report),
+                    Some(Err(error)) => child_output(error.child),
                     None => failure(
                         "no joined result to acknowledge (running, unknown or already acknowledged)",
                     ),

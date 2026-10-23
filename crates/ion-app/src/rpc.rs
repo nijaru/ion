@@ -150,7 +150,7 @@ impl Control {
                     let child = required_string(&value, "child")?.parse::<uuid::Uuid>()?;
                     let owner = self.host.background().context("application has no background owner")?;
                     let result = owner.take(child).context("no joined result to acknowledge (running, unknown or already acknowledged)")??;
-                    Ok(json!({"receipt":result}))
+                    Ok(json!({"receipt":result.receipt,"steering":result.steering}))
                 }
                 "inspect" => inspection::to_value(&self.host.session().view()?),
                 "list_sessions" => Ok(json!(self.host.catalog().list()?.iter().map(|item| json!({"id":item.id,"name":item.name,"preview":item.preview,"turns":item.turns,"model":item.model})).collect::<Vec<_>>())),

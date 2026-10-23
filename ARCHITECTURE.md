@@ -327,6 +327,27 @@ Timeout is a failed relationship with no answer, not a rewrite of the child's
 ordinary Turn end. Infrastructure failures remain fatal even alongside timeout.
 Lost custody remains `Unknown`, not timed out, rolled back or safe to replay.
 
+Live child guidance uses the same Host input custody as root steering. A prepared
+Host recipe returns its cold task and an ephemeral control grant; background
+transfer retains the matching grant with the actual job and verifies child
+identity before admission. A grant is fenced to one model operation and stop scope,
+not a Session UUID or a serialized lease. It cannot follow rebinding or start a
+later Turn. There is no second steering queue, agent loop or direct Core-inbox
+bypass. Literal inputs share existing admission capacity, byte reservations and
+FIFO transfer; ID order is actual admission order even with concurrent producers.
+
+Queued acknowledgement is not committed steering. Receipt projections track
+atomic Core commitment, original input returned on stop/end, or unknown custody
+when control is lost before joining. Core consumes inbox entries only after
+persistence; joined Host reconciliation preserves consumed input's acceptance even
+if a post-commit observer failed. Never classify it as unaccepted/replayable.
+Commitment is not proof of a later model request or understanding. Cancelling
+readiness leaves the child alone; abandoning a waiter cannot recall an input
+already admitted. Live request keys reconcile exact input only within the retained
+grant, not after owner loss. Receipt changes invalidate the supervising owner
+without a new task or reader-owned wakeup; pending intent/projections are not a
+second durable ledger. Committed child input remains in the child Session.
+
 A swarm coordinator may choose roles, topology, message routing, budgets and
 scheduling. Ion supplies execution identity, authority, observable relationships,
 stop/join and outcomes. Concurrent agents sharing files need conflict policy;
@@ -369,7 +390,7 @@ ownership through normal completion; interruption, RPC EOF and terminal quit
 stop and join it before potentially blocking final publication. No daemon is
 implied.
 
-Model-facing coding actions are start/list/status/wait/cancel/acknowledge. A
+Model-facing coding actions are start/list/status/wait/steer/cancel/acknowledge. A
 background start receipt means committed responsibility transfer, not completion.
 Wait and status return retained typed outcomes without consuming them. Wait
 selects 1–64 unique owned children and returns all selected statuses, in requested
@@ -388,6 +409,12 @@ Acknowledgement releases only joined capacity. A child's original visible answer
 is retained only when its requested Turn completed and full Host/Core joining
 succeeded. Failure clears it; it is never reconstructed by reopening storage.
 Notifications are invalidations, not result delivery or completion proof.
+Coding `steer(child, message)` targets a live owned background child with nonblank
+literal guidance of at most 64 KiB UTF-8. It neither changes captured model,
+resources/instructions or authority nor resets the execution deadline. Stopped,
+settled, unknown and acknowledged children reject new guidance; no implicit
+follow-up/resume is introduced. The general Host control grant is also available
+to a foreground child's application caller.
 
 Do not fabricate user instructions or successful answers to deliver
 notifications. Automatic root continuation must not silently select or adopt a

@@ -12,6 +12,7 @@ use std::{
     time::Duration,
 };
 
+use crate::{ChildSteering, ChildSteeringReport};
 use anyhow::{Result, ensure};
 use ion_core::{
     BackgroundJob, BackgroundSlot, BackgroundStartError, CodingSession, CodingSessionError,
@@ -51,6 +52,19 @@ impl Wake for CompletionWake {
     }
 }
 
+// A weak invalidator cannot form a cycle through job control and its receipts.
+struct SteeringWake(Weak<Shared>);
+impl Wake for SteeringWake {
+    fn wake(self: Arc<Self>) {
+        self.wake_by_ref();
+    }
+    fn wake_by_ref(self: &Arc<Self>) {
+        if let Some(shared) = self.0.upgrade() {
+            shared.invalidate();
+        }
+    }
+}
+
 #[derive(Default)]
 struct State {
     reserved: usize,
@@ -62,10 +76,12 @@ struct Child {
     parent: Weak<CodingSession>,
     operation: Option<Operation<DelegationReceipt, CodingSessionError>>,
     result: Option<Result<DelegationReceipt, CodingSessionError>>,
+    steering: Option<ChildSteering>,
 }
 
 /// Cold live destination, not serialized authority.
 pub struct BackgroundDestination {
+    steering: Option<ChildSteering>,
     shared: Arc<Shared>,
     reserved: bool,
 }
@@ -100,7 +116,30 @@ pub struct BackgroundChildSnapshot {
     /// Actual retained operation joined, not merely visible child completion.
     pub joined: bool,
     pub error: Option<String>,
+    pub steering: Vec<ChildSteeringReport>,
 }
+/// Infrastructure acknowledgement retains the complete view as well as its
+/// original typed cause; releasing custody must not discard returned guidance.
+pub struct BackgroundChildFailure {
+    pub child: BackgroundChildSnapshot,
+    pub error: CodingSessionError,
+}
+impl std::fmt::Debug for BackgroundChildFailure {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        self.error.fmt(f)
+    }
+}
+impl std::fmt::Display for BackgroundChildFailure {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        self.error.fmt(f)
+    }
+}
+impl std::error::Error for BackgroundChildFailure {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        Some(&self.error)
+    }
+}
+
 /// Non-consuming selection snapshot after any join or expiry of one wait budget.
 /// Expiry and dropping this report do not stop or acknowledge selected children.
 #[derive(Clone, Serialize)]
@@ -119,6 +158,10 @@ impl Child {
                 .unwrap_or(&self.receipt)
                 .clone(),
             joined: self.operation.is_none(),
+            steering: self
+                .steering
+                .as_ref()
+                .map_or_else(Vec::new, ChildSteering::snapshot),
             error: self
                 .result
                 .as_ref()
@@ -151,6 +194,7 @@ impl BackgroundOwner {
     }
     pub fn destination(&self) -> BackgroundDestination {
         BackgroundDestination {
+            steering: None,
             shared: self.shared.clone(),
             reserved: false,
         }
@@ -382,6 +426,29 @@ impl BackgroundOwner {
             }
         }
     }
+    /// Queue guidance through the live grant captured with this actual job.
+    /// A joined job can reconcile a prior key, never admit another input/Turn.
+    pub async fn steer(
+        &self,
+        child: uuid::Uuid,
+        request: &ion_core::RequestKey,
+        input: &ion_ai::Message,
+        stop: &CancellationToken,
+    ) -> Result<ChildSteeringReport> {
+        self.ensure_open()?;
+        let steering = self
+            .shared
+            .lock()
+            .children
+            .get(&child)
+            .ok_or_else(|| anyhow::anyhow!("child is not owned here (unknown or acknowledged)"))?
+            .steering
+            .clone()
+            .ok_or_else(|| anyhow::anyhow!("this child has no live steering grant"))?;
+        steering
+            .steer_child(Some(child), request, input, stop)
+            .await
+    }
     pub fn request_stop(&self, id: uuid::Uuid) -> Result<()> {
         let state = self.shared.lock();
         let child = state
@@ -414,15 +481,40 @@ impl BackgroundOwner {
         self.drain().await
     }
     /// Explicitly acknowledge one joined result. Unknown/unjoined returns None;
-    /// callers can inspect first to distinguish running from absent custody.
-    pub fn take(&self, child: uuid::Uuid) -> Option<Result<DelegationReceipt, CodingSessionError>> {
+    /// Returns the complete final view, including returned guidance, atomically
+    /// with releasing custody. Infrastructure failures retain their typed cause.
+    pub fn take(
+        &self,
+        child: uuid::Uuid,
+    ) -> Option<Result<BackgroundChildSnapshot, BackgroundChildFailure>> {
         let mut state = self.shared.lock();
         if state.children.get(&child)?.operation.is_some() {
             return None;
         }
-        let result = state.children.remove(&child)?.result;
+        let child = state.children.remove(&child)?;
+        let steering = child
+            .steering
+            .as_ref()
+            .map_or_else(Vec::new, ChildSteering::snapshot);
+        let result = match child.result.expect("joined child retains its result") {
+            Ok(receipt) => Ok(BackgroundChildSnapshot {
+                receipt,
+                joined: true,
+                error: None,
+                steering,
+            }),
+            Err(error) => Err(BackgroundChildFailure {
+                child: BackgroundChildSnapshot {
+                    receipt: child.receipt,
+                    joined: true,
+                    error: Some(error.to_string()),
+                    steering,
+                },
+                error,
+            }),
+        };
         self.shared.invalidate();
-        result
+        Some(result)
     }
 }
 impl Shared {
@@ -463,6 +555,14 @@ impl Drop for BackgroundDestination {
         }
     }
 }
+impl BackgroundDestination {
+    /// Attach the matching prepared live grant; actual child identity is checked
+    /// again before steering. Serializable job coordinates alone grant no control.
+    pub fn with_steering(mut self, steering: ChildSteering) -> Self {
+        self.steering = Some(steering);
+        self
+    }
+}
 impl BackgroundSlot for BackgroundDestination {
     fn owner(&self) -> uuid::Uuid {
         self.shared.id
@@ -499,6 +599,11 @@ impl BackgroundSlot for BackgroundDestination {
                 "background owner is closed".into(),
             ));
         }
+        if let Some(steering) = &self.steering {
+            steering.observe_changes(Waker::from(Arc::new(SteeringWake(Arc::downgrade(
+                &self.shared,
+            )))));
+        }
         let parent = Arc::downgrade(job.parent());
         let weak = Arc::downgrade(&self.shared);
         let (receipt, operation) =
@@ -514,6 +619,7 @@ impl BackgroundSlot for BackgroundDestination {
                 parent,
                 operation: Some(operation),
                 result: None,
+                steering: self.steering.take(),
             },
         );
         state.reserved -= 1;
