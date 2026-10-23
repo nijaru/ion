@@ -143,6 +143,8 @@ fn fork_copies_literal_prefix_and_coordinates_but_not_parent_ownership_or_config
                 &historical,
                 DelegationOutcome::Joined {
                     execution_timed_out: false,
+                    elapsed_ms: None,
+                    partial_output: None,
                     receipt: None,
                     error: Some("stopped before materialization".into()),
                     answer: None,

@@ -16,6 +16,8 @@ pub(super) async fn run_child(
         return (
             DelegationOutcome::Joined {
                 execution_timed_out: false,
+                elapsed_ms: None,
+                partial_output: None,
                 receipt: None,
                 error: Some("stopped before child materialization".into()),
                 answer: None,
@@ -33,6 +35,8 @@ pub(super) async fn run_child(
             return (
                 DelegationOutcome::Joined {
                     execution_timed_out: false,
+                    elapsed_ms: None,
+                    partial_output: None,
                     receipt: None,
                     error: Some(message.clone()),
                     answer: None,
@@ -52,7 +56,15 @@ pub(super) async fn run_child(
     let mut errors = Vec::new();
     let mut answer = None;
     if completion.execution_timed_out {
-        errors.push("child execution deadline exceeded".into());
+        errors.push(
+            match (completion.elapsed_ms, record.spec.execution_timeout_ms) {
+                (Some(ms), Some(budget)) => {
+                    format!("child execution deadline exceeded after {ms} ms (budget {budget} ms)")
+                }
+                (Some(ms), None) => format!("child execution deadline exceeded after {ms} ms"),
+                (None, _) => "child execution deadline exceeded".into(),
+            },
+        );
     }
     match completion.result {
         Ok(observed) => answer = observed,
@@ -94,6 +106,12 @@ pub(super) async fn run_child(
     (
         DelegationOutcome::Joined {
             execution_timed_out: completion.execution_timed_out,
+            elapsed_ms: completion.elapsed_ms,
+            partial_output: if errors.is_empty() {
+                None
+            } else {
+                completion.partial_output
+            },
             receipt,
             error: (!errors.is_empty()).then(|| errors.join("; ")),
             answer,

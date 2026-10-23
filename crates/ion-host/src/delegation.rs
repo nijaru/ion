@@ -8,7 +8,9 @@ use ion_core::{
     DelegationSpec, DelegationTask,
 };
 
-use crate::{Application, ControlUpdate, OperationOutcome, SessionCatalog, SessionSetup};
+use crate::{Application, ControlUpdate, SessionCatalog, SessionSetup};
+
+mod report;
 
 mod steering;
 pub use steering::{ChildSteering, ChildSteeringReport, PreparedDelegation};
@@ -80,8 +82,11 @@ impl SessionDelegation {
         let (steering, ready) = ChildSteering::new(runtime.agent.limits());
         let task = DelegationTask::new(spec, move |child, request, stop| {
             Box::pin(async move {
-                // Keep deadline provenance even if stop/join or cleanup fails.
+                // Runtime ends at observed stop/settlement, not after sweeping
+                // descendants. Both the report and timeout cause survive cleanup.
                 let mut execution_timed_out = false;
+                let mut elapsed_ms = None;
+                let mut report = report::ChildReport::default();
                 let result = async {
                     let child_id = child.id();
                     let processes = runtime.processes.clone();
@@ -96,9 +101,14 @@ impl SessionDelegation {
                     )
                     .map_err(|error| DelegationFailure::Infrastructure(error.to_string()))?;
                     let mut control = setup.into_control::<()>();
+                    let started = tokio::time::Instant::now();
+                    let elapsed = || {
+                        u64::try_from(started.elapsed().as_millis())
+                            .expect("monotonic runtime fits milliseconds")
+                    };
                     let deadline = execution_timeout_ms
                         .map(|ms| {
-                            tokio::time::Instant::now()
+                            started
                                 .checked_add(Duration::from_millis(ms))
                                 .ok_or_else(|| {
                                     DelegationFailure::Execution(
@@ -116,81 +126,63 @@ impl SessionDelegation {
                     if let Some(port) = control.steering() {
                         ready.send_replace(Some((child_id, request.key.clone(), port)));
                     }
-                    let mut failure = admission
+                    report.failure = admission
                         .err()
                         .map(|rejected| admission_failure(rejected.reason));
-                    {
-                        let expires = async {
-                            match deadline {
-                                Some(deadline) => tokio::time::sleep_until(deadline).await,
-                                None => std::future::pending().await,
+                    let expires = async {
+                        match deadline {
+                            Some(deadline) => tokio::time::sleep_until(deadline).await,
+                            None => std::future::pending().await,
+                        }
+                    };
+                    tokio::pin!(expires);
+                    let mut stopping = false;
+                    while control.is_busy() {
+                        tokio::select! {
+                            biased;
+                            () = stop.cancelled(), if !stopping => {
+                                elapsed_ms = Some(elapsed());
+                                stopping = true;
+                                control.request_shutdown();
                             }
-                        };
-                        tokio::pin!(expires);
-                        while control.is_busy() {
-                            tokio::select! {
-                                biased;
-                                () = stop.cancelled() => { control.request_stop(); break; }
-                                () = &mut expires => {
-                                    execution_timed_out = true;
-                                    control.request_stop();
-                                    break;
+                            () = &mut expires, if !stopping => {
+                                elapsed_ms = Some(elapsed());
+                                execution_timed_out = true;
+                                stopping = true;
+                                control.request_shutdown();
+                            }
+                            update = control.next() => {
+                                if matches!(update, ControlUpdate::Settled(_)) {
+                                    elapsed_ms.get_or_insert_with(elapsed);
                                 }
-                                _ = control.maintain() => {}
+                                report.observe(update);
                             }
                         }
                     }
-                    // Completion facts precede Host settlement. Always join the whole
-                    // owner, even after admission refusal or a parent stop.
-                    let report = control.shutdown().await;
-                    // The child cannot transfer a process grant by returning its ID.
-                    // Close this quiescent scope before releasing its answer, even
-                    // when its Core Turn ended normally or its waiter was cancelled.
+                    elapsed_ms.get_or_insert_with(elapsed);
+                    // Still join the whole owner and collect reliable settlements.
+                    // Unlike shutdown's discarded provisional stream, next() above
+                    // preserves safe visible progress while stopped cleanup joins.
+                    let shutdown = control.shutdown().await;
+                    for update in shutdown.updates {
+                        report.observe(update);
+                    }
                     if let Some(processes) = processes
                         && let Err(error) = processes.close_session(child_id).await
                     {
-                        retain_failure(
-                            &mut failure,
-                            DelegationFailure::Infrastructure(error.to_string()),
-                        );
+                        report.fail(DelegationFailure::Infrastructure(error.to_string()));
                     }
-                    let mut answer = None;
-                    for update in report.updates {
-                        if let ControlUpdate::Settled(settlement) = update
-                            && let OperationOutcome::Turn(outcome) = settlement.outcome
-                        {
-                            match outcome {
-                                Ok(text) => answer = Some(text),
-                                Err(error) => {
-                                    let error = if infrastructure(&error) {
-                                        DelegationFailure::Infrastructure(error.to_string())
-                                    } else {
-                                        DelegationFailure::Execution(error.to_string())
-                                    };
-                                    retain_failure(&mut failure, error);
-                                }
-                            }
-                        }
+                    for error in shutdown.cleanup_errors {
+                        report.fail(DelegationFailure::Infrastructure(error.to_string()));
                     }
-                    for error in report.cleanup_errors {
-                        retain_failure(
-                            &mut failure,
-                            DelegationFailure::Infrastructure(error.to_string()),
-                        );
-                    }
-                    if let Some(failure) = failure {
-                        return Err(failure);
-                    }
-                    answer.map(Some).ok_or_else(|| {
-                        DelegationFailure::Infrastructure(
-                            "child control joined without its successful answer".into(),
-                        )
-                    })
+                    report.take_result()
                 }
                 .await;
                 DelegationCompletion {
                     result,
                     execution_timed_out,
+                    elapsed_ms,
+                    partial_output: report.output(),
                 }
             })
         })

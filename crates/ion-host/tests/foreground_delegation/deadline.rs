@@ -65,6 +65,9 @@ async fn deadline_stops_but_joins_and_retains_provenance_after_infrastructure_fa
         } else {
             assert!(f.control.is_busy());
         }
+        // Runtime is already frozen at stop; another minute of held cleanup
+        // must not be relabelled as task execution.
+        tokio::time::sleep(Duration::from_secs(60)).await;
         tokio::time::resume();
 
         f.effect.release.notify_one();
@@ -87,10 +90,24 @@ async fn deadline_stops_but_joins_and_retains_provenance_after_infrastructure_fa
             receipt,
             error: Some(_),
             answer: None,
+            ..
         }) = &outcome
         else {
             panic!("timeout provenance must survive full joining and cleanup errors: {outcome:?}");
         };
+        let Some(DelegationOutcome::Joined {
+            elapsed_ms: Some(runtime),
+            partial_output,
+            ..
+        }) = &outcome
+        else {
+            panic!("runtime survives cleanup");
+        };
+        assert!(*runtime >= 60_000 && *runtime < 121_000);
+        assert!(
+            partial_output.is_none(),
+            "tool-only messages do not become partial text"
+        );
         if !fault {
             assert_eq!(
                 receipt.as_ref().unwrap().end,
@@ -179,6 +196,31 @@ async fn model_progress_does_not_refresh_the_execution_deadline() {
             execution_timed_out: true, answer: None, receipt: Some(receipt), ..
         }) if receipt.end == Some(TurnEndReason::Cancelled)
     ));
+    let outcome = f.session.view().unwrap().delegations()[0]
+        .outcome
+        .clone()
+        .unwrap();
+    let DelegationOutcome::Joined {
+        elapsed_ms,
+        partial_output,
+        error,
+        ..
+    } = outcome
+    else {
+        panic!("joined");
+    };
+    let runtime = elapsed_ms.unwrap();
+    // Tokio timers may wake one millisecond after the ideal paused deadline.
+    assert!((60_000..=60_001).contains(&runtime));
+    let output = partial_output.expect("streamed text must survive timeout");
+    assert!(
+        output.text.starts_with("still working") && !output.truncated && !output.observation_gap
+    );
+    assert!(
+        error
+            .unwrap()
+            .contains(&format!("{runtime} ms (budget 60000 ms)"))
+    );
     f.control.shutdown().await;
     let root = f.root.clone();
     drop(f);

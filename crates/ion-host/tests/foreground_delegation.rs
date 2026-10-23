@@ -30,6 +30,8 @@ mod background;
 mod deadline;
 #[path = "foreground_delegation/join.rs"]
 mod join;
+#[path = "foreground_delegation/report.rs"]
+mod report;
 #[path = "foreground_delegation/steering.rs"]
 mod steering;
 
@@ -498,7 +500,7 @@ async fn fresh_foreground_child_reconciles_without_inheriting_parent_configurati
     assert_eq!(f.child.requests().len(), 2);
     assert_eq!(view.last_end, Some((1, TurnEndReason::Completed)));
     assert!(
-        matches!(&links[0].outcome, Some(DelegationOutcome::Joined { execution_timed_out: false, receipt: Some(receipt), error: None, answer: Some(_) })
+        matches!(&links[0].outcome, Some(DelegationOutcome::Joined { execution_timed_out: false, receipt: Some(receipt), error: None, answer: Some(_), .. })
         if receipt.session == links[0].record.child && receipt.end == Some(TurnEndReason::Completed))
     );
     let Some(DelegationOutcome::Joined { answer, .. }) = &links[0].outcome else {

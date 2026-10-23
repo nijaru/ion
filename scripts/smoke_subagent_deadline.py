@@ -88,13 +88,15 @@ try {
   await tools.subagent({action:'cancel',id:cancelled.value.id});
   const stopped = await tools.subagent({action:'wait',ids:[cancelled.value.id],timeout_ms:10000});
   const foreground = await start('FOREGROUND',{execution_timeout_ms:3000});
-  return {invalid,expired,survivor,brief,first,retained,checked,survived,stopped,foreground};
+  const streaming = await start('STREAM',{execution_timeout_ms:3000});
+  return {invalid,expired,survivor,brief,first,retained,checked,survived,stopped,foreground,streaming};
 } finally {
   await Promise.all(['EXPIRE','SURVIVE','CANCEL','FOREGROUND'].map(release));
 }
 """
     code = code.replace('CHECK_COMMAND', json.dumps(shlex.join([sys.executable, str(program), 'check'])))
     failures, requests, schemas = [], [], []
+    stream_release = threading.Event()
 
     def tool(name, arguments):
         return {"tool_calls": [{"index": 0, "id": "fixture", "type": "function",
@@ -114,11 +116,23 @@ try {
                                             if item["function"]["name"] == "subagent"))
                     delta = tool("code_mode", {"code": code}) if fresh else {"content": "PARENT_DEADLINE_DONE"}
                 else:
-                    assert user in ("EXPIRE", "SURVIVE", "CANCEL", "FOREGROUND"), user
+                    assert user in ("EXPIRE", "SURVIVE", "CANCEL", "FOREGROUND", "STREAM"), user
+                    if user == 'STREAM':
+                        assert fresh
+                        self.send_response(200)
+                        self.send_header('Content-Type', 'text/event-stream')
+                        self.send_header('Connection', 'close')
+                        self.end_headers()
+                        partial = {'choices':[{'index':0,'delta':{'content':'🚀'*13000},'finish_reason':None}]}
+                        self.wfile.write(b'data: '+json.dumps(partial).encode()+b'\n\n')
+                        self.wfile.flush()
+                        stream_release.wait(20)
+                        return
                     assert "subagent" not in {item["function"]["name"] for item in body.get("tools", [])}
                     if fresh:
                         delta = tool("exec", {"command": "exec " + shlex.join([sys.executable, str(program), user]),
                                               "timeout_ms": 120000})
+                        delta['content'] = 'VISIBLE_'+user
                     else:
                         assert user == "SURVIVE", f"stopped child dispatched more model work: {user}"
                         delta = {"content": "SURVIVOR_ANSWER"}
@@ -173,6 +187,23 @@ try {
             assert outcome["receipt"]["end"] == "cancelled", receipt
         assert result["stopped"]["is_error"] and result["foreground"]["is_error"]
         assert not survived["outcome"]["execution_timed_out"]
+        assert survived['outcome']['partial_output'] is None
+        assert isinstance(survived['outcome']['elapsed_ms'], int)
+        for report, name in [(timed_out, 'EXPIRE'), (cancelled, 'CANCEL'), (foreground, 'FOREGROUND')]:
+            observation = report['outcome']['partial_output']
+            assert observation == {'text':'VISIBLE_'+name,'truncated':False,'observation_gap':False}, report
+            elapsed = report['outcome']['elapsed_ms']
+            assert isinstance(elapsed, int) and elapsed >= 0, report
+            if report['outcome']['execution_timed_out']:
+                assert elapsed >= 3000, report
+                assert f'after {elapsed} ms (budget 3000 ms)' in report['outcome']['error'], report
+        streaming = result['streaming']['value']
+        assert result['streaming']['is_error'] and streaming['joined']
+        streamed = streaming['outcome']
+        assert streamed['execution_timed_out'] and streamed['answer'] is None, {key:value for key,value in streamed.items() if key != 'partial_output'}
+        assert streamed['elapsed_ms'] >= 3000
+        assert streamed['partial_output'] == {'text':'🚀'*12800,'truncated':True,'observation_gap':False}
+        assert requests.count('STREAM') == 1, requests
         assert requests.count("SURVIVE") == 2 and requests.count("PARENT") == 2, requests
         for name in ("EXPIRE", "CANCEL", "FOREGROUND"):
             assert requests.count(name) == 1, requests
@@ -191,11 +222,12 @@ try {
         assert inspected['entries'] == entries, 'CLI inspection dropped deadline facts'
         admissions = [entry["data"]["record"] for entry in entries if entry["kind"] == "delegation_admitted"]
         outcomes = {entry["data"]["run"]: entry["data"]["outcome"] for entry in entries if entry["kind"] == "delegation_settled"}
-        assert len(admissions) == len(outcomes) == 4, (admissions, outcomes)
-        for receipt in (timed_out, survived, cancelled, foreground):
+        assert len(admissions) == len(outcomes) == 5, (admissions, outcomes)
+        for receipt in (timed_out, survived, cancelled, foreground, streaming):
             assert outcomes[receipt["id"]] == receipt["outcome"]
-        print("coding deadlines: foreground/background stop and join native descendants; wait expiry and cancellation remain distinct, sibling/default budget survive, typed facts retained: OK")
+        print("coding deadlines: foreground/background native joining, independent expiry/cancellation; bounded visible committed/provisional reports, elapsed runtime and typed facts retained: OK")
     finally:
+        stream_release.set()
         server.shutdown()
         server.server_close()
         thread.join(timeout=5)

@@ -107,7 +107,7 @@ async fn transfer_survives_parent_work_and_shutdown_and_retains_unread_results()
         );
         let receipt = owner.take(child).unwrap().unwrap().receipt;
         assert!(
-            matches!(receipt.outcome, Some(DelegationOutcome::Joined { execution_timed_out: false, receipt: Some(ref receipt), error: None, answer: Some(_) }) if receipt.end == Some(TurnEndReason::Completed))
+            matches!(receipt.outcome, Some(DelegationOutcome::Joined { execution_timed_out: false, receipt: Some(ref receipt), error: None, answer: Some(_), .. }) if receipt.end == Some(TurnEndReason::Completed))
         );
         let reused = reserve(&owner).unwrap();
         assert!(
@@ -365,7 +365,7 @@ async fn cancelling_the_active_parent_after_transfer_does_not_cancel_the_child()
     let child = owner.snapshot().runs[0].receipt.record.run;
     let receipt = owner.take(child).unwrap().unwrap().receipt;
     assert!(
-        matches!(receipt.outcome, Some(DelegationOutcome::Joined { execution_timed_out: false, receipt: Some(ref receipt), error: None, answer: Some(_) }) if receipt.end == Some(TurnEndReason::Completed))
+        matches!(receipt.outcome, Some(DelegationOutcome::Joined { execution_timed_out: false, receipt: Some(ref receipt), error: None, answer: Some(_), .. }) if receipt.end == Some(TurnEndReason::Completed))
     );
     owner.join_shutdown().await.unwrap();
     let root = f.root.clone();

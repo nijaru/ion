@@ -134,7 +134,7 @@ async fn expiry_moves_same_live_run_and_grant_without_refreshing_execution_deadl
     let result = owner.take(id).unwrap().unwrap();
     assert!(
         matches!(&result.receipt.outcome, Some(DelegationOutcome::Joined {
-        execution_timed_out: true, receipt: Some(receipt), error: Some(_), answer: None,
+        execution_timed_out: true, receipt: Some(receipt), error: Some(_), answer: None, ..
     }) if receipt.end == Some(TurnEndReason::Cancelled))
     );
     assert!(

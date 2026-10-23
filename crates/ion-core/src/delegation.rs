@@ -10,7 +10,9 @@ use crate::{AuthorityScope, CodingSession, RequestReceipt, SubmissionRequest, To
 
 mod background;
 mod execution;
+mod report;
 pub use background::{BackgroundJob, BackgroundSlot, BackgroundStartError};
+pub use report::{DelegationPartialOutput, MAX_DELEGATION_PARTIAL_BYTES};
 pub(crate) mod gateway;
 #[cfg(test)]
 mod tests;
@@ -158,6 +160,12 @@ pub enum DelegationOutcome {
         /// Distinct from wait expiry, explicit stop and unknown effects; cleanup
         /// has still joined, and its independent failures remain in `error`.
         execution_timed_out: bool,
+        /// Runtime through observed stop/settlement, excluding subsequent cleanup.
+        /// None means the trusted callback did not observe runtime.
+        elapsed_ms: Option<u64>,
+        /// Bounded visible output from an unsuccessful run, never a final answer
+        /// or evidence that its claims/effects committed. No thinking/tool arguments.
+        partial_output: Option<DelegationPartialOutput>,
         receipt: Option<RequestReceipt>,
         error: Option<String>,
         /// Visible text of the requested child's committed final response,
@@ -188,6 +196,12 @@ pub enum DelegationFailure {
 pub struct DelegationCompletion {
     pub result: Result<Option<String>, DelegationFailure>,
     pub execution_timed_out: bool,
+    /// From linked submission through observed stop/settlement, not later cleanup.
+    /// None when this callback did not observe runtime.
+    pub elapsed_ms: Option<u64>,
+    /// Latest visible response, including provisional text. Core retains this
+    /// only on failure; a successful answer remains independently validated.
+    pub partial_output: Option<DelegationPartialOutput>,
 }
 
 pub(crate) type DelegationWork = Box<

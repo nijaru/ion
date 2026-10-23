@@ -280,7 +280,7 @@ optional `after: true`.
 Session IDs are immutable UUIDs stored in the header, independent of filenames
 and provider affinity. Renaming a closed database does not change its ID; clone
 and fork create new identities without inheriting external delivery receipts or continuation grants.
-This unreleased branch uses Session format 17; earlier development Session
+This unreleased branch uses Session format 18; earlier development Session
 files are rejected, not automatically migrated or replayed. Tool activity classification used by the transcript is
 stored with each assistant tool-call batch, so resumed history is not
 reinterpreted through the currently installed tool catalog.
@@ -1509,6 +1509,22 @@ alongside it. Explicit cancellation is not relabelled as a timeout. Cleanup can
 outlive the budget: this is neither a hard cleanup deadline nor rollback, proof of
 remote quiescence or permission to repeat uncertain effects. A timed-out child has
 no successful answer, even if an independent cleanup failure also occurs.
+
+Joined outcomes include `elapsed_ms`, observed from linked task submission through
+stop/settlement, excluding later cleanup. It is null when the callback did not
+observe runtime; wait expiry does not set it or imply timeout. Timeout diagnostics
+name the observed runtime and recorded execution budget.
+
+Failures can retain `outcome.partial_output` with `text`, `truncated` and
+`observation_gap`. This is the latest visible assistant response, possibly
+uncommitted, not a final answer or proof of completed work. Its UTF-8 prefix is
+limited to 50 KiB; no thinking, tool arguments/results or images are included.
+Discarded retry text is not combined with a new response, and missing progress
+is flagged instead of joining an orphan suffix. The same failed report remains
+available in status, wait, acknowledgement and committed relationship inspection.
+Successful runs have `partial_output: null` and their independently validated
+answer. Running partial-output previews and separately bounded startup remain
+unfinished.
 
 Use `{"action":"wait","ids":["<run-id>","<another-id>"],"timeout_ms":300000}`
 to wait until **any** selected run joins. `ids` requires 1–64 unique owned

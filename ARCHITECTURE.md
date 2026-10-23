@@ -357,6 +357,20 @@ A joined relationship retains typed `execution_timed_out` provenance separately
 from execution/infrastructure errors. Trusted callbacks return
 `DelegationCompletion`, enforcing their specified budget and attesting actual
 expiry; Core never infers it from strings or elapsed wall time after owner loss.
+Joined outcomes also retain optional Host-observed `elapsed_ms`, from linked
+submission through observed stop or settlement, excluding subsequent cleanup.
+Unknown timing is null, not zero or elapsed time inferred after owner loss.
+A failed run can retain `partial_output`: the latest observed visible assistant
+response, bounded to a 50 KiB UTF-8 prefix with explicit truncation/gap flags.
+This is provisional child-authored data, not a successful answer, durable assistant
+commit, verified effect or safe-retry evidence. Thinking, tool arguments/results
+and images are excluded. Never join deltas across missing progress or retry
+boundaries; a reliable settlement can replace lost progress. Completion-only
+services must expose their visible text even when incomplete output cannot commit.
+Success has its independently validated original answer and no duplicate partial
+report. Core validates bounded failed observations and retains them with timing
+and timeout/error facts through inspection, wait and acknowledgement.
+
 Timeout is a failed relationship with no answer, not a rewrite of the child's
 ordinary Turn end. Infrastructure failures remain fatal even alongside timeout.
 Lost custody remains `Unknown`, not timed out, rolled back or safe to replay.

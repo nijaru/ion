@@ -82,6 +82,8 @@ fn complete(child: &Session, record: &crate::DelegationRecord, text: &str) -> Re
 fn joined(receipt: RequestReceipt, text: &str) -> DelegationOutcome {
     DelegationOutcome::Joined {
         execution_timed_out: false,
+        elapsed_ms: None,
+        partial_output: None,
         receipt: Some(receipt),
         error: None,
         answer: Some(text.into()),

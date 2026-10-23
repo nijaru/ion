@@ -55,7 +55,7 @@ pub use recovery::{AuthorityScope, RecoveryBinding, RecoveryPoint, RecoveryState
 pub(crate) use submission::TurnAdmission;
 pub use submission::{RequestKey, RequestReceipt, SubmissionRequest};
 
-const FORMAT_VERSION: u32 = 17;
+const FORMAT_VERSION: u32 = 18;
 // An 8 MiB raw prompt or streamed response can grow up to sixfold when JSON
 // escapes control characters. Keep the storage bound above that encoded size.
 const MAX_ENTRY_BYTES: usize = 64 * 1024 * 1024;
@@ -3115,7 +3115,7 @@ mod tests {
         let (root, path) = fixture();
         drop(Session::create(&path, Some(&root)).unwrap());
         let connection = Connection::open(&path).unwrap();
-        for version in [6, FORMAT_VERSION] {
+        for version in [6, 17, FORMAT_VERSION] {
             let encoded = serde_json::to_vec(&serde_json::json!({
                 "version": version,
                 "cwd": root,
@@ -3133,8 +3133,10 @@ mod tests {
                 Session::inspect(&path).map(|_| ()),
                 Session::inspect_metadata(&path).map(|_| ()),
             ] {
-                if version == 6 {
-                    assert!(matches!(result, Err(SessionError::UnsupportedFormat(6))));
+                if version != FORMAT_VERSION {
+                    assert!(
+                        matches!(result, Err(SessionError::UnsupportedFormat(found)) if found == version)
+                    );
                 } else {
                     assert!(result.is_err());
                 }

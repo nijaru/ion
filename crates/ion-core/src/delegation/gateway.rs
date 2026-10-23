@@ -75,13 +75,17 @@ impl Gateway {
                     let known = receipt.as_mut().expect("admitted child");
                     let (mut outcome, infrastructure) = completed;
                     if let Some(message) = &run.transfer_error
-                        && let DelegationOutcome::Joined { error, answer, .. } = &mut outcome
+                        && let DelegationOutcome::Joined { error, answer, partial_output, .. } = &mut outcome
                     {
                         *error = Some(match error.take() {
                             Some(error) => format!("{error}; {message}"),
                             None => message.clone(),
                         });
-                        *answer = None;
+                        if let Some(text) = answer.take() {
+                            let mut output = DelegationPartialOutput::default();
+                            output.push_text(&text);
+                            *partial_output = Some(output);
+                        }
                     }
                     match parent.settle_delegation(&known.record, outcome.clone()) {
                         Ok(()) => known.outcome = Some(outcome),
@@ -176,7 +180,7 @@ impl Gateway {
                                             // Immediate background execution is still cold:
                                             // no callback was polled before this transfer.
                                             let (message, infrastructure) = start_error(error);
-                                            let outcome = DelegationOutcome::Joined { execution_timed_out: false, receipt: None, error: Some(message.clone()), answer: None };
+                                            let outcome = DelegationOutcome::Joined { execution_timed_out: false, elapsed_ms: None, partial_output: None, receipt: None, error: Some(message.clone()), answer: None };
                                             if let Err(error) = parent.settle_delegation(&record, outcome.clone()) { fault = Some(error); }
                                             else { fault = infrastructure; }
                                             receipt = Some(DelegationReceipt { record, transferred: false, outcome: Some(outcome) });

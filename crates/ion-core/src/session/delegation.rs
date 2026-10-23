@@ -112,8 +112,12 @@ impl State {
                     receipt,
                     error,
                     answer,
+                    partial_output,
+                    ..
                 } = outcome
-                    && ((*execution_timed_out && error.is_none())
+                    && ((partial_output.as_ref().is_some_and(|output| {
+                        !output.valid() || error.is_none() || answer.is_some()
+                    })) || (*execution_timed_out && error.is_none())
                         || (answer.is_some()
                             && (*execution_timed_out
                                 || error.is_some()

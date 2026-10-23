@@ -25,8 +25,9 @@ pub use agent::{
 };
 pub use delegation::{
     BackgroundJob, BackgroundSlot, BackgroundStartError, DelegationCompletion, DelegationFailure,
-    DelegationOutcome, DelegationOwnership, DelegationReceipt, DelegationRecord, DelegationSite,
-    DelegationSpec, DelegationTarget, DelegationTask,
+    DelegationOutcome, DelegationOwnership, DelegationPartialOutput, DelegationReceipt,
+    DelegationRecord, DelegationSite, DelegationSpec, DelegationTarget, DelegationTask,
+    MAX_DELEGATION_PARTIAL_BYTES,
 };
 pub use input::{AcceptedInput, InputBudget, InputReservation};
 pub use invocation::{ToolInvocation, ToolOccurrence, ToolOrigin};

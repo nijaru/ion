@@ -3420,7 +3420,7 @@ mod tests {
                 CancellationToken::new(),
                 steering.clone(),
                 move |event| {
-                    if matches!(event, AgentEvent::TextDelta(_)) {
+                    if matches!(event, AgentEvent::TextDelta(text) if text == "first") {
                         observed_steering.push("also answer this".into()).unwrap();
                     }
                 },
@@ -3670,7 +3670,7 @@ mod tests {
                 CancellationToken::new(),
                 steering.clone(),
                 move |event| {
-                    if matches!(event, AgentEvent::TextDelta(_)) {
+                    if matches!(event, AgentEvent::TextDelta(text) if text == "first") {
                         observed_steering
                             .push_message(
                                 Message {

@@ -307,6 +307,8 @@ fn deadline_settlement_cannot_hide_failure_or_retain_a_successful_answer() {
         let (root, session, _, record) = pending(false);
         let outcome = DelegationOutcome::Joined {
             execution_timed_out: true,
+            elapsed_ms: None,
+            partial_output: None,
             receipt: Some(crate::RequestReceipt {
                 session: record.child,
                 key: crate::delegation::request_key(record.run),
@@ -327,10 +329,56 @@ fn deadline_settlement_cannot_hide_failure_or_retain_a_successful_answer() {
 }
 
 #[test]
+fn partial_reports_require_failed_bounded_observations_and_survive_inspection() {
+    for (size, error, valid) in [
+        (
+            crate::MAX_DELEGATION_PARTIAL_BYTES,
+            Some("stopped".into()),
+            true,
+        ),
+        (
+            crate::MAX_DELEGATION_PARTIAL_BYTES + 1,
+            Some("stopped".into()),
+            false,
+        ),
+        (1, None, false),
+    ] {
+        let (root, session, _, record) = pending(false);
+        let outcome = DelegationOutcome::Joined {
+            execution_timed_out: false,
+            elapsed_ms: Some(700),
+            partial_output: Some(crate::DelegationPartialOutput {
+                text: "x".repeat(size),
+                truncated: false,
+                observation_gap: false,
+            }),
+            receipt: None,
+            error,
+            answer: None,
+        };
+        let result = session.settle_delegation(&record, outcome.clone());
+        if valid {
+            result.unwrap();
+            assert_eq!(
+                Session::inspect(session.path()).unwrap().delegations()[0].outcome,
+                Some(outcome)
+            );
+        } else {
+            assert!(matches!(result, Err(SessionError::InvalidHistory)));
+            assert!(session.view().unwrap().delegations()[0].outcome.is_none());
+        }
+        drop(session);
+        fs::remove_dir_all(root).unwrap();
+    }
+}
+
+#[test]
 fn conservative_recovery_preserves_joined_relationships() {
     let (root, session, _, record) = pending(false);
     let outcome = DelegationOutcome::Joined {
         execution_timed_out: false,
+        elapsed_ms: None,
+        partial_output: None,
         receipt: None,
         error: Some("stopped before materialization".into()),
         answer: None,

@@ -108,6 +108,7 @@ where
     };
     tokio::pin!(stream);
     let mut output_observed = false;
+    let mut text_observed = false;
     loop {
         let event = tokio::select! {
             item = stream.next() => item,
@@ -116,6 +117,7 @@ where
         match event {
             Some(Ok(ModelStreamEvent::TextDelta(text))) if !text.is_empty() => {
                 output_observed = true;
+                text_observed = true;
                 observe(AgentEvent::TextDelta(text));
             }
             Some(Ok(ModelStreamEvent::ThinkingDelta { block, text })) if !text.is_empty() => {
@@ -157,6 +159,26 @@ where
                 if generated && !output_observed {
                     output_observed = true;
                     observe(AgentEvent::ModelOutputObserved);
+                }
+                // Completion-only services still supplied provisional visible
+                // text, including on incomplete responses that cannot commit.
+                if !text_observed && response.message.role == ion_ai::Role::Assistant {
+                    let text = response
+                        .message
+                        .content
+                        .iter()
+                        .filter_map(|part| {
+                            if let Content::Text(text) = part {
+                                Some(text.as_str())
+                            } else {
+                                None
+                            }
+                        })
+                        .collect::<Vec<_>>()
+                        .join("\n");
+                    if !text.is_empty() {
+                        observe(AgentEvent::TextDelta(text));
+                    }
                 }
                 return (Ok(response), output_observed);
             }
