@@ -231,7 +231,15 @@ pub(super) fn handle_builtin(
     args: &str,
 ) -> Result<()> {
     match builtin {
-        Builtin::Help => ui.print(Builtin::help()),
+        Builtin::Help => {
+            let help = if args.is_empty() {
+                Builtin::help()
+            } else {
+                Builtin::help_for(args)
+                    .context("unknown help topic; use /help or type / to discover commands")?
+            };
+            ui.print(help);
+        }
         Builtin::Settings => ui.output_settings(args)?,
         Builtin::Reasoning => {
             if args.is_empty() {

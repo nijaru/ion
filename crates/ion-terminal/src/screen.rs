@@ -69,16 +69,6 @@ impl Surface {
     }
 }
 
-/// What the physical screen shows in our window right now.
-#[derive(Clone)]
-struct Window {
-    surface: Surface,
-    /// One-based cursor row to use for the shell prompt after this
-    /// frame. It is the first row after the rendered content, capped at
-    /// the terminal bottom when the window is full-height.
-    finish_row: u16,
-}
-
 pub struct Screen {
     width: u16,
     /// Physical row where our region starts (the launch cursor). The
@@ -86,7 +76,7 @@ pub struct Screen {
     /// is native terminal scrollback.
     origin: u16,
     screen_height: u16,
-    current: Option<Window>,
+    current: Option<Surface>,
     /// Invalidating cell comparisons must not discard primary ownership evidence.
     repaint: bool,
     resize_pending: Option<Instant>,
@@ -286,7 +276,7 @@ impl Screen {
             })?;
         let cursor_row = match &self.current {
             Some(window) => {
-                let buffer = &window.surface.buffer;
+                let buffer = &window.buffer;
                 let display = reflow_cursor(buffer, offset, self.physical_cursor.1, width)?;
                 // Reflow can preserve the cursor's old column as either a
                 // display-cell offset or an index into the compact glyph cells
@@ -433,8 +423,8 @@ impl Screen {
             // or pending-wrap cursor policy.
             if self.repaint
                 || previous.is_none_or(|prev| {
-                    row >= prev.surface.buffer.area.height
-                        || row_differs(&next.buffer, row, &prev.surface.buffer, row)
+                    row >= prev.buffer.area.height
+                        || row_differs(&next.buffer, row, &prev.buffer, row)
                 })
                 || cursor_column.is_some_and(|col| self.cursor_at != Some((self.origin + row, col)))
                 || self
@@ -446,7 +436,7 @@ impl Screen {
             }
         }
         if let Some(previous) = previous {
-            for row in band as u16..previous.surface.buffer.area.height {
+            for row in band as u16..previous.buffer.area.height {
                 write!(out, "\x1b[0m\x1b[{};1H\x1b[2K", self.origin + row + 1)?;
                 painted = true;
             }
@@ -472,14 +462,7 @@ impl Screen {
         self.cursor_shown = Some(cursor.is_some());
         self.cursor_at = cursor;
         self.physical_cursor = cursor.unwrap_or((self.origin + band as u16 - 1, 0));
-        self.current = Some(Window {
-            surface: next,
-            finish_row: self
-                .origin
-                .saturating_add(band as u16)
-                .saturating_add(1)
-                .min(self.screen_height),
-        });
+        self.current = Some(next);
         Ok(())
     }
 
@@ -548,16 +531,6 @@ impl Screen {
         self.physical_cursor = (self.origin, 0);
         self.invalidate();
         Ok(())
-    }
-
-    /// Park below the active rendered content on shutdown so the shell
-    /// prompt follows the footer instead of the unused physical region.
-    pub fn finish(&mut self, out: &mut impl Write) -> io::Result<()> {
-        let row = self
-            .current
-            .as_ref()
-            .map_or(self.origin.saturating_add(1), |window| window.finish_row);
-        write!(out, "\x1b[{row};1H\x1b[?25h\x1b[0m\r\n")
     }
 }
 
@@ -1197,24 +1170,6 @@ mod tests {
     }
 
     #[test]
-    fn finish_follows_short_rendered_region() {
-        let mut out = Vec::new();
-        let mut screen = Screen::new(40, 2, 10);
-        screen
-            .draw(
-                &mut out,
-                &Frame {
-                    live: &[line("footer"), line("model")],
-                    cursor: None,
-                },
-            )
-            .unwrap();
-        screen.finish(&mut out).unwrap();
-        let text = String::from_utf8(out).unwrap();
-        assert!(text.ends_with("\x1b[5;1H\x1b[?25h\x1b[0m\r\n"));
-    }
-
-    #[test]
     fn reflow_maps_actual_cells_and_hard_row_boundaries() {
         for (text, column, width, expected) in [
             ("123界ab", 6, 4, (1, 3)),
@@ -1433,7 +1388,7 @@ mod tests {
         );
         assert!(!text.contains("\x1b[2J"));
         assert_eq!(
-            reflow_cursor(&screen.current.as_ref().unwrap().surface.buffer, 1, 8, 4).unwrap(),
+            reflow_cursor(&screen.current.as_ref().unwrap().buffer, 1, 8, 4).unwrap(),
             (3, 0)
         );
         // Moving a cursor backwards must remove its old emitted blank extent.

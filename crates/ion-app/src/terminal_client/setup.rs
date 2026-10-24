@@ -88,7 +88,7 @@ async fn run(
             ui.pickers.open(picker);
         }
         program.publish(terminal, false)?;
-        draw(terminal, screen, &mut ui, None, None).await?;
+        draw(terminal, screen, &mut ui, None, None, None).await?;
         let event = terminal
             .next_input()
             .await

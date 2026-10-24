@@ -1087,7 +1087,16 @@ contents as client commands or template selectors.
 ## Terminal experience
 
 Inline native scrollback is primary; fullscreen is another viewport over the same
-semantics. OSC 7501 root status is derived from typed operation/client state and
+semantics. Normal composer chrome identifies the workspace, named or short-ID
+Session, current bound model and help entry point. Derive model identity from the
+live binding, not the last Turn; presentation neither owns selection nor creates
+Session facts. Budget orientation behind the editable cursor, discovery and
+operation controls. Release mutable inline cells on exit rather than archiving
+them as conversation. Help groups the existing command inventory and exposes
+argument grammar and keyboard controls on request; its responses use the same
+complete terminal-local publication as other client commands.
+
+OSC 7501 root status is derived from typed operation/client state and
 emitted by the physical publication owner; a report replaces the root record,
 repeats stable application identity, and contains no task text, guessed progress
 or invented blocked state; an actual masked credential prompt publishes

@@ -172,6 +172,9 @@ six turns into scrollback and labels omitted earlier history as retained; the
 complete Session remains available through inspect/export and tool detail.
 Publication uses available terminal rows before scrolling. Ordinary redraw and
 resize do not publish live rows; terminal-native reflow remains emulator-owned.
+`/help` groups commands by purpose without dumping their argument grammars.
+Use `/help model` (or another built-in command name) for usage and `/help keys`
+for keyboard controls. Type `/` for searchable command/resource discovery.
 Command responses (`/help`, `/skills`, `/tools`, `/tasks result`, etc.) and
 client diagnostics also publish their complete wrapped content, not a clipped
 composer preview. They remain in a terminal-local display log interleaved with
@@ -284,8 +287,11 @@ sends reports without adding a startup query.
 Fullscreen owns the transcript viewport and scrolling while using
 the same Session, agent loop and semantic transcript projection. File/model/
 session pickers and Ctrl-O conversation detail use alternate-screen views in either
-mode. Working-directory, Session, model and context metadata are no longer
-permanent footer rows; `/session` exposes Session/context detail on demand.
+mode. The live footer identifies the workspace, Session name (or short ID), current
+`PROVIDER/MODEL` and `/help`. It follows the active binding even before the first
+Turn and yields space to editing, completion and stop controls on small terminals.
+It is cleared when the client releases its inline surface; `/session` exposes
+full Session/context detail on demand.
 Cloning copies committed conversation and context into a new session with
 independent future turns. Both sessions still use the same live working
 directory; cloning does not copy or restore files.

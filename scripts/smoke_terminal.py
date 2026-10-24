@@ -323,7 +323,7 @@ with tempfile.TemporaryDirectory(prefix="ion-terminal-") as temporary:
         file_query_sent = False
         sent_file_start = selected_file = sent_first = sent_steering = sent_second = resized = sent_tool = closed_tool = sent_compact = sent_clone = sent_controls = sent_login = sent_key = sent_logout = sent_copy = sent_quit = False
         saw_inline_start = False
-        sent_help = sent_preparation = False
+        sent_help = sent_help_keys = sent_preparation = False
         help_start = preparation_start = 0
         preparation_requests = None
         opened_active = closed_active = False
@@ -443,7 +443,11 @@ with tempfile.TemporaryDirectory(prefix="ion-terminal-") as temporary:
                     help_start = len(output)
                     os.write(master, b"/help\r")
                     sent_help = True
-                if sent_help and b"Ctrl-V pastes" in output[help_start:] and b"!!COMMAND" in output[help_start:] and not sent_copy:
+                if sent_help and b"/help COMMAND" in output[help_start:] and b"Models & credentials" in output[help_start:] and not sent_help_keys:
+                    help_start = len(output)
+                    os.write(master, b"/help keys\r")
+                    sent_help_keys = True
+                if sent_help_keys and b"Ctrl-V pastes" in output[help_start:] and b"!!COMMAND" in output[help_start:] and not sent_copy:
                     os.write(master, b"\x18")
                     sent_copy = True
                 if sent_copy and b"Copied last assistant answer" in output and not sent_quit:

@@ -13,7 +13,7 @@ use crate::terminal_commands::{Builtin, Completion};
 use crate::transcript_detail::{DetailView, tools};
 use crate::transcript_render::kind_label;
 use anyhow::{Context, Result};
-use ion_ai::{Content, Message};
+use ion_ai::{Content, Message, ModelRef};
 use ion_core::{
     CodingSession, LiveTranscript, SessionEntry, SessionView, TranscriptItem, TranscriptProjection,
     TurnEndReason,
@@ -38,6 +38,7 @@ mod editing;
 mod editor_recovery;
 mod interaction;
 mod navigation;
+mod orientation;
 mod output;
 mod picker;
 mod question;
@@ -151,6 +152,7 @@ struct Frontend {
     clipboard_job: Option<ClipboardJob>,
     question: Option<QuestionModal>,
     cwd: PathBuf,
+    session_label: String,
 }
 
 struct PromptBrowse {
@@ -260,7 +262,7 @@ pub async fn chat(init: ChatInit) -> Result<()> {
             ui.sync_question(questions.as_ref());
             program.blocked_question = ui.question_owns_input();
             program.publish(terminal, runtime.is_busy())?;
-            draw(terminal, screen, &mut ui, activity.live(), activity.view(&runtime)).await?;
+            draw(terminal, screen, &mut ui, activity.live(), activity.view(&runtime), Some(runtime.agent().model())).await?;
             #[cfg(debug_assertions)]
             if std::env::var_os("ION_SMOKE_PANIC_AFTER_FIRST_DRAW").is_some() {
                 panic!("ION smoke panic after first terminal draw");
@@ -442,13 +444,15 @@ pub async fn chat(init: ChatInit) -> Result<()> {
             if let Some(screen) = screen_owner.as_mut()
                 && outcome.is_ok()
             {
-                draw(terminal, screen, &mut ui, None, None).await?;
+                // Publish pending output, but do not retain identity chrome
+                // after the interactive client relinquishes its surface.
+                draw(terminal, screen, &mut ui, None, None, None).await?;
                 if terminal.is_alt_screen()? {
                     terminal.leave_alt_screen()?;
                     screen.invalidate();
                 }
                 if terminal.prepare_inline(screen).await?.is_some() {
-                    screen.finish(&mut terminal.output()?)?;
+                    terminal.paint_inline(screen, |screen, out| screen.release_inline(out))?;
                 }
             }
             Ok(())
@@ -724,6 +728,10 @@ impl Frontend {
         self.pickers.close();
         let view = session.view()?;
         self.load_history(session, &view);
+        self.session_label = view
+            .name
+            .filter(|name| !name.is_empty())
+            .unwrap_or_else(|| format!("Session {}", &view.id.to_string()[..8]));
         self.details = None;
         self.scroll = 0;
         self.cwd = session
@@ -1307,11 +1315,12 @@ async fn draw(
     ui: &mut Frontend,
     progress: Option<&LiveTranscript>,
     operation: Option<ActiveOperation>,
+    model: Option<&ModelRef>,
 ) -> Result<()> {
     let Some(geometry) = prepare_draw(terminal, screen, ui).await? else {
         return Ok(());
     };
-    draw_prepared(terminal, screen, ui, progress, operation, geometry)
+    draw_prepared(terminal, screen, ui, progress, operation, model, geometry)
 }
 
 fn draw_prepared(
@@ -1320,6 +1329,7 @@ fn draw_prepared(
     ui: &mut Frontend,
     progress: Option<&LiveTranscript>,
     operation: Option<ActiveOperation>,
+    model: Option<&ModelRef>,
     (width, height, surface_reset): (u16, u16, bool),
 ) -> Result<()> {
     if ui.details.is_some() || ui.pickers.active().is_some() {
@@ -1329,7 +1339,15 @@ fn draw_prepared(
         return draw_question_fullscreen(terminal, screen, ui, width, height);
     }
     if ui.mode == TuiMode::Fullscreen {
-        return draw_chat_fullscreen(terminal, screen, ui, progress, operation, width, height);
+        return draw_chat_fullscreen(
+            terminal,
+            screen,
+            ui,
+            progress,
+            operation,
+            model,
+            (width, height),
+        );
     }
 
     let commit_rows = ui.pending_history_rows(width.max(1) as usize);
@@ -1372,15 +1390,23 @@ fn draw_prepared(
         width,
         row_budget.saturating_sub(composer_height + progress_height + status_height),
     );
-    let chrome_budget =
-        row_budget.saturating_sub(composer_height + progress_height + completions.len());
+    // Identity is lower priority than the editor, stop controls and discovery.
+    let footer = orientation::rows(
+        ui,
+        model,
+        width,
+        row_budget
+            .saturating_sub(composer_height + progress_height + completions.len() + chrome.len()),
+    );
+    let chrome_budget = row_budget
+        .saturating_sub(composer_height + progress_height + completions.len() + footer.len());
     // Discovery is temporary composer chrome. Older notices must not hide a
     // keyboard-active menu or displace the operation's stop/status controls.
     if chrome.len() > chrome_budget {
         chrome.drain(..chrome.len() - chrome_budget);
     }
     chrome.extend(completions);
-    let content_budget = row_budget.saturating_sub(composer_height + chrome.len());
+    let content_budget = row_budget.saturating_sub(composer_height + chrome.len() + footer.len());
     // Reopened or resynchronized unfinished facts stay visible as mutable
     // previews. They are not stable output anchors or irreversible scrollback.
     let live_items = progress.map_or_else(
@@ -1399,6 +1425,7 @@ fn draw_prepared(
         live_rows.push(Line::raw(line.as_str()));
     }
     let cursor_row = composer_offset + composer.cursor_row;
+    live_rows.extend(footer);
 
     let desired_live_height = live_rows.len().clamp(1, row_budget);
     let cursor = Some((
@@ -1498,8 +1525,8 @@ fn draw_chat_fullscreen(
     ui: &mut Frontend,
     progress: Option<&LiveTranscript>,
     operation: Option<ActiveOperation>,
-    width: u16,
-    height: u16,
+    model: Option<&ModelRef>,
+    (width, height): (u16, u16),
 ) -> Result<()> {
     let width = width.max(1) as usize;
     let height = height.max(1) as usize;
@@ -1550,7 +1577,14 @@ fn draw_chat_fullscreen(
         width,
         height.saturating_sub(composer_height + status_height),
     );
-    let viewport = height.saturating_sub(composer_height + status_height + completions.len());
+    let footer = orientation::rows(
+        ui,
+        model,
+        width,
+        height.saturating_sub(composer_height + status_height + completions.len()),
+    );
+    let viewport =
+        height.saturating_sub(composer_height + status_height + completions.len() + footer.len());
 
     let end = content.len().saturating_sub(ui.scroll);
     let start = end.saturating_sub(viewport);
@@ -1577,6 +1611,9 @@ fn draw_chat_fullscreen(
         if next_row + index < height {
             rows[next_row + index] = Line::raw(line.as_str());
         }
+    }
+    for (index, line) in footer.into_iter().enumerate() {
+        rows[next_row + composer_height + index] = line;
     }
     let cursor_row = next_row + composer.cursor_row;
     let cursor = (cursor_row < height).then_some((

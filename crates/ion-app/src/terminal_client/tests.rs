@@ -257,6 +257,97 @@ async fn command_namespace_completes_and_never_becomes_a_model_prompt_or_queue()
     fixture.control.shutdown().await;
 }
 
+#[test]
+fn command_overview_defers_argument_grammar_to_detailed_help() {
+    let overview = Builtin::help();
+    assert!(
+        !overview.contains('['),
+        "the overview must not dump argument grammars"
+    );
+    assert!(overview.contains("/help COMMAND"));
+    assert!(overview.contains("/help keys"));
+}
+
+#[tokio::test]
+async fn detailed_help_and_binding_orientation_are_presentation_not_input() {
+    let mut fixture = Fixture::new();
+    let mut ui = Frontend {
+        draft: "unsent 🦀".into(),
+        cursor: 3,
+        ..Frontend::default()
+    };
+    ui.refresh_session(fixture.control.session()).unwrap();
+    assert!(
+        fixture
+            .control
+            .session()
+            .view()
+            .unwrap()
+            .last_model
+            .is_none()
+    );
+    let footer = orientation::rows(&ui, Some(fixture.control.agent().model()), 100, 2);
+    assert_eq!(footer[1].to_string(), "fixture/fixture · /help");
+    command::handle_builtin(
+        &mut fixture.control,
+        &fixture.host,
+        &mut ui,
+        Builtin::Name,
+        "Roadmap",
+    )
+    .unwrap();
+    assert!(
+        orientation::rows(&ui, Some(fixture.control.agent().model()), 100, 2)[0]
+            .to_string()
+            .contains("Roadmap")
+    );
+    for topic in ["model", "/reasoning", "keys"] {
+        let expected = notice_rows(&Builtin::help_for(topic).unwrap(), 79);
+        command::handle_builtin(
+            &mut fixture.control,
+            &fixture.host,
+            &mut ui,
+            Builtin::Help,
+            topic,
+        )
+        .unwrap();
+        assert!(
+            ui.pending_history_rows(80)
+                .windows(expected.len())
+                .any(|rows| rows == expected)
+        );
+        ui.finish_history_commit();
+        assert_eq!((ui.draft.as_str(), ui.cursor), ("unsent 🦀", 3));
+        assert!(!fixture.control.is_busy());
+        assert!(fixture.control.session().view().unwrap().entries.is_empty());
+    }
+    assert!(
+        Builtin::help_for("model")
+            .unwrap()
+            .contains("/model [PROVIDER/MODEL]")
+    );
+    assert!(
+        command::handle_builtin(
+            &mut fixture.control,
+            &fixture.host,
+            &mut ui,
+            Builtin::Help,
+            "missing"
+        )
+        .is_err()
+    );
+    command::handle_builtin(
+        &mut fixture.control,
+        &fixture.host,
+        &mut ui,
+        Builtin::New,
+        "",
+    )
+    .unwrap();
+    assert!(!ui.session_label.contains("Roadmap"));
+    fixture.control.shutdown().await;
+}
+
 #[tokio::test]
 async fn help_output_is_complete_publication_not_clipped_composer_chrome() {
     let mut fixture = Fixture::new();

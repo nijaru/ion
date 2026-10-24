@@ -107,6 +107,11 @@ class Terminal:
             if b"\x1b[6n" in data:
                 self.send(b"\x1b[2;1R")
 
+    def resize(self, rows, columns):
+        fcntl.ioctl(self.master, termios.TIOCSWINSZ, struct.pack("HHHH", rows, columns, 0, 0))
+        os.kill(self.child.pid, signal.SIGWINCH)
+        self.paint()
+
     def wait(self, predicate):
         end = time.monotonic() + 10
         while not predicate():
@@ -137,6 +142,63 @@ class Terminal:
         if self.redirected_master is not None:
             os.close(self.redirected_master)
         self.child.wait(timeout=5)
+
+
+def exercise_orientation(work, env, endpoint):
+    subprocess.run([binary, "use", "other", "vendor/model", "--endpoint", endpoint,
+                    "--wire", "chat-completions"], env=env, check=True, capture_output=True)
+    subprocess.run([binary, "use", "smoke", "smoke-model", "--endpoint", endpoint,
+                    "--wire", "chat-completions"], env=env, check=True, capture_output=True)
+    defaults = (work / "ion/models.json").read_bytes()
+    for mode in ("inline", "fullscreen"):
+        cwd = work / (mode + "-orientation")
+        cwd.mkdir()
+        previous = set((work / "ion").rglob("*.sqlite"))
+        before = len(requests)
+        terminal = Terminal(cwd, env, mode, ["--cwd", str(cwd), "--tui-mode", mode,
+                                            "--model", "other/vendor/model", "chat"])
+        try:
+            terminal.wait(lambda: "other/vendor/model · /help" in terminal.text())
+            assert str(cwd) in terminal.text() and "Session " in terminal.text(), terminal.text()
+            database, = set((work / "ion").rglob("*.sqlite")) - previous
+            with sqlite3.connect(f"file:{database}?mode=ro", uri=True) as connection:
+                assert connection.execute("SELECT count(*) FROM entries").fetchone()[0] == 0
+            terminal.send("/name Release\r")
+            terminal.wait(lambda: " · Release" in terminal.text())
+            terminal.send("/help model\r")
+            terminal.wait(lambda: "Usage: /model [PROVIDER/MODEL]" in terminal.text())
+            terminal.output.clear()
+            terminal.send("/model smoke/smoke-model\r")
+            terminal.wait(lambda: "smoke/smoke-model · /help" in terminal.text())
+            previous = set((work / "ion").rglob("*.sqlite"))
+            terminal.output.clear()
+            terminal.send("/new\r")
+            terminal.wait(lambda: "Started a new session" in terminal.text())
+            database, = set((work / "ion").rglob("*.sqlite")) - previous
+            with sqlite3.connect(f"file:{database}?mode=ro", uri=True) as connection:
+                header = json.loads(connection.execute("SELECT header FROM session WHERE id=1").fetchone()[0])
+            terminal.wait(lambda: "Session " + header["id"][:8] in terminal.text())
+            terminal.output.clear()
+            terminal.send("ORIENTATION_🦀\x01")
+            # Inline CPR is synthetic in this fixture: it cannot model native
+            # reflow. Qualify inline resizing in a real emulator, not with a
+            # guessed cursor report. Fullscreen has no such dependency.
+            if mode == "fullscreen":
+                for rows, columns in ((1, 12), (4, 30), (30, 100)):
+                    terminal.resize(rows, columns)
+                terminal.wait(lambda: "smoke/smoke-model · /help" in terminal.text())
+            terminal.wait(lambda: "ORIENTATION_🦀" in terminal.text())
+            assert len(requests) == before, "presentation admitted model input"
+            terminal.send("PREFIX_\r")
+            terminal.wait(lambda: len(requests) == before + 1)
+            assert user_text(requests[-1]) == "PREFIX_ORIENTATION_🦀", user_text(requests[-1])
+            assert requests[-1]["model"] == "smoke-model", requests[-1]
+            terminal.wait(lambda: b"state=done" in terminal.output)
+            terminal.finish()
+        finally:
+            terminal.close()
+        assert (work / "ion/models.json").read_bytes() == defaults, "Session model changed the global default"
+        print(f"Orientation {mode}: live binding, name/new, detailed help and exact draft (tiny resize in fullscreen): OK", flush=True)
 
 
 def exercise_onboarding(work, base_env, endpoint):
@@ -276,6 +338,7 @@ with tempfile.TemporaryDirectory(prefix="ion-input-") as temporary:
     try:
         exercise_onboarding(work, env, f"http://127.0.0.1:{server.server_port}/v1")
         subprocess.run([binary, "use", "smoke", "smoke-model", "--endpoint", f"http://127.0.0.1:{server.server_port}/v1/chat/completions", "--wire", "chat-completions"], env=env, check=True, capture_output=True)
+        exercise_orientation(work, env, f"http://127.0.0.1:{server.server_port}/v1/chat/completions")
         # Display sanitation must not bypass the secret reader's input guard.
         terminal = Terminal(work, env, "inline", ["login", "unsafe\x1b[31mprovider"])
         try:
