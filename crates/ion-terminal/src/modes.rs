@@ -50,19 +50,25 @@ impl RawMode {
         // Match InputStream's controlling terminal, not a possibly redirected
         // stdin TTY. Restore through this same descriptor even after redirection.
         let terminal = File::open("/dev/tty")?;
-        let original = termios::tcgetattr(&terminal)?;
+        let original = rustix::io::retry_on_intr(|| termios::tcgetattr(&terminal))?;
         Ok(Self { terminal, original })
     }
 
     fn enable(&self) -> io::Result<()> {
         let mut raw = self.original.clone();
         raw.make_raw();
-        termios::tcsetattr(&self.terminal, OptionalActions::Now, &raw)?;
+        // Background job-control can interrupt this ioctl before `fg`. Setting
+        // absolute attributes is idempotent, unlike keyboard-stack push/pop.
+        rustix::io::retry_on_intr(|| {
+            termios::tcsetattr(&self.terminal, OptionalActions::Now, &raw)
+        })?;
         Ok(())
     }
 
     fn restore(&self) -> io::Result<()> {
-        termios::tcsetattr(&self.terminal, OptionalActions::Now, &self.original)?;
+        rustix::io::retry_on_intr(|| {
+            termios::tcsetattr(&self.terminal, OptionalActions::Now, &self.original)
+        })?;
         Ok(())
     }
 }

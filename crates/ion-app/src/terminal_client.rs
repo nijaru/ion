@@ -302,10 +302,14 @@ pub async fn chat(init: ChatInit) -> Result<()> {
                         ui.break_edit_focus();
                         terminal.leave_alt_screen()?;
                         screen.invalidate();
-                        while terminal.prepare_inline(screen).await?.is_none() {
+                        loop {
+                            if terminal.prepare_inline(screen).await?.is_some()
+                                && terminal.paint_inline(screen, |screen, out| screen.release_inline(out))?
+                            {
+                                break;
+                            }
                             tokio::task::yield_now().await;
                         }
-                        screen.release_inline(&mut terminal.output()?)?;
                         terminal.suspend_to_job_control().await.context("suspend terminal job")?;
                         program.published = None;
                         *screen = new_inline_screen(terminal).await.context("restore chat after job suspension")?;
