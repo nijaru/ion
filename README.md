@@ -639,16 +639,21 @@ For a custom OpenRouter model, use `--wire openrouter-chat`. This route retains
 plain reasoning or ordered structured `reasoning_details` across tool calls;
 the generic `chat-completions` route does not assume that contract. Qualify a
 new model with a tool-using turn before relying on it for coding.
-For an OpenAI Responses API route, select a custom provider identity explicitly:
+Built-in OpenAI models use the Responses API without custom route configuration:
 
 ```sh
-ion use openai-api YOUR_MODEL --endpoint https://api.openai.com/v1 \
-  --wire openai-responses --api-key-env OPENAI_API_KEY
+ion use openai gpt-5.5
 ```
 
-Add `--images` only if the selected model accepts images. This uses API-key access,
-not ChatGPT/Codex subscription login, and does not change
-catalog routes. Requests send full history with `store:false`; no server-side
+The catalog supplies the endpoint, image support and token limits. Use
+`OPENAI_API_KEY` or `ion login openai` for API-key access; ChatGPT/Codex subscription
+login is not implemented. Custom endpoints can still select `--wire openai-responses`
+or `--wire chat-completions` under a custom provider identity.
+
+Saved OpenAI selections also use Responses on reopen. Ordinary Chat Completions
+history is projected into Responses input; incompatible native replay is rejected,
+not silently discarded. Explicitly compact or start a new Session if that occurs.
+Responses requests send full history with `store:false`; no server-side
 conversation is required. Native message phases, refusals and encrypted reasoning
 survive tool continuation and reopen. Readable reasoning is distinct from opaque
 replay. Calls execute only after a terminal response; failed or truncated calls

@@ -342,7 +342,7 @@ impl ModelStore {
                 model: saved.model.clone(),
                 endpoint: model.endpoint.into(),
                 wire: match model.wire {
-                    catalog::CatalogWire::ChatCompletions => HttpWire::ChatCompletions,
+                    catalog::CatalogWire::OpenAiResponses => HttpWire::OpenAiResponses,
                     catalog::CatalogWire::DeepSeekChat => HttpWire::DeepSeekChat,
                     catalog::CatalogWire::MiMoChat => HttpWire::MiMoChat,
                     catalog::CatalogWire::OpenRouterChat => HttpWire::OpenRouterChat,
@@ -507,7 +507,7 @@ mod tests {
     }
 
     #[test]
-    fn responses_custom_route_round_trips_without_changing_catalog_defaults() {
+    fn responses_custom_route_round_trips() {
         let store = ModelStore::new(std::env::temp_dir().join("ion-responses-route"));
         let mut route = desktop_route("https://api.example.com/prefix/v1/");
         route.wire = Some("openai-responses".parse().unwrap());
@@ -524,10 +524,65 @@ mod tests {
             HttpModelService::resolve_endpoint(&selected.endpoint, selected.wire).unwrap(),
             selected.endpoint
         );
-        assert_eq!(
-            catalog::find("openai", "gpt-5.5").unwrap().wire,
-            catalog::CatalogWire::ChatCompletions
-        );
+    }
+
+    #[test]
+    fn known_openai_selection_uses_responses_without_route_configuration() {
+        let root =
+            std::env::temp_dir().join(format!("ion-openai-default-{}", uuid::Uuid::now_v7()));
+        let store = ModelStore::new(root.clone());
+        let credentials = CredentialStore::new(root.join("credentials"));
+        for (model, context_window) in [
+            ("gpt-5.5", 1_050_000),
+            ("gpt-5.4-mini", 400_000),
+            ("gpt-5.4", 1_050_000),
+        ] {
+            let saved = SavedSelection {
+                provider: "openai".into(),
+                model: model.into(),
+                endpoint: None,
+                wire: None,
+                api_key_env: None,
+                context_window_tokens: None,
+                max_output_tokens: None,
+                image_input: false,
+            };
+            let selected = store.save_default(&saved).unwrap();
+            let reopened = ModelStore::new(root.clone());
+            for selected in [
+                selected,
+                reopened
+                    .choose(
+                        Some("openai".into()),
+                        Some(model.into()),
+                        None,
+                        &credentials,
+                    )
+                    .unwrap(),
+                reopened.choose(None, None, None, &credentials).unwrap(),
+                reopened
+                    .choose(
+                        None,
+                        None,
+                        Some(ModelRef {
+                            provider: "openai".into(),
+                            model: model.into(),
+                        }),
+                        &credentials,
+                    )
+                    .unwrap(),
+            ] {
+                assert_eq!(selected.wire, HttpWire::OpenAiResponses);
+                assert_eq!(selected.endpoint, "https://api.openai.com/v1/responses");
+                assert_eq!(selected.api_key_env.as_deref(), Some("OPENAI_API_KEY"));
+                assert!(selected.requires_key && selected.image_input);
+                assert_eq!(selected.context_window_tokens, Some(context_window));
+                assert_eq!(selected.max_output_tokens, 128_000);
+                assert!(selected.capabilities.prompt_cache.usage_details);
+            }
+        }
+        assert!(store.configuration().unwrap().custom.is_empty());
+        fs::remove_dir_all(root).unwrap();
     }
 
     #[test]

@@ -899,8 +899,12 @@ committed facts. Allocate collision-free aliases without rebinding earlier encod
 prefixes; retained native identities remain opaque and fixed, or fail explicitly
 on an unresolvable collision. Core must not branch on provider names.
 
-The explicitly selected OpenAI Responses wire is stateless: send current
-instructions and ordered input with `store:false`, never a server conversation or
+Built-in OpenAI catalog models use Responses, including when resolving saved
+model identities on reopen. Custom routes may still select Chat Completions.
+Neutral history can project into the destination wire; incompatible native replay
+must fail explicitly rather than be stripped or trigger an automatic fallback.
+The OpenAI Responses wire is stateless: send current instructions and ordered
+input with `store:false`, never a server conversation or
 `previous_response_id`. Retain complete native output for validated replay, including
 message boundaries/phases, refusals, distinct item/call IDs and terminal-only
 encrypted reasoning. Reconcile snapshots against observed/finalized output before
@@ -913,7 +917,7 @@ authorizes a completed call; truncated calls use the existing non-dispatch settl
 Failed snapshots carrying output establish output custody before their error.
 Responses full-output frames have an independent 8 MiB bound; delta-oriented wires
 retain 256 KiB. Decoded-retention and lifetime/no-progress limits remain separate.
-These semantics neither select a default route nor provide subscription access.
+This API-key route does not provide subscription access.
 
 Caching/affinity are optimizations, not authority. Affinity survives reopen and
 changes on fork/clone. Warming is bounded, separately accounted and subordinate

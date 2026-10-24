@@ -32,6 +32,67 @@ fn completed(events: Vec<ModelStreamEvent>) -> ModelResponse {
 }
 
 #[test]
+fn plain_chat_history_migrates_but_native_chat_replay_is_rejected() {
+    let mut r = request();
+    r.route = ModelRoute::direct(
+        ModelRef {
+            provider: "openai".into(),
+            model: "gpt-5.5".into(),
+        },
+        ModelRouteReason::UserRequest,
+    );
+    r.messages.extend([
+        Message {
+            role: Role::Assistant,
+            content: vec![
+                Content::Text("Reading.".into()),
+                Content::ToolCall(ToolCall {
+                    id: "call_1".into(),
+                    name: "read".into(),
+                    arguments: json!({"path":"a"}),
+                    raw_arguments: None,
+                }),
+            ],
+            provider_replay: None,
+        },
+        Message {
+            role: Role::Tool,
+            content: vec![Content::ToolResult(ToolResult {
+                call_id: "call_1".into(),
+                name: "read".into(),
+                result: json!("contents"),
+                is_error: false,
+                images: vec![],
+            })],
+            provider_replay: None,
+        },
+        Message::user_input("Continue.".into(), []),
+    ]);
+    assert_eq!(
+        responses_body(&r).unwrap()["input"],
+        json!([
+            {"type":"message","role":"user","content":[{"type":"input_text","text":"hello"}]},
+            {"type":"message","role":"assistant","content":[{"type":"input_text","text":"Reading."}]},
+            {"type":"function_call","call_id":"call_1","name":"read","arguments":"{\"path\":\"a\"}"},
+            {"type":"function_call_output","call_id":"call_1","output":"{\"is_error\":false,\"result\":\"contents\"}"},
+            {"type":"message","role":"user","content":[{"type":"input_text","text":"Continue."}]},
+        ])
+    );
+    r.messages[1].provider_replay = Some(ProviderReplay::new(
+        "openai",
+        CHAT_REASONING_CONTENT_REPLAY,
+        json!("private reasoning"),
+    ));
+    let error = responses_body(&r).unwrap_err();
+    assert_eq!(error.kind, ProviderErrorKind::Unsupported);
+    assert!(
+        error
+            .message
+            .contains("explicitly compact or start a new Session")
+    );
+}
+
+#[test]
 fn stateless_request_retains_native_phases_refusals_and_tool_status() {
     let mut request = request();
     let output = vec![

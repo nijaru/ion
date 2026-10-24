@@ -11,7 +11,7 @@
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum CatalogWire {
-    ChatCompletions,
+    OpenAiResponses,
     DeepSeekChat,
     MiMoChat,
     OpenRouterChat,
@@ -198,7 +198,7 @@ pub struct CatalogModel {
 
 const CHECKED_ON: &str = "2026-09-26";
 const CURRENT_CHECKED_ON: &str = "2026-09-29";
-const OPENAI_ENDPOINT: &str = "https://api.openai.com/v1/chat/completions";
+const OPENAI_ENDPOINT: &str = "https://api.openai.com/v1/responses";
 const ANTHROPIC_ENDPOINT: &str = "https://api.anthropic.com/v1/messages";
 const OPENROUTER_ENDPOINT: &str = "https://openrouter.ai/api/v1/chat/completions";
 const DEEPSEEK_ENDPOINT: &str = "https://api.deepseek.com/chat/completions";
@@ -251,7 +251,7 @@ const MODELS: &[CatalogModel] = &[
         provider: "openai",
         id: "gpt-5.5",
         label: "GPT-5.5",
-        wire: CatalogWire::ChatCompletions,
+        wire: CatalogWire::OpenAiResponses,
         endpoint: OPENAI_ENDPOINT,
         api_key_env: "OPENAI_API_KEY",
         context_window: 1_050_000,
@@ -265,7 +265,7 @@ const MODELS: &[CatalogModel] = &[
         provider: "openai",
         id: "gpt-5.4-mini",
         label: "GPT-5.4 Mini",
-        wire: CatalogWire::ChatCompletions,
+        wire: CatalogWire::OpenAiResponses,
         endpoint: OPENAI_ENDPOINT,
         api_key_env: "OPENAI_API_KEY",
         context_window: 400_000,
@@ -279,7 +279,7 @@ const MODELS: &[CatalogModel] = &[
         provider: "openai",
         id: "gpt-5.4",
         label: "GPT-5.4",
-        wire: CatalogWire::ChatCompletions,
+        wire: CatalogWire::OpenAiResponses,
         endpoint: OPENAI_ENDPOINT,
         api_key_env: "OPENAI_API_KEY",
         context_window: 1_050_000,
