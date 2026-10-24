@@ -227,7 +227,7 @@ def exercise_file_discovery():
                     if busy:
                         os.write(master, b"!sleep 30\r")
                         wait(lambda: b"Running shell" in output)
-                    os.write(master, b"Read @")
+                    os.write(master, b"Read @\t")
                     writer = hold_read()
                     wait(lambda: "discovering project files…".encode() in output)
                     # The final character fences Enter processing while discovery
@@ -345,7 +345,7 @@ with tempfile.TemporaryDirectory(prefix="ion-terminal-") as temporary:
                 if b"\xe2\x80\xba " in output and not sent_file_start:
                     assert b"\x1b[?1049h" not in output, "chat entered alternate screen before showing the inline composer"
                     saw_inline_start = True
-                    os.write(master, b"Read @")
+                    os.write(master, b"Read @\t")
                     sent_file_start = True
                 if sent_file_start and b"Choose file" in output and not file_query_sent:
                     os.write(master, b"data.txt")
