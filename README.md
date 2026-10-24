@@ -505,10 +505,11 @@ the draft is empty.
 When Ion is a foreground Unix shell job, Ctrl-Z in chat returns to the shell;
 run `fg` to resume the same chat,
 including its draft, cursor, images and open view. The handoff restores terminal
-modes and rechecks geometry on return. It does not cancel or replay a running
-operation, pause deadlines, or stop tools in independent process groups. The
-terminal status record is cleared while yielding and republished on return.
-Masked credential entry keeps its separate input handling.
+modes and rechecks geometry on return. A `bg` resume stops again until `fg`
+restores foreground ownership. It does not cancel or replay a running operation,
+pause deadlines, or stop tools in independent process groups. The terminal status
+record is cleared while yielding and republished on return. Masked credential
+entry and attached programs retain their separate input handling.
 
 Unsent prompt text has undo/redo: `Ctrl-minus` or `Ctrl-_` undoes; adding Alt redoes.
 Typing groups at whitespace boundaries; paste, completion and successful external
