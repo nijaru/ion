@@ -1,6 +1,10 @@
 //! OSC 7501 root-record publication. The terminal client owns state transitions;
 //! this module owns the bounded wire encoding and physical write contract.
 
+// Clearing the root removes every record on this physical terminal.
+// Use only when yielding terminal ownership, not as an operation outcome.
+pub(crate) const CLEAR_SEQUENCE: &[u8] = b"\x1b]7501;state=clear\x1b\\";
+
 /// Root-record program state. Only interactions Ion actually exposes are
 /// represented; ordinary idle is not blocked and no approval/question state is
 /// invented.

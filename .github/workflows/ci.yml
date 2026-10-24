@@ -68,6 +68,8 @@ jobs:
         run: python3 scripts/smoke_terminal.py
       - name: Keyboard surface custody smoke
         run: python3 scripts/smoke_keyboard.py
+      - name: Unix shell job-control smoke
+        run: python3 scripts/smoke_job_control.py
       - name: Inline native-scrollback smoke
         run: python3 scripts/smoke_scrollback.py
       - name: Direct shell PTY smoke

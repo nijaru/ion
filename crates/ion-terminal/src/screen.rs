@@ -537,6 +537,19 @@ impl Screen {
         Ok(())
     }
 
+    /// Yield the mutable primary band without publishing it into history.
+    /// The caller must reconcile primary geometry and leave alternate screens
+    /// first. The shell can then start at the released band’s anchor.
+    pub fn release_inline(&mut self, out: &mut impl Write) -> io::Result<()> {
+        self.clear_inline_surface(out)?;
+        write!(out, "\x1b[{};1H\x1b[?25h", self.origin + 1)?;
+        out.flush()?;
+        self.current = None;
+        self.physical_cursor = (self.origin, 0);
+        self.invalidate();
+        Ok(())
+    }
+
     /// Park below the active rendered content on shutdown so the shell
     /// prompt follows the footer instead of the unused physical region.
     pub fn finish(&mut self, out: &mut impl Write) -> io::Result<()> {
@@ -1154,6 +1167,33 @@ mod tests {
         let mut terminal = vt100::Parser::new(6, 20, 0);
         terminal.process(&out);
         assert!(terminal.screen().hide_cursor());
+    }
+
+    #[test]
+    fn releasing_inline_erases_only_unpublished_rows_without_scrolling() {
+        let mut terminal = vt100::Parser::new(6, 20, 10);
+        terminal.process(b"settled\r\n");
+        let mut screen = Screen::with_live_height(20, 1, 6, 2);
+        let mut out = Vec::new();
+        screen
+            .draw(
+                &mut out,
+                &Frame {
+                    live: &[line("unsent draft"), line("live progress")],
+                    cursor: Some((0, 3)),
+                },
+            )
+            .unwrap();
+        terminal.process(&out);
+        out.clear();
+        screen.release_inline(&mut out).unwrap();
+        terminal.process(&out);
+        assert_eq!(terminal.screen().contents(), "settled");
+        assert_eq!(terminal.screen().cursor_position(), (1, 0));
+        assert!(!terminal.screen().hide_cursor());
+        assert!(!out.windows(2).any(|bytes| bytes == b"\r\n"));
+        terminal.process(b"SHELL");
+        assert_eq!(terminal.screen().contents(), "settled\nSHELL");
     }
 
     #[test]

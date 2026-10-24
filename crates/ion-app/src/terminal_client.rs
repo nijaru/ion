@@ -298,6 +298,20 @@ pub async fn chat(init: ChatInit) -> Result<()> {
             let event = event.context("terminal input ended unexpectedly")?;
             match event? {
                 InputEvent::Key(key) => {
+                    if key.code == KeyCode::Char('z') && key.modifiers.contains(Modifiers::CONTROL) {
+                        ui.break_edit_focus();
+                        terminal.leave_alt_screen()?;
+                        screen.invalidate();
+                        while terminal.prepare_inline(screen).await?.is_none() {
+                            tokio::task::yield_now().await;
+                        }
+                        screen.release_inline(&mut terminal.output()?)?;
+                        terminal.suspend_to_job_control().await.context("suspend terminal job")?;
+                        program.published = None;
+                        *screen = new_inline_screen(terminal).await.context("restore chat after job suspension")?;
+                        poll_control = true;
+                        continue;
+                    }
                     if key.code == KeyCode::Char('c') && key.modifiers.contains(Modifiers::CONTROL)
                         && (runtime.is_busy() || activity.view(&runtime).is_some())
                     {

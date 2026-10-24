@@ -1105,6 +1105,14 @@ prefix; unfinished facts remain mutable previews, not publication anchors.
 A closed group need not be final. Native reflow belongs to the emulator; resume
 publishes a bounded recent tail with earlier facts inspectable.
 Resize, scrolling, viewport changes and exit preserve composer/terminal custody.
+Unix Ctrl-Z in chat yields the terminal to the controlling shell: erase only the
+mutable primary band without publishing it, clear the terminal root status,
+join input intake and restore modes before stopping the foreground job group.
+On `fg`, reacquire modes and keyboard custody, observe primary geometry and
+redraw the same frontend, including drafts, attachments and open views. Republish
+current operation/outcome status rather than inventing a completion. Suspension
+is not cancellation, replay permission or a paused execution budget; independently
+grouped tools may continue. Credential entry retains its separate input quarantine.
 I/O failure stops input/redraw and awaits settlement before reporting; panic/crash
 cannot promise that. Physical publication is never execution authority.
 

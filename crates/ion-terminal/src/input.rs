@@ -626,6 +626,9 @@ fn read_chunks(
                     return Some(unsent);
                 }
             }
+            // Job-control signals can interrupt a background read before `fg`
+            // restores the foreground group. No bytes were consumed on EINTR.
+            Err(rustix::io::Errno::INTR) => continue,
             Err(error) if error == rustix::io::Errno::AGAIN => {
                 thread::sleep(Duration::from_millis(5));
             }

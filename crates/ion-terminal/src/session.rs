@@ -312,6 +312,21 @@ impl TerminalSession {
         self.restore()
     }
 
+    /// Yield the terminal to the shell and stop the current Unix job group.
+    /// The caller must release its mutable primary surface first. Returning
+    /// from SIGTSTP (normally via `fg`) reacquires modes and keyboard custody;
+    /// independently grouped tools are not stopped or cancelled here.
+    pub async fn suspend_to_job_control(&mut self) -> io::Result<()> {
+        {
+            let mut output = self.output()?;
+            output.write_all(crate::program_status::CLEAR_SEQUENCE)?;
+            output.flush()?;
+        }
+        self.suspend()?;
+        rustix::process::kill_current_process_group(rustix::process::Signal::TSTP)?;
+        self.resume().await
+    }
+
     pub async fn resume(&mut self) -> io::Result<()> {
         self.input.resume()?;
         self.lock().activate()?;
