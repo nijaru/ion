@@ -162,7 +162,8 @@ pub(crate) enum McpAction {
         project: bool,
         #[arg(long, value_enum, default_value = "direct")]
         exposure: ExposureArg,
-        #[arg(trailing_var_arg = true)]
+        /// Arguments passed to the server; use -- to separate overlapping Ion flags.
+        #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
         args: Vec<String>,
     },
     AddHttp {

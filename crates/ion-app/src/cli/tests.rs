@@ -216,6 +216,46 @@ fn metadata_positionals_and_nested_working_directory_have_separate_custody() {
 }
 
 #[test]
+fn mcp_server_arguments_keep_leading_and_overlapping_flags_literal() {
+    for tail in [
+        vec!["-c", "import sys", "--cwd", "server-dir", "--project"],
+        vec!["--", "--cwd", "server-dir", "-c", "import sys", "--project"],
+    ] {
+        let mut args = vec![
+            "ion",
+            "mcp",
+            "add",
+            "--cwd",
+            "/project",
+            "probe",
+            "--exposure",
+            "hidden",
+            "python3",
+        ];
+        args.extend(tail.iter().copied());
+        let cli = parse(&args, true).unwrap();
+        assert_eq!(cli.cwd, Some(PathBuf::from("/project")));
+        let Action::Mcp {
+            action:
+                McpAction::Add {
+                    command,
+                    args,
+                    project,
+                    exposure,
+                    ..
+                },
+        } = cli.action
+        else {
+            panic!("expected stdio server configuration");
+        };
+        assert_eq!(command, "python3");
+        assert_eq!(args, tail.strip_prefix(&["--"]).unwrap_or(&tail));
+        assert!(!project);
+        assert!(matches!(exposure, ExposureArg::Hidden));
+    }
+}
+
+#[test]
 fn pipe_input_is_bounded_utf8_and_only_the_argument_gets_a_separator() {
     let input = "  /literal-template\n\n";
     assert_eq!(read_pipe(input.as_bytes()).unwrap(), input);

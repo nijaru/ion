@@ -545,6 +545,8 @@ with tempfile.TemporaryDirectory(prefix="ion-mcp-") as temporary:
         subprocess.run([binary, "mcp", "add", "flag-probe", "--exposure", "hidden", sys.executable, "-c", "import sys"], env=env, check=True, capture_output=True)
         flagged = subprocess.run([binary, "mcp", "list"], env=env, check=True, capture_output=True, text=True)
         assert "flag-probe\thidden\t" in flagged.stdout, flagged.stdout
+        flag_config = json.loads((Path(env["ION_HOME"]) / "mcp.json").read_text())
+        assert flag_config["servers"]["flag-probe"]["args"] == ["-c", "import sys"], flag_config
         subprocess.run([binary, "mcp", "remove", "flag-probe"], env=env, check=True, capture_output=True)
         config_path = Path(env["ION_HOME"]) / "mcp.json"
         config = json.loads(config_path.read_text())

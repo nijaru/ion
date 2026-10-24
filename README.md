@@ -856,6 +856,9 @@ execute terminal commands; embedded clients can explicitly use shared control's
 lifecycle hooks or UI plugins.
 
 Add local MCP tool servers explicitly with `ion mcp add NAME COMMAND [ARGS...]`.
+Server arguments can start with flags, as in `python3 -c '...'`. Use
+`COMMAND -- ARGS...` when a server's first option overlaps an Ion option such
+as `--cwd`.
 Use `ion mcp add-http NAME URL` for a Streamable HTTP server; add
 `--bearer-token-env VARIABLE` when it requires a bearer token already set in
 the environment. Add `--exposure direct|deferred|hidden` to either command.
