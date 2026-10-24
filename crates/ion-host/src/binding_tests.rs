@@ -236,12 +236,7 @@ fn idle_override_and_effort_restore_as_one_selection() {
     let session = Arc::new(CodingSession::open(path).unwrap());
     let selected = host
         .models()
-        .choose(
-            None,
-            None,
-            session.view().unwrap().last_model,
-            host.credentials(),
-        )
+        .choose(None, session.view().unwrap().last_model, host.credentials())
         .unwrap();
     let binding = control(host.clone(), session, selected);
     assert_eq!(binding.agent().model().model, "override");

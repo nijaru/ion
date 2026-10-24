@@ -44,7 +44,7 @@ precedence.
 With the existing Pi FNOX profile, for example:
 
 ```sh
-fnox -c ~/.config/fnox/config.toml --profile pi exec -- target/debug/ion --provider openrouter --model deepseek/deepseek-v4.1-flash
+fnox -c ~/.config/fnox/config.toml --profile pi exec -- target/debug/ion --model openrouter/deepseek/deepseek-v4.1-flash
 ```
 
 From the project directory:
@@ -56,6 +56,8 @@ ion -p 'Summarize the changes'
 ion --json run 'Inspect and fix the failing test' > events.jsonl
 ion rpc                    # persistent JSONL control on stdin/stdout
 git diff | ion -p 'Review this change'
+git diff | ion -p           # stdin-only headless input
+printf 'Explain this project' | ion run
 ion --continue             # reopen the latest session in this directory
 ion sessions               # list saved sessions and their IDs
 ion --session ID inspect   # committed history for a selected session as JSON
@@ -65,6 +67,19 @@ ion --continue fork 2      # new session before Turn 2, preserving the source
 ion --continue fork 2 --after # new session after settled Turn 2
 ion --continue compact     # summarize old context; retain the raw Session
 ```
+
+Without a command, Ion opens chat when stdin and stdout are terminals; piped or
+redirected I/O selects headless execution. Explicit `chat` and `rpc` keep their
+own input modes. `-p` selects headless mode independently of the prompt, so
+`ion -p --model PROVIDER/MODEL 'PROMPT'` also works. Use `--` before a prompt
+that starts with a dash or matches a command name.
+
+`--model PROVIDER/MODEL` selects an exact catalog or configured custom identity
+for this invocation. With `--provider PROVIDER`, `--model` takes the exact model
+ID, including any namespace slashes. Neither form changes the saved default;
+`ion use PROVIDER MODEL` does. Options may appear before or after a command, but
+must apply to it: metadata commands do not accept model or execution overrides.
+Use `ion COMMAND --help` for that command's options.
 
 Plain CLI metadata (`sessions`, `models`, `use`, resources and MCP listings)
 replaces C0/C1/DEL control characters within fields with spaces, preserving
@@ -299,9 +314,14 @@ This unreleased branch uses Session format 18; earlier development Session
 files are rejected, not automatically migrated or replayed. Tool activity classification used by the transcript is
 stored with each assistant tool-call batch, so resumed history is not
 reinterpreted through the currently installed tool catalog.
-For headless integrations, `--json` works with `run PROMPT` or `--print PROMPT`.
-Headless prompts prepend UTF-8 data piped through stdin, up to 8 MiB. The
-selected model's context window and Ion's encoded request bound can reject
+For headless integrations, `--json` works with `run`, `--print` or an implicit
+piped invocation. Argument text is optional when stdin supplies the prompt.
+Headless input must contain nonblank text or an image. Ion reads and validates piped
+UTF-8 input, up to 8 MiB, before creating a Session or starting MCP servers.
+Stdin alone is preserved exactly, including surrounding whitespace. With both
+stdin and an argument, Ion expands resources in the argument, then prepends the
+literal stdin and one newline; stdin never selects a template or client command.
+The selected model's context window and Ion's encoded request bound can reject
 large input even when it fits that raw input limit.
 Plain text mode writes the committed final answer to stdout after a successful
 turn. Tool progress and errors go to stderr; a failed turn does not print a

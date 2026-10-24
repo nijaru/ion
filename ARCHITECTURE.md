@@ -1069,6 +1069,21 @@ An attached view and a question/approval dialog cannot both own keystrokes: make
 focus transfer explicit before presenting another interaction. Implement each
 interaction with its real caller before adding status variants or capability flags.
 
+## Command-line invocation
+
+Resolve one invocation before opening Host services. Options belong to the
+selected command, including when placed before it; unsupported options fail
+rather than being silently ignored. Qualified model identities use
+`PROVIDER/MODEL`; an explicit provider also permits an exact namespaced model ID.
+Invocation overrides bind the Session without changing the saved global default.
+
+Without an explicit command, terminal stdin and stdout select chat; redirected
+I/O selects headless execution. Explicit chat and RPC retain their own input
+contracts. Headless mode accepts argument text, bounded UTF-8 stdin or images.
+Validate pipe input before Session/MCP admission, preserve its literal contents,
+and prepend it only after argument-side resource expansion. Never interpret pipe
+contents as client commands or template selectors.
+
 ## Terminal experience
 
 Inline native scrollback is primary; fullscreen is another viewport over the same

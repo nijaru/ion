@@ -6,6 +6,21 @@ pub struct ModelRef {
     pub model: String,
 }
 
+impl std::str::FromStr for ModelRef {
+    type Err = &'static str;
+
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        let (provider, model) = value.split_once('/').ok_or("expected PROVIDER/MODEL")?;
+        if provider.is_empty() || model.is_empty() {
+            return Err("expected nonempty PROVIDER/MODEL");
+        }
+        Ok(Self {
+            provider: provider.to_owned(),
+            model: model.to_owned(),
+        })
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ModelRouteReason {

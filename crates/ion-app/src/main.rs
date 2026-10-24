@@ -1,21 +1,21 @@
 //! Local CLI and terminal host for the same coding Agent and Session.
 use std::{
     collections::BTreeSet,
-    io::{self, IsTerminal, Read, Write},
+    io::{self, IsTerminal, Write},
     path::PathBuf,
     sync::Arc,
 };
 
 use anyhow::{Context, Result, bail, ensure};
-use clap::{Parser, Subcommand};
 use ion_ai::{Content, Message};
-use ion_core::{CodingSession, CodingToolSource, ForkPoint, ToolSelection};
+use ion_core::{CodingSession, CodingToolSource, ForkPoint};
 use ion_host::{
-    Application, CredentialStatus, Host, McpExposure, McpHttpServer, McpServer, McpStdioServer,
-    Resources, SavedSelection, Wire,
+    Application, CredentialStatus, Host, McpHttpServer, McpServer, McpStdioServer, Resources,
+    SavedSelection,
 };
 
 mod agent_events;
+mod cli;
 mod clipboard;
 mod clipboard_reader;
 mod display_text;
@@ -35,203 +35,7 @@ mod transcript;
 mod transcript_detail;
 mod transcript_render;
 
-#[derive(Parser)]
-#[command(about = "Ion: a local coding agent")]
-struct Cli {
-    /// Run one prompt headlessly, then exit.
-    #[arg(short = 'p', long = "print", global = true)]
-    print: Option<String>,
-    /// Emit JSONL progress records for a headless prompt.
-    #[arg(long, global = true)]
-    json: bool,
-    /// Enable bounded JavaScript composition alongside direct tools.
-    #[arg(long, global = true)]
-    code_mode: bool,
-    /// Limit model-visible tools to comma-separated names or `*` patterns.
-    #[arg(long, global = true, value_delimiter = ',')]
-    tools: Vec<String>,
-    /// Remove model-visible tools by comma-separated names or `*` patterns.
-    #[arg(long, global = true, value_delimiter = ',')]
-    exclude_tools: Vec<String>,
-    /// Use only read-only model tools; excludes native mutations, direct shell and managed children.
-    #[arg(long, global = true, conflicts_with_all = ["tools", "exclude_tools"])]
-    read_only: bool,
-    /// Working directory for a new session (defaults to the current directory).
-    #[arg(long, global = true)]
-    cwd: Option<PathBuf>,
-    /// Session database path or ID; new work starts a fresh session by default.
-    #[arg(long, global = true, conflicts_with = "continue_session")]
-    session: Option<PathBuf>,
-    /// Continue the most recently active session in this working directory.
-    #[arg(short = 'c', long = "continue", global = true)]
-    continue_session: bool,
-    /// Provider for this invocation; use with --model.
-    #[arg(long, global = true)]
-    provider: Option<String>,
-    /// Exact model ID for this invocation; use with --provider.
-    #[arg(long, global = true)]
-    model: Option<String>,
-    /// Generation effort: default, off, low, medium, high or budget:TOKENS; route support varies.
-    #[arg(long, global = true)]
-    reasoning: Option<ion_ai::Reasoning>,
-    /// Attach an image file to the first submitted prompt (repeatable).
-    #[arg(long, global = true)]
-    image: Vec<PathBuf>,
-    /// Interactive transcript surface: inline native scrollback (default) or fullscreen.
-    #[arg(long, value_enum, global = true, default_value = "inline")]
-    tui_mode: terminal_client::TuiMode,
-    #[command(subcommand)]
-    action: Option<Action>,
-}
-
-#[derive(Subcommand)]
-enum Action {
-    /// Private clipboard transfer helper; never initializes model or Session services.
-    #[command(name = "__clipboard-read", hide = true)]
-    ClipboardRead,
-    /// Print license notices for bundled syntax definitions (no model or Session setup).
-    SyntaxLicenses,
-    /// List models Ion can route to; account access may differ.
-    Models { query: Option<String> },
-    /// Select a catalog model, or configure a custom compatible endpoint.
-    Use {
-        provider: String,
-        model: String,
-        #[arg(long)]
-        endpoint: Option<String>,
-        #[arg(long, value_enum)]
-        wire: Option<Wire>,
-        #[arg(long)]
-        api_key_env: Option<String>,
-        /// Context capacity in tokens for a custom endpoint's model.
-        #[arg(long)]
-        context_window: Option<u32>,
-        /// Maximum output tokens for a custom endpoint's model.
-        #[arg(long)]
-        max_output_tokens: Option<u32>,
-        /// Declare that a custom endpoint's model accepts image input.
-        #[arg(long)]
-        images: bool,
-    },
-    /// Save a provider API key entered at a masked terminal prompt.
-    Login { provider: String },
-    /// Remove a saved credential; an environment key stays active.
-    Logout { provider: String },
-    /// Show credential sources without displaying secrets.
-    Auth,
-    /// Inspect explicit executable user commands.
-    Commands {
-        #[command(subcommand)]
-        action: Option<CommandsAction>,
-    },
-    /// Trust the current project's MCP configuration for its current contents.
-    Trust,
-    /// Remove trust for the current project's MCP configuration.
-    Untrust,
-    /// List saved sessions for the working directory.
-    Sessions,
-    /// List skills and prompt templates available in the working directory.
-    Resources,
-    /// Submit one prompt and print the committed final answer.
-    Run { prompt: String },
-    /// Open the terminal chat client.
-    Chat,
-    /// Configure explicitly connected MCP tool servers.
-    Mcp {
-        #[command(subcommand)]
-        action: McpAction,
-    },
-    /// Control a persistent coding session over JSONL stdin/stdout.
-    Rpc,
-    /// Inspect committed Session history without running a model or tool.
-    Inspect,
-    /// Print a readable committed transcript, or save it to a new file.
-    Export { path: Option<PathBuf> },
-    /// List numbered Turns in a saved Session.
-    Turns,
-    /// Copy a saved conversation into an independent Session in this directory.
-    Clone,
-    /// Fork a saved Session before a Turn, or after it with --after.
-    Fork {
-        turn: u64,
-        #[arg(long)]
-        after: bool,
-    },
-    /// Summarize settled history for continued work, retaining the raw log.
-    Compact,
-}
-
-#[derive(Clone, Copy, Debug, clap::ValueEnum)]
-enum ExposureArg {
-    Direct,
-    Deferred,
-    Hidden,
-}
-
-impl From<ExposureArg> for McpExposure {
-    fn from(value: ExposureArg) -> Self {
-        match value {
-            ExposureArg::Direct => Self::Direct,
-            ExposureArg::Deferred => Self::Deferred,
-            ExposureArg::Hidden => Self::Hidden,
-        }
-    }
-}
-
-#[derive(Subcommand)]
-enum CommandsAction {
-    /// List enabled commands and origin; untrusted project entries are inactive.
-    List,
-    /// Trust the current project commands manifest for its exact contents.
-    Trust,
-    /// Remove trust for the current project commands manifest.
-    Untrust,
-}
-
-#[derive(Subcommand)]
-enum McpAction {
-    List,
-    Add {
-        name: String,
-        command: String,
-        /// Write to the project `.ion/mcp.json` instead of user configuration.
-        #[arg(long)]
-        project: bool,
-        #[arg(long, value_enum, default_value = "direct")]
-        exposure: ExposureArg,
-        #[arg(trailing_var_arg = true)]
-        args: Vec<String>,
-    },
-    AddHttp {
-        name: String,
-        url: String,
-        #[arg(long)]
-        bearer_token_env: Option<String>,
-        #[arg(long)]
-        project: bool,
-        #[arg(long, value_enum, default_value = "direct")]
-        exposure: ExposureArg,
-    },
-    Remove {
-        name: String,
-        #[arg(long)]
-        project: bool,
-    },
-}
-
-fn parse_tool_selection(cli: &Cli) -> Result<ToolSelection> {
-    if cli.read_only {
-        return Ok(ToolSelection::all());
-    }
-    let include = validated_tool_patterns(&cli.tools)?;
-    let exclude = validated_tool_patterns(&cli.exclude_tools)?;
-    let selection = if include.is_empty() {
-        ToolSelection::all()
-    } else {
-        ToolSelection::include(include)
-    };
-    Ok(selection.with_exclude(exclude))
-}
+use cli::{Action, CommandsAction, Invocation, McpAction};
 
 fn configured_cwd(cwd: Option<PathBuf>) -> Result<PathBuf> {
     let path = cwd.unwrap_or(std::env::current_dir()?);
@@ -242,20 +46,13 @@ fn configured_cwd(cwd: Option<PathBuf>) -> Result<PathBuf> {
     Ok(path)
 }
 
-fn validated_tool_patterns(values: &[String]) -> Result<Vec<String>> {
-    values
-        .iter()
-        .map(|value| {
-            let value = value.trim();
-            ensure!(!value.is_empty(), "tool pattern is empty");
-            Ok(value.to_owned())
-        })
-        .collect()
-}
-
 #[tokio::main]
 async fn main() {
-    if let Err(error) = run_cli(Cli::parse()).await {
+    let result = match cli::parse() {
+        Ok(invocation) => run_cli(invocation).await,
+        Err(error) => Err(error),
+    };
+    if let Err(error) = result {
         // Reporting to a broken stderr must not replace the original failure
         // with a printing panic after controlled cleanup has completed.
         // Errors can quote repository metadata before trust is granted.
@@ -265,46 +62,12 @@ async fn main() {
     }
 }
 
-async fn run_cli(cli: Cli) -> Result<()> {
-    if matches!(cli.action, Some(Action::ClipboardRead)) {
+async fn run_cli(cli: Invocation) -> Result<()> {
+    if matches!(cli.action, Action::ClipboardRead) {
         return clipboard_reader::write_native();
     }
-    if cli.reasoning.is_some()
-        && !matches!(
-            &cli.action,
-            Some(Action::Run { .. } | Action::Chat | Action::Rpc | Action::Compact) | None
-        )
-    {
-        bail!("--reasoning requires a coding prompt, chat, RPC or compaction");
-    }
-    if !cli.image.is_empty()
-        && !matches!(
-            &cli.action,
-            Some(Action::Run { .. }) | Some(Action::Chat) | None
-        )
-    {
-        bail!("--image requires a coding prompt or chat");
-    }
-    if (cli.read_only || !cli.tools.is_empty() || !cli.exclude_tools.is_empty())
-        && !matches!(
-            &cli.action,
-            Some(Action::Run { .. } | Action::Chat | Action::Rpc) | None
-        )
-    {
-        bail!("--tools, --exclude-tools and --read-only require a coding client");
-    }
-    if cli.json
-        && (!matches!(&cli.action, Some(Action::Run { .. }) | None)
-            || cli.action.is_none() && cli.print.is_none())
-    {
-        bail!("--json requires `run PROMPT` or `--print PROMPT`");
-    }
-    let tool_selection = parse_tool_selection(&cli)?;
-    if matches!(cli.action, Some(Action::SyntaxLicenses)) {
-        ensure!(
-            cli.print.is_none(),
-            "--print cannot be combined with a subcommand"
-        );
+    let tool_selection = cli.tool_selection;
+    if matches!(cli.action, Action::SyntaxLicenses) {
         let mut notices = String::from("# Bundled syntax definitions\n\n");
         for license in two_face::acknowledgement::listing().for_syntaxes() {
             license.write_md(&mut notices);
@@ -315,11 +78,10 @@ async fn run_cli(cli: Cli) -> Result<()> {
     let credentials = host.credentials();
     let models = host.models();
     match cli.action {
-        Some(Action::ClipboardRead | Action::SyntaxLicenses) => {
+        Action::ClipboardRead | Action::SyntaxLicenses => {
             unreachable!("standalone command handled before Host setup")
         }
-        Some(_) if cli.print.is_some() => bail!("--print cannot be combined with a subcommand"),
-        Some(Action::Models { query }) => {
+        Action::Models { query } => {
             let query = query.unwrap_or_default().to_ascii_lowercase();
             for choice in models.choices(credentials)? {
                 let model = choice.selected;
@@ -339,7 +101,7 @@ async fn run_cli(cli: Cli) -> Result<()> {
             }
             Ok(())
         }
-        Some(Action::Use {
+        Action::Use {
             provider,
             model,
             endpoint,
@@ -348,7 +110,7 @@ async fn run_cli(cli: Cli) -> Result<()> {
             context_window,
             max_output_tokens,
             images,
-        }) => {
+        } => {
             let saved = SavedSelection {
                 provider,
                 model,
@@ -367,7 +129,7 @@ async fn run_cli(cli: Cli) -> Result<()> {
             ))?;
             Ok(())
         }
-        Some(Action::Login { provider }) => {
+        Action::Login { provider } => {
             ensure!(
                 io::stdin().is_terminal() && io::stdout().is_terminal(),
                 "API-key login requires a terminal; use an environment variable in headless mode"
@@ -392,7 +154,7 @@ async fn run_cli(cli: Cli) -> Result<()> {
             ))?;
             Ok(())
         }
-        Some(Action::Logout { provider }) => {
+        Action::Logout { provider } => {
             credentials.remove(&provider)?;
             print_stdout(format_args!(
                 "Removed saved {} credential. Any environment key remains active.",
@@ -400,7 +162,7 @@ async fn run_cli(cli: Cli) -> Result<()> {
             ))?;
             Ok(())
         }
-        Some(Action::Auth) => {
+        Action::Auth => {
             let mut seen = BTreeSet::new();
             for choice in models.choices(credentials)? {
                 let model = choice.selected;
@@ -414,7 +176,7 @@ async fn run_cli(cli: Cli) -> Result<()> {
             }
             Ok(())
         }
-        Some(Action::Sessions) => {
+        Action::Sessions => {
             let cwd = cli.cwd.unwrap_or(std::env::current_dir()?).canonicalize()?;
             let catalog = host.sessions(Some(cwd));
             for session in catalog.list()? {
@@ -436,7 +198,7 @@ async fn run_cli(cli: Cli) -> Result<()> {
             }
             Ok(())
         }
-        Some(Action::Resources) => {
+        Action::Resources => {
             let cwd = cli.cwd.unwrap_or(std::env::current_dir()?).canonicalize()?;
             let resources = host.resources(&cwd)?;
             for skill in resources.skills() {
@@ -464,7 +226,7 @@ async fn run_cli(cli: Cli) -> Result<()> {
             }
             Ok(())
         }
-        Some(Action::Commands { action }) => {
+        Action::Commands { action } => {
             let cwd = configured_cwd(cli.cwd.clone())?;
             let commands = ion_host::CommandConfig::with_project(host.config_root(), &cwd)?;
             match action.unwrap_or(CommandsAction::List) {
@@ -502,7 +264,7 @@ async fn run_cli(cli: Cli) -> Result<()> {
             }
             Ok(())
         }
-        Some(Action::Trust) => {
+        Action::Trust => {
             let cwd = configured_cwd(cli.cwd.clone())?;
             let config = host.mcp_config_for(&cwd)?;
             config.trust_project()?;
@@ -515,14 +277,14 @@ async fn run_cli(cli: Cli) -> Result<()> {
             ))?;
             Ok(())
         }
-        Some(Action::Untrust) => {
+        Action::Untrust => {
             let cwd = configured_cwd(cli.cwd.clone())?;
             let config = host.mcp_config_for(&cwd)?;
             config.untrust_project()?;
             print_stdout(format_args!("Removed project MCP trust"))?;
             Ok(())
         }
-        Some(Action::Mcp { action }) => {
+        Action::Mcp { action } => {
             let cwd = configured_cwd(cli.cwd.clone())?;
             let config = host.mcp_config_for(&cwd)?;
             match action {
@@ -634,14 +396,12 @@ async fn run_cli(cli: Cli) -> Result<()> {
                 catalog.latest()?
             } else if matches!(
                 action,
-                Some(
-                    Action::Inspect
-                        | Action::Export { .. }
-                        | Action::Turns
-                        | Action::Compact
-                        | Action::Clone
-                        | Action::Fork { .. }
-                )
+                Action::Inspect
+                    | Action::Export { .. }
+                    | Action::Turns
+                    | Action::Compact
+                    | Action::Clone
+                    | Action::Fork { .. }
             ) {
                 bail!("use --continue or --session ID; run `ion sessions` to find one")
             } else {
@@ -666,13 +426,13 @@ async fn run_cli(cli: Cli) -> Result<()> {
             let catalog = existing
                 .as_ref()
                 .map_or(catalog, |view| host.sessions(view.cwd.clone()));
-            if matches!(action, Some(Action::Inspect)) {
+            if matches!(action, Action::Inspect) {
                 ensure!(existing.is_some(), "session does not exist");
                 let view = CodingSession::inspect(&path)?;
                 inspection::write(&view, &mut io::stdout().lock())?;
                 return Ok(());
             }
-            if let Some(Action::Export { path: output }) = &action {
+            if let Action::Export { path: output } = &action {
                 ensure!(existing.is_some(), "session does not exist");
                 let view = CodingSession::inspect(&path)?;
                 if let Some(output) = output {
@@ -693,7 +453,7 @@ async fn run_cli(cli: Cli) -> Result<()> {
                 }
                 return Ok(());
             }
-            if matches!(action, Some(Action::Turns)) {
+            if matches!(action, Action::Turns) {
                 ensure!(existing.is_some(), "session does not exist");
                 let view = CodingSession::inspect(&path)?;
                 for turn in view.turns() {
@@ -710,7 +470,7 @@ async fn run_cli(cli: Cli) -> Result<()> {
                 }
                 return Ok(());
             }
-            if matches!(action, Some(Action::Clone)) {
+            if matches!(action, Action::Clone) {
                 ensure!(existing.is_some(), "session does not exist");
                 let source = CodingSession::open(&path)?;
                 let target = catalog.new_path()?;
@@ -719,7 +479,7 @@ async fn run_cli(cli: Cli) -> Result<()> {
                 print_stdout(format_args!("Cloned session as {}", metadata_field(&id)))?;
                 return Ok(());
             }
-            if let Some(Action::Fork { turn, after }) = &action {
+            if let Action::Fork { turn, after } = &action {
                 ensure!(existing.is_some(), "session does not exist");
                 let source = CodingSession::open(&path)?;
                 let target = catalog.new_path()?;
@@ -735,7 +495,7 @@ async fn run_cli(cli: Cli) -> Result<()> {
                 print_stdout(format_args!("Forked session as {}", metadata_field(&id)))?;
                 return Ok(());
             }
-            if matches!(action, Some(Action::Compact)) {
+            if matches!(action, Action::Compact) {
                 ensure!(existing.is_some(), "session does not exist");
             }
             let session_cwd = match &existing {
@@ -746,11 +506,10 @@ async fn run_cli(cli: Cli) -> Result<()> {
                 None => cwd.as_path(),
             };
             let previous = existing.as_ref().and_then(|view| view.last_model.clone());
-            let interactive_setup = matches!(action, Some(Action::Chat) | None)
-                && cli.print.is_none()
+            let interactive_setup = matches!(action, Action::Chat)
                 && io::stdin().is_terminal()
                 && io::stdout().is_terminal();
-            let selection = models.choose(cli.provider, cli.model, previous, credentials);
+            let selection = models.choose(cli.model, previous, credentials);
             let selected = if interactive_setup {
                 let selected = match selection {
                     Ok(selected) => Some(selected),
@@ -792,7 +551,7 @@ async fn run_cli(cli: Cli) -> Result<()> {
             } else {
                 CodingSession::create(&path, Some(&cwd))?
             });
-            let startup = if matches!(action, Some(Action::Compact)) {
+            let startup = if matches!(action, Action::Compact) {
                 ion_host::McpStartup::default()
             } else {
                 host.external_tools(
@@ -810,9 +569,8 @@ async fn run_cli(cli: Cli) -> Result<()> {
             // Terminal and bidirectional RPC own a live question responder.
             // One-shot headless, compaction and managed children have no answer
             // channel and therefore no declared question tool.
-            let questions = (cli.print.is_none()
-                && matches!(&action, Some(Action::Chat | Action::Rpc) | None))
-            .then(ion_host::QuestionCustody::new);
+            let questions =
+                matches!(&action, Action::Chat | Action::Rpc).then(ion_host::QuestionCustody::new);
             let mut application = ion_host::CodingApplication::new(host.clone(), external_tools)
                 .with_code_mode(cli.code_mode);
             if cli.read_only {
@@ -859,7 +617,7 @@ async fn run_cli(cli: Cli) -> Result<()> {
                 for diagnostic in setup.commands().diagnostics() {
                     startup_diagnostics.push(format!("[commands: {}]", metadata_field(diagnostic)));
                 }
-                if cli.print.is_some() || !matches!(&action, Some(Action::Chat) | None) {
+                if !matches!(&action, Action::Chat) {
                     for diagnostic in &startup_diagnostics {
                         print_stderr(format_args!("{diagnostic}"))?;
                     }
@@ -873,31 +631,23 @@ async fn run_cli(cli: Cli) -> Result<()> {
                 // Headless resource expansion precedes piped context; its prepared
                 // message remains literal when admitted by shared control.
                 let client = match action {
-                    Some(Action::Run { prompt }) => {
-                        let prompt = with_piped_input(expand_input(
-                            setup.resources(),
-                            prompt,
-                            setup.agent().limits().max_request_bytes,
-                        )?)?;
+                    Action::Run { prompt } => {
+                        let prompt = cli::with_piped_input(
+                            expand_input(
+                                setup.resources(),
+                                prompt.unwrap_or_default(),
+                                setup.agent().limits().max_request_bytes,
+                            )?,
+                            cli.piped_input,
+                        );
                         Client::Headless(
                             headless::Request::Prompt(Message::user_input(prompt, images)),
                             cli.json,
                         )
                     }
-                    Some(Action::Compact) => Client::Headless(headless::Request::Compact, false),
-                    Some(Action::Rpc) => Client::Rpc,
-                    Some(Action::Chat) | None if cli.print.is_none() => Client::Terminal(images),
-                    None => {
-                        let prompt = with_piped_input(expand_input(
-                            setup.resources(),
-                            cli.print.expect("matched Some"),
-                            setup.agent().limits().max_request_bytes,
-                        )?)?;
-                        Client::Headless(
-                            headless::Request::Prompt(Message::user_input(prompt, images)),
-                            cli.json,
-                        )
-                    }
+                    Action::Compact => Client::Headless(headless::Request::Compact, false),
+                    Action::Rpc => Client::Rpc,
+                    Action::Chat => Client::Terminal(images),
                     _ => unreachable!("non-agent action handled above"),
                 };
                 // Each client immediately owns shared control and always joins it.
@@ -1024,19 +774,4 @@ fn status_label(status: CredentialStatus) -> &'static str {
         CredentialStatus::Saved => "saved login",
         CredentialStatus::Missing => "no credential",
     }
-}
-
-fn with_piped_input(prompt: String) -> Result<String> {
-    if io::stdin().is_terminal() {
-        return Ok(prompt);
-    }
-    const MAX_STDIN: u64 = 8 * 1024 * 1024;
-    let mut bytes = Vec::new();
-    io::stdin().take(MAX_STDIN + 1).read_to_end(&mut bytes)?;
-    ensure!(bytes.len() as u64 <= MAX_STDIN, "piped stdin exceeds 8 MiB");
-    if bytes.is_empty() {
-        return Ok(prompt);
-    }
-    let input = String::from_utf8(bytes).context("piped stdin is not UTF-8")?;
-    Ok(format!("{input}\n{prompt}"))
 }

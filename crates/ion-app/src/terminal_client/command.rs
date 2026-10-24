@@ -353,12 +353,11 @@ pub(super) fn handle_builtin(
         }
         Builtin::Model => {
             if !args.is_empty() {
-                let (provider, model) =
-                    args.split_once('/').context("use /model PROVIDER/MODEL")?;
-                runtime.select_model(ModelRef {
-                    provider: provider.into(),
-                    model: model.into(),
-                })?;
+                runtime.select_model(
+                    args.parse::<ModelRef>()
+                        .map_err(anyhow::Error::msg)
+                        .context("use /model PROVIDER/MODEL")?,
+                )?;
                 ui.status = format!("Selected {args}");
             } else {
                 ui.pickers.open(Picker::models(services)?);

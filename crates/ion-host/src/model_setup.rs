@@ -29,18 +29,24 @@ pub enum Wire {
     OpenAiResponses,
 }
 
+impl Wire {
+    pub const VALUES: &[(&str, Self)] = &[
+        ("chat-completions", Self::ChatCompletions),
+        ("openrouter-chat", Self::OpenRouterChat),
+        ("llama-cpp-no-thinking", Self::LlamaCppNoThinking),
+        ("anthropic-messages", Self::AnthropicMessages),
+        ("openai-responses", Self::OpenAiResponses),
+    ];
+}
+
 impl std::str::FromStr for Wire {
     type Err = String;
 
     fn from_str(value: &str) -> std::result::Result<Self, Self::Err> {
-        match value {
-            "chat-completions" => Ok(Self::ChatCompletions),
-            "openrouter-chat" => Ok(Self::OpenRouterChat),
-            "llama-cpp-no-thinking" => Ok(Self::LlamaCppNoThinking),
-            "anthropic-messages" => Ok(Self::AnthropicMessages),
-            "openai-responses" => Ok(Self::OpenAiResponses),
-            _ => Err(format!("unknown wire format: {value}")),
-        }
+        Self::VALUES
+            .iter()
+            .find_map(|(name, wire)| (*name == value).then_some(*wire))
+            .ok_or_else(|| format!("unknown wire format: {value}"))
     }
 }
 
@@ -183,16 +189,12 @@ impl ModelStore {
 
     pub fn choose(
         &self,
-        provider: Option<String>,
-        model: Option<String>,
+        explicit: Option<ModelRef>,
         previous: Option<ModelRef>,
         credentials: &CredentialStore,
     ) -> Result<Selection> {
-        if provider.is_some() != model.is_some() {
-            bail!("--provider and --model must be used together");
-        }
-        if let (Some(provider), Some(model)) = (provider, model) {
-            return self.resolve_identity(&ModelRef { provider, model });
+        if let Some(explicit) = explicit {
+            return self.resolve_identity(&explicit);
         }
         if let Some(previous) = previous {
             return self.resolve_identity(&previous).with_context(|| {
@@ -553,16 +555,17 @@ mod tests {
                 selected,
                 reopened
                     .choose(
-                        Some("openai".into()),
-                        Some(model.into()),
+                        Some(ModelRef {
+                            provider: "openai".into(),
+                            model: model.into(),
+                        }),
                         None,
                         &credentials,
                     )
                     .unwrap(),
-                reopened.choose(None, None, None, &credentials).unwrap(),
+                reopened.choose(None, None, &credentials).unwrap(),
                 reopened
                     .choose(
-                        None,
                         None,
                         Some(ModelRef {
                             provider: "openai".into(),
@@ -723,12 +726,7 @@ mod tests {
         );
         assert_eq!(
             reopened
-                .choose(
-                    None,
-                    None,
-                    None,
-                    &CredentialStore::new(root.join("credentials"))
-                )
+                .choose(None, None, &CredentialStore::new(root.join("credentials")))
                 .unwrap()
                 .endpoint,
             first.endpoint
@@ -758,12 +756,7 @@ mod tests {
             assert!(credentials.resolver(provider, None).is_err());
             assert_eq!(
                 store
-                    .choose(
-                        None,
-                        None,
-                        None,
-                        &CredentialStore::new(root.join("credentials"))
-                    )
+                    .choose(None, None, &CredentialStore::new(root.join("credentials")))
                     .unwrap()
                     .identity(),
                 first.identity()
@@ -806,12 +799,7 @@ mod tests {
             );
         }
         let default = store
-            .choose(
-                None,
-                None,
-                None,
-                &CredentialStore::new(root.join("credentials")),
-            )
+            .choose(None, None, &CredentialStore::new(root.join("credentials")))
             .unwrap();
         assert!(saved.iter().any(|selected| {
             selected.identity() == default.identity() && selected.endpoint == default.endpoint
@@ -865,7 +853,6 @@ mod tests {
         let store = ModelStore::new(root.clone());
         let selected = store
             .choose(
-                None,
                 None,
                 Some(ModelRef {
                     provider: "desktop".into(),

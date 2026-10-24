@@ -61,8 +61,10 @@ async fn submit(args: Args, cwd: &Path, session: Arc<CodingSession>) -> Result<(
     );
     let host = Arc::new(Host::from_environment()?);
     let selected = host.models().choose(
-        Some(args.provider),
-        Some(args.model),
+        Some(ion_ai::ModelRef {
+            provider: args.provider,
+            model: args.model,
+        }),
         None,
         host.credentials(),
     )?;

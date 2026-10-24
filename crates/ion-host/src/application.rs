@@ -317,10 +317,10 @@ impl Application for CodingApplication {
         model: Option<&ModelRef>,
         questions: Option<Arc<QuestionCustody>>,
     ) -> Result<ApplicationRuntime> {
-        let selected =
-            self.host
-                .models()
-                .choose(None, None, model.cloned(), self.host.credentials())?;
+        let selected = self
+            .host
+            .models()
+            .choose(None, model.cloned(), self.host.credentials())?;
         self.runtime_with_selection(
             cwd.context("coding requires a working directory")?,
             &selected,
