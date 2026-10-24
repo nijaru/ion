@@ -21,20 +21,24 @@ generic workflow language or Ion-owned coordination service follows from this.
 Leaving infrastructure external must not leave callers to reconstruct acceptance,
 execution identity, parentage or settlement themselves.
 
-Pi and fx are primary implementation references for harness design and workflows;
-fx also guides restrained presentation. Codex is a secondary Rust reference, and
-Claude Code's documented contracts provide secondary workflow/SDK evidence. Inspect
-relevant source; distinguish established behavior, experiments and vendor claims.
-Adapt semantics to Rust, not entire runtimes or feature inventories.
-
 ### Reference-derived design
 
-[Pi](https://github.com/earendil-works/pi) and
-[fx](https://github.com/vercel-labs/fx) are living upstream baselines, not pinned
-parity targets. Use their current relevant implementation when making a design
-decision. Historical revisions identify evidence, not the version Ion must match.
-Separate shipped native workflows, examples/extensions and experimental SDKs;
-one surface does not inherit another's guarantees.
+[Pi](https://github.com/earendil-works/pi) is the primary harness/workflow baseline;
+[fx](https://github.com/vercel-labs/fx) informs alternatives and restrained native
+presentation. Codex is a secondary Rust reference; Claude Code's documented
+contracts provide secondary workflow/SDK evidence. These are living baselines,
+not pinned parity targets. Inspect current relevant interactions and edge cases
+before designing the corresponding Ion workflow. Historical revisions identify
+evidence, not the version Ion must match. Separate shipped native workflows,
+examples/extensions, experimental SDKs and vendor claims; one surface does not
+inherit another's guarantees.
+
+Preserve proven user-facing semantics by default and implement them idiomatically
+in Rust, rather than translating entire runtimes or feature inventories.
+Departures need a concrete usability, correctness or ownership benefit, including
+the cost of relearning; language differences and convenience for existing
+internals are not sufficient. Ion's authority and durability contracts remain
+constraints, not extra user ceremony.
 
 Comparable workflow completeness, reliability and polish are the target, not
 matching language APIs, crate diagrams or feature counts. Ion's coding workflow
@@ -1084,7 +1088,10 @@ legible without color. Nested activity uses recorded parentage, not an invented
 process tree. Queued is not running or successful.
 
 Keep drafts editable during work: multiline/history, paste/images, external editor,
-steering and follow-ups. Commands/pickers retain unsent input. Draft replacement
+steering and follow-ups. Commands/pickers retain unsent input. Ordinary `@` typing
+stays literal; Tab after an `@path` prefix explicitly opens file search. Dismissing
+that search preserves the pre-search draft and cursor; accepting replaces only
+its captured prefix range. Draft replacement
 invalidates draft-bound completion ranges and cancels their discovery without
 abandoning the worker's join. Text editing has bounded terminal-local undo/redo
 and kill/yank recovery, independent of durable input custody. Ordinary typing

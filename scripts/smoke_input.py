@@ -385,6 +385,34 @@ with tempfile.TemporaryDirectory(prefix="ion-input-") as temporary:
             finally:
                 terminal.close()
 
+            # Ordinary typing stays in the editor. Only explicit Tab enters
+            # file search; dismissing it must retain the pre-search draft.
+            cwd = work / (mode + "-files")
+            (cwd / "src").mkdir(parents=True)
+            (cwd / "src/main.rs").write_text("fn main() {}\n")
+            terminal = Terminal(cwd, env, mode)
+            try:
+                terminal.wait(lambda: "›" in terminal.text())
+                for prompt, complete in (("nick@example.com", False), ("Read @ma next", True)):
+                    terminal.output.clear()
+                    before = len(requests)
+                    terminal.send(prompt)
+                    terminal.paint()
+                    if complete:
+                        terminal.send(b"\x1b[D" * len(" next") + b"\t")
+                        terminal.wait(lambda: "Choose file" in terminal.text())
+                        terminal.send("unmatched-filter")
+                        terminal.send(b"\x1b")
+                        terminal.paint()
+                    terminal.send(b"\r")
+                    terminal.wait(lambda: len(requests) == before + 1)
+                    assert user_text(requests[-1]) == prompt, user_text(requests[-1])
+                    terminal.wait(lambda: b"state=done" in terminal.output)
+                terminal.finish()
+            finally:
+                terminal.close()
+            print(f"File input {mode}: literal email and cancelled completion retain exact prompt: OK", flush=True)
+
             # Stopping an observed shell withdraws automatic queued dispatch;
             # a normal exit 7 does not. Neither changes the saved native outcome.
             for cancelled in (True, False):

@@ -815,18 +815,24 @@ async fn file_picker_inserts_a_selected_project_path() {
         cwd: root.clone(),
         ..Frontend::default()
     };
-    ui.insert("Read ");
+    // Complete in the middle of a draft, after multibyte whitespace. Dismissal
+    // leaves the original literal/cursor intact, even after filtering results.
+    let literal = "Read\u{2003}@m next";
+    let cursor = "Read\u{2003}@m".len();
+    ui.insert(literal);
+    ui.cursor = cursor;
+    ui.key(KeyEvent::new(KeyCode::Tab, Modifiers::NONE), None, None);
     ui.key(
-        KeyEvent::new(KeyCode::Char('@'), Modifiers::NONE),
+        KeyEvent::new(KeyCode::Char('x'), Modifiers::NONE),
         None,
         None,
     );
-    ui.key(
-        KeyEvent::new(KeyCode::Char('m'), Modifiers::NONE),
-        None,
-        None,
-    );
-    assert!(ui.pickers.complete().await.is_none());
+    ui.key(KeyEvent::new(KeyCode::Esc, Modifiers::NONE), None, None);
+    assert_eq!((ui.draft.as_str(), ui.cursor), (literal, cursor));
+    ui.key(KeyEvent::new(KeyCode::Tab, Modifiers::NONE), None, None);
+    while ui.pickers.has_job() {
+        assert!(ui.pickers.complete().await.is_none());
+    }
     let picker = ui.pickers.active().unwrap();
     assert_eq!(picker.query, "m");
     assert_eq!(picker.items.len(), 1);
@@ -837,6 +843,8 @@ async fn file_picker_inserts_a_selected_project_path() {
         panic!("file picker did not choose a path")
     };
     ui.insert_file(path, start, end);
-    assert_eq!(ui.draft, "Read @src/main.rs");
+    assert_eq!(ui.draft, "Read\u{2003}@src/main.rs next");
+    assert_eq!(ui.cursor, "Read\u{2003}@src/main.rs".len());
+    ui.pickers.shutdown().await.unwrap();
     std::fs::remove_dir_all(root).unwrap();
 }

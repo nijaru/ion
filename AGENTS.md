@@ -8,12 +8,17 @@
 - Build one reusable Rust agent engine. Coding is its first application, not
   its ceiling. Bots, services, phone integrations and coordinators reuse shared
   control, admission, recovery and delegation rather than implementing new loops.
-- Pi and fx are living upstream architecture/workflow baselines; Codex and
-  Claude Code are secondary references. Inspect current relevant upstream source
-  before designing an overlapping capability. Do not freeze parity against a
-  release or old checkout. Revisions identify historical evidence only.
-  Distinguish delivered reference behavior, examples, experiments and claims;
-  adapt semantics to Ion's ownership, durability and authority contracts.
+- Pi is the primary architecture/workflow baseline; fx informs alternatives
+  and native presentation. Codex and Claude Code are secondary references.
+  Inspect current relevant upstream source before designing an overlapping
+  capability, including its interaction and edge cases. Preserve proven
+  user-facing semantics by default; implement them idiomatically in Rust.
+  Depart only for a concrete usability, correctness or ownership benefit,
+  accounting for relearning costs—not novelty, language differences or existing
+  implementation convenience. Preserve Ion's authority/durability contracts.
+  Do not freeze parity against a release or old checkout. Revisions identify
+  historical evidence only; distinguish delivered behavior from examples,
+  experiments and claims.
 - Inline native scrollback is primary. Fullscreen is another viewport over the
   same semantics, not a separate runtime or polish workstream.
 - Ion is unreleased v0 without compatibility guarantees. Replace obsolete

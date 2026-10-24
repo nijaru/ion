@@ -543,9 +543,11 @@ These editing keys remain available during work without
 cancelling it; Ctrl-C still cancels the active operation.
 Up and Down browse earlier prompts when the cursor reaches the first or last
 editor line. Returning from history restores the unsent draft and its cursor,
-even if a running Turn refreshed history. Type
-`@` to pick a project file, or use Tab after a partial `@path`; the picker
-inserts a path reference for the model to read, not the file's contents.
+even if a running Turn refreshed history. Type `@` or a partial `@path`, then
+press Tab to pick a project file. Ordinary `@` typing, including email addresses,
+stays literal. Esc dismisses file search without changing the original draft or
+cursor. Choosing a file inserts a path reference for the model to read, not the
+file's contents.
 Discovery runs off the client event loop, so you can filter or dismiss the picker
 while it scans. Limits and traversal errors are reported rather than hidden.
 Closing the picker cancels further traversal and prevents stale results from

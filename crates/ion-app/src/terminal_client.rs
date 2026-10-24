@@ -1018,8 +1018,10 @@ impl Frontend {
                 code: KeyCode::Tab, ..
             } => {
                 let start = self.draft[..self.cursor]
-                    .rfind(char::is_whitespace)
-                    .map_or(0, |at| at + 1);
+                    .char_indices()
+                    .rev()
+                    .find(|(_, ch)| ch.is_whitespace())
+                    .map_or(0, |(at, ch)| at + ch.len_utf8());
                 let token = &self.draft[start..self.cursor];
                 if let Some(query) = token.strip_prefix('@') {
                     self.pickers
@@ -1078,16 +1080,6 @@ impl Frontend {
                 modifiers,
             } if modifiers.contains(Modifiers::CONTROL) => {
                 self.insert("\n");
-                Action::None
-            }
-            KeyEvent {
-                code: KeyCode::Char('@'),
-                modifiers,
-            } if !modifiers.contains(Modifiers::CONTROL) && !modifiers.contains(Modifiers::ALT) => {
-                let start = self.cursor;
-                self.insert("@");
-                self.pickers
-                    .open_files(&self.cwd, start, self.cursor, String::new());
                 Action::None
             }
             KeyEvent {

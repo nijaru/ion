@@ -583,6 +583,33 @@ async fn asynchronous_preparation_return_retains_raw_source_and_other_edits() {
 }
 
 #[tokio::test]
+async fn typed_at_signs_remain_literal_until_explicit_completion() {
+    for literal in [
+        "nick@example.com",
+        "user@host:repo",
+        "Read @src/main.rs next",
+        "@",
+    ] {
+        let mut ui = Frontend::default();
+        for ch in literal.chars() {
+            ui.key(
+                KeyEvent::new(KeyCode::Char(ch), Modifiers::NONE),
+                None,
+                None,
+            );
+        }
+        assert_eq!((ui.draft.as_str(), ui.cursor), (literal, literal.len()));
+        assert!(ui.pickers.active().is_none());
+        assert!(!ui.pickers.has_job());
+        assert!(matches!(
+            ui.key(KeyEvent::new(KeyCode::Enter, Modifiers::NONE), None, None),
+            Action::Submit(text) if text == literal
+        ));
+        ui.pickers.shutdown().await.unwrap();
+    }
+}
+
+#[tokio::test]
 async fn withdrawn_preparation_replaces_draft_and_invalidates_file_completion() {
     for literal in ["é queued input", "ASCII queued input"] {
         let mut fixture = Fixture::new();
@@ -600,16 +627,8 @@ async fn withdrawn_preparation_replaces_draft_and_invalidates_file_completion() 
         );
         assert!(fixture.control.state().preparing_input);
         assert!(fixture.control.withdraw_last_follow_up().is_some());
-        ui.key(
-            KeyEvent::new(KeyCode::Char('x'), Modifiers::NONE),
-            None,
-            None,
-        );
-        ui.key(
-            KeyEvent::new(KeyCode::Char('@'), Modifiers::NONE),
-            None,
-            None,
-        );
+        ui.insert("x @");
+        ui.key(KeyEvent::new(KeyCode::Tab, Modifiers::NONE), None, None);
         assert!(ui.pickers.active().is_some());
 
         let mut activity = Activity::default();
@@ -631,10 +650,10 @@ async fn withdrawn_preparation_replaces_draft_and_invalidates_file_completion() 
         );
 
         ui.recover_draft();
-        assert_eq!((ui.draft.as_str(), ui.cursor), ("x@", 2));
+        assert_eq!((ui.draft.as_str(), ui.cursor), ("x @", 3));
         assert!(ui.images.is_empty());
         assert!(
-            matches!(ui.key(KeyEvent::new(KeyCode::Enter, Modifiers::NONE), None, None), Action::Submit(text) if text == "x@")
+            matches!(ui.key(KeyEvent::new(KeyCode::Enter, Modifiers::NONE), None, None), Action::Submit(text) if text == "x @")
         );
         fixture.control.shutdown().await;
         ui.pickers.shutdown().await.unwrap();
