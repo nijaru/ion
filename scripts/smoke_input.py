@@ -257,6 +257,8 @@ def exercise_onboarding(work, base_env, endpoint):
             terminal.wait(lambda: "DONE_" + prompt in terminal.text())
             assert len(requests) == 1 and user_text(requests[0]) == prompt, requests
             assert "DISPOSABLE" not in json.dumps(requests)
+            # Answer text can precede settlement; Ctrl-C would still cancel then.
+            terminal.wait(lambda: b"\x1b]7501;state=done:app=ion\x1b\\" in terminal.output)
             terminal.finish()
         finally:
             terminal.close()
