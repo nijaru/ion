@@ -890,6 +890,22 @@ committed facts. Allocate collision-free aliases without rebinding earlier encod
 prefixes; retained native identities remain opaque and fixed, or fail explicitly
 on an unresolvable collision. Core must not branch on provider names.
 
+The explicitly selected OpenAI Responses wire is stateless: send current
+instructions and ordered input with `store:false`, never a server conversation or
+`previous_response_id`. Retain complete native output for validated replay, including
+message boundaries/phases, refusals, distinct item/call IDs and terminal-only
+encrypted reasoning. Reconcile snapshots against observed/finalized output before
+commit; ciphertext is never human thinking. Reasoning replay stays scoped to its
+producing provider, wire and model. Flat function declarations use `strict:false`;
+foreign namespaces cannot resolve to same-named local tools. Tool-result text
+preserves the observed error/withholding envelope and images stay attached to the
+corresponding function result. Terminal completion, not EOF or progressive JSON,
+authorizes a completed call; truncated calls use the existing non-dispatch settlement.
+Failed snapshots carrying output establish output custody before their error.
+Responses full-output frames have an independent 8 MiB bound; delta-oriented wires
+retain 256 KiB. Decoded-retention and lifetime/no-progress limits remain separate.
+These semantics neither select a default route nor provide subscription access.
+
 Caching/affinity are optimizations, not authority. Affinity survives reopen and
 changes on fork/clone. Warming is bounded, separately accounted and subordinate
 to settlement. Schedule only positive refresh deadlines within the active horizon;

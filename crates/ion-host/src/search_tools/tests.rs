@@ -320,8 +320,8 @@ fn malformed_or_incomplete_grounding_cannot_become_plausible_empty_results() {
 }
 
 #[test]
-fn valid_custom_model_endpoints_are_not_rejected_for_lacking_native_search_paths() {
-    let selected = Selection {
+fn coding_profiles_enable_only_applicable_native_search_paths() {
+    let mut selected = Selection {
         provider: "openai".into(),
         model: "custom".into(),
         endpoint: "http://127.0.0.1:1/custom-model-handler".into(),
@@ -343,6 +343,22 @@ fn valid_custom_model_endpoints_are_not_rejected_for_lacking_native_search_paths
     )
     .unwrap();
     assert!(tools.native.is_none());
+    selected.wire = HttpWire::OpenAiResponses;
+    selected.provider = "custom-responses".into();
+    selected.endpoint = "http://127.0.0.1:1/prefix/v1/responses".into();
+    let tools = SearchTools::coding(
+        &selected,
+        &CredentialStore::new("unused-fixture-store"),
+        &SearchSettings {
+            native: true,
+            fallbacks: vec![],
+        },
+    )
+    .unwrap();
+    let route = tools.native.unwrap();
+    assert_eq!(route.backend, SearchBackend::Openai);
+    assert_eq!(route.endpoint.as_str(), selected.endpoint);
+    assert_eq!(route.model, Some(selected.identity()));
 }
 
 #[tokio::test]

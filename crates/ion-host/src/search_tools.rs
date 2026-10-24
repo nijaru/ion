@@ -178,6 +178,7 @@ impl SearchTools {
         let backend = match selected.wire {
             HttpWire::AnthropicMessages => Some(SearchBackend::Anthropic),
             HttpWire::DeepSeekChat => Some(SearchBackend::Deepseek),
+            HttpWire::OpenAiResponses => Some(SearchBackend::Openai),
             HttpWire::ChatCompletions if selected.provider == "openai" => {
                 Some(SearchBackend::Openai)
             }
@@ -187,13 +188,18 @@ impl SearchTools {
         // A valid coding endpoint need not implement a standard sibling search
         // path (notably SDK/proxy routes). Inapplicable search must not break it.
         let backend = backend.filter(|backend| {
-            *backend == SearchBackend::Anthropic || base.path().ends_with("/chat/completions")
+            *backend == SearchBackend::Anthropic
+                || base.path().ends_with("/chat/completions")
+                || (selected.wire == HttpWire::OpenAiResponses
+                    && base.path().ends_with("/responses"))
         });
         let native = if settings.native {
             backend
                 .map(|backend| {
                     let mut endpoint = base.clone();
-                    if backend != SearchBackend::Anthropic {
+                    if backend != SearchBackend::Anthropic
+                        && selected.wire != HttpWire::OpenAiResponses
+                    {
                         let stem = endpoint
                             .path()
                             .strip_suffix("/chat/completions")

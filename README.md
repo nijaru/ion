@@ -606,7 +606,8 @@ instruction context including bounded omission notices. Closest files get budget
 priority; included files render global-to-local. A nested linked worktree's copy
 shadows the main checkout's project copy of the same file.
 `ion use` also accepts a custom model with
-`--endpoint URL --wire chat-completions` or `--wire anthropic-messages`.
+`--endpoint URL --wire chat-completions`, `--wire anthropic-messages`, or
+`--wire openai-responses`.
 Custom provider identifiers contain only lowercase ASCII letters, digits and
 hyphens, with 1–64 bytes; the same identifier is used for provider login.
 `URL` may be a compatible API base such as `http://desktop:8080/v1` or the
@@ -627,6 +628,26 @@ For a custom OpenRouter model, use `--wire openrouter-chat`. This route retains
 plain reasoning or ordered structured `reasoning_details` across tool calls;
 the generic `chat-completions` route does not assume that contract. Qualify a
 new model with a tool-using turn before relying on it for coding.
+For an OpenAI Responses API route, select a custom provider identity explicitly:
+
+```sh
+ion use openai-api YOUR_MODEL --endpoint https://api.openai.com/v1 \
+  --wire openai-responses --api-key-env OPENAI_API_KEY
+```
+
+Add `--images` only if the selected model accepts images. This uses API-key access,
+not ChatGPT/Codex subscription login, and does not change
+catalog routes. Requests send full history with `store:false`; no server-side
+conversation is required. Native message phases, refusals and encrypted reasoning
+survive tool continuation and reopen. Readable reasoning is distinct from opaque
+replay. Calls execute only after a terminal response; failed or truncated calls
+cannot authorize a tool effect. Function tools retain their existing optional-field
+semantics (`strict:false`); namespaced/hosted tools are not mapped to local tools.
+Responses requires at least 16 output tokens and permits bounded full-output SSE
+frames up to 8 MiB; other wires retain their 256 KiB frame limit. Independent decoded
+output/replay and stream-work bounds still apply. This route is qualified against a
+local protocol fixture, not a live OpenAI account.
+
 When switching models between Turns, Ion keeps the saved transcript and tool
 results but omits opaque reasoning from earlier model epochs in later model
 requests. Switching back does not revive those older blocks. Model requests
@@ -637,8 +658,8 @@ identity and any provider-returned model identifier. Effective physical model
 changes advance replay epochs independently of logical selection, so a future
 virtual route cannot switch A → B → A and accidentally revive stale opaque
 reasoning. Ion does not yet provide a virtual-model registry or router.
-Anthropic encoding aliases unsigned migrated tool IDs when their format or a
-collision requires it, keeping each call paired with its result. Aliases are
+Anthropic and Responses encoding alias unsigned migrated tool IDs when their
+format or a collision requires it, keeping each call paired with its result. Aliases are
 wire-only: committed IDs, other chat wires and retained native replay are
 unchanged. Appending history does not rebind an earlier encoded prefix; a collision
 that would require renaming retained replay reports an incompatibility instead.

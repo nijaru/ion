@@ -25,6 +25,8 @@ pub enum Wire {
     OpenRouterChat,
     LlamaCppNoThinking,
     AnthropicMessages,
+    #[serde(rename = "openai-responses")]
+    OpenAiResponses,
 }
 
 impl std::str::FromStr for Wire {
@@ -36,6 +38,7 @@ impl std::str::FromStr for Wire {
             "openrouter-chat" => Ok(Self::OpenRouterChat),
             "llama-cpp-no-thinking" => Ok(Self::LlamaCppNoThinking),
             "anthropic-messages" => Ok(Self::AnthropicMessages),
+            "openai-responses" => Ok(Self::OpenAiResponses),
             _ => Err(format!("unknown wire format: {value}")),
         }
     }
@@ -347,6 +350,7 @@ impl ModelStore {
             Wire::OpenRouterChat => HttpWire::OpenRouterChat,
             Wire::LlamaCppNoThinking => HttpWire::LlamaCppNoThinking,
             Wire::AnthropicMessages => HttpWire::AnthropicMessages,
+            Wire::OpenAiResponses => HttpWire::OpenAiResponses,
         };
         let endpoint = HttpModelService::resolve_endpoint(endpoint, wire)
             .context("invalid custom endpoint")?;
@@ -484,6 +488,30 @@ mod tests {
         assert!(!store.resolve_saved(&route).unwrap().requires_key);
         route.endpoint = Some("https://example.com/v1/chat/completions?token=hidden".into());
         assert!(store.resolve_saved(&route).is_err());
+    }
+
+    #[test]
+    fn responses_custom_route_round_trips_without_changing_catalog_defaults() {
+        let store = ModelStore::new(std::env::temp_dir().join("ion-responses-route"));
+        let mut route = desktop_route("https://api.example.com/prefix/v1/");
+        route.wire = Some("openai-responses".parse().unwrap());
+        let serialized = serde_json::to_string(&route).unwrap();
+        assert!(serialized.contains("\"openai-responses\""));
+        let route: SavedSelection = serde_json::from_str(&serialized).unwrap();
+        let selected = store.resolve_saved(&route).unwrap();
+        assert_eq!(selected.wire, HttpWire::OpenAiResponses);
+        assert_eq!(
+            selected.endpoint,
+            "https://api.example.com/prefix/v1/responses"
+        );
+        assert_eq!(
+            HttpModelService::resolve_endpoint(&selected.endpoint, selected.wire).unwrap(),
+            selected.endpoint
+        );
+        assert_eq!(
+            catalog::find("openai", "gpt-5.5").unwrap().wire,
+            catalog::CatalogWire::ChatCompletions
+        );
     }
 
     #[test]

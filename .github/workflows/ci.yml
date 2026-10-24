@@ -58,6 +58,8 @@ jobs:
         run: bash scripts/smoke.sh && python3 scripts/smoke_headless.py
       - name: Anthropic signed replay and migration smoke
         run: python3 scripts/smoke_anthropic.py
+      - name: Responses stateless replay and effect-fence smoke
+        run: python3 scripts/smoke_responses.py
       - name: Fixed coding qualification smoke
         run: python3 scripts/smoke_coding.py
       - name: Native web retrieval smoke

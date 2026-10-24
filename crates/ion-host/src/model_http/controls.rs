@@ -33,6 +33,31 @@ pub(super) fn control_fields(
         }
         return Ok(fields);
     }
+    if wire == HttpWire::OpenAiResponses {
+        if controls.max_output_tokens < 16 {
+            return Err(invalid("Responses requires at least 16 output tokens"));
+        }
+        let mut fields = json!({"max_output_tokens":controls.max_output_tokens});
+        match controls.reasoning {
+            Reasoning::ProviderDefault => {}
+            Reasoning::Off => fields["reasoning"] = json!({"effort":"none"}),
+            Reasoning::Low => fields["reasoning"] = json!({"effort":"low","summary":"auto"}),
+            Reasoning::Medium => fields["reasoning"] = json!({"effort":"medium","summary":"auto"}),
+            Reasoning::High => fields["reasoning"] = json!({"effort":"high","summary":"auto"}),
+            Reasoning::BudgetTokens(_) => {
+                return Err(unsupported(
+                    "exact reasoning-token budgets are unsupported by Responses",
+                ));
+            }
+        }
+        if let Some(value) = controls.temperature {
+            fields["temperature"] = json!(value);
+        }
+        if let Some(value) = controls.top_p {
+            fields["top_p"] = json!(value);
+        }
+        return Ok(fields);
+    }
     if matches!(controls.reasoning, Reasoning::BudgetTokens(_)) {
         return Err(unsupported(
             "exact reasoning-token budgets are unsupported by Chat Completions",
@@ -90,7 +115,7 @@ pub(super) fn control_fields(
             Reasoning::High => fields["reasoning"] = json!({"effort":"high"}),
             Reasoning::BudgetTokens(_) => unreachable!("rejected above"),
         },
-        HttpWire::AnthropicMessages => unreachable!("handled above"),
+        HttpWire::AnthropicMessages | HttpWire::OpenAiResponses => unreachable!("handled above"),
     }
     Ok(fields)
 }

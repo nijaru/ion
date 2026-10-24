@@ -346,7 +346,7 @@ fn transcript_messages(
                     }}));
                 }
                 Part::ToolCall { call, id } => {
-                    *id = ids.for_call(&call.id, replay.is_some())?;
+                    *id = ids.for_call(&call.id, replay.is_some(), "Anthropic")?;
                     blocks.push(
                         json!({"type":"tool_use","id":id,"name":call.name,"input":call.arguments}),
                     );

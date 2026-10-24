@@ -31,6 +31,8 @@ mod chat_request;
 mod controls;
 mod errors;
 mod limits;
+mod responses;
+mod responses_request;
 mod tool_ids;
 mod transcript;
 use anthropic::AnthropicState;
@@ -49,6 +51,8 @@ use errors::{
     anthropic_sse_error, chat_stream_error, classify_status_error, provider_error_detail_value,
 };
 use limits::{ResponseBudget, StreamBudget};
+use responses::ResponsesState;
+use responses_request::responses_body;
 
 const MAX_FRAME: usize = 256 * 1024;
 const MAX_ERROR_BODY: usize = 16 * 1024;
@@ -71,11 +75,28 @@ pub enum HttpWire {
     MiMoChat,
     OpenRouterChat,
     AnthropicMessages,
+    OpenAiResponses,
 }
 
 impl HttpWire {
     fn is_chat(self) -> bool {
-        self != Self::AnthropicMessages
+        match self {
+            Self::ChatCompletions
+            | Self::LlamaCppNoThinking
+            | Self::DeepSeekChat
+            | Self::MiMoChat
+            | Self::OpenRouterChat => true,
+            Self::AnthropicMessages | Self::OpenAiResponses => false,
+        }
+    }
+
+    fn frame_limit(self) -> usize {
+        // Responses terminal events repeat the full output, not just a delta.
+        if self == Self::OpenAiResponses {
+            8 * 1024 * 1024
+        } else {
+            MAX_FRAME
+        }
     }
 }
 
@@ -102,10 +123,10 @@ impl HttpModelService {
     ) -> Result<String, ProviderError> {
         let mut url = parse_endpoint(base_or_endpoint)?;
         let path = url.path().trim_end_matches('/');
-        let complete = if wire.is_chat() {
-            path.ends_with("/chat/completions")
-        } else {
-            path.ends_with("/v1/messages")
+        let complete = match wire {
+            HttpWire::AnthropicMessages => path.ends_with("/v1/messages"),
+            HttpWire::OpenAiResponses => path.ends_with("/responses"),
+            _ => path.ends_with("/chat/completions"),
         };
         let has_anthropic_version = path.ends_with("/v1");
         let mut segments = url
@@ -113,13 +134,19 @@ impl HttpModelService {
             .map_err(|_| invalid("provider endpoint cannot contain path segments"))?;
         segments.pop_if_empty();
         if !complete {
-            if wire.is_chat() {
-                segments.push("chat").push("completions");
-            } else {
-                if !has_anthropic_version {
-                    segments.push("v1");
+            match wire {
+                HttpWire::AnthropicMessages => {
+                    if !has_anthropic_version {
+                        segments.push("v1");
+                    }
+                    segments.push("messages");
                 }
-                segments.push("messages");
+                HttpWire::OpenAiResponses => {
+                    segments.push("responses");
+                }
+                _ => {
+                    segments.push("chat").push("completions");
+                }
             }
         }
         drop(segments);
@@ -200,14 +227,14 @@ impl ModelService for HttpModelService {
         Box::pin(async move {
             let native_anthropic = self.wire == HttpWire::AnthropicMessages
                 && self.endpoint.host_str() == Some("api.anthropic.com");
-            let mut body = if self.wire.is_chat() {
-                chat_body(&request, self.wire)?
-            } else {
-                anthropic_body_for_route(
+            let mut body = match self.wire {
+                HttpWire::OpenAiResponses => responses_body(&request)?,
+                HttpWire::AnthropicMessages => anthropic_body_for_route(
                     &request,
                     native_anthropic,
                     self.capabilities.context_mutation.inline_tool_definitions,
-                )?
+                )?,
+                _ => chat_body(&request, self.wire)?,
             };
             if native_anthropic
                 && request.prompt_cache == PromptCacheIntent::Reusable
@@ -216,10 +243,12 @@ impl ModelService for HttpModelService {
                 body["cache_control"] = json!({"type":"ephemeral"});
             }
             let inline_tools = anthropic_body_uses_inline_tools(&body);
-            let mut decoder = if self.wire.is_chat() {
-                Decoder::Chat(ChatState::new(self.wire))
-            } else {
-                Decoder::Anthropic(AnthropicState::new(anthropic_body_prefix_digest(&body)?))
+            let mut decoder = match self.wire {
+                HttpWire::OpenAiResponses => Decoder::Responses(ResponsesState::default()),
+                HttpWire::AnthropicMessages => {
+                    Decoder::Anthropic(AnthropicState::new(anthropic_body_prefix_digest(&body)?))
+                }
+                _ => Decoder::Chat(ChatState::new(self.wire)),
             };
             // Dropping this future drops credential lookup. The caller owns cancellation;
             // no provider request is spawned into an independent task.
@@ -245,10 +274,10 @@ impl ModelService for HttpModelService {
                         "invalid provider credential",
                     ));
                 }
-                let header_text = if self.wire.is_chat() {
-                    format!("Bearer {key}")
-                } else {
+                let header_text = if self.wire == HttpWire::AnthropicMessages {
                     key
+                } else {
+                    format!("Bearer {key}")
                 };
                 let mut header = HeaderValue::from_str(&header_text).map_err(|_| {
                     error(
@@ -257,10 +286,10 @@ impl ModelService for HttpModelService {
                     )
                 })?;
                 header.set_sensitive(true);
-                post = if self.wire.is_chat() {
-                    post.header(AUTHORIZATION, header)
-                } else {
+                post = if self.wire == HttpWire::AnthropicMessages {
                     post.header("x-api-key", header)
+                } else {
+                    post.header(AUTHORIZATION, header)
                 };
             }
             if self.wire == HttpWire::AnthropicMessages {
@@ -341,7 +370,7 @@ impl ModelService for HttpModelService {
                     let chunk = next.map_err(|_| transport("provider stream transport failed"))?;
                     for byte in chunk {
                         budget.byte()?;
-                        if frame.len() == MAX_FRAME { Err(invalid("provider SSE frame exceeded byte limit"))?; }
+                        if frame.len() == wire.frame_limit() { Err(invalid("provider SSE frame exceeded byte limit"))?; }
                         frame.push(byte);
                         // SSE ignores exactly one initial UTF-8 BOM. The absolute
                         // byte count recognizes it even across transport chunks.
@@ -352,24 +381,29 @@ impl ModelService for HttpModelService {
                         if !has_sse_event_boundary(&frame) { continue; }
                         let events = decode_stream_frame(&frame, &mut decoder, &request, wire, &mut budget)?;
                         frame.clear();
+                        let failure = decoder.take_error();
                         for event in events {
                             let event = normalize_capacity(event, wire, context_window_tokens);
                             let terminal = matches!(event, ModelStreamEvent::Completed(_));
                             yield event;
                             if terminal { return; }
                         }
+                        if let Some(failure) = failure { Err(failure)?; }
                     }
                 }
                 // SSE permits a final event without a trailing blank line. Some
                 // Chat Completions servers also close after finish_reason rather
                 // than sending a separate [DONE] sentinel.
                 if !frame.is_empty() {
-                    for event in decode_stream_frame(&frame, &mut decoder, &request, wire, &mut budget)? {
+                    let events = decode_stream_frame(&frame, &mut decoder, &request, wire, &mut budget)?;
+                    let failure = decoder.take_error();
+                    for event in events {
                         let event = normalize_capacity(event, wire, context_window_tokens);
                         let terminal = matches!(event, ModelStreamEvent::Completed(_));
                         yield event;
                         if terminal { return; }
                     }
+                    if let Some(failure) = failure { Err(failure)?; }
                 }
                 if wire.is_chat() {
                     yield normalize_capacity(ModelStreamEvent::Completed(decoder.complete(&request)?), wire, context_window_tokens);
@@ -489,6 +523,14 @@ fn decode_frame(
         .map_err(|_| invalid("provider sent invalid SSE JSON"))?;
     if wire == HttpWire::AnthropicMessages && parsed.event.as_deref() != value["type"].as_str() {
         return Err(invalid("Anthropic SSE event and data type disagree"));
+    }
+    if wire == HttpWire::OpenAiResponses
+        && parsed
+            .event
+            .as_deref()
+            .is_some_and(|event| Some(event) != value["type"].as_str())
+    {
+        return Err(invalid("Responses SSE event and data type disagree"));
     }
     decoder.accept(&value, request)
 }
@@ -635,12 +677,21 @@ fn parse_tool_arguments(raw: String) -> (Value, Option<String>) {
 enum Decoder {
     Chat(ChatState),
     Anthropic(AnthropicState),
+    Responses(ResponsesState),
 }
 impl Decoder {
+    fn take_error(&mut self) -> Option<ProviderError> {
+        match self {
+            Self::Responses(state) => state.pending_error.take(),
+            _ => None,
+        }
+    }
+
     fn retained_bytes(&self) -> usize {
         match self {
             Self::Chat(state) => state.budget.used,
             Self::Anthropic(state) => state.budget.used,
+            Self::Responses(state) => state.budget.used,
         }
     }
 
@@ -652,12 +703,14 @@ impl Decoder {
         match self {
             Self::Chat(state) => state.accept(value),
             Self::Anthropic(state) => state.accept(value, request),
+            Self::Responses(state) => state.accept(value, request),
         }
     }
     fn complete(&mut self, request: &ModelRequest) -> Result<ModelResponse, ProviderError> {
         match self {
             Self::Chat(state) => std::mem::take(state).complete(request),
             Self::Anthropic(_) => Err(invalid("[DONE] is not an Anthropic completion")),
+            Self::Responses(_) => Err(invalid("Responses requires a terminal response event")),
         }
     }
 }
@@ -702,6 +755,7 @@ fn valid_openrouter_details(value: &Value) -> bool {
 
 #[cfg(test)]
 mod tests {
+    mod responses;
     mod stream_limits;
     mod tool_ids;
 
