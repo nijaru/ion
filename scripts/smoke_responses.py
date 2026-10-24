@@ -32,9 +32,9 @@ def message(identity, text, *, phase="final_answer", refusal=False):
     return dict(type="message", id=identity, role="assistant", status="completed", phase=phase, content=[part])
 
 
-def finish(output, *, incomplete=False):
+def finish(output, *, incomplete=False, output_tokens=8):
     response = dict(id="resp_1", model="mock", status="incomplete" if incomplete else "completed", output=output,
-                    usage=dict(input_tokens=10, output_tokens=8, total_tokens=18,
+                    usage=dict(input_tokens=10, output_tokens=output_tokens, total_tokens=10 + output_tokens,
                                input_tokens_details=dict(cached_tokens=6), output_tokens_details=dict(reasoning_tokens=3)))
     if incomplete:
         response["incomplete_details"] = dict(reason="max_output_tokens")
@@ -78,13 +78,22 @@ class Handler(BaseHTTPRequestHandler):
                 payload = finish([foreign]) if step == 1 else finish([message("msg_namespace", "WRONG_LOCAL_TOOL_EXECUTED")])
             elif self.path == "/truncated/v1/responses":
                 if step == 1:
-                    payload = finish([call('{"path":"forbidden.txt"', status="incomplete")], incomplete=True)
+                    payload = finish([call('{"path":"forbidden.txt"', status="incomplete")], incomplete=True, output_tokens=body["max_output_tokens"])
                 else:
-                    retained = next(item for item in body["input"] if item["type"] == "function_call")
-                    assert retained["arguments"] == '{"path":"forbidden.txt"'
-                    result = next(item for item in body["input"] if item["type"] == "function_call_output")
-                    assert json.loads(result["output"])["is_error"] is True
-                    payload = finish([message("msg_truncated", "TRUNCATED_NOT_EXECUTED")])
+                    retained = [item for item in body["input"] if item["type"] == "function_call"]
+                    assert retained[0]["arguments"] == '{"path":"forbidden.txt"'
+                    results = [item for item in body["input"] if item["type"] == "function_call_output"]
+                    assert all(json.loads(result["output"])["is_error"] is True for result in results)
+                    if step == 2:
+                        # Valid JSON is still not execution authority when the
+                        # response is truncated, even with a completed call item.
+                        valid = call(dict(path="valid-truncated.txt", content="NEVER"))
+                        valid.update(id="fc_valid", call_id="call_valid")
+                        payload = finish([valid], incomplete=True, output_tokens=body["max_output_tokens"])
+                    else:
+                        assert step == 3 and len(results) == 2
+                        assert json.loads(retained[1]["arguments"])["path"] == "valid-truncated.txt"
+                        payload = finish([message("msg_truncated", "TRUNCATED_NOT_EXECUTED")])
             else:
                 raise AssertionError(f"unexpected endpoint: {self.path}")
             self.send_response(200)
@@ -195,8 +204,9 @@ with tempfile.TemporaryDirectory(prefix="ion-responses-") as temporary:
         select("/truncated")
         truncated = submit("truncated", "Handle a truncated call safely")
         assert truncated[-1] == dict(type="run_end", status="completed"), truncated
-        assert len(requests["/truncated/v1/responses"]) == 2
+        assert len(requests["/truncated/v1/responses"]) == 3
         assert not (workspace / "forbidden.txt").exists()
+        assert not (workspace / "valid-truncated.txt").exists()
     finally:
         server.shutdown()
         server.server_close()
