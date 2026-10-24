@@ -41,6 +41,7 @@ mod navigation;
 mod output;
 mod picker;
 mod question;
+mod setup;
 mod tasks;
 use clipboard_input::*;
 use command::{CommandInput, dispatch_command};
@@ -48,8 +49,9 @@ use composer::input_window;
 use editing::{Edit, vertical_cursor};
 use editor_recovery::EditorRecovery;
 use interaction::{apply_picker, submit_editor};
-use picker::{Picker, PickerItem, PickerValue, Pickers};
+use picker::{Picker, PickerValue, Pickers};
 use question::{QuestionAction, QuestionModal};
+pub use setup::setup_model;
 
 const MAX_DRAFT: usize = 64 * 1024;
 const LIVE_REGION_MAX_ROWS: usize = 12;

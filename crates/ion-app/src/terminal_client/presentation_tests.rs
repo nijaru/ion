@@ -1,3 +1,4 @@
+use super::picker::PickerItem;
 use super::*;
 use ion_ai::ModelRef;
 use ion_core::{

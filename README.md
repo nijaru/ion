@@ -21,13 +21,24 @@ target/debug/ion models
 Use `target/debug/ion` in the commands below, or install the binary on your
 `PATH` with `cargo install --locked --path crates/ion-app`.
 
+Run `ion` from a terminal to begin. If no model is configured or authenticated,
+Ion opens a searchable model catalog. Choose a model, enter its API key at the
+hidden prompt, and continue into chat. That choice becomes the default. Esc or
+Ctrl-C closes the picker without creating a Session; Ctrl-C cancels key entry
+and returns to the picker. Configured keyless endpoints need no key entry.
+Setup does not issue a model request or start MCP servers. Credentials and model
+choices already saved are not rolled back if later application setup fails.
+
 Ion picks a catalog model automatically when its provider key is present in
 `DEEPSEEK_API_KEY`, `XIAOMI_API_KEY`, `OPENROUTER_API_KEY`, `OPENAI_API_KEY` or
 `ANTHROPIC_API_KEY`. The default preference starts with DeepSeek Flash, then
 MiMo Flash, then DeepSeek Flash through OpenRouter. To select one explicitly,
 run `ion use PROVIDER MODEL` with the exact ID shown by `ion models`.
-`ion login PROVIDER` accepts a key at a masked terminal prompt when no
-environment key is available. `ion auth` shows which credential source is
+A selected or reopened model with a missing key opens the same hidden prompt in
+interactive chat. `ion login PROVIDER` also accepts a key at a hidden terminal
+prompt. Headless, RPC and redirected launches never open setup UI; configure a
+model and credential first. Invalid routes remain errors rather than falling
+back to a different model. `ion auth` shows which credential source is
 active, and `ion logout PROVIDER` removes a saved key. Environment keys take
 precedence.
 With the existing Pi FNOX profile, for example:

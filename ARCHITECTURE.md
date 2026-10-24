@@ -177,6 +177,15 @@ engine UI; a future approval boundary must decide before effect dispatch and
 cannot retroactively stop started work. V1 does not claim OS sandboxing. OAuth is
 an optional access workflow, not a first-use gate.
 
+Interactive coding startup may resolve missing model selection or credentials
+before publishing a binding. The terminal owns this setup UI; Host model and
+credential stores own validation and persistence. No Session, model request,
+executable tools or MCP startup is admitted until setup succeeds. Cancellation
+returns without a Session; already saved configuration is not rolled back.
+Explicit invalid routes and corrupt configuration remain errors, not prompts to
+silently select another route. Unattended clients require complete setup and
+never enter this UI. Ready bindings use the same shared control as before.
+
 ## Agent loop and effects
 
 The principal lifecycle is:

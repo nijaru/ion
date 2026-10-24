@@ -42,6 +42,40 @@ pub(super) struct Picker {
 }
 
 impl Picker {
+    pub fn models(services: &ion_host::Host) -> Result<Self> {
+        let items = services
+            .models()
+            .choices(services.credentials())?
+            .into_iter()
+            .map(|choice| {
+                let option = choice.selected;
+                PickerItem {
+                    label: format!(
+                        "{}/{}  {}  {}",
+                        option.provider,
+                        option.model,
+                        choice.label,
+                        if option.requires_key
+                            && choice.credential == ion_host::CredentialStatus::Missing
+                        {
+                            "needs API key"
+                        } else {
+                            "ready"
+                        }
+                    ),
+                    detail: None,
+                    value: PickerValue::Model(option.identity()),
+                }
+            })
+            .collect();
+        Ok(Self {
+            title: "Choose model",
+            query: String::new(),
+            selected: 0,
+            items,
+        })
+    }
+
     pub fn matches(&self) -> Vec<usize> {
         let query = self.query.to_ascii_lowercase();
         self.items

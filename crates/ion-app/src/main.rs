@@ -746,7 +746,24 @@ async fn run_cli(cli: Cli) -> Result<()> {
                 None => cwd.as_path(),
             };
             let previous = existing.as_ref().and_then(|view| view.last_model.clone());
-            let selected = models.choose(cli.provider, cli.model, previous, credentials)?;
+            let interactive_setup = matches!(action, Some(Action::Chat) | None)
+                && cli.print.is_none()
+                && io::stdin().is_terminal()
+                && io::stdout().is_terminal();
+            let selection = models.choose(cli.provider, cli.model, previous, credentials);
+            let selected = if interactive_setup {
+                let selected = match selection {
+                    Ok(selected) => Some(selected),
+                    Err(error) if error.is::<ion_host::ModelSelectionRequired>() => None,
+                    Err(error) => return Err(error),
+                };
+                let Some(selected) = terminal_client::setup_model(&host, selected).await? else {
+                    return Ok(());
+                };
+                selected
+            } else {
+                selection?
+            };
             selected.require_access(credentials)?;
             let sources = cli
                 .image

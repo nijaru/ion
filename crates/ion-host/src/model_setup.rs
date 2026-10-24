@@ -81,6 +81,21 @@ pub struct Selection {
     pub capabilities: catalog::ModelCapabilities,
 }
 
+/// No explicit, restored, saved or authenticated catalog selection is available.
+/// Interactive clients may offer setup; unattended callers must report the error.
+#[derive(Debug)]
+pub struct ModelSelectionRequired;
+
+impl std::fmt::Display for ModelSelectionRequired {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str(
+            "no model selected; run `ion models`, then `ion use PROVIDER MODEL` or set a provider key",
+        )
+    }
+}
+
+impl std::error::Error for ModelSelectionRequired {}
+
 impl Selection {
     pub fn identity(&self) -> ModelRef {
         ModelRef {
@@ -89,11 +104,14 @@ impl Selection {
         }
     }
 
-    pub fn require_access(&self, credentials: &CredentialStore) -> Result<()> {
-        if self.requires_key
+    pub fn credential_missing(&self, credentials: &CredentialStore) -> Result<bool> {
+        Ok(self.requires_key
             && credentials.status(&self.provider, self.api_key_env.as_deref())?
-                == CredentialStatus::Missing
-        {
+                == CredentialStatus::Missing)
+    }
+
+    pub fn require_access(&self, credentials: &CredentialStore) -> Result<()> {
+        if self.credential_missing(credentials)? {
             if let Some(env_name) = &self.api_key_env {
                 bail!(
                     "no {} credential; set {} or run `ion login {}`",
@@ -198,9 +216,7 @@ impl ModelStore {
                 });
             }
         }
-        bail!(
-            "no model selected; run `ion models`, then `ion use PROVIDER MODEL` or set a provider key"
-        )
+        Err(ModelSelectionRequired.into())
     }
 
     pub fn resolve_identity(&self, model: &ModelRef) -> Result<Selection> {

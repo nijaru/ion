@@ -70,7 +70,9 @@ pub use mcp::{
     McpConfig, McpExposure, McpHttpServer, McpServer, McpStartup, McpStdioServer, McpTools,
 };
 pub use model_http::{HttpModelService, HttpWire};
-pub use model_setup::{ModelChoice, ModelStore, SavedSelection, Selection, Wire};
+pub use model_setup::{
+    ModelChoice, ModelSelectionRequired, ModelStore, SavedSelection, Selection, Wire,
+};
 pub use process::{
     AttachmentPage, AttachmentScreen, AttachmentWrite, ProcessOwner, ProcessTools,
     TerminalAttachment, TerminalSummary,

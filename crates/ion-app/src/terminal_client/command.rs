@@ -5,12 +5,12 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
 use ion_ai::ModelRef;
-use ion_host::{CredentialStatus, SessionControl};
+use ion_host::SessionControl;
 use ion_terminal::{Screen, TerminalSession};
 
 use super::{
-    Builtin, EditorDraft, Frontend, Picker, PickerItem, PickerValue, ProgramStatusState, TuiMode,
-    context_label, copy_last_answer, edit_draft_in_terminal,
+    Builtin, EditorDraft, Frontend, Picker, ProgramStatusState, TuiMode, context_label,
+    copy_last_answer, edit_draft_in_terminal,
     interaction::{editor_delivery, submit_editor},
     login_in_terminal, navigation, tasks, tools,
 };
@@ -361,35 +361,7 @@ pub(super) fn handle_builtin(
                 })?;
                 ui.status = format!("Selected {args}");
             } else {
-                let items = services
-                    .models()
-                    .choices(services.credentials())?
-                    .into_iter()
-                    .map(|choice| {
-                        let option = choice.selected;
-                        Ok(PickerItem {
-                            label: format!(
-                                "{}/{}  {}  {}",
-                                option.provider,
-                                option.model,
-                                choice.label,
-                                if choice.credential == CredentialStatus::Missing {
-                                    "no credential"
-                                } else {
-                                    "ready"
-                                }
-                            ),
-                            detail: None,
-                            value: PickerValue::Model(option.identity()),
-                        })
-                    })
-                    .collect::<Result<Vec<_>>>()?;
-                ui.pickers.open(Picker {
-                    title: "Choose model",
-                    query: String::new(),
-                    selected: 0,
-                    items,
-                });
+                ui.pickers.open(Picker::models(services)?);
             }
         }
         Builtin::Logout => {

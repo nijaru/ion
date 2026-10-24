@@ -11,6 +11,7 @@ import signal
 import sqlite3
 import struct
 import subprocess
+import sys
 import tempfile
 import termios
 import threading
@@ -22,6 +23,7 @@ from pathlib import Path
 root = Path(__file__).resolve().parent.parent
 binary = Path(os.environ.get("ION_SMOKE_BIN", root / "target/debug/ion"))
 requests = []
+unexpected_connections = []
 release = threading.Event()
 
 
@@ -31,6 +33,10 @@ def user_text(body):
 
 
 class Handler(BaseHTTPRequestHandler):
+    def do_CONNECT(self):
+        unexpected_connections.append(self.path)
+        self.send_error(502, "Model requests are forbidden during setup")
+
     def do_POST(self):
         body = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
         requests.append(body)
@@ -133,6 +139,131 @@ class Terminal:
         self.child.wait(timeout=5)
 
 
+def exercise_onboarding(work, base_env, endpoint):
+    for mode in ("inline", "fullscreen"):
+        cwd = work / (mode + "-onboarding")
+        cwd.mkdir()
+        home = cwd / "ion"
+        env = dict(base_env, HOME=str(cwd / "home"), ION_HOME=str(home),
+                   XDG_CONFIG_HOME=str(cwd / "config"), XDG_STATE_HOME=str(cwd / "state"),
+                   HTTPS_PROXY=endpoint, HTTP_PROXY=endpoint, ALL_PROXY=endpoint,
+                   NO_PROXY="127.0.0.1,localhost")
+        home.mkdir()
+        marker = cwd / "mcp-started"
+        mcp = home / "mcp.json"
+        mcp.write_text(json.dumps({"servers": {"must-not-start": {
+            "command": sys.executable,
+            "args": ["-c", f"from pathlib import Path; Path({str(marker)!r}).touch()"],
+        }}}))
+        # No credentials, model calls or Session are needed to reach setup.
+        result = subprocess.run([binary, "-p", "NEVER_SEND"], env=env, capture_output=True)
+        assert result.returncode == 1 and b"no model selected" in result.stderr
+        terminal = Terminal(cwd, env, mode)
+        try:
+            terminal.wait(lambda: "Choose default model" in terminal.text())
+            assert not list(home.rglob("*.sqlite")), "setup allocated a Session"
+            terminal.send("openai/gpt-5.4-mini")
+            terminal.paint()
+            terminal.send(b"\rPRE_READ_DISPOSABLE\r")
+            terminal.wait(lambda: "openai API key:" in terminal.text())
+            assert not termios.tcgetattr(terminal.master)[3] & (termios.ECHO | termios.ECHONL)
+            terminal.send(b"CANCELLED_DISPOSABLE\x03PROMPT_DISPOSABLE\r")
+            terminal.wait(lambda: "choose a model to retry" in terminal.text())
+            assert "DISPOSABLE" not in terminal.text(), "setup credential leaked"
+            assert not list(home.rglob("*.sqlite")), "cancelled login allocated a Session"
+            assert not (home / "models.json").exists(), "cancelled choice changed the default"
+            assert not (home / "credentials/openai.key").exists()
+            assert not marker.exists(), "cancelled setup launched MCP"
+            terminal.finish()
+            assert termios.tcgetattr(terminal.master) == terminal.original_modes
+        finally:
+            terminal.close()
+
+        mcp.unlink()
+        # A disposable key is saved locally; no prompt is submitted to OpenAI.
+        # Startup must not issue any model request or admit credential type-ahead.
+        terminal = Terminal(cwd, env, mode)
+        try:
+            terminal.wait(lambda: "Choose default model" in terminal.text())
+            terminal.send("openai/gpt-5.4-mini")
+            terminal.paint()
+            terminal.send(b"\r")
+            terminal.wait(lambda: "openai API key:" in terminal.text())
+            terminal.output.clear()
+            terminal.send(b"ACTUAL_DISPOSABLE\rSUFFIX_DISPOSABLE\r")
+            terminal.wait(lambda: "›" in terminal.text())
+            terminal.paint()
+            assert "DISPOSABLE" not in terminal.text(), "secret became visible input"
+            saved = json.loads((home / "models.json").read_text())
+            assert saved["default"] == {"provider": "openai", "model": "gpt-5.4-mini"}
+            key = home / "credentials/openai.key"
+            assert key.read_bytes() == b"ACTUAL_DISPOSABLE"
+            assert key.stat().st_mode & 0o777 == 0o600
+            terminal.finish()
+        finally:
+            terminal.close()
+        sessions = list(home.rglob("*.sqlite"))
+        assert len(sessions) == 1
+        inspection = subprocess.run([binary, "--session", sessions[0], "inspect"], env=env, capture_output=True, check=True)
+        assert b"DISPOSABLE" not in inspection.stdout and b"NEVER_SEND" not in inspection.stdout
+        turns = subprocess.run([binary, "--session", sessions[0], "turns"], env=env, capture_output=True, check=True)
+        assert not turns.stdout.strip(), "onboarding admitted model input"
+
+        # Invalid explicit routes must fail, not silently offer a different model.
+        terminal = Terminal(cwd, env, mode, ["--provider", "missing", "--model", "unknown"])
+        try:
+            deadline = time.monotonic() + 5
+            while terminal.child.poll() is None:
+                assert time.monotonic() < deadline
+                terminal.pump()
+            terminal.paint()
+            assert terminal.child.returncode == 1 and "Choose default model" not in terminal.text()
+        finally:
+            terminal.close()
+
+        # A known model with a missing credential goes directly to masked entry,
+        # even when reopening a Session. Cancellation does not modify its facts.
+        subprocess.run([binary, "logout", "openai"], env=env, capture_output=True, check=True)
+        before = sessions[0].read_bytes()
+        terminal = Terminal(cwd, env, mode, ["--session", sessions[0], "--tui-mode", mode])
+        try:
+            terminal.wait(lambda: "openai API key:" in terminal.text())
+            terminal.send(b"\x03")
+            terminal.wait(lambda: "choose a model to retry" in terminal.text())
+            terminal.finish()
+            assert sessions[0].read_bytes() == before, "cancelled setup changed the saved Session"
+        finally:
+            terminal.close()
+        assert not unexpected_connections, unexpected_connections
+        assert not requests, "setup issued a model request"
+
+        # Configured keyless endpoints use the same picker and admission path.
+        subprocess.run([binary, "use", "local", "fixture", "--endpoint", endpoint,
+                        "--wire", "chat-completions"], env=env, capture_output=True, check=True)
+        config = json.loads((home / "models.json").read_text())
+        config["default"] = None
+        (home / "models.json").write_text(json.dumps(config))
+        terminal = Terminal(cwd, env, mode)
+        try:
+            terminal.wait(lambda: "Choose default model" in terminal.text())
+            terminal.send("local/fixture")
+            terminal.paint()
+            terminal.output.clear()
+            terminal.send(b"\r")
+            terminal.wait(lambda: "›" in terminal.text())
+            assert "API key:" not in terminal.text(), "keyless route requested a credential"
+            prompt = "ONBOARD_LOCAL_" + mode
+            terminal.send(prompt + "\r")
+            terminal.wait(lambda: "DONE_" + prompt in terminal.text())
+            assert len(requests) == 1 and user_text(requests[0]) == prompt, requests
+            assert "DISPOSABLE" not in json.dumps(requests)
+            terminal.finish()
+        finally:
+            terminal.close()
+        requests.clear()
+        print(f"Onboarding {mode}: picker, masked key, quarantine, default, cancellation, MCP fence, reopen and keyless admission: OK", flush=True)
+
+
 with tempfile.TemporaryDirectory(prefix="ion-input-") as temporary:
     work = Path(temporary)
     env = {name: value for name, value in os.environ.items() if name in ("PATH", "SHELL", "TMPDIR")}
@@ -141,6 +272,7 @@ with tempfile.TemporaryDirectory(prefix="ion-input-") as temporary:
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
     try:
+        exercise_onboarding(work, env, f"http://127.0.0.1:{server.server_port}/v1")
         subprocess.run([binary, "use", "smoke", "smoke-model", "--endpoint", f"http://127.0.0.1:{server.server_port}/v1/chat/completions", "--wire", "chat-completions"], env=env, check=True, capture_output=True)
         # Display sanitation must not bypass the secret reader's input guard.
         terminal = Terminal(work, env, "inline", ["login", "unsafe\x1b[31mprovider"])
