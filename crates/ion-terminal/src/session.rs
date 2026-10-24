@@ -324,6 +324,15 @@ impl TerminalSession {
         }
         self.suspend()?;
         rustix::process::kill_current_process_group(rustix::process::Signal::TSTP)?;
+        let terminal = File::open("/dev/tty")?;
+        while rustix::io::retry_on_intr(|| rustix::termios::tcgetpgrp(&terminal))?
+            != rustix::process::getpgrp()
+        {
+            // `bg` is not permission to read shell input or capture its editing
+            // modes. Stop again until `fg`; SIGSTOP also avoids a spinning loop
+            // when job-control signals were inherited as ignored or are orphaned.
+            rustix::process::kill_current_process_group(rustix::process::Signal::STOP)?;
+        }
         self.resume().await
     }
 
