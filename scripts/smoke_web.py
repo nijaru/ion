@@ -204,7 +204,8 @@ if __name__ == "__main__":
             def run(*args):
                 return subprocess.run([str(BINARY), "--cwd", str(root / "work"), *args], env=env, capture_output=True, text=True, timeout=45, check=True)
 
-            run("use", "fixture", "web", "--endpoint", f"http://127.0.0.1:{provider.server_port}/v1", "--wire", "chat-completions")
+            subprocess.run([str(BINARY), "use", "fixture", "web", "--endpoint", f"http://127.0.0.1:{provider.server_port}/v1", "--wire", "chat-completions"],
+                           env=env, capture_output=True, text=True, timeout=45, check=True)
             for prompt, options in [("WEB_DIRECT", []), ("WEB_READONLY", ["--read-only"]), ("WEB_CODE", ["--code-mode"]), ("WEB_EXCLUDED", ["--code-mode", "--exclude-tools", "web_fetch"])]:
                 before = len(web_calls)
                 result = run(*options, "run", prompt)
@@ -248,7 +249,8 @@ if __name__ == "__main__":
                 backend = mode.removeprefix("SEARCH_").lower()
                 fallback = [{"provider": backend, "endpoint": f"http://127.0.0.1:{provider.server_port}/search/{backend}", "api_key_env": "SEARCH_TOKEN"}] if active == "fixture" else []
                 (root / "ion/settings.json").write_text(json.dumps({"search": {"fallbacks": fallback}}))
-                run("use", active, "search-fixture", "--endpoint", f"http://127.0.0.1:{provider.server_port}/proxy/v1", "--wire", "chat-completions", "--api-key-env", "MODEL_TOKEN")
+                subprocess.run([str(BINARY), "use", active, "search-fixture", "--endpoint", f"http://127.0.0.1:{provider.server_port}/proxy/v1", "--wire", "chat-completions", "--api-key-env", "MODEL_TOKEN"],
+                               env=env, capture_output=True, text=True, timeout=45, check=True)
                 before_search, before_web = len(search_calls), len(web_calls)
                 result = run(*options, "run", mode + "_PARENT_PRIVATE_CONTEXT")
                 assert result.stdout.strip() == "SEARCH_FETCH_OK", result

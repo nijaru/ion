@@ -129,8 +129,9 @@ try {
             return subprocess.run([BINARY, "--cwd", workspace, *arguments], env=env, capture_output=True,
                                   text=True, check=True, timeout=50)
 
-        run("use", "smoke", "steering", "--wire", "chat-completions", "--max-output-tokens", "256",
-            "--endpoint", f"http://127.0.0.1:{server.server_port}/v1")
+        subprocess.run([BINARY, "use", "smoke", "steering", "--wire", "chat-completions",
+                        "--max-output-tokens", "256", "--endpoint", f"http://127.0.0.1:{server.server_port}/v1"],
+                       env=env, capture_output=True, text=True, check=True, timeout=50)
         process = run("--tools", "read,write,exec,subagent,code_mode", "--code-mode", "--json", "run", "PARENT")
         records = [json.loads(line) for line in process.stdout.splitlines()]
         result = next(r["output"]["result"] for r in records if r["type"] == "tool_finished")

@@ -53,8 +53,9 @@ with tempfile.TemporaryDirectory(prefix="ion-subagent-routing-") as temporary:
                               check=True, capture_output=True, text=True, timeout=20)
 
     def configure(provider, model, endpoint, token, wire="chat-completions", output=256):
-        run("use", provider, model, "--endpoint", endpoint, "--wire", wire,
-            "--api-key-env", token, "--max-output-tokens", str(output))
+        subprocess.run([BINARY, "use", provider, model, "--endpoint", endpoint, "--wire", wire,
+                        "--api-key-env", token, "--max-output-tokens", str(output)],
+                       env=env, check=True, capture_output=True, text=True, timeout=20)
 
     def tool(name, arguments):
         return {"tool_calls": [{"index": 0, "id": "fixture-call", "type": "function",

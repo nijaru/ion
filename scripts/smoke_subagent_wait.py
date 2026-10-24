@@ -103,8 +103,9 @@ try {
             return subprocess.run([BINARY, "--cwd", workspace, *arguments], env=env, capture_output=True,
                                   text=True, check=True, timeout=25)
 
-        run("use", "smoke", "wait", "--wire", "chat-completions", "--max-output-tokens", "256",
-            "--endpoint", f"http://127.0.0.1:{server.server_port}/v1")
+        subprocess.run([BINARY, "use", "smoke", "wait", "--wire", "chat-completions",
+                        "--max-output-tokens", "256", "--endpoint", f"http://127.0.0.1:{server.server_port}/v1"],
+                       env=env, capture_output=True, text=True, check=True, timeout=25)
         process = run("--tools", "read,write,subagent,code_mode", "--code-mode", "--json", "run", "PARENT")
         records = [json.loads(line) for line in process.stdout.splitlines()]
         assert not failures, failures

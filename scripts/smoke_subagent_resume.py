@@ -169,8 +169,9 @@ try {
                                   capture_output=True, text=True, check=True, timeout=50)
 
         def configure(provider, model):
-            run("use", provider, model, "--wire", "chat-completions", "--max-output-tokens", "256",
-                "--endpoint", f"http://127.0.0.1:{server.server_port}/v1")
+            subprocess.run([BINARY, "use", provider, model, "--wire", "chat-completions",
+                            "--max-output-tokens", "256", "--endpoint", f"http://127.0.0.1:{server.server_port}/v1"],
+                           env=env, capture_output=True, text=True, check=True, timeout=50)
 
         configure("saved", "saved")
         configure("smoke", "parent")
