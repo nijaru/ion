@@ -6,7 +6,13 @@ use std::time::Duration;
 async fn deadline_stops_but_joins_and_retains_provenance_after_infrastructure_failure() {
     for (background, fault) in [(false, false), (true, false), (true, true)] {
         let owner = Arc::new(BackgroundOwner::new(1).unwrap());
-        let mut f = Fixture::with_owner(
+        let partial_service = fault.then(|| {
+            Arc::new(ScriptedModelService::new([response(vec![
+                Content::Text("visible before failure 🦀".into()),
+                call("effect", json!({})),
+            ])]))
+        });
+        let mut f = Fixture::with_child_service(
             if background {
                 Wait::Join
             } else {
@@ -17,6 +23,9 @@ async fn deadline_stops_but_joins_and_retains_provenance_after_infrastructure_fa
             None,
             background.then(|| owner.clone()),
             Some(60_000),
+            partial_service
+                .as_ref()
+                .map(|service| service.clone() as Arc<dyn ion_ai::ModelService>),
         );
         let mut started = f.effect.started.subscribe();
         let mut stopped = f.effect.stopped.subscribe();
@@ -104,10 +113,17 @@ async fn deadline_stops_but_joins_and_retains_provenance_after_infrastructure_fa
             panic!("runtime survives cleanup");
         };
         assert!(*runtime >= 60_000 && *runtime < 121_000);
-        assert!(
-            partial_output.is_none(),
-            "tool-only messages do not become partial text"
-        );
+        if fault {
+            assert_eq!(
+                partial_output.as_ref().unwrap().text,
+                "visible before failure 🦀"
+            );
+        } else {
+            assert!(
+                partial_output.is_none(),
+                "tool-only messages do not become partial text"
+            );
+        }
         if !fault {
             assert_eq!(
                 receipt.as_ref().unwrap().end,
@@ -122,15 +138,32 @@ async fn deadline_stops_but_joins_and_retains_provenance_after_infrastructure_fa
             outcome,
         );
         assert_eq!(f.effect.calls.load(Ordering::SeqCst), 1);
-        assert_eq!(f.child.requests().len(), 1);
+        assert_eq!(
+            partial_service
+                .as_ref()
+                .unwrap_or(&f.child)
+                .requests()
+                .len(),
+            1
+        );
         if fault {
+            assert_eq!(
+                owner.run(record.run).unwrap().receipt.outcome,
+                outcome,
+                "live failure must retain the same committed outcome as history"
+            );
             let failure = owner
                 .take(record.run)
                 .unwrap()
                 .err()
                 .expect("typed infrastructure failure");
             assert!(failure.run.joined);
+            assert_eq!(failure.run.receipt.outcome, outcome);
             assert_eq!(failure.run.error, Some(failure.error.to_string()));
+            assert!(matches!(
+                failure.error,
+                ion_core::CodingSessionError::DelegationInfrastructure(_)
+            ));
             assert!(matches!(&failure.run.steering[0].status,
                 ion_host::SteeringStatus::Returned { input: ion_host::UserInput::Message(message), reason: ion_host::ReturnSnapshot::Stopped } if message == &guidance));
             assert!(

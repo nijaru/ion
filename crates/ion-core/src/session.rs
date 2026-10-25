@@ -2469,6 +2469,13 @@ pub enum SessionError {
     StaleRecoveryPoint,
     #[error("delegation infrastructure failed: {0}")]
     DelegationInfrastructure(String),
+    /// Infrastructure failed after the parent's joined outcome was committed.
+    #[error("{error}")]
+    DelegationSettledFailure {
+        receipt: Box<crate::DelegationReceipt>,
+        #[source]
+        error: Box<SessionError>,
+    },
     #[error("child resume refused: {0}")]
     DelegationTargetUnavailable(String),
     #[error("session does not exist")]

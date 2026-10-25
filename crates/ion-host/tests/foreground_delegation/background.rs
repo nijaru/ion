@@ -209,7 +209,11 @@ async fn late_settlement_failure_closes_owner_without_any_result_reader() {
     assert!(reserve(&owner).is_err());
     assert!(f.session.view().unwrap().delegations()[0].outcome.is_none());
     owner.join_shutdown().await.unwrap_err();
-    assert!(owner.take(child).unwrap().is_err());
+    let failure = owner.take(child).unwrap().err().expect("settlement failed");
+    assert!(
+        failure.run.receipt.outcome.is_none(),
+        "failed commit cannot attest a final receipt"
+    );
     assert!(owner.snapshot().failed);
     assert!(
         reserve(&owner).is_err(),

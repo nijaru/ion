@@ -417,6 +417,10 @@ cannot erase them with a transient status update.
 
 Timeout is a failed relationship with no answer, not a rewrite of the child's
 ordinary Turn end. Infrastructure failures remain fatal even alongside timeout.
+Once parent settlement commits, live custody and acknowledgement retain that same
+joined outcome alongside the typed infrastructure cause. Failed settlement or a
+lost task cannot fabricate a confirmed outcome. Consuming an error never reopens
+the failed owner.
 Lost custody remains `Unknown`, not timed out, rolled back or safe to replay.
 
 Live child guidance uses the same Host input custody as root steering. A prepared

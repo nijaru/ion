@@ -1182,6 +1182,9 @@ ready result. `run(id)`/`jobs()` inspect retained status by run ID;
 only `take(id)` releases a joined result's capacity, returning its complete
 final snapshot atomically, including steering reports. An infrastructure error
 returns `BackgroundRunFailure` with both its `run` snapshot and the typed cause.
+The receipt retains any committed joined outcome, including timeout, runtime and
+partial output, even alongside an infrastructure error. If parent settlement
+failed, it remains unconfirmed. Acknowledgement does not reopen a failed owner.
 Capacity bounds reservations, running jobs and unread results together (1–64 slots), not history,
 encoded bytes or RSS. Changes are published through a revision plus notification;
 clients still reconcile snapshots rather than treating notification as delivery.

@@ -74,10 +74,11 @@ struct State {
     failures: Vec<String>,
 }
 struct Run {
+    // Latest confirmed transfer or settlement; joining errors cannot erase it.
     receipt: DelegationReceipt,
     parent: Weak<CodingSession>,
     operation: Option<Operation<DelegationReceipt, CodingSessionError>>,
-    result: Option<Result<DelegationReceipt, CodingSessionError>>,
+    result: Option<Result<(), CodingSessionError>>,
     steering: Option<ChildSteering>,
     progress: Option<ChildProgress>,
 }
@@ -158,12 +159,7 @@ pub struct BackgroundWait {
 impl Run {
     fn snapshot(&self) -> BackgroundRunSnapshot {
         BackgroundRunSnapshot {
-            receipt: self
-                .result
-                .as_ref()
-                .and_then(|r| r.as_ref().ok())
-                .unwrap_or(&self.receipt)
-                .clone(),
+            receipt: self.receipt.clone(),
             joined: self.operation.is_none(),
             progress: self.progress.as_ref().and_then(ChildProgress::snapshot),
             steering: self
@@ -264,11 +260,7 @@ impl BackgroundOwner {
             .runs
             .values()
             .map(|run| {
-                let receipt = run
-                    .result
-                    .as_ref()
-                    .and_then(|result| result.as_ref().ok())
-                    .unwrap_or(&run.receipt);
+                let receipt = &run.receipt;
                 let (end, error) = match &receipt.outcome {
                     Some(ion_core::DelegationOutcome::Joined { receipt, error, .. }) => {
                         (receipt.as_ref().and_then(|r| r.end.clone()), error.clone())
@@ -363,6 +355,20 @@ impl BackgroundOwner {
                     match Pin::new(operation).poll(&mut operation_context) {
                         Poll::Pending => busy = true,
                         Poll::Ready(result) => {
+                            let result = match result {
+                                Ok(receipt) => {
+                                    run.receipt = receipt;
+                                    Ok(())
+                                }
+                                Err(CodingSessionError::DelegationSettledFailure {
+                                    receipt,
+                                    error,
+                                }) => {
+                                    run.receipt = *receipt;
+                                    Err(*error)
+                                }
+                                Err(error) => Err(error),
+                            };
                             if let Err(error) = &result {
                                 failures.push(error.to_string());
                             }
@@ -509,22 +515,18 @@ impl BackgroundOwner {
             .as_ref()
             .map_or_else(Vec::new, ChildSteering::snapshot);
         let progress = run.progress.as_ref().and_then(ChildProgress::snapshot);
-        let result = match run.result.expect("joined run retains its result") {
-            Ok(receipt) => Ok(BackgroundRunSnapshot {
-                receipt,
-                joined: true,
-                error: None,
-                steering,
-                progress,
-            }),
+        let result = run.result.expect("joined run retains its result");
+        let snapshot = BackgroundRunSnapshot {
+            receipt: run.receipt,
+            joined: true,
+            error: result.as_ref().err().map(ToString::to_string),
+            steering,
+            progress,
+        };
+        let result = match result {
+            Ok(()) => Ok(snapshot),
             Err(error) => Err(BackgroundRunFailure {
-                run: BackgroundRunSnapshot {
-                    receipt: run.receipt,
-                    joined: true,
-                    error: Some(error.to_string()),
-                    steering,
-                    progress,
-                },
+                run: snapshot,
                 error,
             }),
         };

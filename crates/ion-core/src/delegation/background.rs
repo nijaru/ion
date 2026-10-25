@@ -98,6 +98,8 @@ impl BackgroundJob {
     /// it remains here, so the gateway can stop and fully join it before release.
     /// A parent stop observed before commit refuses transfer; a racing stop may
     /// lose to commit. After commit the destination's reserved stop scope owns it.
+    /// A joined infrastructure error carries its committed receipt in
+    /// `CodingSessionError::DelegationSettledFailure`; failed settlement does not.
     /// The failure hook must not panic or block on the installation lock.
     pub fn start(
         &mut self,
@@ -148,15 +150,23 @@ impl BackgroundJob {
                     let result =
                         parent
                             .settle_delegation(&record, outcome.clone())
-                            .and_then(|()| match infrastructure {
-                                Some(error) => {
-                                    Err(CodingSessionError::DelegationInfrastructure(error))
-                                }
-                                None => Ok(DelegationReceipt {
+                            .and_then(|()| {
+                                let receipt = DelegationReceipt {
                                     record,
                                     transferred: true,
                                     outcome: Some(outcome),
-                                }),
+                                };
+                                match infrastructure {
+                                    Some(error) => {
+                                        Err(CodingSessionError::DelegationSettledFailure {
+                                            receipt: Box::new(receipt),
+                                            error: Box::new(
+                                                CodingSessionError::DelegationInfrastructure(error),
+                                            ),
+                                        })
+                                    }
+                                    None => Ok(receipt),
+                                }
                             });
                     if result.is_ok() {
                         failure.0 = None;
