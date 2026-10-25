@@ -678,14 +678,19 @@ async fn asynchronous_preparation_return_retains_raw_source_and_other_edits() {
 }
 
 #[tokio::test]
-async fn typed_at_signs_remain_literal_until_explicit_completion() {
+async fn typed_at_signs_remain_literal_without_accepting_suggestions() {
+    let root = std::env::temp_dir().join(format!("ion-literal-files-{}", uuid::Uuid::now_v7()));
+    fs::create_dir(&root).unwrap();
     for literal in [
         "nick@example.com",
         "user@host:repo",
         "Read @src/main.rs next",
         "@",
     ] {
-        let mut ui = Frontend::default();
+        let mut ui = Frontend {
+            cwd: root.clone(),
+            ..Frontend::default()
+        };
         for ch in literal.chars() {
             ui.key(
                 KeyEvent::new(KeyCode::Char(ch), Modifiers::NONE),
@@ -695,13 +700,15 @@ async fn typed_at_signs_remain_literal_until_explicit_completion() {
         }
         assert_eq!((ui.draft.as_str(), ui.cursor), (literal, literal.len()));
         assert!(ui.pickers.active().is_none());
-        assert!(!ui.pickers.has_job());
+        // Suggestions may discover asynchronously; no unseen candidate can
+        // consume this Enter or change the literal prompt.
         assert!(matches!(
             ui.key(KeyEvent::new(KeyCode::Enter, Modifiers::NONE), None, None),
             Action::Submit(text) if text == literal
         ));
         ui.pickers.shutdown().await.unwrap();
     }
+    fs::remove_dir_all(root).unwrap();
 }
 
 #[tokio::test]
@@ -724,7 +731,8 @@ async fn withdrawn_preparation_replaces_draft_and_invalidates_file_completion() 
         assert!(fixture.control.withdraw_last_follow_up().is_some());
         ui.insert("x @");
         ui.key(KeyEvent::new(KeyCode::Tab, Modifiers::NONE), None, None);
-        assert!(ui.pickers.active().is_some());
+        assert!(ui.completion.active());
+        assert!(ui.pickers.active().is_none());
 
         let mut activity = Activity::default();
         drain(&mut fixture.control, &mut ui, &mut activity).await;
@@ -733,15 +741,15 @@ async fn withdrawn_preparation_replaces_draft_and_invalidates_file_completion() 
             matches!(&ui.images[..], [ImageSource::Path(path)] if path.ends_with("absent.png"))
         );
         assert!(
-            ui.pickers.active().is_none(),
+            !ui.completion.active(),
             "returned input must invalidate the old draft's completion range"
         );
         while ui.pickers.has_job() {
             ui.pickers.complete().await;
         }
         assert!(
-            ui.pickers.active().is_none(),
-            "late discovery must not reopen the old picker"
+            !ui.completion.active(),
+            "late discovery must not reopen the old completion"
         );
 
         ui.recover_draft();

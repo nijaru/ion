@@ -30,6 +30,7 @@ mod rpc;
 mod stdio;
 mod terminal_client;
 mod terminal_commands;
+mod terminal_completion;
 mod tool_output;
 mod transcript;
 mod transcript_detail;

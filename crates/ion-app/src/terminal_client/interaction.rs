@@ -83,10 +83,6 @@ pub(super) async fn apply_picker(
         }
         return Ok(());
     }
-    if let PickerValue::File { path, start, end } = value {
-        ui.insert_file(path, start, end);
-        return Ok(());
-    }
     if ui.clipboard_job.is_some() {
         ui.status = "Wait for clipboard paste or cancel it with Ctrl-C".into();
         return Ok(());
@@ -142,7 +138,7 @@ pub(super) async fn apply_picker(
             };
             return Ok(());
         }
-        PickerValue::File { .. } | PickerValue::Setting(_) | PickerValue::Task(_) => {
+        PickerValue::Setting(_) | PickerValue::Task(_) => {
             unreachable!("handled above")
         }
     };

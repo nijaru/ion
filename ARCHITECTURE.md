@@ -1141,10 +1141,19 @@ process tree. Queued is not running or successful.
 
 Keep drafts editable during work: multiline/history, paste/images, external editor,
 steering and follow-ups. Commands/pickers retain unsent input. Ordinary `@` typing
-stays literal; Tab after an `@path` prefix explicitly opens file search. Dismissing
-that search preserves the pre-search draft and cursor; accepting replaces only
-its captured prefix range. Draft replacement
-invalidates draft-bound completion ranges and cancels their discovery without
+stays literal. An `@path` token at an input boundary offers non-modal project-file
+suggestions over the real editor: typing, paste, deletion and movement keep editing
+the draft. Escape hides suggestions without discarding those edits or moving the
+cursor; Tab reopens them. Tab or Enter accepts a visible candidate as an editor
+edit, never as submission. Replacement covers the current file token, including a
+quoted path's suffix when completing before its closing quote, while preserving
+following prose. Directories continue completion; filenames are quoted and escaped
+when needed. File discovery uses one bounded project-path snapshot per completion
+episode; leaving or dismissing the token retires it. File and Session discovery
+share one cooperative scan owner, with cancelled work joined before replacement.
+A layout proposal is not selection authority: deferred inline reconciliation or
+a rejected geometry-fenced paint revokes acceptance until a frame is published.
+Draft replacement invalidates draft-bound completion ranges and cancels discovery without
 abandoning the worker's join. Text editing has bounded terminal-local undo/redo
 and kill/yank recovery, independent of durable input custody. Ordinary typing
 coalesces at word boundaries; paste, completion and external-editor replacement

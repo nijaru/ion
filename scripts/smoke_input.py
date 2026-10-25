@@ -122,10 +122,11 @@ class Terminal:
             if b"\x1b[6n" in data:
                 self.send(b"\x1b[2;1R")
 
-    def resize(self, rows, columns):
+    def resize(self, rows, columns, settle=True):
         fcntl.ioctl(self.master, termios.TIOCSWINSZ, struct.pack("HHHH", rows, columns, 0, 0))
         os.kill(self.child.pid, signal.SIGWINCH)
-        self.paint()
+        if settle:
+            self.paint()
 
     def wait(self, predicate):
         end = time.monotonic() + 10
@@ -665,33 +666,72 @@ with tempfile.TemporaryDirectory(prefix="ion-input-") as temporary:
             finally:
                 terminal.close()
 
-            # Ordinary typing stays in the editor. Only explicit Tab enters
-            # file search; dismissing it must retain the pre-search draft.
+            # File suggestions never own literal input. Browse/accept/dismiss
+            # through the real editor, with the model request as prompt oracle.
             cwd = work / (mode + "-files")
             (cwd / "src").mkdir(parents=True)
             (cwd / "src/main.rs").write_text("fn main() {}\n")
+            (cwd / "space dir").mkdir()
+            (cwd / "space dir/café🦀.rs").write_text("fixture\n")
             terminal = Terminal(cwd, env, mode)
             try:
                 terminal.wait(lambda: "›" in terminal.text())
-                for prompt, complete in (("nick@example.com", False), ("Read @ma next", True)):
+                cases = [
+                    ("nick@example.com", None, "nick@example.com"),
+                    ("Read @m next", "dismiss", "Read @ma next"),
+                    ("Read @smrs next", "accept", "Read @src/main.rs next"),
+                    ("Read @ma", "paste", "Read @src/main.rs "),
+                    ("Read @ma next", "undo", "Read @ma next"),
+                    ('Read @"space d next', "directory", 'Read @"space dir/café🦀.rs" next'),
+                ]
+                # This fixture's synthetic CPR cannot establish native inline
+                # reflow. Qualify inline resize with an actual emulator instead.
+                if mode == "fullscreen":
+                    cases.append(("Read @ma next", "clipped", "Read @ma next"))
+                for prompt, action, expected in cases:
                     terminal.output.clear()
                     before = len(requests)
-                    terminal.send(prompt)
+                    terminal.send(b"\x1b[200~" + prompt.encode() + b"\x1b[201~" if action == "paste" else prompt)
                     terminal.paint()
-                    if complete:
-                        terminal.send(b"\x1b[D" * len(" next") + b"\t")
-                        terminal.wait(lambda: "Choose file" in terminal.text())
-                        terminal.send("unmatched-filter")
-                        terminal.send(b"\x1b")
+                    if action:
+                        if action != "paste":
+                            terminal.send(b"\x1b[D" * len(" next"))
+                        terminal.wait(lambda: "Files ·" in terminal.text())
                         terminal.paint()
-                    terminal.send(b"\r")
+                        if action == "clipped":
+                            # Submit DURING resize settling, before a new frame
+                            # can publish. Old visible rows authorize nothing in
+                            # the now-clipped/reconciling viewport.
+                            terminal.resize(30, 2, settle=False)
+                            terminal.send(b"\r")
+                        elif action == "dismiss":
+                            terminal.send("a")
+                            terminal.paint()
+                            terminal.send(b"\x1b")
+                        else:
+                            terminal.send(b"\t" if action == "directory" else b"\r")
+                            terminal.paint()
+                            if action == "directory":
+                                terminal.send(b"\t")
+                                terminal.paint()
+                            if action == "undo":
+                                terminal.send(b"\x1f")
+                                terminal.paint()
+                                terminal.send(b"\x1b")
+                        terminal.paint()
+                        if action != "clipped":
+                            assert len(requests) == before, "completion/dismissal sent a prompt"
+                    if action != "clipped":
+                        terminal.send(b"\r")
                     terminal.wait(lambda: len(requests) == before + 1)
-                    assert user_text(requests[-1]) == prompt, user_text(requests[-1])
+                    assert user_text(requests[-1]) == expected, user_text(requests[-1])
+                    if action == "clipped":
+                        terminal.resize(30, 100)
                     terminal.wait(lambda: b"state=done" in terminal.output)
                 terminal.finish()
             finally:
                 terminal.close()
-            print(f"File input {mode}: literal email and cancelled completion retain exact prompt: OK", flush=True)
+            print(f"File input {mode}: literal email, live suggestions, dismiss/accept/undo and quoted directories" + ("; clipped menu during resize" if mode == "fullscreen" else "") + ": OK", flush=True)
 
             # Stopping an observed shell withdraws automatic queued dispatch;
             # a normal exit 7 does not. Neither changes the saved native outcome.

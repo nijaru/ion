@@ -9,7 +9,8 @@ use std::{
 };
 
 use crate::display_text::{fit_line, push_wrapped};
-use crate::terminal_commands::{Builtin, Completion};
+use crate::terminal_commands::Builtin;
+use crate::terminal_completion::Completion;
 use crate::transcript_detail::{DetailView, tools};
 use crate::transcript_render::kind_label;
 use anyhow::{Context, Result};
@@ -261,6 +262,7 @@ pub async fn chat(init: ChatInit) -> Result<()> {
         loop {
             terminal.check_active().context("terminal lifecycle failed")?;
             ui.sync_question(questions.as_ref());
+            ui.refresh_completion(Some(runtime.resources()), Some(runtime.commands()), false);
             program.blocked_question = ui.question_owns_input();
             program.publish(terminal, runtime.is_busy())?;
             draw(terminal, screen, &mut ui, activity.live(), activity.view(&runtime), Some(runtime.agent().model())).await?;
@@ -400,7 +402,10 @@ pub async fn chat(init: ChatInit) -> Result<()> {
                     ui.break_edit_focus();
                     ui.status = error.to_string();
                 },
-                InputEvent::Resize(_) => screen.note_resize(),
+                InputEvent::Resize(_) => {
+                    ui.completion.invalidate_visibility();
+                    screen.note_resize();
+                },
                 InputEvent::Mouse(mouse) => ui.mouse(mouse.kind()),
             }
         }
@@ -907,6 +912,32 @@ impl Frontend {
         self.scroll = 0;
     }
 
+    fn refresh_completion(
+        &mut self,
+        resources: Option<&Resources>,
+        commands: Option<&ion_host::CommandCatalog>,
+        force: bool,
+    ) {
+        if self.details.is_some() || self.pickers.active().is_some() || self.question_owns_input() {
+            self.completion.clear();
+            self.pickers.cancel_files();
+            return;
+        }
+        self.completion.refresh(
+            &self.draft,
+            self.cursor,
+            resources,
+            commands,
+            self.pickers.files(&self.cwd),
+            force,
+        );
+        if self.completion.wants_files() {
+            self.pickers.request_files(&self.cwd);
+        } else {
+            self.pickers.cancel_files();
+        }
+    }
+
     fn key(
         &mut self,
         key: KeyEvent,
@@ -925,15 +956,17 @@ impl Frontend {
         }
         self.prepare_edit_key(key);
         let menu_was_visible = self.completion.visible();
-        self.completion.refresh(
-            &self.draft,
-            self.cursor,
+        self.refresh_completion(
             resources,
             commands,
             key.code == KeyCode::Tab && key.modifiers.is_empty(),
         );
-        if self.completion.active() && key.code == KeyCode::Esc && key.modifiers.is_empty() {
+        if (self.completion.active() || self.completion.wants_files())
+            && key.code == KeyCode::Esc
+            && key.modifiers.is_empty()
+        {
             self.completion.dismiss();
+            self.pickers.cancel_files();
             return Action::None;
         }
         if key.modifiers.is_empty()
@@ -979,13 +1012,11 @@ impl Frontend {
             }
         }
         if self.undo_key(key) {
-            self.completion
-                .refresh(&self.draft, self.cursor, resources, commands, false);
+            self.refresh_completion(resources, commands, false);
             return Action::None;
         }
         if self.yank_keys(key) {
-            self.completion
-                .refresh(&self.draft, self.cursor, resources, commands, false);
+            self.refresh_completion(resources, commands, false);
             return Action::None;
         }
         if let Some(edit) = editing::key(&self.draft, self.cursor, key) {
@@ -996,8 +1027,7 @@ impl Frontend {
                 }
                 Edit::Delete { range, kill } => self.delete_text(range, kill),
             }
-            self.completion
-                .refresh(&self.draft, self.cursor, resources, commands, false);
+            self.refresh_completion(resources, commands, false);
             return Action::None;
         }
         let action = match key {
@@ -1019,16 +1049,7 @@ impl Frontend {
             KeyEvent {
                 code: KeyCode::Tab, ..
             } => {
-                let start = self.draft[..self.cursor]
-                    .char_indices()
-                    .rev()
-                    .find(|(_, ch)| ch.is_whitespace())
-                    .map_or(0, |(at, ch)| at + ch.len_utf8());
-                let token = &self.draft[start..self.cursor];
-                if let Some(query) = token.strip_prefix('@') {
-                    self.pickers
-                        .open_files(&self.cwd, start, self.cursor, query.to_owned());
-                } else {
+                if !self.completion.wants_files() {
                     self.insert("\t");
                 }
                 Action::None
@@ -1199,12 +1220,7 @@ impl Frontend {
             }
             _ => Action::None,
         };
-        if self.pickers.active().is_some() || self.details.is_some() {
-            self.completion.clear();
-        } else {
-            self.completion
-                .refresh(&self.draft, self.cursor, resources, commands, false);
-        }
+        self.refresh_completion(resources, commands, false);
         action
     }
 
@@ -1317,6 +1333,9 @@ async fn draw(
     operation: Option<ActiveOperation>,
     model: Option<&ModelRef>,
 ) -> Result<()> {
+    // Layout is not publication: a deferred geometry reconciliation cannot
+    // leave an old menu authorized as a keyboard target.
+    ui.completion.invalidate_visibility();
     let Some(geometry) = prepare_draw(terminal, screen, ui).await? else {
         return Ok(());
     };
@@ -1452,6 +1471,8 @@ fn draw_prepared(
     })?;
     if painted {
         ui.finish_history_commit();
+    } else {
+        ui.completion.invalidate_visibility();
     }
     Ok(())
 }

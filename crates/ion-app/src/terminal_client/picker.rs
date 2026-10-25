@@ -1,4 +1,5 @@
-//! Modal picker custody and its one owned, cooperative background scan.
+//! Modal choices and cooperative discovery shared with non-modal completion.
+//! One retained scan joins before its replacement can start.
 use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 
@@ -13,7 +14,7 @@ use tokio_util::sync::CancellationToken;
 
 use super::navigation::{ForkPickerValue, session_items};
 
-const MAX_FILES: usize = 20_000;
+const MAX_PATHS: usize = 20_000;
 const MAX_ENTRIES: usize = 100_000;
 
 pub(super) enum PickerValue {
@@ -25,11 +26,6 @@ pub(super) enum PickerValue {
     Task(super::tasks::TaskChoice),
     Fork(ForkPickerValue),
     Context(super::navigation::ContextPickerValue),
-    File {
-        path: String,
-        start: usize,
-        end: usize,
-    },
 }
 
 pub(super) struct PickerItem {
@@ -64,8 +60,6 @@ impl Picker {
 #[derive(Clone)]
 struct FileRequest {
     cwd: PathBuf,
-    start: usize,
-    end: usize,
 }
 
 #[derive(Clone)]
@@ -112,6 +106,9 @@ pub(super) struct Pickers {
     // waiting slot, never spawn another scan before the old one is joined.
     waiting: Option<PickerRequest>,
     job: Option<PickerJob>,
+    // A project-path snapshot belongs to the current file-completion episode,
+    // not a draft range. Only the editor derives replacement ranges.
+    files: Option<(PathBuf, Vec<String>)>,
 }
 
 impl Pickers {
@@ -203,6 +200,7 @@ impl Pickers {
         self.notice = None;
         self.rendered_selected = None;
         self.waiting = None;
+        self.files = None;
         if let Some(job) = &self.job {
             job.stop.cancel();
         }
@@ -213,19 +211,40 @@ impl Pickers {
         self.active = Some(picker);
     }
 
-    pub fn open_files(&mut self, cwd: &Path, start: usize, end: usize, query: String) {
-        self.open(Picker {
-            title: "Choose file",
-            query,
-            selected: 0,
-            items: Vec::new(),
-        });
+    pub fn files(&self, cwd: &Path) -> Option<&[String]> {
+        self.files
+            .as_ref()
+            .filter(|(root, _)| root == cwd)
+            .map(|(_, paths)| paths.as_slice())
+    }
+
+    pub fn request_files(&mut self, cwd: &Path) {
+        if self.files(cwd).is_some()
+            || matches!(&self.waiting, Some(PickerRequest::Files(request)) if request.cwd == cwd)
+            || self.job.as_ref().is_some_and(|job| {
+                !job.stop.is_cancelled()
+                    && matches!(&job.request, PickerRequest::Files(request) if request.cwd == cwd)
+            })
+        {
+            return;
+        }
+        self.close();
         self.waiting = Some(PickerRequest::Files(FileRequest {
             cwd: cwd.to_path_buf(),
-            start,
-            end,
         }));
         self.admit();
+    }
+
+    pub fn cancel_files(&mut self) {
+        self.files = None;
+        if matches!(&self.waiting, Some(PickerRequest::Files(_))) {
+            self.waiting = None;
+        }
+        if let Some(job) = &self.job
+            && matches!(job.request, PickerRequest::Files(_))
+        {
+            job.stop.cancel();
+        }
     }
 
     pub fn open_sessions(&mut self, catalog: SessionCatalog, current_id: String) {
@@ -284,7 +303,13 @@ impl Pickers {
         {
             Err(error) => {
                 if publish {
-                    self.close();
+                    if let PickerRequest::Files(request) = &job.request {
+                        // Remember the failed episode so drawing cannot turn a
+                        // filesystem error into an automatic retry loop.
+                        self.files = Some((request.cwd.clone(), Vec::new()));
+                    } else {
+                        self.close();
+                    }
                 }
                 Some(format!("{}: {error:#}", job.request.failure_label()))
             }
@@ -294,30 +319,10 @@ impl Pickers {
                     unreachable!("file output has a file request")
                 };
                 let empty = paths.is_empty();
-                if let Some(picker) = &mut self.active {
-                    picker.items = paths
-                        .into_iter()
-                        .map(|path| PickerItem {
-                            label: path.clone(),
-                            detail: None,
-                            value: PickerValue::File {
-                                path,
-                                start: request.start,
-                                end: request.end,
-                            },
-                        })
-                        .collect();
-                    picker.selected = picker
-                        .selected
-                        .min(picker.matches().len().saturating_sub(1));
-                }
-                self.rendered_selected = None;
-                if empty {
-                    self.close();
-                }
+                self.files = Some((request.cwd, paths));
                 if limited {
                     Some(format!(
-                        "File discovery limited to {MAX_FILES} files or {MAX_ENTRIES} entries; results may be incomplete"
+                        "File discovery limited to {MAX_PATHS} paths or {MAX_ENTRIES} entries; results may be incomplete"
                     ))
                 } else if empty {
                     Some("No project files available for completion".into())
@@ -451,7 +456,7 @@ fn discover(cwd: &Path, stop: &CancellationToken) -> Result<PickerOutput> {
         if stop.is_cancelled() {
             return Ok(PickerOutput::Cancelled);
         }
-        if paths.len() >= MAX_FILES || visited >= MAX_ENTRIES {
+        if paths.len() >= MAX_PATHS || visited >= MAX_ENTRIES {
             break true;
         }
         let entry = walker.next();
@@ -467,7 +472,11 @@ fn discover(cwd: &Path, stop: &CancellationToken) -> Result<PickerOutput> {
             return Ok(PickerOutput::Cancelled);
         }
         visited += 1;
-        if entry.file_type().is_some_and(|kind| kind.is_file()) {
+        if entry.depth() > 0
+            && entry
+                .file_type()
+                .is_some_and(|kind| kind.is_file() || kind.is_dir())
+        {
             let relative = entry
                 .path()
                 .strip_prefix(cwd)
@@ -475,7 +484,11 @@ fn discover(cwd: &Path, stop: &CancellationToken) -> Result<PickerOutput> {
             let path = relative
                 .to_str()
                 .with_context(|| format!("project file path is not valid UTF-8: {relative:?}"))?;
-            paths.push(path.to_owned());
+            paths.push(if entry.file_type().is_some_and(|kind| kind.is_dir()) {
+                format!("{path}/")
+            } else {
+                path.to_owned()
+            });
         }
     };
     paths.sort();
@@ -494,8 +507,6 @@ mod tests {
     fn file_request() -> PickerRequest {
         PickerRequest::Files(FileRequest {
             cwd: PathBuf::new(),
-            start: 2,
-            end: 3,
         })
     }
 
@@ -533,7 +544,9 @@ mod tests {
     }
 
     fn held_file_job(result: Result<PickerOutput>) -> (Pickers, oneshot::Sender<()>) {
-        held_job(file_request(), "Choose file", result)
+        let (mut pickers, release) = held_job(file_request(), "Choose file", result);
+        pickers.active = None;
+        (pickers, release)
     }
 
     fn held_session_job(result: Result<PickerOutput>) -> (Pickers, oneshot::Sender<()>) {
@@ -655,19 +668,19 @@ mod tests {
                 .await
                 .is_err()
         );
-        pickers.key(KeyEvent::new(KeyCode::Esc, Modifiers::NONE));
+        pickers.cancel_files();
         assert!(pickers.active().is_none());
         assert!(pickers.job.as_ref().unwrap().stop.is_cancelled());
-        for query in ["first", "latest"] {
-            pickers.open_files(&root, 7, 8, query.into());
+        for cwd in [root.join("superseded"), root.clone()] {
+            pickers.request_files(&cwd);
             assert_eq!(pickers.job.as_ref().unwrap().task.id(), original);
         }
         release.send(()).unwrap();
         assert!(pickers.complete().await.is_none());
-        assert!(pickers.active().unwrap().items.is_empty());
-        assert_eq!(pickers.active().unwrap().query, "latest");
+        assert!(pickers.active().is_none());
+        assert!(pickers.files(&root).is_none());
         assert!(pickers.complete().await.is_none());
-        assert_eq!(pickers.active().unwrap().items[0].label, "current.rs");
+        assert_eq!(pickers.files(&root).unwrap(), ["current.rs"]);
         pickers.shutdown().await.unwrap();
         std::fs::remove_dir_all(root).unwrap();
     }
@@ -698,18 +711,17 @@ mod tests {
         std::fs::write(root.join("current.rs"), "current").unwrap();
         let (mut pickers, release) = held_session_job(sessions("stale.sqlite"));
         let original = pickers.job.as_ref().unwrap().task.id();
-        for query in ["first", "latest"] {
-            pickers.open_files(&root, 7, 8, query.into());
+        for cwd in [root.join("superseded"), root.clone()] {
+            pickers.request_files(&cwd);
             assert_eq!(pickers.job.as_ref().unwrap().task.id(), original);
         }
         release.send(()).unwrap();
-        // The cancelled Session result cannot publish into the newer file picker.
+        // The cancelled Session result cannot publish into file completion.
         assert!(pickers.complete().await.is_none());
-        assert_eq!(pickers.active().unwrap().title, "Choose file");
-        assert!(pickers.active().unwrap().items.is_empty());
+        assert!(pickers.active().is_none());
+        assert!(pickers.files(&root).is_none());
         assert!(pickers.complete().await.is_none());
-        assert_eq!(pickers.active().unwrap().query, "latest");
-        assert_eq!(pickers.active().unwrap().items[0].label, "current.rs");
+        assert_eq!(pickers.files(&root).unwrap(), ["current.rs"]);
         pickers.shutdown().await.unwrap();
         std::fs::remove_dir_all(root).unwrap();
     }
@@ -791,30 +803,23 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn completion_preserves_query_and_selection_and_surfaces_discovery_failures() {
+    async fn file_discovery_publishes_metadata_and_does_not_retry_failed_episodes() {
         let (mut pickers, release) = held_file_job(files("draft query.rs"));
-        pickers.key(KeyEvent::new(KeyCode::Enter, Modifiers::NONE));
-        assert!(
-            pickers.active().is_some(),
-            "Enter cannot discard a pending query"
-        );
         release.send(()).unwrap();
         assert!(pickers.complete().await.is_none());
-        assert_eq!(pickers.active().unwrap().query, "draft query");
-        assert_eq!(pickers.active().unwrap().selected, 0);
-        pickers.rows(80, 10);
-        let Some(PickerValue::File { path, start, end }) =
-            pickers.key(KeyEvent::new(KeyCode::Enter, Modifiers::NONE))
-        else {
-            panic!("no chosen file")
-        };
-        assert_eq!((path.as_str(), start, end), ("draft query.rs", 2, 3));
+        assert!(pickers.active().is_none());
+        assert_eq!(pickers.files(Path::new("")).unwrap(), ["draft query.rs"]);
 
         let (mut pickers, release) = held_file_job(Err(anyhow::anyhow!("read failed")));
-        pickers.close();
         release.send(()).unwrap();
         assert!(pickers.complete().await.unwrap().contains("read failed"));
-        assert!(pickers.active().is_none());
+        pickers.request_files(Path::new(""));
+        assert!(
+            !pickers.has_job(),
+            "drawing a failed episode must not retry I/O"
+        );
+        assert_eq!(pickers.files(Path::new("")).unwrap(), Vec::<String>::new());
+        pickers.shutdown().await.unwrap();
     }
 
     #[test]

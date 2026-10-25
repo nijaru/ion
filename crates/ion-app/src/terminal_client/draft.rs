@@ -110,18 +110,6 @@ impl Frontend {
         );
     }
 
-    pub(super) fn insert_file(&mut self, path: String, start: usize, end: usize) {
-        // File completion owns a range in the current draft. Text replacement
-        // is recorded as one atomic edit before the picker's delayed join can
-        // publish into a different baseline.
-        let mention = if path.chars().any(char::is_whitespace) {
-            format!("@\"{path}\"")
-        } else {
-            format!("@{path}")
-        };
-        self.replace_text(start..end, &mention, start + mention.len());
-    }
-
     pub(super) fn restore_input(&mut self, input: Message) -> Result<(), &'static str> {
         let (draft, images) = super::split_editor_input(input)?;
         if draft.len() > MAX_DRAFT {

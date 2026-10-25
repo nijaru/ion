@@ -625,7 +625,7 @@ fn command_completion_edits_without_dispatch_or_argument_loss() {
     ui.cursor = 0;
     ui.insert("/re");
     ui.completion
-        .refresh(&ui.draft, ui.cursor, None, None, false);
+        .refresh(&ui.draft, ui.cursor, None, None, None, false);
     assert!(ui.completion.rows(80, 1).is_empty());
     // A menu that cannot fit is not an invisible keyboard target.
     assert!(
@@ -667,11 +667,7 @@ fn picker_selection_stays_visible_beside_wrapped_query_and_status() {
                 .map(|index| PickerItem {
                     label: format!("{index:02}-matching-long-project-file.rs"),
                     detail: None,
-                    value: PickerValue::File {
-                        path: format!("file-{index}"),
-                        start: 0,
-                        end: 1,
-                    },
+                    value: PickerValue::Session(format!("file-{index}").into()),
                 })
                 .collect(),
         });
@@ -763,7 +759,7 @@ fn resource_completion_preserves_literal_commands_and_terminal_control_names() {
     };
     ui.insert("/zzmenu-ch");
     ui.completion
-        .refresh(&ui.draft, ui.cursor, Some(&resources), None, false);
+        .refresh(&ui.draft, ui.cursor, Some(&resources), None, None, false);
     for width in [1, 8, 24, 80] {
         let rows = ui.completion.rows(width, 5);
         assert!(rows.len() <= 5);
@@ -793,7 +789,7 @@ fn resource_completion_preserves_literal_commands_and_terminal_control_names() {
     assert_eq!(ui.draft, "/skill:zzmenu-audit ");
     ui.replace_draft_atomic("/ne".into());
     ui.completion
-        .refresh(&ui.draft, ui.cursor, Some(&resources), None, false);
+        .refresh(&ui.draft, ui.cursor, Some(&resources), None, None, false);
     assert!(
         ui.completion
             .rows(100, 5)
@@ -804,47 +800,118 @@ fn resource_completion_preserves_literal_commands_and_terminal_control_names() {
 }
 
 #[tokio::test]
-async fn file_picker_inserts_a_selected_project_path() {
-    let root = std::env::temp_dir().join(format!("ion-files-{}", std::process::id()));
-    let _ = std::fs::remove_dir_all(&root);
+async fn file_completion_cannot_accept_clipped_or_unpublished_candidates() {
+    let root = std::env::temp_dir().join(format!("ion-file-fence-{}", uuid::Uuid::now_v7()));
+    std::fs::create_dir(&root).unwrap();
+    std::fs::write(root.join("main.rs"), "fixture").unwrap();
+    for (width, budget, unpublished) in
+        [(80, 1, false), (2, 5, false), (3, 5, false), (80, 5, true)]
+    {
+        let mut ui = Frontend {
+            cwd: root.clone(),
+            ..Frontend::default()
+        };
+        ui.insert("@ma");
+        ui.refresh_completion(None, None, false);
+        while ui.pickers.has_job() {
+            assert!(ui.pickers.complete().await.is_none());
+        }
+        ui.refresh_completion(None, None, false);
+        ui.completion.rows(width, budget);
+        if unpublished {
+            ui.completion.invalidate_visibility();
+        }
+        assert!(!ui.completion.visible());
+        // Even one unique file needs visible selection authority. A Tab may
+        // reopen suggestions, but cannot blindly replace the literal token.
+        assert!(matches!(
+            ui.key(KeyEvent::new(KeyCode::Tab, Modifiers::NONE), None, None),
+            Action::None
+        ));
+        assert_eq!(ui.draft, "@ma");
+        assert!(
+            matches!(ui.key(KeyEvent::new(KeyCode::Enter, Modifiers::NONE), None, None), Action::Submit(text) if text == "@ma")
+        );
+        ui.pickers.shutdown().await.unwrap();
+    }
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[tokio::test]
+async fn automatic_file_suggestions_keep_edits_in_the_draft() {
+    let root = std::env::temp_dir().join(format!("ion-complete-{}", uuid::Uuid::now_v7()));
     std::fs::create_dir_all(root.join("src")).unwrap();
-    std::fs::write(root.join("src/main.rs"), "fn main() {}").unwrap();
+    std::fs::write(root.join("src/main.rs"), "fixture").unwrap();
     std::fs::write(root.join("src/skip.rs"), "ignored").unwrap();
     std::fs::write(root.join(".gitignore"), "src/skip.rs\n").unwrap();
     let mut ui = Frontend {
         cwd: root.clone(),
         ..Frontend::default()
     };
-    // Complete in the middle of a draft, after multibyte whitespace. Dismissal
-    // leaves the original literal/cursor intact, even after filtering results.
-    let literal = "Read\u{2003}@m next";
-    let cursor = "Read\u{2003}@m".len();
-    ui.insert(literal);
-    ui.cursor = cursor;
-    ui.key(KeyEvent::new(KeyCode::Tab, Modifiers::NONE), None, None);
+    ui.insert("Read\u{2003}@ next");
+    ui.cursor = "Read\u{2003}@".len();
+    assert!(matches!(
+        ui.key(
+            KeyEvent::new(KeyCode::Char('m'), Modifiers::NONE),
+            None,
+            None
+        ),
+        Action::None
+    ));
+    assert_eq!(ui.draft, "Read\u{2003}@m next");
+    assert!(
+        ui.pickers.active().is_none(),
+        "file suggestions are not a modal input owner"
+    );
+    assert!(
+        ui.pickers.has_job(),
+        "typing a file prefix should start cooperative discovery"
+    );
+    while ui.pickers.has_job() {
+        assert!(ui.pickers.complete().await.is_none());
+    }
+    ui.refresh_completion(None, None, false);
+    assert!(
+        ui.completion
+            .rows(80, 5)
+            .iter()
+            .any(|row| row.contains("src/main.rs"))
+    );
+    assert!(ui.completion.visible());
+    // Search edits are actual draft edits; Escape discards no input.
     ui.key(
-        KeyEvent::new(KeyCode::Char('x'), Modifiers::NONE),
+        KeyEvent::new(KeyCode::Char('a'), Modifiers::NONE),
         None,
         None,
     );
+    assert_eq!(ui.draft, "Read\u{2003}@ma next");
+    let original = (ui.draft.clone(), ui.cursor);
     ui.key(KeyEvent::new(KeyCode::Esc, Modifiers::NONE), None, None);
-    assert_eq!((ui.draft.as_str(), ui.cursor), (literal, cursor));
+    assert_eq!((ui.draft.clone(), ui.cursor), original);
+    ui.refresh_completion(None, None, false);
+    assert!(
+        !ui.completion.active(),
+        "drawing cannot reopen a dismissed suggestion"
+    );
     ui.key(KeyEvent::new(KeyCode::Tab, Modifiers::NONE), None, None);
     while ui.pickers.has_job() {
         assert!(ui.pickers.complete().await.is_none());
     }
-    let picker = ui.pickers.active().unwrap();
-    assert_eq!(picker.query, "m");
-    assert_eq!(picker.items.len(), 1);
-    assert_eq!(picker.items[0].label, "src/main.rs");
-    ui.pickers.rows(80, 10);
-    let chosen = ui.key(KeyEvent::new(KeyCode::Enter, Modifiers::NONE), None, None);
-    let Action::Pick(PickerValue::File { path, start, end }) = chosen else {
-        panic!("file picker did not choose a path")
-    };
-    ui.insert_file(path, start, end);
+    ui.refresh_completion(None, None, false);
+    ui.completion.rows(80, 5);
+    assert!(matches!(
+        ui.key(KeyEvent::new(KeyCode::Enter, Modifiers::NONE), None, None),
+        Action::None
+    ));
     assert_eq!(ui.draft, "Read\u{2003}@src/main.rs next");
-    assert_eq!(ui.cursor, "Read\u{2003}@src/main.rs".len());
+    assert_eq!(ui.cursor, "Read\u{2003}@src/main.rs ".len());
+    // Accepting a suggestion is one undoable editor edit, never a submission.
+    ui.key(
+        KeyEvent::new(KeyCode::Char('_'), Modifiers::CONTROL),
+        None,
+        None,
+    );
+    assert_eq!((ui.draft.clone(), ui.cursor), original);
     ui.pickers.shutdown().await.unwrap();
     std::fs::remove_dir_all(root).unwrap();
 }

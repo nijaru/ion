@@ -588,16 +588,21 @@ These editing keys remain available during work without
 cancelling it; Ctrl-C still cancels the active operation.
 Up and Down browse earlier prompts when the cursor reaches the first or last
 editor line. Returning from history restores the unsent draft and its cursor,
-even if a running Turn refreshed history. Type `@` or a partial `@path`, then
-press Tab to pick a project file. Ordinary `@` typing, including email addresses,
-stays literal. Esc dismisses file search without changing the original draft or
-cursor. Choosing a file inserts a path reference for the model to read, not the
-file's contents.
-Discovery runs off the client event loop, so you can filter or dismiss the picker
-while it scans. Limits and traversal errors are reported rather than hidden.
-Closing the picker cancels further traversal and prevents stale results from
-reopening it; exit still waits for any filesystem call already underway.
-Restoring or replacing a draft also closes its old completion picker. Returned
+even if a running Turn refreshed history. Type `@` or a partial `@path` at a token
+boundary to see project-file suggestions without leaving the editor. Ordinary
+`@` typing, including email addresses, stays literal. Up/Down selects a visible
+suggestion; Tab or Enter completes its path without sending the prompt. Directories
+end in `/` so you can keep completing their contents. Paths needing quotes are
+escaped automatically. Esc hides suggestions and retains the current draft and
+cursor, including edits made while browsing. Tab reopens dismissed suggestions.
+Choosing a file inserts a path reference for the model to read, not its contents.
+Discovery runs off the client event loop and honors project ignore rules without
+following symlinks. It takes a bounded snapshot of up to 20,000 paths or 100,000
+entries for the current completion episode; dismiss and reopen to refresh it.
+Limits and traversal errors are reported rather than hidden. Dismissal cancels
+further traversal and prevents stale results from reopening suggestions; exit
+still waits for any filesystem call already underway.
+Restoring or replacing a draft also closes its old suggestions. Returned
 input keeps its cursor and attachments; a displaced unsent draft remains
 recoverable with Alt-Up.
 Type `/` to discover terminal commands, prompt templates, `/skill:NAME` and

@@ -1,9 +1,4 @@
-//! Terminal command identity, discoverable resources and non-executing completion.
-use std::ops::Range;
-
-use ion_host::{CommandCatalog, Resources};
-
-use crate::display_text::fit_line;
+//! Terminal command identity and its authoritative help/discovery inventory.
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Group {
@@ -24,12 +19,12 @@ const GROUPS: &[(Group, &str)] = &[
     (Group::General, "Help & exit"),
 ];
 
-struct Command {
+pub(crate) struct Command {
     kind: Builtin,
     group: Group,
-    name: &'static str,
-    hint: &'static str,
-    description: &'static str,
+    pub(crate) name: &'static str,
+    pub(crate) hint: &'static str,
+    pub(crate) description: &'static str,
 }
 
 // Keep dispatch identities, help and discovery in one searchable inventory.
@@ -37,7 +32,7 @@ macro_rules! commands {
     ($($kind:ident => ($group:ident, $name:literal, $hint:literal, $description:literal)),+ $(,)?) => {
         #[derive(Clone, Copy, Debug, PartialEq, Eq)]
         pub(crate) enum Builtin { $($kind),+ }
-        const COMMANDS: &[Command] = &[
+        pub(crate) const COMMANDS: &[Command] = &[
             $(Command { kind: Builtin::$kind, group: Group::$group, name: $name, hint: $hint, description: $description }),+
         ];
     };
@@ -138,7 +133,8 @@ impl Builtin {
                     "Editing\n",
                     "  Enter sends; Shift/Ctrl-Enter or Ctrl-J adds a line.\n",
                     "  Ctrl-V pastes files, image or text; Ctrl-G opens the external editor.\n",
-                    "  Tab after @path opens file search; Esc dismisses completion or a view.\n",
+                    "  @path suggests project files; typing stays in the editor.\n",
+                    "  Tab/Enter completes a visible file; Esc closes suggestions or views.\n",
                     "  Ctrl-U/K kills to line start/end; Ctrl-W or Alt-Backspace kills a word.\n",
                     "  Alt-D/Delete kills the next word; Ctrl-Y yanks; Alt-Y cycles text kills.\n",
                     "  Ctrl-minus or Ctrl-_ undoes; adding Alt redoes.\n",
@@ -168,224 +164,5 @@ impl Builtin {
             .iter()
             .find(|command| command.name == name)
             .map(|command| format!("{}\nUsage: {}", command.description, command.usage()))
-    }
-}
-
-struct Suggestion {
-    name: String,
-    description: String,
-}
-
-struct Menu {
-    prefix: String,
-    range: Range<usize>,
-    items: Vec<Suggestion>,
-    selected: usize,
-    drawn: bool,
-}
-
-#[derive(Default)]
-pub(crate) struct Completion {
-    menu: Option<Menu>,
-    dismissed: Option<String>,
-}
-
-impl Completion {
-    pub(crate) fn clear(&mut self) {
-        self.menu = None;
-        self.dismissed = None;
-    }
-
-    pub(crate) fn refresh(
-        &mut self,
-        draft: &str,
-        cursor: usize,
-        resources: Option<&Resources>,
-        commands: Option<&CommandCatalog>,
-        force: bool,
-    ) {
-        let start = draft.len() - draft.trim_start().len();
-        let end = draft[start..]
-            .find(char::is_whitespace)
-            .map_or(draft.len(), |at| start + at);
-        if cursor <= start || cursor > end || !draft[start..].starts_with('/') {
-            self.clear();
-            return;
-        }
-        let prefix = &draft[start + 1..cursor];
-        if self.dismissed.as_deref() == Some(prefix) && !force {
-            self.menu = None;
-            return;
-        }
-        self.dismissed = None;
-        let matches = |name: &str| {
-            name.starts_with(prefix)
-                || name
-                    .strip_prefix("skill:")
-                    .is_some_and(|name| name.starts_with(prefix))
-        };
-        let mut items = COMMANDS
-            .iter()
-            .filter(|command| matches(command.name))
-            .map(|command| Suggestion {
-                name: command.name.into(),
-                description: format!(
-                    "{}{}{}",
-                    command.hint,
-                    if command.hint.is_empty() { "" } else { " · " },
-                    command.description
-                ),
-            })
-            .collect::<Vec<_>>();
-        if let Some(resources) = resources {
-            items.extend(
-                resources
-                    .templates()
-                    .filter(|template| {
-                        matches(&template.name)
-                            && Builtin::parse(&format!("/{}", template.name)).is_none()
-                    })
-                    .map(|template| Suggestion {
-                        name: template.name.clone(),
-                        description: format!(
-                            "[prompt] {}{}{}",
-                            template.argument_hint.as_deref().unwrap_or(""),
-                            if template.argument_hint.is_some() {
-                                " · "
-                            } else {
-                                ""
-                            },
-                            template.description
-                        ),
-                    }),
-            );
-            items.extend(
-                resources
-                    .skills()
-                    .filter(|skill| matches(&format!("skill:{}", skill.name)))
-                    .map(|skill| Suggestion {
-                        name: format!("skill:{}", skill.name),
-                        description: format!("[skill] {}", skill.description),
-                    }),
-            );
-        }
-        if let Some(commands) = commands {
-            items.extend(
-                commands
-                    .iter()
-                    .filter(|command| {
-                        matches(&format!("command:{}", command.name))
-                            && Builtin::parse(&format!("/command:{}", command.name)).is_none()
-                    })
-                    .map(|command| Suggestion {
-                        name: format!("command:{}", command.name),
-                        description: format!(
-                            "[command · {}] {}",
-                            command.origin, command.description
-                        ),
-                    }),
-            );
-        }
-        items.sort_by(|a, b| a.name.cmp(&b.name));
-        let previous = self
-            .menu
-            .as_ref()
-            .filter(|menu| menu.prefix == prefix && menu.range == (start..end));
-        if items.is_empty()
-            || (!force
-                && previous.is_none()
-                && cursor == end
-                && items.iter().any(|item| item.name == prefix))
-        {
-            self.menu = None;
-            return;
-        }
-        let drawn = previous.is_some_and(|menu| menu.drawn);
-        let selected_name = previous
-            .and_then(|menu| menu.items.get(menu.selected))
-            .map(|item| &item.name);
-        let selected = selected_name
-            .and_then(|name| items.iter().position(|item| &item.name == name))
-            .unwrap_or(0);
-        self.menu = Some(Menu {
-            prefix: prefix.into(),
-            range: start..end,
-            items,
-            selected,
-            drawn,
-        });
-    }
-
-    pub(crate) fn active(&self) -> bool {
-        self.menu.is_some()
-    }
-
-    pub(crate) fn visible(&self) -> bool {
-        self.menu.as_ref().is_some_and(|menu| menu.drawn)
-    }
-
-    pub(crate) fn unique(&self) -> bool {
-        self.menu.as_ref().is_some_and(|menu| menu.items.len() == 1)
-    }
-
-    pub(crate) fn move_selection(&mut self, down: bool) {
-        if let Some(menu) = &mut self.menu {
-            menu.selected = if down {
-                (menu.selected + 1).min(menu.items.len() - 1)
-            } else {
-                menu.selected.saturating_sub(1)
-            };
-        }
-    }
-
-    pub(crate) fn dismiss(&mut self) {
-        if let Some(menu) = self.menu.take() {
-            self.dismissed = Some(menu.prefix);
-        }
-    }
-
-    pub(crate) fn replacement(&self, draft: &str) -> Option<(Range<usize>, String, usize)> {
-        let menu = self.menu.as_ref()?;
-        let name = &menu.items[menu.selected].name;
-        let following_space = draft[menu.range.end..]
-            .chars()
-            .next()
-            .filter(|ch| ch.is_whitespace());
-        let text = format!(
-            "/{name}{}",
-            if following_space.is_some() { "" } else { " " }
-        );
-        let cursor = menu.range.start + text.len() + following_space.map_or(0, char::len_utf8);
-        Some((menu.range.clone(), text, cursor))
-    }
-
-    pub(crate) fn rows(&mut self, width: usize, budget: usize) -> Vec<String> {
-        let Some(menu) = &mut self.menu else {
-            return Vec::new();
-        };
-        menu.drawn = budget >= 2;
-        if !menu.drawn {
-            return Vec::new();
-        }
-        let visible = budget.saturating_sub(1).min(4);
-        let start = menu.selected.saturating_sub(visible.saturating_sub(1));
-        let mut rows = vec![fit_line(
-            "Commands · ↑/↓ select · Tab complete · Esc close",
-            width,
-        )];
-        rows.extend(menu.items.iter().enumerate().skip(start).take(visible).map(
-            |(index, item)| {
-                fit_line(
-                    &format!(
-                        "{} /{} — {}",
-                        if index == menu.selected { '›' } else { ' ' },
-                        item.name,
-                        item.description
-                    ),
-                    width,
-                )
-            },
-        ));
-        rows
     }
 }
