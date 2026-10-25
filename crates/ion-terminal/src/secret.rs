@@ -12,6 +12,7 @@ pub enum SecretRejection {
     Cancelled,
     Ended,
     Invalid,
+    InvalidPrompt,
 }
 
 impl std::fmt::Display for SecretRejection {
@@ -20,6 +21,7 @@ impl std::fmt::Display for SecretRejection {
             Self::Cancelled => "secret entry cancelled",
             Self::Ended => "secret input ended",
             Self::Invalid => "secret must be a valid single line of at most 4096 bytes",
+            Self::InvalidPrompt => "secret prompt contains control characters",
         })
     }
 }
@@ -36,10 +38,7 @@ impl TerminalSession {
     ) -> io::Result<Result<String, SecretRejection>> {
         self.check_active()?;
         if prompt.chars().any(char::is_control) {
-            return Err(io::Error::new(
-                io::ErrorKind::InvalidInput,
-                "secret prompt contains control characters",
-            ));
+            return Ok(Err(SecretRejection::InvalidPrompt));
         }
         self.input
             .quarantine()
