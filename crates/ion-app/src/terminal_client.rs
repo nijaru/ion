@@ -54,7 +54,7 @@ use editor_recovery::EditorRecovery;
 use interaction::{apply_picker, submit_editor};
 use picker::{Picker, PickerValue, Pickers};
 use question::{QuestionAction, QuestionModal};
-pub use setup::setup_model;
+pub use setup::{choose_session, setup_model};
 
 const MAX_DRAFT: usize = 64 * 1024;
 const LIVE_REGION_MAX_ROWS: usize = 12;
@@ -404,6 +404,7 @@ pub async fn chat(init: ChatInit) -> Result<()> {
                 },
                 InputEvent::Resize(_) => {
                     ui.completion.invalidate_visibility();
+                    ui.pickers.invalidate_visibility();
                     screen.note_resize();
                 },
                 InputEvent::Mouse(mouse) => ui.mouse(mouse.kind()),
@@ -1336,6 +1337,7 @@ async fn draw(
     // Layout is not publication: a deferred geometry reconciliation cannot
     // leave an old menu authorized as a keyboard target.
     ui.completion.invalidate_visibility();
+    ui.pickers.invalidate_visibility();
     let Some(geometry) = prepare_draw(terminal, screen, ui).await? else {
         return Ok(());
     };

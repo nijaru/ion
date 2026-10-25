@@ -145,7 +145,8 @@ pub(super) fn resume(
     if args.is_empty() {
         let catalog = runtime.catalog().clone();
         let current = runtime.session().id().to_string();
-        ui.pickers.open_sessions(catalog, current);
+        ui.pickers
+            .open_sessions(catalog, super::picker::SessionBrowser::Active(current));
     } else {
         let path = runtime.catalog().by_id(args)?;
         runtime.switch_session(path)?;
@@ -257,15 +258,21 @@ fn fork_after_items(turns: Vec<TurnSummary>) -> Vec<PickerItem> {
 
 pub(super) fn session_items(
     sessions: Vec<SessionSummary>,
-    current_id: &str,
+    current_id: Option<&str>,
+    show_cwd: bool,
     now: SystemTime,
 ) -> Vec<PickerItem> {
     sessions
         .into_iter()
         .map(|session| {
-            let is_current = session.id == current_id;
-            let label = session_label(&session, is_current);
-            let detail = session_detail(&session, is_current, now);
+            let is_current = Some(session.id.as_str()) == current_id;
+            let mut label = session_label(&session, is_current);
+            let mut detail = session_detail(&session, is_current, now);
+            if show_cwd && let Some(cwd) = &session.cwd {
+                let cwd = plain(&cwd.display().to_string());
+                label.push_str(&format!("  {cwd}"));
+                detail.push_str(&format!("\nfolder {cwd}"));
+            }
             PickerItem {
                 label,
                 detail: Some(detail),
@@ -419,6 +426,7 @@ mod tests {
         SessionSummary {
             id: "019abcdef0123456789abcdef01234567".into(),
             path: "/state/session.sqlite".into(),
+            cwd: Some("/workspace".into()),
             name: Some(name.into()),
             preview: Some("first prompt\nsecond line".into()),
             model,
@@ -433,7 +441,8 @@ mod tests {
         let recent = now - Duration::from_secs(125);
         let item = session_items(
             vec![summary("Named\u{1b}[31m task", None, recent)],
-            "019abcdef0123456789abcdef01234567",
+            Some("019abcdef0123456789abcdef01234567"),
+            false,
             now,
         )
         .pop()

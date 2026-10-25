@@ -89,7 +89,7 @@ class Terminal:
             self.redirected_master, redirected_slave = pty.openpty()
             self.redirected_modes = termios.tcgetattr(redirected_slave)
         command = [binary, "--cwd", cwd, "--tui-mode", mode, "chat"] if args is None else [binary, *args]
-        self.child = subprocess.Popen(command, env=env, stdin=redirected_slave if redirected_tty else slave, stdout=slave, stderr=slave, preexec_fn=attach)
+        self.child = subprocess.Popen(command, cwd=cwd, env=env, stdin=redirected_slave if redirected_tty else slave, stdout=slave, stderr=slave, preexec_fn=attach)
         os.close(slave)
         if redirected_tty:
             os.close(redirected_slave)
@@ -145,6 +145,9 @@ class Terminal:
 
     def finish(self):
         self.send(b"\x03")
+        self.wait_exit()
+
+    def wait_exit(self):
         end = time.monotonic() + 10
         while self.child.poll() is None:
             assert time.monotonic() < end, self.output[-2500:]
@@ -417,6 +420,220 @@ def exercise_configuration(work, base_env, endpoint):
         print(f"Configuration {mode}: live settings, effort, API-key provider, model auth/cancel, secret quarantine and draft: OK", flush=True)
 
 
+def exercise_resume(work, base_env, endpoint):
+    def selected(terminal):
+        # The query also starts with ›; only a rendered Session ID is a result.
+        return re.search(r"› [0-9a-f]{8}-[0-9a-f]{3}  RESUME_BETA", terminal.text())
+
+    for mode in ("inline", "fullscreen"):
+        sandbox = work / (mode + "-resume")
+        sandbox.mkdir()
+        a, b, empty = [sandbox / name for name in ("alpha", "beta", "empty")]
+        for cwd in (a, b, empty):
+            cwd.mkdir()
+        home = sandbox / "ion"
+        home.mkdir()
+        env = dict(base_env, HOME=str(sandbox / "home"), ION_HOME=str(home),
+                   XDG_CONFIG_HOME=str(sandbox / "config"), XDG_STATE_HOME=str(sandbox / "state"),
+                   HTTPS_PROXY=endpoint, HTTP_PROXY=endpoint, ALL_PROXY=endpoint,
+                   NO_PROXY="127.0.0.1,localhost")
+        marker = sandbox / "mcp-started"
+        mcp = home / "mcp.json"
+        mcp.write_text(json.dumps({"servers": {"must-not-start": {
+            "command": sys.executable,
+            "args": ["-c", f"from pathlib import Path; Path({str(marker)!r}).touch()"],
+        }}}))
+        before_requests = len(requests)
+        terminal = Terminal(empty, env, mode, ["-r", "--tui-mode", mode])
+        try:
+            terminal.wait(lambda: "No saved Sessions for this working directory" in terminal.text())
+            terminal.send(b"\t")
+            terminal.wait(lambda: "No saved coding Sessions" in terminal.text())
+            terminal.send(b"\x1b")
+            terminal.wait_exit()
+            assert termios.tcgetattr(terminal.master) == terminal.original_modes
+            assert not list(home.rglob("*.sqlite")) and not (home / "models.json").exists()
+            assert not marker.exists() and len(requests) == before_requests
+        finally:
+            terminal.close()
+        mcp.unlink()
+        subprocess.run([binary, "use", "resume-saved", "saved-model", "--endpoint", endpoint,
+                        "--wire", "chat-completions"], env=env, capture_output=True, check=True)
+        for cwd, prompt in ((a, "RESUME_ALPHA"), (b, "RESUME_BETA")):
+            subprocess.run([binary, "--cwd", cwd, "-p", prompt], env=env, capture_output=True, check=True)
+        paths = set(home.rglob("*.sqlite"))
+        assert len(paths) == 2
+        subprocess.run([binary, "use", "resume-default", "default-model", "--endpoint", endpoint,
+                        "--wire", "chat-completions"], env=env, capture_output=True, check=True)
+        defaults = (home / "models.json").read_bytes()
+        before_requests = len(requests)
+
+        # Preserve a filtered query across scope changes; browsing/cancel never
+        # opens a Session or picks a model, even with a working saved default.
+        terminal = Terminal(a, env, mode, ["-r", "--tui-mode", mode])
+        try:
+            terminal.wait(lambda: "RESUME_ALPHA" in terminal.text())
+            terminal.send("RESUME_BETA")
+            terminal.paint()
+            terminal.send(b"\t")
+            terminal.wait(lambda: selected(terminal))
+            terminal.finish()
+            assert set(home.rglob("*.sqlite")) == paths
+            assert (home / "models.json").read_bytes() == defaults
+            assert len(requests) == before_requests
+        finally:
+            terminal.close()
+
+        # Implicit launch cwd can change through an explicit All-folders choice.
+        # Stored model and history win over the global default; selection itself
+        # does not submit input. The next real prompt goes into the same Session.
+        terminal = Terminal(a, env, mode, ["--resume", "--tui-mode", mode])
+        try:
+            terminal.wait(lambda: "RESUME_ALPHA" in terminal.text())
+            terminal.send("RESUME_BETA\t")
+            terminal.wait(lambda: selected(terminal))
+            terminal.paint()
+            terminal.output.clear()
+            terminal.send(b"\r")
+            terminal.wait(lambda: "resume-saved/saved-model" in terminal.text())
+            assert "default-model" not in terminal.text()
+            assert len(requests) == before_requests
+            terminal.send("RESUME_CHECK_BETA\r")
+            terminal.wait(lambda: "DONE_RESUME_CHECK_BETA" in terminal.text())
+            terminal.wait(lambda: b"\x1b]7501;state=done:app=ion\x1b\\" in terminal.output)
+            terminal.finish()
+            assert termios.tcgetattr(terminal.master) == terminal.original_modes
+        finally:
+            terminal.close()
+        assert len(requests) == before_requests + 1
+        body = requests[-1]
+        assert body["model"] == "saved-model" and user_text(body) == "RESUME_CHECK_BETA"
+        assert "RESUME_BETA" in json.dumps(body) and "RESUME_ALPHA" not in json.dumps(body)
+        views = [json.loads(subprocess.run([binary, "--session", path, "inspect"], env=env,
+                                          capture_output=True, check=True).stdout) for path in paths]
+        target, = [view for view in views if view["cwd"] == str(b.resolve())]
+        assert sum(entry["kind"] == "turn_ended" for entry in target["entries"]) == 2
+        assert set(home.rglob("*.sqlite")) == paths
+        assert (home / "models.json").read_bytes() == defaults
+
+        # An explicit directory is still a fence, not permission to adopt another
+        # workspace. Read-only browsing needs neither the route nor credentials.
+        terminal = Terminal(a, env, mode, ["--cwd", a, "--resume", "inspect"])
+        try:
+            terminal.wait(lambda: "RESUME_ALPHA" in terminal.text())
+            terminal.send("RESUME_BETA\t")
+            terminal.wait(lambda: selected(terminal))
+            terminal.paint()
+            terminal.output.clear()
+            terminal.send(b"\r")
+            end = time.monotonic() + 10
+            while terminal.child.poll() is None:
+                assert time.monotonic() < end, terminal.text()
+                terminal.pump()
+            terminal.paint()
+            assert terminal.child.returncode == 1 and "--cwd does not match" in terminal.text()
+            assert termios.tcgetattr(terminal.master) == terminal.original_modes
+        finally:
+            terminal.close()
+        for args in (["--resume", "-p", "NEVER_SEND"], ["rpc", "--resume"]):
+            result = subprocess.run([binary, *args], cwd=a, env=env, capture_output=True)
+            assert result.returncode != 0 and not result.stdout
+        assert len(requests) == before_requests + 1
+        assert set(home.rglob("*.sqlite")) == paths
+
+        # Persist a native model choice with a disposable environment credential,
+        # but never call that provider. Its later repair is Session-local, not
+        # fresh-launch default onboarding, even after cancelling the key reader.
+        target_path, = [path for path in paths if json.loads(subprocess.run(
+            [binary, "--session", path, "inspect"], env=env, capture_output=True,
+            check=True).stdout)["cwd"] == str(b.resolve())]
+        keyed_env = dict(env, OPENAI_API_KEY="DISPOSABLE_NOT_SENT")
+        terminal = Terminal(b, keyed_env, mode, ["--session", target_path, "--tui-mode", mode])
+        try:
+            terminal.wait(lambda: "resume-saved/saved-model" in terminal.text())
+            terminal.send("/model openai/gpt-5.4-mini\r")
+            terminal.wait(lambda: "Selected openai/gpt-5.4-mini" in terminal.text())
+            terminal.finish()
+        finally:
+            terminal.close()
+        terminal = Terminal(b, env, mode, ["--resume", "--tui-mode", mode])
+        try:
+            terminal.wait(lambda: selected(terminal))
+            terminal.send(b"\r")
+            terminal.wait(lambda: "openai API key:" in terminal.text())
+            terminal.send(b"\x03")
+            terminal.wait(lambda: "choose a model to retry" in terminal.text())
+            terminal.send("resume-saved/saved-model")
+            terminal.paint()
+            terminal.output.clear()
+            terminal.send(b"\r")
+            terminal.wait(lambda: "resume-saved/saved-model" in terminal.text())
+            terminal.finish()
+        finally:
+            terminal.close()
+        assert (home / "models.json").read_bytes() == defaults, "resumed model repair rewrote the global default"
+        assert not (home / "credentials/openai.key").exists()
+        mcp.write_text(json.dumps({"servers": {"must-not-start": {
+            "command": sys.executable,
+            "args": ["-c", f"from pathlib import Path; Path({str(marker)!r}).touch()"],
+        }}}))
+        terminal = Terminal(b, env, mode, ["inspect", "--resume"])
+        try:
+            terminal.wait(lambda: selected(terminal))
+            terminal.output.clear()
+            terminal.send(b"\r")
+            terminal.wait_exit()
+            terminal.paint()
+            assert '"last_model"' in terminal.text() and '"gpt-5.4-mini"' in terminal.text()
+            assert "API key:" not in terminal.text() and not marker.exists()
+            assert termios.tcgetattr(terminal.master) == terminal.original_modes
+        finally:
+            terminal.close()
+        mcp.unlink()
+
+        # A discovery snapshot is not permission to create a replacement when
+        # its file vanishes, including after metadata was read for key setup.
+        for stage, cwd, prompt in (("selection", a, "RESUME_ALPHA"), ("key setup", b, "RESUME_BETA")):
+            path, = [path for path in paths if json.loads(subprocess.run(
+                [binary, "--session", path, "inspect"], env=env, capture_output=True,
+                check=True).stdout)["cwd"] == str(cwd.resolve())]
+            backup = path.with_suffix(".held")
+            terminal = Terminal(cwd, env, mode, ["--resume", "--tui-mode", mode])
+            try:
+                terminal.wait(lambda: re.search(r"› [0-9a-f]{8}-[0-9a-f]{3}  " + prompt, terminal.text()))
+                if stage == "key setup":
+                    terminal.send(b"\r")
+                    terminal.wait(lambda: "openai API key:" in terminal.text())
+                path.rename(backup)
+                terminal.output.clear()
+                if stage == "selection":
+                    terminal.send(b"\r")
+                else:
+                    terminal.send(b"\x03")
+                    terminal.wait(lambda: "choose a model to retry" in terminal.text())
+                    terminal.send("resume-saved/saved-model")
+                    terminal.paint()
+                    terminal.output.clear()
+                    terminal.send(b"\r")
+                end = time.monotonic() + 10
+                while terminal.child.poll() is None and not path.exists():
+                    assert time.monotonic() < end, terminal.text()
+                    terminal.pump()
+                assert not path.exists(), f"missing saved Session was recreated during {stage}"
+                assert terminal.child.wait(timeout=5) == 1
+                assert termios.tcgetattr(terminal.master) == terminal.original_modes
+            finally:
+                terminal.close()
+                if backup.exists():
+                    for leftover in (path, Path(str(path) + "-wal"), Path(str(path) + "-shm")):
+                        leftover.unlink(missing_ok=True)
+                    backup.rename(path)
+        assert (home / "models.json").read_bytes() == defaults
+        assert len(requests) == before_requests + 1 and not unexpected_connections
+        requests.clear()
+        print(f"Resume {mode}: empty/cancel, scoped search, cross-workspace reopen, model/history/default, cwd fence and terminal restoration: OK", flush=True)
+
+
 def exercise_onboarding(work, base_env, endpoint):
     for mode in ("inline", "fullscreen"):
         cwd = work / (mode + "-onboarding")
@@ -554,6 +771,7 @@ with tempfile.TemporaryDirectory(prefix="ion-input-") as temporary:
     try:
         exercise_onboarding(work, env, f"http://127.0.0.1:{server.server_port}/v1")
         subprocess.run([binary, "use", "smoke", "smoke-model", "--endpoint", f"http://127.0.0.1:{server.server_port}/v1/chat/completions", "--wire", "chat-completions"], env=env, check=True, capture_output=True)
+        exercise_resume(work, env, f"http://127.0.0.1:{server.server_port}/v1/chat/completions")
         exercise_orientation(work, env, f"http://127.0.0.1:{server.server_port}/v1/chat/completions")
         exercise_configuration(work, env, f"http://127.0.0.1:{server.server_port}/v1/chat/completions")
         exercise_tasks(work, env)

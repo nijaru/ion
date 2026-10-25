@@ -82,6 +82,30 @@ fn headless_modes_share_one_action_and_explicit_chat_stays_explicit() {
 }
 
 #[test]
+fn resume_is_an_explicit_terminal_chooser_not_a_session_operand() {
+    for args in [
+        vec!["ion", "-r"],
+        vec!["ion", "chat", "--resume"],
+        vec!["ion", "--resume", "run", "hello"],
+        vec!["ion", "inspect", "--resume"],
+    ] {
+        assert!(parse(&args, true).unwrap().resume_session, "{args:?}");
+        assert!(parse(&args, false).is_err(), "{args:?}");
+    }
+    for args in [
+        vec!["ion", "--resume", "--session", "saved"],
+        vec!["ion", "--continue", "chat", "--resume"],
+        vec!["ion", "--resume", "rpc"],
+        vec!["ion", "--resume", "run", "--json", "hello"],
+        vec!["ion", "auth", "--resume"],
+        vec!["ion", "--resume", "saved"],
+    ] {
+        assert!(parse(&args, true).is_err(), "{args:?}");
+    }
+    assert!(!parse(&["ion"], true).unwrap().resume_session);
+}
+
+#[test]
 fn scopes_reject_unused_options_in_both_positions_and_help_matches() {
     for (verb, flag, value) in [
         ("auth", "--model", "openai/gpt-5.4"),

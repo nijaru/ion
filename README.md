@@ -59,6 +59,7 @@ git diff | ion -p 'Review this change'
 git diff | ion -p           # stdin-only headless input
 printf 'Explain this project' | ion run
 ion --continue             # reopen the latest session in this directory
+ion -r                     # choose a saved Session; Tab browses all folders
 ion sessions               # list saved sessions and their IDs
 ion --session ID inspect   # committed history for a selected session as JSON
 ion --continue clone       # copy the latest conversation to a new session
@@ -110,6 +111,15 @@ answer channel and omits it. Unattended RPC clients can use
 
 `--cwd PATH` chooses a working directory. By default, a run starts a new
 session; `--continue` reopens the most recently active one in that directory.
+`-r` or `--resume` opens a searchable launch-time chooser before model setup or
+Session/MCP admission. It starts in the current folder; Tab switches to all coding
+folders and shows each Session's recorded directory. Esc or Ctrl-C exits without
+creating a Session or changing the default model. Empty results still allow scope
+changes. The chooser requires terminal stdin/stdout, is unavailable in RPC or with
+`--json`, and conflicts with `--session`/`--continue`; use those explicit selectors
+for scripts. An explicit `--cwd` must still match the chosen Session. If its saved
+file vanishes during selection or model setup, reopening fails rather than
+creating a replacement.
 `--session ID` selects a listed session, and `--session PATH` can create or
 open an exact SQLite path for scripts. Session paths are canonicalized so
 symbolic links share the same writer lock. Hard-linked databases are rejected;
@@ -142,14 +152,18 @@ with a missing key opens the same hidden credential reader as first-use setup;
 Ctrl-C cancels key entry without changing the current model. Model selection never
 changes the saved default. Saving a key is local storage, not remote authentication;
 an explicitly saved key remains saved if later binding preflight fails. Environment
-keys take precedence over saved keys. A resumed session restores its model; `ion use` sets the
+keys take precedence over saved keys. A resumed session restores its model;
+cancelling its key prompt and choosing a replacement model repairs that binding
+without changing the global default. `ion use` sets the
 default for new sessions. Custom routes and that default are published together
 in `~/.ion/models.json`, with concurrent saves serialized. Ion keeps user
 configuration, credentials, resources and saved Sessions under `~/.ion`; set
 `ION_HOME` to choose another directory for all of them. Existing XDG data is
 not automatically imported or migrated.
 
-`/resume` opens a searchable saved-Session browser and marks the current Session.
+`/resume` opens a searchable saved-Session browser within the active workspace
+and marks the current Session. Unlike the launch-time chooser, it does not switch
+the live binding's working directory.
 The selected conversation shows its full ID, Turn count, recorded model and file
 activity timestamp/age. Activity is a discovery-time snapshot, not execution
 status. Discovery runs outside the input loop; Esc dismisses the browser while

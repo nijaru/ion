@@ -1089,6 +1089,24 @@ rather than being silently ignored. Qualified model identities use
 `PROVIDER/MODEL`; an explicit provider also permits an exact namespaced model ID.
 Invocation overrides bind the Session without changing the saved global default.
 
+An explicit `-r`/`--resume` browses saved coding Sessions before model selection,
+Session allocation or application admission. Start in the launch directory and
+allow switching to all coding workspaces, with recorded cwd visible. Metadata
+discovery does not include workspace-free applications or nested managed children,
+change model defaults, submit input or authorize effects. Cancellation exits;
+empty results remain browsable. Discovery retains and joins cancelled workers
+before replacement or exit, including presentation failure. Choosing a path uses
+the ordinary reopen/model-restoration path and retains explicit-cwd validation.
+A selected existing Session is never recreated if its file disappears during
+startup. Verify its inspected identity and cwd again after acquiring the writer,
+before application resources or MCP admission.
+The chooser requires terminal input/output and cannot precede RPC or `--json`
+protocol output. Explicit paths/IDs and `--continue` remain unattended selectors;
+fresh launch stays fresh. Only fresh no-model onboarding saves a chosen default;
+repairing a resumed or explicit model choice changes that binding, not the global
+default. In-chat browsing remains within the live binding's
+captured workspace rather than silently changing its authority.
+
 Without an explicit command, terminal stdin and stdout select chat; redirected
 I/O selects headless execution. Explicit chat and RPC retain their own input
 contracts. Headless mode accepts argument text, bounded UTF-8 stdin or images.

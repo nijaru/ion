@@ -20,6 +20,7 @@ pub(crate) struct Invocation {
     pub cwd: Option<PathBuf>,
     pub session: Option<PathBuf>,
     pub continue_session: bool,
+    pub resume_session: bool,
     pub model: Option<ModelRef>,
     pub reasoning: Option<Reasoning>,
     pub image: Vec<PathBuf>,
@@ -205,6 +206,8 @@ fn options() -> Vec<Arg> {
             .value_name("PATH_OR_ID").help("Open a saved Session; new work starts fresh by default"),
         Arg::new("continue_session").short('c').long("continue").action(ArgAction::SetTrue)
             .help("Continue the most recently active Session in this directory"),
+        Arg::new("resume_session").short('r').long("resume").action(ArgAction::SetTrue)
+            .help("Choose a saved Session in a terminal; Tab switches current/all folders"),
         Arg::new("provider").long("provider").value_name("PROVIDER")
             .help("Provider for an exact --model ID, including namespaced IDs"),
         Arg::new("model").long("model").value_name("PROVIDER/MODEL")
@@ -235,6 +238,7 @@ fn applicable(command: &str, option: &str) -> bool {
                 )
         }
         "session" | "continue_session" => coding || saved,
+        "resume_session" => matches!(command, "chat" | "run") || saved,
         "provider" | "model" | "reasoning" => coding || command == "compact",
         "code_mode" | "tools" | "exclude_tools" | "read_only" => coding,
         "image" => matches!(command, "run" | "chat"),
@@ -340,6 +344,16 @@ fn normalize(mut matches: ArgMatches, interactive: bool) -> Result<Invocation> {
         session.is_none() || !continue_session,
         "--session conflicts with --continue"
     );
+    let resume_session = one(&mut levels, "resume_session")?.unwrap_or(false);
+    ensure!(
+        !resume_session || session.is_none() && !continue_session,
+        "--resume conflicts with --session and --continue"
+    );
+    let json = one(&mut levels, "json")?.unwrap_or(false);
+    ensure!(
+        !resume_session || interactive && !json,
+        "--resume requires terminal input and output without --json; use --session ID instead"
+    );
     let tools = patterns(many(&mut levels, "tools"))?;
     let exclude = patterns(many(&mut levels, "exclude_tools"))?;
     let read_only = one(&mut levels, "read_only")?.unwrap_or(false);
@@ -377,11 +391,12 @@ fn normalize(mut matches: ArgMatches, interactive: bool) -> Result<Invocation> {
         cwd: one(&mut levels, "cwd")?,
         session,
         continue_session,
+        resume_session,
         model,
         reasoning: one(&mut levels, "reasoning")?,
         image: many(&mut levels, "image"),
         tui_mode: one(&mut levels, "tui_mode")?.unwrap_or(TuiMode::Inline),
-        json: one(&mut levels, "json")?.unwrap_or(false),
+        json,
         code_mode: one(&mut levels, "code_mode")?.unwrap_or(false),
         read_only,
         tool_selection,

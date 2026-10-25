@@ -62,10 +62,19 @@ struct FileRequest {
     cwd: PathBuf,
 }
 
+/// Startup can choose a workspace before admission; a live binding stays in its
+/// captured workspace. Do not offer cross-directory choices it cannot publish.
+#[derive(Clone)]
+pub(super) enum SessionBrowser {
+    Launch,
+    Active(String),
+}
+
 #[derive(Clone)]
 struct SessionRequest {
     catalog: SessionCatalog,
-    current_id: String,
+    browser: SessionBrowser,
+    all_workspaces: bool,
 }
 
 #[derive(Clone)]
@@ -109,6 +118,7 @@ pub(super) struct Pickers {
     // A project-path snapshot belongs to the current file-completion episode,
     // not a draft range. Only the editor derives replacement ranges.
     files: Option<(PathBuf, Vec<String>)>,
+    sessions: Option<SessionRequest>,
 }
 
 impl Pickers {
@@ -201,6 +211,7 @@ impl Pickers {
         self.rendered_selected = None;
         self.waiting = None;
         self.files = None;
+        self.sessions = None;
         if let Some(job) = &self.job {
             job.stop.cancel();
         }
@@ -247,18 +258,37 @@ impl Pickers {
         }
     }
 
-    pub fn open_sessions(&mut self, catalog: SessionCatalog, current_id: String) {
+    pub fn open_sessions(&mut self, catalog: SessionCatalog, browser: SessionBrowser) {
+        self.load_sessions(
+            SessionRequest {
+                catalog,
+                browser,
+                all_workspaces: false,
+            },
+            String::new(),
+        );
+    }
+
+    fn load_sessions(&mut self, request: SessionRequest, query: String) {
         self.open(Picker {
-            title: "Resume session",
-            query: String::new(),
+            title: if matches!(request.browser, SessionBrowser::Active(_)) {
+                "Resume session"
+            } else if request.all_workspaces {
+                "Resume session · all folders · Tab: current folder"
+            } else {
+                "Resume session · current folder · Tab: all folders"
+            },
+            query,
             selected: 0,
             items: Vec::new(),
         });
-        self.waiting = Some(PickerRequest::Sessions(SessionRequest {
-            catalog,
-            current_id,
-        }));
+        self.sessions = Some(request.clone());
+        self.waiting = Some(PickerRequest::Sessions(request));
         self.admit();
+    }
+
+    pub fn invalidate_visibility(&mut self) {
+        self.rendered_selected = None;
     }
 
     fn admit(&mut self) {
@@ -277,8 +307,14 @@ impl Pickers {
             }
             PickerRequest::Sessions(sessions) => {
                 let catalog = sessions.catalog.clone();
+                let all_workspaces = sessions.all_workspaces;
                 tokio::task::spawn_blocking(move || {
-                    catalog.scan(&worker_stop).map(|sessions| {
+                    let result = if all_workspaces {
+                        catalog.scan_all(&worker_stop)
+                    } else {
+                        catalog.scan(&worker_stop)
+                    };
+                    result.map(|sessions| {
                         sessions.map_or(PickerOutput::Cancelled, PickerOutput::Sessions)
                     })
                 })
@@ -302,14 +338,10 @@ impl Pickers {
             .and_then(|result| result)
         {
             Err(error) => {
-                if publish {
-                    if let PickerRequest::Files(request) = &job.request {
-                        // Remember the failed episode so drawing cannot turn a
-                        // filesystem error into an automatic retry loop.
-                        self.files = Some((request.cwd.clone(), Vec::new()));
-                    } else {
-                        self.close();
-                    }
+                if publish && let PickerRequest::Files(request) = &job.request {
+                    // Remember the failed episode so drawing cannot turn a
+                    // filesystem error into an automatic retry loop.
+                    self.files = Some((request.cwd.clone(), Vec::new()));
                 }
                 Some(format!("{}: {error:#}", job.request.failure_label()))
             }
@@ -334,7 +366,15 @@ impl Pickers {
                 let PickerRequest::Sessions(request) = job.request else {
                     unreachable!("Session output has a Session request")
                 };
-                let items = session_items(sessions, &request.current_id, SystemTime::now());
+                let items = session_items(
+                    sessions,
+                    match &request.browser {
+                        SessionBrowser::Launch => None,
+                        SessionBrowser::Active(id) => Some(id.as_str()),
+                    },
+                    request.all_workspaces,
+                    SystemTime::now(),
+                );
                 let empty = items.is_empty();
                 if let Some(picker) = &mut self.active {
                     picker.items = items;
@@ -343,10 +383,16 @@ impl Pickers {
                         .min(picker.matches().len().saturating_sub(1));
                 }
                 self.rendered_selected = None;
-                if empty {
+                if empty && matches!(request.browser, SessionBrowser::Active(_)) {
                     self.close();
+                    Some("No saved Sessions for this working directory".into())
+                } else {
+                    empty.then(|| if request.all_workspaces {
+                        "No saved coding Sessions · Esc exits".into()
+                    } else {
+                        "No saved Sessions for this working directory · Tab: all folders · Esc exits".into()
+                    })
                 }
-                empty.then(|| "No saved Sessions for this working directory".into())
             }
             Ok(PickerOutput::Files { .. } | PickerOutput::Sessions(_)) => None,
         };
@@ -383,6 +429,21 @@ impl Pickers {
     }
 
     pub fn key(&mut self, key: KeyEvent) -> Option<PickerValue> {
+        if key.code == KeyCode::Tab
+            && key.modifiers.is_empty()
+            && let Some(mut request) = self.sessions.clone()
+            && matches!(request.browser, SessionBrowser::Launch)
+        {
+            request.all_workspaces = !request.all_workspaces;
+            let query = self
+                .active
+                .as_ref()
+                .expect("Session browser is active")
+                .query
+                .clone();
+            self.load_sessions(request, query);
+            return None;
+        }
         let loading = self.loading();
         let picker = self.active.as_mut().expect("picker is active");
         match key.code {
@@ -513,7 +574,8 @@ mod tests {
     fn session_request(current_id: &str) -> PickerRequest {
         PickerRequest::Sessions(SessionRequest {
             catalog: SessionCatalog::new(PathBuf::new(), None),
-            current_id: current_id.into(),
+            browser: SessionBrowser::Active(current_id.into()),
+            all_workspaces: false,
         })
     }
 
@@ -568,6 +630,7 @@ mod tests {
         Ok(PickerOutput::Sessions(vec![SessionSummary {
             id: "019abcdef0123456789abcdef01234567".into(),
             path: path.into(),
+            cwd: Some("/workspace".into()),
             name: Some("saved task".into()),
             preview: Some("saved prompt".into()),
             model: None,
@@ -762,6 +825,41 @@ mod tests {
                 assert!(pickers.active().is_none());
             }
         }
+    }
+
+    #[tokio::test]
+    async fn session_scope_switch_keeps_query_and_joins_before_replacement() {
+        let (mut pickers, release) = held_session_job(sessions("/stale"));
+        let PickerRequest::Sessions(request) = &pickers.job.as_ref().unwrap().request else {
+            unreachable!()
+        };
+        let mut request = request.clone();
+        request.browser = SessionBrowser::Launch;
+        pickers.sessions = Some(request);
+        pickers.key(KeyEvent::new(KeyCode::Tab, Modifiers::NONE));
+        assert_eq!(pickers.active().unwrap().query, "draft query");
+        assert!(pickers.sessions.as_ref().unwrap().all_workspaces);
+        assert!(pickers.job.as_ref().unwrap().stop.is_cancelled());
+        assert!(pickers.waiting.is_some());
+        release.send(()).unwrap();
+        assert!(pickers.complete().await.is_none());
+        assert!(pickers.waiting.is_none());
+        assert!(
+            pickers.active().unwrap().items.is_empty(),
+            "old scope was published"
+        );
+        pickers.complete().await;
+        assert!(
+            pickers.active().is_some(),
+            "an empty scope must still allow Tab"
+        );
+        assert_eq!(pickers.active().unwrap().query, "draft query");
+        assert!(
+            pickers
+                .key(KeyEvent::new(KeyCode::Enter, Modifiers::NONE))
+                .is_none()
+        );
+        pickers.shutdown().await.unwrap();
     }
 
     #[tokio::test]

@@ -392,7 +392,12 @@ async fn run_cli(cli: Invocation) -> Result<()> {
             let cwd = cli.cwd.unwrap_or(std::env::current_dir()?).canonicalize()?;
             ensure!(cwd.is_dir(), "working directory is not a directory");
             let catalog = host.sessions(Some(cwd.clone()));
-            let path = if let Some(explicit) = cli.session {
+            let path = if cli.resume_session {
+                let Some(path) = terminal_client::choose_session(catalog.clone()).await? else {
+                    return Ok(());
+                };
+                path
+            } else if let Some(explicit) = cli.session {
                 catalog.resolve_explicit(explicit)?
             } else if cli.continue_session {
                 catalog.latest()?
@@ -405,11 +410,13 @@ async fn run_cli(cli: Invocation) -> Result<()> {
                     | Action::Clone
                     | Action::Fork { .. }
             ) {
-                bail!("use --continue or --session ID; run `ion sessions` to find one")
+                bail!(
+                    "use --continue, --resume in a terminal, or --session ID; run `ion sessions` to find one"
+                )
             } else {
                 catalog.new_path()?
             };
-            let existing = if path.is_file() {
+            let existing = if cli.resume_session || cli.continue_session || path.is_file() {
                 Some(CodingSession::inspect_metadata(&path)?)
             } else {
                 None
@@ -518,7 +525,10 @@ async fn run_cli(cli: Invocation) -> Result<()> {
                     Err(error) if error.is::<ion_host::ModelSelectionRequired>() => None,
                     Err(error) => return Err(error),
                 };
-                let Some(selected) = terminal_client::setup_model(&host, selected).await? else {
+                let choose_default = existing.is_none() && selected.is_none();
+                let Some(selected) =
+                    terminal_client::setup_model(&host, selected, choose_default).await?
+                else {
                     return Ok(());
                 };
                 selected
@@ -548,11 +558,17 @@ async fn run_cli(cli: Invocation) -> Result<()> {
                 tokio_util::sync::CancellationToken::new(),
             )
             .await?;
-            let session = Arc::new(if path.is_file() {
+            let session = Arc::new(if existing.is_some() {
                 CodingSession::open(&path)?
             } else {
                 CodingSession::create(&path, Some(&cwd))?
             });
+            if let Some(view) = &existing {
+                ensure!(
+                    session.id() == view.id && session.cwd() == view.cwd.as_deref(),
+                    "saved Session identity or working directory changed during startup; reopen it explicitly"
+                );
+            }
             let startup = if matches!(action, Action::Compact) {
                 ion_host::McpStartup::default()
             } else {

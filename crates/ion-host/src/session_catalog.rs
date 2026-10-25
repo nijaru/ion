@@ -16,7 +16,7 @@ use tokio_util::sync::CancellationToken;
 
 #[derive(Clone)]
 pub struct SessionCatalog {
-    directory: PathBuf,
+    root: PathBuf,
     cwd: Option<PathBuf>,
 }
 
@@ -24,6 +24,7 @@ pub struct SessionCatalog {
 pub struct SessionSummary {
     pub id: String,
     pub path: PathBuf,
+    pub cwd: Option<PathBuf>,
     pub name: Option<String>,
     pub preview: Option<String>,
     pub model: Option<ModelRef>,
@@ -33,19 +34,16 @@ pub struct SessionSummary {
 
 impl SessionCatalog {
     pub fn new(root: PathBuf, cwd: Option<PathBuf>) -> Self {
-        let key = cwd.as_ref().map_or_else(
-            || "workspace-free".to_owned(),
-            |cwd| format!("{:x}", Sha256::digest(cwd.as_os_str().as_encoded_bytes())),
-        );
-        Self {
-            directory: root.join(key),
-            cwd,
-        }
+        Self { root, cwd }
     }
 
     /// Concrete workspace directory; inspecting it creates no files.
-    pub(crate) fn directory(&self) -> &Path {
-        &self.directory
+    pub(crate) fn directory(&self) -> PathBuf {
+        let key = self.cwd.as_ref().map_or_else(
+            || "workspace-free".to_owned(),
+            |cwd| format!("{:x}", Sha256::digest(cwd.as_os_str().as_encoded_bytes())),
+        );
+        self.root.join(key)
     }
 
     pub(crate) fn cwd(&self) -> Option<&Path> {
@@ -58,7 +56,7 @@ impl SessionCatalog {
             DirBuilder::new()
                 .recursive(true)
                 .mode(0o700)
-                .create(directory)
+                .create(&directory)
                 .with_context(|| format!("cannot create {}", directory.display()))?;
         }
         for _ in 0..16 {
@@ -89,12 +87,57 @@ impl SessionCatalog {
         let Some(paths) = self.paths_until(Some(stop))? else {
             return Ok(None);
         };
+        self.scan_paths(paths, false, stop)
+    }
+
+    /// Read coding Sessions across workspace namespaces, excluding workspace-free
+    /// applications and nested managed children. This never changes the catalog's
+    /// namespace or grants authority to execute in a discovered directory.
+    pub fn scan_all(&self, stop: &CancellationToken) -> Result<Option<Vec<SessionSummary>>> {
+        if stop.is_cancelled() {
+            return Ok(None);
+        }
+        let mut paths = Vec::new();
+        let entries = match fs::read_dir(&self.root) {
+            Ok(entries) => entries,
+            Err(error) if error.kind() == io::ErrorKind::NotFound => {
+                return self.scan_paths(Vec::new(), true, stop);
+            }
+            Err(error) => return Err(error).context("cannot list Session workspaces"),
+        };
+        let mut entries = entries;
+        loop {
+            if stop.is_cancelled() {
+                return Ok(None);
+            }
+            let Some(entry) = entries.next() else { break };
+            let entry = entry?;
+            if stop.is_cancelled() {
+                return Ok(None);
+            }
+            if !entry.file_type()?.is_dir() {
+                continue;
+            }
+            let Some(workspace_paths) = paths_in(&entry.path(), Some(stop))? else {
+                return Ok(None);
+            };
+            paths.extend(workspace_paths);
+        }
+        self.scan_paths(paths, true, stop)
+    }
+
+    fn scan_paths(
+        &self,
+        paths: Vec<PathBuf>,
+        all_workspaces: bool,
+        stop: &CancellationToken,
+    ) -> Result<Option<Vec<SessionSummary>>> {
         let mut sessions = Vec::new();
         for path in paths {
             if stop.is_cancelled() {
                 return Ok(None);
             }
-            if let Some(summary) = self.summary(path) {
+            if let Some(summary) = self.summary(path, all_workspaces) {
                 sessions.push(summary);
             }
         }
@@ -111,72 +154,16 @@ impl SessionCatalog {
     }
 
     fn paths_until(&self, stop: Option<&CancellationToken>) -> Result<Option<Vec<PathBuf>>> {
-        let cancelled = || stop.is_some_and(CancellationToken::is_cancelled);
-        if cancelled() {
-            return Ok(None);
-        }
-        let mut paths = Vec::new();
-        match fs::read_dir(self.directory()) {
-            Ok(mut entries) => loop {
-                if cancelled() {
-                    return Ok(None);
-                }
-                // `for` would traverse before checking cancellation. Check first,
-                // then surface an observed traversal error before any later stop.
-                let Some(entry) = entries.next() else {
-                    break;
-                };
-                let entry = entry?;
-                if cancelled() {
-                    return Ok(None);
-                }
-                let path = entry.path();
-                if path.extension().is_some_and(|ext| ext == "sqlite")
-                    && entry.file_type()?.is_file()
-                {
-                    paths.push(path);
-                }
-            },
-            Err(error) if error.kind() == io::ErrorKind::NotFound => {}
-            Err(error) => return Err(error).context("cannot list sessions"),
-        }
-        if cancelled() {
-            return Ok(None);
-        }
-        Ok(Some(paths))
+        paths_in(&self.directory(), stop)
     }
 
-    fn summary(&self, path: PathBuf) -> Option<SessionSummary> {
-        // Discovery must remain usable if one file is damaged or only
-        // partially initialized. Opening that path explicitly still reports
-        // its real error.
-        let view = CodingSession::inspect_metadata(&path).ok()?;
-        if view.cwd != self.cwd {
-            return None;
-        }
-        let updated = modified(&path).ok()?;
-        let preview = view.first_input.map(|input| {
-            let label = match input {
-                SessionInputPreview::Prompt { text } => text.unwrap_or_else(|| "[image]".into()),
-                SessionInputPreview::Shell { command, excluded } => {
-                    format!("{}{command}", if excluded { "!!" } else { "!" })
-                }
-            };
-            label
-                .chars()
-                .map(|ch| if ch.is_control() { ' ' } else { ch })
-                .collect()
-        });
-        preview.as_ref()?;
-        let id = view.id.to_string();
-        Some(SessionSummary {
-            id,
-            path,
-            name: view.name,
-            preview,
-            model: view.last_model,
-            turns: view.turns,
-            updated,
+    fn summary(&self, path: PathBuf, all_workspaces: bool) -> Option<SessionSummary> {
+        summary(path).filter(|summary| {
+            if all_workspaces {
+                summary.cwd.is_some()
+            } else {
+                summary.cwd == self.cwd
+            }
         })
     }
 
@@ -189,7 +176,7 @@ impl SessionCatalog {
         recent.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| b.0.cmp(&a.0)));
         recent
             .into_iter()
-            .find_map(|(path, _)| self.summary(path))
+            .find_map(|(path, _)| self.summary(path, false))
             .map(|session| session.path)
             .context("no saved session for this directory")
     }
@@ -205,7 +192,7 @@ impl SessionCatalog {
                 CodingSession::inspect_id(path)
                     .is_ok_and(|identity| identity.to_string().starts_with(id))
             })
-            .filter_map(|path| self.summary(path));
+            .filter_map(|path| self.summary(path, false));
         let first = matches.next().context("session ID was not found")?;
         if matches.next().is_some() {
             bail!("session ID is ambiguous; use more characters")
@@ -220,6 +207,72 @@ impl SessionCatalog {
             self.by_id(&value.to_string_lossy())
         }
     }
+}
+
+fn paths_in(directory: &Path, stop: Option<&CancellationToken>) -> Result<Option<Vec<PathBuf>>> {
+    let cancelled = || stop.is_some_and(CancellationToken::is_cancelled);
+    if cancelled() {
+        return Ok(None);
+    }
+    let mut paths = Vec::new();
+    match fs::read_dir(directory) {
+        Ok(mut entries) => loop {
+            if cancelled() {
+                return Ok(None);
+            }
+            // `for` would traverse before checking cancellation. Check first,
+            // then surface an observed traversal error before any later stop.
+            let Some(entry) = entries.next() else {
+                break;
+            };
+            let entry = entry?;
+            if cancelled() {
+                return Ok(None);
+            }
+            let path = entry.path();
+            if path.extension().is_some_and(|ext| ext == "sqlite") && entry.file_type()?.is_file() {
+                paths.push(path);
+            }
+        },
+        Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+        Err(error) => return Err(error).context("cannot list sessions"),
+    }
+    if cancelled() {
+        return Ok(None);
+    }
+    Ok(Some(paths))
+}
+
+fn summary(path: PathBuf) -> Option<SessionSummary> {
+    // Discovery must remain usable if one file is damaged or only
+    // partially initialized. Opening that path explicitly still reports
+    // its real error.
+    let view = CodingSession::inspect_metadata(&path).ok()?;
+    let updated = modified(&path).ok()?;
+    let preview = view.first_input.map(|input| {
+        let label = match input {
+            SessionInputPreview::Prompt { text } => text.unwrap_or_else(|| "[image]".into()),
+            SessionInputPreview::Shell { command, excluded } => {
+                format!("{}{command}", if excluded { "!!" } else { "!" })
+            }
+        };
+        label
+            .chars()
+            .map(|ch| if ch.is_control() { ' ' } else { ch })
+            .collect()
+    });
+    preview.as_ref()?;
+    let id = view.id.to_string();
+    Some(SessionSummary {
+        id,
+        path,
+        cwd: view.cwd,
+        name: view.name,
+        preview,
+        model: view.last_model,
+        turns: view.turns,
+        updated,
+    })
 }
 
 fn modified(path: &Path) -> Result<SystemTime> {
@@ -437,6 +490,73 @@ mod tests {
         }
         fs::remove_dir_all(root).unwrap();
     }
+    #[tokio::test]
+    async fn all_workspace_discovery_is_passive_and_excludes_non_root_coding_sessions() {
+        let (root, catalog) = fixture();
+        let other_cwd = root.join("other");
+        fs::create_dir(&other_cwd).unwrap();
+        let other =
+            SessionCatalog::new(root.join("state"), Some(other_cwd.canonicalize().unwrap()));
+        let workspace_free = SessionCatalog::new(root.join("state"), None);
+        let child = catalog.directory().join("children/child.sqlite");
+        fs::create_dir_all(child.parent().unwrap()).unwrap();
+        let mut saved = Vec::new();
+        for (path, cwd) in [
+            (catalog.new_path().unwrap(), catalog.cwd.as_deref()),
+            (other.new_path().unwrap(), other.cwd.as_deref()),
+            (workspace_free.new_path().unwrap(), None),
+            (child, catalog.cwd.as_deref()),
+        ] {
+            let session = Arc::new(CodingSession::create(&path, cwd).unwrap());
+            agent(&catalog, 1)
+                .submit(
+                    session.clone(),
+                    "saved prompt".into(),
+                    String::new(),
+                    CancellationToken::new(),
+                    |_| {},
+                )
+                .await
+                .unwrap();
+            session.shutdown().await.unwrap();
+            saved.push((path, session.view().unwrap().entries));
+        }
+        assert_eq!(catalog.list().unwrap().len(), 1);
+        assert_eq!(workspace_free.list().unwrap().len(), 1);
+        let all = catalog
+            .scan_all(&CancellationToken::new())
+            .unwrap()
+            .unwrap();
+        assert_eq!(all.len(), 2);
+        assert!(all.iter().any(|item| item.cwd == catalog.cwd));
+        assert!(all.iter().any(|item| item.cwd == other.cwd));
+        for (path, before) in saved {
+            assert_eq!(CodingSession::inspect(&path).unwrap().entries, before);
+        }
+        let stop = CancellationToken::new();
+        stop.cancel();
+        assert!(catalog.scan_all(&stop).unwrap().is_none());
+        let missing = SessionCatalog::new(root.join("absent"), None);
+        assert_eq!(
+            missing
+                .scan_all(&CancellationToken::new())
+                .unwrap()
+                .unwrap()
+                .len(),
+            0
+        );
+        assert!(missing.scan_all(&stop).unwrap().is_none());
+        assert!(!root.join("absent").exists());
+        let broken = root.join("broken");
+        fs::write(&broken, b"not a directory").unwrap();
+        assert!(
+            SessionCatalog::new(broken, None)
+                .scan_all(&CancellationToken::new())
+                .is_err()
+        );
+        fs::remove_dir_all(root).unwrap();
+    }
+
     #[tokio::test]
     async fn scan_distinguishes_completion_cancellation_and_directory_errors() {
         let (root, catalog) = fixture();
