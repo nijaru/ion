@@ -612,9 +612,9 @@ cursor, including edits made while browsing. Tab reopens dismissed suggestions.
 Tab also opens completion for an ordinary filename, including an empty token;
 keep typing to narrow it. Paths containing `/`, dot-prefixed paths, `~` and quoted
 paths offer suggestions automatically. Relative, absolute and `~/` spellings are
-preserved; `~/` uses HOME, not ION_HOME. A leading `/name` remains command discovery
-until another `/` identifies an absolute directory path; use `Read /name` to
-complete a root entry without that ambiguity. URLs and ordinary prose do not open
+preserved; `~/` uses HOME, not ION_HOME. An unquoted leading `/` is reserved for
+terminal commands. Complete an absolute path after prose (`Read /tmp/pa`), with
+`@/tmp/pa`, or inside quotes (`"/tmp/pa`). URLs and ordinary prose do not open
 file suggestions automatically.
 Choosing a file inserts a path reference for the model to read, not its contents.
 Discovery runs off the client event loop. Fuzzy `@path` search uses the project

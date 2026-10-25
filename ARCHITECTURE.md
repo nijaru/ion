@@ -1168,8 +1168,9 @@ quoted path's suffix when completing before its closing quote, while preserving
 following prose. Directories continue completion; filenames are quoted and escaped
 when needed. Tab opens ordinary filename completion and keeps that episode active
 through edits in its token; path-like or quoted tokens offer directory completion
-automatically. Ordinary prose and URLs do not. First-token slash commands retain
-precedence until a second slash identifies an absolute path. Lookup resolves
+automatically. Ordinary prose and URLs do not. An unquoted leading slash retains
+the terminal-command namespace; absolute paths complete after prose, with `@` or
+inside quotes instead of offering a path that submission would reject. Lookup resolves
 relative paths from the captured workspace and `~/` from an absolute HOME, while
 replacement preserves the user's spelling. Completion does not expand shell
 variables, run commands or read file contents.

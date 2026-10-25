@@ -907,6 +907,8 @@ with tempfile.TemporaryDirectory(prefix="ion-input-") as temporary:
                     ("Read pl next", "bare", "Read plain.rs next"),
                     ("Read ./src/ma next", "accept", "Read ./src/main.rs next"),
                     (f"Read {cwd}/src/ma next", "accept", f"Read {cwd}/src/main.rs next"),
+                    (f"@{cwd}/src/ma next", "accept", f"@{cwd}/src/main.rs next"),
+                    (f'"{cwd}/src/ma next', "accept", f'"{cwd}/src/main.rs" next'),
                     (f"Read ~/paths-{mode}/ma next", "accept", f"Read ~/paths-{mode}/main.rs next"),
                     ('Read "space dir/ca next', "accept", 'Read "space dir/café🦀.rs" next'),
                     ('Read @"space d next', "directory", 'Read @"space dir/café🦀.rs" next'),

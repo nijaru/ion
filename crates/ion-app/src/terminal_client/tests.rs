@@ -726,6 +726,16 @@ async fn ordinary_paths_complete_in_place_without_submitting() {
             false,
         ),
         (
+            format!("@{}/ma", root.display()),
+            format!("@{}/main.rs ", root.display()),
+            false,
+        ),
+        (
+            format!("\"{}/ma", root.display()),
+            format!("\"{}/main.rs\" ", root.display()),
+            false,
+        ),
+        (
             "Read \"space dir/ma".to_owned(),
             "Read \"space dir/main.rs\" ".to_owned(),
             false,

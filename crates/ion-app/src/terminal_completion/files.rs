@@ -132,12 +132,9 @@ pub(super) fn path_prefix(draft: &str, cursor: usize, force: bool) -> Option<Pre
         raw.to_owned()
     };
     if !attachment {
-        // Preserve first-token command completion until a second slash makes
-        // the absolute directory intent unambiguous.
-        if start == draft.len() - draft.trim_start().len()
-            && query.starts_with('/')
-            && !query[1..].contains('/')
-        {
+        // Submission reserves every unquoted leading slash for terminal
+        // commands. Do not offer paths that would then be rejected as commands.
+        if !quoted && start == draft.len() - draft.trim_start().len() && query.starts_with('/') {
             return None;
         }
         if query.contains("://") {
@@ -332,7 +329,7 @@ mod tests {
                 "../main.rs",
             ),
             (
-                "/tmp/ma",
+                "Read /tmp/ma",
                 false,
                 FileScope::Directory("/tmp/".into()),
                 "/tmp/main.rs",
@@ -373,6 +370,7 @@ mod tests {
             "https://example.com/file",
             "/model",
             "/help",
+            "/tmp/ma",
         ] {
             assert!(path_prefix(draft, draft.len(), false).is_none(), "{draft}");
         }
