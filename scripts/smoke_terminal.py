@@ -619,7 +619,7 @@ with tempfile.TemporaryDirectory(prefix="ion-terminal-") as temporary:
                 fcntl.ioctl(panic_slave, termios.TIOCSCTTY, 0)
 
             panic = subprocess.Popen(
-                [binary, "--cwd", workspace, "--tui-mode", "fullscreen", "chat"],
+                [binary, "--cwd", workspace, "--tui-mode", "fullscreen", "chat", "NEVER_START_AFTER_DRAW_FAULT"],
                 env={
                     **env,
                     "ION_SMOKE_PANIC_AFTER_FIRST_DRAW": "1",
@@ -653,6 +653,7 @@ with tempfile.TemporaryDirectory(prefix="ion-terminal-") as temporary:
                 drain_terminal(panic_master, panic_output)
                 assert status != 0, "panic probe unexpectedly exited successfully"
                 assert b"ION smoke panic after first terminal draw" in panic_output, panic_output[-2000:]
+                assert "NEVER_START_AFTER_DRAW_FAULT" not in trace.read_text(), "failed startup dispatched its initial prompt"
                 for sequence, label in (
                     (b"\x1b[?1049h", "alternate screen enter"),
                     (b"\x1b[?1049l", "alternate screen leave"),
@@ -804,7 +805,7 @@ def exercise_questions():
                     os.setsid()
                     fcntl.ioctl(slave, termios.TIOCSCTTY, 0)
 
-                child = subprocess.Popen([binary, "--cwd", workspace, "chat"], env=env, stdin=slave, stdout=slave, stderr=slave, preexec_fn=attach)
+                child = subprocess.Popen([binary, "--cwd", workspace, "chat", "Ask the fixture question"], env=env, stdin=slave, stdout=slave, stderr=slave, preexec_fn=attach)
                 os.close(slave)
                 output = bytearray()
                 cursor = CursorReplies()
@@ -831,8 +832,6 @@ def exercise_questions():
                     return re.sub(rb"\x1b\[[0-9;?]*[A-Za-z]", b"", bytes(output))
 
                 try:
-                    wait(lambda: "›".encode() in output, "composer")
-                    os.write(master, b"Ask the fixture question\r")
                     wait(lambda: b"Question 1/1" in plain() and b"Type something." in plain(), "question modal")
                     assert b"\x1b]7501;state=blocked:kind=question:app=ion\x1b\\" in output, "question modal did not publish blocked status"
                     if mode == "select":

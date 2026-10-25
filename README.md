@@ -51,6 +51,8 @@ From the project directory:
 
 ```sh
 ion                        # terminal chat
+ion 'Inspect and fix the failing test' # start a prompt, then keep chatting
+ion chat 'Summarize this project'      # explicit terminal mode
 ion run 'Inspect and fix the failing test'
 ion -p 'Summarize the changes'
 ion --json run 'Inspect and fix the failing test' > events.jsonl
@@ -74,6 +76,15 @@ redirected I/O selects headless execution. Explicit `chat` and `rpc` keep their
 own input modes. `-p` selects headless mode independently of the prompt, so
 `ion -p --model PROVIDER/MODEL 'PROMPT'` also works. Use `--` before a prompt
 that starts with a dash or matches a command name.
+
+A terminal launch prompt is submitted once, after any model setup or Session
+selection. Pass the text as one quoted argument. Skills/templates expand normally,
+but terminal built-ins and `!`/`!!` shell syntax are model input here, not local
+commands. Initial text is limited to the editor's 64 KiB recovery capacity;
+rejected or unaccepted input retains its literal text and images for editing.
+A launch prompt does not automatically continue an interrupted Turn. `--image`
+attaches to the initial prompt when present; without a prompt argument, images stay
+unsent.
 
 `--model PROVIDER/MODEL` selects an exact catalog or configured custom identity
 for this invocation. With `--provider PROVIDER`, `--model` takes the exact model

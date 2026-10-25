@@ -1108,8 +1108,17 @@ default. In-chat browsing remains within the live binding's
 captured workspace rather than silently changing its authority.
 
 Without an explicit command, terminal stdin and stdout select chat; redirected
-I/O selects headless execution. Explicit chat and RPC retain their own input
-contracts. Headless mode accepts argument text, bounded UTF-8 stdin or images.
+I/O selects headless execution. An optional launch prompt starts the selected
+client; explicit `chat` also accepts it. Terminal launch attempts that prompt once,
+after acquiring terminal input/output and drawing, through ordinary shared-control
+admission with literal recovery metadata and images. Rejection/return retains the
+input for editing; startup never resumes unknown effects or retries implicitly.
+CLI prompt text may expand resources but never invokes terminal built-ins or direct
+user-shell syntax. Bound it to the editor's recovery capacity before Session/MCP
+admission. Without a prompt argument, attached images stay unsent for the first
+prompt.
+Explicit chat and RPC retain their own input contracts. Headless mode accepts
+argument text, bounded UTF-8 stdin or images.
 Validate pipe input before Session/MCP admission, preserve its literal contents,
 and prepend it only after argument-side resource expansion. Never interpret pipe
 contents as client commands or template selectors.

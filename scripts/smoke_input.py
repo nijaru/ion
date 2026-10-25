@@ -131,7 +131,10 @@ class Terminal:
     def wait(self, predicate):
         end = time.monotonic() + 10
         while not predicate():
-            assert time.monotonic() < end and self.child.poll() is None, (self.child.poll(), self.output[-2500:])
+            status = self.child.poll()
+            # Exit may become visible between the loop predicate and this read.
+            # Recheck the requested condition; an unexpected exit still fails.
+            assert (time.monotonic() < end and status is None) or predicate(), (status, self.output[-2500:])
             self.pump()
 
     def text(self):
@@ -161,6 +164,103 @@ class Terminal:
         if self.redirected_master is not None:
             os.close(self.redirected_master)
         self.child.wait(timeout=5)
+
+
+def exercise_launch(work, base_env, endpoint):
+    # The launch input must use real admission, not a simulated Submit key or
+    # the frontend's shell/builtin dispatcher. Exercise the same recovery lease.
+    for mode in ("inline", "fullscreen"):
+        sandbox = work / f"launch-{mode}"
+        cwd = sandbox / "workspace"
+        cwd.mkdir(parents=True)
+        env = dict(base_env, HOME=str(sandbox / "home"), ION_HOME=str(sandbox / "ion"),
+                   XDG_CONFIG_HOME=str(sandbox / "config"), XDG_STATE_HOME=str(sandbox / "state"))
+        subprocess.run([binary, "use", "smoke", "smoke-model", "--endpoint", endpoint,
+                        "--wire", "chat-completions", "--images"], env=env, check=True, capture_output=True)
+        (sandbox / "ion/keybindings.json").write_text('{"tui.input.submit":"ctrl+s"}')
+        database = sandbox / "conversation.sqlite"
+        before = len(requests)
+        prompt = "  !touch MUST_NOT_EXIST_🦀\n " if mode == "inline" else "  /quit\n "
+        args = ["--cwd", cwd, "--session", database, "--tui-mode", mode]
+        terminal = Terminal(cwd, env, mode, [*args, *(["chat"] if mode == "inline" else []), prompt])
+        try:
+            terminal.wait(lambda: len(requests) == before + 1 and b"state=done" in terminal.output)
+            assert user_text(requests[-1]) == prompt and not (cwd / "MUST_NOT_EXIST_🦀").exists()
+            terminal.output.clear()
+            terminal.send("FOLLOWUP_Ab🦀\r")
+            terminal.paint()
+            assert len(requests) == before + 1, "launch depended on the old Submit key"
+            terminal.send(b"\x13")
+            terminal.wait(lambda: len(requests) == before + 2 and b"state=done" in terminal.output)
+            assert user_text(requests[-1]) == "FOLLOWUP_Ab🦀"
+            terminal.send(b"\x04")
+            terminal.wait_exit()
+            assert termios.tcgetattr(terminal.master) == terminal.original_modes
+        finally:
+            terminal.close()
+
+        # Failed resource expansion returns the literal invocation at its exact
+        # cursor with the original image; fixing the quote admits only once.
+        prompts = cwd / ".ion/prompts"
+        prompts.mkdir(parents=True)
+        (prompts / "launch.md").write_text("$1")
+        picture = cwd / "pixel.png"
+        picture.write_bytes(bytes.fromhex(
+            "89504e470d0a1a0a0000000d49484452000000010000000108060000001f15c489"
+            "0000000d49444154789c63f8cfc0f01f00050001ff89993d1d0000000049454e44ae426082"))
+        terminal = Terminal(cwd, env, mode, [*args, "--image", picture, "chat", "/launch 'RESTORED_🦀"])
+        try:
+            terminal.wait(lambda: "Input was not queued" in terminal.text())
+            assert len(requests) == before + 2
+            terminal.send("'\x13")
+            terminal.wait(lambda: len(requests) == before + 3 and b"state=done" in terminal.output)
+            content = requests[-1]["messages"][-1]["content"]
+            assert content[0] == {"type": "text", "text": "RESTORED_🦀"}, content
+            assert len(content) == 2 and content[1]["image_url"]["url"].startswith("data:image/png;base64,"), content
+            terminal.send(b"\x04")
+            terminal.wait_exit()
+        finally:
+            terminal.close()
+
+        # A launched model Turn can be stopped while its real exec child is
+        # running. Stop joins that child, keeps unsent text/cursor, and never
+        # replays the accepted launch prompt.
+        pid = None
+        terminal = Terminal(cwd, env, mode, [*args, "chat", "TASK_CHILD_LAUNCH"])
+        try:
+            terminal.wait(lambda: (cwd / "task.ready").exists())
+            pid = int((cwd / "task.pid").read_text())
+            terminal.send("UNSENT_Ab🦀\x1b[H")
+            terminal.output.clear()
+            terminal.send(b"\x03")
+            terminal.wait(lambda: "Turn stopped" in terminal.text())
+            try:
+                os.kill(pid, 0)
+                raise AssertionError("startup Stop did not join its exec child")
+            except ProcessLookupError:
+                pass
+            assert len(requests) == before + 4 and not (cwd / "task.effect").exists()
+            assert (cwd / "task.ready").exists(), "Stop was treated as rollback"
+            terminal.output.clear()
+            terminal.send("PREFIX_\x13")
+            terminal.wait(lambda: len(requests) == before + 5 and b"state=done" in terminal.output)
+            assert user_text(requests[-1]) == "PREFIX_UNSENT_Ab🦀", requests[-1]
+            terminal.send(b"\x04")
+            terminal.wait_exit()
+            assert termios.tcgetattr(terminal.master) == terminal.original_modes
+        finally:
+            terminal.close()
+            if pid is not None:
+                try:
+                    if os.getpgid(pid) == pid:
+                        os.killpg(pid, signal.SIGKILL)
+                except ProcessLookupError:
+                    pass
+        with sqlite3.connect(database) as connection:
+            facts = [json.loads(row[0]) for row in connection.execute("SELECT body FROM entries ORDER BY seq")]
+        ended = [fact["data"]["reason"] for fact in facts if fact["kind"] == "turn_ended"]
+        assert ended == ["completed", "completed", "completed", "cancelled", "completed"], ended
+        print(f"Launch {mode}: initial prompt, interactive continuation, resource/image recovery, Stop/join and no replay: OK", flush=True)
 
 
 def exercise_keybindings(work, base_env, endpoint):
@@ -596,7 +696,7 @@ def exercise_resume(work, base_env, endpoint):
             "args": ["-c", f"from pathlib import Path; Path({str(marker)!r}).touch()"],
         }}}))
         before_requests = len(requests)
-        terminal = Terminal(empty, env, mode, ["-r", "--tui-mode", mode])
+        terminal = Terminal(empty, env, mode, ["-r", "--tui-mode", mode, "NEVER_SUBMIT_CANCELLED_SELECTION"])
         try:
             terminal.wait(lambda: "No saved Sessions for this working directory" in terminal.text())
             terminal.send(b"\t")
@@ -805,7 +905,7 @@ def exercise_onboarding(work, base_env, endpoint):
         # No credentials, model calls or Session are needed to reach setup.
         result = subprocess.run([binary, "-p", "NEVER_SEND"], env=env, capture_output=True)
         assert result.returncode == 1 and b"no model selected" in result.stderr
-        terminal = Terminal(cwd, env, mode)
+        terminal = Terminal(cwd, env, mode, ["--tui-mode", mode, "NEVER_SUBMIT_CANCELLED_SETUP"])
         try:
             terminal.wait(lambda: "Choose default model" in terminal.text())
             assert not list(home.rglob("*.sqlite")), "setup allocated a Session"
@@ -890,7 +990,8 @@ def exercise_onboarding(work, base_env, endpoint):
         config = json.loads((home / "models.json").read_text())
         config["default"] = None
         (home / "models.json").write_text(json.dumps(config))
-        terminal = Terminal(cwd, env, mode)
+        prompt = "ONBOARD_LOCAL_" + mode
+        terminal = Terminal(cwd, env, mode, ["--tui-mode", mode, prompt])
         try:
             terminal.wait(lambda: "Choose default model" in terminal.text())
             terminal.send("local/fixture")
@@ -899,8 +1000,6 @@ def exercise_onboarding(work, base_env, endpoint):
             terminal.send(b"\r")
             terminal.wait(lambda: "›" in terminal.text())
             assert "API key:" not in terminal.text(), "keyless route requested a credential"
-            prompt = "ONBOARD_LOCAL_" + mode
-            terminal.send(prompt + "\r")
             terminal.wait(lambda: "DONE_" + prompt in terminal.text())
             assert len(requests) == 1 and user_text(requests[0]) == prompt, requests
             assert "DISPOSABLE" not in json.dumps(requests)
@@ -928,6 +1027,7 @@ with tempfile.TemporaryDirectory(prefix="ion-input-") as temporary:
         exercise_configuration(work, env, f"http://127.0.0.1:{server.server_port}/v1/chat/completions")
         exercise_keybindings(work, env, f"http://127.0.0.1:{server.server_port}/v1/chat/completions")
         exercise_tasks(work, env)
+        exercise_launch(work, env, f"http://127.0.0.1:{server.server_port}/v1/chat/completions")
         # Display sanitation must not bypass the secret reader's input guard.
         terminal = Terminal(work, env, "inline", ["login", "unsafe\x1b[31mprovider"])
         try:

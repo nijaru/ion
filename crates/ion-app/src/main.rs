@@ -390,7 +390,7 @@ async fn run_cli(cli: Invocation) -> Result<()> {
         }
         action => {
             let keys = if cli.resume_session
-                || (matches!(action, Action::Chat)
+                || (matches!(action, Action::Chat { .. })
                     && io::stdin().is_terminal()
                     && io::stdout().is_terminal())
             {
@@ -526,7 +526,7 @@ async fn run_cli(cli: Invocation) -> Result<()> {
                 None => cwd.as_path(),
             };
             let previous = existing.as_ref().and_then(|view| view.last_model.clone());
-            let interactive_setup = matches!(action, Action::Chat)
+            let interactive_setup = matches!(action, Action::Chat { .. })
                 && io::stdin().is_terminal()
                 && io::stdout().is_terminal();
             let selection = models.choose(cli.model, previous, credentials);
@@ -598,8 +598,8 @@ async fn run_cli(cli: Invocation) -> Result<()> {
             // Terminal and bidirectional RPC own a live question responder.
             // One-shot headless, compaction and managed children have no answer
             // channel and therefore no declared question tool.
-            let questions =
-                matches!(&action, Action::Chat | Action::Rpc).then(ion_host::QuestionCustody::new);
+            let questions = matches!(&action, Action::Chat { .. } | Action::Rpc)
+                .then(ion_host::QuestionCustody::new);
             let mut application = ion_host::CodingApplication::new(host.clone(), external_tools)
                 .with_code_mode(cli.code_mode);
             if cli.read_only {
@@ -646,7 +646,7 @@ async fn run_cli(cli: Invocation) -> Result<()> {
                 for diagnostic in setup.commands().diagnostics() {
                     startup_diagnostics.push(format!("[commands: {}]", metadata_field(diagnostic)));
                 }
-                if !matches!(&action, Action::Chat) {
+                if !matches!(&action, Action::Chat { .. }) {
                     for diagnostic in &startup_diagnostics {
                         print_stderr(format_args!("{diagnostic}"))?;
                     }
@@ -654,7 +654,10 @@ async fn run_cli(cli: Invocation) -> Result<()> {
                 enum Client {
                     Headless(headless::Request, bool),
                     Rpc,
-                    Terminal(Vec<ion_ai::LoadedImage>),
+                    Terminal {
+                        prompt: Option<String>,
+                        images: Vec<ion_ai::LoadedImage>,
+                    },
                 }
                 // Complete fallible preflight before transferring cleanup custody.
                 // Headless resource expansion precedes piped context; its prepared
@@ -676,7 +679,7 @@ async fn run_cli(cli: Invocation) -> Result<()> {
                     }
                     Action::Compact => Client::Headless(headless::Request::Compact, false),
                     Action::Rpc => Client::Rpc,
-                    Action::Chat => Client::Terminal(images),
+                    Action::Chat { prompt } => Client::Terminal { prompt, images },
                     _ => unreachable!("non-agent action handled above"),
                 };
                 // Each client immediately owns shared control and always joins it.
@@ -686,12 +689,13 @@ async fn run_cli(cli: Invocation) -> Result<()> {
                 match client {
                     Client::Headless(request, json) => headless::run(setup, request, json).await,
                     Client::Rpc => rpc::run(setup, host).await,
-                    Client::Terminal(images) => {
+                    Client::Terminal { prompt, images } => {
                         terminal_client::chat(terminal_client::ChatInit {
                             setup,
                             services: host,
                             images,
                             startup_diagnostics,
+                            initial_prompt: prompt,
                             tui_mode: cli.tui_mode,
                             keys,
                         })

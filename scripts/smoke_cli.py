@@ -68,6 +68,7 @@ with tempfile.TemporaryDirectory(prefix="ion-cli-") as temporary:
             (["--json", "--model", "first/vendor/model"], b"bare pipeline", "bare pipeline"),
             (["--model", "first/vendor/model", "-p", "argument"], b"literal context\n", "literal context\n\nargument"),
             (["run", "argument", "--model", "first/vendor/model"], b"", "argument"),
+            (["--model", "first/vendor/model", "  bare 🦀\n "], b"", "  bare 🦀\n "),
             (["-p", "--model", "first/vendor/model", "separate mode"], b"", "separate mode"),
             (["--model", "first/vendor/model", "-p", "--", "- dash-leading"], b"", "- dash-leading"),
             (["--provider", "first", "run", "--model", "vendor/model", "paired"], b"", "paired"),
@@ -113,6 +114,8 @@ with tempfile.TemporaryDirectory(prefix="ion-cli-") as temporary:
             (["-p"], b"x" * (8 * 1024 * 1024 + 1), b"exceeds 8 MiB"),
             (["--model", "first/vendor/model", "auth"], b"", b"does not apply"),
             (["auth", "--model", "first/vendor/model"], b"", b"unexpected argument"),
+            (["chat", "x" * (64 * 1024 + 1)], b"", b"exceeds 64 KiB"),
+            (["unused prompt", "auth"], b"", b"put the prompt after"),
         ]:
             result = run("--cwd", workspace, *args, input=piped, check=False) if "auth" not in args else run(*args, input=piped, check=False)
             assert result.returncode != 0 and error in result.stderr, (args, result.stderr)

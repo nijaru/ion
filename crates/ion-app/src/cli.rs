@@ -98,8 +98,8 @@ pub(crate) enum Action {
     Resources,
     /// Submit one prompt and print the committed final answer.
     Run { prompt: Option<String> },
-    /// Open the terminal chat client.
-    Chat,
+    /// Open terminal chat, optionally starting with a prompt.
+    Chat { prompt: Option<String> },
     /// Configure explicitly connected MCP tool servers.
     Mcp {
         #[command(subcommand)]
@@ -266,8 +266,8 @@ fn command() -> Command {
             .about("Ion: a local coding agent")
             .after_help("Without a command, open chat in a terminal or submit piped stdin headlessly.\nOptions may precede a command, but must apply to that command. See ion COMMAND --help.")
             .args(options.iter().cloned())
-            .arg(Arg::new("print_prompt").value_name("PROMPT").requires("print")
-                .help("Prompt for --print; omit to read piped stdin")),
+            .arg(Arg::new("prompt").value_name("PROMPT")
+                .help("Initial prompt; interactive in a terminal, headless with --print or redirected I/O")),
     )
     .mut_subcommands(|child| {
         let owner = child.get_name().to_owned();
@@ -304,18 +304,31 @@ pub(crate) fn parse() -> Result<Invocation> {
 fn normalize(mut matches: ArgMatches, interactive: bool) -> Result<Invocation> {
     let explicit = matches.subcommand().map(|(name, _)| name.to_owned());
     let print = matches.remove_one::<bool>("print").unwrap_or(false);
-    let prompt = matches.remove_one::<String>("print_prompt");
+    let prompt = matches.remove_one::<String>("prompt");
     ensure!(
         !print || explicit.is_none(),
         "--print cannot be combined with a subcommand"
+    );
+    ensure!(
+        explicit.is_none() || prompt.is_none(),
+        "put the prompt after chat or run, not before a subcommand"
     );
     let action = if explicit.is_some() {
         Action::from_arg_matches(&matches)?
     } else if print || !interactive {
         Action::Run { prompt }
     } else {
-        Action::Chat
+        Action::Chat { prompt }
     };
+    if let Action::Chat {
+        prompt: Some(prompt),
+    } = &action
+    {
+        ensure!(
+            prompt.len() <= crate::terminal_client::MAX_DRAFT,
+            "interactive initial prompt exceeds 64 KiB"
+        );
+    }
     let owner = explicit.as_deref().unwrap_or(match action {
         Action::Run { .. } => "run",
         _ => "chat",

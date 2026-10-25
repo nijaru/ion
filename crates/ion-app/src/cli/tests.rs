@@ -56,6 +56,11 @@ fn headless_modes_share_one_action_and_explicit_chat_stays_explicit() {
         (vec!["ion", "run"], true, None),
         (vec!["ion", "run", "hello"], true, Some("hello")),
         (vec!["ion"], false, None),
+        (
+            vec!["ion", "  bare 🦀 prompt\n"],
+            false,
+            Some("  bare 🦀 prompt\n"),
+        ),
     ] {
         let cli = parse(&args, interactive).unwrap();
         let Action::Run { prompt } = cli.action else {
@@ -68,17 +73,45 @@ fn headless_modes_share_one_action_and_explicit_chat_stays_explicit() {
     }
     assert!(matches!(
         parse(&["ion"], true).unwrap().action,
-        Action::Chat
+        Action::Chat { prompt: None }
     ));
     assert!(matches!(
         parse(&["ion", "chat"], false).unwrap().action,
-        Action::Chat
+        Action::Chat { prompt: None }
     ));
     assert!(matches!(
         parse(&["ion", "rpc"], false).unwrap().action,
         Action::Rpc
     ));
     assert!(parse(&["ion", "-p", "hello", "auth"], true).is_err());
+}
+
+#[test]
+fn interactive_launch_preserves_one_prompt_and_rejects_unrecoverable_or_unused_text() {
+    let text = "  launch 🦀\nwith context  ";
+    for args in [
+        vec!["ion", text],
+        vec!["ion", "chat", text],
+        vec!["ion", "--model", "first/vendor/model", text],
+        vec!["ion", "chat", text, "--model", "first/vendor/model"],
+        vec!["ion", "--resume", text],
+    ] {
+        let cli = parse(&args, true).unwrap();
+        assert!(
+            matches!(cli.action, Action::Chat { prompt: Some(prompt) } if prompt == text),
+            "{args:?}"
+        );
+    }
+    for args in [
+        vec!["ion", text, "auth"],
+        vec!["ion", text, "chat"],
+        vec!["ion", "chat", "one", "two"],
+    ] {
+        assert!(parse(&args, true).is_err(), "{args:?}");
+    }
+    let exact = "🦀".repeat(crate::terminal_client::MAX_DRAFT / 4);
+    assert!(parse(&["ion", "chat", &exact], true).is_ok());
+    assert!(parse(&["ion", "chat", &format!("{exact}x")], true).is_err());
 }
 
 #[test]
@@ -98,11 +131,13 @@ fn resume_is_an_explicit_terminal_chooser_not_a_session_operand() {
         vec!["ion", "--resume", "rpc"],
         vec!["ion", "--resume", "run", "--json", "hello"],
         vec!["ion", "auth", "--resume"],
-        vec!["ion", "--resume", "saved"],
     ] {
         assert!(parse(&args, true).is_err(), "{args:?}");
     }
     assert!(!parse(&["ion"], true).unwrap().resume_session);
+    let cli = parse(&["ion", "--resume", "saved"], true).unwrap();
+    assert!(cli.resume_session);
+    assert!(matches!(cli.action, Action::Chat { prompt: Some(prompt) } if prompt == "saved"));
 }
 
 #[test]

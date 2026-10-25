@@ -59,7 +59,7 @@ use picker::{Picker, PickerValue, Pickers};
 use question::{QuestionAction, QuestionModal};
 pub use setup::{choose_session, setup_model};
 
-const MAX_DRAFT: usize = 64 * 1024;
+pub(crate) const MAX_DRAFT: usize = 64 * 1024;
 const LIVE_REGION_MAX_ROWS: usize = 12;
 const RESUME_TURN_LIMIT: usize = 6;
 const RESUME_ENTRY_LIMIT_WITHOUT_TURNS: usize = 32;
@@ -229,6 +229,7 @@ pub struct ChatInit {
     pub setup: ion_host::SessionSetup,
     pub images: Vec<LoadedImage>,
     pub startup_diagnostics: Vec<String>,
+    pub initial_prompt: Option<String>,
     pub tui_mode: TuiMode,
     pub(crate) keys: KeyBindings,
 }
@@ -247,6 +248,7 @@ pub async fn chat(init: ChatInit) -> Result<()> {
         images: init.images.into_iter().map(Into::into).collect(),
         ..Frontend::default()
     };
+    let mut initial_prompt = init.initial_prompt;
     let mut activity = Activity::default();
     let mut program = ProgramStatusState::default();
     let mut terminal_owner = None;
@@ -275,6 +277,15 @@ pub async fn chat(init: ChatInit) -> Result<()> {
             #[cfg(debug_assertions)]
             if std::env::var_os("ION_SMOKE_PANIC_AFTER_FIRST_DRAW").is_some() {
                 panic!("ION smoke panic after first terminal draw");
+            }
+            // CLI text is a prompt, not a simulated editor key: never interpret
+            // it as a terminal command or direct shell invocation. Attempt once
+            // after terminal entry/first draw; normal Host rejection/return keeps
+            // its literal source and images available in the editor.
+            if let Some(prompt) = initial_prompt.take() {
+                submit_editor(&mut runtime, &mut ui, Delivery::Start, EditorDraft::at_end(prompt));
+                poll_control = true;
+                continue;
             }
             let retry_inline = screen.reconciliation_pending() && !terminal.is_alt_screen()?;
             let event = tokio::select! {
