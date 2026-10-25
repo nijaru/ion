@@ -299,6 +299,7 @@ def exercise_configuration(work, base_env, endpoint):
             release.set()
             terminal.close()
         assert (home / "models.json").read_bytes() == defaults, "configuration changed global defaults"
+        assert not unexpected_connections, "configuration dispatched a native provider request: " + repr(unexpected_connections)
         print(f"Configuration {mode}: live settings, effort, API-key provider, model auth/cancel, secret quarantine and draft: OK", flush=True)
 
 
