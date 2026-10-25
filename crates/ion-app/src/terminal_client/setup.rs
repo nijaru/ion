@@ -83,7 +83,7 @@ async fn run(
             }
         }
         if ui.pickers.active().is_none() {
-            let mut picker = Picker::models(host)?;
+            let mut picker = Picker::models(host, None)?;
             picker.title = "Choose default model";
             ui.pickers.open(picker);
         }

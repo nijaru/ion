@@ -18,4 +18,4 @@ pub use input::{
 pub use program_status::ProgramStatus;
 pub use requirements::TerminalRequirements;
 pub use screen::{Frame, Screen, Surface};
-pub use session::{TerminalOutput, TerminalSession, TerminalWriter};
+pub use session::{SecretRejection, TerminalOutput, TerminalSession, TerminalWriter};

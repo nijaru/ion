@@ -33,6 +33,7 @@ mod attach;
 mod clipboard_input;
 mod command;
 mod composer;
+mod configuration;
 mod draft;
 mod editing;
 mod editor_recovery;
@@ -304,16 +305,7 @@ pub async fn chat(init: ChatInit) -> Result<()> {
                 InputEvent::Key(key) => {
                     if key.code == KeyCode::Char('z') && key.modifiers.contains(Modifiers::CONTROL) {
                         ui.break_edit_focus();
-                        terminal.leave_alt_screen()?;
-                        screen.invalidate();
-                        loop {
-                            if terminal.prepare_inline(screen).await?.is_some()
-                                && terminal.paint_inline(screen, |screen, out| screen.release_inline(out))?
-                            {
-                                break;
-                            }
-                            tokio::task::yield_now().await;
-                        }
+                        release_inline_surface(terminal, screen).await?;
                         terminal.suspend_to_job_control().await.context("suspend terminal job")?;
                         program.published = None;
                         *screen = new_inline_screen(terminal).await.context("restore chat after job suspension")?;
@@ -386,7 +378,7 @@ pub async fn chat(init: ChatInit) -> Result<()> {
                             .await?;
                         },
                         Action::PasteClipboard => start_clipboard_paste(&mut ui, runtime.agent()),
-                        Action::Pick(value) => apply_picker(&mut runtime, &mut ui, value)?,
+                        Action::Pick(value) => apply_picker(&mut runtime, &init.services, &mut ui, terminal, screen, &mut program, value).await?,
                     }
                     poll_control = true;
                 },
@@ -497,6 +489,22 @@ async fn new_inline_screen(terminal: &mut TerminalSession) -> Result<Screen> {
     }
 }
 
+// Yield only reconciled, unpublished primary cells before another terminal
+// consumer writes at the cursor. In particular, a secret prompt must not be
+// appended to an old editor line or leave stale identity chrome below it.
+async fn release_inline_surface(terminal: &mut TerminalSession, screen: &mut Screen) -> Result<()> {
+    terminal.leave_alt_screen()?;
+    screen.invalidate();
+    loop {
+        if terminal.prepare_inline(screen).await?.is_some()
+            && terminal.paint_inline(screen, |screen, out| screen.release_inline(out))?
+        {
+            return Ok(());
+        }
+        tokio::task::yield_now().await;
+    }
+}
+
 async fn login_in_terminal(
     terminal: &mut TerminalSession,
     screen: &mut Screen,
@@ -505,13 +513,18 @@ async fn login_in_terminal(
     program: &mut ProgramStatusState,
 ) -> Result<Result<()>> {
     anyhow::ensure!(!provider.is_empty(), "use /login PROVIDER");
+    release_inline_surface(terminal, screen).await?;
     // Command admission allows credential entry only while foreground control is idle.
     program.blocked_auth = true;
     program.publish(terminal, false)?;
-    let result = match terminal.read_secret(&format!("{provider} API key: ")).await {
-        Ok(key) => credentials.save_api_key(provider, &key),
-        Err(error) => Err(error).context("read login credential"),
-    };
+    let entry = terminal
+        .read_secret(&format!("{provider} API key: "))
+        .await
+        .context("read login credential")?;
+    let result = entry
+        .map_err(anyhow::Error::new)
+        .context("read login credential")
+        .and_then(|key| credentials.save_api_key(provider, &key));
     let restored = new_inline_screen(terminal).await;
     program.blocked_auth = false;
     program.publish(terminal, false)?;
@@ -882,26 +895,6 @@ impl Frontend {
         self.pending_history_banner = None;
     }
 
-    fn output_settings(&mut self, args: &str) -> Result<()> {
-        match args {
-            "" => self.print(format!("Tool output: {}. Use /settings compact or /settings expanded.\nThinking: {}. Use /settings thinking show or /settings thinking hide; independent of generation effort.\nTerminal-local: affects fullscreen and future publication, not existing native scrollback. Inline progress stays compact. Ctrl-O always inspects recorded source.", self.output_detail.label(), self.thinking_visibility.label())),
-            "compact" | "expanded" => {
-                self.output_detail = if args == "compact" { crate::tool_output::OutputDetail::Compact } else { crate::tool_output::OutputDetail::Expanded };
-                self.scroll = 0;
-                self.fullscreen_rows = 0;
-                self.status = format!("Tool output: {} · fullscreen and future publication; native history unchanged", self.output_detail.label());
-            }
-            "thinking show" | "thinking hide" => {
-                self.thinking_visibility = if args == "thinking show" { crate::transcript_render::ThinkingVisibility::Visible } else { crate::transcript_render::ThinkingVisibility::Hidden };
-                self.scroll = 0;
-                self.fullscreen_rows = 0;
-                self.status = format!("Thinking: {} · presentation only; native history unchanged", self.thinking_visibility.label());
-            }
-            _ => anyhow::bail!("use /settings compact|expanded or /settings thinking show|hide"),
-        }
-        Ok(())
-    }
-
     fn print(&mut self, message: String) {
         self.output
             .push(message, self.pending_history_target, false);
@@ -1057,6 +1050,12 @@ impl Frontend {
                 modifiers,
             } if modifiers.contains(Modifiers::CONTROL) => {
                 Action::Command(CommandInput::Shortcut(Builtin::Editor))
+            }
+            KeyEvent {
+                code: KeyCode::Char('l'),
+                modifiers,
+            } if modifiers.contains(Modifiers::CONTROL) => {
+                Action::Command(CommandInput::Shortcut(Builtin::Model))
             }
             KeyEvent {
                 code: KeyCode::Char('v'),

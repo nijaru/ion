@@ -147,6 +147,7 @@ async fn run_cli(cli: Invocation) -> Result<()> {
                 .read_secret(&format!("{provider} API key: "))
                 .await?;
             terminal.restore()?;
+            let key = key?;
             credentials.save_api_key(&provider, &key)?;
             print_stdout(format_args!(
                 "Saved {} credential.",

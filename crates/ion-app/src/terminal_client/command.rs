@@ -115,6 +115,30 @@ pub(super) async fn dispatch_command(
                 Err(error) => ui.status = format!("{error:#}"),
             }
         }
+        CommandKind::Builtin(Builtin::Model) if !args.is_empty() => {
+            let result = match args
+                .parse::<ModelRef>()
+                .map_err(anyhow::Error::msg)
+                .context("use /model PROVIDER/MODEL")
+            {
+                Ok(model) => {
+                    super::configuration::select_model(
+                        runtime, services, terminal, screen, program, model,
+                    )
+                    .await?
+                }
+                Err(error) => Err(error),
+            };
+            match result {
+                Ok(()) => ui.status = format!("Selected {args}"),
+                Err(error) => {
+                    if let Some(source) = input.into_editor() {
+                        ui.restore_editor(source);
+                    }
+                    ui.status = format!("{error:#}");
+                }
+            }
+        }
         CommandKind::Builtin(Builtin::Compact) if args.is_empty() => {
             let source = input
                 .into_editor()
@@ -243,7 +267,7 @@ pub(super) fn handle_builtin(
         Builtin::Settings => ui.output_settings(args)?,
         Builtin::Reasoning => {
             if args.is_empty() {
-                ui.print(format!("Generation effort: {}. Use /reasoning default|off|low|medium|high|budget:TOKENS; route support varies", runtime.session().reasoning()?));
+                ui.pickers.open(Picker::reasoning(runtime)?);
             } else {
                 let reasoning = args
                     .parse::<ion_ai::Reasoning>()
@@ -359,18 +383,11 @@ pub(super) fn handle_builtin(
                 ui.refresh_session(runtime.session())?;
             }
         }
-        Builtin::Model => {
-            if !args.is_empty() {
-                runtime.select_model(
-                    args.parse::<ModelRef>()
-                        .map_err(anyhow::Error::msg)
-                        .context("use /model PROVIDER/MODEL")?,
-                )?;
-                ui.status = format!("Selected {args}");
-            } else {
-                ui.pickers.open(Picker::models(services)?);
-            }
+        Builtin::Model if args.is_empty() => {
+            ui.pickers
+                .open(Picker::models(services, Some(runtime.agent().model()))?);
         }
+        Builtin::Login if args.is_empty() => ui.pickers.open(Picker::providers(services)?),
         Builtin::Logout => {
             anyhow::ensure!(!args.is_empty(), "use /logout PROVIDER");
             services.credentials().remove(args)?;

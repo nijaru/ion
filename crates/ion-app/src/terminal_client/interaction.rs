@@ -1,6 +1,7 @@
 //! Translate editor actions into typed Host admission; commands remain terminal UI.
 use anyhow::Result;
-use ion_host::{Delivery, SessionControl, UserInput};
+use ion_host::{Delivery, Host, SessionControl, UserInput};
+use ion_terminal::{Screen, TerminalSession};
 
 use super::{Builtin, EditorDraft, Frontend, PickerValue, navigation::apply_fork};
 
@@ -58,11 +59,20 @@ pub(super) fn submit_editor(
     }
 }
 
-pub(super) fn apply_picker(
+pub(super) async fn apply_picker(
     runtime: &mut SessionControl<EditorDraft>,
+    services: &Host,
     ui: &mut Frontend,
+    terminal: &mut TerminalSession,
+    screen: &mut Screen,
+    program: &mut super::ProgramStatusState,
     value: PickerValue,
 ) -> Result<()> {
+    if let PickerValue::Setting(setting) = value {
+        ui.apply_setting(setting);
+        ui.open_settings();
+        return Ok(());
+    }
     if let PickerValue::File { path, start, end } = value {
         ui.insert_file(path, start, end);
         return Ok(());
@@ -91,8 +101,38 @@ pub(super) fn apply_picker(
             };
         }
         PickerValue::Session(path) => runtime.switch_session(path),
-        PickerValue::Model(model) => runtime.select_model(model),
-        PickerValue::File { .. } => unreachable!("handled above"),
+        PickerValue::Model(model) => {
+            super::configuration::select_model(runtime, services, terminal, screen, program, model)
+                .await?
+        }
+        PickerValue::Reasoning(reasoning) => {
+            let result = runtime.select_reasoning(reasoning);
+            ui.status = match result {
+                Ok(()) => format!("Generation effort: {reasoning}"),
+                Err(error) => format!("{error:#}"),
+            };
+            return Ok(());
+        }
+        PickerValue::Login(provider) => {
+            if runtime.is_busy() {
+                ui.status = "This action is available after the operation".into();
+                return Ok(());
+            }
+            ui.status = match super::login_in_terminal(
+                terminal,
+                screen,
+                services.credentials(),
+                &provider,
+                program,
+            )
+            .await?
+            {
+                Ok(()) => format!("Saved {provider} API key; environment keys take precedence"),
+                Err(error) => format!("{error:#}"),
+            };
+            return Ok(());
+        }
+        PickerValue::File { .. } | PickerValue::Setting(_) => unreachable!("handled above"),
     };
     match result {
         Ok(()) => {

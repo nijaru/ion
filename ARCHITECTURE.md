@@ -1091,10 +1091,26 @@ semantics. Normal composer chrome identifies the workspace, named or short-ID
 Session, current bound model and help entry point. Derive model identity from the
 live binding, not the last Turn; presentation neither owns selection nor creates
 Session facts. Budget orientation behind the editable cursor, discovery and
-operation controls. Release mutable inline cells on exit rather than archiving
-them as conversation. Help groups the existing command inventory and exposes
+operation controls. Release mutable inline cells on exit or before masked input
+rather than archiving them as conversation or writing a secret prompt into stale
+editor chrome. Help groups the existing command inventory and exposes
 argument grammar and keyboard controls on request; its responses use the same
 complete terminal-local publication as other client commands.
+
+Routine configuration commands offer choices as well as explicit arguments.
+Settings show current terminal-local values and remain open for repeated changes;
+they never select generation effort or rewrite published history. Effort choices
+come from the bound agent's adapter preflight for coding and summary, with the
+current preference preselected; the client owns no parallel wire-capability table.
+API-key provider discovery reuses known/configured model choices and labels local
+credential sources, not account authentication. Model selection marks the current
+binding; Ctrl-L opens it while retaining the draft, cursor and attachments. Missing
+required credentials use the existing masked reader before shared-control binding
+replacement. Reject busy or clipboard-owned admission before entering that reader.
+Cancellation preserves the old binding and saved default. A successful, explicit
+key save is not rolled back by a later binding failure; Session model selection
+never saves a global default. Terminal restoration failures remain fatal rather
+than returning input custody to an uncertain terminal.
 
 OSC 7501 root status is derived from typed operation/client state and
 emitted by the physical publication owner; a report replaces the root record,

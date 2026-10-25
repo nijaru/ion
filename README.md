@@ -118,15 +118,21 @@ not displace the latest conversation in `--continue` or `sessions`. An
 existing session uses its recorded directory, and an explicit `--cwd` must
 match it. Headless runs print the
 session ID to stderr. In the TUI, `/new`, `/clone`, `/tree`, `/fork`, `/fork-after`, `/resume`, `/name`, `/session`,
-`/model` and `/compact` manage the conversation; `/login PROVIDER` and `/logout PROVIDER`
-manage saved keys. `/tasks` lists application-owned background runs with content-free
+`/model` and `/compact` manage the conversation; `/login` chooses an API-key
+provider, and `/login PROVIDER` or `/logout PROVIDER` manages its saved key. `/tasks` lists application-owned background runs with content-free
 activity, elapsed time and absolute last-observed activity. `/tasks status ID` adds
 the bounded, literal provisional preview and error cause without waiting or
 acknowledging. Thinking content and tool arguments/results stay hidden; previews
 are not answers or committed facts. `/tasks result ID` requires actual joining;
 `/tasks cancel ID` requests stop but cleanup may remain unjoined. Use
 `/tasks acknowledge ID` to release joined custody without deleting committed facts. The TUI model picker searches catalog and configured
-custom routes. A resumed session restores its model; `ion use` sets the
+custom routes, marks the current model and preselects it. Ctrl-L opens that picker
+without replacing the draft or its cursor/attachments. Choosing a native model
+with a missing key opens the same hidden credential reader as first-use setup;
+Ctrl-C cancels key entry without changing the current model. Model selection never
+changes the saved default. Saving a key is local storage, not remote authentication;
+an explicitly saved key remains saved if later binding preflight fails. Environment
+keys take precedence over saved keys. A resumed session restores its model; `ion use` sets the
 default for new sessions. Custom routes and that default are published together
 in `~/.ion/models.json`, with concurrent saves serialized. Ion keeps user
 configuration, credentials, resources and saved Sessions under `~/.ion`; set
@@ -144,7 +150,8 @@ confirming a selection switches through idle shared control. This is a flat
 catalog, not inferred fork ancestry; `/tree` explores context paths within a Session.
 
 Use `--reasoning high` for headless/chat/RPC startup or manual compaction,
-`/reasoning high` in an idle terminal, or RPC
+`/reasoning` for searchable, adapter-supported choices with the current effort
+preselected, `/reasoning high` in an idle terminal, or RPC
 `{"id":"r","type":"set_reasoning","effort":"high"}`. Values are `default`,
 `off`, `low`, `medium`, `high` and `budget:TOKENS`. The preference is
 Session-owned: reopen and clone retain it, forks restore the selected Turn's
@@ -163,7 +170,7 @@ accepts `default` and `off`, both disabling thinking. Other Chat routes accept
 the five non-budget choices. DeepSeek maps medium/high to its high setting;
 MiMo maps all three levels to enabled thinking. Every current HTTP route refuses
 exact token budgets. Effort affects future generation, not retained historical
-reasoning or signed continuation. `/settings thinking` remains display-only.
+reasoning or signed continuation. `/settings thinking show|hide` remains display-only.
 
 Terminal chat is inline-first. Settled transcript rows are appended once to
 native terminal scrollback; Ion keeps only the active composer/progress region
@@ -245,8 +252,10 @@ additional rows are omitted with an ellipsis. Ctrl-O or `/tool N` shows the full
 recorded capture, including truncation, without interpreting its contents as
 Markdown.
 
-`/settings` shows the current tool-output presentation; `/settings compact`
-(the default) or `/settings expanded` changes it without changing model behavior.
+`/settings` opens a searchable list showing tool-output and thinking presentation.
+Enter (or Space with an empty search) cycles the selected value immediately; the
+list stays open until Esc. `/settings compact` (the default) or `/settings expanded`
+also changes output detail without changing model behavior.
 Compact shows the first three read-content lines and the last three lines of
 both command streams (four for direct shell), with explicit omission notices.
 Expanded shows all recorded read/command output and edit capture, and separates

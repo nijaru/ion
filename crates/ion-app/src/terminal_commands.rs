@@ -69,7 +69,7 @@ commands! {
     Prompts => (Resources, "prompts", "", "List available prompt templates"),
     Commands => (Resources, "commands", "", "List enabled executable user commands"),
     Reload => (Resources, "reload", "", "Reload project instructions, resources and command metadata"),
-    Login => (Models, "login", "PROVIDER", "Save a credential using masked input"),
+    Login => (Models, "login", "[PROVIDER]", "Choose an API-key provider or save its key using masked input"),
     Logout => (Models, "logout", "PROVIDER", "Remove a saved credential"),
     Quit => (General, "quit", "", "Exit the terminal client"),
 }
@@ -147,6 +147,7 @@ impl Builtin {
                     "  Ctrl-Z suspends on Unix; fg resumes the same chat.\n",
                     "\n",
                     "Views & evidence\n",
+                    "  Ctrl-L chooses a model without replacing the draft.\n",
                     "  Ctrl-O opens conversation details; Esc or Ctrl-O closes them.\n",
                     "  Ctrl-X copies the last answer, or selected tool evidence in its detail view.\n",
                     "\n",

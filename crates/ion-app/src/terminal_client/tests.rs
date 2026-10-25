@@ -196,7 +196,11 @@ fn command_actions_own_exact_editor_sources() {
 
 #[test]
 fn command_shortcuts_leave_editor_text_cursor_and_attachments_owned_by_editor() {
-    for (key, builtin) in [('x', Builtin::Copy), ('g', Builtin::Editor)] {
+    for (key, builtin) in [
+        ('x', Builtin::Copy),
+        ('g', Builtin::Editor),
+        ('l', Builtin::Model),
+    ] {
         let mut ui = Frontend {
             draft: "unsent 🦀 draft".into(),
             cursor: 3,
@@ -1052,6 +1056,160 @@ fn shell_syntax_and_output_settings_remain_editor_operations() {
         crate::transcript_render::ThinkingVisibility::Visible
     );
     assert!(ui.output_settings("thinking sometimes").is_err());
+}
+
+#[tokio::test]
+async fn configuration_selectors_preserve_unsent_input_without_admission() {
+    let mut fixture = Fixture::new();
+    let mut ui = Frontend {
+        draft: "unsent 🦀".into(),
+        cursor: 3,
+        images: vec![image("attached")],
+        ..Frontend::default()
+    };
+    for builtin in [
+        Builtin::Settings,
+        Builtin::Reasoning,
+        Builtin::Login,
+        Builtin::Model,
+    ] {
+        command::handle_builtin(&mut fixture.control, &fixture.host, &mut ui, builtin, "").unwrap();
+        assert!(
+            ui.pickers.active().is_some(),
+            "{builtin:?} must offer choices"
+        );
+        assert!(matches!(
+            ui.key(KeyEvent::new(KeyCode::Esc, Modifiers::NONE), None, None),
+            Action::None
+        ));
+        assert!(ui.pickers.active().is_none());
+        assert_eq!((ui.draft.as_str(), ui.cursor), ("unsent 🦀", 3));
+        assert_note(&ui.images[0], "attached");
+        assert!(fixture.control.session().view().unwrap().entries.is_empty());
+        assert!(!fixture.control.is_busy());
+    }
+    fixture.control.shutdown().await;
+}
+
+#[test]
+fn settings_cycle_only_rendered_choices_and_keep_search_and_draft() {
+    let mut ui = Frontend {
+        draft: "unsent 🦀".into(),
+        cursor: 3,
+        thinking_visibility: crate::transcript_render::ThinkingVisibility::Visible,
+        ..Frontend::default()
+    };
+    ui.output_settings("").unwrap();
+    assert!(matches!(
+        ui.key(KeyEvent::new(KeyCode::Enter, Modifiers::NONE), None, None),
+        Action::None
+    ));
+    for code in [KeyCode::Char(' '), KeyCode::Enter] {
+        modal_rows(&mut ui, None, None, 100, 20);
+        let Action::Pick(PickerValue::Setting(setting)) =
+            ui.key(KeyEvent::new(code, Modifiers::NONE), None, None)
+        else {
+            panic!("rendered settings can cycle");
+        };
+        ui.apply_setting(setting);
+        ui.open_settings();
+        assert!(ui.pickers.active().is_some());
+        assert!(
+            matches!(
+                ui.key(KeyEvent::new(KeyCode::Enter, Modifiers::NONE), None, None),
+                Action::None
+            ),
+            "updated choices require another render"
+        );
+    }
+    assert_eq!(ui.output_detail, crate::tool_output::OutputDetail::Compact);
+    ui.pickers.insert("Thinking");
+    modal_rows(&mut ui, None, None, 100, 20);
+    let Action::Pick(PickerValue::Setting(setting)) =
+        ui.key(KeyEvent::new(KeyCode::Enter, Modifiers::NONE), None, None)
+    else {
+        panic!("filtered setting is selectable");
+    };
+    ui.apply_setting(setting);
+    ui.open_settings();
+    assert_eq!(ui.pickers.active().unwrap().query, "Thinking");
+    assert_eq!(
+        ui.thinking_visibility,
+        crate::transcript_render::ThinkingVisibility::Hidden
+    );
+    assert_eq!((ui.draft.as_str(), ui.cursor), ("unsent 🦀", 3));
+}
+
+#[tokio::test]
+async fn reasoning_choices_use_adapter_support_and_preselect_current() {
+    let mut fixture = Fixture::new();
+    for (wire, expected) in [
+        (
+            Wire::ChatCompletions,
+            vec![
+                ion_ai::Reasoning::ProviderDefault,
+                ion_ai::Reasoning::Off,
+                ion_ai::Reasoning::Low,
+                ion_ai::Reasoning::Medium,
+                ion_ai::Reasoning::High,
+            ],
+        ),
+        (
+            Wire::LlamaCppNoThinking,
+            vec![ion_ai::Reasoning::ProviderDefault, ion_ai::Reasoning::Off],
+        ),
+        (
+            Wire::AnthropicMessages,
+            vec![ion_ai::Reasoning::ProviderDefault],
+        ),
+    ] {
+        fixture
+            .control
+            .select_reasoning(ion_ai::Reasoning::ProviderDefault)
+            .unwrap();
+        let selected = fixture
+            .host
+            .models()
+            .save_default(&SavedSelection {
+                provider: "effort".into(),
+                model: "model".into(),
+                endpoint: Some("http://127.0.0.1:1".into()),
+                wire: Some(wire),
+                api_key_env: None,
+                context_window_tokens: None,
+                max_output_tokens: None,
+                image_input: false,
+            })
+            .unwrap();
+        fixture.control.select_model(selected.identity()).unwrap();
+        let current = *expected.last().unwrap();
+        fixture.control.select_reasoning(current).unwrap();
+        let before = fixture.control.session().view().unwrap().entries.len();
+        let picker = Picker::reasoning(&fixture.control).unwrap();
+        let actual: Vec<_> = picker
+            .items
+            .iter()
+            .map(|item| match item.value {
+                PickerValue::Reasoning(value) => value,
+                _ => panic!("only reasoning choices"),
+            })
+            .collect();
+        assert_eq!(actual, expected);
+        assert!(
+            matches!(picker.items[picker.selected].value, PickerValue::Reasoning(value) if value == current)
+        );
+        assert!(picker.items[picker.selected].label.contains("current"));
+        assert_eq!(
+            fixture.control.session().view().unwrap().entries.len(),
+            before
+        );
+        assert_eq!(fixture.control.session().reasoning().unwrap(), current);
+    }
+    let picker = Picker::models(&fixture.host, Some(fixture.control.agent().model())).unwrap();
+    assert!(
+        matches!(&picker.items[picker.selected].value, PickerValue::Model(value) if value == fixture.control.agent().model())
+    );
+    fixture.control.shutdown().await;
 }
 
 #[test]

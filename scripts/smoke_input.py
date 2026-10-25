@@ -201,6 +201,107 @@ def exercise_orientation(work, env, endpoint):
         print(f"Orientation {mode}: live binding, name/new, detailed help and exact draft (tiny resize in fullscreen): OK", flush=True)
 
 
+def exercise_configuration(work, base_env, endpoint):
+    home = work / "configuration-ion"
+    env = dict(base_env, ION_HOME=str(home), HTTP_PROXY=endpoint, HTTPS_PROXY=endpoint, ALL_PROXY=endpoint,
+               NO_PROXY="127.0.0.1,localhost")
+    for provider, extra in (("login-only", []),):
+        subprocess.run([binary, "use", provider, "model", "--endpoint", endpoint,
+                        "--wire", "chat-completions", *extra], env=env, check=True, capture_output=True)
+    subprocess.run([binary, "use", "smoke", "smoke-model", "--endpoint", endpoint,
+                    "--wire", "chat-completions"], env=env, check=True, capture_output=True)
+    defaults = (home / "models.json").read_bytes()
+    for mode in ("inline", "fullscreen"):
+        credential = home / "credentials/openai.key"
+        credential.unlink(missing_ok=True)
+        cwd = work / (mode + "-configuration")
+        cwd.mkdir()
+        before = len(requests)
+        terminal = Terminal(cwd, env, mode)
+        try:
+            terminal.wait(lambda: "smoke/smoke-model · /help" in terminal.text())
+            release.clear()
+            terminal.send("WAIT_HISTORY\r")
+            terminal.wait(lambda: len(requests) == before + 1)
+            terminal.output.clear()
+            terminal.send("/model openai/gpt-5.4-mini\r")
+            terminal.wait(lambda: "This action is available after the operation" in terminal.text())
+            assert "API key:" not in terminal.text() and not credential.exists(), "busy model selection solicited a key"
+            terminal.send("\x15")
+            release.set()
+            terminal.wait(lambda: b"state=done" in terminal.output)
+            before = len(requests)
+            terminal.send("/settings\r")
+            terminal.wait(lambda: "Settings · Enter/Space" in terminal.text())
+            terminal.send(" ")
+            terminal.wait(lambda: "Tool output: expanded" in terminal.text())
+            terminal.send("Thinking")
+            terminal.paint()
+            terminal.send("\r")
+            terminal.wait(lambda: "presentation only; native history unchanged" in terminal.text())
+            terminal.send("\x1b")
+            terminal.paint()
+            terminal.output.clear()
+            terminal.send("/reasoning\r")
+            terminal.wait(lambda: "Generation effort" in terminal.text())
+            terminal.send("high")
+            terminal.paint()
+            terminal.send("\r")
+            terminal.wait(lambda: "Generation effort: high" in terminal.text())
+            terminal.send("/login\r")
+            terminal.wait(lambda: "API-key provider" in terminal.text())
+            terminal.send("login-only")
+            terminal.paint()
+            terminal.send("\r")
+            terminal.wait(lambda: "login-only API key:" in terminal.text())
+            assert not termios.tcgetattr(terminal.master)[3] & termios.ECHO
+            terminal.send("DISPOSABLE_LOGIN_KEY\r")
+            terminal.wait(lambda: "Saved login-only API key" in terminal.text())
+            terminal.output.clear()
+            terminal.send("/model openai/gpt-5.4-mini\r")
+            terminal.wait(lambda: "openai API key:" in terminal.text())
+            terminal.send("\x03")
+            terminal.wait(lambda: "read login credential" in terminal.text())
+            assert not credential.exists(), "cancelled model auth saved a key"
+            terminal.wait(lambda: "smoke/smoke-model · /help" in terminal.text())
+            terminal.send("\x15")
+            terminal.paint()
+            terminal.output.clear()
+            # The shortcut must retain the literal and cursor. Native route
+            # selection is local; return to loopback before any model request.
+            terminal.send("DRAFT_🦀\x01\x0c")
+            terminal.wait(lambda: "Choose model" in terminal.text())
+            terminal.send("openai/gpt-5.4-mini")
+            terminal.paint()
+            terminal.send("\r")
+            terminal.wait(lambda: "openai API key:" in terminal.text())
+            terminal.send("DISPOSABLE_MODEL_KEY\rSECRET_TAIL_SHOULD_NOT_SUBMIT\r")
+            terminal.wait(lambda: "openai/gpt-5.4-mini · /help" in terminal.text())
+            assert credential.read_text() == "DISPOSABLE_MODEL_KEY"
+            assert credential.stat().st_mode & 0o777 == 0o600
+            assert len(requests) == before, "configuration or secret typeahead admitted input"
+            assert "DISPOSABLE_" not in terminal.text(), "credential was echoed"
+            terminal.output.clear()
+            terminal.send("\x0c")
+            terminal.wait(lambda: "Choose model" in terminal.text())
+            terminal.send("smoke/smoke-model")
+            terminal.paint()
+            terminal.send("\r")
+            terminal.wait(lambda: "smoke/smoke-model · /help" in terminal.text())
+            terminal.output.clear()
+            terminal.send("PREFIX_\r")
+            terminal.wait(lambda: len(requests) == before + 1)
+            assert user_text(requests[-1]) == "PREFIX_DRAFT_🦀", requests[-1]
+            assert requests[-1]["model"] == "smoke-model" and requests[-1]["reasoning_effort"] == "high"
+            terminal.wait(lambda: b"state=done" in terminal.output)
+            terminal.finish()
+        finally:
+            release.set()
+            terminal.close()
+        assert (home / "models.json").read_bytes() == defaults, "configuration changed global defaults"
+        print(f"Configuration {mode}: live settings, effort, API-key provider, model auth/cancel, secret quarantine and draft: OK", flush=True)
+
+
 def exercise_onboarding(work, base_env, endpoint):
     for mode in ("inline", "fullscreen"):
         cwd = work / (mode + "-onboarding")
@@ -339,6 +440,7 @@ with tempfile.TemporaryDirectory(prefix="ion-input-") as temporary:
         exercise_onboarding(work, env, f"http://127.0.0.1:{server.server_port}/v1")
         subprocess.run([binary, "use", "smoke", "smoke-model", "--endpoint", f"http://127.0.0.1:{server.server_port}/v1/chat/completions", "--wire", "chat-completions"], env=env, check=True, capture_output=True)
         exercise_orientation(work, env, f"http://127.0.0.1:{server.server_port}/v1/chat/completions")
+        exercise_configuration(work, env, f"http://127.0.0.1:{server.server_port}/v1/chat/completions")
         # Display sanitation must not bypass the secret reader's input guard.
         terminal = Terminal(work, env, "inline", ["login", "unsafe\x1b[31mprovider"])
         try:

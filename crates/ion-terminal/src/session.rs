@@ -19,6 +19,7 @@ use modes::TerminalState;
 
 #[path = "secret.rs"]
 mod secret;
+pub use secret::SecretRejection;
 
 type State = TerminalState<Stdout>;
 static PANIC_OWNER: Mutex<Weak<Mutex<State>>> = Mutex::new(Weak::new());

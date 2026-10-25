@@ -19,6 +19,9 @@ const MAX_ENTRIES: usize = 100_000;
 pub(super) enum PickerValue {
     Session(PathBuf),
     Model(ModelRef),
+    Reasoning(ion_ai::Reasoning),
+    Login(String),
+    Setting(super::configuration::Setting),
     Fork(ForkPickerValue),
     Context(super::navigation::ContextPickerValue),
     File {
@@ -42,40 +45,6 @@ pub(super) struct Picker {
 }
 
 impl Picker {
-    pub fn models(services: &ion_host::Host) -> Result<Self> {
-        let items = services
-            .models()
-            .choices(services.credentials())?
-            .into_iter()
-            .map(|choice| {
-                let option = choice.selected;
-                PickerItem {
-                    label: format!(
-                        "{}/{}  {}  {}",
-                        option.provider,
-                        option.model,
-                        choice.label,
-                        if option.requires_key
-                            && choice.credential == ion_host::CredentialStatus::Missing
-                        {
-                            "needs API key"
-                        } else {
-                            "ready"
-                        }
-                    ),
-                    detail: None,
-                    value: PickerValue::Model(option.identity()),
-                }
-            })
-            .collect();
-        Ok(Self {
-            title: "Choose model",
-            query: String::new(),
-            selected: 0,
-            items,
-        })
-    }
-
     pub fn matches(&self) -> Vec<usize> {
         let query = self.query.to_ascii_lowercase();
         self.items
@@ -427,6 +396,30 @@ impl Pickers {
                 picker.selected = 0;
                 self.rendered_selected = None;
             }
+            KeyCode::Enter | KeyCode::Char(' ')
+                if !loading
+                    && (key.code == KeyCode::Enter
+                        || (key.modifiers.is_empty()
+                            && picker.query.is_empty()
+                            && picker
+                                .items
+                                .iter()
+                                .any(|item| matches!(item.value, PickerValue::Setting(_))))) =>
+            {
+                let index = picker.matches().get(picker.selected).copied();
+                let index = index.filter(|index| self.rendered_selected == Some(*index));
+                if let Some(index) = index
+                    && let PickerValue::Setting(setting) = picker.items[index].value
+                {
+                    self.rendered_selected = None;
+                    return Some(PickerValue::Setting(setting));
+                }
+                let value = index.map(|index| picker.items.remove(index).value);
+                if value.is_some() {
+                    self.close();
+                }
+                return value;
+            }
             KeyCode::Char(ch)
                 if !key.modifiers.contains(Modifiers::CONTROL)
                     && !key.modifiers.contains(Modifiers::ALT) =>
@@ -434,16 +427,6 @@ impl Pickers {
                 picker.query.push(ch);
                 picker.selected = 0;
                 self.rendered_selected = None;
-            }
-            KeyCode::Enter if !loading => {
-                let index = picker.matches().get(picker.selected).copied();
-                let value = index
-                    .filter(|index| self.rendered_selected == Some(*index))
-                    .map(|index| picker.items.remove(index).value);
-                if value.is_some() {
-                    self.close();
-                }
-                return value;
             }
             _ => {}
         }

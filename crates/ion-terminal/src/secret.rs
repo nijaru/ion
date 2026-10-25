@@ -6,11 +6,34 @@ use crate::{InputEvent, KeyCode, Modifiers};
 // Credential entry is not a composer: no rendering, history or model admission.
 const MAX_SECRET_BYTES: usize = 4096;
 
+/// User entry outcomes, distinct from failure of the physical terminal lease.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SecretRejection {
+    Cancelled,
+    Ended,
+    Invalid,
+}
+
+impl std::fmt::Display for SecretRejection {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str(match self {
+            Self::Cancelled => "secret entry cancelled",
+            Self::Ended => "secret input ended",
+            Self::Invalid => "secret must be a valid single line of at most 4096 bytes",
+        })
+    }
+}
+impl std::error::Error for SecretRejection {}
+
 impl TerminalSession {
     /// Read a hidden single-line secret using the existing raw terminal lease.
     /// Quarantine type-ahead before the prompt and after success, rejection or
     /// cancellation. Dropping this future also quarantines its unread suffix.
-    pub async fn read_secret(&mut self, prompt: &str) -> io::Result<String> {
+    /// Only the inner rejection permits returning to ordinary input admission.
+    pub async fn read_secret(
+        &mut self,
+        prompt: &str,
+    ) -> io::Result<Result<String, SecretRejection>> {
         self.check_active()?;
         if prompt.chars().any(char::is_control) {
             return Err(io::Error::new(
@@ -36,6 +59,11 @@ impl TerminalSession {
             entry.terminal.input.settle_secret_paste().await?;
         }
         entry.finish()?;
+        // Quarantine may restart intake successfully after a one-shot read fault.
+        // It cannot restore a lease whose physical input has already failed.
+        if result.is_err() {
+            self.lock().fail();
+        }
         result
     }
 }
@@ -46,7 +74,7 @@ struct SecretEntry<'a> {
 }
 
 impl SecretEntry<'_> {
-    async fn read(&mut self, prompt: &str) -> io::Result<String> {
+    async fn read(&mut self, prompt: &str) -> io::Result<Result<String, SecretRejection>> {
         self.terminal.output()?.write_all(prompt.as_bytes())?;
         self.terminal.output()?.flush()?;
         let mut secret = String::new();
@@ -54,8 +82,10 @@ impl SecretEntry<'_> {
             let event = self.terminal.next_input().await.ok_or_else(|| {
                 io::Error::new(io::ErrorKind::UnexpectedEof, "secret input ended")
             })??;
-            if consume(&mut secret, event)? {
-                return Ok(secret);
+            match consume(&mut secret, event) {
+                Ok(true) => return Ok(Ok(secret)),
+                Ok(false) => {}
+                Err(rejection) => return Ok(Err(rejection)),
             }
         }
     }
@@ -81,20 +111,14 @@ impl Drop for SecretEntry<'_> {
     }
 }
 
-fn consume(secret: &mut String, event: InputEvent) -> io::Result<bool> {
+fn consume(secret: &mut String, event: InputEvent) -> Result<bool, SecretRejection> {
     match event {
         InputEvent::Key(key) if key.modifiers.contains(Modifiers::CONTROL) => match key.code {
             KeyCode::Char('c') => {
-                return Err(io::Error::new(
-                    io::ErrorKind::Interrupted,
-                    "secret entry cancelled",
-                ));
+                return Err(SecretRejection::Cancelled);
             }
             KeyCode::Char('d') if secret.is_empty() => {
-                return Err(io::Error::new(
-                    io::ErrorKind::UnexpectedEof,
-                    "secret input ended",
-                ));
+                return Err(SecretRejection::Ended);
             }
             KeyCode::Char('u') => secret.clear(),
             KeyCode::Char('w') => {
@@ -113,7 +137,7 @@ fn consume(secret: &mut String, event: InputEvent) -> io::Result<bool> {
             }
             KeyCode::Char(ch) if !ch.is_control() => {
                 if secret.len() + ch.len_utf8() > MAX_SECRET_BYTES {
-                    return Err(invalid_secret());
+                    return Err(SecretRejection::Invalid);
                 }
                 secret.push(ch);
             }
@@ -121,21 +145,14 @@ fn consume(secret: &mut String, event: InputEvent) -> io::Result<bool> {
         },
         InputEvent::Paste(text) => {
             if text.chars().any(char::is_control) || secret.len() + text.len() > MAX_SECRET_BYTES {
-                return Err(invalid_secret());
+                return Err(SecretRejection::Invalid);
             }
             secret.push_str(&text);
         }
-        InputEvent::Rejected(_) => return Err(invalid_secret()),
+        InputEvent::Rejected(_) => return Err(SecretRejection::Invalid),
         _ => {}
     }
     Ok(false)
-}
-
-fn invalid_secret() -> io::Error {
-    io::Error::new(
-        io::ErrorKind::InvalidInput,
-        "secret must be a valid single line of at most 4096 bytes",
-    )
 }
 
 #[cfg(test)]
@@ -154,15 +171,34 @@ mod tests {
         assert_eq!(value, "ab");
         consume(&mut value, InputEvent::Paste("CD".into())).unwrap();
         assert_eq!(value, "abCD");
-        for event in [
-            InputEvent::Paste("line\nother".into()),
-            InputEvent::Paste("x".repeat(MAX_SECRET_BYTES)),
-            InputEvent::Rejected(InputError::InvalidUtf8),
-            InputEvent::Key(KeyEvent::new(KeyCode::Char('c'), Modifiers::CONTROL)),
+        for (event, rejection) in [
+            (
+                InputEvent::Paste("line\nother".into()),
+                SecretRejection::Invalid,
+            ),
+            (
+                InputEvent::Paste("x".repeat(MAX_SECRET_BYTES)),
+                SecretRejection::Invalid,
+            ),
+            (
+                InputEvent::Rejected(InputError::InvalidUtf8),
+                SecretRejection::Invalid,
+            ),
+            (
+                InputEvent::Key(KeyEvent::new(KeyCode::Char('c'), Modifiers::CONTROL)),
+                SecretRejection::Cancelled,
+            ),
         ] {
-            assert!(consume(&mut value, event).is_err());
+            assert_eq!(consume(&mut value, event), Err(rejection));
             assert_eq!(value, "abCD");
         }
+        assert_eq!(
+            consume(
+                &mut String::new(),
+                InputEvent::Key(KeyEvent::new(KeyCode::Char('d'), Modifiers::CONTROL))
+            ),
+            Err(SecretRejection::Ended)
+        );
         assert!(
             consume(
                 &mut value,
