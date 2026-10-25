@@ -119,13 +119,23 @@ existing session uses its recorded directory, and an explicit `--cwd` must
 match it. Headless runs print the
 session ID to stderr. In the TUI, `/new`, `/clone`, `/tree`, `/fork`, `/fork-after`, `/resume`, `/name`, `/session`,
 `/model` and `/compact` manage the conversation; `/login` chooses an API-key
-provider, and `/login PROVIDER` or `/logout PROVIDER` manages its saved key. `/tasks` lists application-owned background runs with content-free
-activity, elapsed time and absolute last-observed activity. `/tasks status ID` adds
-the bounded, literal provisional preview and error cause without waiting or
-acknowledging. Thinking content and tool arguments/results stay hidden; previews
-are not answers or committed facts. `/tasks result ID` requires actual joining;
-`/tasks cancel ID` requests stop but cleanup may remain unjoined. Use
-`/tasks acknowledge ID` to release joined custody without deleting committed facts. The TUI model picker searches catalog and configured
+provider, and `/login PROVIDER` or `/logout PROVIDER` manages its saved key.
+
+`/tasks` opens a searchable list of application-owned background tasks. Select a
+row for progress/details, a readable result, stop or removal. Live metadata shows
+the captured model, content-free activity, elapsed time and last-observed activity;
+progress inspection adds the bounded, literal provisional preview and error cause.
+Thinking content and tool arguments/results stay hidden. Previews are not final
+answers or committed facts. Reading or closing a view never consumes a result or
+stops a task. Esc closes the picker; Ctrl-C still stops foreground work while busy.
+Stop requests cancellation, not rollback or completed cleanup. Results and removal
+require actual joining. Removing a finished task releases its retained result and
+any returned guidance, shows them once more and leaves saved Session facts intact;
+uncommitted guidance is not automatically saved or replayed. Attachment counts
+are shown without decoding their contents. Explicit `/tasks status ID`,
+`/tasks result ID`, `/tasks cancel ID` and `/tasks acknowledge ID` remain available.
+
+The TUI model picker searches catalog and configured
 custom routes, marks the current model and preselects it. Ctrl-L opens that picker
 without replacing the draft or its cursor/attachments. Choosing a native model
 with a missing key opens the same hidden credential reader as first-use setup;

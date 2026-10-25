@@ -1,327 +1,240 @@
 //! Human inspection over Host custody. No client-owned task lifecycle or cache.
 use anyhow::{Context, Result};
-use ion_host::{
-    BackgroundJobStatus, BackgroundOwner, BackgroundRunSnapshot, ChildActivity,
-    ChildActivitySnapshot,
-};
+use ion_host::{BackgroundJobStatus, BackgroundOwner, BackgroundRunSnapshot};
 
-use super::Frontend;
+use super::{Frontend, Picker, PickerValue, picker::PickerItem};
+
+mod render;
+use render::{activity, end_label, result, state, status};
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(super) enum TaskChoice {
+    Open(uuid::Uuid),
+    Progress(uuid::Uuid),
+    Result(uuid::Uuid),
+    Stop(uuid::Uuid),
+    Remove(uuid::Uuid),
+    List,
+}
+
+pub(super) fn apply(ui: &mut Frontend, owner: &BackgroundOwner, choice: TaskChoice) -> Result<()> {
+    match choice {
+        TaskChoice::List => open(ui, owner),
+        TaskChoice::Open(id) => ui.pickers.open(action_picker(owner, id)?),
+        TaskChoice::Progress(id) => ui.print(status(&owned(owner, id)?)),
+        TaskChoice::Result(id) => ui.print(result(&owned(owner, id)?)?),
+        TaskChoice::Stop(id) => {
+            owner.request_stop(id)?;
+            ui.status =
+                "Stop requested; cleanup must still finish. Effects are not rolled back.".into();
+            ui.print(ui.status.clone());
+            ui.pickers.open(action_picker(owner, id)?);
+        }
+        TaskChoice::Remove(id) => {
+            let report = owner
+                .take(id)
+                .context("task is still finishing or is no longer retained")?;
+            let run = match report {
+                Ok(run) => run,
+                Err(failure) => {
+                    ui.print(result(&failure.run)?);
+                    return Err(failure.error.into());
+                }
+            };
+            ui.status = "Removed from task list; saved Session facts remain".into();
+            ui.print(format!("{}\n\n{}", result(&run)?, ui.status));
+        }
+    }
+    Ok(())
+}
+
+fn owned(owner: &BackgroundOwner, id: uuid::Uuid) -> Result<BackgroundRunSnapshot> {
+    owner
+        .run(id)
+        .context("task is no longer retained by this application")
+}
+
+fn item(job: &BackgroundJobStatus) -> PickerItem {
+    PickerItem {
+        label: format!(
+            "Task {} · {}{} · {}/{}",
+            &job.id.to_string()[..8],
+            state(job.joined, job.progress.as_ref()),
+            job.end.as_ref().map_or_else(
+                || {
+                    if job.error.is_some() {
+                        " · failure observed".into()
+                    } else if job.joined {
+                        " · outcome unknown".into()
+                    } else {
+                        String::new()
+                    }
+                },
+                |end| format!(" · {}", end_label(end))
+            ),
+            job.model.provider,
+            job.model.model
+        ),
+        detail: Some({
+            let mut text = String::new();
+            if let Some(error) = &job.error {
+                text.push_str(&format!("Error: {error}\n"));
+            }
+            text.push_str(
+                &job.progress
+                    .as_ref()
+                    .map_or_else(|| "No live activity observed".into(), activity),
+            );
+            text
+        }),
+        value: PickerValue::Task(TaskChoice::Open(job.id)),
+    }
+}
+
+fn open(ui: &mut Frontend, owner: &BackgroundOwner) {
+    let items: Vec<_> = owner.jobs().iter().map(item).collect();
+    if items.is_empty() {
+        ui.pickers.close();
+        ui.status = "No retained background tasks".into();
+    } else {
+        ui.pickers.open(Picker {
+            title: "Background tasks",
+            query: String::new(),
+            selected: 0,
+            items,
+        });
+    }
+}
+
+fn action_picker(owner: &BackgroundOwner, id: uuid::Uuid) -> Result<Picker> {
+    let job = owner
+        .jobs()
+        .into_iter()
+        .find(|job| job.id == id)
+        .context("task is no longer retained by this application")?;
+    Ok(actions(&job))
+}
+
+fn actions(job: &BackgroundJobStatus) -> Picker {
+    let id = job.id;
+    let label = format!(
+        "Task {} · {} · {}/{}",
+        &id.to_string()[..8],
+        state(job.joined, job.progress.as_ref()),
+        job.model.provider,
+        job.model.model
+    );
+    let mut items = vec![PickerItem {
+        label: "Show progress and details".into(),
+        detail: Some(label.clone()),
+        value: PickerValue::Task(TaskChoice::Progress(id)),
+    }];
+    if job.joined {
+        items.push(PickerItem {
+            label: "Show result".into(),
+            detail: Some(label),
+            value: PickerValue::Task(TaskChoice::Result(id)),
+        });
+        items.push(PickerItem { label: "Remove finished task from list".into(),
+            detail: Some("Releases the retained result and any returned guidance; shows them once more. Saved Session facts remain, not uncommitted inputs. This does not undo effects.".into()),
+            value: PickerValue::Task(TaskChoice::Remove(id)) });
+    } else if !job.progress.as_ref().is_some_and(|p| p.stopping) {
+        items.push(PickerItem { label: "Stop task".into(),
+            detail: Some("Requests cancellation only. Cleanup must still finish; effects are not rolled back.".into()),
+            value: PickerValue::Task(TaskChoice::Stop(id)) });
+    }
+    items.push(PickerItem {
+        label: "Back to task list".into(),
+        detail: None,
+        value: PickerValue::Task(TaskChoice::List),
+    });
+    Picker {
+        title: "Task actions",
+        query: String::new(),
+        selected: 0,
+        items,
+    }
+}
+
+/// Refresh presentation from Host observations, preserving the selected identity,
+/// never an index that could silently retarget a stop/remove action.
+pub(super) fn refresh(ui: &mut Frontend, owner: &BackgroundOwner) {
+    let Some(picker) = ui.pickers.active() else {
+        return;
+    };
+    let Some(PickerValue::Task(first)) = picker.items.first().map(|item| &item.value) else {
+        return;
+    };
+
+    let next = match first {
+        TaskChoice::Open(_) => {
+            let items: Vec<_> = owner.jobs().iter().map(item).collect();
+            if items.is_empty() {
+                open(ui, owner);
+                return;
+            }
+            Picker {
+                title: "Background tasks",
+                query: String::new(),
+                selected: 0,
+                items,
+            }
+        }
+        TaskChoice::Progress(id) => match action_picker(owner, *id) {
+            Ok(picker) => picker,
+            Err(_) => {
+                open(ui, owner);
+                ui.status = "Task is no longer retained".into();
+                return;
+            }
+        },
+        _ => return,
+    };
+    let mut next = next;
+    refresh_selection(&mut next, picker);
+    ui.pickers.open(next);
+}
+
+fn refresh_selection(next: &mut Picker, previous: &Picker) {
+    let selected = previous.matches().get(previous.selected).and_then(|index| {
+        if let PickerValue::Task(choice) = previous.items[*index].value {
+            Some(choice)
+        } else {
+            None
+        }
+    });
+    next.query.clone_from(&previous.query);
+    let matching = next.matches();
+    if let Some(index) = matching.iter().position(|index| {
+        matches!(next.items[*index].value, PickerValue::Task(choice) if Some(choice) == selected)
+    }) {
+        next.selected = index;
+    } else {
+        // A completion can turn a filtered Stop into Remove. A fresh render
+        // alone must not reinterpret that intent as releasing an unread result.
+        if matching.first().is_some_and(|index| matches!(next.items[*index].value,
+            PickerValue::Task(TaskChoice::Stop(_) | TaskChoice::Remove(_)))) {
+            next.query.clear(); // Unfiltered first choices only open/read views.
+        }
+        next.selected = 0;
+    }
+}
 
 const USAGE: &str = "use /tasks [status|result|cancel|acknowledge UUID]";
 
 pub(super) fn command(ui: &mut Frontend, owner: &BackgroundOwner, args: &str) -> Result<()> {
     if args.is_empty() {
-        let jobs = owner.jobs();
-        if jobs.is_empty() {
-            ui.print("No retained background tasks".into());
-        }
-        for job in jobs {
-            ui.print(summary(&job));
-        }
+        open(ui, owner);
         return Ok(());
     }
     let (action, id) = args.split_once(char::is_whitespace).context(USAGE)?;
     let child = id.trim().parse::<uuid::Uuid>()?;
-    match action {
-        "status" => {
-            let report = owner
-                .run(child)
-                .context("child is not owned here (unknown or acknowledged)")?;
-            ui.print(status(&report));
-        }
-        "result" => {
-            let report = owner
-                .run(child)
-                .context("child is not owned here (unknown or acknowledged)")?;
-            anyhow::ensure!(
-                report.joined,
-                "child has not joined; use /tasks status to inspect live progress"
-            );
-            let outcome = report
-                .receipt
-                .outcome
-                .context("joined without a committed outcome; inspect Session facts")?;
-            ui.print(format!(
-                "Child {child} · observed outcome\n{}",
-                serde_json::to_string_pretty(&outcome)?
-            ));
-        }
-        "cancel" => {
-            owner.request_stop(child)?;
-            ui.status = format!("Stop requested for {child}; cleanup must still join");
-        }
-        "acknowledge" => {
-            let report = owner.take(child).context(
-                "no joined result to acknowledge (running, unknown or already acknowledged)",
-            )??;
-            ui.print(format!(
-                "Acknowledged {child}; committed facts remain at {}",
-                report.receipt.record.path.display()
-            ));
-        }
+    let choice = match action {
+        "status" => TaskChoice::Progress(child),
+        "result" => TaskChoice::Result(child),
+        "cancel" => TaskChoice::Stop(child),
+        "acknowledge" => TaskChoice::Remove(child),
         _ => anyhow::bail!(USAGE),
-    }
-    Ok(())
-}
-
-fn state(joined: bool, progress: Option<&ChildActivitySnapshot>) -> &'static str {
-    if joined {
-        "joined"
-    } else if progress.is_some_and(|progress| progress.stopping) {
-        "stopping · cleanup unjoined"
-    } else {
-        "unjoined"
-    }
-}
-
-fn activity(progress: &ChildActivitySnapshot) -> String {
-    let kind = match progress.activity {
-        Some(ChildActivity::Model) => "model",
-        Some(ChildActivity::Thinking) => "thinking (content hidden)",
-        Some(ChildActivity::Text) => "text",
-        Some(ChildActivity::Tool) => "tool",
-        None => "none observed",
     };
-    let tool = progress
-        .current_tool
-        .as_ref()
-        .map(|name| format!(" · {name}"))
-        .unwrap_or_default();
-    let elapsed = progress.elapsed_ms;
-    let duration = if elapsed < 60_000 {
-        format!("{}.{:01}s", elapsed / 1000, elapsed % 1000 / 100)
-    } else {
-        format!("{}m {}s", elapsed / 60_000, elapsed % 60_000 / 1000)
-    };
-    let last = progress
-        .last_activity_at_ms
-        .and_then(|ms| super::navigation::utc_timestamp(ms / 1000))
-        .map(|value| format!("{value} UTC"))
-        .unwrap_or_else(|| "not observed".into());
-    format!("activity: {kind}{tool} · elapsed {duration}\nlast activity: {last}")
-}
-
-fn end_label(end: &ion_core::TurnEndReason) -> &'static str {
-    match end {
-        ion_core::TurnEndReason::Completed => "completed",
-        ion_core::TurnEndReason::Cancelled => "cancelled",
-        ion_core::TurnEndReason::Interrupted => "interrupted",
-        ion_core::TurnEndReason::Failed(_) => "failed",
-    }
-}
-
-fn summary(job: &BackgroundJobStatus) -> String {
-    let mut text = format!("{} · {}", job.id, state(job.joined, job.progress.as_ref()));
-    if let Some(end) = &job.end {
-        text.push_str(&format!(" · end: {}", end_label(end)));
-    }
-    if let Some(error) = &job.error {
-        text.push_str(&format!("\nerror: {error}"));
-    }
-    if let Some(progress) = &job.progress {
-        text.push_str(&format!("\n{}", activity(progress)));
-    }
-    text.push_str(&format!("\nparent {} · {}", job.parent, job.path.display()));
-    text
-}
-
-fn status(run: &BackgroundRunSnapshot) -> String {
-    let progress = run.progress.as_ref();
-    let mut text = format!(
-        "Task {} · {}",
-        run.receipt.record.run,
-        state(run.joined, progress.map(|progress| &progress.status))
-    );
-    if let Some(error) = &run.error {
-        text.push_str(&format!("\nerror: {error}"));
-    }
-    if let Some(ion_core::DelegationOutcome::Joined {
-        execution_timed_out,
-        error,
-        receipt,
-        ..
-    }) = &run.receipt.outcome
-    {
-        if *execution_timed_out {
-            text.push_str("\nexecution deadline expired");
-        }
-        if let Some(error) = error {
-            text.push_str(&format!("\nchild error: {error}"));
-        }
-        if let Some(receipt) = receipt {
-            text.push_str(&format!(
-                "\nchild end: {}",
-                receipt.end.as_ref().map_or("unknown", end_label)
-            ));
-        }
-    }
-    if let Some(progress) = progress {
-        text.push_str(&format!("\n{}", activity(&progress.status)));
-        if let Some(output) = &progress.provisional_output {
-            text.push_str("\n\nProvisional child output — not a final answer or committed fact\n");
-            text.push_str(&output.text);
-            if output.truncated {
-                text.push_str("\n[preview truncated at 50 KiB UTF-8]");
-            }
-            if output.observation_gap {
-                text.push_str("\n[progress gap; missing text was not reconstructed]");
-            }
-        }
-    } else {
-        text.push_str("\nLive progress unavailable");
-    }
-    text.push_str(&format!(
-        "\n\nChild {} · {}",
-        run.receipt.record.child,
-        run.receipt.record.path.display()
-    ));
-    if run.joined {
-        text.push_str(&format!(
-            "\nUse /tasks result {} for the durable outcome",
-            run.receipt.record.run
-        ));
-    } else {
-        text.push_str("\nOnly joined means cleanup finished; silence alone does not prove a stall");
-    }
-    text
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use ion_core::{
-        DelegationOutcome, DelegationOwnership, DelegationPartialOutput, DelegationReceipt,
-        DelegationRecord, DelegationSite, DelegationSpec, DelegationTarget, ToolOccurrence,
-    };
-    use ion_host::ChildProgressSnapshot;
-
-    fn observation() -> BackgroundRunSnapshot {
-        let record = DelegationRecord {
-            run: uuid::Uuid::from_u128(1),
-            child: uuid::Uuid::from_u128(2),
-            site: DelegationSite {
-                session: uuid::Uuid::from_u128(3),
-                turn: 1,
-                tool: ToolOccurrence {
-                    assistant_entry: 2,
-                    ordinal: 0,
-                },
-                composed_child: None,
-            },
-            path: "/children/observed.sqlite".into(),
-            ownership: DelegationOwnership::Background {
-                owner: uuid::Uuid::from_u128(4),
-            },
-            spec: DelegationSpec {
-                target: DelegationTarget::Fresh {
-                    directory: "/children".into(),
-                },
-                cwd: None,
-                model: ion_ai::ModelRef {
-                    provider: "fixture".into(),
-                    model: "child".into(),
-                },
-                reasoning: ion_ai::Reasoning::ProviderDefault,
-                execution_timeout_ms: None,
-                authority: ion_core::AuthorityScope::new("fixture").unwrap(),
-                input: ion_ai::Message::user_input("HIDDEN_TASK_ARGUMENT".into(), []),
-            },
-        };
-        let progress = ChildProgressSnapshot {
-            status: ChildActivitySnapshot {
-                child_session: record.child,
-                request: record.request_key(),
-                elapsed_ms: 12_300,
-                last_activity_at_ms: Some(1_700_000_000_000),
-                activity: Some(ChildActivity::Thinking),
-                current_tool: None,
-                stopping: false,
-            },
-            provisional_output: Some(DelegationPartialOutput {
-                text: "literal ```rust\n\u{1b}[31mVISIBLE 🚀".into(),
-                truncated: true,
-                observation_gap: true,
-            }),
-        };
-        BackgroundRunSnapshot {
-            receipt: DelegationReceipt {
-                record,
-                transferred: true,
-                outcome: None,
-            },
-            joined: false,
-            error: None,
-            steering: vec![],
-            progress: Some(progress),
-        }
-    }
-
-    #[test]
-    fn summaries_distinguish_custody_and_show_only_content_free_observations() {
-        let run = observation();
-        let mut job = BackgroundJobStatus {
-            id: run.receipt.record.run,
-            parent: run.receipt.record.site.session,
-            path: run.receipt.record.path,
-            joined: false,
-            end: None,
-            error: None,
-            progress: run.progress.map(|progress| progress.status),
-        };
-        for (joined, stopping, expected) in [
-            (false, false, "unjoined"),
-            (false, true, "stopping · cleanup unjoined"),
-            (true, true, "joined"),
-        ] {
-            job.joined = joined;
-            job.progress.as_mut().unwrap().stopping = stopping;
-            let text = summary(&job);
-            assert!(text.lines().next().unwrap().ends_with(expected), "{text}");
-            assert!(text.contains("thinking (content hidden)") && text.contains("elapsed 12.3s"));
-            assert!(text.contains("2023-11-14 22:13:20 UTC"));
-            assert!(!text.contains("VISIBLE") && !text.contains("HIDDEN_TASK_ARGUMENT"));
-        }
-    }
-
-    #[test]
-    fn failure_precedes_explicit_provisional_literal_preview_with_gap_and_truncation() {
-        let mut run = observation();
-        run.joined = true;
-        run.error = Some("infrastructure cause".into());
-        run.receipt.outcome = Some(DelegationOutcome::Joined {
-            execution_timed_out: true,
-            elapsed_ms: Some(12_300),
-            partial_output: None,
-            receipt: None,
-            error: Some("execution cause".into()),
-            answer: None,
-        });
-        let text = status(&run);
-        assert!(
-            text.find("infrastructure cause").unwrap()
-                < text.find("Provisional child output").unwrap()
-        );
-        assert!(
-            text.find("execution cause").unwrap() < text.find("Provisional child output").unwrap()
-        );
-        assert!(text.contains("not a final answer or committed fact"));
-        assert!(text.contains("preview truncated") && text.contains("progress gap"));
-        assert!(text.contains("for the durable outcome") && !text.contains("HIDDEN_TASK_ARGUMENT"));
-        // This is the real inline/fullscreen notice path, not Markdown execution
-        // or a direct write of untrusted control bytes to the emulator.
-        let rows = super::super::notice_rows(&text, 70);
-        assert!(
-            rows.iter()
-                .flat_map(|row| row.spans.iter())
-                .all(|span| !span.content.contains('\u{1b}')
-                    && span.style == ratatui::style::Style::default())
-        );
-        assert!(
-            rows.iter()
-                .map(ToString::to_string)
-                .collect::<Vec<_>>()
-                .join("\n")
-                .contains("literal ```rust")
-        );
-    }
+    apply(ui, owner, choice)
 }

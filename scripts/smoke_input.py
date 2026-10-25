@@ -40,12 +40,27 @@ class Handler(BaseHTTPRequestHandler):
     def do_POST(self):
         body = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
         requests.append(body)
-        prompt = user_text(body)
+        last_user = next(message for message in reversed(body["messages"]) if message["role"] == "user")
+        prompt = last_user["content"]
+        if isinstance(prompt, list):
+            prompt = "".join(part["text"] for part in prompt if part["type"] == "text")
+        delta = None
+        if prompt.startswith("TASK_PARENT_") or prompt.startswith("TASK_CHILD_"):
+            fresh = body["messages"][-1]["role"] == "user"
+            if fresh:
+                if prompt.startswith("TASK_PARENT_"):
+                    name, arguments = "subagent", {"action": "start", "mode": "background", "task": prompt.replace("TASK_PARENT_", "TASK_CHILD_")}
+                else:
+                    name, arguments = "exec", {"command": "printf '%s' $$ > task.pid; touch task.ready; while [ ! -f task.release ]; do sleep 0.01; done; printf TASK_EFFECT > task.effect", "timeout_ms": 120000}
+                delta = {"tool_calls": [{"index": 0, "id": name, "type": "function", "function": {"name": name, "arguments": json.dumps(arguments)}}]}
+            else:
+                delta = {"content": "TASK_ACCEPTED" if prompt.startswith("TASK_PARENT_") else "TASK_FINAL_🦀"}
         if prompt in ("WAIT_HISTORY", "ACCEPTED_VIEW_FAULT"):
             assert release.wait(10), "fixture did not release the waiting response"
+        delta = delta or {"content": "DONE_" + prompt}
         events = [
-            {"choices": [{"index": 0, "delta": {"content": "DONE_" + prompt}, "finish_reason": None}]},
-            {"choices": [{"index": 0, "delta": {}, "finish_reason": "stop"}]},
+            {"choices": [{"index": 0, "delta": delta, "finish_reason": None}]},
+            {"choices": [{"index": 0, "delta": {}, "finish_reason": "tool_calls" if "tool_calls" in delta else "stop"}]},
         ]
         payload = b"".join(b"data: " + json.dumps(event).encode() + b"\n\n" for event in events) + b"data: [DONE]\n\n"
         self.send_response(200)
@@ -142,6 +157,104 @@ class Terminal:
         if self.redirected_master is not None:
             os.close(self.redirected_master)
         self.child.wait(timeout=5)
+
+
+def exercise_tasks(work, env):
+    def alive(pid):
+        try:
+            os.kill(pid, 0)
+            return True
+        except ProcessLookupError:
+            return False
+
+    for mode in ("inline", "fullscreen"):
+        for stop in (False, True):
+            cwd = work / f"tasks-{mode}-{stop}"
+            cwd.mkdir()
+            before_paths = set((Path(env["ION_HOME"]) / "sessions").rglob("*.sqlite"))
+            terminal = Terminal(cwd, env, mode)
+            pid = None
+            try:
+                terminal.paint()
+                terminal.send(f"TASK_PARENT_{mode}_{stop}\r")
+                terminal.wait(lambda: (cwd / "task.ready").exists() and b"state=done" in terminal.output)
+                pid = int((cwd / "task.pid").read_text())
+                child_paths = set((Path(env["ION_HOME"]) / "sessions").rglob("children/*.sqlite")) - before_paths
+                assert len(child_paths) == 1, child_paths
+                before = len(requests)
+                terminal.output.clear()
+                terminal.send("/tasks\r")
+                terminal.wait(lambda: "Background tasks" in terminal.text())
+                terminal.paint()
+                terminal.send("smoke\r")
+                terminal.wait(lambda: "Task actions" in terminal.text())
+                terminal.paint()
+                assert "Stop task" in terminal.text() and "Remove finished" not in terminal.text(), terminal.text()
+                terminal.send(b"\x1b")
+                terminal.paint()
+                assert alive(pid) and len(requests) == before, "browsing/dismissal stopped or consumed work"
+                terminal.output.clear()
+                terminal.send("/tasks\r")
+                terminal.wait(lambda: "Background tasks" in terminal.text())
+                terminal.paint()
+                terminal.send("\r")
+                terminal.wait(lambda: "Task actions" in terminal.text())
+                terminal.paint()
+                if stop:
+                    terminal.send("Stop\r")
+                    terminal.wait(lambda: not alive(pid) and "Show result" in terminal.text())
+                    assert not (cwd / "task.effect").exists(), "stop was treated as successful work"
+                else:
+                    # Completion must update the OPEN action list, not leave a stale stop/remove target.
+                    (cwd / "task.release").touch()
+                    terminal.wait(lambda: not alive(pid) and "Show result" in terminal.text())
+                    assert (cwd / "task.effect").read_text() == "TASK_EFFECT"
+                terminal.paint()
+                terminal.output.clear()
+                terminal.send("Show result\r")
+                terminal.wait(lambda: "observed outcome" in terminal.text())
+                terminal.paint()
+                if not stop:
+                    assert "Final answer" in terminal.text() and "TASK_FINAL_🦀" in terminal.text(), terminal.text()
+                else:
+                    assert "cancelled" in terminal.text() and "Final answer" not in terminal.text(), terminal.text()
+                assert '"kind": "joined"' not in terminal.text(), "result is still a JSON protocol envelope"
+                count = len(requests)
+                # Merely reading the result must leave it selectable until explicit removal.
+                terminal.output.clear()
+                terminal.send("/tasks\r")
+                terminal.wait(lambda: "Background tasks" in terminal.text())
+                terminal.paint()
+                terminal.send("\r")
+                terminal.wait(lambda: "Remove finished task" in terminal.text())
+                terminal.paint()
+                terminal.send("Remove\r")
+                terminal.wait(lambda: "Removed from task list" in terminal.text())
+                terminal.output.clear()
+                terminal.send("/tasks\r")
+                terminal.wait(lambda: "No retained background tasks" in terminal.text())
+                assert len(requests) == count, "task inspection/removal issued model work"
+                children = []
+                for path in child_paths:
+                    assert path.exists(), "task removal deleted its child Session"
+                    connection = sqlite3.connect(f"file:{path}?mode=ro", uri=True)
+                    try:
+                        entries = [json.loads(row[0]) for row in connection.execute("SELECT body FROM entries")]
+                        if path.parent.name == "children" and any(entry["kind"] == "turn_ended" for entry in entries):
+                            children.append(path)
+                    finally:
+                        connection.close()
+                assert children, "task removal deleted child Session facts"
+                terminal.finish()
+            finally:
+                (cwd / "task.release").touch()
+                if pid:
+                    deadline = time.monotonic() + 10
+                    while alive(pid):
+                        assert time.monotonic() < deadline, "owned task process survived cleanup"
+                        terminal.pump()
+                terminal.close()
+            print(f"Tasks {mode} stop={stop}: live picker, no implicit cancellation, readable retained result, explicit removal and saved facts: OK", flush=True)
 
 
 def exercise_orientation(work, env, endpoint):
@@ -442,6 +555,7 @@ with tempfile.TemporaryDirectory(prefix="ion-input-") as temporary:
         subprocess.run([binary, "use", "smoke", "smoke-model", "--endpoint", f"http://127.0.0.1:{server.server_port}/v1/chat/completions", "--wire", "chat-completions"], env=env, check=True, capture_output=True)
         exercise_orientation(work, env, f"http://127.0.0.1:{server.server_port}/v1/chat/completions")
         exercise_configuration(work, env, f"http://127.0.0.1:{server.server_port}/v1/chat/completions")
+        exercise_tasks(work, env)
         # Display sanitation must not bypass the secret reader's input guard.
         terminal = Terminal(work, env, "inline", ["login", "unsafe\x1b[31mprovider"])
         try:

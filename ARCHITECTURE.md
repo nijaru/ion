@@ -397,11 +397,23 @@ Owner invalidation signals observation changes, not joining. This read-only hand
 holds no Session writer or execution/cancellation grant, and survives acknowledgement
 only as ephemeral observation data, not recovery authority. Core's joined outcome
 remains the durable result; no live progress is written as relationship facts.
-Terminal `/tasks` consumes content-free metadata without copying child output;
-`/tasks status` explicitly requests the bounded provisional preview. Both render
-through the same literal, control-safe inline/fullscreen notice path and remain
-terminal-local output, never model input. Stopping is still unjoined, errors
-precede previews, and result/acknowledgement still require actual joining.
+Terminal `/tasks` offers searchable task/action choices over content-free Host
+metadata, including the captured model, without copying task input or child output
+for browsing. Owner invalidation refreshes open choices while preserving action
+identity; a vanished action cannot silently become stop/removal under an old
+filter. Fall back to a read-only choice instead. Explicit progress inspection adds
+the bounded provisional preview; readable results distinguish final answers,
+failed partial output, unknown effects and returned guidance. Errors precede
+previews. All evidence uses the same literal, control-safe inline/fullscreen notice
+path, remains terminal-local and never becomes model input. Browsing, reading and
+closing views do not consume results or stop execution. Esc dismisses views; the
+existing busy foreground Ctrl-C stop policy is unchanged. Stop is a request, not
+rollback or completed cleanup. Results and explicit removal require actual joining.
+Removal releases retained custody, including returned guidance, republishes the
+outcome/guidance and preserves saved Session facts—not uncommitted inputs. It never
+replays returned guidance. Non-text attachments are counted without decoding.
+Explicit action receipts use complete publication so a racing owner invalidation
+cannot erase them with a transient status update.
 
 Timeout is a failed relationship with no answer, not a rewrite of the child's
 ordinary Turn end. Infrastructure failures remain fatal even alongside timeout.

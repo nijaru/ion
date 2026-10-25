@@ -102,6 +102,7 @@ pub struct BackgroundSnapshot {
 #[derive(Clone, Serialize)]
 pub struct BackgroundJobStatus {
     pub id: uuid::Uuid,
+    pub model: ion_ai::ModelRef,
     pub parent: uuid::Uuid,
     pub path: std::path::PathBuf,
     pub joined: bool,
@@ -276,6 +277,7 @@ impl BackgroundOwner {
                 };
                 BackgroundJobStatus {
                     id: receipt.record.run,
+                    model: receipt.record.spec.model.clone(),
                     parent: receipt.record.site.session,
                     path: receipt.record.path.clone(),
                     joined: run.operation.is_none(),

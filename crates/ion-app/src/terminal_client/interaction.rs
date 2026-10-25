@@ -1,5 +1,5 @@
 //! Translate editor actions into typed Host admission; commands remain terminal UI.
-use anyhow::Result;
+use anyhow::{Context, Result};
 use ion_host::{Delivery, Host, SessionControl, UserInput};
 use ion_terminal::{Screen, TerminalSession};
 
@@ -73,6 +73,16 @@ pub(super) async fn apply_picker(
         ui.open_settings();
         return Ok(());
     }
+    if let PickerValue::Task(choice) = value {
+        let result = runtime
+            .background()
+            .context("application has no background owner")
+            .and_then(|owner| super::tasks::apply(ui, &owner, choice));
+        if let Err(error) = result {
+            ui.status = format!("{error:#}");
+        }
+        return Ok(());
+    }
     if let PickerValue::File { path, start, end } = value {
         ui.insert_file(path, start, end);
         return Ok(());
@@ -132,7 +142,9 @@ pub(super) async fn apply_picker(
             };
             return Ok(());
         }
-        PickerValue::File { .. } | PickerValue::Setting(_) => unreachable!("handled above"),
+        PickerValue::File { .. } | PickerValue::Setting(_) | PickerValue::Task(_) => {
+            unreachable!("handled above")
+        }
     };
     match result {
         Ok(()) => {

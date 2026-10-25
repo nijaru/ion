@@ -283,6 +283,7 @@ pub async fn chat(init: ChatInit) -> Result<()> {
                     let owner = background.as_ref().expect("guarded owner");
                     owner.check()?;
                     let summary = owner.summary();
+                    tasks::refresh(&mut ui, owner);
                     ui.status = format!("Background: {} running · {} retained results · /tasks", summary.running, summary.joined);
                     continue;
                 },

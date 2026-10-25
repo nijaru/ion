@@ -22,6 +22,7 @@ pub(super) enum PickerValue {
     Reasoning(ion_ai::Reasoning),
     Login(String),
     Setting(super::configuration::Setting),
+    Task(super::tasks::TaskChoice),
     Fork(ForkPickerValue),
     Context(super::navigation::ContextPickerValue),
     File {
