@@ -38,6 +38,7 @@ mod configuration;
 mod draft;
 mod editing;
 mod editor_recovery;
+mod file_discovery;
 mod interaction;
 mod navigation;
 mod orientation;
@@ -924,16 +925,22 @@ impl Frontend {
             self.pickers.cancel_files();
             return;
         }
+        let home = std::env::var_os("HOME").map(PathBuf::from);
+        let scope =
+            self.completion
+                .file_scope(&self.draft, self.cursor, &self.cwd, home.as_deref(), force);
         self.completion.refresh(
             &self.draft,
             self.cursor,
             resources,
             commands,
-            self.pickers.files(&self.cwd),
+            scope.as_ref().and_then(|scope| self.pickers.files(scope)),
             force,
         );
-        if self.completion.wants_files() {
-            self.pickers.request_files(&self.cwd);
+        if self.completion.wants_files()
+            && let Some(scope) = scope
+        {
+            self.pickers.request_files(&scope);
         } else {
             self.pickers.cancel_files();
         }

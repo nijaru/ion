@@ -1,10 +1,11 @@
-//! Non-modal command and project-file suggestions over the unsent editor.
+//! Non-modal command and file suggestions over the unsent editor.
 use crate::display_text::{fit_line, fit_line_with_status};
 use crate::terminal_commands::{Builtin, COMMANDS};
 use ion_host::{CommandCatalog, Resources};
 use std::ops::Range;
 
 mod files;
+pub(crate) use files::FileScope;
 
 struct Suggestion {
     name: String,
@@ -31,12 +32,43 @@ struct Menu {
 pub(crate) struct Completion {
     menu: Option<Menu>,
     dismissed: Option<(Kind, String, Range<usize>)>,
+    // Explicit Tab keeps bare-token discovery active through edits in that token.
+    forced_start: Option<usize>,
 }
 
 impl Completion {
     pub(crate) fn clear(&mut self) {
         self.menu = None;
         self.dismissed = None;
+        self.forced_start = None;
+    }
+
+    pub(crate) fn edited(&mut self, at: usize) {
+        self.menu = None;
+        self.dismissed = None;
+        if self.forced_start.is_some_and(|start| at < start) {
+            self.forced_start = None;
+        }
+    }
+
+    fn file_prefix(&self, draft: &str, cursor: usize, force: bool) -> Option<files::Prefix> {
+        if let Some(token) = files::path_prefix(draft, cursor, force) {
+            return Some(token);
+        }
+        let start = self.forced_start?;
+        files::path_prefix(draft, cursor, true).filter(|token| token.range.start == start)
+    }
+
+    pub(crate) fn file_scope(
+        &self,
+        draft: &str,
+        cursor: usize,
+        cwd: &std::path::Path,
+        home: Option<&std::path::Path>,
+        force: bool,
+    ) -> Option<FileScope> {
+        self.file_prefix(draft, cursor, force)
+            .map(|token| token.scope(cwd, home))
     }
 
     pub(crate) fn refresh(
@@ -48,7 +80,12 @@ impl Completion {
         paths: Option<&[String]>,
         force: bool,
     ) {
-        if let Some(token) = files::prefix(draft, cursor) {
+        if let Some(token) = self.file_prefix(draft, cursor, force) {
+            if force {
+                self.forced_start = Some(token.range.start);
+            } else if self.forced_start != Some(token.range.start) {
+                self.forced_start = None;
+            }
             let prefix = &draft[token.range.start..cursor];
             // Discovery publishes one immutable path snapshot per episode.
             // Reuse filtered rows for draws/resizes and control updates; only
@@ -66,13 +103,14 @@ impl Completion {
                 prefix,
                 token.range.clone(),
                 paths
-                    .map(|paths| files::suggestions(paths, &token.query))
+                    .map(|paths| token.suggestions(paths))
                     .unwrap_or_default(),
                 paths.is_none(),
                 force,
             );
             return;
         }
+        self.forced_start = None;
         let start = draft.len() - draft.trim_start().len();
         let end = draft[start..]
             .find(char::is_whitespace)
@@ -268,6 +306,7 @@ impl Completion {
     }
 
     pub(crate) fn dismiss(&mut self) {
+        self.forced_start = None;
         if let Some(menu) = self.menu.take() {
             self.dismissed = Some((menu.kind, menu.prefix, menu.range));
         }
@@ -298,10 +337,7 @@ impl Completion {
         menu.drawn = false;
         if menu.items.is_empty() {
             return if menu.loading && budget > 0 {
-                vec![fit_line(
-                    "Files · discovering project paths… · Esc close",
-                    width,
-                )]
+                vec![fit_line("Files · discovering paths… · Esc close", width)]
             } else {
                 Vec::new()
             };

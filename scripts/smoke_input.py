@@ -889,6 +889,10 @@ with tempfile.TemporaryDirectory(prefix="ion-input-") as temporary:
             cwd = work / (mode + "-files")
             (cwd / "src").mkdir(parents=True)
             (cwd / "src/main.rs").write_text("fn main() {}\n")
+            (cwd / "plain.rs").write_text("fixture\n")
+            home_paths = Path(env["HOME"]) / f"paths-{mode}"
+            home_paths.mkdir(parents=True)
+            (home_paths / "main.rs").write_text("home fixture\n")
             (cwd / "space dir").mkdir()
             (cwd / "space dir/café🦀.rs").write_text("fixture\n")
             terminal = Terminal(cwd, env, mode)
@@ -900,6 +904,11 @@ with tempfile.TemporaryDirectory(prefix="ion-input-") as temporary:
                     ("Read @smrs next", "accept", "Read @src/main.rs next"),
                     ("Read @ma", "paste", "Read @src/main.rs "),
                     ("Read @ma next", "undo", "Read @ma next"),
+                    ("Read pl next", "bare", "Read plain.rs next"),
+                    ("Read ./src/ma next", "accept", "Read ./src/main.rs next"),
+                    (f"Read {cwd}/src/ma next", "accept", f"Read {cwd}/src/main.rs next"),
+                    (f"Read ~/paths-{mode}/ma next", "accept", f"Read ~/paths-{mode}/main.rs next"),
+                    ('Read "space dir/ca next', "accept", 'Read "space dir/café🦀.rs" next'),
                     ('Read @"space d next', "directory", 'Read @"space dir/café🦀.rs" next'),
                 ]
                 # This fixture's synthetic CPR cannot establish native inline
@@ -914,6 +923,10 @@ with tempfile.TemporaryDirectory(prefix="ion-input-") as temporary:
                     if action:
                         if action != "paste":
                             terminal.send(b"\x1b[D" * len(" next"))
+                        if action == "bare":
+                            terminal.send(b"\t")
+                            terminal.paint()
+                            terminal.send("a")  # Forced completion survives ordinary typing.
                         terminal.wait(lambda: "Files ·" in terminal.text())
                         terminal.paint()
                         if action == "clipped":
@@ -938,7 +951,7 @@ with tempfile.TemporaryDirectory(prefix="ion-input-") as temporary:
                                 terminal.send(b"\x1b")
                         terminal.paint()
                         if action != "clipped":
-                            assert len(requests) == before, "completion/dismissal sent a prompt"
+                            assert len(requests) == before, ("completion/dismissal sent a prompt", prompt, action, user_text(requests[-1]))
                     if action != "clipped":
                         terminal.send(b"\r")
                     terminal.wait(lambda: len(requests) == before + 1)
@@ -949,7 +962,7 @@ with tempfile.TemporaryDirectory(prefix="ion-input-") as temporary:
                 terminal.finish()
             finally:
                 terminal.close()
-            print(f"File input {mode}: literal email, live suggestions, dismiss/accept/undo and quoted directories" + ("; clipped menu during resize" if mode == "fullscreen" else "") + ": OK", flush=True)
+            print(f"File input {mode}: literal email, fuzzy references, bare/relative/absolute/home paths, dismiss/accept/undo and quoted directories" + ("; clipped menu during resize" if mode == "fullscreen" else "") + ": OK", flush=True)
 
             # Stopping an observed shell withdraws automatic queued dispatch;
             # a normal exit 7 does not. Neither changes the saved native outcome.

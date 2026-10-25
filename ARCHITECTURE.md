@@ -1166,8 +1166,18 @@ cursor; Tab reopens them. Tab or Enter accepts a visible candidate as an editor
 edit, never as submission. Replacement covers the current file token, including a
 quoted path's suffix when completing before its closing quote, while preserving
 following prose. Directories continue completion; filenames are quoted and escaped
-when needed. File discovery uses one bounded project-path snapshot per completion
-episode; leaving or dismissing the token retires it. File and Session discovery
+when needed. Tab opens ordinary filename completion and keeps that episode active
+through edits in its token; path-like or quoted tokens offer directory completion
+automatically. Ordinary prose and URLs do not. First-token slash commands retain
+precedence until a second slash identifies an absolute path. Lookup resolves
+relative paths from the captured workspace and `~/` from an absolute HOME, while
+replacement preserves the user's spelling. Completion does not expand shell
+variables, run commands or read file contents.
+Fuzzy project search honors ignore rules and does not follow discovered symlinks.
+Explicit directory lookup lists one level, including hidden/ignored entries and
+classifying directory symlinks without recursively walking them. One bounded
+metadata snapshot belongs to each lookup scope; changing scope replaces it, and
+leaving or dismissing the token retires it. File and Session discovery
 share one cooperative scan owner, with cancelled work joined before replacement.
 A layout proposal is not selection authority: deferred inline reconciliation or
 a rejected geometry-fenced paint revokes acceptance until a frame is published.

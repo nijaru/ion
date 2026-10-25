@@ -712,6 +712,66 @@ async fn typed_at_signs_remain_literal_without_accepting_suggestions() {
 }
 
 #[tokio::test]
+async fn ordinary_paths_complete_in_place_without_submitting() {
+    let root = std::env::temp_dir().join(format!("ion-paths-{}", uuid::Uuid::now_v7()));
+    fs::create_dir_all(root.join("space dir")).unwrap();
+    fs::write(root.join("main.rs"), "owned fixture").unwrap();
+    fs::write(root.join("space dir/main.rs"), "owned fixture").unwrap();
+    for (mut literal, expected, force) in [
+        ("Read m".to_owned(), "Read main.rs ".to_owned(), true),
+        ("Read ./ma".to_owned(), "Read ./main.rs ".to_owned(), false),
+        (
+            format!("Read {}/ma", root.display()),
+            format!("Read {}/main.rs ", root.display()),
+            false,
+        ),
+        (
+            "Read \"space dir/ma".to_owned(),
+            "Read \"space dir/main.rs\" ".to_owned(),
+            false,
+        ),
+    ] {
+        let mut ui = Frontend {
+            cwd: root.clone(),
+            ..Frontend::default()
+        };
+        ui.insert(&literal);
+        ui.refresh_completion(None, None, false);
+        if force {
+            assert!(
+                !ui.completion.active(),
+                "ordinary prose must not open a file menu"
+            );
+            ui.key(KeyEvent::new(KeyCode::Tab, Modifiers::NONE), None, None);
+            ui.key(
+                KeyEvent::new(KeyCode::Char('a'), Modifiers::NONE),
+                None,
+                None,
+            );
+            literal.push('a');
+        }
+        assert!(ui.completion.wants_files(), "{literal}");
+        assert_eq!(ui.draft, literal);
+        ui.pickers.complete().await;
+        ui.refresh_completion(None, None, false);
+        assert!(!ui.completion.rows(200, 6).is_empty(), "{literal}");
+        assert!(matches!(
+            ui.key(KeyEvent::new(KeyCode::Enter, Modifiers::NONE), None, None),
+            Action::None
+        ));
+        assert_eq!(ui.draft, expected);
+        ui.key(
+            KeyEvent::new(KeyCode::Char('_'), Modifiers::CONTROL),
+            None,
+            None,
+        );
+        assert_eq!(ui.draft, literal, "acceptance must be one undoable edit");
+        ui.pickers.shutdown().await.unwrap();
+    }
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[tokio::test]
 async fn withdrawn_preparation_replaces_draft_and_invalidates_file_completion() {
     for literal in ["é queued input", "ASCII queued input"] {
         let mut fixture = Fixture::new();

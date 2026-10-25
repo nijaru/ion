@@ -605,11 +605,6 @@ fn command_completion_edits_without_dispatch_or_argument_loss() {
     assert_eq!(ui.draft, "/re");
     ui.draft.clear();
     ui.cursor = 0;
-    ui.insert("literal");
-    ui.key(KeyEvent::new(KeyCode::Tab, Modifiers::NONE), None, None);
-    assert_eq!(ui.draft, "literal\t");
-    ui.draft.clear();
-    ui.cursor = 0;
     ui.insert("/fork");
     ui.key(KeyEvent::new(KeyCode::Tab, Modifiers::NONE), None, None);
     assert!(ui.completion.active());

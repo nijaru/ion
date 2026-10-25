@@ -609,10 +609,20 @@ suggestion; Tab or Enter completes its path without sending the prompt. Director
 end in `/` so you can keep completing their contents. Paths needing quotes are
 escaped automatically. Esc hides suggestions and retains the current draft and
 cursor, including edits made while browsing. Tab reopens dismissed suggestions.
+Tab also opens completion for an ordinary filename, including an empty token;
+keep typing to narrow it. Paths containing `/`, dot-prefixed paths, `~` and quoted
+paths offer suggestions automatically. Relative, absolute and `~/` spellings are
+preserved; `~/` uses HOME, not ION_HOME. A leading `/name` remains command discovery
+until another `/` identifies an absolute directory path; use `Read /name` to
+complete a root entry without that ambiguity. URLs and ordinary prose do not open
+file suggestions automatically.
 Choosing a file inserts a path reference for the model to read, not its contents.
-Discovery runs off the client event loop and honors project ignore rules without
-following symlinks. It takes a bounded snapshot of up to 20,000 paths or 100,000
-entries for the current completion episode; dismiss and reopen to refresh it.
+Discovery runs off the client event loop. Fuzzy `@path` search uses the project
+snapshot, honoring ignore rules without following symlinks. Ordinary paths and
+explicit `@./`, `@../`, `@/` or `@~/` paths list only their requested directory,
+including hidden and ignored entries; directory symlinks can be entered explicitly.
+Each snapshot is bounded to 20,000 paths or 100,000 entries. Changing directory
+loads a new snapshot; dismiss and reopen to refresh the same directory.
 Limits and traversal errors are reported rather than hidden. Dismissal cancels
 further traversal and prevents stale results from reopening suggestions; exit
 still waits for any filesystem call already underway.

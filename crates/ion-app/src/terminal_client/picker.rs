@@ -1,11 +1,12 @@
 //! Modal choices and cooperative discovery shared with non-modal completion.
 //! One retained scan joins before its replacement can start.
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::time::SystemTime;
 
+use super::file_discovery::{MAX_ENTRIES, MAX_PATHS, discover};
 use crate::display_text::{fit_line_with_status, push_wrapped};
+use crate::terminal_completion::FileScope;
 use anyhow::{Context, Result};
-use ignore::WalkBuilder;
 use ion_ai::ModelRef;
 use ion_host::{SessionCatalog, SessionSummary};
 use ion_terminal::{KeyCode, KeyEvent, Modifiers};
@@ -13,9 +14,6 @@ use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
 
 use super::navigation::{ForkPickerValue, session_items};
-
-const MAX_PATHS: usize = 20_000;
-const MAX_ENTRIES: usize = 100_000;
 
 pub(super) enum PickerValue {
     Session(PathBuf),
@@ -57,11 +55,6 @@ impl Picker {
     }
 }
 
-#[derive(Clone)]
-struct FileRequest {
-    cwd: PathBuf,
-}
-
 /// Startup can choose a workspace before admission; a live binding stays in its
 /// captured workspace. Do not offer cross-directory choices it cannot publish.
 #[derive(Clone)]
@@ -79,7 +72,7 @@ struct SessionRequest {
 
 #[derive(Clone)]
 enum PickerRequest {
-    Files(FileRequest),
+    Files(FileScope),
     Sessions(SessionRequest),
 }
 
@@ -98,7 +91,7 @@ struct PickerJob {
     task: JoinHandle<Result<PickerOutput>>,
 }
 
-enum PickerOutput {
+pub(super) enum PickerOutput {
     Cancelled,
     Files { paths: Vec<String>, limited: bool },
     Sessions(Vec<SessionSummary>),
@@ -115,9 +108,9 @@ pub(super) struct Pickers {
     // waiting slot, never spawn another scan before the old one is joined.
     waiting: Option<PickerRequest>,
     job: Option<PickerJob>,
-    // A project-path snapshot belongs to the current file-completion episode,
+    // A scope-keyed metadata snapshot belongs to the current completion episode,
     // not a draft range. Only the editor derives replacement ranges.
-    files: Option<(PathBuf, Vec<String>)>,
+    files: Option<(FileScope, Vec<String>)>,
     sessions: Option<SessionRequest>,
 }
 
@@ -189,7 +182,7 @@ impl Pickers {
                 .map(|job| &job.request)
         }) {
             Some(PickerRequest::Sessions(_)) => "discovering saved Sessions…",
-            Some(PickerRequest::Files(_)) | None => "discovering project files…",
+            Some(PickerRequest::Files(_)) | None => "discovering files…",
         }
     }
 
@@ -222,27 +215,25 @@ impl Pickers {
         self.active = Some(picker);
     }
 
-    pub fn files(&self, cwd: &Path) -> Option<&[String]> {
+    pub fn files(&self, scope: &FileScope) -> Option<&[String]> {
         self.files
             .as_ref()
-            .filter(|(root, _)| root == cwd)
+            .filter(|(root, _)| root == scope)
             .map(|(_, paths)| paths.as_slice())
     }
 
-    pub fn request_files(&mut self, cwd: &Path) {
-        if self.files(cwd).is_some()
-            || matches!(&self.waiting, Some(PickerRequest::Files(request)) if request.cwd == cwd)
+    pub fn request_files(&mut self, scope: &FileScope) {
+        if self.files(scope).is_some()
+            || matches!(&self.waiting, Some(PickerRequest::Files(request)) if request == scope)
             || self.job.as_ref().is_some_and(|job| {
                 !job.stop.is_cancelled()
-                    && matches!(&job.request, PickerRequest::Files(request) if request.cwd == cwd)
+                    && matches!(&job.request, PickerRequest::Files(request) if request == scope)
             })
         {
             return;
         }
         self.close();
-        self.waiting = Some(PickerRequest::Files(FileRequest {
-            cwd: cwd.to_path_buf(),
-        }));
+        self.waiting = Some(PickerRequest::Files(scope.clone()));
         self.admit();
     }
 
@@ -302,8 +293,8 @@ impl Pickers {
         let worker_stop = stop.clone();
         let task = match &request {
             PickerRequest::Files(files) => {
-                let cwd = files.cwd.clone();
-                tokio::task::spawn_blocking(move || discover(&cwd, &worker_stop))
+                let scope = files.clone();
+                tokio::task::spawn_blocking(move || discover(&scope, &worker_stop))
             }
             PickerRequest::Sessions(sessions) => {
                 let catalog = sessions.catalog.clone();
@@ -341,7 +332,7 @@ impl Pickers {
                 if publish && let PickerRequest::Files(request) = &job.request {
                     // Remember the failed episode so drawing cannot turn a
                     // filesystem error into an automatic retry loop.
-                    self.files = Some((request.cwd.clone(), Vec::new()));
+                    self.files = Some((request.clone(), Vec::new()));
                 }
                 Some(format!("{}: {error:#}", job.request.failure_label()))
             }
@@ -351,13 +342,13 @@ impl Pickers {
                     unreachable!("file output has a file request")
                 };
                 let empty = paths.is_empty();
-                self.files = Some((request.cwd, paths));
+                self.files = Some((request, paths));
                 if limited {
                     Some(format!(
                         "File discovery limited to {MAX_PATHS} paths or {MAX_ENTRIES} entries; results may be incomplete"
                     ))
                 } else if empty {
-                    Some("No project files available for completion".into())
+                    Some("No files available for completion".into())
                 } else {
                     None
                 }
@@ -501,64 +492,10 @@ impl Pickers {
     }
 }
 
-fn discover(cwd: &Path, stop: &CancellationToken) -> Result<PickerOutput> {
-    if stop.is_cancelled() {
-        return Ok(PickerOutput::Cancelled);
-    }
-    let mut walker = WalkBuilder::new(cwd)
-        .follow_links(false)
-        .require_git(false)
-        .build();
-    let mut paths = Vec::new();
-    let mut visited = 0;
-    let limited = loop {
-        // An in-flight filesystem call cannot be killed. Check before and after
-        // each traversal step; cap admission even for trees containing no files.
-        if stop.is_cancelled() {
-            return Ok(PickerOutput::Cancelled);
-        }
-        if paths.len() >= MAX_PATHS || visited >= MAX_ENTRIES {
-            break true;
-        }
-        let entry = walker.next();
-        // Preserve errors even when dismissal raced with this traversal step.
-        let entry = match entry {
-            Some(entry) => entry.context("traverse project files")?,
-            None => break false,
-        };
-        if let Some(error) = entry.error() {
-            return Err(anyhow::anyhow!("project ignore rules: {error}"));
-        }
-        if stop.is_cancelled() {
-            return Ok(PickerOutput::Cancelled);
-        }
-        visited += 1;
-        if entry.depth() > 0
-            && entry
-                .file_type()
-                .is_some_and(|kind| kind.is_file() || kind.is_dir())
-        {
-            let relative = entry
-                .path()
-                .strip_prefix(cwd)
-                .context("project file escaped traversal root")?;
-            let path = relative
-                .to_str()
-                .with_context(|| format!("project file path is not valid UTF-8: {relative:?}"))?;
-            paths.push(if entry.file_type().is_some_and(|kind| kind.is_dir()) {
-                format!("{path}/")
-            } else {
-                path.to_owned()
-            });
-        }
-    };
-    paths.sort();
-    Ok(PickerOutput::Files { paths, limited })
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::path::Path;
     use std::time::UNIX_EPOCH;
     use tokio::{
         sync::oneshot,
@@ -566,9 +503,7 @@ mod tests {
     };
 
     fn file_request() -> PickerRequest {
-        PickerRequest::Files(FileRequest {
-            cwd: PathBuf::new(),
-        })
+        PickerRequest::Files(FileScope::Project(PathBuf::new()))
     }
 
     fn session_request(current_id: &str) -> PickerRequest {
@@ -734,16 +669,22 @@ mod tests {
         pickers.cancel_files();
         assert!(pickers.active().is_none());
         assert!(pickers.job.as_ref().unwrap().stop.is_cancelled());
-        for cwd in [root.join("superseded"), root.clone()] {
-            pickers.request_files(&cwd);
+        for scope in [
+            FileScope::Project(root.join("superseded")),
+            FileScope::Directory(root.clone()),
+        ] {
+            pickers.request_files(&scope);
             assert_eq!(pickers.job.as_ref().unwrap().task.id(), original);
         }
         release.send(()).unwrap();
         assert!(pickers.complete().await.is_none());
         assert!(pickers.active().is_none());
-        assert!(pickers.files(&root).is_none());
+        assert!(pickers.files(&FileScope::Directory(root.clone())).is_none());
         assert!(pickers.complete().await.is_none());
-        assert_eq!(pickers.files(&root).unwrap(), ["current.rs"]);
+        assert_eq!(
+            pickers.files(&FileScope::Directory(root.clone())).unwrap(),
+            ["current.rs"]
+        );
         pickers.shutdown().await.unwrap();
         std::fs::remove_dir_all(root).unwrap();
     }
@@ -775,16 +716,19 @@ mod tests {
         let (mut pickers, release) = held_session_job(sessions("stale.sqlite"));
         let original = pickers.job.as_ref().unwrap().task.id();
         for cwd in [root.join("superseded"), root.clone()] {
-            pickers.request_files(&cwd);
+            pickers.request_files(&FileScope::Project(cwd));
             assert_eq!(pickers.job.as_ref().unwrap().task.id(), original);
         }
         release.send(()).unwrap();
         // The cancelled Session result cannot publish into file completion.
         assert!(pickers.complete().await.is_none());
         assert!(pickers.active().is_none());
-        assert!(pickers.files(&root).is_none());
+        assert!(pickers.files(&FileScope::Project(root.clone())).is_none());
         assert!(pickers.complete().await.is_none());
-        assert_eq!(pickers.files(&root).unwrap(), ["current.rs"]);
+        assert_eq!(
+            pickers.files(&FileScope::Project(root.clone())).unwrap(),
+            ["current.rs"]
+        );
         pickers.shutdown().await.unwrap();
         std::fs::remove_dir_all(root).unwrap();
     }
@@ -906,17 +850,23 @@ mod tests {
         release.send(()).unwrap();
         assert!(pickers.complete().await.is_none());
         assert!(pickers.active().is_none());
-        assert_eq!(pickers.files(Path::new("")).unwrap(), ["draft query.rs"]);
+        assert_eq!(
+            pickers.files(&FileScope::Project(PathBuf::new())).unwrap(),
+            ["draft query.rs"]
+        );
 
         let (mut pickers, release) = held_file_job(Err(anyhow::anyhow!("read failed")));
         release.send(()).unwrap();
         assert!(pickers.complete().await.unwrap().contains("read failed"));
-        pickers.request_files(Path::new(""));
+        pickers.request_files(&FileScope::Project(PathBuf::new()));
         assert!(
             !pickers.has_job(),
             "drawing a failed episode must not retry I/O"
         );
-        assert_eq!(pickers.files(Path::new("")).unwrap(), Vec::<String>::new());
+        assert_eq!(
+            pickers.files(&FileScope::Project(PathBuf::new())).unwrap(),
+            Vec::<String>::new()
+        );
         pickers.shutdown().await.unwrap();
     }
 
@@ -928,17 +878,25 @@ mod tests {
         #[cfg(unix)]
         std::os::unix::fs::symlink(root.join("visible.rs"), root.join("link.rs")).unwrap();
         let stop = CancellationToken::new();
-        let PickerOutput::Files { paths, limited } = discover(&root, &stop).unwrap() else {
+        let PickerOutput::Files { paths, limited } =
+            discover(&FileScope::Project(root.clone()), &stop).unwrap()
+        else {
             panic!("cancelled unexpectedly")
         };
         assert_eq!(paths, ["visible.rs"]);
         assert!(!limited);
         stop.cancel();
         assert!(matches!(
-            discover(&root, &stop).unwrap(),
+            discover(&FileScope::Project(root.clone()), &stop).unwrap(),
             PickerOutput::Cancelled
         ));
-        assert!(discover(&root.join("missing"), &CancellationToken::new()).is_err());
+        assert!(
+            discover(
+                &FileScope::Project(root.join("missing")),
+                &CancellationToken::new()
+            )
+            .is_err()
+        );
         // Linux permits raw-byte filenames; APFS rejects this fixture at creation.
         #[cfg(target_os = "linux")]
         {
@@ -946,7 +904,7 @@ mod tests {
             // Lossy completion could select a different valid UTF-8 filename.
             let name = std::ffi::OsString::from_vec(b"invalid-\xff.rs".to_vec());
             std::fs::write(root.join(name), "invalid path").unwrap();
-            let error = discover(&root, &CancellationToken::new())
+            let error = discover(&FileScope::Project(root.clone()), &CancellationToken::new())
                 .err()
                 .expect("non-UTF-8 filenames must not be completed lossily");
             assert!(format!("{error:#}").contains("not valid UTF-8"));

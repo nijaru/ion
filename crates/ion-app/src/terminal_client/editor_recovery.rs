@@ -273,7 +273,7 @@ impl Frontend {
     }
 
     fn insert_clean(&mut self, text: &str, group: Group, typed: bool) {
-        self.completion.clear();
+        self.completion.edited(self.cursor);
         let clean = sanitize(text);
         if clean.is_empty() {
             self.recovery.interrupt();
@@ -316,8 +316,8 @@ impl Frontend {
     /// Paste, newline, completion opener and other programmatic insertion are
     /// one atomic edit even when they contain several characters.
     pub(super) fn insert(&mut self, text: &str) {
-        self.completion.clear();
         if self.pickers.insert(text) {
+            self.completion.clear();
             return;
         }
         self.insert_clean(text, Group::Other, false);
@@ -377,7 +377,7 @@ impl Frontend {
         let cursor_before = self.cursor;
         let was_kill = self.recovery.group == Group::Kill;
         self.browsing = None;
-        self.completion.clear();
+        self.completion.edited(range.start);
         self.draft.replace_range(range.clone(), "");
         self.cursor = range.start;
         if let Some(direction) = kill {

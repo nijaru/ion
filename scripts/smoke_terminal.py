@@ -229,7 +229,7 @@ def exercise_file_discovery():
                         wait(lambda: b"Running shell" in output)
                     os.write(master, b"Read @")
                     writer = hold_read()
-                    wait(lambda: "discovering project paths…".encode() in output)
+                    wait(lambda: "discovering paths…".encode() in output)
                     # Tab cannot accept an unseen file while the read is held.
                     # The final character acknowledges processing that Tab, not
                     # merely a query repaint before the attempted completion.
@@ -255,7 +255,7 @@ def exercise_file_discovery():
                         # mention, starting a fresh automatic discovery episode.
                         os.write(master, b"\x17\x1b[D")  # Kill marker, enter mention.
                         writer = hold_read()
-                        wait(lambda: "discovering project paths…".encode() in output)
+                        wait(lambda: "discovering paths…".encode() in output)
                         # Escape, then leave the token and visibly acknowledge
                         # the editor action without issuing any provider input.
                         os.write(master, b"\x1b\x1b[Cdraft")
