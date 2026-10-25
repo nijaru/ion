@@ -298,7 +298,7 @@ with tempfile.TemporaryDirectory(prefix="ion-resources-") as temporary:
                         checkpoint = len(output)
                         os.write(master, b"/reload\r")
                         phase = 3
-                    elif phase == 3 and b"Reloaded resources" in current:
+                    elif phase == 3 and b"Reloaded keybindings, resources and commands" in current:
                         checkpoint = len(output)
                         os.write(master, b"/reasoning high\r")
                         reasoning_retry_at = time.monotonic() + 0.1

@@ -7,7 +7,10 @@
 //! text can be yanked into another draft.
 use std::{collections::VecDeque, ops::Range};
 
-use ion_terminal::{KeyCode, KeyEvent, Modifiers};
+use crate::keybindings::{self, COMPOSER, KeyAction};
+use ion_terminal::KeyEvent;
+#[cfg(test)]
+use ion_terminal::{KeyCode, Modifiers};
 
 use super::{Frontend, MAX_DRAFT, editing::Kill};
 
@@ -180,36 +183,6 @@ impl EditorRecovery {
     }
 }
 
-/// Undo for either documented Ctrl spelling, redo only with Alt.
-fn undo_action(key: KeyEvent) -> Option<bool> {
-    let control = key.modifiers.contains(Modifiers::CONTROL);
-    let alt = key.modifiers.contains(Modifiers::ALT);
-    match key.code {
-        // Legacy terminals send one 0x1f byte for Ctrl-minus/Ctrl-underscore.
-        KeyCode::Char('\x1f') => Some(alt),
-        KeyCode::Char('-' | '_') if control => Some(alt),
-        _ => None,
-    }
-}
-
-fn yank_key(key: KeyEvent) -> bool {
-    key.code == KeyCode::Char('y')
-        && key.modifiers.contains(Modifiers::CONTROL)
-        && !key.modifiers.contains(Modifiers::ALT)
-}
-
-fn yank_pop_key(key: KeyEvent) -> bool {
-    key.code == KeyCode::Char('y')
-        && key.modifiers.contains(Modifiers::ALT)
-        && !key.modifiers.contains(Modifiers::CONTROL)
-}
-
-fn typed_key(key: KeyEvent) -> bool {
-    matches!(key.code, KeyCode::Char(_))
-        && !key.modifiers.contains(Modifiers::CONTROL)
-        && !key.modifiers.contains(Modifiers::ALT)
-}
-
 fn sanitize(text: &str) -> String {
     text.chars()
         .filter_map(|ch| match ch {
@@ -238,17 +211,21 @@ impl Frontend {
 
     /// Consume the key-level grouping rules before a normal composer action.
     pub(super) fn prepare_edit_key(&mut self, key: KeyEvent) {
-        if !yank_pop_key(key) {
+        let action = self.keys.action(COMPOSER, key);
+        if action != Some(KeyAction::YankPop) {
             self.recovery.clear_yank();
         }
-        if !typed_key(key) && super::editing::kill(key).is_none() {
+        let typed = action.is_none() && keybindings::printable(key).is_some();
+        if !typed && action.and_then(super::editing::kill).is_none() {
             self.recovery.break_group();
         }
     }
 
     pub(super) fn undo_key(&mut self, key: KeyEvent) -> bool {
-        let Some(redo) = undo_action(key) else {
-            return false;
+        let redo = match self.keys.action(COMPOSER, key) {
+            Some(KeyAction::Undo) => false,
+            Some(KeyAction::Redo) => true,
+            _ => return false,
         };
         self.browsing = None;
         self.completion.clear();
@@ -261,10 +238,10 @@ impl Frontend {
     }
 
     pub(super) fn yank_keys(&mut self, key: KeyEvent) -> bool {
-        if yank_pop_key(key) {
+        if self.keys.matches(KeyAction::YankPop, key) {
             self.yank_pop();
             true
-        } else if yank_key(key) {
+        } else if self.keys.matches(KeyAction::Yank, key) {
             self.yank();
             true
         } else {
@@ -371,7 +348,7 @@ impl Frontend {
             self.recovery.interrupt();
             return;
         }
-        // `editing::key` derives deletion ranges from the current draft. An
+        // `editing::apply` derives deletion ranges from the current draft. An
         // invalid internal range would corrupt cursor and recovery state.
         let removed = self.draft[range.clone()].to_owned();
         let cursor_before = self.cursor;

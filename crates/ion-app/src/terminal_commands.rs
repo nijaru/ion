@@ -63,7 +63,7 @@ commands! {
     Skills => (Resources, "skills", "", "List available skills"),
     Prompts => (Resources, "prompts", "", "List available prompt templates"),
     Commands => (Resources, "commands", "", "List enabled executable user commands"),
-    Reload => (Resources, "reload", "", "Reload project instructions, resources and command metadata"),
+    Reload => (Resources, "reload", "", "Reload keybindings, project instructions, resources and command metadata"),
     Login => (Models, "login", "[PROVIDER]", "Choose an API-key provider or save its key using masked input"),
     Logout => (Models, "logout", "PROVIDER", "Remove a saved credential"),
     Quit => (General, "quit", "", "Exit the terminal client"),
@@ -99,7 +99,7 @@ impl Builtin {
             .map(|command| command.kind)
     }
 
-    pub(crate) fn help() -> String {
+    pub(crate) fn help(keys: &crate::keybindings::KeyBindings) -> String {
         let groups = GROUPS
             .iter()
             .map(|(group, title)| {
@@ -114,49 +114,17 @@ impl Builtin {
             .collect::<Vec<_>>()
             .join("\n");
         format!(
-            "Commands\n\n{groups}\n\nType / to discover commands; Tab completes without executing.\n/help COMMAND shows usage; /help keys shows keyboard controls.\nEnter sends · Shift-Enter adds a line · Ctrl-C stops work"
+            "Commands\n\n{groups}\n\nType / to discover commands; {} completes without executing.\n/help COMMAND shows usage; /help keys shows effective bindings and action IDs.\n{} sends · {} adds a line · {} stops work",
+            keys.hint(crate::keybindings::KeyAction::Tab),
+            keys.hint(crate::keybindings::KeyAction::Submit),
+            keys.hint(crate::keybindings::KeyAction::NewLine),
+            keys.hint(crate::keybindings::KeyAction::Interrupt)
         )
     }
 
-    pub(crate) fn help_for(name: &str) -> Option<String> {
+    pub(crate) fn help_for(name: &str, keys: &crate::keybindings::KeyBindings) -> Option<String> {
         if name == "keys" {
-            return Some(
-                concat!(
-                    "Keyboard controls\n",
-                    "\n",
-                    "Navigation\n",
-                    "  Arrows move; Up/Down at the first/last line browse prompt history.\n",
-                    "  Home/End or Ctrl-A/E move to line boundaries.\n",
-                    "  Ctrl/Alt-Left/Right or Alt-B/F move by word.\n",
-                    "  Page-Up/Down scroll the fullscreen transcript.\n",
-                    "\n",
-                    "Editing\n",
-                    "  Enter sends; Shift/Ctrl-Enter or Ctrl-J adds a line.\n",
-                    "  Ctrl-V pastes files, image or text; Ctrl-G opens the external editor.\n",
-                    "  @path suggests project files; typing stays in the editor.\n",
-                    "  Tab/Enter completes a visible file; Esc closes suggestions or views.\n",
-                    "  Ctrl-U/K kills to line start/end; Ctrl-W or Alt-Backspace kills a word.\n",
-                    "  Alt-D/Delete kills the next word; Ctrl-Y yanks; Alt-Y cycles text kills.\n",
-                    "  Ctrl-minus or Ctrl-_ undoes; adding Alt redoes.\n",
-                    "  Ctrl-D deletes forward, or exits with an empty draft.\n",
-                    "  Ctrl-C while idle clears the draft, or exits when it is empty.\n",
-                    "  Ctrl-Z suspends on Unix; fg resumes the same chat.\n",
-                    "\n",
-                    "Views & evidence\n",
-                    "  Ctrl-L chooses a model without replacing the draft.\n",
-                    "  Ctrl-O opens conversation details; Esc or Ctrl-O closes them.\n",
-                    "  Ctrl-X copies the last answer, or selected tool evidence in its detail view.\n",
-                    "\n",
-                    "During work\n",
-                    "  Enter steers a coding Turn; Alt-Enter queues a follow-up.\n",
-                    "  Enter during shell or compaction queues a follow-up.\n",
-                    "  Alt-Up recovers queued or returned drafts; Ctrl-C cancels work.\n",
-                    "\n",
-                    "Shell\n",
-                    "  !COMMAND shares shell output; !!COMMAND excludes it from model context.",
-                )
-                .into(),
-            );
+            return Some(keys.help());
         }
         let name = name.strip_prefix('/').unwrap_or(name);
         let name = if name == "exit" { "quit" } else { name };

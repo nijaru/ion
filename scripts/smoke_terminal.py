@@ -455,7 +455,7 @@ with tempfile.TemporaryDirectory(prefix="ion-terminal-") as temporary:
                     help_start = len(output)
                     os.write(master, b"/help keys\r")
                     sent_help_keys = True
-                if sent_help_keys and b"Ctrl-V pastes" in output[help_start:] and b"!!COMMAND" in output[help_start:] and not sent_copy:
+                if sent_help_keys and b"app.clipboard.pasteImage" in output[help_start:] and b"app.details.nextPage" in output[help_start:] and not sent_copy:
                     os.write(master, b"\x18")
                     sent_copy = True
                 if sent_copy and b"Copied last assistant answer" in output and not sent_quit:

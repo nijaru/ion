@@ -207,7 +207,7 @@ fn options() -> Vec<Arg> {
         Arg::new("continue_session").short('c').long("continue").action(ArgAction::SetTrue)
             .help("Continue the most recently active Session in this directory"),
         Arg::new("resume_session").short('r').long("resume").action(ArgAction::SetTrue)
-            .help("Choose a saved Session in a terminal; Tab switches current/all folders"),
+            .help("Choose a saved Session in a terminal; supports current/all folder scope"),
         Arg::new("provider").long("provider").value_name("PROVIDER")
             .help("Provider for an exact --model ID, including namespaced IDs"),
         Arg::new("model").long("model").value_name("PROVIDER/MODEL")

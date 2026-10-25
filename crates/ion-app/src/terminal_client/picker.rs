@@ -5,11 +5,15 @@ use std::time::SystemTime;
 
 use super::file_discovery::{MAX_ENTRIES, MAX_PATHS, discover};
 use crate::display_text::{fit_line_with_status, push_wrapped};
+#[cfg(test)]
+use crate::keybindings::KeyBindings;
 use crate::terminal_completion::FileScope;
 use anyhow::{Context, Result};
 use ion_ai::ModelRef;
 use ion_host::{SessionCatalog, SessionSummary};
-use ion_terminal::{KeyCode, KeyEvent, Modifiers};
+use ion_terminal::KeyEvent;
+#[cfg(test)]
+use ion_terminal::{KeyCode, Modifiers};
 use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
 
@@ -101,7 +105,7 @@ pub(super) enum PickerOutput {
 pub(super) struct Pickers {
     active: Option<Picker>,
     notice: Option<String>,
-    // The item index rendered as selected in the latest frame. Enter accepts only
+    // The item index rendered as selected in the latest frame. Confirmation accepts only
     // that candidate, so a stale or clipped selection cannot be chosen blindly.
     rendered_selected: Option<usize>,
     // A dismissed worker still owns its handle. New requests replace this single
@@ -117,6 +121,40 @@ pub(super) struct Pickers {
 impl Pickers {
     pub fn active(&self) -> Option<&Picker> {
         self.active.as_ref()
+    }
+
+    pub fn controls(&self, keys: &crate::keybindings::KeyBindings) -> Option<String> {
+        use crate::keybindings::KeyAction;
+        let picker = self.active.as_ref()?;
+        let mut controls = format!(
+            "{} select · {} closes",
+            keys.hint(KeyAction::Confirm),
+            keys.hint(KeyAction::Cancel)
+        );
+        if picker
+            .items
+            .iter()
+            .any(|item| matches!(item.value, PickerValue::Setting(_)))
+        {
+            controls.push_str(&format!(
+                " · {} changes settings",
+                keys.hint(KeyAction::Toggle)
+            ));
+        }
+        if let Some(request) = &self.sessions
+            && matches!(request.browser, SessionBrowser::Launch)
+        {
+            controls.push_str(&format!(
+                " · {}: {}",
+                keys.hint(KeyAction::Scope),
+                if request.all_workspaces {
+                    "current folder"
+                } else {
+                    "all folders"
+                }
+            ));
+        }
+        Some(controls)
     }
 
     /// Render against the final budget, after composer and status allocation.
@@ -135,7 +173,7 @@ impl Pickers {
             push_wrapped(&mut rows, notice, width);
         }
         // At small sizes the selected result outranks metadata and notices:
-        // Enter must not select a row clipped away by another row.
+        // Confirmation must not select a row clipped away by another row.
         let selected_row = usize::from(!matching.is_empty());
         rows.truncate(height.saturating_sub(selected_row));
         if let Some(detail) = matching
@@ -265,9 +303,9 @@ impl Pickers {
             title: if matches!(request.browser, SessionBrowser::Active(_)) {
                 "Resume session"
             } else if request.all_workspaces {
-                "Resume session · all folders · Tab: current folder"
+                "Resume session · all folders"
             } else {
-                "Resume session · current folder · Tab: all folders"
+                "Resume session · current folder"
             },
             query,
             selected: 0,
@@ -378,10 +416,12 @@ impl Pickers {
                     self.close();
                     Some("No saved Sessions for this working directory".into())
                 } else {
-                    empty.then(|| if request.all_workspaces {
-                        "No saved coding Sessions · Esc exits".into()
-                    } else {
-                        "No saved Sessions for this working directory · Tab: all folders · Esc exits".into()
+                    empty.then(|| {
+                        if request.all_workspaces {
+                            "No saved coding Sessions".into()
+                        } else {
+                            "No saved Sessions for this working directory".into()
+                        }
                     })
                 }
             }
@@ -419,9 +459,14 @@ impl Pickers {
         true
     }
 
-    pub fn key(&mut self, key: KeyEvent) -> Option<PickerValue> {
-        if key.code == KeyCode::Tab
-            && key.modifiers.is_empty()
+    pub fn key(
+        &mut self,
+        key: KeyEvent,
+        keys: &crate::keybindings::KeyBindings,
+    ) -> Option<PickerValue> {
+        use crate::keybindings::{self, KeyAction, PICKER};
+        let action = keys.action(PICKER, key);
+        if action == Some(KeyAction::Scope)
             && let Some(mut request) = self.sessions.clone()
             && matches!(request.browser, SessionBrowser::Launch)
         {
@@ -437,28 +482,26 @@ impl Pickers {
         }
         let loading = self.loading();
         let picker = self.active.as_mut().expect("picker is active");
-        match key.code {
-            KeyCode::Esc => self.close(),
-            KeyCode::Char('c') if key.modifiers.contains(Modifiers::CONTROL) => self.close(),
-            KeyCode::Up => {
+        match action {
+            Some(KeyAction::Cancel | KeyAction::Interrupt) => self.close(),
+            Some(KeyAction::SelectUp) => {
                 picker.selected = picker.selected.saturating_sub(1);
                 self.rendered_selected = None;
             }
-            KeyCode::Down => {
+            Some(KeyAction::SelectDown) => {
                 picker.selected =
                     (picker.selected + 1).min(picker.matches().len().saturating_sub(1));
                 self.rendered_selected = None;
             }
-            KeyCode::Backspace => {
+            Some(KeyAction::Backspace) => {
                 picker.query.pop();
                 picker.selected = 0;
                 self.rendered_selected = None;
             }
-            KeyCode::Enter | KeyCode::Char(' ')
+            Some(KeyAction::Confirm | KeyAction::Toggle)
                 if !loading
-                    && (key.code == KeyCode::Enter
-                        || (key.modifiers.is_empty()
-                            && picker.query.is_empty()
+                    && (action == Some(KeyAction::Confirm)
+                        || (picker.query.is_empty()
                             && picker
                                 .items
                                 .iter()
@@ -478,13 +521,12 @@ impl Pickers {
                 }
                 return value;
             }
-            KeyCode::Char(ch)
-                if !key.modifiers.contains(Modifiers::CONTROL)
-                    && !key.modifiers.contains(Modifiers::ALT) =>
-            {
-                picker.query.push(ch);
-                picker.selected = 0;
-                self.rendered_selected = None;
+            None | Some(KeyAction::Toggle) => {
+                if let Some(ch) = keybindings::printable(key) {
+                    picker.query.push(ch);
+                    picker.selected = 0;
+                    self.rendered_selected = None;
+                }
             }
             _ => {}
         }
@@ -598,7 +640,10 @@ mod tests {
         assert!(pickers.rows(80, 0).is_empty());
         assert!(
             pickers
-                .key(KeyEvent::new(KeyCode::Enter, Modifiers::NONE))
+                .key(
+                    KeyEvent::new(KeyCode::Enter, Modifiers::NONE),
+                    &KeyBindings::default()
+                )
                 .is_none()
         );
         assert!(pickers.active().is_some());
@@ -607,7 +652,10 @@ mod tests {
         assert_eq!(&marker_only[1..], ["›", " "]);
         assert!(
             pickers
-                .key(KeyEvent::new(KeyCode::Enter, Modifiers::NONE))
+                .key(
+                    KeyEvent::new(KeyCode::Enter, Modifiers::NONE),
+                    &KeyBindings::default()
+                )
                 .is_none()
         );
         assert!(pickers.active().is_some());
@@ -616,7 +664,10 @@ mod tests {
         assert_eq!(&ellipsis_only[1..], ["› …", "  …"]);
         assert!(
             pickers
-                .key(KeyEvent::new(KeyCode::Enter, Modifiers::NONE))
+                .key(
+                    KeyEvent::new(KeyCode::Enter, Modifiers::NONE),
+                    &KeyBindings::default()
+                )
                 .is_none()
         );
         assert!(pickers.active().is_some());
@@ -624,7 +675,7 @@ mod tests {
         let rows = pickers.rows(80, 10);
         assert!(rows.iter().any(|row| row == "› alpha"));
         assert!(matches!(
-            pickers.key(KeyEvent::new(KeyCode::Enter, Modifiers::NONE)),
+            pickers.key(KeyEvent::new(KeyCode::Enter, Modifiers::NONE), &KeyBindings::default()),
             Some(PickerValue::Session(path)) if path == Path::new("alpha")
         ));
         assert!(pickers.active().is_none());
@@ -634,21 +685,30 @@ mod tests {
         pickers.rows(1, 10);
         assert!(
             pickers
-                .key(KeyEvent::new(KeyCode::Enter, Modifiers::NONE))
+                .key(
+                    KeyEvent::new(KeyCode::Enter, Modifiers::NONE),
+                    &KeyBindings::default()
+                )
                 .is_none()
         );
         pickers.rows(80, 10);
-        pickers.key(KeyEvent::new(KeyCode::Char('b'), Modifiers::NONE));
+        pickers.key(
+            KeyEvent::new(KeyCode::Char('b'), Modifiers::NONE),
+            &KeyBindings::default(),
+        );
         assert!(
             pickers
-                .key(KeyEvent::new(KeyCode::Enter, Modifiers::NONE))
+                .key(
+                    KeyEvent::new(KeyCode::Enter, Modifiers::NONE),
+                    &KeyBindings::default()
+                )
                 .is_none()
         );
         assert_eq!(pickers.active().unwrap().query, "b");
         let rows = pickers.rows(80, 10);
         assert!(rows.iter().any(|row| row == "› beta"));
         assert!(matches!(
-            pickers.key(KeyEvent::new(KeyCode::Enter, Modifiers::NONE)),
+            pickers.key(KeyEvent::new(KeyCode::Enter, Modifiers::NONE), &KeyBindings::default()),
             Some(PickerValue::Session(path)) if path == Path::new("beta")
         ));
     }
@@ -780,7 +840,10 @@ mod tests {
         let mut request = request.clone();
         request.browser = SessionBrowser::Launch;
         pickers.sessions = Some(request);
-        pickers.key(KeyEvent::new(KeyCode::Tab, Modifiers::NONE));
+        pickers.key(
+            KeyEvent::new(KeyCode::Tab, Modifiers::NONE),
+            &KeyBindings::default(),
+        );
         assert_eq!(pickers.active().unwrap().query, "draft query");
         assert!(pickers.sessions.as_ref().unwrap().all_workspaces);
         assert!(pickers.job.as_ref().unwrap().stop.is_cancelled());
@@ -800,7 +863,10 @@ mod tests {
         assert_eq!(pickers.active().unwrap().query, "draft query");
         assert!(
             pickers
-                .key(KeyEvent::new(KeyCode::Enter, Modifiers::NONE))
+                .key(
+                    KeyEvent::new(KeyCode::Enter, Modifiers::NONE),
+                    &KeyBindings::default()
+                )
                 .is_none()
         );
         pickers.shutdown().await.unwrap();
@@ -811,9 +877,15 @@ mod tests {
         let (mut pickers, release) = held_session_job(sessions("/current"));
         pickers.active.as_mut().unwrap().query.clear();
         for character in "saved".chars() {
-            pickers.key(KeyEvent::new(KeyCode::Char(character), Modifiers::NONE));
+            pickers.key(
+                KeyEvent::new(KeyCode::Char(character), Modifiers::NONE),
+                &KeyBindings::default(),
+            );
         }
-        pickers.key(KeyEvent::new(KeyCode::Enter, Modifiers::NONE));
+        pickers.key(
+            KeyEvent::new(KeyCode::Enter, Modifiers::NONE),
+            &KeyBindings::default(),
+        );
         assert!(
             pickers.active().is_some(),
             "Enter cannot discard a pending query"
@@ -829,9 +901,10 @@ mod tests {
         assert!(detail.contains("2 turn(s)"));
         let rows = pickers.rows(80, 10);
         assert!(rows.iter().any(|row| row.starts_with("› ")));
-        let Some(PickerValue::Session(path)) =
-            pickers.key(KeyEvent::new(KeyCode::Enter, Modifiers::NONE))
-        else {
+        let Some(PickerValue::Session(path)) = pickers.key(
+            KeyEvent::new(KeyCode::Enter, Modifiers::NONE),
+            &KeyBindings::default(),
+        ) else {
             panic!("no chosen Session")
         };
         assert_eq!(path, PathBuf::from("/current"));

@@ -84,7 +84,10 @@ pub(super) async fn apply_picker(
         return Ok(());
     }
     if ui.clipboard_job.is_some() {
-        ui.status = "Wait for clipboard paste or cancel it with Ctrl-C".into();
+        ui.status = format!(
+            "Wait for clipboard paste or cancel it with {}",
+            ui.keys.hint(crate::keybindings::KeyAction::Interrupt)
+        );
         return Ok(());
     }
     let result = match value {

@@ -330,14 +330,26 @@ impl Completion {
         Some((menu.range.clone(), text, cursor))
     }
 
-    pub(crate) fn rows(&mut self, width: usize, budget: usize) -> Vec<String> {
+    pub(crate) fn rows(
+        &mut self,
+        width: usize,
+        budget: usize,
+        keys: &crate::keybindings::KeyBindings,
+    ) -> Vec<String> {
+        use crate::keybindings::KeyAction;
         let Some(menu) = &mut self.menu else {
             return Vec::new();
         };
         menu.drawn = false;
         if menu.items.is_empty() {
             return if menu.loading && budget > 0 {
-                vec![fit_line("Files · discovering paths… · Esc close", width)]
+                vec![fit_line(
+                    &format!(
+                        "Files · discovering paths… · {} close",
+                        keys.hint(KeyAction::Cancel)
+                    ),
+                    width,
+                )]
             } else {
                 Vec::new()
             };
@@ -347,12 +359,27 @@ impl Completion {
         }
         let visible = budget.saturating_sub(1).min(4);
         let start = menu.selected.saturating_sub(visible.saturating_sub(1));
+        let accept = if menu.kind == Kind::Files {
+            format!(
+                "{} / {}",
+                keys.hint(KeyAction::Tab),
+                keys.hint(KeyAction::Confirm)
+            )
+        } else {
+            keys.hint(KeyAction::Tab)
+        };
+        let title = if menu.kind == Kind::Files {
+            "Files"
+        } else {
+            "Commands"
+        };
         let mut rows = vec![fit_line(
-            if menu.kind == Kind::Files {
-                "Files · ↑/↓ select · Tab/Enter complete · Esc close"
-            } else {
-                "Commands · ↑/↓ select · Tab complete · Esc close"
-            },
+            &format!(
+                "{title} · {} / {} select · {accept} complete · {} close",
+                keys.hint(KeyAction::SelectUp),
+                keys.hint(KeyAction::SelectDown),
+                keys.hint(KeyAction::Cancel)
+            ),
             width,
         )];
         for (index, item) in menu.items.iter().enumerate().skip(start).take(visible) {

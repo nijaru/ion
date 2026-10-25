@@ -1,6 +1,6 @@
 //! Paged inspection of canonical saved facts and the current live transcript.
+use crate::keybindings::KeyAction;
 use ion_core::{LiveTranscript, TranscriptActivity, TranscriptItem, TranscriptProjection};
-use ion_terminal::KeyCode;
 use std::num::NonZeroUsize;
 
 use crate::display_text::push_wrapped;
@@ -44,27 +44,31 @@ impl DetailView {
         self.page = None;
     }
 
-    pub fn key(&mut self, key: KeyCode) {
+    pub(crate) fn navigate(&mut self, action: KeyAction) {
         let Some(page) = &self.page else { return };
-        match key {
-            KeyCode::Up | KeyCode::PageUp => {
+        match action {
+            KeyAction::DetailUp | KeyAction::PageUp => {
                 self.page_end = Some(page.end);
-                let step = if key == KeyCode::Up { 1 } else { 12 };
+                let step = if action == KeyAction::DetailUp { 1 } else { 12 };
                 self.scroll = self
                     .scroll
                     .saturating_add(step)
                     .min(page.rows.len().saturating_sub(1));
             }
-            KeyCode::Down | KeyCode::PageDown => {
-                let step = if key == KeyCode::Down { 1 } else { 12 };
+            KeyAction::DetailDown | KeyAction::PageDown => {
+                let step = if action == KeyAction::DetailDown {
+                    1
+                } else {
+                    12
+                };
                 self.scroll = self.scroll.saturating_sub(step);
             }
-            KeyCode::Left if self.tool.is_none() && page.start > 0 => {
+            KeyAction::Earlier if self.tool.is_none() && page.start > 0 => {
                 self.page_end = Some(page.start);
                 self.scroll = 0;
                 self.invalidate();
             }
-            KeyCode::Right if self.tool.is_none() => {
+            KeyAction::Later if self.tool.is_none() => {
                 let end = page.end.saturating_add(PAGE_ENTRIES).min(page.total);
                 self.page_end = (end < page.total).then_some(end);
                 self.scroll = 0;
@@ -242,14 +246,28 @@ impl DetailView {
         Some((number, evidence))
     }
 
-    pub fn controls(&self) -> String {
-        self.tool.map_or_else(
-            || "Conversation · ← older / → newer · ↑/↓ scroll · Esc or Ctrl-O closes".into(),
-            |number| {
+    pub(crate) fn controls(&self, keys: &crate::keybindings::KeyBindings) -> String {
+        let title = self.tool.map_or_else(
+            || {
                 format!(
-                    "Tool {number} · Ctrl-X copies evidence · ↑/↓ scroll · Esc or Ctrl-O closes"
+                    "Conversation · {} older / {} newer",
+                    keys.hint(KeyAction::Earlier),
+                    keys.hint(KeyAction::Later)
                 )
             },
+            |number| {
+                format!(
+                    "Tool {number} · {} copies evidence",
+                    keys.hint(KeyAction::Copy)
+                )
+            },
+        );
+        format!(
+            "{title} · {} / {} scroll · {} or {} closes",
+            keys.hint(KeyAction::DetailUp),
+            keys.hint(KeyAction::DetailDown),
+            keys.hint(KeyAction::Cancel),
+            keys.hint(KeyAction::Detail)
         )
     }
 }
@@ -472,12 +490,12 @@ mod tests {
         let tail = view.rows().join("\n");
         assert!(tail.contains("ANSWER_39"));
         assert!(!tail.contains("ANSWER_0\n"));
-        view.key(KeyCode::Left);
+        view.navigate(KeyAction::Earlier);
         view.prepare(&history, None, 80);
         let earlier = view.rows().join("\n");
         assert!(earlier.contains("ANSWER_0\n"));
         assert!(!earlier.contains("ANSWER_39"));
-        view.key(KeyCode::Right);
+        view.navigate(KeyAction::Later);
         view.prepare(&history, None, 6);
         assert!(
             view.rows()

@@ -67,6 +67,11 @@ impl Modifiers {
     }
 
     #[must_use]
+    pub const fn without(self, other: Self) -> Self {
+        Self(self.0 & !other.0)
+    }
+
+    #[must_use]
     pub const fn contains(self, other: Self) -> bool {
         self.0 & other.0 == other.0
     }
@@ -1021,6 +1026,28 @@ mod tests {
                 Modifiers::ALT
             )))
         );
+    }
+
+    #[test]
+    fn legacy_controls_and_extended_reports_have_explicit_aliases() {
+        for (bytes, code, modifiers) in [
+            (b"\x08".as_slice(), KeyCode::Backspace, Modifiers::NONE),
+            (b"\t", KeyCode::Tab, Modifiers::NONE),
+            (b"\n", KeyCode::Enter, Modifiers::NONE),
+            (b"\r", KeyCode::Enter, Modifiers::NONE),
+            (b"\x1b[104;5u", KeyCode::Char('h'), Modifiers::CONTROL),
+            (b"\x1b[105;5u", KeyCode::Char('i'), Modifiers::CONTROL),
+            (b"\x1b[106;5u", KeyCode::Char('j'), Modifiers::CONTROL),
+            (b"\x1b[109;5u", KeyCode::Char('m'), Modifiers::CONTROL),
+        ] {
+            let events = InputParser::new().parse_as_vec(bytes, false);
+            assert_eq!(events.len(), 1, "{bytes:?}");
+            assert_eq!(
+                InputStream::decode(events[0].clone()),
+                Some(InputEvent::Key(KeyEvent::new(code, modifiers))),
+                "{bytes:?}"
+            );
+        }
     }
 
     #[test]

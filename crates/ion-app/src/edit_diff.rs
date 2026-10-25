@@ -36,13 +36,13 @@ pub(crate) fn render(
     activity: &TranscriptActivity,
     prefix: &str,
     width: usize,
-    detail: crate::tool_output::OutputDetail,
+    detail: &crate::tool_output::OutputOptions,
 ) {
     let Some(diff) = recorded(activity) else {
         return;
     };
     const PREVIEW_LINES: usize = 8;
-    let expanded = detail == crate::tool_output::OutputDetail::Expanded;
+    let expanded = detail.detail == crate::tool_output::OutputDetail::Expanded;
     let mut source = diff.text.lines().skip(if expanded { 0 } else { 2 });
     let lines = source
         .by_ref()
@@ -50,11 +50,11 @@ pub(crate) fn render(
         .collect::<Vec<_>>();
     let more = source.next().is_some();
     let footer = if diff.truncated {
-        Some("… diff capture truncated · Ctrl-O")
+        Some(format!("… diff capture truncated · {}", detail.details_key))
     } else if more {
-        Some("… more diff · Ctrl-O")
+        Some(format!("… more diff · {}", detail.details_key))
     } else if lines.is_empty() {
-        Some("No text changes")
+        Some("No text changes".into())
     } else {
         None
     };
@@ -88,7 +88,7 @@ pub(crate) fn render(
             &format!("{prefix}  "),
             Line::styled(
                 crate::display_text::fit_line(
-                    footer,
+                    &footer,
                     width.saturating_sub(prefix.width() + 2).max(1),
                 ),
                 style(Role::Secondary),
@@ -132,7 +132,10 @@ mod tests {
             &activity,
             "  ",
             80,
-            crate::tool_output::OutputDetail::Compact,
+            &crate::tool_output::OutputOptions::new(
+                crate::tool_output::OutputDetail::Compact,
+                &crate::keybindings::KeyBindings::default(),
+            ),
         );
         assert!(rows.iter().any(|row| row.to_string().contains("+new")));
         activity.activity.kind = ToolActivityKind::Read;
@@ -169,7 +172,10 @@ mod tests {
                 &activity,
                 "│ ",
                 width,
-                crate::tool_output::OutputDetail::Compact,
+                &crate::tool_output::OutputOptions::new(
+                    crate::tool_output::OutputDetail::Compact,
+                    &crate::keybindings::KeyBindings::default(),
+                ),
             );
             assert!(rows.len() <= 9, "width {width}: {} rows", rows.len());
             assert!(
@@ -193,7 +199,10 @@ mod tests {
             &activity,
             "  ",
             80,
-            crate::tool_output::OutputDetail::Expanded,
+            &crate::tool_output::OutputOptions::new(
+                crate::tool_output::OutputDetail::Expanded,
+                &crate::keybindings::KeyBindings::default(),
+            ),
         );
         let expanded = expanded
             .iter()

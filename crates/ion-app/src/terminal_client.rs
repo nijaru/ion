@@ -2,6 +2,8 @@
 #[cfg(test)]
 use ion_ai::Role;
 #[cfg(test)]
+use ion_terminal::{KeyCode, Modifiers};
+#[cfg(test)]
 use std::fs;
 use std::{
     collections::{HashSet, VecDeque},
@@ -9,6 +11,7 @@ use std::{
 };
 
 use crate::display_text::{fit_line, push_wrapped};
+use crate::keybindings::{self, COMPLETION, COMPOSER, DETAILS, KeyAction, KeyBindings};
 use crate::terminal_commands::Builtin;
 use crate::terminal_completion::Completion;
 use crate::transcript_detail::{DetailView, tools};
@@ -22,8 +25,7 @@ use ion_core::{
 use ion_host::image_input::{ImageSource, LoadedImage};
 use ion_host::{CredentialStore, Delivery, QuestionResponder, Resources};
 use ion_terminal::{
-    Frame, InputEvent, KeyCode, KeyEvent, Modifiers, MouseKind, ProgramStatus, Screen,
-    TerminalSession,
+    Frame, InputEvent, KeyEvent, MouseKind, ProgramStatus, Screen, TerminalSession,
 };
 use ratatui::text::Line;
 use tokio::time::Duration;
@@ -128,6 +130,7 @@ use activity::{ActiveOperation, Activity};
 
 #[derive(Default)]
 struct Frontend {
+    keys: KeyBindings,
     mode: TuiMode,
     output_detail: crate::tool_output::OutputDetail,
     thinking_visibility: crate::transcript_render::ThinkingVisibility,
@@ -227,6 +230,7 @@ pub struct ChatInit {
     pub images: Vec<LoadedImage>,
     pub startup_diagnostics: Vec<String>,
     pub tui_mode: TuiMode,
+    pub(crate) keys: KeyBindings,
 }
 
 pub async fn chat(init: ChatInit) -> Result<()> {
@@ -239,6 +243,7 @@ pub async fn chat(init: ChatInit) -> Result<()> {
     let mut background_revision = 0;
     let mut ui = Frontend {
         mode: init.tui_mode,
+        keys: init.keys,
         images: init.images.into_iter().map(Into::into).collect(),
         ..Frontend::default()
     };
@@ -307,7 +312,7 @@ pub async fn chat(init: ChatInit) -> Result<()> {
             let event = event.context("terminal input ended unexpectedly")?;
             match event? {
                 InputEvent::Key(key) => {
-                    if key.code == KeyCode::Char('z') && key.modifiers.contains(Modifiers::CONTROL) {
+                    if ui.keys.matches(KeyAction::Suspend, key) {
                         ui.break_edit_focus();
                         release_inline_surface(terminal, screen).await?;
                         terminal.suspend_to_job_control().await.context("suspend terminal job")?;
@@ -316,7 +321,7 @@ pub async fn chat(init: ChatInit) -> Result<()> {
                         poll_control = true;
                         continue;
                     }
-                    if key.code == KeyCode::Char('c') && key.modifiers.contains(Modifiers::CONTROL)
+                    if ui.keys.matches(KeyAction::Interrupt, key)
                         && (runtime.is_busy() || activity.view(&runtime).is_some())
                     {
                         ui.break_edit_focus();
@@ -329,7 +334,7 @@ pub async fn chat(init: ChatInit) -> Result<()> {
                             .question
                             .as_mut()
                             .expect("question owns input")
-                            .key(key);
+                            .key(key, &ui.keys);
                         apply_question_action(&mut ui, questions.as_ref(), action);
                         poll_control = true;
                         continue;
@@ -884,7 +889,7 @@ impl Frontend {
             self.history_published_items..self.pending_history_target,
             true,
             width.saturating_sub(1).max(1),
-            self.output_detail,
+            &crate::tool_output::OutputOptions::new(self.output_detail, &self.keys),
             self.thinking_visibility,
         );
         if self.pending_history_banner.is_none()
@@ -960,33 +965,39 @@ impl Frontend {
         if self.pickers.active().is_some() {
             self.break_edit_focus();
             self.completion.clear();
-            return self.pickers.key(key).map_or(Action::None, Action::Pick);
+            return self
+                .pickers
+                .key(key, &self.keys)
+                .map_or(Action::None, Action::Pick);
         }
-        self.prepare_edit_key(key);
+        let input = self.keys.action(COMPOSER, key);
+        let completion_key = self.keys.action(COMPLETION, key);
         let menu_was_visible = self.completion.visible();
-        self.refresh_completion(
-            resources,
-            commands,
-            key.code == KeyCode::Tab && key.modifiers.is_empty(),
-        );
+        self.refresh_completion(resources, commands, input == Some(KeyAction::Tab));
         if (self.completion.active() || self.completion.wants_files())
-            && key.code == KeyCode::Esc
-            && key.modifiers.is_empty()
+            && completion_key == Some(KeyAction::Cancel)
         {
+            self.break_edit_focus();
             self.completion.dismiss();
             self.pickers.cancel_files();
             return Action::None;
         }
-        if key.modifiers.is_empty()
-            && (self.completion.visible() || (self.completion.active() && key.code == KeyCode::Tab))
+        if self.completion.visible()
+            || (self.completion.active() && completion_key == Some(KeyAction::Tab))
         {
-            match key.code {
-                KeyCode::Up | KeyCode::Down => {
-                    self.completion.move_selection(key.code == KeyCode::Down);
+            match completion_key {
+                Some(KeyAction::SelectUp | KeyAction::SelectDown) => {
+                    self.break_edit_focus();
+                    self.completion
+                        .move_selection(completion_key == Some(KeyAction::SelectDown));
                     return Action::None;
                 }
-                KeyCode::Tab | KeyCode::Enter => {
-                    if key.code == KeyCode::Tab && !menu_was_visible && !self.completion.unique() {
+                Some(KeyAction::Tab | KeyAction::Confirm) => {
+                    self.break_edit_focus();
+                    if completion_key == Some(KeyAction::Tab)
+                        && !menu_was_visible
+                        && !self.completion.unique()
+                    {
                         return Action::None;
                     }
                     if let Some((range, text, cursor)) = self.completion.replacement(&self.draft) {
@@ -998,36 +1009,30 @@ impl Frontend {
                 _ => {}
             }
         }
-        // Clipboard preparation owns future attachments. Preserve the literal
-        // editor input until it completes, before any client can acknowledge it.
+        self.prepare_edit_key(key);
+        // Preparing clipboard attachments never acknowledges a future prompt.
         if self.clipboard_job.is_some()
-            && key.code == KeyCode::Enter
-            && !key.modifiers.contains(Modifiers::SHIFT)
-            && !key.modifiers.contains(Modifiers::CONTROL)
+            && matches!(input, Some(KeyAction::Submit | KeyAction::FollowUp))
             && Builtin::parse(self.draft.split_whitespace().next().unwrap_or("")).is_none()
         {
             self.status = "Wait for clipboard paste, then send the prompt".into();
             return Action::None;
         }
-        if key.code == KeyCode::Char('c') && key.modifiers.contains(Modifiers::CONTROL) {
-            let stop = self.clipboard_job.as_ref().map(|job| &job.stop);
-            if let Some(stop) = stop
-                && !stop.is_cancelled()
-            {
-                stop.cancel();
-                self.status = "Cancelling input preparation…".into();
-                return Action::None;
-            }
+        if input == Some(KeyAction::Interrupt)
+            && let Some(stop) = self.clipboard_job.as_ref().map(|job| &job.stop)
+            && !stop.is_cancelled()
+        {
+            stop.cancel();
+            self.status = "Cancelling input preparation…".into();
+            return Action::None;
         }
-        if self.undo_key(key) {
+        if self.undo_key(key) || self.yank_keys(key) {
             self.refresh_completion(resources, commands, false);
             return Action::None;
         }
-        if self.yank_keys(key) {
-            self.refresh_completion(resources, commands, false);
-            return Action::None;
-        }
-        if let Some(edit) = editing::key(&self.draft, self.cursor, key) {
+        if let Some(edit) =
+            input.and_then(|action| editing::apply(&self.draft, self.cursor, action))
+        {
             match edit {
                 Edit::Move(cursor) => {
                     self.break_edit_focus();
@@ -1038,11 +1043,8 @@ impl Frontend {
             self.refresh_completion(resources, commands, false);
             return Action::None;
         }
-        let action = match key {
-            KeyEvent {
-                code: KeyCode::Char('c'),
-                modifiers,
-            } if modifiers.contains(Modifiers::CONTROL) => {
+        let action = match input {
+            Some(KeyAction::Interrupt) => {
                 if self.draft.is_empty() {
                     Action::Quit
                 } else {
@@ -1050,58 +1052,26 @@ impl Frontend {
                     Action::None
                 }
             }
-            KeyEvent {
-                code: KeyCode::Char('d'),
-                modifiers,
-            } if modifiers.contains(Modifiers::CONTROL) && self.draft.is_empty() => Action::Quit,
-            KeyEvent {
-                code: KeyCode::Tab, ..
-            } => {
+            Some(KeyAction::Exit) if self.draft.is_empty() => Action::Quit,
+            Some(KeyAction::Tab) => {
                 if !self.completion.wants_files() {
                     self.insert("\t");
                 }
                 Action::None
             }
-            KeyEvent {
-                code: KeyCode::Char('o'),
-                modifiers,
-            } if modifiers.contains(Modifiers::CONTROL) => {
+            Some(KeyAction::Detail) => {
                 self.open_details(None);
                 Action::None
             }
-            KeyEvent {
-                code: KeyCode::Char('x'),
-                modifiers,
-            } if modifiers.contains(Modifiers::CONTROL) => {
-                Action::Command(CommandInput::Shortcut(Builtin::Copy))
-            }
-            KeyEvent {
-                code: KeyCode::Char('g'),
-                modifiers,
-            } if modifiers.contains(Modifiers::CONTROL) => {
-                Action::Command(CommandInput::Shortcut(Builtin::Editor))
-            }
-            KeyEvent {
-                code: KeyCode::Char('l'),
-                modifiers,
-            } if modifiers.contains(Modifiers::CONTROL) => {
-                Action::Command(CommandInput::Shortcut(Builtin::Model))
-            }
-            KeyEvent {
-                code: KeyCode::Char('v'),
-                modifiers,
-            } if modifiers.contains(Modifiers::CONTROL) => Action::PasteClipboard,
-            KeyEvent {
-                code: KeyCode::Enter,
-                modifiers,
-            } if modifiers.contains(Modifiers::SHIFT) || modifiers.contains(Modifiers::CONTROL) => {
+            Some(KeyAction::Copy) => Action::Command(CommandInput::Shortcut(Builtin::Copy)),
+            Some(KeyAction::External) => Action::Command(CommandInput::Shortcut(Builtin::Editor)),
+            Some(KeyAction::Model) => Action::Command(CommandInput::Shortcut(Builtin::Model)),
+            Some(KeyAction::Paste) => Action::PasteClipboard,
+            Some(KeyAction::NewLine) => {
                 self.insert("\n");
                 Action::None
             }
-            KeyEvent {
-                code: KeyCode::Enter,
-                modifiers,
-            } if modifiers.contains(Modifiers::ALT) => {
+            Some(KeyAction::FollowUp) => {
                 if self.draft.trim().is_empty() && self.images.is_empty() {
                     Action::None
                 } else {
@@ -1112,17 +1082,7 @@ impl Frontend {
                     Action::Queue(prompt)
                 }
             }
-            KeyEvent {
-                code: KeyCode::Char('j'),
-                modifiers,
-            } if modifiers.contains(Modifiers::CONTROL) => {
-                self.insert("\n");
-                Action::None
-            }
-            KeyEvent {
-                code: KeyCode::Enter,
-                ..
-            } => {
+            Some(KeyAction::Submit) => {
                 let syntax = self.draft.trim();
                 let invalid_shell = if let Some(command) = syntax.strip_prefix("!!") {
                     command
@@ -1179,13 +1139,8 @@ impl Frontend {
                     }
                 }
             }
-            KeyEvent {
-                code: KeyCode::Up,
-                modifiers,
-            } if modifiers.contains(Modifiers::ALT) => Action::Recover,
-            KeyEvent {
-                code: KeyCode::Up, ..
-            } => {
+            Some(KeyAction::Dequeue) => Action::Recover,
+            Some(KeyAction::CursorUp) => {
                 if let Some(cursor) = vertical_cursor(&self.draft, self.cursor, false) {
                     self.cursor = cursor;
                 } else {
@@ -1193,10 +1148,7 @@ impl Frontend {
                 }
                 Action::None
             }
-            KeyEvent {
-                code: KeyCode::Down,
-                ..
-            } => {
+            Some(KeyAction::CursorDown) => {
                 if let Some(cursor) = vertical_cursor(&self.draft, self.cursor, true) {
                     self.cursor = cursor;
                 } else {
@@ -1204,26 +1156,19 @@ impl Frontend {
                 }
                 Action::None
             }
-            KeyEvent {
-                code: KeyCode::PageUp,
-                ..
-            } => {
+            Some(KeyAction::PageUp) => {
                 self.scroll = self.scroll.saturating_add(10);
                 Action::None
             }
-            KeyEvent {
-                code: KeyCode::PageDown,
-                ..
-            } => {
+            Some(KeyAction::PageDown) => {
                 self.scroll = self.scroll.saturating_sub(10);
                 Action::None
             }
-            KeyEvent {
-                code: KeyCode::Char(ch),
-                modifiers,
-            } if !modifiers.contains(Modifiers::CONTROL) && !modifiers.contains(Modifiers::ALT) => {
-                let mut bytes = [0; 4];
-                self.insert_typed(ch.encode_utf8(&mut bytes));
+            None => {
+                if let Some(ch) = keybindings::printable(key) {
+                    let mut bytes = [0; 4];
+                    self.insert_typed(ch.encode_utf8(&mut bytes));
+                }
                 Action::None
             }
             _ => Action::None,
@@ -1246,23 +1191,28 @@ impl Frontend {
     }
 
     fn detail_key(&mut self, key: KeyEvent) -> Action {
-        if key.code == KeyCode::Esc
-            || (key.code == KeyCode::Char('o') && key.modifiers == Modifiers::CONTROL)
-        {
-            self.details = None;
-            self.status = "Details closed".into();
-        } else if key.code == KeyCode::Char('x') && key.modifiers.contains(Modifiers::CONTROL) {
-            let selected = self
-                .details
-                .as_ref()
-                .and_then(DetailView::copy_evidence)
-                .is_some();
-            if selected {
-                return Action::CopyDetail;
+        match self.keys.action(DETAILS, key) {
+            Some(KeyAction::Cancel | KeyAction::Detail) => {
+                self.details = None;
+                self.status = "Details closed".into();
             }
-            self.status = "No selected tool evidence; open /tool N to copy".into();
-        } else if let Some(view) = &mut self.details {
-            view.key(key.code);
+            Some(KeyAction::Copy) => {
+                if self
+                    .details
+                    .as_ref()
+                    .and_then(DetailView::copy_evidence)
+                    .is_some()
+                {
+                    return Action::CopyDetail;
+                }
+                self.status = "No selected tool evidence; open /tool N to copy".into();
+            }
+            Some(action) => {
+                if let Some(view) = &mut self.details {
+                    view.navigate(action);
+                }
+            }
+            None => {}
         }
         Action::None
     }
@@ -1417,6 +1367,7 @@ fn draw_prepared(
     let completions = ui.completion.rows(
         width,
         row_budget.saturating_sub(composer_height + progress_height + status_height),
+        &ui.keys,
     );
     // Identity is lower priority than the editor, stop controls and discovery.
     let footer = orientation::rows(
@@ -1446,6 +1397,10 @@ fn draw_prepared(
         width,
         content_budget,
         ui.thinking_visibility,
+        &crate::tool_output::OutputOptions::new(
+            crate::tool_output::OutputDetail::Compact,
+            &ui.keys,
+        ),
     );
     live_rows.extend(chrome.into_iter().map(Line::raw));
     let composer_offset = live_rows.len();
@@ -1515,8 +1470,9 @@ fn visible_status(ui: &Frontend, operation: Option<ActiveOperation>) -> Option<S
         String::new()
     } else {
         format!(
-            " · {} recovered draft(s) · Alt-Up cycles",
-            ui.recovered.len()
+            " · {} recovered draft(s) · {} cycles",
+            ui.recovered.len(),
+            ui.keys.hint(KeyAction::Dequeue)
         )
     };
     let queued = operation
@@ -1540,10 +1496,13 @@ fn visible_status(ui: &Frontend, operation: Option<ActiveOperation>) -> Option<S
                 format!("{label} · {status}")
             }
         } else if status.is_empty() {
-            let controls = operation.controls();
+            let controls = operation.controls(&ui.keys);
             format!("{label} · {controls}")
         } else {
-            format!("{label} · Ctrl-C cancels · {status}")
+            format!(
+                "{label} · {} cancels · {status}",
+                ui.keys.hint(KeyAction::Interrupt)
+            )
         });
     }
     (!status.is_empty()).then_some(status)
@@ -1565,14 +1524,14 @@ fn draw_chat_fullscreen(
         0..ui.history.items.len(),
         false,
         width,
-        ui.output_detail,
+        &crate::tool_output::OutputOptions::new(ui.output_detail, &ui.keys),
         ui.thinking_visibility,
     );
     if let Some(progress) = progress {
         let live = crate::transcript_render::rows(
             &progress.projection().items,
             width,
-            ui.output_detail,
+            &crate::tool_output::OutputOptions::new(ui.output_detail, &ui.keys),
             ui.thinking_visibility,
         );
         if !live.is_empty()
@@ -1606,6 +1565,7 @@ fn draw_chat_fullscreen(
     let completions = ui.completion.rows(
         width,
         height.saturating_sub(composer_height + status_height),
+        &ui.keys,
     );
     let footer = orientation::rows(
         ui,
@@ -1666,7 +1626,7 @@ fn draw_question_fullscreen(
         .question
         .as_mut()
         .expect("question owns input")
-        .render(width, height);
+        .render(width, height, &ui.keys);
     screen.draw_fullscreen(&mut terminal.output()?, &frame.rows, frame.cursor)?;
     Ok(())
 }
@@ -1749,7 +1709,11 @@ fn modal_rows(
     if let Some(view) = &mut ui.details {
         view.prepare(&ui.history, progress, width);
     }
-    let controls = ui.details.as_ref().map(DetailView::controls);
+    let controls = ui
+        .details
+        .as_ref()
+        .map(|view| view.controls(&ui.keys))
+        .or_else(|| ui.pickers.controls(&ui.keys));
     let status = visible_status(ui, operation);
     let status = if ui.question.is_some() {
         Some(status.map_or_else(
@@ -1817,6 +1781,8 @@ fn modal_rows(
     (rows, cursor)
 }
 
+#[cfg(test)]
+mod keybinding_tests;
 #[cfg(test)]
 mod presentation_tests;
 #[cfg(test)]

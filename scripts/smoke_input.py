@@ -163,6 +163,158 @@ class Terminal:
         self.child.wait(timeout=5)
 
 
+def exercise_keybindings(work, base_env, endpoint):
+    for mode in ("inline", "fullscreen"):
+        root = work / f"keys-{mode}"
+        cwd = root / "workspace"
+        cwd.mkdir(parents=True)
+        env = dict(base_env, HOME=str(root / "home"), ION_HOME=str(root / "ion"), XDG_CONFIG_HOME=str(root / "config"), XDG_STATE_HOME=str(root / "state"))
+        subprocess.run([binary, "use", "smoke", "smoke-model", "--endpoint", endpoint, "--wire", "chat-completions"], env=env, check=True, capture_output=True)
+        config = root / "ion/keybindings.json"
+        config.write_text('{"app.model.select":"private-secret"}')
+        before = len(requests)
+        terminal = Terminal(cwd, env, mode)
+        try:
+            terminal.wait(lambda: terminal.child.poll() is not None)
+            terminal.paint()
+            assert terminal.child.returncode == 1 and "invalid keybindings.json" in terminal.text(), terminal.text()
+            assert "private-secret" not in terminal.text() and not list((root / "ion").rglob("*.sqlite")), "invalid keymap leaked data or allocated a Session"
+            assert termios.tcgetattr(terminal.master) == terminal.original_modes
+        finally:
+            terminal.close()
+        subprocess.run([binary, "models"], env=env, check=True, capture_output=True)
+        # Credentials have their own masked/quarantined lease, not App shortcuts.
+        terminal = Terminal(cwd, env, mode, ["login", "key-fixture"])
+        try:
+            terminal.wait(lambda: "key-fixture API key:" in terminal.text())
+            terminal.send(b"DISPOSABLE_KEY\x11")
+            terminal.paint()
+            assert terminal.child.poll() is None and "DISPOSABLE_KEY" not in terminal.text()
+            terminal.send(b"\x03")
+            terminal.wait(lambda: terminal.child.poll() is not None)
+            assert terminal.child.returncode == 1 and termios.tcgetattr(terminal.master) == terminal.original_modes
+            assert not (root / "ion/credentials/key-fixture.key").exists()
+        finally:
+            terminal.close()
+        keys = {
+            "app.model.select": "alt+m", "app.interrupt": "ctrl+q", "app.suspend": "f6",
+            "tui.input.submit": "ctrl+s", "tui.input.tab": "ctrl+t",
+            "tui.select.confirm": "alt+enter", "tui.select.cancel": "alt+x",
+            "tui.select.down": "ctrl+n", "tui.select.up": "ctrl+p",
+            "app.tools.expand": "alt+o", "app.message.copy": [],
+            "app.session.toggleScope": "ctrl+f",
+        }
+        config.write_text(json.dumps(keys))
+        (cwd / "named-file.txt").touch()
+        pid = None
+        terminal = Terminal(cwd, env, mode)
+        try:
+            terminal.wait(lambda: "›" in terminal.text())
+            terminal.output.clear()
+            terminal.send(b"DRAFT_Ab\x0c")  # Old Ctrl-L no longer opens a picker.
+            terminal.paint()
+            assert "Choose model" not in terminal.text()
+            terminal.send(b"\x1bm")
+            terminal.wait(lambda: "Choose model" in terminal.text())
+            terminal.paint()
+            terminal.send(b"\r\x1b")  # Old confirm/cancel are disabled in this context.
+            terminal.paint()
+            terminal.send("smoke")  # If either old shortcut closed the picker this corrupts the independently observed prompt.
+            terminal.send(b"\x1bx")
+            terminal.paint()
+            terminal.send(b"\x13")
+            terminal.wait(lambda: len(requests) == before + 1 and b"state=done" in terminal.output)
+            assert user_text(requests[-1]) == "DRAFT_Ab", requests[-1]
+            terminal.output.clear()
+            terminal.send(b"named-\x14")
+            terminal.wait(lambda: "Files ·" in terminal.text() and "named-file.txt" in terminal.text())
+            terminal.paint()
+            terminal.send(b"\t\r")
+            terminal.paint()
+            assert len(requests) == before + 1, "old submit/complete key admitted input"
+            terminal.send(b"\x1b[13;3u")
+            terminal.paint()
+            assert len(requests) == before + 1, "configured completion confirm submitted or queued"
+            terminal.send(b"\x13")
+            terminal.wait(lambda: len(requests) == before + 2 and b"state=done" in terminal.output)
+            assert user_text(requests[-1]) == "named-file.txt ", requests[-1]
+            config.write_text('{"app.model.select":"private-secret"}')
+            terminal.output.clear()
+            terminal.send(b"/reload\x13")
+            terminal.wait(lambda: "invalid keybindings.json" in terminal.text())
+            assert "private-secret" not in terminal.text()
+            terminal.send(b"\x11")  # Clears the restored /reload; an empty draft would exit.
+            terminal.send(b"\x1bm")
+            terminal.wait(lambda: "Choose model" in terminal.text())
+            terminal.send(b"\x1bx")
+            terminal.paint()
+            keys["app.model.select"] = "alt+w"
+            config.write_text(json.dumps(keys))
+            terminal.output.clear()
+            terminal.send(b"/reload\x13")
+            terminal.wait(lambda: "Reloaded keybindings" in terminal.text())
+            terminal.output.clear()
+            terminal.send(b"\x1bm")
+            terminal.paint()
+            assert "Choose model" not in terminal.text(), "reload retained the old shortcut"
+            terminal.send(b"\x1bw")
+            terminal.wait(lambda: "Choose model" in terminal.text())
+            terminal.send(b"\x1bx")
+            terminal.paint()
+            terminal.output.clear()
+            terminal.send(b"!printf '%s' $$ > key.pid; touch key.ready; while :; do sleep 0.01; done\x13")
+            terminal.wait(lambda: (cwd / "key.ready").exists())
+            pid = int((cwd / "key.pid").read_text())
+            terminal.send(b"\x1bo")
+            terminal.wait(lambda: "Conversation ·" in terminal.text())
+            terminal.send(b"\x03")
+            terminal.paint()
+            os.kill(pid, 0)  # Old global Stop must be inactive, even over a modal.
+            terminal.output.clear()
+            terminal.send(b"\x11")
+            terminal.wait(lambda: b"state=idle" in terminal.output)
+            try:
+                os.kill(pid, 0)
+                raise AssertionError("custom Stop did not join the shell")
+            except ProcessLookupError:
+                pass
+            assert (cwd / "key.ready").exists(), "stop was treated as rollback"
+            terminal.send(b"\x1bx")
+            terminal.paint()
+            terminal.send(b"\x11")
+            terminal.wait_exit()
+            assert len(requests) == before + 2, "keyboard control admitted unexpected model work"
+        finally:
+            terminal.close()
+            if pid is not None:
+                try:
+                    if os.getpgid(pid) == pid:
+                        os.killpg(pid, signal.SIGKILL)
+                except ProcessLookupError:
+                    pass
+        # The launch chooser receives the same map before opening a Session.
+        sessions = set((root / "ion").rglob("*.sqlite"))
+        other = root / "other"
+        other.mkdir()
+        terminal = Terminal(other, env, mode, ["--resume", "--tui-mode", mode, "chat"])
+        try:
+            terminal.wait(lambda: "No saved Sessions" in terminal.text())
+            terminal.output.clear()
+            terminal.send(b"\x06")
+            terminal.wait(lambda: "all folders" in terminal.text() and "smoke-model" in terminal.text())
+            terminal.paint()
+            terminal.output.clear()
+            terminal.send(b"\x1b[13;3u")
+            terminal.wait(lambda: str(cwd.resolve()) in terminal.text() and b"state=idle" in terminal.output)
+            terminal.paint()
+            terminal.send(b"\x11")
+            terminal.wait_exit()
+            assert set((root / "ion").rglob("*.sqlite")) == sessions, "resume allocated another Session"
+        finally:
+            terminal.close()
+        print(f"Keybindings {mode}: pre-admission validation, metadata/secret isolation, custom editor/modal/completion, failed/successful reload, global Stop/join and launch chooser: OK", flush=True)
+
+
 def exercise_tasks(work, env):
     def alive(pid):
         try:
@@ -349,7 +501,7 @@ def exercise_configuration(work, base_env, endpoint):
             terminal.wait(lambda: b"state=done" in terminal.output)
             before = len(requests)
             terminal.send("/settings\r")
-            terminal.wait(lambda: "Settings · Enter/Space" in terminal.text())
+            terminal.wait(lambda: "Settings ·" in terminal.text() and "Space changes settings" in terminal.text())
             terminal.send(" ")
             terminal.wait(lambda: "Tool output: expanded" in terminal.text())
             terminal.send("Thinking")
@@ -774,6 +926,7 @@ with tempfile.TemporaryDirectory(prefix="ion-input-") as temporary:
         exercise_resume(work, env, f"http://127.0.0.1:{server.server_port}/v1/chat/completions")
         exercise_orientation(work, env, f"http://127.0.0.1:{server.server_port}/v1/chat/completions")
         exercise_configuration(work, env, f"http://127.0.0.1:{server.server_port}/v1/chat/completions")
+        exercise_keybindings(work, env, f"http://127.0.0.1:{server.server_port}/v1/chat/completions")
         exercise_tasks(work, env)
         # Display sanitation must not bypass the secret reader's input guard.
         terminal = Terminal(work, env, "inline", ["login", "unsafe\x1b[31mprovider"])

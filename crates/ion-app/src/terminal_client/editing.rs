@@ -1,7 +1,7 @@
 //! Literal-text editing only; admission, history browsing and rendering stay with the client.
 use std::ops::Range;
 
-use ion_terminal::{KeyCode, KeyEvent, Modifiers};
+use crate::keybindings::KeyAction;
 use unicode_segmentation::{GraphemeCursor, UnicodeSegmentation};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -113,72 +113,46 @@ pub(super) fn vertical_cursor(text: &str, cursor: usize, down: bool) -> Option<u
     )
 }
 
-/// Which kill behavior a key owns, independent of the current draft.
-pub(super) fn kill(key: KeyEvent) -> Option<Kill> {
-    let control = key.modifiers.contains(Modifiers::CONTROL);
-    let alt = key.modifiers.contains(Modifiers::ALT);
-    let control_char = control && !alt;
-    let alt_char = alt && !control;
-    match key.code {
-        KeyCode::Backspace if alt => Some(Kill::Backward),
-        KeyCode::Delete if alt => Some(Kill::Forward),
-        KeyCode::Char('w') if control_char => Some(Kill::Backward),
-        KeyCode::Char('d') if alt_char => Some(Kill::Forward),
-        KeyCode::Char('u') if control_char => Some(Kill::Backward),
-        KeyCode::Char('k') if control_char => Some(Kill::Forward),
+/// Kill direction belongs to the semantic edit, not its physical shortcut.
+pub(super) fn kill(action: KeyAction) -> Option<Kill> {
+    match action {
+        KeyAction::KillWordBackward | KeyAction::KillLineBackward => Some(Kill::Backward),
+        KeyAction::KillWordForward | KeyAction::KillLineForward => Some(Kill::Forward),
         _ => None,
     }
 }
 
-pub(super) fn key(text: &str, cursor: usize, key: KeyEvent) -> Option<Edit> {
-    let control = key.modifiers.contains(Modifiers::CONTROL);
-    let alt = key.modifiers.contains(Modifiers::ALT);
-    let modified_word = control || alt;
-    let control_char = control && !alt;
-    let alt_char = alt && !control;
-    let kill = kill(key);
-    let operation = match key.code {
-        KeyCode::Home => Edit::Move(line_start(text, cursor)),
-        KeyCode::End => Edit::Move(line_end(text, cursor)),
-        KeyCode::Left if modified_word => Edit::Move(word_start(text, cursor)),
-        KeyCode::Right if modified_word => Edit::Move(word_end(text, cursor)),
-        KeyCode::Left => Edit::Move(previous_grapheme(text, cursor)),
-        KeyCode::Right => Edit::Move(next_grapheme(text, cursor)),
-        KeyCode::Backspace if alt => Edit::Delete {
+pub(super) fn apply(text: &str, cursor: usize, action: KeyAction) -> Option<Edit> {
+    use KeyAction::*;
+    let kill = kill(action);
+    Some(match action {
+        LineStart => Edit::Move(line_start(text, cursor)),
+        LineEnd => Edit::Move(line_end(text, cursor)),
+        WordLeft => Edit::Move(word_start(text, cursor)),
+        WordRight => Edit::Move(word_end(text, cursor)),
+        Left => Edit::Move(previous_grapheme(text, cursor)),
+        Right => Edit::Move(next_grapheme(text, cursor)),
+        KillWordBackward => Edit::Delete {
             range: word_start(text, cursor)..cursor,
             kill,
         },
-        KeyCode::Delete if alt => Edit::Delete {
+        KillWordForward => Edit::Delete {
             range: cursor..word_end(text, cursor),
             kill,
         },
-        KeyCode::Backspace => Edit::Delete {
+        Backspace => Edit::Delete {
             range: previous_grapheme(text, cursor)..cursor,
             kill,
         },
-        KeyCode::Delete => Edit::Delete {
+        Delete => Edit::Delete {
             range: cursor..next_grapheme(text, cursor),
             kill,
         },
-        KeyCode::Char('a') if control_char => Edit::Move(line_start(text, cursor)),
-        KeyCode::Char('e') if control_char => Edit::Move(line_end(text, cursor)),
-        KeyCode::Char('b') if control_char => Edit::Move(previous_grapheme(text, cursor)),
-        KeyCode::Char('f') if control_char => Edit::Move(next_grapheme(text, cursor)),
-        KeyCode::Char('b') if alt_char => Edit::Move(word_start(text, cursor)),
-        KeyCode::Char('f') if alt_char => Edit::Move(word_end(text, cursor)),
-        KeyCode::Char('w') if control_char => Edit::Delete {
-            range: word_start(text, cursor)..cursor,
-            kill,
-        },
-        KeyCode::Char('d') if alt_char => Edit::Delete {
-            range: cursor..word_end(text, cursor),
-            kill,
-        },
-        KeyCode::Char('d') if control_char && !text.is_empty() => Edit::Delete {
+        Exit if !text.is_empty() => Edit::Delete {
             range: cursor..next_grapheme(text, cursor),
             kill,
         },
-        KeyCode::Char('u') if control_char => {
+        KillLineBackward => {
             let start = line_start(text, cursor);
             Edit::Delete {
                 range: if cursor == start {
@@ -189,7 +163,7 @@ pub(super) fn key(text: &str, cursor: usize, key: KeyEvent) -> Option<Edit> {
                 kill,
             }
         }
-        KeyCode::Char('k') if control_char => {
+        KillLineForward => {
             let end = line_end(text, cursor);
             Edit::Delete {
                 range: cursor..if cursor == end {
@@ -201,8 +175,7 @@ pub(super) fn key(text: &str, cursor: usize, key: KeyEvent) -> Option<Edit> {
             }
         }
         _ => return None,
-    };
-    Some(operation)
+    })
 }
 
 #[cfg(test)]
@@ -212,55 +185,25 @@ mod tests {
     #[test]
     fn kill_classification_matches_the_delete_ranges_it_owns() {
         let text = "alpha βeta\ngamma";
-        for (cursor, key, expected) in [
-            (
-                text.len(),
-                KeyEvent::new(KeyCode::Char('w'), Modifiers::CONTROL),
-                Kill::Backward,
-            ),
-            (
-                text.len(),
-                KeyEvent::new(KeyCode::Char('u'), Modifiers::CONTROL),
-                Kill::Backward,
-            ),
-            (
-                "alpha βeta\n".len(),
-                KeyEvent::new(KeyCode::Backspace, Modifiers::ALT),
-                Kill::Backward,
-            ),
-            (
-                0,
-                KeyEvent::new(KeyCode::Delete, Modifiers::ALT),
-                Kill::Forward,
-            ),
-            (
-                "alpha βeta\n".len(),
-                KeyEvent::new(KeyCode::Char('d'), Modifiers::ALT),
-                Kill::Forward,
-            ),
+        for (cursor, action, expected) in [
+            (text.len(), KeyAction::KillWordBackward, Kill::Backward),
+            (text.len(), KeyAction::KillLineBackward, Kill::Backward),
+            (0, KeyAction::KillWordForward, Kill::Forward),
             (
                 "alpha βeta".len(),
-                KeyEvent::new(KeyCode::Char('k'), Modifiers::CONTROL),
+                KeyAction::KillLineForward,
                 Kill::Forward,
             ),
         ] {
-            assert_eq!(kill(key), Some(expected));
-            assert!(matches!(
-                self::key(text, cursor, key),
-                Some(Edit::Delete {
-                    kill: Some(found),
-                    ..
-                }) if found == expected
-            ));
+            assert_eq!(kill(action), Some(expected));
+            assert!(
+                matches!(apply(text, cursor, action), Some(Edit::Delete { kill: Some(found), .. }) if found == expected)
+            );
         }
-        for key in [
-            KeyEvent::new(KeyCode::Backspace, Modifiers::NONE),
-            KeyEvent::new(KeyCode::Delete, Modifiers::NONE),
-            KeyEvent::new(KeyCode::Char('d'), Modifiers::CONTROL),
-        ] {
-            assert_eq!(kill(key), None);
+        for action in [KeyAction::Backspace, KeyAction::Delete, KeyAction::Exit] {
+            assert_eq!(kill(action), None);
             assert!(matches!(
-                self::key(text, text.len(), key),
+                apply(text, text.len(), action),
                 Some(Edit::Delete { kill: None, .. }) | None
             ));
         }
@@ -316,6 +259,6 @@ mod tests {
             vertical_cursor(text, end + 3, false),
             Some("e\u{301}".len())
         );
-        assert!(key("", 0, KeyEvent::new(KeyCode::Char('d'), Modifiers::CONTROL)).is_none());
+        assert!(apply("", 0, KeyAction::Exit).is_none());
     }
 }

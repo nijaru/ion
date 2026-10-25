@@ -89,7 +89,10 @@ pub(super) async fn dispatch_command(
         if let Some(source) = input.into_editor() {
             ui.restore_editor(source);
         }
-        ui.status = "Wait for clipboard paste or cancel it with Ctrl-C".into();
+        ui.status = format!(
+            "Wait for clipboard paste or cancel it with {}",
+            ui.keys.hint(crate::keybindings::KeyAction::Interrupt)
+        );
         return Ok(());
     }
     // Modal external I/O cannot monopolize foreground controls while work runs.
@@ -257,9 +260,9 @@ pub(super) fn handle_builtin(
     match builtin {
         Builtin::Help => {
             let help = if args.is_empty() {
-                Builtin::help()
+                Builtin::help(&ui.keys)
             } else {
-                Builtin::help_for(args)
+                Builtin::help_for(args, &ui.keys)
                     .context("unknown help topic; use /help or type / to discover commands")?
             };
             ui.print(help);
@@ -290,7 +293,11 @@ pub(super) fn handle_builtin(
                 ui.mode = TuiMode::Fullscreen;
                 ui.scroll = 0;
                 ui.fullscreen_rows = 0;
-                ui.status = "Fullscreen TUI · PageUp/PageDown or mouse wheel scrolls".into();
+                ui.status = format!(
+                    "Fullscreen TUI · {} / {} or mouse wheel scrolls",
+                    ui.keys.label(crate::keybindings::KeyAction::PageUp),
+                    ui.keys.label(crate::keybindings::KeyAction::PageDown)
+                );
             }
             _ => anyhow::bail!("use /tui inline or /tui fullscreen"),
         },
@@ -319,9 +326,13 @@ pub(super) fn handle_builtin(
                 .join("\n"),
         ),
         Builtin::Reload => {
+            let keys = crate::keybindings::KeyBindings::load(services.config_root())?;
             runtime.reload_resources()?;
+            ui.break_edit_focus();
+            ui.keys = keys;
+            ui.status.clear();
             ui.print(format!(
-                "Reloaded resources and commands ({} diagnostic(s))",
+                "Reloaded keybindings, resources and commands ({} diagnostic(s))",
                 runtime.resources().diagnostics().len() + runtime.commands().diagnostics().len()
             ));
         }

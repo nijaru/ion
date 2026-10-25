@@ -67,9 +67,9 @@ must be considered explicitly rather than hidden under broad claims of parity:
   formats; history and artifact retention policy. Basic context navigation and
   independent conversation copies have distinct contracts below.
 - **Customization:** packaged user-installable contributions, arbitrary command
-  handlers, lifecycle/policy consumers, external renderers, themes and configurable
-  keybindings. Named executable commands and Rust/MCP tools do not deliver all of
-  these powers.
+  handlers, lifecycle/policy consumers, external renderers and themes. Named
+  executable commands, configurable terminal keys and Rust/MCP tools do not
+  deliver all of these powers.
 - **Model access and accounting:** subscription/OAuth workflows, additional
   provider protocols, virtual-model routing, user-facing spending/usage reports
   and budgets. Context-token calibration is not a spending budget.
@@ -1126,6 +1126,29 @@ rather than archiving them as conversation or writing a secret prompt into stale
 editor chrome. Help groups the existing command inventory and exposes
 argument grammar and keyboard controls on request; its responses use the same
 complete terminal-local publication as other client commands.
+
+Ordinary terminal keys resolve through one App-owned semantic action registry,
+shared by the composer, completion, launch/model selectors, questions, details and
+effective help/hints. The user `keybindings.json` under the Host config root is
+presentation configuration, not Host settings, project authority or Session data.
+Missing actions keep defaults; strings/arrays replace bindings and empty arrays
+disable them. Reject unknown actions, invalid values and same-context collisions;
+separate focused contexts may reuse a key. Match declared modifiers and normalize
+only terminal aliases; never translate configured keys into old physical shortcuts.
+Completion consumes its own actions before composer actions and ends composer
+edit/yank affinity when it does so. Literal fallback preserves the original event.
+
+Prepare bounded, validated configuration before interactive startup admission or
+terminal acquisition. Missing files use defaults; malformed/unreadable files fail
+explicitly with sanitized diagnostics. `/reload` prepares replacement keys before
+resource reload and publishes them only on success, discarding retained old-key
+status hints without replacing the draft. There is no project keymap or watcher.
+Headless, RPC, metadata commands and standalone login ignore the unused file.
+Mapped Stop and Unix suspend keep precedence over ordinary modal/question input.
+Masked credential input and attached-program forwarding keep their separate
+physical-control leases. Enhanced keyboards can distinguish chords that legacy
+terminal bytes alias; application configuration cannot recover those distinctions.
+Key names and examples belong in the usage guide; the registry owns defaults.
 
 Routine configuration commands offer choices as well as explicit arguments.
 Settings show current terminal-local values and remain open for repeated changes;

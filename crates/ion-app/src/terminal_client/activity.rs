@@ -28,11 +28,19 @@ impl ActiveOperation {
         self.stop_requested
     }
 
-    pub(super) fn controls(self) -> &'static str {
+    pub(super) fn controls(self, keys: &crate::keybindings::KeyBindings) -> String {
+        use crate::keybindings::KeyAction;
+        let submit = keys.hint(KeyAction::Submit);
+        let follow_up = keys.hint(KeyAction::FollowUp);
+        let cancel = keys.hint(KeyAction::Interrupt);
         match self.kind {
-            OperationKind::Coding => "Enter steers · Alt-Enter queues · Ctrl-C cancels",
-            OperationKind::Shell | OperationKind::Compaction => "Enter queues · Ctrl-C cancels",
-            OperationKind::Preparation => "Alt-Enter queues · Ctrl-C cancels",
+            OperationKind::Coding => {
+                format!("{submit} steers · {follow_up} queues · {cancel} cancels")
+            }
+            OperationKind::Shell | OperationKind::Compaction => {
+                format!("{submit} queues · {cancel} cancels")
+            }
+            OperationKind::Preparation => format!("{follow_up} queues · {cancel} cancels"),
         }
     }
 
@@ -212,7 +220,7 @@ impl Activity {
                     ReturnReason::NotAccepted => "not durably accepted".into(),
                     ReturnReason::Preparation(error) => format!("preparation failed: {error:#}"),
                 };
-                ui.note(format!("{kind} returned: {reason}{fault}. Draft retained; {} additional draft(s) · Alt-Up cycles without resubmitting", ui.recovered.len()));
+                ui.note(format!("{kind} returned: {reason}{fault}. Draft retained; {} additional draft(s) · {} cycles without resubmitting", ui.recovered.len(), ui.keys.hint(crate::keybindings::KeyAction::Dequeue)));
             }
             ControlUpdate::Settled(settlement) => {
                 self.live = None;

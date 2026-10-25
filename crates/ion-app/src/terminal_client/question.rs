@@ -1,10 +1,13 @@
 //! Typed question modal: presentation, bounded editor and lease-bound answers.
 //! Question custody itself remains in ion-host.
+use crate::keybindings::{self, CHOICE, KeyAction, KeyBindings, TEXT};
 use ion_host::{
     MAX_ANSWER_BYTES, Question, QuestionAnswer, QuestionRequestId, SYNTHETIC_NEXT_LABEL,
     SYNTHETIC_TEXT_LABEL,
 };
-use ion_terminal::{KeyCode, KeyEvent, Modifiers};
+use ion_terminal::KeyEvent;
+#[cfg(test)]
+use ion_terminal::{KeyCode, Modifiers};
 use ratatui::text::Line;
 
 use super::composer::input_window;
@@ -65,43 +68,30 @@ impl QuestionModal {
         self.status = status;
     }
 
-    pub(super) fn key(&mut self, key: KeyEvent) -> QuestionAction {
-        if self.too_small && key.code != KeyCode::Esc {
+    pub(super) fn key(&mut self, key: KeyEvent, keys: &KeyBindings) -> QuestionAction {
+        let context = if self.editor.is_some() { TEXT } else { CHOICE };
+        let action = keys.action(context, key);
+        if self.too_small && action != Some(KeyAction::Cancel) {
             return QuestionAction::None;
         }
         if self.editor.is_some() {
-            return self.editor_key(key);
+            return self.editor_key(key, action);
         }
-        match key {
-            KeyEvent {
-                code: KeyCode::Esc,
-                modifiers,
-            } if modifiers.is_empty() => QuestionAction::Cancel(self.request),
-            KeyEvent {
-                code: KeyCode::Up,
-                modifiers,
-            } if modifiers.is_empty() || modifiers == Modifiers::ALT => {
+        match action {
+            Some(KeyAction::Cancel) => QuestionAction::Cancel(self.request),
+            Some(KeyAction::SelectUp) => {
                 self.selected = self.selected.saturating_sub(1);
                 self.status.clear();
                 QuestionAction::None
             }
-            KeyEvent {
-                code: KeyCode::Down,
-                modifiers,
-            } if modifiers.is_empty() || modifiers == Modifiers::ALT => {
+            Some(KeyAction::SelectDown) => {
                 let last = self.current_options().len() + usize::from(self.multi_select());
                 self.selected = (self.selected + 1).min(last);
                 self.status.clear();
                 QuestionAction::None
             }
-            KeyEvent {
-                code: KeyCode::Enter,
-                modifiers,
-            } if modifiers.is_empty() => self.confirm(),
-            KeyEvent {
-                code: KeyCode::Char(' '),
-                modifiers,
-            } if modifiers.is_empty() && self.multi_select() => {
+            Some(KeyAction::Confirm) => self.confirm(),
+            Some(KeyAction::Toggle) if self.multi_select() => {
                 if self.selected < self.current_options().len() {
                     self.toggle();
                 }
@@ -173,62 +163,28 @@ impl QuestionModal {
             text: String::new(),
             cursor: 0,
         });
-        self.status = "Type a custom answer, then press Enter".into();
+        self.status = "Type a custom answer".into();
     }
 
-    fn editor_key(&mut self, key: KeyEvent) -> QuestionAction {
-        let editor = self.editor.as_mut().expect("checked editor");
-        match key {
-            KeyEvent {
-                code: KeyCode::Esc,
-                modifiers,
-            } if modifiers.is_empty() => QuestionAction::Cancel(self.request),
-            KeyEvent {
-                code: KeyCode::Enter,
-                modifiers,
-            } if modifiers.is_empty() => self.confirm_custom(),
-            KeyEvent {
-                code: KeyCode::Enter,
-                modifiers,
-            } if modifiers.contains(Modifiers::SHIFT) || modifiers.contains(Modifiers::CONTROL) => {
-                self.insert("\n");
-                QuestionAction::None
-            }
-            KeyEvent {
-                code: KeyCode::Char('j'),
-                modifiers,
-            } if modifiers.contains(Modifiers::CONTROL) => {
-                self.insert("\n");
-                QuestionAction::None
-            }
-            KeyEvent {
-                code: KeyCode::Tab,
-                modifiers,
-            } if modifiers.is_empty() => {
-                self.insert("\t");
-                QuestionAction::None
-            }
-            KeyEvent {
-                code: KeyCode::Up | KeyCode::Down,
-                modifiers,
-            } if modifiers.contains(Modifiers::ALT) || modifiers.is_empty() => {
-                if let Some(cursor) =
-                    editing::vertical_cursor(&editor.text, editor.cursor, key.code == KeyCode::Down)
-                {
+    fn editor_key(&mut self, key: KeyEvent, action: Option<KeyAction>) -> QuestionAction {
+        match action {
+            Some(KeyAction::Cancel) => return QuestionAction::Cancel(self.request),
+            Some(KeyAction::Submit) => return self.confirm_custom(),
+            Some(KeyAction::NewLine) => self.insert("\n"),
+            Some(KeyAction::Tab) => self.insert("\t"),
+            Some(KeyAction::SelectUp | KeyAction::SelectDown) => {
+                let editor = self.editor.as_mut().expect("checked editor");
+                if let Some(cursor) = editing::vertical_cursor(
+                    &editor.text,
+                    editor.cursor,
+                    action == Some(KeyAction::SelectDown),
+                ) {
                     editor.cursor = cursor;
                 }
-                QuestionAction::None
             }
-            KeyEvent {
-                code: KeyCode::Char(ch),
-                modifiers,
-            } if !modifiers.contains(Modifiers::CONTROL) && !modifiers.contains(Modifiers::ALT) => {
-                let mut bytes = [0; 4];
-                self.insert(ch.encode_utf8(&mut bytes));
-                QuestionAction::None
-            }
-            key => {
-                if let Some(edit) = editing::key(&editor.text, editor.cursor, key) {
+            Some(action) => {
+                let editor = self.editor.as_mut().expect("checked editor");
+                if let Some(edit) = editing::apply(&editor.text, editor.cursor, action) {
                     match edit {
                         Edit::Move(cursor) => editor.cursor = cursor,
                         Edit::Delete { range, .. } => {
@@ -237,9 +193,15 @@ impl QuestionModal {
                         }
                     }
                 }
-                QuestionAction::None
+            }
+            None => {
+                if let Some(ch) = keybindings::printable(key) {
+                    let mut bytes = [0; 4];
+                    self.insert(ch.encode_utf8(&mut bytes));
+                }
             }
         }
+        QuestionAction::None
     }
 
     fn confirm_custom(&mut self) -> QuestionAction {
@@ -296,7 +258,7 @@ impl QuestionModal {
         &self.questions[self.index].options
     }
 
-    pub(super) fn render(&mut self, width: u16, height: u16) -> QuestionFrame {
+    pub(super) fn render(&mut self, width: u16, height: u16, keys: &KeyBindings) -> QuestionFrame {
         let width = width.max(1) as usize;
         let height = height.max(1) as usize;
         self.too_small = width < 8;
@@ -395,13 +357,33 @@ impl QuestionModal {
 
         let editing = self.editor.is_some();
         let controls = if editing {
-            "Enter answer · Shift-Enter newline · Esc cancel · Ctrl-C stops Turn"
+            format!(
+                "{} answer · {} newline",
+                keys.hint(KeyAction::Submit),
+                keys.hint(KeyAction::NewLine)
+            )
         } else if question.multi_select {
-            "Up/Down move · Space/Enter toggle · Next confirm · Esc cancel · Ctrl-C stop"
+            format!(
+                "{} / {} move · {} / {} toggle · Next confirms",
+                keys.hint(KeyAction::SelectUp),
+                keys.hint(KeyAction::SelectDown),
+                keys.hint(KeyAction::Toggle),
+                keys.hint(KeyAction::Confirm)
+            )
         } else {
-            "Up/Down choose · Enter select · Esc cancel · Ctrl-C stops Turn"
+            format!(
+                "{} / {} choose · {} select",
+                keys.hint(KeyAction::SelectUp),
+                keys.hint(KeyAction::SelectDown),
+                keys.hint(KeyAction::Confirm)
+            )
         };
-        let mut footer = vec![fit_line(controls, width)];
+        let controls = format!(
+            "{controls} · {} cancel · {} stops Turn",
+            keys.hint(KeyAction::Cancel),
+            keys.hint(KeyAction::Interrupt)
+        );
+        let mut footer = vec![fit_line(&controls, width)];
         if !self.status.is_empty() {
             footer.push(fit_line(&self.status, width));
         }
@@ -479,17 +461,32 @@ mod tests {
     #[test]
     fn selection_advances_across_batch_and_text_row() {
         let mut modal = modal();
-        modal.key(KeyEvent::new(KeyCode::Down, Modifiers::NONE));
-        assert!(matches!(modal.key(enter()), QuestionAction::None));
+        modal.key(
+            KeyEvent::new(KeyCode::Down, Modifiers::NONE),
+            &KeyBindings::default(),
+        );
+        assert!(matches!(
+            modal.key(enter(), &KeyBindings::default()),
+            QuestionAction::None
+        ));
         assert_eq!(modal.answers, vec![QuestionAnswer::Option { index: 1 }]);
-        modal.key(KeyEvent::new(KeyCode::Down, Modifiers::NONE));
-        modal.key(KeyEvent::new(KeyCode::Down, Modifiers::NONE));
+        modal.key(
+            KeyEvent::new(KeyCode::Down, Modifiers::NONE),
+            &KeyBindings::default(),
+        );
+        modal.key(
+            KeyEvent::new(KeyCode::Down, Modifiers::NONE),
+            &KeyBindings::default(),
+        );
         assert_eq!(modal.selected, 2);
-        assert!(matches!(modal.key(enter()), QuestionAction::None));
+        assert!(matches!(
+            modal.key(enter(), &KeyBindings::default()),
+            QuestionAction::None
+        ));
         assert!(modal.editor.is_some());
         modal.paste("café 🦀");
         assert!(
-            matches!(modal.key(enter()), QuestionAction::Answer(_, ref answers) if answers.last() == Some(&QuestionAnswer::Text { text: "café 🦀".into() }))
+            matches!(modal.key(enter(), &KeyBindings::default()), QuestionAction::Answer(_, ref answers) if answers.last() == Some(&QuestionAnswer::Text { text: "café 🦀".into() }))
         );
     }
 
@@ -499,25 +496,31 @@ mod tests {
         modal.questions[0].multi_select = true;
         let down = KeyEvent::new(KeyCode::Down, Modifiers::NONE);
         let space = KeyEvent::new(KeyCode::Char(' '), Modifiers::NONE);
-        modal.key(down);
-        modal.key(space); // Beta first, output must still follow request order.
-        modal.key(KeyEvent::new(KeyCode::Up, Modifiers::NONE));
-        modal.key(enter());
-        modal.key(enter()); // Undo Alpha, then select it again.
-        modal.key(space);
+        modal.key(down, &KeyBindings::default());
+        modal.key(space, &KeyBindings::default()); // Beta first, output must still follow request order.
+        modal.key(
+            KeyEvent::new(KeyCode::Up, Modifiers::NONE),
+            &KeyBindings::default(),
+        );
+        modal.key(enter(), &KeyBindings::default());
+        modal.key(enter(), &KeyBindings::default()); // Undo Alpha, then select it again.
+        modal.key(space, &KeyBindings::default());
         assert!(modal.answers.is_empty());
         assert_eq!(modal.index, 0);
-        let rows = modal.render(80, 16).rows;
+        let rows = modal.render(80, 16, &KeyBindings::default()).rows;
         assert!(rows.iter().any(|row| row.to_string().contains("[x] Alpha")));
         assert!(rows.iter().any(|row| row.to_string().contains("[x] Beta")));
         for _ in 0..3 {
-            modal.key(down);
+            modal.key(down, &KeyBindings::default());
         }
         assert_eq!(modal.selected, 3);
-        modal.key(space); // Next is not a checkable option.
-        let rows = modal.render(24, 2).rows;
+        modal.key(space, &KeyBindings::default()); // Next is not a checkable option.
+        let rows = modal.render(24, 2, &KeyBindings::default()).rows;
         assert!(rows.iter().any(|row| row.to_string().contains("› Next")));
-        assert!(matches!(modal.key(enter()), QuestionAction::None));
+        assert!(matches!(
+            modal.key(enter(), &KeyBindings::default()),
+            QuestionAction::None
+        ));
         assert_eq!(
             modal.answers,
             vec![QuestionAnswer::Options {
@@ -527,7 +530,7 @@ mod tests {
         assert_eq!(modal.index, 1);
         assert!(modal.checked.is_empty());
         assert!(
-            matches!(modal.key(enter()), QuestionAction::Answer(_, ref answers)
+            matches!(modal.key(enter(), &KeyBindings::default()), QuestionAction::Answer(_, ref answers)
             if answers == &vec![QuestionAnswer::Options { indices: vec![0,1] }, QuestionAnswer::Option { index: 0 }])
         );
     }
@@ -539,23 +542,29 @@ mod tests {
             modal.questions.truncate(1);
             modal.questions[0].multi_select = true;
             if custom {
-                modal.key(enter());
+                modal.key(enter(), &KeyBindings::default());
             }
             for _ in 0..2 {
-                modal.key(KeyEvent::new(KeyCode::Down, Modifiers::NONE));
+                modal.key(
+                    KeyEvent::new(KeyCode::Down, Modifiers::NONE),
+                    &KeyBindings::default(),
+                );
             }
             let expected = if custom {
-                modal.key(enter());
+                modal.key(enter(), &KeyBindings::default());
                 modal.paste("  different 🦀  ");
                 QuestionAnswer::Text {
                     text: "  different 🦀  ".into(),
                 }
             } else {
-                modal.key(KeyEvent::new(KeyCode::Down, Modifiers::NONE));
+                modal.key(
+                    KeyEvent::new(KeyCode::Down, Modifiers::NONE),
+                    &KeyBindings::default(),
+                );
                 QuestionAnswer::Options { indices: vec![] }
             };
             assert!(
-                matches!(modal.key(enter()), QuestionAction::Answer(_, ref answers) if answers == &vec![expected])
+                matches!(modal.key(enter(), &KeyBindings::default()), QuestionAction::Answer(_, ref answers) if answers == &vec![expected])
             );
             assert!(modal.checked.is_empty());
         }
@@ -564,18 +573,30 @@ mod tests {
     #[test]
     fn custom_editor_is_bounded_and_preserves_exact_unicode() {
         let mut modal = modal();
-        modal.key(KeyEvent::new(KeyCode::Down, Modifiers::NONE));
-        modal.key(KeyEvent::new(KeyCode::Down, Modifiers::NONE));
-        modal.key(enter());
+        modal.key(
+            KeyEvent::new(KeyCode::Down, Modifiers::NONE),
+            &KeyBindings::default(),
+        );
+        modal.key(
+            KeyEvent::new(KeyCode::Down, Modifiers::NONE),
+            &KeyBindings::default(),
+        );
+        modal.key(enter(), &KeyBindings::default());
         modal.paste("  ");
-        assert!(matches!(modal.key(enter()), QuestionAction::None));
+        assert!(matches!(
+            modal.key(enter(), &KeyBindings::default()),
+            QuestionAction::None
+        ));
         assert!(modal.status.contains("must not be empty"));
         modal.paste("  spaced ✓  ");
         let before = modal.editor.as_ref().unwrap().text.clone();
         modal.paste(&"x".repeat(MAX_ANSWER_BYTES));
         assert_eq!(modal.editor.as_ref().unwrap().text, before);
         assert!(modal.status.contains("limited"));
-        assert!(matches!(modal.key(enter()), QuestionAction::None));
+        assert!(matches!(
+            modal.key(enter(), &KeyBindings::default()),
+            QuestionAction::None
+        ));
         assert_eq!(
             modal.answers[0],
             QuestionAnswer::Text {
@@ -589,31 +610,43 @@ mod tests {
         for (width, multi_select) in [(1, false), (2, false), (1, true), (2, true)] {
             let mut modal = modal();
             modal.questions[0].multi_select = multi_select;
-            let frame = modal.render(width, 1);
+            let frame = modal.render(width, 1, &KeyBindings::default());
             assert_eq!(frame.rows.len(), 1);
             assert!(frame.cursor.is_none());
             assert!(!frame.rows[0].to_string().is_empty());
-            assert!(matches!(modal.key(enter()), QuestionAction::None));
+            assert!(matches!(
+                modal.key(enter(), &KeyBindings::default()),
+                QuestionAction::None
+            ));
             assert!(modal.answers.is_empty());
             modal.paste("invisible");
             assert!(modal.answers.is_empty());
         }
         let mut modal = modal();
-        modal.render(20, 1);
+        modal.render(20, 1, &KeyBindings::default());
         assert!(!modal.too_small);
-        assert!(matches!(modal.key(enter()), QuestionAction::None));
+        assert!(matches!(
+            modal.key(enter(), &KeyBindings::default()),
+            QuestionAction::None
+        ));
         assert_eq!(modal.answers, vec![QuestionAnswer::Option { index: 0 }]);
     }
 
     #[test]
     fn one_row_editor_keeps_cursor_and_text_visible_at_narrow_geometry() {
         let mut modal = modal();
-        modal.render(20, 1);
-        modal.key(KeyEvent::new(KeyCode::Down, Modifiers::NONE));
-        modal.key(KeyEvent::new(KeyCode::Down, Modifiers::NONE));
-        modal.key(enter());
+        modal.render(20, 1, &KeyBindings::default());
+        modal.key(
+            KeyEvent::new(KeyCode::Down, Modifiers::NONE),
+            &KeyBindings::default(),
+        );
+        modal.key(
+            KeyEvent::new(KeyCode::Down, Modifiers::NONE),
+            &KeyBindings::default(),
+        );
+        modal.key(enter(), &KeyBindings::default());
         modal.paste("x");
-        let frame = modal.render(8, 1);
+        let frame = modal.render(8, 1, &KeyBindings::default());
         assert!(frame.cursor.is_some());
         let (row, _) = frame.cursor.unwrap();
         assert!(frame.rows[row].to_string().contains('x'));
@@ -623,15 +656,18 @@ mod tests {
     #[test]
     fn short_viewport_keeps_selected_row_and_editor_cursor_visible() {
         let mut modal = modal();
-        let frame = modal.render(30, 4);
+        let frame = modal.render(30, 4, &KeyBindings::default());
         assert!(
             frame
                 .rows
                 .iter()
                 .any(|row| row.to_string().contains("Alpha"))
         );
-        modal.key(KeyEvent::new(KeyCode::Down, Modifiers::NONE));
-        let frame = modal.render(30, 3);
+        modal.key(
+            KeyEvent::new(KeyCode::Down, Modifiers::NONE),
+            &KeyBindings::default(),
+        );
+        let frame = modal.render(30, 3, &KeyBindings::default());
         assert!(
             frame
                 .rows
@@ -644,10 +680,13 @@ mod tests {
                 .map(ToString::to_string)
                 .collect::<Vec<_>>()
         );
-        modal.key(KeyEvent::new(KeyCode::Down, Modifiers::NONE));
-        modal.key(enter());
+        modal.key(
+            KeyEvent::new(KeyCode::Down, Modifiers::NONE),
+            &KeyBindings::default(),
+        );
+        modal.key(enter(), &KeyBindings::default());
         modal.paste("cursor");
-        let frame = modal.render(30, 3);
+        let frame = modal.render(30, 3, &KeyBindings::default());
         assert!(frame.cursor.is_some());
         assert!(frame.cursor.unwrap().0 < frame.rows.len());
     }

@@ -156,7 +156,7 @@ impl Frontend {
             ThinkingVisibility::Hidden => ThinkingVisibility::Visible,
         };
         self.pickers.open(Picker {
-            title: "Settings · Enter/Space changes · Esc closes",
+            title: "Settings",
             query,
             selected,
             items: vec![

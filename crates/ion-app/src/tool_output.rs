@@ -20,6 +20,20 @@ impl OutputDetail {
     }
 }
 
+pub(crate) struct OutputOptions {
+    pub detail: OutputDetail,
+    pub details_key: String,
+}
+
+impl OutputOptions {
+    pub(crate) fn new(detail: OutputDetail, keys: &crate::keybindings::KeyBindings) -> Self {
+        Self {
+            detail,
+            details_key: keys.hint(crate::keybindings::KeyAction::Detail),
+        }
+    }
+}
+
 enum Preview {
     Head(usize),
     Tail(usize),
@@ -30,7 +44,7 @@ pub(crate) fn render_activity(
     activity: &TranscriptActivity,
     prefix: &str,
     width: usize,
-    detail: OutputDetail,
+    detail: &OutputOptions,
 ) {
     if !matches!(
         activity.state,
@@ -112,6 +126,7 @@ pub(crate) fn render_folded_reads(
     activities: &[TranscriptActivity],
     prefix: &str,
     width: usize,
+    detail: &OutputOptions,
 ) {
     if activities
         .first()
@@ -123,8 +138,9 @@ pub(crate) fn render_folded_reads(
         rows,
         prefix,
         &format!(
-            "… {} read outputs folded · /settings expanded · Ctrl-O",
-            activities.len()
+            "… {} read outputs folded · /settings expanded · {}",
+            activities.len(),
+            detail.details_key
         ),
         width,
     );
@@ -174,7 +190,7 @@ pub(crate) fn render_command(
     output: &Value,
     prefix: &str,
     width: usize,
-    detail: OutputDetail,
+    detail: &OutputOptions,
     compact_lines: usize,
 ) {
     for stream in ["stdout", "stderr"] {
@@ -199,8 +215,11 @@ pub(crate) fn render_command(
             );
         } else if output[format!("{stream}_truncated")].as_bool() == Some(true) {
             let notice = match output[format!("{stream}_omitted_bytes")].as_u64() {
-                Some(bytes) => format!("… {stream} truncated · {bytes} raw bytes omitted · Ctrl-O"),
-                None => format!("… {stream} truncated · Ctrl-O"),
+                Some(bytes) => format!(
+                    "… {stream} truncated · {bytes} raw bytes omitted · {}",
+                    detail.details_key
+                ),
+                None => format!("… {stream} truncated · {}", detail.details_key),
             };
             note(rows, prefix, &notice, width);
         }
@@ -239,7 +258,7 @@ fn render_text(
     prefix: &str,
     label: &str,
     width: usize,
-    detail: OutputDetail,
+    detail: &OutputOptions,
     preview: Preview,
 ) {
     let (compact_lines, tail) = match preview {
@@ -250,7 +269,7 @@ fn render_text(
     if count == 0 {
         return;
     }
-    let expanded = detail == OutputDetail::Expanded;
+    let expanded = detail.detail == OutputDetail::Expanded;
     let skip = if !expanded && tail {
         count.saturating_sub(compact_lines)
     } else {
@@ -284,11 +303,15 @@ fn render_text(
         let omitted = count.saturating_sub(compact_lines);
         let notice = if omitted > 0 {
             format!(
-                "… {omitted} {} {label} lines · /settings expanded · Ctrl-O",
-                if tail { "earlier" } else { "more" }
+                "… {omitted} {} {label} lines · /settings expanded · {}",
+                if tail { "earlier" } else { "more" },
+                detail.details_key
             )
         } else {
-            "… long line shortened · /settings expanded · Ctrl-O".into()
+            format!(
+                "… long line shortened · /settings expanded · {}",
+                detail.details_key
+            )
         };
         note(rows, prefix, &notice, width);
     }
@@ -325,7 +348,7 @@ mod tests {
                 }),
                 "",
                 120,
-                detail,
+                &OutputOptions::new(detail, &crate::keybindings::KeyBindings::default()),
                 3,
             );
             let text = rows
@@ -350,7 +373,7 @@ mod tests {
                 &json!({"stdout": "\u{fffd}", "stdout_lossy": false, "stdout_complete": true}),
                 "",
                 120,
-                detail,
+                &OutputOptions::new(detail, &crate::keybindings::KeyBindings::default()),
                 3,
             );
             assert!(

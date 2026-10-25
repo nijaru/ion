@@ -4,7 +4,7 @@ use std::ops::Range;
 use ion_core::TranscriptItem;
 use ratatui::text::Line;
 
-use crate::{tool_output::OutputDetail, transcript_render::ThinkingVisibility};
+use crate::{tool_output::OutputOptions, transcript_render::ThinkingVisibility};
 
 #[derive(Default)]
 pub(super) struct Output {
@@ -48,7 +48,7 @@ impl Output {
         range: Range<usize>,
         pending: bool,
         width: usize,
-        detail: OutputDetail,
+        detail: &OutputOptions,
         thinking: ThinkingVisibility,
     ) -> Vec<Line<'static>> {
         let mut rows = Vec::new();

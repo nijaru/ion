@@ -205,7 +205,8 @@ Publication uses available terminal rows before scrolling. Ordinary redraw and
 resize do not publish live rows; terminal-native reflow remains emulator-owned.
 `/help` groups commands by purpose without dumping their argument grammars.
 Use `/help model` (or another built-in command name) for usage and `/help keys`
-for keyboard controls. Type `/` for searchable command/resource discovery.
+for effective keyboard controls, or [configure keybindings](#keybindings).
+Type `/` for searchable command/resource discovery.
 Command responses (`/help`, `/skills`, `/tools`, `/tasks result`, etc.) and
 client diagnostics also publish their complete wrapped content, not a clipped
 composer preview. They remain in a terminal-local display log interleaved with
@@ -565,6 +566,55 @@ Secrets must be valid single-line UTF-8 of at most 4096 bytes. Rejected or cance
 unfinished pastes remain discarded through their closing marker. Bracketed
 paste is limited to 64 KiB of valid UTF-8. Malformed, oversized or unfinished
 paste is discarded without submitting a prefix or replacing the current draft.
+### Keybindings
+
+The shortcuts in this guide are defaults. Create `~/.ion/keybindings.json`
+(or `$ION_HOME/keybindings.json`) to change ordinary terminal controls:
+
+```json
+{
+  "app.model.select": ["alt+m", "f6"],
+  "tui.input.submit": "ctrl+s",
+  "app.message.copy": []
+}
+```
+
+Run `/help keys` for supported action IDs and their effective bindings. A missing
+action keeps its defaults; a string or array replaces them; `[]` disables it.
+In this example, Ctrl-L no longer opens models and Enter no longer submits the
+composer. Enter still confirms a visible completion or picker because that is a
+separate action. Keys may repeat in separate focused contexts, but collisions
+within one context—including unchanged defaults—are rejected. Mapped Stop and
+suspend retain priority over ordinary pickers, details and questions.
+
+Use `ctrl+`, `alt+` and `shift+` in any order, with a character or a named key:
+`enter`/`return`, `escape`/`esc`, `tab`, `backtab`, `space`, `backspace`,
+`delete`, `insert`, `home`, `end`, `up`, `down`, `left`, `right`,
+`pageup`, `pagedown` or function keys such as `f6`. ASCII names are
+case-insensitive; write `shift+a`, not `A`, for an uppercase chord. Symbols
+can be literal (`!`, `ctrl++`); Shift-Tab and BackTab are equivalent.
+Ctrl-minus and Ctrl-underscore share one binding. Other modifiers must match
+exactly; unrelated extra modifiers do not activate a shortcut.
+
+Legacy terminals cannot distinguish every chord: Ctrl-I is Tab, Ctrl-J/M is
+Enter and Ctrl-H is Backspace. Use an enhanced keyboard protocol or another key
+when those distinctions matter. Configuration cannot recover information the
+terminal never sends.
+
+The file is limited to 64 KiB. Unknown/duplicate action IDs, invalid keys, bad JSON,
+unreadable files and collisions fail explicitly; invalid startup configuration is
+rejected before terminal setup or Session/MCP admission. Edit the file and run
+`/reload` to apply it alongside resources and commands. Failed reload keeps the
+old bindings; successful reload preserves the draft and refreshes hints. There is
+no watcher or project keymap. Headless, RPC, metadata commands and standalone
+`ion login` ignore this terminal-only file.
+
+Masked credential entry keeps physical Ctrl-C cancellation and its secret-editing
+controls. Attached programs receive their own input, with physical Ctrl-] to detach;
+ordinary application bindings do not intercept either lease.
+
+### Default editing controls
+
 Home/End or Ctrl-A/E move within the current logical line; Ctrl-B/F move by
 grapheme. Ctrl/Alt-Left/Right or Alt-B/F move by Unicode word boundaries.
 Ctrl-U/K delete to the line start/end, joining adjacent lines when already at

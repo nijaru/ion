@@ -1,7 +1,8 @@
 //! Startup selection before Session, tool or MCP admission.
+use crate::keybindings::{KeyAction, KeyBindings};
 use anyhow::{Context, Result};
 use ion_host::{Host, SavedSelection, Selection, SessionCatalog};
-use ion_terminal::{InputEvent, KeyCode, Modifiers, Screen, TerminalSession};
+use ion_terminal::{InputEvent, Screen, TerminalSession};
 use std::path::PathBuf;
 
 use super::{
@@ -13,6 +14,7 @@ pub async fn setup_model(
     host: &Host,
     selected: Option<Selection>,
     choose_default: bool,
+    keys: &KeyBindings,
 ) -> Result<Option<Selection>> {
     let selected = match selected {
         Some(selection) if !selection.credential_missing(host.credentials())? => {
@@ -23,7 +25,15 @@ pub async fn setup_model(
     let mut terminal = TerminalSession::enter().await?;
     let outcome = async {
         let mut screen = new_inline_screen(&mut terminal).await?;
-        run(host, selected, choose_default, &mut terminal, &mut screen).await
+        run(
+            host,
+            selected,
+            choose_default,
+            keys,
+            &mut terminal,
+            &mut screen,
+        )
+        .await
     }
     .await;
     // This UI only paints transient picker rows on the alternate screen. Secret
@@ -35,11 +45,15 @@ pub async fn setup_model(
 }
 
 /// Browse without allocating a Session, choosing a model or admitting tools.
-/// Escape/Ctrl-C returns None; discovery is joined even after terminal failure.
-pub async fn choose_session(catalog: SessionCatalog) -> Result<Option<PathBuf>> {
+/// Cancellation returns None; discovery is joined even after terminal failure.
+pub async fn choose_session(
+    catalog: SessionCatalog,
+    keys: &KeyBindings,
+) -> Result<Option<PathBuf>> {
     let mut terminal = TerminalSession::enter().await?;
     let mut ui = Frontend {
-        status: "Choose a Session · type to filter · Enter resumes · Esc exits".into(),
+        keys: keys.clone(),
+        status: "Choose a Session · type to filter".into(),
         ..Frontend::default()
     };
     ui.pickers
@@ -66,16 +80,13 @@ pub async fn choose_session(catalog: SessionCatalog) -> Result<Option<PathBuf>> 
                 .check_active()
                 .context("Session picker terminal failed")?;
             match event.context("Session picker input ended")?? {
-                InputEvent::Key(key)
-                    if key.modifiers.contains(Modifiers::CONTROL)
-                        && key.code == KeyCode::Char('z') =>
-                {
+                InputEvent::Key(key) if keys.matches(KeyAction::Suspend, key) => {
                     terminal.suspend_to_job_control().await?;
                     screen.invalidate();
                     program.published = None;
                 }
                 InputEvent::Key(key) => {
-                    if let Some(PickerValue::Session(path)) = ui.pickers.key(key) {
+                    if let Some(PickerValue::Session(path)) = ui.pickers.key(key, keys) {
                         return Ok(Some(path));
                     }
                     if ui.pickers.active().is_none() {
@@ -122,11 +133,13 @@ async fn run(
     host: &Host,
     mut selected: Option<Selection>,
     choose_default: bool,
+    keys: &KeyBindings,
     terminal: &mut TerminalSession,
     screen: &mut Screen,
 ) -> Result<Option<Selection>> {
     let mut ui = Frontend {
-        status: "Select a model · type to filter · Enter selects · Esc exits".into(),
+        keys: keys.clone(),
+        status: "Select a model · type to filter".into(),
         ..Frontend::default()
     };
     let mut program = ProgramStatusState::default();
@@ -163,7 +176,7 @@ async fn run(
                     return Ok(Some(selection));
                 }
                 Err(error) => {
-                    ui.status = format!("{error:#} · choose a model to retry or Esc to exit");
+                    ui.status = format!("{error:#} · choose a model to retry");
                 }
             }
         }
@@ -183,15 +196,13 @@ async fn run(
             .await
             .context("model setup input ended")??;
         match event {
-            InputEvent::Key(key)
-                if key.modifiers.contains(Modifiers::CONTROL) && key.code == KeyCode::Char('z') =>
-            {
+            InputEvent::Key(key) if keys.matches(KeyAction::Suspend, key) => {
                 terminal.suspend_to_job_control().await?;
                 screen.invalidate();
                 program.published = None;
             }
             InputEvent::Key(key) => {
-                if let Some(PickerValue::Model(model)) = ui.pickers.key(key) {
+                if let Some(PickerValue::Model(model)) = ui.pickers.key(key, keys) {
                     selected = Some(host.models().resolve_identity(&model)?);
                 } else if ui.pickers.active().is_none() {
                     return Ok(None);

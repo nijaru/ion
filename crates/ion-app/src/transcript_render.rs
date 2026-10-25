@@ -2,7 +2,7 @@
 use crate::{
     display_text::fit_line,
     presentation_style::{Role, style},
-    tool_output::OutputDetail,
+    tool_output::{OutputDetail, OutputOptions},
 };
 use ion_core::{
     ActivityGroup, ActivityResult, ActivityState, ToolActivityKind, TranscriptActivity,
@@ -66,7 +66,7 @@ const MAX_COALESCED_SUBJECTS: usize = 3;
 pub fn rows(
     items: &[TranscriptItem],
     width: usize,
-    detail: OutputDetail,
+    detail: &OutputOptions,
     thinking: ThinkingVisibility,
 ) -> Vec<Line<'static>> {
     let width = width.max(1);
@@ -107,13 +107,14 @@ pub(super) fn live_rows(
     width: usize,
     budget: usize,
     thinking: ThinkingVisibility,
+    detail: &OutputOptions,
 ) -> Vec<Line<'static>> {
     if budget == 0 {
         return Vec::new();
     }
     // Expanded capture is for publication/fullscreen. Inline progress stays a
     // compact semantic preview instead of allocating a whole capture each tick.
-    let rendered = rows(items, width, OutputDetail::Compact, thinking);
+    let rendered = rows(items, width, detail, thinking);
     if rendered.len() <= budget {
         return rendered;
     }
@@ -135,8 +136,9 @@ pub(super) fn live_rows(
         push_wrapped(
             &mut selected,
             &format!(
-                "{} · Ctrl-O",
-                group_header(activities().map(|(_, _, activity)| activity))
+                "{} · {}",
+                group_header(activities().map(|(_, _, activity)| activity)),
+                detail.details_key
             ),
             width.max(1),
         );
@@ -172,7 +174,10 @@ pub(super) fn live_rows(
         }
     } else {
         selected.push(Line::styled(
-            fit_line("… earlier conversation · Ctrl-O", width),
+            fit_line(
+                &format!("… earlier conversation · {}", detail.details_key),
+                width,
+            ),
             style(Role::Secondary),
         ));
     }
@@ -188,7 +193,14 @@ pub(super) fn live_rows(
                 let pinned_index = pinned
                     .filter(|(index, _)| *index == item_index)
                     .map(|(_, index)| index);
-                render_current_group(&mut selected, group, width, remaining, pinned_index)
+                render_current_group(
+                    &mut selected,
+                    group,
+                    width,
+                    remaining,
+                    pinned_index,
+                    &detail.details_key,
+                )
             }
             TranscriptItem::User(message) | TranscriptItem::Assistant(message) => {
                 let user = matches!(focus, TranscriptItem::User(_));
@@ -234,7 +246,7 @@ pub(super) fn live_rows(
             }
             TranscriptItem::UserShell(shell) => {
                 let mut preview = Vec::new();
-                render_shell(&mut preview, shell, width, OutputDetail::Compact);
+                render_shell(&mut preview, shell, width, detail);
                 preview.truncate(remaining);
                 selected.extend(preview);
             }
@@ -251,6 +263,7 @@ fn render_current_group(
     width: usize,
     budget: usize,
     pinned_index: Option<usize>,
+    details_key: &str,
 ) {
     let display = display_activities(&group.activities, OutputDetail::Compact);
     let capacity = budget.saturating_sub(1);
@@ -292,7 +305,7 @@ fn render_current_group(
     }
     if reserve_omission > 0 {
         rows.push(Line::styled(
-            fit_line(&format!("└ {omitted} more · Ctrl-O"), width),
+            fit_line(&format!("└ {omitted} more · {details_key}"), width),
             style(Role::Secondary),
         ));
     }
@@ -389,7 +402,7 @@ fn render_shell(
     rows: &mut Vec<Line<'static>>,
     shell: &UserShellActivity,
     width: usize,
-    detail: OutputDetail,
+    detail: &OutputOptions,
 ) {
     let prefix = if shell.exclude_from_context {
         "› !!"
@@ -480,12 +493,12 @@ fn render_group(
     rows: &mut Vec<Line<'static>>,
     group: &ActivityGroup,
     width: usize,
-    detail: OutputDetail,
+    detail: &OutputOptions,
 ) {
     if group.activities.is_empty() {
         return;
     }
-    let display = display_activities(&group.activities, detail);
+    let display = display_activities(&group.activities, detail.detail);
 
     if group.activities.len() == 1 {
         let item = &display[0];
@@ -538,6 +551,7 @@ fn render_group(
                 &group.activities[item.source.clone()],
                 if last { "  " } else { "│ " },
                 width,
+                detail,
             );
         }
         crate::edit_diff::render(
@@ -562,9 +576,9 @@ fn render_children(
     children: &[TranscriptActivity],
     prefix: &str,
     width: usize,
-    detail: OutputDetail,
+    detail: &OutputOptions,
 ) {
-    let display = display_activities(children, detail);
+    let display = display_activities(children, detail.detail);
     for (index, item) in display.iter().enumerate() {
         let last = index + 1 == display.len();
         let continuation = format!("{prefix}{}", if last { "  " } else { "│ " });
@@ -596,6 +610,7 @@ fn render_children(
                 &children[item.source.clone()],
                 &continuation,
                 width,
+                detail,
             );
         }
         if children[item.source.start].activity.kind != ToolActivityKind::Command
@@ -1095,6 +1110,76 @@ fn push_detail(
 mod tests {
     use super::*;
     #[test]
+    fn disclosure_hints_follow_configured_or_disabled_detail_action() {
+        use serde_json::json;
+        let activities = vec![
+            activity(
+                "r1",
+                ToolActivityKind::Read,
+                "one",
+                ActivityState::Completed,
+                Some(json!({"content":"one"})),
+            ),
+            activity(
+                "r2",
+                ToolActivityKind::Read,
+                "two",
+                ActivityState::Completed,
+                Some(json!({"content":"two"})),
+            ),
+            activity(
+                "c",
+                ToolActivityKind::Command,
+                "test",
+                ActivityState::Completed,
+                Some(json!({"stdout":"1\n2\n3\n4\n5\n6", "stdout_truncated":true})),
+            ),
+            activity(
+                "e",
+                ToolActivityKind::Edit,
+                "file",
+                ActivityState::Completed,
+                Some(
+                    json!({"diff":{"text":"--- old\n+++ new\n@@ hunk\n-1\n+2\n-3\n+4\n-5\n+6\n-7\n+8\n-9\n+10", "truncated":false}}),
+                ),
+            ),
+        ];
+        let items = [TranscriptItem::ActivityGroup(ActivityGroup {
+            turn: 1,
+            open: false,
+            activities,
+        })];
+        for (config, expected) in [
+            (r#"{"app.tools.expand":"f8"}"#, "F8"),
+            (r#"{"app.tools.expand":[]}"#, "unbound"),
+        ] {
+            let keys = crate::keybindings::KeyBindings::parse(config.as_bytes()).unwrap();
+            let options = OutputOptions::new(OutputDetail::Compact, &keys);
+            let published = rows(&items, 160, &options, ThinkingVisibility::Hidden);
+            for label in [
+                "read outputs folded",
+                "earlier stdout",
+                "stdout truncated",
+                "more diff",
+            ] {
+                let notice = published
+                    .iter()
+                    .find(|row| row.to_string().contains(label))
+                    .unwrap();
+                assert!(notice.to_string().contains(expected), "{notice}");
+            }
+            let live = live_rows(&items, 160, 4, ThinkingVisibility::Hidden, &options);
+            assert!(live.iter().any(|row| row.to_string().contains(expected)));
+            assert!(
+                published
+                    .iter()
+                    .chain(&live)
+                    .all(|row| !row.to_string().contains("Ctrl-O"))
+            );
+        }
+    }
+
+    #[test]
     fn thinking_visibility_preserves_literal_source_and_wrapping() {
         let projection = TranscriptProjection {
             items: vec![
@@ -1116,7 +1201,10 @@ mod tests {
             let hidden = rows(
                 &projection.items,
                 width,
-                OutputDetail::Expanded,
+                &OutputOptions::new(
+                    OutputDetail::Expanded,
+                    &crate::keybindings::KeyBindings::default(),
+                ),
                 ThinkingVisibility::Hidden,
             );
             assert!(
@@ -1125,13 +1213,34 @@ mod tests {
                     .any(|line| line.to_string().contains("thought"))
             );
             assert_eq!(
-                live_rows(&projection.items, width, 3, ThinkingVisibility::Hidden),
-                live_rows(&projection.items[..1], width, 3, ThinkingVisibility::Hidden)
+                live_rows(
+                    &projection.items,
+                    width,
+                    3,
+                    ThinkingVisibility::Hidden,
+                    &OutputOptions::new(
+                        OutputDetail::Compact,
+                        &crate::keybindings::KeyBindings::default()
+                    )
+                ),
+                live_rows(
+                    &projection.items[..1],
+                    width,
+                    3,
+                    ThinkingVisibility::Hidden,
+                    &OutputOptions::new(
+                        OutputDetail::Compact,
+                        &crate::keybindings::KeyBindings::default()
+                    )
+                )
             );
             let visible = rows(
                 &projection.items,
                 width,
-                OutputDetail::Compact,
+                &OutputOptions::new(
+                    OutputDetail::Compact,
+                    &crate::keybindings::KeyBindings::default(),
+                ),
                 ThinkingVisibility::Visible,
             );
             assert!(
@@ -1143,7 +1252,10 @@ mod tests {
         let shown = rows(
             &projection.items,
             80,
-            OutputDetail::Compact,
+            &OutputOptions::new(
+                OutputDetail::Compact,
+                &crate::keybindings::KeyBindings::default(),
+            ),
             ThinkingVisibility::Visible,
         );
         assert!(shown.iter().any(|line| {
@@ -1166,7 +1278,16 @@ mod tests {
                 parts: vec![TranscriptPart::Thinking("long thought\n".repeat(20))],
             })],
         };
-        let preview = live_rows(&long.items, 80, 3, ThinkingVisibility::Visible);
+        let preview = live_rows(
+            &long.items,
+            80,
+            3,
+            ThinkingVisibility::Visible,
+            &OutputOptions::new(
+                OutputDetail::Compact,
+                &crate::keybindings::KeyBindings::default(),
+            ),
+        );
         assert_eq!(preview.len(), 3);
         assert!(
             preview
@@ -1189,7 +1310,10 @@ mod tests {
         super::rows(
             &projection.items,
             width,
-            OutputDetail::Compact,
+            &OutputOptions::new(
+                OutputDetail::Compact,
+                &crate::keybindings::KeyBindings::default(),
+            ),
             ThinkingVisibility::Hidden,
         )
         .iter()
@@ -1201,10 +1325,19 @@ mod tests {
         width: usize,
         budget: usize,
     ) -> Vec<String> {
-        super::live_rows(&projection.items, width, budget, ThinkingVisibility::Hidden)
-            .iter()
-            .map(ToString::to_string)
-            .collect()
+        super::live_rows(
+            &projection.items,
+            width,
+            budget,
+            ThinkingVisibility::Hidden,
+            &OutputOptions::new(
+                OutputDetail::Compact,
+                &crate::keybindings::KeyBindings::default(),
+            ),
+        )
+        .iter()
+        .map(ToString::to_string)
+        .collect()
     }
     use ion_core::{ToolActivity, TranscriptActivity};
 
@@ -1249,7 +1382,10 @@ mod tests {
         let compact_rows = rows(
             &single.items,
             120,
-            OutputDetail::Compact,
+            &OutputOptions::new(
+                OutputDetail::Compact,
+                &crate::keybindings::KeyBindings::default(),
+            ),
             ThinkingVisibility::Hidden,
         );
         // Ranges, omission notices and capture paths are essential evidence,
@@ -1312,7 +1448,10 @@ mod tests {
             let expanded = rows(
                 &grouped.items,
                 width,
-                OutputDetail::Expanded,
+                &OutputOptions::new(
+                    OutputDetail::Expanded,
+                    &crate::keybindings::KeyBindings::default(),
+                ),
                 ThinkingVisibility::Hidden,
             );
             assert!(expanded.iter().all(|row| row.width() <= width));
@@ -1325,7 +1464,10 @@ mod tests {
         let expanded = rows(
             &grouped.items,
             120,
-            OutputDetail::Expanded,
+            &OutputOptions::new(
+                OutputDetail::Expanded,
+                &crate::keybindings::KeyBindings::default(),
+            ),
             ThinkingVisibility::Hidden,
         )
         .iter()
@@ -1373,7 +1515,10 @@ mod tests {
         let rows = super::rows(
             &projection.items,
             24,
-            OutputDetail::Compact,
+            &OutputOptions::new(
+                OutputDetail::Compact,
+                &crate::keybindings::KeyBindings::default(),
+            ),
             ThinkingVisibility::Hidden,
         );
         let read = rows
@@ -1398,7 +1543,16 @@ mod tests {
             .collect::<String>();
         assert!(retained.contains(subject));
         assert!(rows.iter().all(|row| row.width() <= 24));
-        let live = super::live_rows(&projection.items, 24, 6, ThinkingVisibility::Hidden);
+        let live = super::live_rows(
+            &projection.items,
+            24,
+            6,
+            ThinkingVisibility::Hidden,
+            &OutputOptions::new(
+                OutputDetail::Compact,
+                &crate::keybindings::KeyBindings::default(),
+            ),
+        );
         assert!(live.iter().any(|row| row.style.fg == Some(Color::Red)));
         assert!(live.iter().any(|row| row.style.fg == Some(Color::Cyan)));
     }
@@ -1418,12 +1572,30 @@ mod tests {
             };
             for narrow in 1..=width {
                 assert!(
-                    super::live_rows(&projection.items, narrow, 3, ThinkingVisibility::Hidden)
-                        .iter()
-                        .all(|row| row.width() <= narrow)
+                    super::live_rows(
+                        &projection.items,
+                        narrow,
+                        3,
+                        ThinkingVisibility::Hidden,
+                        &OutputOptions::new(
+                            OutputDetail::Compact,
+                            &crate::keybindings::KeyBindings::default()
+                        )
+                    )
+                    .iter()
+                    .all(|row| row.width() <= narrow)
                 );
             }
-            let rows = super::live_rows(&projection.items, width, 3, ThinkingVisibility::Hidden);
+            let rows = super::live_rows(
+                &projection.items,
+                width,
+                3,
+                ThinkingVisibility::Hidden,
+                &OutputOptions::new(
+                    OutputDetail::Compact,
+                    &crate::keybindings::KeyBindings::default(),
+                ),
+            );
             let first = &rows[1];
             if source.starts_with("**") {
                 assert!(

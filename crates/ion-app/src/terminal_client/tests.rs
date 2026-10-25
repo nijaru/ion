@@ -263,7 +263,7 @@ async fn command_namespace_completes_and_never_becomes_a_model_prompt_or_queue()
 
 #[test]
 fn command_overview_defers_argument_grammar_to_detailed_help() {
-    let overview = Builtin::help();
+    let overview = Builtin::help(&KeyBindings::default());
     assert!(
         !overview.contains('['),
         "the overview must not dump argument grammars"
@@ -306,7 +306,10 @@ async fn detailed_help_and_binding_orientation_are_presentation_not_input() {
             .contains("Roadmap")
     );
     for topic in ["model", "/reasoning", "keys"] {
-        let expected = notice_rows(&Builtin::help_for(topic).unwrap(), 79);
+        let expected = notice_rows(
+            &Builtin::help_for(topic, &KeyBindings::default()).unwrap(),
+            79,
+        );
         command::handle_builtin(
             &mut fixture.control,
             &fixture.host,
@@ -326,7 +329,7 @@ async fn detailed_help_and_binding_orientation_are_presentation_not_input() {
         assert!(fixture.control.session().view().unwrap().entries.is_empty());
     }
     assert!(
-        Builtin::help_for("model")
+        Builtin::help_for("model", &KeyBindings::default())
             .unwrap()
             .contains("/model [PROVIDER/MODEL]")
     );
@@ -357,7 +360,7 @@ async fn help_output_is_complete_publication_not_clipped_composer_chrome() {
     let mut fixture = Fixture::new();
     let mut ui = Frontend::default();
     ui.refresh_session(fixture.control.session()).unwrap();
-    let expected = notice_rows(&Builtin::help(), 39);
+    let expected = notice_rows(&Builtin::help(&KeyBindings::default()), 39);
     assert!(expected.len() > LIVE_REGION_MAX_ROWS);
     for _ in 0..2 {
         command::handle_builtin(
@@ -764,7 +767,10 @@ async fn ordinary_paths_complete_in_place_without_submitting() {
         assert_eq!(ui.draft, literal);
         ui.pickers.complete().await;
         ui.refresh_completion(None, None, false);
-        assert!(!ui.completion.rows(200, 6).is_empty(), "{literal}");
+        assert!(
+            !ui.completion.rows(200, 6, &ui.keys).is_empty(),
+            "{literal}"
+        );
         assert!(matches!(
             ui.key(KeyEvent::new(KeyCode::Enter, Modifiers::NONE), None, None),
             Action::None
@@ -915,7 +921,7 @@ async fn unfinished_history_anchors_are_stable_on_initial_load_and_reinspection(
             ui.load_history(fixture.control.session(), &view);
             assert_eq!(ui.history.items.len(), 2);
             assert_eq!(ui.pending_history_target, 1);
-            ui.print(Builtin::help());
+            ui.print(Builtin::help(&KeyBindings::default()));
         }
         let pending = ui.pending_history_rows(80);
         assert!(
@@ -928,7 +934,7 @@ async fn unfinished_history_anchors_are_stable_on_initial_load_and_reinspection(
             0..2,
             false,
             80,
-            ui.output_detail,
+            &crate::tool_output::OutputOptions::new(ui.output_detail, &ui.keys),
             ui.thinking_visibility,
         );
         assert!(
@@ -1330,8 +1336,14 @@ fn question_modal_preserves_composer_draft_images_and_defers_to_other_views() {
     };
     assert!(ui.question_owns_input());
     let question = ui.question.as_mut().unwrap();
-    question.key(KeyEvent::new(KeyCode::Down, Modifiers::NONE));
-    question.key(KeyEvent::new(KeyCode::Enter, Modifiers::NONE));
+    question.key(
+        KeyEvent::new(KeyCode::Down, Modifiers::NONE),
+        &KeyBindings::default(),
+    );
+    question.key(
+        KeyEvent::new(KeyCode::Enter, Modifiers::NONE),
+        &KeyBindings::default(),
+    );
     assert_eq!(ui.draft, "literal draft");
     assert_eq!(ui.cursor, "literal draft".len());
     assert_eq!(ui.images.len(), 1);

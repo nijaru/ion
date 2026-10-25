@@ -105,8 +105,9 @@ impl Frontend {
             self.show_draft(recovered);
         }
         self.status = format!(
-            "{} recovered draft(s) · Alt-Up cycles drafts",
-            self.recovered.len()
+            "{} recovered draft(s) · {} cycles drafts",
+            self.recovered.len(),
+            self.keys.hint(crate::keybindings::KeyAction::Dequeue)
         );
     }
 

@@ -23,6 +23,7 @@ mod edit_diff;
 mod external_editor;
 mod headless;
 mod inspection;
+mod keybindings;
 mod markdown;
 mod presentation_style;
 mod publication;
@@ -388,12 +389,22 @@ async fn run_cli(cli: Invocation) -> Result<()> {
             Ok(())
         }
         action => {
+            let keys = if cli.resume_session
+                || (matches!(action, Action::Chat)
+                    && io::stdin().is_terminal()
+                    && io::stdout().is_terminal())
+            {
+                keybindings::KeyBindings::load(host.config_root())?
+            } else {
+                keybindings::KeyBindings::default()
+            };
             let explicit_cwd = cli.cwd.is_some();
             let cwd = cli.cwd.unwrap_or(std::env::current_dir()?).canonicalize()?;
             ensure!(cwd.is_dir(), "working directory is not a directory");
             let catalog = host.sessions(Some(cwd.clone()));
             let path = if cli.resume_session {
-                let Some(path) = terminal_client::choose_session(catalog.clone()).await? else {
+                let Some(path) = terminal_client::choose_session(catalog.clone(), &keys).await?
+                else {
                     return Ok(());
                 };
                 path
@@ -527,7 +538,7 @@ async fn run_cli(cli: Invocation) -> Result<()> {
                 };
                 let choose_default = existing.is_none() && selected.is_none();
                 let Some(selected) =
-                    terminal_client::setup_model(&host, selected, choose_default).await?
+                    terminal_client::setup_model(&host, selected, choose_default, &keys).await?
                 else {
                     return Ok(());
                 };
@@ -682,6 +693,7 @@ async fn run_cli(cli: Invocation) -> Result<()> {
                             images,
                             startup_diagnostics,
                             tui_mode: cli.tui_mode,
+                            keys,
                         })
                         .await
                     }

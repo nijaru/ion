@@ -245,7 +245,7 @@ fn local_output_keeps_history_order_across_publication_and_reflow() {
             0..2,
             false,
             width,
-            ui.output_detail,
+            &crate::tool_output::OutputOptions::new(ui.output_detail, &ui.keys),
             ui.thinking_visibility,
         );
         assert!(rows.iter().all(|row| row.width() <= width));
@@ -608,9 +608,9 @@ fn command_completion_edits_without_dispatch_or_argument_loss() {
     ui.insert("/fork");
     ui.key(KeyEvent::new(KeyCode::Tab, Modifiers::NONE), None, None);
     assert!(ui.completion.active());
-    ui.completion.rows(80, 5);
+    ui.completion.rows(80, 5, &ui.keys);
     ui.key(KeyEvent::new(KeyCode::Down, Modifiers::NONE), None, None);
-    ui.completion.rows(80, 5);
+    ui.completion.rows(80, 5, &ui.keys);
     assert!(matches!(
         ui.key(KeyEvent::new(KeyCode::Enter, Modifiers::NONE), None, None),
         Action::None
@@ -621,7 +621,7 @@ fn command_completion_edits_without_dispatch_or_argument_loss() {
     ui.insert("/re");
     ui.completion
         .refresh(&ui.draft, ui.cursor, None, None, None, false);
-    assert!(ui.completion.rows(80, 1).is_empty());
+    assert!(ui.completion.rows(80, 1, &ui.keys).is_empty());
     // A menu that cannot fit is not an invisible keyboard target.
     assert!(
         matches!(ui.key(KeyEvent::new(KeyCode::Enter, Modifiers::NONE), None, None), Action::Command(CommandInput::Editor(source)) if source.literal == "/re" && source.cursor == 3)
@@ -756,7 +756,7 @@ fn resource_completion_preserves_literal_commands_and_terminal_control_names() {
     ui.completion
         .refresh(&ui.draft, ui.cursor, Some(&resources), None, None, false);
     for width in [1, 8, 24, 80] {
-        let rows = ui.completion.rows(width, 5);
+        let rows = ui.completion.rows(width, 5, &ui.keys);
         assert!(rows.len() <= 5);
         assert!(rows.iter().all(|row| !row.contains('\x1b')
             && unicode_width::UnicodeWidthStr::width(row.as_str()) <= width));
@@ -787,7 +787,7 @@ fn resource_completion_preserves_literal_commands_and_terminal_control_names() {
         .refresh(&ui.draft, ui.cursor, Some(&resources), None, None, false);
     assert!(
         ui.completion
-            .rows(100, 5)
+            .rows(100, 5, &ui.keys)
             .iter()
             .all(|row| !row.contains("[prompt]"))
     );
@@ -812,7 +812,7 @@ async fn file_completion_cannot_accept_clipped_or_unpublished_candidates() {
             assert!(ui.pickers.complete().await.is_none());
         }
         ui.refresh_completion(None, None, false);
-        ui.completion.rows(width, budget);
+        ui.completion.rows(width, budget, &ui.keys);
         if unpublished {
             ui.completion.invalidate_visibility();
         }
@@ -868,7 +868,7 @@ async fn automatic_file_suggestions_keep_edits_in_the_draft() {
     ui.refresh_completion(None, None, false);
     assert!(
         ui.completion
-            .rows(80, 5)
+            .rows(80, 5, &ui.keys)
             .iter()
             .any(|row| row.contains("src/main.rs"))
     );
@@ -893,7 +893,7 @@ async fn automatic_file_suggestions_keep_edits_in_the_draft() {
         assert!(ui.pickers.complete().await.is_none());
     }
     ui.refresh_completion(None, None, false);
-    ui.completion.rows(80, 5);
+    ui.completion.rows(80, 5, &ui.keys);
     assert!(matches!(
         ui.key(KeyEvent::new(KeyCode::Enter, Modifiers::NONE), None, None),
         Action::None
