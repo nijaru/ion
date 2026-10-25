@@ -84,6 +84,9 @@ pub(super) fn path_prefix(draft: &str, cursor: usize, force: bool) -> Option<Pre
     let mut quoted = false;
     let mut closed = false;
     let mut escaped = false;
+    // Do not rescan the remaining draft for every unmatched opening wrapper.
+    let wrappers = [('(', ')'), ('[', ']'), ('{', '}'), ('<', '>'), ('`', '`')];
+    let last_closers = wrappers.map(|(_, closer)| before.rfind(closer));
     for (at, ch) in before.char_indices() {
         if quoted {
             if escaped {
@@ -101,18 +104,13 @@ pub(super) fn path_prefix(draft: &str, cursor: usize, force: bool) -> Option<Pre
             closed = false;
         } else if ch == '"' && (at == start || &before[start..at] == "@") {
             quoted = true;
-        } else if at == start {
-            let closer = match ch {
-                '(' => Some(')'),
-                '[' => Some(']'),
-                '{' => Some('}'),
-                '<' => Some('>'),
-                '`' => Some('`'),
-                _ => None,
-            };
-            if closer.is_some_and(|closer| !before[at + ch.len_utf8()..].contains(closer)) {
-                start += ch.len_utf8();
-            }
+        } else if at == start
+            && wrappers
+                .iter()
+                .position(|(opener, _)| *opener == ch)
+                .is_some_and(|index| last_closers[index].is_none_or(|last| last <= at))
+        {
+            start += ch.len_utf8();
         }
     }
     if closed {
@@ -283,6 +281,7 @@ mod tests {
             ("@", ""),
             ("Read\u{2003}@src/ma", "src/ma"),
             ("(`@ma", "ma"),
+            ("((([@ma", "ma"),
             ("@\"space dir/ma", "space dir/ma"),
         ] {
             let token = path_prefix(draft, draft.len(), false).unwrap();
