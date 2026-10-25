@@ -88,7 +88,7 @@ impl Picker {
                         }
                     ),
                     detail: Some(if reasoning == Reasoning::ProviderDefault {
-                        "Use the provider's default generation policy".into()
+                        "Use this route's default generation policy".into()
                     } else {
                         "Accepted by this route's adapter; provider mappings may differ".into()
                     }),
