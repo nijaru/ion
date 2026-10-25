@@ -227,31 +227,39 @@ def exercise_file_discovery():
                     if busy:
                         os.write(master, b"!sleep 30\r")
                         wait(lambda: b"Running shell" in output)
-                    os.write(master, b"Read @\t")
+                    os.write(master, b"Read @")
                     writer = hold_read()
-                    wait(lambda: "discovering project files…".encode() in output)
-                    # The final character fences Enter processing while discovery
-                    # is held; a query repaint before Enter is not an acknowledgement.
-                    os.write(master, b"data.tx\rt")
-                    wait(lambda: "› data.txt".encode() in output)
+                    wait(lambda: "discovering project paths…".encode() in output)
+                    # Tab cannot accept an unseen file while the read is held.
+                    # The final character acknowledges processing that Tab, not
+                    # merely a query repaint before the attempted completion.
+                    os.write(master, b"data.tx\tt")
+                    wait(lambda: "› Read @data.txt".encode() in output)
                     output.clear()
                     os.close(writer)
                     writer = None
                     # Completion must paint without any additional input.
-                    wait(lambda: b"1 match(es)" in output)
-                    os.write(master, b"\r")
-                    wait(lambda: b"Read @data.txt" in output)
+                    wait(lambda: "› data.txt".encode() in output)
+                    # Acceptance adds only an already-blank cell plus a cursor
+                    # move. A following real draft edit acknowledges it without
+                    # demanding a redundant repaint from the diff renderer.
+                    os.write(master, b"\rselected")
+                    wait(lambda: b"Read @data.txt selected" in output)
                     if not busy:
                         output.clear()
                         os.write(master, b"\x03")  # Explicitly clear the draft.
                         wait(lambda: cursor.position[1] == 3 and "›".encode() in output)
                     else:
                         output.clear()
-                        os.write(master, b"\t")  # Reopen the current mention.
+                        # Return from the inserted trailing space into the
+                        # mention, starting a fresh automatic discovery episode.
+                        os.write(master, b"\x17\x1b[D")  # Kill marker, enter mention.
                         writer = hold_read()
-                        wait(lambda: "discovering project files…".encode() in output)
-                        os.write(master, b"\x1b")
-                        wait(lambda: b"Read @data.txt" in output)
+                        wait(lambda: "discovering project paths…".encode() in output)
+                        # Escape, then leave the token and visibly acknowledge
+                        # the editor action without issuing any provider input.
+                        os.write(master, b"\x1b\x1b[Cdraft")
+                        wait(lambda: b"Read @data.txt draft" in output)
                         output.clear()
                         os.write(master, b"\x03")
                         # Shell cancellation/settlement cannot await discovery.
@@ -262,7 +270,7 @@ def exercise_file_discovery():
                         end = time.monotonic() + 0.2
                         while time.monotonic() < end:
                             pump()
-                        assert b"Choose file" not in output, "dismissed discovery reopened its modal"
+                        assert "Files ·".encode() not in output, "retired discovery reopened suggestions"
                         output.clear()
                         os.write(master, b"\x03")
                         wait(lambda: cursor.position[1] == 3 and "›".encode() in output)
@@ -299,7 +307,7 @@ with tempfile.TemporaryDirectory(prefix="ion-terminal-") as temporary:
     copy_file = work / "copied.txt"
     for program in ("pbcopy", "wl-copy", "xclip", "xsel"):
         wrapper = copy_bin / program
-        wrapper.write_text('#!/bin/sh\ncat > "$ION_SMOKE_CLIPBOARD"\n')
+        wrapper.write_text('#!/bin/sh\n/bin/cat > "$ION_SMOKE_CLIPBOARD"\n')
         wrapper.chmod(0o755)
     env = os.environ.copy()
     env.update(ION_HOME=str(work / "ion"), XDG_CONFIG_HOME=str(work / "config"), XDG_STATE_HOME=str(work / "state"), TERM="xterm-256color", ION_SMOKE_STEERING="1", SSH_CONNECTION="ion-smoke", WAYLAND_DISPLAY="ion-smoke", ION_SMOKE_CLIPBOARD=str(copy_file), PATH=f"{copy_bin}:{env['PATH']}")
@@ -347,10 +355,10 @@ with tempfile.TemporaryDirectory(prefix="ion-terminal-") as temporary:
                     saw_inline_start = True
                     os.write(master, b"Read @\t")
                     sent_file_start = True
-                if sent_file_start and b"Choose file" in output and not file_query_sent:
+                if sent_file_start and "Files ·".encode() in output and not file_query_sent:
                     os.write(master, b"data.txt")
                     file_query_sent = True
-                if file_query_sent and b"1 match(es)" in output and not selected_file:
+                if file_query_sent and "› data.txt".encode() in output and not selected_file:
                     os.write(master, b"\r")
                     selected_file = True
                 if selected_file and b"Read @data.txt" in output and not sent_first:
