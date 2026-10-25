@@ -109,6 +109,8 @@ pub(crate) enum Action {
     Rpc,
     /// Inspect committed Session history without running a model or tool.
     Inspect,
+    /// Show recorded Session token usage, not account billing or quota.
+    Usage,
     /// Print a readable committed transcript, or save it to a new file.
     Export { path: Option<PathBuf> },
     /// List numbered Turns in a saved Session.
@@ -226,7 +228,7 @@ fn applicable(command: &str, option: &str) -> bool {
     let coding = matches!(command, "run" | "chat" | "rpc");
     let saved = matches!(
         command,
-        "inspect" | "export" | "turns" | "clone" | "fork" | "compact"
+        "inspect" | "usage" | "export" | "turns" | "clone" | "fork" | "compact"
     );
     match option {
         "cwd" => {

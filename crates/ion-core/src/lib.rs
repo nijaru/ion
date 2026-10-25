@@ -12,6 +12,7 @@ mod operation;
 mod prompt_size;
 mod request;
 mod session;
+mod session_usage;
 mod summary;
 mod tool_result;
 mod tool_set;
@@ -38,6 +39,7 @@ pub use session::{
     SessionInputPreview, SessionMetadata, SessionView, StoredToolActivity, SubmissionRequest,
     TurnEndReason, TurnSummary, UnobservedUserShell, UserShellOutcome,
 };
+pub use session_usage::{ModelUsage, SessionUsage, TokenCount, UsageTotals};
 pub use tool_set::{
     ToolActivity, ToolActivityKind, ToolCatalog, ToolDefinition, ToolExecutor, ToolExposure,
     ToolPresentation, ToolPresentationTarget, ToolRegistration, ToolSelection, ToolSet,

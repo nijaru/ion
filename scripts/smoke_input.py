@@ -55,13 +55,17 @@ class Handler(BaseHTTPRequestHandler):
                 delta = {"tool_calls": [{"index": 0, "id": name, "type": "function", "function": {"name": name, "arguments": json.dumps(arguments)}}]}
             else:
                 delta = {"content": "TASK_ACCEPTED" if prompt.startswith("TASK_PARENT_") else "TASK_FINAL_🦀"}
-        if prompt in ("WAIT_HISTORY", "ACCEPTED_VIEW_FAULT"):
+        if prompt in ("WAIT_HISTORY", "ACCEPTED_VIEW_FAULT", "WAIT_USAGE"):
             assert release.wait(10), "fixture did not release the waiting response"
         delta = delta or {"content": "DONE_" + prompt}
         events = [
             {"choices": [{"index": 0, "delta": delta, "finish_reason": None}]},
             {"choices": [{"index": 0, "delta": {}, "finish_reason": "tool_calls" if "tool_calls" in delta else "stop"}]},
         ]
+        if prompt == "USAGE_KNOWN":
+            events[-1]["model"] = "served-alias"
+            events[-1]["usage"] = {"prompt_tokens": 1017, "completion_tokens": 17,
+                                    "prompt_tokens_details": {"cached_tokens": 555}}
         payload = b"".join(b"data: " + json.dumps(event).encode() + b"\n\n" for event in events) + b"data: [DONE]\n\n"
         self.send_response(200)
         self.send_header("Content-Type", "text/event-stream")
@@ -164,6 +168,60 @@ class Terminal:
         if self.redirected_master is not None:
             os.close(self.redirected_master)
         self.child.wait(timeout=5)
+
+
+def exercise_usage(work, base_env, endpoint):
+    for mode in ("inline", "fullscreen"):
+        sandbox = work / f"usage-{mode}"
+        cwd = sandbox / "workspace"
+        cwd.mkdir(parents=True)
+        env = dict(base_env, HOME=str(sandbox / "home"), ION_HOME=str(sandbox / "ion"),
+                   XDG_CONFIG_HOME=str(sandbox / "config"), XDG_STATE_HOME=str(sandbox / "state"))
+        subprocess.run([binary, "use", "smoke", "model", "--endpoint", endpoint,
+                        "--wire", "chat-completions"], env=env, check=True, capture_output=True)
+        database = sandbox / "conversation.sqlite"
+        before = len(requests)
+        terminal = Terminal(cwd, env, mode, ["--cwd", cwd, "--session", database,
+                            "--tui-mode", mode, "chat", "USAGE_KNOWN"])
+        # Keep the identity row whole: this byte-stream probe is not a VT screen
+        # emulator and cannot join an unchanged wrapped row to a later diff.
+        terminal.resize(40, 200)
+        release.clear()
+        try:
+            terminal.wait(lambda: len(requests) == before + 1 and b"state=done" in terminal.output)
+            terminal.output.clear()
+            terminal.send("/session\r")
+            terminal.wait(lambda: "Total tokens: 1034" in terminal.text())
+            assert "Cache read tokens: 555" in terminal.text(), terminal.text()
+            assert "Cost: unknown" in terminal.text(), terminal.text()
+            assert len(requests) == before + 1
+            terminal.output.clear()
+            terminal.send("WAIT_USAGE\r")
+            terminal.wait(lambda: len(requests) == before + 2)
+            terminal.send("/session\r")
+            terminal.wait(lambda: "2turn(s)" in re.sub(r"\s+", "", terminal.text()))
+            assert "Recorded usage · 1 observation(s)" in terminal.text(), terminal.text()
+            assert b"state=done" not in terminal.output, "inspection settled the active request"
+            assert not release.is_set() and len(requests) == before + 2
+            release.set()
+            terminal.wait(lambda: b"state=done" in terminal.output)
+            terminal.output.clear()
+            terminal.send("/session\r")
+            terminal.wait(lambda: "Total tokens: 1034 reported (incomplete)" in terminal.text())
+            terminal.paint()
+            assert "Input tokens: 1017 reported; 1 observation(s) unreported" in terminal.text(), terminal.text()
+            assert "provider reports served-alias" in terminal.text(), terminal.text()
+            assert len(requests) == before + 2
+            terminal.finish()
+            assert termios.tcgetattr(terminal.master) == terminal.original_modes
+        finally:
+            release.set()
+            terminal.close()
+        report = subprocess.run([binary, "usage", "--session", database], env=env,
+                                check=True, capture_output=True, timeout=10).stdout.decode()
+        assert "Total tokens: 1034 reported (incomplete)" in report, report
+        assert len(requests) == before + 2
+        print(f"Session usage {mode}: cached totals, busy snapshot, partial reporting and passive CLI: OK", flush=True)
 
 
 def exercise_launch(work, base_env, endpoint):
@@ -1028,6 +1086,7 @@ with tempfile.TemporaryDirectory(prefix="ion-input-") as temporary:
         exercise_keybindings(work, env, f"http://127.0.0.1:{server.server_port}/v1/chat/completions")
         exercise_tasks(work, env)
         exercise_launch(work, env, f"http://127.0.0.1:{server.server_port}/v1/chat/completions")
+        exercise_usage(work, env, f"http://127.0.0.1:{server.server_port}/v1/chat/completions")
         # Display sanitation must not bypass the secret reader's input guard.
         terminal = Terminal(work, env, "inline", ["login", "unsafe\x1b[31mprovider"])
         try:

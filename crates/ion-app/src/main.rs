@@ -28,6 +28,7 @@ mod markdown;
 mod presentation_style;
 mod publication;
 mod rpc;
+mod session_usage;
 mod stdio;
 mod terminal_client;
 mod terminal_commands;
@@ -415,6 +416,7 @@ async fn run_cli(cli: Invocation) -> Result<()> {
             } else if matches!(
                 action,
                 Action::Inspect
+                    | Action::Usage
                     | Action::Export { .. }
                     | Action::Turns
                     | Action::Compact
@@ -450,6 +452,16 @@ async fn run_cli(cli: Invocation) -> Result<()> {
                 ensure!(existing.is_some(), "session does not exist");
                 let view = CodingSession::inspect(&path)?;
                 inspection::write(&view, &mut io::stdout().lock())?;
+                return Ok(());
+            }
+            if matches!(action, Action::Usage) {
+                ensure!(existing.is_some(), "session does not exist");
+                let view = CodingSession::inspect(&path)?;
+                print_stdout(format_args!(
+                    "Session {}\n{}",
+                    view.id,
+                    session_usage::render(&view.usage())
+                ))?;
                 return Ok(());
             }
             if let Action::Export { path: output } = &action {

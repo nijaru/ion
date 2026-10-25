@@ -64,6 +64,7 @@ ion --continue             # reopen the latest session in this directory
 ion -r                     # choose a saved Session; Tab browses all folders
 ion sessions               # list saved sessions and their IDs
 ion --session ID inspect   # committed history for a selected session as JSON
+ion --continue usage       # recorded token usage, without a model request
 ion --continue clone       # copy the latest conversation to a new session
 ion --continue turns       # list Turn numbers and prompt previews
 ion --continue fork 2      # new session before Turn 2, preserving the source
@@ -141,6 +142,17 @@ match it. Headless runs print the
 session ID to stderr. In the TUI, `/new`, `/clone`, `/tree`, `/fork`, `/fork-after`, `/resume`, `/name`, `/session`,
 `/model` and `/compact` manage the conversation; `/login` chooses an API-key
 provider, and `/login PROVIDER` or `/logout PROVIDER` manages its saved key.
+
+`/session` also shows recorded token usage; `ion --continue usage` or
+`ion --session ID usage` prints the same accounting without model or MCP setup.
+It includes assistant, compaction and cache-refresh observations from all saved
+history, including inactive paths and copied history—not just current context.
+Cache reads/writes are subsets of input, not extra tokens. Missing measurements
+stay unknown; partial totals show reported subtotals and unreported observation
+counts. Logical/effective routes and provider-returned model names retain their
+saved attribution. In-flight/unrecorded requests and other Sessions are excluded.
+Historical prices and charges are not stored, so cost remains unknown; this is
+not a bill, provider quota or spending budget.
 
 `/tasks` opens a searchable list of application-owned background tasks. Select a
 row for progress/details, a readable result, stop or removal. Live metadata shows

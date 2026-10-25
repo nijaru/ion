@@ -121,6 +121,7 @@ fn resume_is_an_explicit_terminal_chooser_not_a_session_operand() {
         vec!["ion", "chat", "--resume"],
         vec!["ion", "--resume", "run", "hello"],
         vec!["ion", "inspect", "--resume"],
+        vec!["ion", "usage", "--resume"],
     ] {
         assert!(parse(&args, true).unwrap().resume_session, "{args:?}");
         assert!(parse(&args, false).is_err(), "{args:?}");
@@ -148,6 +149,7 @@ fn scopes_reject_unused_options_in_both_positions_and_help_matches() {
         ("use", "--cwd", "/tmp"),
         ("sessions", "--reasoning", "high"),
         ("inspect", "--code-mode", ""),
+        ("usage", "--model", "openai/gpt-5.4"),
         ("rpc", "--image", "photo.png"),
         ("run", "--tui-mode", "fullscreen"),
         ("chat", "--json", ""),

@@ -339,7 +339,7 @@ pub(super) fn handle_builtin(
         Builtin::Session => {
             let view = runtime.session().view()?;
             ui.print(format!(
-                "Session {} · {} turn(s) · {} · {}",
+                "Session {} · {} turn(s) · {} · {}\n{}",
                 runtime.session().path().display(),
                 view.entries
                     .iter()
@@ -347,6 +347,7 @@ pub(super) fn handle_builtin(
                     .count(),
                 view.name.as_deref().unwrap_or("unnamed"),
                 context_label(&view, runtime.agent().limits().context_window_tokens),
+                crate::session_usage::render(&view.usage()),
             ));
         }
         Builtin::Export => {

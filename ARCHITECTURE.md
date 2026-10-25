@@ -71,7 +71,7 @@ must be considered explicitly rather than hidden under broad claims of parity:
   executable commands, configurable terminal keys and Rust/MCP tools do not
   deliver all of these powers.
 - **Model access and accounting:** subscription/OAuth workflows, additional
-  provider protocols, virtual-model routing, user-facing spending/usage reports
+  provider protocols, virtual-model routing, account spending/limit reports
   and budgets. Context-token calibration is not a spending budget.
 - **Clients and distribution:** ACP/editor adapters, non-Rust SDK bindings,
   browser/WASM hosts, platform support beyond currently qualified environments,
@@ -897,6 +897,22 @@ its original configuration. Logical-Turn continuation still requires matching cu
 authority and configuration; passive recovery eligibility is not that attestation.
 Logical selection, effective model, returned identity and usage remain distinct. Model
 epochs survive reopen, including A → B → A; routing policy is not correctness state.
+
+Recorded Session usage is a passive Core projection of all committed assistant,
+compaction and cache-refresh accounting, including inactive and inherited history.
+Context selection and compaction do not erase those observations. The terminal
+`/session` and saved-Session CLI `usage` consume the same projection without model,
+tool or MCP admission. This is not recursive child usage or a unique billing ledger
+across copied Sessions. In-flight and unrecorded requests remain outside its scope;
+observation counts cannot establish request or billing coverage.
+
+Keep each missing measurement distinct from a reported zero, and qualify partial
+known subtotals. Input already includes cache reads/writes; never add these subsets
+again. Attribute captured logical/effective and provider-returned identities rather
+than today's selected model. Historical prices and charges are not recorded, so
+cost remains unknown: current cache-warming economics cannot retroactively price
+history. Recorded consumption, context occupancy, account quotas and enforceable
+spending budgets are separate contracts.
 
 Adapters own framing, errors and opaque provider continuation. Recoverable error
 identity must not depend on clipping its diagnostic presentation. Bound transport/

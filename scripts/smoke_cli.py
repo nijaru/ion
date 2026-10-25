@@ -22,6 +22,14 @@ class Handler(BaseHTTPRequestHandler):
             {"choices": [{"index": 0, "delta": {"content": "CLI_OK"}, "finish_reason": None}]},
             {"choices": [{"index": 0, "delta": {}, "finish_reason": "stop"}]},
         ]
+        prompt = requests[-1]["messages"][-1]["content"]
+        if prompt in ("default", "restore"):
+            events[-1]["model"] = "served-alias"
+            events[-1]["usage"] = {
+                "prompt_tokens": 1017 if prompt == "default" else 0,
+                "completion_tokens": 17 if prompt == "default" else 0,
+                "prompt_tokens_details": {"cached_tokens": 555 if prompt == "default" else 0},
+            }
         payload = b"".join(b"data: " + json.dumps(event).encode() + b"\n\n" for event in events)
         payload += b"data: [DONE]\n\n"
         self.send_response(200)
@@ -69,6 +77,7 @@ with tempfile.TemporaryDirectory(prefix="ion-cli-") as temporary:
             (["--model", "first/vendor/model", "-p", "argument"], b"literal context\n", "literal context\n\nargument"),
             (["run", "argument", "--model", "first/vendor/model"], b"", "argument"),
             (["--model", "first/vendor/model", "  bare 🦀\n "], b"", "  bare 🦀\n "),
+            (["--model", "first/vendor/model", "--", "usage"], b"", "usage"),
             (["-p", "--model", "first/vendor/model", "separate mode"], b"", "separate mode"),
             (["--model", "first/vendor/model", "-p", "--", "- dash-leading"], b"", "- dash-leading"),
             (["--provider", "first", "run", "--model", "vendor/model", "paired"], b"", "paired"),
@@ -122,6 +131,28 @@ with tempfile.TemporaryDirectory(prefix="ion-cli-") as temporary:
         assert set((root / "ion").rglob("*.sqlite")) == before
         assert not marker.exists()
         assert len(requests) == calls
+
+        # Usage is passive saved-history inspection, even with no configured
+        # model and an invalid unused keymap. It cannot start MCP or read stdin.
+        store.rename(store.with_suffix(".saved"))
+        (root / "ion/keybindings.json").write_text("invalid unused keymap")
+        report = run("usage", "--session", session, input=b"\xff").stdout.decode()
+        assert "Input tokens: 1017 reported; 1 observation(s) unreported" in report, report
+        assert "Output tokens: 17 reported; 1 observation(s) unreported" in report, report
+        assert "Total tokens: 1034 reported (incomplete)" in report, report
+        assert "Cache read tokens: 555 reported; 1 observation(s) unreported" in report, report
+        assert "Cache write tokens: unknown" in report, report
+        assert "first/vendor/model" in report and "second/other" in report, report
+        assert "provider reports served-alias" in report and "Cost: unknown" in report, report
+        assert json.loads(run("inspect", "--session", session).stdout) == view
+        latest = run("--cwd", workspace, "--continue", "usage").stdout.decode()
+        assert "Total tokens: unknown" in latest and "Cost: unknown" in latest, latest
+        assert len(requests) == calls and not marker.exists()
+        absent = root / "absent.sqlite"
+        for args in (("usage",), ("usage", "--session", absent),
+                     ("--model", "first/vendor/model", "usage", "--session", session)):
+            assert run(*args, check=False).returncode != 0, args
+        assert not absent.exists() and len(requests) == calls and not marker.exists()
 
         # Metadata never consumes stdin, and invalid option scopes fail before a
         # producer must close its pipe.
