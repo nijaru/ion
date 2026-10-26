@@ -31,6 +31,7 @@ pub mod model_setup;
 mod preparation;
 mod process;
 mod project_instructions;
+pub mod prompt_files;
 mod question;
 mod question_tool;
 pub mod resources;

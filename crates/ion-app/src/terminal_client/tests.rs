@@ -134,7 +134,13 @@ impl Fixture {
         let session =
             Arc::new(CodingSession::create(root.join("session.sqlite"), Some(&root)).unwrap());
         let setup = ion_host::CodingApplication::new(host.clone(), None)
-            .setup(session, selected, None, None)
+            .setup(
+                session,
+                selected,
+                None,
+                None,
+                host.resources(&root).unwrap(),
+            )
             .unwrap();
         Self {
             root,
@@ -414,10 +420,15 @@ fn assert_note(image: &ImageSource, expected: &str) {
 
 #[test]
 fn returned_drafts_never_merge_identical_text_or_attachment_associations() {
+    let file = |name: &str| ion_host::prompt_files::TextFile {
+        name: name.into(),
+        text: format!("context for {name}"),
+    };
     let mut ui = Frontend {
         draft: "unsent".into(),
         cursor: 2,
         images: vec![image("unsent")],
+        files: vec![file("unsent")],
         ..Frontend::default()
     };
     ui.return_draft(
@@ -426,6 +437,7 @@ fn returned_drafts_never_merge_identical_text_or_attachment_associations() {
             cursor: 1,
         },
         vec![image("first")],
+        vec![file("first")],
     );
     ui.return_draft(
         EditorDraft {
@@ -433,6 +445,7 @@ fn returned_drafts_never_merge_identical_text_or_attachment_associations() {
             cursor: 4,
         },
         vec![image("second")],
+        vec![file("second")],
     );
     assert_eq!(
         (ui.draft.as_str(), ui.cursor, ui.recovered.len()),
@@ -447,8 +460,30 @@ fn returned_drafts_never_merge_identical_text_or_attachment_associations() {
         assert_eq!((ui.draft.as_str(), ui.cursor), (text, cursor));
         assert_eq!(ui.images.len(), 1);
         assert_note(&ui.images[0], note);
+        assert_eq!(ui.files.len(), 1);
+        assert_eq!(ui.files[0].name, note);
+        assert_eq!(ui.files[0].text, file(note).text);
     }
     assert_eq!(ui.recovered.len(), 2);
+}
+
+#[test]
+fn oversized_history_preserves_the_draft_and_can_be_traversed_without_loading_it() {
+    let mut ui = Frontend {
+        draft: "unsent 🦀".into(),
+        cursor: 3,
+        prompt_history: vec!["older".into(), "x".repeat(MAX_DRAFT + 1)],
+        ..Frontend::default()
+    };
+    ui.history_previous();
+    assert_eq!((ui.draft.as_str(), ui.cursor), ("unsent 🦀", 3));
+    assert!(ui.status.contains("exceeds editor limit"));
+    ui.history_previous();
+    assert_eq!(ui.draft, "older");
+    ui.history_next();
+    assert_eq!(ui.draft, "older");
+    ui.history_next();
+    assert_eq!((ui.draft.as_str(), ui.cursor), ("unsent 🦀", 3));
 }
 
 #[test]
@@ -460,7 +495,7 @@ fn returned_draft_ends_history_browsing_without_losing_unsent_input() {
         ..Frontend::default()
     };
     ui.history_previous();
-    ui.return_draft(EditorDraft::at_end("returned".into()), vec![]);
+    ui.return_draft(EditorDraft::at_end("returned".into()), vec![], Vec::new());
     ui.history_next();
     assert_eq!((ui.draft.as_str(), ui.cursor), ("unsent", 2));
     ui.recover_draft();

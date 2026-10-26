@@ -573,7 +573,7 @@ async fn run_cli(cli: Invocation) -> Result<()> {
             // Startup has not admitted a Session operation or taken terminal
             // custody. Preserve default SIGINT here; registering Tokio's handler
             // would also change the later interactive terminal's signal behavior.
-            let images = ion_host::image_input::prepare_images(
+            let mut images = ion_host::image_input::prepare_images(
                 &selected.identity(),
                 selected.image_input,
                 sources,
@@ -581,6 +581,96 @@ async fn run_cli(cli: Invocation) -> Result<()> {
                 tokio_util::sync::CancellationToken::new(),
             )
             .await?;
+            let paths = match &action {
+                Action::Run { input } | Action::Chat { input } => input
+                    .files()
+                    .map(|path| {
+                        let path = if let Some(rest) =
+                            path.to_str().and_then(|value| value.strip_prefix("~/"))
+                        {
+                            PathBuf::from(std::env::var_os("HOME").context("@~/ requires HOME")?)
+                                .join(rest)
+                        } else {
+                            path.to_path_buf()
+                        };
+                        Ok(if path.is_absolute() {
+                            path
+                        } else {
+                            session_cwd.join(path)
+                        })
+                    })
+                    .collect::<Result<Vec<_>>>()?,
+                _ => Vec::new(),
+            };
+            let prepared = ion_host::prompt_files::prepare_files(
+                paths,
+                selected.identity(),
+                selected.image_input,
+                ion_core::AgentLimits::default().max_request_bytes,
+                tokio_util::sync::CancellationToken::new(),
+            )
+            .await?;
+            images.extend(prepared.images);
+            let files = prepared.text;
+            // Freeze resources and validate the complete launch before creating a
+            // Session or starting MCP. Terminal resource errors still belong to
+            // ordinary recoverable editor admission, not a second submission path.
+            let resources = host.resources(session_cwd)?;
+            enum Client {
+                Headless(headless::Request, bool),
+                Rpc,
+                Terminal {
+                    prompt: Option<String>,
+                    images: Vec<ion_ai::LoadedImage>,
+                    files: Vec<ion_host::prompt_files::TextFile>,
+                },
+            }
+            let client = match action {
+                Action::Run { input } => {
+                    let prompt = cli::with_piped_input(
+                        expand_input(
+                            &resources,
+                            input.prompt().unwrap_or_default().to_owned(),
+                            ion_core::AgentLimits::default().max_request_bytes,
+                        )?,
+                        cli.piped_input,
+                    );
+                    let message = ion_host::prompt_files::compose_prompt(prompt, &files, images);
+                    drop(files);
+                    Client::Headless(headless::Request::Prompt(message), cli.json)
+                }
+                Action::Chat { input } => Client::Terminal {
+                    prompt: input
+                        .prompt()
+                        .map(str::to_owned)
+                        .or_else(|| input.files().next().is_some().then(String::new)),
+                    images,
+                    files,
+                },
+                Action::Compact => Client::Headless(headless::Request::Compact, false),
+                Action::Rpc => Client::Rpc,
+                _ => unreachable!("non-agent action handled above"),
+            };
+            let bytes = match &client {
+                Client::Headless(headless::Request::Prompt(message), _) => {
+                    serde_json::to_vec(message)?.len()
+                }
+                Client::Terminal {
+                    prompt,
+                    files,
+                    images,
+                } => serde_json::to_vec(&ion_host::prompt_files::compose_prompt(
+                    prompt.clone().unwrap_or_default(),
+                    files,
+                    images.clone(),
+                ))?
+                .len(),
+                _ => 0,
+            };
+            ensure!(
+                bytes <= ion_core::AgentLimits::default().max_request_bytes,
+                "launch input exceeds input byte limit"
+            );
             let session = Arc::new(if existing.is_some() {
                 CodingSession::open(&path)?
             } else {
@@ -592,7 +682,7 @@ async fn run_cli(cli: Invocation) -> Result<()> {
                     "saved Session identity or working directory changed during startup; reopen it explicitly"
                 );
             }
-            let startup = if matches!(action, Action::Compact) {
+            let startup = if matches!(client, Client::Headless(headless::Request::Compact, _)) {
                 ion_host::McpStartup::default()
             } else {
                 host.external_tools(
@@ -610,7 +700,7 @@ async fn run_cli(cli: Invocation) -> Result<()> {
             // Terminal and bidirectional RPC own a live question responder.
             // One-shot headless, compaction and managed children have no answer
             // channel and therefore no declared question tool.
-            let questions = matches!(&action, Action::Chat { .. } | Action::Rpc)
+            let questions = matches!(&client, Client::Terminal { .. } | Client::Rpc)
                 .then(ion_host::QuestionCustody::new);
             let mut application = ion_host::CodingApplication::new(host.clone(), external_tools)
                 .with_code_mode(cli.code_mode);
@@ -633,6 +723,7 @@ async fn run_cli(cli: Invocation) -> Result<()> {
                     selected,
                     cli.reasoning,
                     questions,
+                    resources,
                 ) {
                     Ok(setup) => setup,
                     Err(error) => {
@@ -658,42 +749,11 @@ async fn run_cli(cli: Invocation) -> Result<()> {
                 for diagnostic in setup.commands().diagnostics() {
                     startup_diagnostics.push(format!("[commands: {}]", metadata_field(diagnostic)));
                 }
-                if !matches!(&action, Action::Chat { .. }) {
+                if !matches!(&client, Client::Terminal { .. }) {
                     for diagnostic in &startup_diagnostics {
                         print_stderr(format_args!("{diagnostic}"))?;
                     }
                 }
-                enum Client {
-                    Headless(headless::Request, bool),
-                    Rpc,
-                    Terminal {
-                        prompt: Option<String>,
-                        images: Vec<ion_ai::LoadedImage>,
-                    },
-                }
-                // Complete fallible preflight before transferring cleanup custody.
-                // Headless resource expansion precedes piped context; its prepared
-                // message remains literal when admitted by shared control.
-                let client = match action {
-                    Action::Run { prompt } => {
-                        let prompt = cli::with_piped_input(
-                            expand_input(
-                                setup.resources(),
-                                prompt.unwrap_or_default(),
-                                setup.agent().limits().max_request_bytes,
-                            )?,
-                            cli.piped_input,
-                        );
-                        Client::Headless(
-                            headless::Request::Prompt(Message::user_input(prompt, images)),
-                            cli.json,
-                        )
-                    }
-                    Action::Compact => Client::Headless(headless::Request::Compact, false),
-                    Action::Rpc => Client::Rpc,
-                    Action::Chat { prompt } => Client::Terminal { prompt, images },
-                    _ => unreachable!("non-agent action handled above"),
-                };
                 // Each client immediately owns shared control and always joins it.
                 // Keeping the original Arc here would pin its exclusive writer
                 // lock after a client switches to a different Session.
@@ -702,11 +762,16 @@ async fn run_cli(cli: Invocation) -> Result<()> {
                 match client {
                     Client::Headless(request, json) => headless::run(setup, request, json).await,
                     Client::Rpc => rpc::run(setup, host).await,
-                    Client::Terminal { prompt, images } => {
+                    Client::Terminal {
+                        prompt,
+                        images,
+                        files,
+                    } => {
                         terminal_client::chat(terminal_client::ChatInit {
                             setup,
                             services: host,
                             images,
+                            files,
                             startup_diagnostics,
                             initial_prompt: prompt,
                             tui_mode: cli.tui_mode,

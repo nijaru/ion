@@ -210,16 +210,17 @@ impl Activity {
                 return Ok(reconcile(ui, control).err());
             }
             ControlUpdate::Returned(returned) => {
-                let UserInput::Prompt { images, .. } = returned.input else {
+                let UserInput::Prompt { images, files, .. } = returned.input else {
                     unreachable!("terminal submits only raw prompts")
                 };
                 if matches!(returned.reason, ReturnReason::Cleared) {
                     ui.show_draft(super::RecoveredDraft {
                         source: returned.metadata,
                         images,
+                        files,
                     });
                 } else {
-                    ui.return_draft(returned.metadata, images);
+                    ui.return_draft(returned.metadata, images, files);
                 }
                 ui.status = "Draft returned".into();
                 let fault = returned
@@ -391,6 +392,7 @@ mod tests {
             .submit(
                 Delivery::Start,
                 UserInput::Prompt {
+                    files: Vec::new(),
                     text: "initial".into(),
                     images: vec![ion_host::image_input::ImageSource::Path(
                         fixture.root.join("missing.png"),

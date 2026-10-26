@@ -55,6 +55,8 @@ ion 'Inspect and fix the failing test' # start a prompt, then keep chatting
 ion chat 'Summarize this project'      # explicit terminal mode
 ion run 'Inspect and fix the failing test'
 ion -p 'Summarize the changes'
+ion -p @notes.md @src/lib.rs 'Review these files'
+ion chat @diagram.png 'Explain this image'
 ion --json run 'Inspect and fix the failing test' > events.jsonl
 ion rpc                    # persistent JSONL control on stdin/stdout
 git diff | ion -p 'Review this change'
@@ -76,16 +78,32 @@ Without a command, Ion opens chat when stdin and stdout are terminals; piped or
 redirected I/O selects headless execution. Explicit `chat` and `rpc` keep their
 own input modes. `-p` selects headless mode independently of the prompt, so
 `ion -p --model PROVIDER/MODEL 'PROMPT'` also works. Use `--` before a prompt
-that starts with a dash or matches a command name.
+that starts with a dash, starts with `@`, or matches a command name. For example,
+`ion -- @literal` sends literal text rather than reading a file.
 
 A terminal launch prompt is submitted once, after any model setup or Session
-selection. Pass the text as one quoted argument. Skills/templates expand normally,
-but terminal built-ins and `!`/`!!` shell syntax are model input here, not local
-commands. Initial text is limited to the editor's 64 KiB recovery capacity;
-rejected or unaccepted input retains its literal text and images for editing.
-A launch prompt does not automatically continue an interrupted Turn. `--image`
-attaches to the initial prompt when present; without a prompt argument, images stay
-unsent.
+selection. Pass at most one prompt as a quoted argument. Skills/templates expand
+normally, but terminal built-ins and `!`/`!!` shell syntax are model input here,
+not local commands. Initial prompt text is limited to the editor's 64 KiB recovery
+capacity; rejected or unaccepted input retains its literal text, cursor and
+file/image attachments for editing. A launch prompt does not automatically
+continue an interrupted Turn. `--image` attaches to the initial prompt when
+present; without a prompt or `@file` operand, images stay unsent.
+
+Bare launch, `run` and `chat` accept multiple explicit `@file` operands with that
+one prompt, or files alone. Relative files resolve from the selected Session's
+working directory; `@~/...` uses HOME. Ion reads each regular file (or symlink to
+one) once: UTF-8 text becomes literal JSON-framed context, and supported images
+use normal image normalization and model-capability checks. Only the prompt
+expands resources, not file contents or stdin. Empty files are retained; a leading
+UTF-8 BOM is stripped. Invalid UTF-8, binary NUL bytes and special files are
+rejected, not silently converted or truncated. Sources are bounded to 32 MiB each,
+and the complete encoded launch input must fit the 8 MiB request bound before
+Session creation or MCP startup. Interactive template expansion still uses normal
+recoverable admission. File snapshots survive source edits and rejected input;
+committed history stores the complete context, not live paths. History too large
+for the 64 KiB editor is visibly refused without replacing the current draft.
+Typing or completing `@path` inside chat does **not** import a file.
 
 `--model PROVIDER/MODEL` selects an exact catalog or configured custom identity
 for this invocation. With `--provider PROVIDER`, `--model` takes the exact model
@@ -381,8 +399,9 @@ stored with each assistant tool-call batch, so resumed history is not
 reinterpreted through the currently installed tool catalog.
 For headless integrations, `--json` works with `run`, `--print` or an implicit
 piped invocation. Argument text is optional when stdin supplies the prompt.
-Headless input must contain nonblank text or an image. Ion reads and validates piped
-UTF-8 input, up to 8 MiB, before creating a Session or starting MCP servers.
+Headless input must contain nonblank text, file context or an image. Ion reads and
+validates piped UTF-8 input, up to 8 MiB, before creating a Session or starting MCP
+servers.
 Stdin alone is preserved exactly, including surrounding whitespace. With both
 stdin and an argument, Ion expands resources in the argument, then prepends the
 literal stdin and one newline; stdin never selects a template or client command.
@@ -469,8 +488,10 @@ Image preparation occupies one pending-input slot, not an accepted queue entry.
 `get_state` reports shared control activity, including `preparing_input`. Image
 preparation remains owned and joinable while controls and other queued input stay
 available; active decoders cannot be forcibly interrupted. A preparation error
-returns the original typed input. Steering preparation cannot attach to a later
-Turn when its target ends.
+returns the original typed input. Returned `input` uses the tagged Host shape
+`{"Prompt":{"text":"...","images":[],"files":[]}}`; RPC text/image commands leave
+`files` empty. Steering preparation cannot attach to a later Turn when its target
+ends.
 
 `steer` targets the active coding Turn. Ready steering queued during automatic
 compaction joins the rebuilt request; it does not rewrite an issued request or
@@ -2066,8 +2087,11 @@ example prints only the committed answer using fallible output, restores the
 saved reasoning preference, and connects no MCP servers. It is an SDK lifecycle
 sample, not a replacement for the terminal or RPC client.
 
-`CodingApplication::new(host, tools).setup(session, selected, reasoning, questions)` supplies
-the coding preset. It loads coding instructions/resources and native tools; the
+`CodingApplication::new(host, tools).setup(session, selected, reasoning, questions, resources)`
+supplies the coding preset. Prepare `resources` once from `Application::resources`
+for the selected cwd (or `host.resources(cwd)` for the default coding recipe).
+The same snapshot serves initial-input preflight and binding; CLI preflight runs
+before Session creation and MCP startup. The recipe supplies native tools; the
 optional `tools` source adds or overrides registrations, not a complete allowlist.
 `with_tool_selection(ToolSelection::include(...).with_exclude(...))` narrows the
 model-visible loadout; `with_read_only_tools()` selects the read-only preset.
@@ -2139,8 +2163,10 @@ concurrent joins, reader-independent failure/panic and Code Mode error catching.
 These qualify bounded offline SDK ownership/recovery, not live-model delegation,
 service scale or remote-effect quiescence.
 
-Use `submit(Delivery, UserInput, metadata)` for input. `Prompt` expands resources
-once and normalizes attachments; an already-prepared `Message` stays literal.
+Use `submit(Delivery, UserInput, metadata)` for input. `Prompt` expands only its
+`text` once, normalizes images and composes literal `TextFile` snapshots from
+`files`; `prompt_files::prepare_files` performs explicit bounded file loading.
+An already-prepared `Message` stays literal.
 Refusal returns the original input and metadata. The returned `InputId` means
 Host custody, not durable acceptance. Client metadata requires `Serialize + Send`
 but not `Clone`; it never enters model content or Session records.

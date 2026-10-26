@@ -6,14 +6,17 @@ use std::{
 
 use anyhow::{Context, Result, bail, ensure};
 use clap::{
-    Arg, ArgAction, ArgMatches, Command, FromArgMatches, Subcommand, builder::TypedValueParser,
-    parser::ValueSource,
+    Arg, ArgAction, ArgMatches, Args, Command, FromArgMatches, Subcommand,
+    builder::TypedValueParser, parser::ValueSource,
 };
 use ion_ai::{ModelRef, Reasoning};
 use ion_core::ToolSelection;
 use ion_host::{McpExposure, Wire};
 
 use crate::terminal_client::TuiMode;
+
+mod launch;
+use launch::LaunchInput;
 
 pub(crate) struct Invocation {
     pub action: Action,
@@ -98,9 +101,15 @@ pub(crate) enum Action {
     /// List skills and prompt templates available in the working directory.
     Resources,
     /// Submit one prompt and print the committed final answer.
-    Run { prompt: Option<String> },
+    Run {
+        #[command(flatten)]
+        input: LaunchInput,
+    },
     /// Open terminal chat, optionally starting with a prompt.
-    Chat { prompt: Option<String> },
+    Chat {
+        #[command(flatten)]
+        input: LaunchInput,
+    },
     /// Configure explicitly connected MCP tool servers.
     Mcp {
         #[command(subcommand)]
@@ -268,12 +277,11 @@ fn scoped(command: Command, owner: &str, options: &[Arg]) -> Command {
 fn command() -> Command {
     let options = options();
     Action::augment_subcommands(
-        Command::new("ion")
+        LaunchInput::augment_args(Command::new("ion")
             .about("Ion: a local coding agent")
+            .subcommand_precedence_over_arg(true)
             .after_help("Without a command, open chat in a terminal or submit piped stdin headlessly.\nOptions may precede a command, but must apply to that command. See ion COMMAND --help.")
-            .args(options.iter().cloned())
-            .arg(Arg::new("prompt").value_name("PROMPT")
-                .help("Initial prompt; interactive in a terminal, headless with --print or redirected I/O")),
+            .args(options.iter().cloned())),
     )
     .mut_subcommands(|child| {
         let owner = child.get_name().to_owned();
@@ -293,15 +301,16 @@ pub(crate) fn parse() -> Result<Invocation> {
             .error(clap::error::ErrorKind::ValueValidation, error)
             .exit()
     });
-    if let Action::Run { prompt } = &invocation.action {
+    if let Action::Run { input } = &invocation.action {
         if !io::stdin().is_terminal() {
             invocation.piped_input = read_pipe(io::stdin().lock())?;
         }
         ensure!(
-            !prompt.as_deref().unwrap_or_default().trim().is_empty()
+            !input.prompt().unwrap_or_default().trim().is_empty()
+                || input.files().next().is_some()
                 || !invocation.piped_input.trim().is_empty()
                 || !invocation.image.is_empty(),
-            "a headless prompt needs text, piped stdin or --image"
+            "a headless prompt needs text, @file, piped stdin or --image"
         );
     }
     Ok(invocation)
@@ -310,28 +319,28 @@ pub(crate) fn parse() -> Result<Invocation> {
 fn normalize(mut matches: ArgMatches, interactive: bool) -> Result<Invocation> {
     let explicit = matches.subcommand().map(|(name, _)| name.to_owned());
     let print = matches.remove_one::<bool>("print").unwrap_or(false);
-    let prompt = matches.remove_one::<String>("prompt");
+    let input = LaunchInput::from_arg_matches_mut(&mut matches)?;
     ensure!(
         !print || explicit.is_none(),
         "--print cannot be combined with a subcommand"
     );
     ensure!(
-        explicit.is_none() || prompt.is_none(),
+        explicit.is_none() || input.is_empty(),
         "put the prompt after chat or run, not before a subcommand"
     );
     let action = if explicit.is_some() {
         Action::from_arg_matches(&matches)?
     } else if print || !interactive {
-        Action::Run { prompt }
+        Action::Run { input }
     } else {
-        Action::Chat { prompt }
+        Action::Chat { input }
     };
-    if let Action::Chat {
-        prompt: Some(prompt),
-    } = &action
-    {
+    if let Action::Run { input } | Action::Chat { input } = &action {
+        input.validate()?;
+    }
+    if let Action::Chat { input } = &action {
         ensure!(
-            prompt.len() <= crate::terminal_client::MAX_DRAFT,
+            input.prompt().map_or(0, str::len) <= crate::terminal_client::MAX_DRAFT,
             "interactive initial prompt exceeds 64 KiB"
         );
     }

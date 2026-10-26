@@ -16,8 +16,9 @@ fn route(model: &str) -> SavedSelection {
     }
 }
 fn control(host: Arc<Host>, session: Arc<CodingSession>, selected: Selection) -> SessionControl {
+    let resources = host.resources(session.cwd().unwrap()).unwrap();
     crate::CodingApplication::new(host, None)
-        .setup(session, selected, None, None)
+        .setup(session, selected, None, None, resources)
         .unwrap()
         .into_control()
 }
@@ -51,9 +52,10 @@ async fn explicit_service_environment_skips_user_settings_and_serves_named_comma
         )
         .unwrap(),
     );
+    let resources = host.resources(&cwd).unwrap();
     let mut control = crate::CodingApplication::new(host, None)
         .with_command_environment(environment)
-        .setup(session.clone(), selected, None, None)
+        .setup(session.clone(), selected, None, None, resources)
         .unwrap()
         .into_control::<()>();
     control

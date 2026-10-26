@@ -165,12 +165,15 @@ impl<M: Serialize + Send + 'static> SessionControl<M> {
 
         // Preparation overlaps Core execution and never occupies Core's slot.
         if self.preparing.is_none()
-            && let Some((id, pending, text)) = custody.inputs.iter().find_map(|(&id, input)| {
+            && let Some((id, pending, message)) = custody.inputs.iter().find_map(|(&id, input)| {
                 let pending = input.pending()?;
-                let InputContent::Images(text) = &pending.content else {
+                let InputContent::Images(message) = &pending.content else {
                     return None;
                 };
-                pending.withdrawn.is_none().then_some((id, pending, text))
+                pending
+                    .withdrawn
+                    .is_none()
+                    .then_some((id, pending, message))
             })
         {
             let UserInput::Prompt { images, .. } = &pending.original else {
@@ -189,7 +192,7 @@ impl<M: Serialize + Send + 'static> SessionControl<M> {
                         .join(&*path);
                 }
             }
-            let text = text.clone();
+            let mut message = message.clone();
             let model = self.setup.runtime.agent.model().clone();
             let limits = self.setup.runtime.agent.limits();
             self.preparing = Some((
@@ -203,7 +206,10 @@ impl<M: Serialize + Send + 'static> SessionControl<M> {
                         stop,
                     )
                     .await?;
-                    Ok(Message::user_input(text, images))
+                    message
+                        .content
+                        .extend(images.into_iter().flat_map(ion_ai::LoadedImage::into_parts));
+                    Ok(message)
                 }),
             ));
         }

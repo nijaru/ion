@@ -126,7 +126,7 @@ def until_all(child, *predicates):
 
 def returned_prompt(record, text, images=()):
     # Host returns the literal editor input, not its expanded/prepared Message.
-    assert record["input"] == {"Prompt": {"text": text, "images": list(images)}}, record
+    assert record["input"] == {"Prompt": {"text": text, "images": list(images), "files": []}}, record
 
 
 def chunk(kind, data):

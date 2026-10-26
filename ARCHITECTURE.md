@@ -1157,8 +1157,8 @@ empty results remain browsable. Discovery retains and joins cancelled workers
 before replacement or exit, including presentation failure. Choosing a path uses
 the ordinary reopen/model-restoration path and retains explicit-cwd validation.
 A selected existing Session is never recreated if its file disappears during
-startup. Verify its inspected identity and cwd again after acquiring the writer,
-before application resources or MCP admission.
+startup. Read-only file/resource preflight uses its inspected cwd. Verify identity
+and cwd again after acquiring the writer, before binding or MCP admission.
 The chooser requires terminal input/output and cannot precede RPC or `--json`
 protocol output. Explicit paths/IDs and `--continue` remain unattended selectors;
 fresh launch stays fresh. Only fresh no-model onboarding saves a chosen default;
@@ -1170,14 +1170,40 @@ Without an explicit command, terminal stdin and stdout select chat; redirected
 I/O selects headless execution. An optional launch prompt starts the selected
 client; explicit `chat` also accepts it. Terminal launch attempts that prompt once,
 after acquiring terminal input/output and drawing, through ordinary shared-control
-admission with literal recovery metadata and images. Rejection/return retains the
-input for editing; startup never resumes unknown effects or retries implicitly.
+admission with literal recovery metadata and file/image snapshots. Rejection/return
+retains the original text, cursor and attachments for editing; startup never resumes
+unknown effects or retries implicitly.
 CLI prompt text may expand resources but never invokes terminal built-ins or direct
 user-shell syntax. Bound it to the editor's recovery capacity before Session/MCP
-admission. Without a prompt argument, attached images stay unsent for the first
-prompt.
+admission. Explicit `@file` operands also trigger that one initial submission when
+there is no prompt. Without either, attached `--image` inputs stay unsent.
+
+Bare launch, `run` and `chat` accept multiple explicit file operands and at most
+one prompt; they neither join extra text arguments nor create a startup Turn queue.
+`--` protects a literal prompt, including leading `@` and reserved command names.
+Relative operands use the selected Session cwd; `@~/...` expands HOME. Host reads
+regular files or symlinks to them through verified bounded descriptors; special
+files fail closed. Supported images use the existing normalization/capability
+contract. Other inputs require strict UTF-8 without NUL; strip only a leading BOM,
+preserve empty files and other bytes. Retain immutable text snapshots separately
+from original prompt recovery metadata. Expand only the original prompt, then
+compose JSON-framed filenames/text and typed images into ordinary message content.
+File data is not resource or command authority; framing is not a prompt-injection
+guarantee. No live paths, implicit rereads or new Core Session format are involved.
+The source read bound is 32 MiB per file; aggregate encoded launch input must fit
+the existing request bound (8 MiB by default), without truncation.
+
+Validate the complete launch candidate before Session creation or MCP startup.
+Headless expansion and literal stdin composition precede this check; interactive
+resource errors remain ordinary recoverable Host admission. One prepared Resources
+snapshot serves preflight and initial binding, supplied explicitly to
+`CodingApplication::setup`; setup must not rediscover a competing snapshot.
+Once committed, file context remains complete ordinary history. Editor restoration
+and Up/Down history recall obey the same 64 KiB capacity; oversized entries leave
+the current draft/cursor intact and remain traversable without being installed.
+
 Explicit chat and RPC retain their own input contracts. Headless mode accepts
-argument text, bounded UTF-8 stdin or images.
+argument text, explicit files, bounded UTF-8 stdin or images.
 Validate pipe input before Session/MCP admission, preserve its literal contents,
 and prepend it only after argument-side resource expansion. Never interpret pipe
 contents as client commands or template selectors.

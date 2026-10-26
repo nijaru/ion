@@ -151,6 +151,7 @@ async fn workspace_free_application_keeps_its_authority_across_shared_lifecycle(
     assert_eq!(refused.0, "literal shell");
     assert!(control.session().view().unwrap().entries.is_empty());
     let input = UserInput::Prompt {
+        files: Vec::new(),
         text: "retain original".into(),
         images: vec![ImageSource::Path(root.join("must-not-read.png"))],
     };
@@ -159,7 +160,7 @@ async fn workspace_free_application_keeps_its_authority_across_shared_lifecycle(
         .unwrap_err();
     assert_eq!(refused.metadata, "literal image");
     assert!(
-        matches!(refused.input, UserInput::Prompt { text, images } if text == "retain original" && matches!(&images[..], [ImageSource::Path(path)] if path == &root.join("must-not-read.png")))
+        matches!(refused.input, UserInput::Prompt { text, images, .. } if text == "retain original" && matches!(&images[..], [ImageSource::Path(path)] if path == &root.join("must-not-read.png")))
     );
     assert!(!control.is_busy());
     let image = ion_ai::normalize_rgba(1, 1, vec![255, 0, 0, 255]).unwrap();
@@ -167,6 +168,7 @@ async fn workspace_free_application_keeps_its_authority_across_shared_lifecycle(
         .submit(
             Delivery::Start,
             UserInput::Prompt {
+                files: Vec::new(),
                 text: "/unknown is literal".into(),
                 images: vec![image.into()],
             },
@@ -335,7 +337,13 @@ async fn coding_application_selection_and_read_only_narrow_the_model_loadout() {
             ion_core::ToolSelection::include(names.iter().map(|name| (*name).into())),
         );
         let control = application
-            .setup(session.clone(), selected.clone(), None, None)
+            .setup(
+                session.clone(),
+                selected.clone(),
+                None,
+                None,
+                host.resources(&cwd).unwrap(),
+            )
             .unwrap()
             .into_control::<()>();
         let catalog = control.agent().tool_catalog();
@@ -364,7 +372,13 @@ async fn coding_application_selection_and_read_only_narrow_the_model_loadout() {
     );
     let application = crate::CodingApplication::new(host.clone(), None).with_read_only_tools();
     let control = application
-        .setup(session.clone(), selected.clone(), None, None)
+        .setup(
+            session.clone(),
+            selected.clone(),
+            None,
+            None,
+            host.resources(&cwd).unwrap(),
+        )
         .unwrap()
         .into_control::<()>();
     assert_eq!(control.commands().iter().count(), 1);
@@ -391,7 +405,13 @@ async fn coding_application_selection_and_read_only_narrow_the_model_loadout() {
         .with_code_mode(true)
         .with_read_only_tools();
     let control = application
-        .setup(session.clone(), selected.clone(), None, None)
+        .setup(
+            session.clone(),
+            selected.clone(),
+            None,
+            None,
+            host.resources(&cwd).unwrap(),
+        )
         .unwrap()
         .into_control::<()>();
     let catalog = control.agent().tool_catalog();
@@ -431,7 +451,13 @@ fn last_selection_builder_wins_for_restricted_roles() {
     let control = crate::CodingApplication::new(host.clone(), None)
         .with_read_only_tools()
         .with_tool_selection(explicit.clone())
-        .setup(session, selected.clone(), None, None)
+        .setup(
+            session,
+            selected.clone(),
+            None,
+            None,
+            host.resources(&cwd).unwrap(),
+        )
         .unwrap()
         .into_control::<()>();
     let tools = control.agent().tool_catalog();
@@ -441,10 +467,10 @@ fn last_selection_builder_wins_for_restricted_roles() {
     drop(control);
 
     let session = Arc::new(CodingSession::create(catalog.new_path().unwrap(), Some(&cwd)).unwrap());
-    let control = crate::CodingApplication::new(host, None)
+    let control = crate::CodingApplication::new(host.clone(), None)
         .with_tool_selection(explicit)
         .with_read_only_tools()
-        .setup(session, selected, None, None)
+        .setup(session, selected, None, None, host.resources(&cwd).unwrap())
         .unwrap()
         .into_control::<()>();
     let tools = control.agent().tool_catalog();
@@ -487,6 +513,7 @@ fn question_capability_obeys_explicit_selection_and_read_only_policy() {
             selected.clone(),
             None,
             Some(crate::QuestionCustody::new()),
+            host.resources(&cwd).unwrap(),
         )
         .unwrap()
         .into_control::<()>();
@@ -504,6 +531,7 @@ fn question_capability_obeys_explicit_selection_and_read_only_policy() {
             selected.clone(),
             None,
             Some(crate::QuestionCustody::new()),
+            host.resources(&cwd).unwrap(),
         )
         .unwrap()
         .into_control::<()>();
@@ -513,9 +541,9 @@ fn question_capability_obeys_explicit_selection_and_read_only_policy() {
     drop(control);
 
     let session = Arc::new(CodingSession::create(catalog.new_path().unwrap(), Some(&cwd)).unwrap());
-    let control = crate::CodingApplication::new(host, None)
+    let control = crate::CodingApplication::new(host.clone(), None)
         .with_read_only_tools()
-        .setup(session, selected, None, None)
+        .setup(session, selected, None, None, host.resources(&cwd).unwrap())
         .unwrap()
         .into_control::<()>();
     assert!(

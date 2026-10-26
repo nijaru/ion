@@ -173,19 +173,21 @@ impl CodingApplication {
 
     /// Preserve the executable's already-resolved initial route (including
     /// explicit overrides); subsequent selections use this application's store.
+    /// Supply the resource snapshot from `Application::resources` so launch
+    /// preflight and binding use the same discovered bytes.
     pub fn setup(
         &self,
         session: Arc<CodingSession>,
         selected: Selection,
         reasoning: Option<ion_ai::Reasoning>,
         questions: Option<QuestionCustody>,
+        resources: Resources,
     ) -> Result<SessionSetup> {
         let questions = questions.map(Arc::new);
         let cwd = session
             .cwd()
             .context("coding requires a working directory")?;
         let catalog = self.host.sessions(Some(cwd.to_path_buf()));
-        let resources = self.resources(Some(cwd))?;
         let runtime = self.runtime_with_selection(cwd, &selected, questions.clone())?;
         SessionSetup::from_prepared(
             session,

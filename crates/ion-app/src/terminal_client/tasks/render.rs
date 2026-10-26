@@ -232,7 +232,20 @@ fn append_preview(text: &mut String, output: &ion_core::DelegationPartialOutput)
 
 fn returned_input(input: &ion_host::UserInput) -> String {
     let (mut text, attachments) = match input {
-        ion_host::UserInput::Prompt { text, images } => (text.clone(), images.len()),
+        ion_host::UserInput::Prompt {
+            text,
+            images,
+            files,
+        } => {
+            let mut text = text.clone();
+            if !files.is_empty() {
+                text.push_str(&format!(
+                    "\n[{} text file snapshot(s) retained]",
+                    files.len()
+                ));
+            }
+            (text, images.len())
+        }
         ion_host::UserInput::Message(message) => {
             let mut text = String::new();
             let mut attachments = 0;
@@ -458,6 +471,7 @@ mod tests {
     #[test]
     fn returned_guidance_renders_literal_text_without_decoding_attachments() {
         let input = ion_host::UserInput::Prompt {
+            files: Vec::new(),
             text: "UNDELIVERED_🦀".into(),
             images: vec![ion_host::image_input::ImageSource::Path(
                 "missing.png".into(),

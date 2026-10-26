@@ -353,7 +353,9 @@ with tempfile.TemporaryDirectory(prefix="ion-terminal-") as temporary:
                 if b"\xe2\x80\xba " in output and not sent_file_start:
                     assert b"\x1b[?1049h" not in output, "chat entered alternate screen before showing the inline composer"
                     saw_inline_start = True
-                    os.write(master, b"Read @\t")
+                    # @ opens suggestions automatically. A Tab here can accept
+                    # the first candidate before the query below is typed.
+                    os.write(master, b"Read @")
                     sent_file_start = True
                 if sent_file_start and "Files ·".encode() in output and not file_query_sent:
                     os.write(master, b"data.txt")

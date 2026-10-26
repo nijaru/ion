@@ -3,6 +3,7 @@ use super::*;
 const PNG: &str = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGP4z8DwHwAFAAH/iZk9HQAAAABJRU5ErkJggg==";
 fn image_prompt() -> UserInput {
     UserInput::Prompt {
+        files: Vec::new(),
         text: "  original image\n".into(),
         images: vec![ImageSource::Encoded {
             mime_type: "image/png".into(),
@@ -29,6 +30,73 @@ async fn block_decoder() -> (std::sync::mpsc::Sender<()>, tokio::task::JoinHandl
 }
 
 #[tokio::test]
+async fn literal_files_survive_expansion_image_preparation_and_rejected_input() {
+    let model = Model::new(1);
+    let mut fixture = Fixture::new(model.clone(), true);
+    let prompts = fixture.root.join(".ion/prompts");
+    fs::create_dir_all(&prompts).unwrap();
+    fs::write(prompts.join("next.md"), "EXPANDED $1").unwrap();
+    fixture.control.reload_resources().unwrap();
+    let file = || crate::prompt_files::TextFile {
+        name: "source.md".into(),
+        text: "/next dangerous\n{{ARG}}\n".into(),
+    };
+    let mut input = image_prompt();
+    let UserInput::Prompt { text, files, .. } = &mut input else {
+        unreachable!()
+    };
+    *text = "/next one".into();
+    files.push(file());
+    fixture
+        .control
+        .submit(Delivery::Start, input, meta("/next one"))
+        .unwrap();
+    model.release();
+    let (_, settlement) = settle(&mut fixture.control).await;
+    assert!(matches!(settlement.outcome, OperationOutcome::Turn(Ok(_))));
+    let request = model.requests.lock().unwrap()[0].clone();
+    let user = request
+        .messages
+        .iter()
+        .rev()
+        .find(|message| message.role == Role::User)
+        .unwrap();
+    let Content::Text(text) = &user.content[0] else {
+        panic!("text")
+    };
+    assert!(text.contains("EXPANDED one"));
+    assert!(text.contains("/next dangerous"));
+    assert!(!text.contains("EXPANDED dangerous"));
+    assert_eq!(
+        user.content
+            .iter()
+            .filter(|part| matches!(part, Content::Image(_)))
+            .count(),
+        1
+    );
+    let rejected = fixture
+        .control
+        .submit(
+            Delivery::Start,
+            UserInput::Prompt {
+                text: "/next '".into(),
+                images: Vec::new(),
+                files: vec![file()],
+            },
+            meta("/next '"),
+        )
+        .unwrap_err();
+    let UserInput::Prompt { text, files, .. } = rejected.input else {
+        panic!("original")
+    };
+    assert_eq!(text, "/next '");
+    assert_eq!(files[0].text, file().text);
+    assert_eq!(rejected.metadata.literal, "/next '");
+    assert_eq!(model.calls.load(Ordering::SeqCst), 1);
+    fixture.control.shutdown().await;
+}
+
+#[tokio::test]
 async fn failed_initial_preparation_returns_queued_work_without_starting_it() {
     let model = Model::new(1);
     let mut fixture = Fixture::new(model.clone(), true);
@@ -37,6 +105,7 @@ async fn failed_initial_preparation_returns_queued_work_without_starting_it() {
         .submit(
             Delivery::Start,
             UserInput::Prompt {
+                files: Vec::new(),
                 text: "root".into(),
                 images: vec![ImageSource::Path("absent.png".into())],
             },
@@ -99,6 +168,7 @@ async fn normalized_attachments_keep_notes_while_prompt_resources_expand() {
         .submit(
             Delivery::Start,
             UserInput::Prompt {
+                files: Vec::new(),
                 text: "/check ARG".into(),
                 images: vec![image.into()],
             },
@@ -134,6 +204,7 @@ async fn preparation_refusal_retains_exact_input_and_blocks_silent_replacement()
         .submit(
             Delivery::Start,
             UserInput::Prompt {
+                files: Vec::new(),
                 text: "literal".into(),
                 images: vec![ImageSource::Path("missing image.png".into())],
             },
@@ -161,7 +232,7 @@ async fn preparation_refusal_retains_exact_input_and_blocks_silent_replacement()
             assert_eq!(input.metadata.literal, "original");
             assert!(matches!(input.reason, ReturnReason::Preparation(_)));
             assert!(
-                matches!(input.input, UserInput::Prompt { text, images } if text == "literal" && matches!(&images[..], [ImageSource::Path(path)] if path == std::path::Path::new("missing image.png")))
+                matches!(input.input, UserInput::Prompt { text, images, .. } if text == "literal" && matches!(&images[..], [ImageSource::Path(path)] if path == std::path::Path::new("missing image.png")))
             );
         }
         _ => panic!("preparation refusal must return input"),
@@ -182,7 +253,7 @@ fn preparation_overlaps_turns_but_a_late_steer_never_retargets() {
         let snapshot = fixture.control.snapshot(|_| ()).unwrap();
         let input = snapshot.inputs.iter().find(|input| input.id == steer).unwrap();
         assert_eq!(input.phase, InputCustodyPhase::PendingPreparation);
-        assert!(matches!(&input.original, Some(UserInput::Prompt { text, images })
+        assert!(matches!(&input.original, Some(UserInput::Prompt { text, images, .. })
             if text == "  original image\n" && matches!(&images[..], [ImageSource::Encoded { data, .. }] if data == PNG)));
         fixture.control.submit(Delivery::FollowUp, prompt("explicit next"), meta("followup")).unwrap();
         model.release();
@@ -211,7 +282,7 @@ fn preparation_overlaps_turns_but_a_late_steer_never_retargets() {
         assert_eq!(returned.delivery, Delivery::Steer(target));
         assert_eq!(returned.metadata.literal, "  literal 🦀\n");
         assert!(matches!(returned.reason, ReturnReason::TurnEnded));
-        assert!(matches!(returned.input, UserInput::Prompt { text, images } if text == "  original image\n" && matches!(&images[..], [ImageSource::Encoded { mime_type, data }] if mime_type == "image/png" && data == PNG)));
+        assert!(matches!(returned.input, UserInput::Prompt { text, images, .. } if text == "  original image\n" && matches!(&images[..], [ImageSource::Encoded { mime_type, data }] if mime_type == "image/png" && data == PNG)));
         assert!(model.requests.lock().unwrap().iter().flat_map(|request| &request.messages).flat_map(|message| &message.content).all(|part| !matches!(part, Content::Image(_))));
         assert_eq!(model.calls.load(Ordering::SeqCst), 2);
     });

@@ -7,7 +7,7 @@ struct Admission {
 }
 
 enum AdmissionContent {
-    Images(String),
+    Images(Message),
     Ready(Message),
 }
 
@@ -357,11 +357,15 @@ impl<M: Serialize + Send + 'static> SessionControl<M> {
             }
         }
         let limits = self.setup.runtime.agent.limits();
-        let (message, expanded) = match input {
+        let (message, image_message) = match input {
             UserInput::Message(message) => (message.clone(), None),
-            UserInput::Prompt { text, images } => {
+            UserInput::Prompt {
+                text,
+                images,
+                files,
+            } => {
                 ensure!(
-                    !text.trim().is_empty() || !images.is_empty(),
+                    !text.trim().is_empty() || !images.is_empty() || !files.is_empty(),
                     "prompt is empty"
                 );
                 if !images.is_empty() {
@@ -391,22 +395,24 @@ impl<M: Serialize + Send + 'static> SessionControl<M> {
                     .unwrap_or_else(|| text.clone());
                 // The placeholder only reserves/validates raw image-only inputs;
                 // it is never used as model content.
-                let reserve_text = if expanded.trim().is_empty() && !images.is_empty() {
-                    "[image]".into()
-                } else {
-                    expanded.clone()
-                };
+                let reserve_text =
+                    if expanded.trim().is_empty() && files.is_empty() && !images.is_empty() {
+                        "[image]".into()
+                    } else {
+                        expanded.clone()
+                    };
                 (
-                    Message::user_input(reserve_text, []),
-                    (!images.is_empty()).then_some(expanded),
+                    crate::prompt_files::compose_prompt(reserve_text, files, []),
+                    (!images.is_empty())
+                        .then(|| crate::prompt_files::compose_prompt(expanded, files, [])),
                 )
             }
         };
         let reservation = self.budget.reserve(&message, &(input, metadata), limits)?;
         Ok(Admission {
             reservation,
-            content: match expanded {
-                Some(text) => AdmissionContent::Images(text),
+            content: match image_message {
+                Some(message) => AdmissionContent::Images(message),
                 None => AdmissionContent::Ready(message),
             },
         })

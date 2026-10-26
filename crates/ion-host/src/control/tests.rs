@@ -35,6 +35,7 @@ fn meta(text: &str) -> Metadata {
 }
 fn prompt(text: &str) -> UserInput {
     UserInput::Prompt {
+        files: Vec::new(),
         text: text.into(),
         images: Vec::new(),
     }
@@ -136,7 +137,13 @@ impl<M: Serialize + Send + 'static> Fixture<M> {
         let session =
             Arc::new(CodingSession::create(root.join("session.sqlite"), Some(&root)).unwrap());
         let mut setup = crate::CodingApplication::new(host.clone(), None)
-            .setup(session, selected.clone(), None, None)
+            .setup(
+                session,
+                selected.clone(),
+                None,
+                None,
+                host.resources(&root).unwrap(),
+            )
             .unwrap();
         setup.runtime.agent = Arc::new(
             CodingAgent::with_tool_set(
@@ -766,7 +773,13 @@ async fn owner_drop_requests_stop_and_core_retains_the_actual_task() {
     let fixture = Fixture::new(model.clone(), false);
     let session = fixture.control.session().clone();
     let mut setup = crate::CodingApplication::new(fixture.host.clone(), None)
-        .setup(session.clone(), fixture.selected.clone(), None, None)
+        .setup(
+            session.clone(),
+            fixture.selected.clone(),
+            None,
+            None,
+            fixture.host.resources(session.cwd().unwrap()).unwrap(),
+        )
         .unwrap();
     setup.runtime.agent = fixture.control.agent().clone();
     let mut control = setup.into_control::<Metadata>();

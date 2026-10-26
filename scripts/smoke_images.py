@@ -313,7 +313,7 @@ with tempfile.TemporaryDirectory(prefix="ion-images-") as temporary:
 
         def returned_image(record, text, source):
             assert record["reason"] == "cleared", record
-            assert record["input"] == {"Prompt": {"text": text, "images": [source]}}, record
+            assert record["input"] == {"Prompt": {"text": text, "images": [source], "files": []}}, record
 
         try:
             rpc_session = rpc_read()["session"]

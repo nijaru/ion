@@ -51,12 +51,14 @@ pub struct ControlState {
     pub shutdown_complete: bool,
 }
 
-/// Prepared messages are literal: only Prompt performs resource expansion.
+/// Prepared messages are literal. Prompt expands only `text`; file snapshots
+/// remain data and never select resources or commands.
 #[derive(Clone, Debug, Serialize)]
 pub enum UserInput {
     Prompt {
         text: String,
         images: Vec<ImageSource>,
+        files: Vec<crate::prompt_files::TextFile>,
     },
     Message(Message),
 }

@@ -318,7 +318,27 @@ def exercise_launch(work, base_env, endpoint):
             facts = [json.loads(row[0]) for row in connection.execute("SELECT body FROM entries ORDER BY seq")]
         ended = [fact["data"]["reason"] for fact in facts if fact["kind"] == "turn_ended"]
         assert ended == ["completed", "completed", "completed", "cancelled", "completed"], ended
-        print(f"Launch {mode}: initial prompt, interactive continuation, resource/image recovery, Stop/join and no replay: OK", flush=True)
+        # Files alone must trigger startup even though the literal editor prompt
+        # is empty, and must not depend on the configured Submit key.
+        context = cwd / "context.txt"
+        context.write_text("FILE_ONLY_🦀")
+        file_database = sandbox / "file-only.sqlite"
+        count = len(requests)
+        terminal = Terminal(cwd, env, mode, ["--cwd", cwd, "--session", file_database,
+                            "--tui-mode", mode, *([] if mode == "inline" else ["chat"]), "@" + str(context)])
+        try:
+            terminal.wait(lambda: len(requests) == count + 1 and b"state=done" in terminal.output)
+            assert json.loads(user_text(requests[-1]).split("\n", 2)[1])["text"] == "FILE_ONLY_🦀"
+            terminal.send(b"\x04")
+            terminal.wait_exit()
+            assert termios.tcgetattr(terminal.master) == terminal.original_modes
+        finally:
+            terminal.close()
+        with sqlite3.connect(file_database) as connection:
+            ended = [json.loads(row[0])["data"]["reason"] for row in connection.execute(
+                "SELECT body FROM entries WHERE json_extract(body, '$.kind') = 'turn_ended'")]
+        assert ended == ["completed"], ended
+        print(f"Launch {mode}: initial prompt/files-only, interactive continuation, resource/image recovery, Stop/join and no replay: OK", flush=True)
 
 
 def exercise_keybindings(work, base_env, endpoint):

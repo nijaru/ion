@@ -41,6 +41,7 @@ pub(super) fn submit_editor(
     let input = UserInput::Prompt {
         text: source.literal.clone(),
         images: std::mem::take(&mut ui.images),
+        files: std::mem::take(&mut ui.files),
     };
     match runtime.submit(delivery, input, source) {
         Ok(_) => {
@@ -49,11 +50,12 @@ pub(super) fn submit_editor(
         }
         Err(rejected) => {
             let rejected = *rejected;
-            let UserInput::Prompt { images, .. } = rejected.input else {
+            let UserInput::Prompt { images, files, .. } = rejected.input else {
                 unreachable!("terminal submits only raw prompts")
             };
             ui.restore_editor(rejected.metadata);
             ui.images = images;
+            ui.files = files;
             ui.status = format!("Input was not queued: {:#}", rejected.reason);
         }
     }

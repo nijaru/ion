@@ -57,8 +57,8 @@ impl Frontend {
             cursor: self.cursor,
         });
         browse.index = browse.index.saturating_sub(1);
-        let draft = self.prompt_history[browse.index].clone();
-        self.set_editor_baseline(EditorDraft::at_end(draft));
+        let index = browse.index;
+        self.recall_history_entry(index);
     }
 
     pub(super) fn history_next(&mut self) {
@@ -67,36 +67,59 @@ impl Frontend {
         };
         if browse.index + 1 < browse.end {
             browse.index += 1;
-            let draft = self.prompt_history[browse.index].clone();
-            self.set_editor_baseline(EditorDraft::at_end(draft));
+            let index = browse.index;
+            self.recall_history_entry(index);
         } else {
             self.restore_browsed_draft();
         }
     }
 
-    pub(super) fn return_draft(&mut self, source: EditorDraft, images: Vec<ImageSource>) {
+    fn recall_history_entry(&mut self, index: usize) {
+        let draft = &self.prompt_history[index];
+        if draft.len() > MAX_DRAFT {
+            self.status = "History input exceeds editor limit; current draft retained".into();
+            return;
+        }
+        let draft = draft.clone();
+        self.set_editor_baseline(EditorDraft::at_end(draft));
+        self.status.clear();
+    }
+
+    pub(super) fn return_draft(
+        &mut self,
+        source: EditorDraft,
+        images: Vec<ImageSource>,
+        files: Vec<ion_host::prompt_files::TextFile>,
+    ) {
         self.restore_browsed_draft();
-        if self.draft.is_empty() && self.images.is_empty() {
+        if self.draft.is_empty() && self.images.is_empty() && self.files.is_empty() {
             self.restore_editor(source);
             self.images = images;
+            self.files = files;
         } else {
-            self.recovered.push_back(RecoveredDraft { source, images });
+            self.recovered.push_back(RecoveredDraft {
+                source,
+                images,
+                files,
+            });
         }
     }
 
     pub(super) fn show_draft(&mut self, recovered: RecoveredDraft) {
         self.restore_browsed_draft();
-        if !self.draft.is_empty() || !self.images.is_empty() {
+        if !self.draft.is_empty() || !self.images.is_empty() || !self.files.is_empty() {
             self.recovered.push_back(RecoveredDraft {
                 source: EditorDraft {
                     literal: std::mem::take(&mut self.draft),
                     cursor: self.cursor,
                 },
                 images: std::mem::take(&mut self.images),
+                files: std::mem::take(&mut self.files),
             });
         }
         self.restore_editor(recovered.source);
         self.images = recovered.images;
+        self.files = recovered.files;
     }
 
     pub(super) fn recover_draft(&mut self) {
@@ -119,6 +142,7 @@ impl Frontend {
         self.show_draft(RecoveredDraft {
             source: EditorDraft::at_end(draft),
             images: images.into_iter().map(Into::into).collect(),
+            files: Vec::new(),
         });
         Ok(())
     }

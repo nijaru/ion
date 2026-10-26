@@ -228,6 +228,7 @@ async fn answer_resumes_the_same_turn_and_dispatches_dependent_effect_once() {
         .submit(
             Delivery::Start,
             UserInput::Prompt {
+                files: Vec::new(),
                 text: "ask".into(),
                 images: Vec::new(),
             },
@@ -360,6 +361,7 @@ async fn responder_loss_stops_before_dependent_dispatch() {
         .submit(
             Delivery::Start,
             UserInput::Prompt {
+                files: Vec::new(),
                 text: "ask".into(),
                 images: Vec::new(),
             },
@@ -408,6 +410,7 @@ async fn responder_loss_in_code_mode_stops_the_root_turn_before_dependent_effect
         .submit(
             Delivery::Start,
             UserInput::Prompt {
+                files: Vec::new(),
                 text: "ask from code mode".into(),
                 images: Vec::new(),
             },
@@ -480,6 +483,7 @@ async fn responder_loss_in_code_mode_stops_the_root_turn_before_dependent_effect
         .submit(
             Delivery::Start,
             UserInput::Prompt {
+                files: Vec::new(),
                 text: "new turn".into(),
                 images: Vec::new(),
             },
@@ -519,6 +523,7 @@ async fn control_stop_before_answer_prevents_dependent_dispatch() {
         .submit(
             Delivery::Start,
             UserInput::Prompt {
+                files: Vec::new(),
                 text: "ask".into(),
                 images: Vec::new(),
             },
@@ -558,6 +563,7 @@ async fn replacement_rebinds_custody_and_shutdown_revokes_saved_responder() {
         .submit(
             Delivery::Start,
             UserInput::Prompt {
+                files: Vec::new(),
                 text: "first ask".into(),
                 images: Vec::new(),
             },
@@ -602,6 +608,7 @@ async fn replacement_rebinds_custody_and_shutdown_revokes_saved_responder() {
         .submit(
             Delivery::Start,
             UserInput::Prompt {
+                files: Vec::new(),
                 text: "second ask".into(),
                 images: Vec::new(),
             },

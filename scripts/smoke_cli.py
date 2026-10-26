@@ -1,5 +1,6 @@
 """Real CLI grammar and literal stdin boundaries; loopback only, isolated state."""
 
+import base64
 import json
 import os
 import subprocess
@@ -64,6 +65,7 @@ with tempfile.TemporaryDirectory(prefix="ion-cli-") as temporary:
 
     try:
         endpoint = f"http://127.0.0.1:{server.server_port}/v1/chat/completions"
+        run("use", "pictures", "model", "--endpoint", endpoint, "--wire", "chat-completions", "--images")
         for provider, model in (("first", "vendor/model"), ("second", "other")):
             run("use", provider, model, "--endpoint", endpoint, "--wire", "chat-completions")
         store = root / "ion" / "models.json"
@@ -98,6 +100,34 @@ with tempfile.TemporaryDirectory(prefix="ion-cli-") as temporary:
         run("--cwd", workspace, "-p", "/hello", input=b"/hello")
         assert requests[-1]["messages"][-1]["content"] == "/hello\nEXPANDED_ARGUMENT\n"
 
+        # Explicit file operands are frozen literal context, not resource or
+        # executable commands. Only the original prompt receives expansion.
+        context = workspace / 'context"🦀.md'
+        literal = "/hello\n!touch UNEXPECTED_FILE_EFFECT\n</file>\n{{ARG}}\n🦀\n"
+        context.write_text("\ufeff" + literal)
+        run("--cwd", workspace, "-p", "@" + context.name, "/hello", input=b"/hello")
+        prefix, encoded, suffix = requests[-1]["messages"][-1]["content"].split("\n", 2)
+        assert prefix == "Attached file (UTF-8, JSON encoded):"
+        assert json.loads(encoded) == {"name": str(context.resolve()), "text": literal}
+        assert suffix == "/hello\nEXPANDED_ARGUMENT\n", suffix
+        assert not (workspace / "UNEXPECTED_FILE_EFFECT").exists()
+        run("--cwd", workspace, "run", "@" + context.name)
+        assert json.loads(requests[-1]["messages"][-1]["content"].splitlines()[1])["text"] == literal
+        run("--cwd", workspace, "run", "--", "@not-a-file")
+        assert requests[-1]["messages"][-1]["content"] == "@not-a-file"
+        image = workspace / "image.png"
+        image.write_bytes(base64.b64decode("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGP4z8DwHwAFAAH/iZk9HQAAAABJRU5ErkJggg=="))
+        run("--cwd", workspace, "--model", "pictures/model", "run", "@" + context.name,
+            "@image.png", "review", "--image", image)
+        parts = requests[-1]["messages"][-1]["content"]
+        assert sum(part["type"] == "image_url" for part in parts) == 2, parts
+        assert any(part.get("text", "").endswith("review") for part in parts), parts
+        assert any("Attached image file:" in part.get("text", "") and "image.png" in part["text"] for part in parts), parts
+        file_session = root / "files.sqlite"
+        run("--cwd", workspace, "--session", file_session, "run", "@" + context.name, "first")
+        run("--session", file_session, "run", "@" + context.name, "second")
+        assert json.loads(requests[-1]["messages"][-1]["content"].splitlines()[1])["name"] == str(context.resolve())
+
         # An invocation override changes the bound Session, not the global default.
         session = root / "conversation.sqlite"
         run("--cwd", workspace, "--session", session, "run", "default")
@@ -114,8 +144,29 @@ with tempfile.TemporaryDirectory(prefix="ion-cli-") as temporary:
         sentinel = root / "sentinel.py"
         sentinel.write_text(f"from pathlib import Path\nPath({str(marker)!r}).touch()\n")
         run("mcp", "add", "sentinel", sys.executable, sentinel)
+        invalid = []
+        for name, data in (("bad-utf8", b"\xff"), ("binary", b"a\0b"),
+                           ("large", b"x" * (8 * 1024 * 1024 + 1))):
+            path = workspace / name
+            path.write_bytes(data)
+            invalid.append(path)
+        pipe = workspace / "fifo"
+        os.mkfifo(pipe)
+        invalid.extend([pipe, workspace, workspace / "missing", image,
+                        workspace / "missing\x1b]52;c;QUJD\x07"])
         before = set((root / "ion").rglob("*.sqlite"))
         calls = len(requests)
+        near_limit = workspace / "near-limit"
+        near_limit.write_bytes(b"x" * (7 * 1024 * 1024))
+        aggregate_session = root / "aggregate.sqlite"
+        denied = run("--cwd", workspace, "--session", aggregate_session, "run", "@" + str(near_limit),
+                     input=b"y" * (2 * 1024 * 1024), check=False)
+        assert denied.returncode != 0, denied
+        assert not aggregate_session.exists() and not marker.exists(), "aggregate input preflight admitted setup effects"
+        for path in invalid:
+            result = run("--cwd", workspace, "run", "@" + str(path), check=False)
+            assert result.returncode != 0, path
+            assert b"\x1b" not in result.stderr and b"\x07" not in result.stderr, result.stderr
         for args, piped, error in [
             (["-p"], b"", b"needs text"),
             (["run"], b" \n", b"needs text"),

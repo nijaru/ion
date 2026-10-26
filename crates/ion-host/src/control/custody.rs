@@ -22,7 +22,7 @@ pub(super) struct PendingInput {
 }
 
 pub(super) enum InputContent {
-    Images(String),
+    Images(Message),
     Ready(AcceptedInput<InputId>),
     // Root dispatch keeps its message reservation here; transferred steering
     // carries that reservation into Core's inbox instead.

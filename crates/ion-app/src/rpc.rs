@@ -295,7 +295,15 @@ impl Control {
         };
         let input = self
             .host
-            .submit(delivery, UserInput::Prompt { text, images }, metadata)
+            .submit(
+                delivery,
+                UserInput::Prompt {
+                    text,
+                    images,
+                    files: Vec::new(),
+                },
+                metadata,
+            )
             .map_err(|rejected| rejected.reason)?;
         self.correlations.insert(
             input,

@@ -43,7 +43,7 @@ impl Fixture {
         let session = Arc::new(ion_core::CodingSession::create(path, Some(&cwd)).unwrap());
         session.select_model(selected.identity()).unwrap();
         let setup = ion_host::CodingApplication::new(host.clone(), None)
-            .setup(session, selected, None, None)
+            .setup(session, selected, None, None, host.resources(&cwd).unwrap())
             .unwrap();
         Self {
             control: Some(Control::new(setup, host)),
@@ -223,6 +223,7 @@ async fn original_typed_input_and_protocol_id_survive_clear_queue() {
     let credit = ReplyCredits::new(1).acquire().unwrap();
     let id = Some(json!("literal"));
     let input = UserInput::Prompt {
+        files: Vec::new(),
         text: "/do not re-expand".into(),
         images: vec![],
     };

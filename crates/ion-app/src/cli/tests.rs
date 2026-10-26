@@ -93,27 +93,65 @@ fn headless_modes_share_one_action_and_explicit_chat_stays_explicit() {
         ),
     ] {
         let cli = parse(&args, interactive).unwrap();
-        let Action::Run { prompt } = cli.action else {
+        let Action::Run { input } = cli.action else {
             panic!("expected headless action")
         };
         assert_eq!(
-            prompt.as_deref().unwrap_or_default(),
+            input.prompt().unwrap_or_default(),
             expected.unwrap_or_default()
         );
     }
     assert!(matches!(
         parse(&["ion"], true).unwrap().action,
-        Action::Chat { prompt: None }
+        Action::Chat { input } if input.prompt().is_none()
     ));
     assert!(matches!(
         parse(&["ion", "chat"], false).unwrap().action,
-        Action::Chat { prompt: None }
+        Action::Chat { input } if input.prompt().is_none()
     ));
     assert!(matches!(
         parse(&["ion", "rpc"], false).unwrap().action,
         Action::Rpc
     ));
     assert!(parse(&["ion", "-p", "hello", "auth"], true).is_err());
+}
+
+#[test]
+fn file_operands_are_explicit_and_literal_escape_keeps_one_prompt() {
+    for prefix in [vec!["ion"], vec!["ion", "chat"], vec!["ion", "run"]] {
+        let mut args = prefix.clone();
+        args.extend(["@first.md", "review 🦀", "@image.png"]);
+        let cli = parse(&args, true).unwrap();
+        let (Action::Run { input } | Action::Chat { input }) = cli.action else {
+            panic!("launch")
+        };
+        assert_eq!(input.prompt(), Some("review 🦀"));
+        assert_eq!(
+            input.files().collect::<Vec<_>>(),
+            vec![
+                std::path::Path::new("first.md"),
+                std::path::Path::new("image.png")
+            ]
+        );
+
+        let mut args = prefix;
+        args.extend(["@first.md", "--", "@literal"]);
+        let cli = parse(&args, true).unwrap();
+        let (Action::Run { input } | Action::Chat { input }) = cli.action else {
+            panic!("launch")
+        };
+        assert_eq!(input.prompt(), Some("@literal"));
+        assert_eq!(input.files().count(), 1);
+    }
+    for args in [
+        vec!["ion", "@"],
+        vec!["ion", "run", "one", "two"],
+        vec!["ion", "one", "--", "two"],
+        vec!["ion", "@file", "inspect"],
+        vec!["ion", "usage", "@file"],
+    ] {
+        assert!(parse(&args, true).is_err(), "{args:?}");
+    }
 }
 
 #[test]
@@ -128,7 +166,7 @@ fn interactive_launch_preserves_one_prompt_and_rejects_unrecoverable_or_unused_t
     ] {
         let cli = parse(&args, true).unwrap();
         assert!(
-            matches!(cli.action, Action::Chat { prompt: Some(prompt) } if prompt == text),
+            matches!(cli.action, Action::Chat { input } if input.prompt() == Some(text)),
             "{args:?}"
         );
     }
@@ -168,7 +206,7 @@ fn resume_is_an_explicit_terminal_chooser_not_a_session_operand() {
     assert!(!parse(&["ion"], true).unwrap().resume_session);
     let cli = parse(&["ion", "--resume", "saved"], true).unwrap();
     assert!(cli.resume_session);
-    assert!(matches!(cli.action, Action::Chat { prompt: Some(prompt) } if prompt == "saved"));
+    assert!(matches!(cli.action, Action::Chat { input } if input.prompt() == Some("saved")));
 }
 
 #[test]

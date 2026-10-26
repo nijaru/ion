@@ -139,6 +139,7 @@ struct Frontend {
     fullscreen_width: usize,
     draft: String,
     images: Vec<ImageSource>,
+    files: Vec<ion_host::prompt_files::TextFile>,
     cursor: usize,
     recovery: EditorRecovery,
     history_session: Option<PathBuf>,
@@ -188,6 +189,7 @@ impl EditorDraft {
 struct RecoveredDraft {
     source: EditorDraft,
     images: Vec<ImageSource>,
+    files: Vec<ion_host::prompt_files::TextFile>,
 }
 
 // Inverse of Message::user_input, not a lossy flattening of arbitrary multipart
@@ -228,6 +230,7 @@ pub struct ChatInit {
     pub services: std::sync::Arc<ion_host::Host>,
     pub setup: ion_host::SessionSetup,
     pub images: Vec<LoadedImage>,
+    pub files: Vec<ion_host::prompt_files::TextFile>,
     pub startup_diagnostics: Vec<String>,
     pub initial_prompt: Option<String>,
     pub tui_mode: TuiMode,
@@ -247,6 +250,7 @@ pub async fn chat(init: ChatInit) -> Result<()> {
         mode: init.tui_mode,
         keys: init.keys,
         images: init.images.into_iter().map(Into::into).collect(),
+        files: init.files,
         ..Frontend::default()
     };
     let mut initial_prompt = init.initial_prompt;
@@ -282,7 +286,7 @@ pub async fn chat(init: ChatInit) -> Result<()> {
             // CLI text is a prompt, not a simulated editor key: never interpret
             // it as a terminal command or direct shell invocation. Attempt once
             // after terminal entry/first draw; normal Host rejection/return keeps
-            // its literal source and images available in the editor.
+            // its literal source and attachments available in the editor.
             if let Some(prompt) = initial_prompt.take() {
                 submit_editor(&mut runtime, &mut ui, Delivery::Start, EditorDraft::at_end(prompt));
                 poll_control = true;
@@ -1092,7 +1096,7 @@ impl Frontend {
                 Action::None
             }
             Some(KeyAction::FollowUp) => {
-                if self.draft.trim().is_empty() && self.images.is_empty() {
+                if self.draft.trim().is_empty() && self.images.is_empty() && self.files.is_empty() {
                     Action::None
                 } else {
                     self.begin_draft_handoff();
@@ -1117,7 +1121,7 @@ impl Frontend {
                 } else {
                     None
                 };
-                if syntax.is_empty() && self.images.is_empty() {
+                if syntax.is_empty() && self.images.is_empty() && self.files.is_empty() {
                     Action::None
                 } else if let Some(status) = invalid_shell {
                     self.status = status.into();
@@ -1481,11 +1485,14 @@ fn settlement_program_status(outcome: &ion_host::OperationOutcome) -> ProgramSta
 
 fn visible_status(ui: &Frontend, operation: Option<ActiveOperation>) -> Option<String> {
     let idle = ui.status.is_empty();
-    let attachment = if ui.images.is_empty() {
+    let mut attachment = if ui.images.is_empty() {
         String::new()
     } else {
         format!(" · {} image(s) attached", ui.images.len())
     };
+    if !ui.files.is_empty() {
+        attachment.push_str(&format!(" · {} text file(s) attached", ui.files.len()));
+    }
     let recovery = if ui.recovered.is_empty() {
         String::new()
     } else {

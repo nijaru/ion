@@ -126,7 +126,7 @@ def qualify(case):
                     if case == "abort":
                         returned = [record for record in records if record["type"] == "uncommitted_follow_up" and record["id"] == "queued"]
                         assert len(returned) == 1 and returned[0]["reason"] == "stopped", records
-                        assert returned[0]["input"] == {"Prompt": {"text": "forbidden", "images": []}}, returned
+                        assert returned[0]["input"] == {"Prompt": {"text": "forbidden", "images": [], "files": []}}, returned
                     assert ended["id"] == "direct" and ended["status"] == "cancelled", ended
                     assert ended["outcome"]["kind"] == "observed" and ended["outcome"]["output"]["cancelled"], ended
                 if case == "abort":
