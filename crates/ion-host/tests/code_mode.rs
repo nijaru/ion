@@ -456,15 +456,30 @@ impl CodingToolSource for DiscoverySource {
         let refreshed = self.published.load(std::sync::atomic::Ordering::SeqCst);
         (0..13)
             .map(|index| {
-                ion_core::ToolRegistration::new(
-                    ion_core::ToolDefinition::external(ion_ai::ToolSpec {
-                        name: if index == 12 { "CANDIDATE_11".into() } else { format!("candidate_{index:02}") },
-                        description: if refreshed { "changed" } else { "Similar discovery candidate_11" }.into(),
-                        input_schema: json!({"type":"object","properties":{"index":{"const":index}}}),
+                let definition = ion_core::ToolDefinition::external(ion_ai::ToolSpec {
+                    name: if index == 12 {
+                        "CANDIDATE_11".into()
+                    } else {
+                        format!("candidate_{index:02}")
+                    },
+                    description: if refreshed {
+                        "changed"
+                    } else {
+                        "Similar discovery candidate_11"
+                    }
+                    .into(),
+                    input_schema: json!({"type":"object","properties":{"index":{"const":index}}}),
+                });
+                let definition = if index == 11 {
+                    definition.with_result_schema(if refreshed {
+                        json!(false)
+                    } else {
+                        json!({"$ref":"#/$defs/Data","$defs":{"Data":{"type":"string"}}})
                     })
-                    .deferred(),
-                    self.clone(),
-                )
+                } else {
+                    definition
+                };
+                ion_core::ToolRegistration::new(definition.deferred(), self.clone())
             })
             .collect()
     }
@@ -507,6 +522,7 @@ async fn discovery_is_exact_read_only_deferred_and_request_frozen() {
             r#"
             const page = await searchTools('SIMILAR');
             const exact = await describeTool('candidate_11');
+            const untyped = await describeTool('candidate_00');
             const bounded = await searchTools('SIMILAR', {limit: 2});
             const emptyOptions = await searchTools('SIMILAR', {});
             const priority = await searchTools('CaNdIdAtE_11', {limit: 3});
@@ -515,7 +531,7 @@ async fn discovery_is_exact_read_only_deferred_and_request_frozen() {
             const exclusions = await Promise.all(['tool_search','code_mode'].map(query => searchTools(query)));
             await tools[exact.name]({});
             const frozen = await describeTool(exact.name);
-            return {page, bounded, emptyOptions, priority, one, exact, missing, exclusions, frozen};
+            return {page, bounded, emptyOptions, priority, one, exact, untyped, missing, exclusions, frozen};
         "#,
         )]),
         response(vec![code(
@@ -562,7 +578,7 @@ async fn discovery_is_exact_read_only_deferred_and_request_frozen() {
     );
     assert_eq!(
         result["exact"],
-        json!({"name":"candidate_11","description":"Similar discovery candidate_11","input_schema":{"type":"object","properties":{"index":{"const":11}}}})
+        json!({"name":"candidate_11","description":"Similar discovery candidate_11","input_schema":{"type":"object","properties":{"index":{"const":11}}},"result_schema":{"path":["value"],"schema":{"$ref":"#/$defs/Data","$defs":{"Data":{"type":"string"}}}}})
     );
     assert_eq!(
         result["bounded"],
@@ -580,11 +596,19 @@ async fn discovery_is_exact_read_only_deferred_and_request_frozen() {
     );
     assert_eq!(result["one"], json!([result["priority"][0]]));
     assert_eq!(result["frozen"], result["exact"]);
+    assert_eq!(
+        result["untyped"].get("result_schema"),
+        Some(&serde_json::Value::Null)
+    );
     assert_eq!(result["missing"], json!([null, null, null, null, null]));
     assert_eq!(result["exclusions"], json!([[], []]));
     assert_eq!(outputs[0].value["calls"], 1);
     assert_eq!(outputs[1].value["calls"], 0);
     assert_eq!(outputs[1].value["result"]["description"], "changed");
+    assert_eq!(
+        outputs[1].value["result"]["result_schema"],
+        json!({"path":["value"],"schema":false})
+    );
     let intents = view
         .entries
         .iter()
@@ -596,7 +620,7 @@ async fn discovery_is_exact_read_only_deferred_and_request_frozen() {
     assert_eq!(intents.len(), 1);
     assert_eq!(
         serde_json::to_value(&intents[0].definition).unwrap(),
-        result["exact"]
+        json!({"name":result["exact"]["name"],"description":result["exact"]["description"],"input_schema":result["exact"]["input_schema"]})
     );
     for request in model.requests() {
         assert!(

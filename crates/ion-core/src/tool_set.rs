@@ -176,11 +176,22 @@ fn pattern_matches(pattern: &str, name: &str) -> bool {
     p == pattern.len()
 }
 
+/// A standalone JSON Schema describing expected successful data at an object-key
+/// path within `ToolOutput::value`. Empty paths describe that whole value.
+/// This is discovery metadata, not runtime validation or authority. Keeping the
+/// schema separate from its location preserves its local reference scope.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ToolResultSchema {
+    pub value_path: Vec<String>,
+    pub schema: Value,
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct ToolDefinition {
     pub spec: ToolSpec,
     pub presentation: ToolPresentation,
     pub exposure: ToolExposure,
+    pub result_schema: Option<ToolResultSchema>,
 }
 
 impl ToolDefinition {
@@ -189,7 +200,18 @@ impl ToolDefinition {
             spec,
             presentation: ToolPresentation::external(),
             exposure: ToolExposure::Direct,
+            result_schema: None,
         }
+    }
+
+    /// Annotate the complete successful `ToolOutput::value`, without changing
+    /// the executor, provider request, observed value or error handling.
+    pub fn with_result_schema(mut self, schema: Value) -> Self {
+        self.result_schema = Some(ToolResultSchema {
+            value_path: Vec::new(),
+            schema,
+        });
+        self
     }
 
     pub fn deferred(mut self) -> Self {
@@ -242,6 +264,7 @@ struct ToolSearchInput {
 
 fn tool_search_definition() -> ToolDefinition {
     ToolDefinition {
+        result_schema: None,
         spec: ToolSpec {
             name: TOOL_SEARCH_NAME.into(),
             description: "Search tools that are callable by the harness but not declared in this request. Matching tools are loaded into the next model request.".into(),

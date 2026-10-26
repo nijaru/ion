@@ -753,7 +753,7 @@ mod tests {
         describe
             .reply
             .send(Ok(
-                json!({"name":"ec","description":"Echo","input_schema":{"type":"object"}})
+                json!({"name":"ec","description":"Echo","input_schema":{"type":"object"},"result_schema":null})
                     .to_string(),
             ))
             .unwrap();
@@ -765,7 +765,7 @@ mod tests {
         inspect.reply.send(Ok("{\"children\":[]}".into())).unwrap();
         assert_eq!(
             serde_json::from_str::<serde_json::Value>(&finish(&mut task).await.unwrap()).unwrap(),
-            json!({"a": {"value": 2, "is_error": false}, "b": {"name":"ec","description":"Echo","input_schema":{"type":"object"}}, "c":{"children":[]}}),
+            json!({"a": {"value": 2, "is_error": false}, "b": {"name":"ec","description":"Echo","input_schema":{"type":"object"},"result_schema":null}, "c":{"children":[]}}),
         );
         assert!(!stop.is_cancelled());
         assert!(task.requests.recv().await.is_none());

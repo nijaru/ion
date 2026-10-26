@@ -1380,6 +1380,17 @@ before guest consumption. Parent settlement joins its tool children; recovery
 closes unknown children without rerunning code. Selected results reach model
 context; raw child facts stay inspectable, not fabricated conversation messages.
 
+Result-shape hints belong to the frozen tool definition, not the provider-facing
+argument schema. Code Mode discovery returns a standalone JSON Schema and a path
+from its actual `{value, is_error, images}` reply to the described value. An empty
+SDK value path describes `value` itself; an advertised MCP output schema describes
+`value.structured_content`, without discarding its surrounding diagnostics or
+rebasing schema-local references. Missing hints mean unknown, not text or success.
+Hints describe expected successful data, not validation, conversion, authorization
+or replay safety. Check observed error and truncation/delivery markers before
+interpreting data. Discovery cannot change an outcome, unwrap an error, fetch a
+schema reference or activate a capability.
+
 Guest failure exposes a stable parent locator for bounded metadata/JSON inspection.
 Inspection preserves observed/not-dispatched/unknown, excludes private shell
 context, opaque replay and normalized image bytes, and grants no replay authority.

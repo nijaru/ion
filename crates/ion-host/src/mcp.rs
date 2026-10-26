@@ -14,7 +14,7 @@ use futures_util::future::join_all;
 use ion_ai::{BoxFuture, ToolSpec};
 use ion_core::{
     CodingToolOutput, CodingToolSource, ToolActivityKind, ToolDefinition, ToolExposure,
-    ToolPresentation, ToolRegistration,
+    ToolPresentation, ToolRegistration, ToolResultSchema,
 };
 use rmcp::{
     ClientHandler, RoleClient,
@@ -62,7 +62,13 @@ impl ClientHandler for ChangeHandler {
 }
 
 type Client = RunningService<RoleClient, ChangeHandler>;
-type RegisteredTools = Vec<(ToolSpec, String)>;
+struct RegisteredTool {
+    spec: ToolSpec,
+    original_name: String,
+    result_schema: Option<ToolResultSchema>,
+}
+
+type RegisteredTools = Vec<RegisteredTool>;
 type Catalog = BTreeMap<String, RegisteredTools>;
 
 struct Server {
@@ -333,13 +339,14 @@ fn publish_tools(
     let mut names: HashSet<_> = catalog
         .iter()
         .filter(|(name, _)| name.as_str() != server)
-        .flat_map(|(_, tools)| tools.iter().map(|(spec, _)| spec.name.as_str()))
+        .flat_map(|(_, tools)| tools.iter().map(|tool| tool.spec.name.as_str()))
         .collect();
-    for (spec, original) in &tools {
+    for tool in &tools {
         ensure!(
-            names.insert(&spec.name),
-            "MCP server {server} has colliding tool name {original:?} (alias {}) in the complete MCP source",
-            spec.name
+            names.insert(&tool.spec.name),
+            "MCP server {server} has colliding tool name {:?} (alias {}) in the complete MCP source",
+            tool.original_name,
+            tool.spec.name
         );
     }
     catalog.insert(server.to_owned(), tools);
@@ -363,14 +370,18 @@ async fn discover_tools(name: &str, client: &Client) -> Result<RegisteredTools> 
             || format!("Tool {tool_name} from MCP server {name}"),
             |description| description.into_owned(),
         );
-        registered.push((
-            ToolSpec {
+        registered.push(RegisteredTool {
+            spec: ToolSpec {
                 name: exposed,
                 description,
-                input_schema: Value::Object((*tool.input_schema).clone()),
+                input_schema: Value::Object(Arc::unwrap_or_clone(tool.input_schema)),
             },
-            tool_name,
-        ));
+            original_name: tool_name,
+            result_schema: tool.output_schema.map(|schema| ToolResultSchema {
+                value_path: vec!["structured_content".into()],
+                schema: Value::Object(Arc::unwrap_or_clone(schema)),
+            }),
+        });
     }
     Ok(registered)
 }
@@ -422,13 +433,14 @@ impl CodingToolSource for McpTools {
             if server.exposure == McpExposure::Hidden {
                 continue;
             }
-            for (spec, original) in tools {
+            for tool in tools {
                 registrations.push(ToolRegistration::new(
                     ToolDefinition {
-                        spec: spec.clone(),
+                        spec: tool.spec.clone(),
+                        result_schema: tool.result_schema.clone(),
                         presentation: ToolPresentation::static_target(
                             ToolActivityKind::External,
-                            original.clone(),
+                            tool.original_name.clone(),
                         ),
                         exposure: match server.exposure {
                             McpExposure::Direct => ToolExposure::Direct,
@@ -437,7 +449,7 @@ impl CodingToolSource for McpTools {
                     },
                     Arc::new(McpExecutor {
                         server: server.clone(),
-                        original_name: original.clone(),
+                        original_name: tool.original_name.clone(),
                     }),
                 ));
             }
@@ -522,7 +534,8 @@ for line in sys.stdin:
                   "capabilities": {"tools": {}}, "serverInfo": {"name": "bound", "version": "1"}}
     elif method == "tools/list":
         listings += 1
-        result = {"tools": [{"name": "probe", "inputSchema": {"type": "object"}}]
+        result = {"tools": [{"name": "probe", "inputSchema": {"type": "object"},
+                             "outputSchema": {"type": "object", "properties": {"called": {"type": "string"}}}}]
                   if listings == 1 else []}
     elif method == "tools/call":
         result = {"content": [], "structuredContent": {"called": request["params"]["name"]}}
@@ -569,6 +582,13 @@ for line in sys.stdin:
 
         assert!(diagnostics.is_empty(), "{diagnostics:?}");
         assert!(refreshed.specs().is_empty());
+        assert_eq!(
+            issued.definition(&call.name).unwrap().result_schema,
+            Some(ToolResultSchema {
+                value_path: vec!["structured_content".into()],
+                schema: json!({"type":"object","properties":{"called":{"type":"string"}}}),
+            })
+        );
         assert!(!observed.is_error, "{}", observed.value);
         assert_eq!(observed.value["structured_content"]["called"], "probe");
         assert!(closed.is_error);

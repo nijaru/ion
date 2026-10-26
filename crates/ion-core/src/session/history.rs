@@ -127,6 +127,7 @@ pub(crate) struct HistoryRead {
 
 pub(crate) fn definition() -> ToolDefinition {
     ToolDefinition {
+        result_schema: None,
         spec: ToolSpec {
             name: HISTORY_NAME.into(),
             description: concat!(

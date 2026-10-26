@@ -44,6 +44,7 @@ impl CodingToolSource for BlockingWrite {
     fn registrations(self: Arc<Self>) -> Vec<ToolRegistration> {
         vec![ToolRegistration::new(
             ToolDefinition {
+                result_schema: None,
                 spec: ToolSpec {
                     name: "blocking_write".into(),
                     description: "controlled blocking I/O".into(),

@@ -28,6 +28,19 @@ use crate::{
 struct Input {
     code: String,
 }
+#[derive(Serialize)]
+struct ToolDescription<'a> {
+    #[serde(flatten)]
+    spec: &'a ion_ai::ToolSpec,
+    result_schema: Option<ResultSchemaDescription<'a>>,
+}
+
+#[derive(Serialize)]
+struct ResultSchemaDescription<'a> {
+    path: Vec<&'a str>,
+    schema: &'a Value,
+}
+
 struct Admitted {
     intent: ChildIntent,
     reply: oneshot::Sender<CodeReply>,
@@ -149,12 +162,22 @@ impl<F: FnMut(AgentEvent)> Gate<'_, F> {
                     let _ = request.reply.send(Err("guest stopped".into()));
                     return;
                 }
-                let spec = self
+                let description = self
                     .catalog
                     .definition(&name)
                     .filter(|_| !self.catalog.is_intrinsic(&name))
-                    .map(|definition| &definition.spec);
-                self.reply(request.reply, &spec);
+                    .map(|definition| ToolDescription {
+                        spec: &definition.spec,
+                        result_schema: definition.result_schema.as_ref().map(|hint| {
+                            ResultSchemaDescription {
+                                path: std::iter::once("value")
+                                    .chain(hint.value_path.iter().map(String::as_str))
+                                    .collect(),
+                                schema: &hint.schema,
+                            }
+                        }),
+                    });
+                self.reply(request.reply, &description);
             }
             CodeRequestKind::SearchTools { query, limit } => {
                 if self.stop.is_cancelled() {

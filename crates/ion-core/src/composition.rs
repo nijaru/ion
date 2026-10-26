@@ -152,6 +152,7 @@ pub(crate) fn failure(message: impl Into<String>) -> ToolOutput {
 
 pub(crate) fn definition(limits: CodeLimits) -> ToolDefinition {
     ToolDefinition {
+        result_schema: None,
         spec: ToolSpec {
             name: CODE_MODE_NAME.into(),
             description: format!(
@@ -160,7 +161,7 @@ pub(crate) fn definition(limits: CodeLimits) -> ToolDefinition {
                     "Await tools.name(args), or tools[name](args) for exact names needing brackets, for {{value,is_error,images}}. ",
                     "tools is a frozen null-prototype namespace of all callable direct/deferred tools, without aliases; then/toJSON names prevent startup to avoid implicit dispatch. ",
                     "Unknown members are undefined. ",
-                    "searchTools(query,options?) returns matching {{name,description}} candidates; options accepts only limit, an integer 1..10 (default 10), with exact ASCII-insensitive names ranked first; describeTool(name) returns the exact case-sensitive frozen ToolSpec (name/description/input_schema) or null for unknown/non-guest capabilities. ",
+                    "searchTools(query,options?) returns matching {{name,description}} candidates; options accepts only limit, an integer 1..10 (default 10), with exact ASCII-insensitive names ranked first; describeTool(name) returns the exact frozen name/description/input_schema and result_schema, or null for unknown/non-guest capabilities. result_schema is null when unknown, otherwise {{path,schema}}: a key path from the tool reply and a standalone JSON Schema of expected successful data. Check is_error and truncation/delivery markers; hints do not validate, convert or unwrap results. ",
                     "Both include callable deferred tools, exclude intrinsic tool_search/code_mode, and are read-only, not activation or effects. ",
                     "Return JSON and/or call text(value) and image(block) to select output for the model. text renders primitives as strings and objects as JSON. ",
                     "images contains small invocation-scoped {{type:'image',id,mime_type}} blocks; image(block) selects a committed image from this invocation without copying bytes through JavaScript. It does not accept URLs, raw image data or historical locators. ",

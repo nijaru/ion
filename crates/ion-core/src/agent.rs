@@ -1303,6 +1303,7 @@ mod tests {
                 "type":"object", "required":["command"], "properties":{"command":{"type":"string"}}
             })),
         ].map(|(name, kind, key, input_schema)| ToolDefinition {
+            result_schema: None,
             spec: ToolSpec { name: name.into(), description: format!("Fixture {name}"), input_schema },
             presentation: ToolPresentation::argument(kind, key),
             exposure: ToolExposure::Direct,
@@ -1650,6 +1651,7 @@ mod tests {
                 let version = self.0.load(Ordering::SeqCst);
                 vec![ToolRegistration::new(
                     ToolDefinition {
+                        result_schema: None,
                         spec: ToolSpec {
                             name: "probe".into(),
                             description: format!("generation {version}"),
@@ -1735,6 +1737,7 @@ mod tests {
         fn registrations(self: Arc<Self>) -> Vec<ToolRegistration> {
             vec![ToolRegistration::new(
                 ToolDefinition {
+                    result_schema: None,
                     spec: ToolSpec {
                         name: "read".into(),
                         description: "slow read".into(),

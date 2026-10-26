@@ -97,6 +97,7 @@ impl ToolSource for LocalTools {
                 };
                 ToolRegistration::new(
                     ToolDefinition {
+                        result_schema: None,
                         spec,
                         presentation: ToolPresentation::argument(kind, key),
                         exposure: ToolExposure::Direct,

@@ -47,8 +47,8 @@ pub use session::{
 pub use session_usage::{ModelUsage, SessionUsage, TokenCount, UsageTotals};
 pub use tool_set::{
     ToolActivity, ToolActivityKind, ToolCatalog, ToolDefinition, ToolExecutor, ToolExposure,
-    ToolPresentation, ToolPresentationTarget, ToolRegistration, ToolSelection, ToolSet,
-    ToolSource as CodingToolSource,
+    ToolPresentation, ToolPresentationTarget, ToolRegistration, ToolResultSchema, ToolSelection,
+    ToolSet, ToolSource as CodingToolSource,
 };
 
 pub use composition::{

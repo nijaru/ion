@@ -119,6 +119,7 @@ pub(super) fn registrations(servers: &[Arc<Server>]) -> Vec<ToolRegistration> {
     .map(|(kind, name, description)| {
         ToolRegistration::new(
             ToolDefinition {
+                result_schema: None,
                 spec: ion_ai::ToolSpec {
                     name: name.into(),
                     description: description.into(),
@@ -142,6 +143,7 @@ pub(super) fn registrations(servers: &[Arc<Server>]) -> Vec<ToolRegistration> {
     })
     .chain(std::iter::once(ToolRegistration::new(
         ToolDefinition {
+            result_schema: None,
             spec: ion_ai::ToolSpec {
                 name: READ_RESOURCE.into(),
                 description: "Read a specific resource from an MCP server given the server name and resource URI.".into(),

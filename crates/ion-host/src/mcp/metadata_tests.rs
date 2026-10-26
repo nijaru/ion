@@ -82,13 +82,51 @@ fn colliding_refresh_keeps_the_complete_previous_catalog() {
         input_schema: json!({}),
     };
     let catalog = SyncRwLock::new(Catalog::new());
-    publish_tools(&catalog, "a", vec![(spec("first"), "original-a".into())]).unwrap();
-    publish_tools(&catalog, "b", vec![(spec("second"), "original-b".into())]).unwrap();
-    let failed = publish_tools(&catalog, "a", vec![(spec("second"), "changed-a".into())]);
+    let registered = |spec, original_name: &str, schema| RegisteredTool {
+        spec,
+        original_name: original_name.into(),
+        result_schema: Some(ToolResultSchema {
+            value_path: vec!["structured_content".into()],
+            schema,
+        }),
+    };
+    publish_tools(
+        &catalog,
+        "a",
+        vec![registered(
+            spec("first"),
+            "original-a",
+            json!({"type":"string"}),
+        )],
+    )
+    .unwrap();
+    publish_tools(
+        &catalog,
+        "b",
+        vec![registered(
+            spec("second"),
+            "original-b",
+            json!({"type":"boolean"}),
+        )],
+    )
+    .unwrap();
+    let failed = publish_tools(
+        &catalog,
+        "a",
+        vec![registered(
+            spec("second"),
+            "changed-a",
+            json!({"type":"number"}),
+        )],
+    );
     assert!(failed.is_err());
     let snapshot = catalog.read().unwrap();
     assert_eq!(snapshot.len(), 2);
-    assert_eq!(snapshot["a"][0].0.name, "first");
-    assert_eq!(snapshot["a"][0].1, "original-a");
-    assert_eq!(snapshot["b"][0].0.name, "second");
+    assert_eq!(snapshot["a"][0].spec.name, "first");
+    assert_eq!(snapshot["a"][0].original_name, "original-a");
+    assert_eq!(
+        snapshot["a"][0].result_schema.as_ref().unwrap().schema,
+        json!({"type":"string"})
+    );
+    assert_eq!(snapshot["b"][0].spec.name, "second");
 }

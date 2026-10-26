@@ -1916,12 +1916,25 @@ reject before admission, without coercion or clamping. Matching uses
 ASCII-insensitive name/description substrings, with exact ASCII-insensitive
 names first and frozen catalogue order within each rank, without duplicates.
 Global `describeTool(name)` looks up an exact, case-sensitive name in Core's
-frozen catalogue and returns its full provider-neutral
-`{name, description, input_schema}` ToolSpec, or explicit `null` if missing.
+frozen catalogue and returns
+`{name, description, input_schema, result_schema}`, or explicit `null` if missing.
+`result_schema` is `null` when unknown, otherwise `{path, schema}`: a key path from
+the actual `{value, is_error, images}` reply and a standalone JSON Schema for the
+expected successful data there. Local schema references stay unchanged. Rust
+registrations can use `ToolDefinition::with_result_schema(schema)` for the whole
+`value` (`path: ['value']`), or `ToolResultSchema.value_path` for a nested value.
+An advertised MCP output schema points to `['value', 'structured_content']`;
+content, errors, conversion notices, capture paths and images are not unwrapped
+or discarded. Hints do not validate or convert observations. Check `is_error` and
+truncation/delivery markers before interpreting data; discovery fetches no schema
+references.
+
 Both include callable deferred tools and exclude intrinsic `tool_search` and
 `code_mode`. Discovery is read-only: it neither activates tools nor records child
 effects, and shares existing bridge, JSON, reply, cancellation and guest budgets.
-This is not full Pi API parity; typed result schemas are not yet exposed.
+Value-conversion helpers, generated TypeScript declarations and persistent script
+state are not supplied by this discovery API.
+
 Select model-visible output with a JSON `return`, `text(value)` or `image(block)`:
 
 ```js

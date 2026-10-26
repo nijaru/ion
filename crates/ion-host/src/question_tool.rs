@@ -33,6 +33,7 @@ impl QuestionTools {
 impl CodingToolSource for QuestionTools {
     fn registrations(self: Arc<Self>) -> Vec<ToolRegistration> {
         let definition = ToolDefinition {
+            result_schema: None,
             spec: ToolSpec {
                 name: TOOL_NAME.into(),
                 description: format!(
