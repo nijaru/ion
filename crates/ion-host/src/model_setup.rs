@@ -11,6 +11,8 @@ use anyhow::{Context, Result, bail, ensure};
 use ion_ai::ModelRef;
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 
+mod matching;
+
 use crate::{
     HttpModelService, HttpWire,
     auth::{CredentialStatus, CredentialStore, validate_provider_id},
@@ -219,6 +221,65 @@ impl ModelStore {
             }
         }
         Err(ModelSelectionRequired.into())
+    }
+
+    /// Resolve human shorthand once, before binding. Never use this to restore
+    /// a stored identity or interpret a new endpoint's literal model ID.
+    pub fn resolve_pattern(
+        &self,
+        text: &str,
+        provider: Option<&str>,
+        credentials: &CredentialStore,
+    ) -> Result<Selection> {
+        let text = text.trim();
+        ensure!(!text.is_empty(), "model pattern must not be empty");
+        if let Some(provider) = provider {
+            validate_provider_id(&provider.to_ascii_lowercase())?;
+        }
+        let scoped = provider
+            .map(|provider| (provider, text))
+            .or_else(|| text.split_once('/'));
+        if let Some(entry) = scoped.and_then(|(provider, id)| {
+            catalog::models()
+                .iter()
+                .find(|entry| entry.provider.eq_ignore_ascii_case(provider) && entry.id == id)
+        }) {
+            // Preserve exact catalog lookup even if unrelated saved routes or
+            // credentials are broken. Do not case-fold an exact custom ID away.
+            return self.resolve_identity(&ModelRef {
+                provider: entry.provider.into(),
+                model: entry.id.into(),
+            });
+        }
+        let configuration = self.configuration()?;
+        let candidates = catalog::models()
+            .iter()
+            .map(|entry| matching::Candidate {
+                provider: entry.provider,
+                id: entry.id,
+                name: entry.label,
+            })
+            .chain(
+                configuration
+                    .custom
+                    .iter()
+                    .map(|route| matching::Candidate {
+                        provider: &route.provider,
+                        id: &route.model,
+                        name: &route.model,
+                    }),
+            )
+            .collect::<Vec<_>>();
+        let identity = |candidate: matching::Candidate<'_>| ModelRef {
+            provider: candidate.provider.into(),
+            model: candidate.id.into(),
+        };
+        let selected = matching::resolve(&candidates, text, provider, |candidate| {
+            Ok(!self
+                .resolve_identity_with(&identity(candidate), &configuration)?
+                .credential_missing(credentials)?)
+        })?;
+        self.resolve_identity_with(&identity(selected), &configuration)
     }
 
     pub fn resolve_identity(&self, model: &ModelRef) -> Result<Selection> {
@@ -585,6 +646,77 @@ mod tests {
             }
         }
         assert!(store.configuration().unwrap().custom.is_empty());
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn human_patterns_resolve_canonical_routes_without_rewriting_exact_state() {
+        let root = std::env::temp_dir().join(format!("ion-model-pattern-{}", uuid::Uuid::now_v7()));
+        let store = ModelStore::new(root.clone());
+        let credentials = CredentialStore::new(root.join("credentials"));
+        let mut route = desktop_route("http://localhost:8080/v1");
+        route.model = "vendor/alpha-latest:high".into();
+        let exact = store.save_default(&route).unwrap().identity();
+        let publication = root.join("models.json");
+        let before = fs::read(&publication).unwrap();
+        for (text, provider) in [
+            ("alpha", None),
+            ("DESKTOP/ALPHA", None),
+            ("vendor/alpha-latest:high", Some("desktop")),
+        ] {
+            assert_eq!(
+                store
+                    .resolve_pattern(text, provider, &credentials)
+                    .unwrap()
+                    .identity(),
+                exact
+            );
+        }
+        assert_eq!(fs::read(&publication).unwrap(), before);
+        assert!(
+            store
+                .resolve_identity(&ModelRef {
+                    provider: "desktop".into(),
+                    model: "alpha".into()
+                })
+                .is_err()
+        );
+        assert!(
+            store
+                .choose(
+                    None,
+                    Some(ModelRef {
+                        provider: "desktop".into(),
+                        model: "alpha".into()
+                    }),
+                    &credentials
+                )
+                .is_err()
+        );
+        let mut configuration: ModelConfiguration = serde_json::from_slice(&before).unwrap();
+        configuration.custom.clear();
+        write_json(&publication, &configuration).unwrap();
+        assert!(store.choose(None, None, &credentials).is_err());
+        fs::write(&publication, b"not JSON").unwrap();
+        assert_eq!(
+            store
+                .resolve_pattern("openai/gpt-5.5", None, &credentials)
+                .unwrap()
+                .model,
+            "gpt-5.5"
+        );
+        assert_eq!(
+            store
+                .resolve_pattern("gpt-5.5", Some("openai"), &credentials)
+                .unwrap()
+                .model,
+            "gpt-5.5"
+        );
+        assert!(
+            store
+                .resolve_pattern("gpt", Some("openai"), &credentials)
+                .is_err()
+        );
         fs::remove_dir_all(root).unwrap();
     }
 

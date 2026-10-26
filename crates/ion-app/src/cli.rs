@@ -9,7 +9,7 @@ use clap::{
     Arg, ArgAction, ArgMatches, Args, Command, FromArgMatches, Subcommand,
     builder::TypedValueParser, parser::ValueSource,
 };
-use ion_ai::{ModelRef, Reasoning};
+use ion_ai::Reasoning;
 use ion_core::ToolSelection;
 use ion_host::{McpExposure, Wire};
 
@@ -24,7 +24,7 @@ pub(crate) struct Invocation {
     pub session: Option<PathBuf>,
     pub continue_session: bool,
     pub resume_session: bool,
-    pub model: Option<ModelRef>,
+    pub model: Option<ModelPattern>,
     pub reasoning: Option<Reasoning>,
     pub image: Vec<PathBuf>,
     pub tui_mode: TuiMode,
@@ -35,6 +35,13 @@ pub(crate) struct Invocation {
     pub tool_selection: ToolSelection,
     /// Literal pipe input, captured before Session or tool admission.
     pub piped_input: String,
+}
+
+/// Human selection text; never a durable or already-resolved model identity.
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) struct ModelPattern {
+    pub provider: Option<String>,
+    pub text: String,
 }
 
 #[derive(Subcommand)]
@@ -51,7 +58,7 @@ pub(crate) enum Action {
         /// Catalog provider ID, or a label for a custom provider.
         #[arg(id = "selected_provider", value_name = "PROVIDER")]
         provider: String,
-        /// Exact model ID, including any namespace.
+        /// Known model ID/name pattern; literal model ID when configuring --endpoint.
         #[arg(id = "selected_model", value_name = "MODEL")]
         model: String,
         /// Full HTTP endpoint URL; requires --wire for a custom route.
@@ -224,9 +231,9 @@ fn options() -> Vec<Arg> {
         Arg::new("resume_session").short('r').long("resume").action(ArgAction::SetTrue)
             .help("Choose a saved Session in a terminal; supports current/all folder scope"),
         Arg::new("provider").long("provider").value_name("PROVIDER")
-            .help("Provider for an exact --model ID, including namespaced IDs"),
-        Arg::new("model").long("model").value_name("PROVIDER/MODEL")
-            .help("Exact qualified model identity, or an exact ID with --provider; does not change the saved default"),
+            .help("Constrain --model to this provider; model text may include a namespace"),
+        Arg::new("model").long("model").value_name("MODEL")
+            .help("Known model identity or ID/name substring; PROVIDER/MODEL scopes the match; does not change the saved default"),
         Arg::new("reasoning").long("reasoning").value_parser(clap::value_parser!(Reasoning))
             .value_name("EFFORT").help("Generation effort: default, off, low, medium, high or budget:TOKENS; route support varies"),
         Arg::new("image").long("image").action(ArgAction::Append)
@@ -401,19 +408,16 @@ fn normalize(mut matches: ArgMatches, interactive: bool) -> Result<Invocation> {
     let model: Option<String> = one(&mut levels, "model")?;
     let model = match (provider, model) {
         (None, None) => None,
-        (Some(provider), Some(model)) => {
+        (provider, Some(text)) => {
             ensure!(
-                !provider.is_empty() && !model.is_empty(),
-                "provider and model must not be empty"
+                provider
+                    .as_ref()
+                    .is_none_or(|provider| !provider.trim().is_empty())
+                    && !text.trim().is_empty(),
+                "provider and model pattern must not be empty"
             );
-            Some(ModelRef { provider, model })
+            Some(ModelPattern { provider, text })
         }
-        (None, Some(qualified)) => Some(
-            qualified
-                .parse()
-                .map_err(anyhow::Error::msg)
-                .context("use --model PROVIDER/MODEL, or --provider PROVIDER --model MODEL")?,
-        ),
         (Some(_), None) => bail!("--provider requires --model"),
     };
     Ok(Invocation {

@@ -47,7 +47,7 @@ commands! {
     Resume => (Sessions, "resume", "[ID]", "Choose a saved Session"),
     Session => (Sessions, "session", "", "Show Session, context and recorded token usage"),
     Name => (Sessions, "name", "[NAME]", "Show or change the Session name"),
-    Model => (Models, "model", "[PROVIDER/MODEL]", "Choose a model"),
+    Model => (Models, "model", "[MODEL]", "Choose a known model by identity or ID/name substring"),
     Reasoning => (Models, "reasoning", "[default|off|low|medium|high|budget:TOKENS]", "Select generation effort (route support varies)"),
     Compact => (Work, "compact", "", "Summarize settled context"),
     Tasks => (Work, "tasks", "[status|result|cancel|acknowledge UUID]", "Choose task progress, result, stop or remove"),

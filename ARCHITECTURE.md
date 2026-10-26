@@ -1142,11 +1142,26 @@ interaction with its real caller before adding status variants or capability fla
 
 ## Command-line invocation
 
-Resolve one invocation before opening Host services. Options belong to the
+Parse one invocation before opening Host services. Options belong to the
 selected command, including when placed before it; unsupported options fail
-rather than being silently ignored. Qualified model identities use
-`PROVIDER/MODEL`; an explicit provider also permits an exact namespaced model ID.
-Invocation overrides bind the Session without changing the saved global default.
+rather than being silently ignored. Invocation overrides bind the Session without
+changing the saved global default.
+
+Human model selection (`--model`, `use` without a new endpoint, and typed `/model`)
+resolves known catalog/configured routes through one Host matcher before binding.
+Accept exact identities and case-insensitive ID/display-name substrings. Exact
+matches win; otherwise prefer undated aliases, then the highest model identifier,
+following Pi. For bare patterns spanning providers, prefer locally usable routes;
+a tied identifier across providers is ambiguous rather than catalog-order routing.
+A unique match remains selectable without credentials for explicit key setup.
+A recognized `PROVIDER/` prefix or `--provider` is a hard scope, never permission
+to fall through to another provider. With `--provider`, the complete model text
+remains a possibly namespaced ID/pattern within that provider. Preserve literal
+colon suffixes; reasoning remains a separate option. Unknown patterns do not
+invent routes or capabilities. New endpoint configuration, saved Session/default
+identities, SDK/RPC selection and managed-child model references stay exact;
+reopening never reinterprets an old identity as a pattern. Launch resolution
+precedes Session/MCP admission; successful selection exposes the canonical identity.
 
 An explicit `-r`/`--resume` browses saved coding Sessions before model selection,
 Session allocation or application admission. Start in the launch directory and

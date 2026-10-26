@@ -33,7 +33,7 @@ Ion picks a catalog model automatically when its provider key is present in
 `DEEPSEEK_API_KEY`, `XIAOMI_API_KEY`, `OPENROUTER_API_KEY`, `OPENAI_API_KEY` or
 `ANTHROPIC_API_KEY`. The default preference starts with DeepSeek Flash, then
 MiMo Flash, then DeepSeek Flash through OpenRouter. To select one explicitly,
-run `ion use PROVIDER MODEL` with the exact ID shown by `ion models`.
+run `ion use PROVIDER MODEL` with an ID or name substring from `ion models`.
 A selected or reopened model with a missing key opens the same hidden prompt in
 interactive chat. `ion login PROVIDER` also accepts a key at a hidden terminal
 prompt. Headless, RPC and redirected launches never open setup UI; configure a
@@ -120,12 +120,23 @@ committed history stores the complete context, not live paths. History too large
 for the 64 KiB editor is visibly refused without replacing the current draft.
 Typing or completing `@path` inside chat does **not** import a file.
 
-`--model PROVIDER/MODEL` selects an exact catalog or configured custom identity
-for this invocation. With `--provider PROVIDER`, `--model` takes the exact model
-ID, including any namespace slashes. Neither form changes the saved default;
-`ion use PROVIDER MODEL` does. Options may appear before or after a command, but
-must apply to it: metadata commands do not accept model or execution overrides.
-Use `ion COMMAND --help` for that command's options.
+`--model MODEL` selects a known catalog or configured custom route for this
+invocation. Use an exact ID or a case-insensitive ID/display-name substring;
+`--model openai/mini` and `--provider openai --model mini` constrain the match to
+OpenAI. An explicit provider never falls through to another provider. With
+`--provider`, the complete model text stays inside that provider, including
+namespace slashes. Colon suffixes remain literal IDs; set effort with `--reasoning`.
+
+Exact matches win. Otherwise Ion prefers undated aliases over dated snapshots,
+then the highest model identifier. Bare patterns spanning providers prefer locally
+usable routes; a tied ID on several providers is an error with canonical choices.
+A unique model can be selected before its key is configured. Resolution does not
+probe account access, invent routes or change the saved default. `ion use PROVIDER
+MODEL` uses the same matching rules and saves the canonical default. Reopened
+Session models and saved defaults remain exact, not patterns that can drift.
+Options may appear before or after a command, but must apply to it: metadata
+commands do not accept model or execution overrides. Use `ion COMMAND --help`
+for that command's options.
 
 Plain CLI metadata (`sessions`, `models`, `use`, resources and MCP listings)
 replaces C0/C1/DEL control characters within fields with spaces, preserving
@@ -202,7 +213,9 @@ are shown without decoding their contents. Explicit `/tasks status ID`,
 `/tasks result ID`, `/tasks cancel ID` and `/tasks acknowledge ID` remain available.
 
 The TUI model picker searches catalog and configured
-custom routes, marks the current model and preselects it. Ctrl-L opens that picker
+custom routes, marks the current model and preselects it. Typed `/model MODEL`
+uses the same shorthand matcher as `--model` and reports the canonical choice.
+Ctrl-L opens that picker
 without replacing the draft or its cursor/attachments. Choosing a native model
 with a missing key opens the same hidden credential reader as first-use setup;
 Ctrl-C cancels key entry without changing the current model. Model selection never
@@ -814,7 +827,8 @@ priority; included files render global-to-local. A nested linked worktree's copy
 shadows the main checkout's project copy of the same file.
 `ion use` also accepts a custom model with
 `--endpoint URL --wire chat-completions`, `--wire anthropic-messages`, or
-`--wire openai-responses`.
+`--wire openai-responses`. With `--endpoint`, the model ID is literal, even when
+it resembles shorthand for an existing route.
 Custom provider identifiers contain only lowercase ASCII letters, digits and
 hyphens, with 1–64 bytes; the same identifier is used for provider login.
 `URL` may be a compatible API base such as `http://desktop:8080/v1` or the

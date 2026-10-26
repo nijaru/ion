@@ -95,7 +95,44 @@ with tempfile.TemporaryDirectory(prefix="ion-cli-") as temporary:
         for provider, model in (("first", "vendor/model"), ("second", "other")):
             run("use", provider, model, "--endpoint", endpoint, "--wire", "chat-completions")
         store = root / "ion" / "models.json"
+        for provider, model in (("matches", "shorthand-20260101"),
+                                ("matches", "shorthand-20261001"),
+                                ("matches", "shorthand-latest"),
+                                ("matches", "first/namespaced:high"),
+                                ("matches", "twin"), ("second", "twin")):
+            run("use", provider, model, "--endpoint", endpoint, "--wire", "chat-completions")
+        run("use", "second", "other")
         saved_default = store.read_bytes()
+
+        # Human patterns resolve once to canonical requests and Session facts.
+        # They neither change the global default nor interpret colon IDs as effort.
+        for args, expected in [
+            (["--model", "shorthand"], "shorthand-latest"),
+            (["--model", "MATCHES/SHORTHAND-2026"], "shorthand-20261001"),
+            (["--model", "matches/shorthand-20260101"], "shorthand-20260101"),
+            (["--provider", "matches", "--model", "first/namespaced:high"], "first/namespaced:high"),
+        ]:
+            database = root / "pattern.sqlite"
+            run("--cwd", workspace, "--session", database, *args, "run", "MODEL_SHORTHAND_PROBE")
+            assert requests[-1]["model"] == expected, requests[-1]
+            assert "reasoning_effort" not in requests[-1], requests[-1]
+            view = json.loads(run("inspect", "--session", database).stdout)
+            assert view["last_model"] == {"provider": "matches", "model": expected}, view
+            assert store.read_bytes() == saved_default
+
+        run("use", "matches", "shorthand")
+        assert json.loads(store.read_bytes())["default"] == {"provider": "matches", "model": "shorthand-latest"}
+        # Display-name lookup and missing-key setup are local, not account probes.
+        run("use", "openai", "GPT-5.4 Mini")
+        assert json.loads(store.read_bytes())["default"] == {"provider": "openai", "model": "gpt-5.4-mini"}
+        # Creating an endpoint retains the literal ID even when it is shorthand
+        # for a different existing route. It is not a speculative model lookup.
+        run("use", "matches", "shorthand", "--endpoint", endpoint, "--wire", "chat-completions")
+        assert json.loads(store.read_bytes())["default"] == {"provider": "matches", "model": "shorthand"}
+        run("use", "second", "other")
+        saved_default = store.read_bytes()
+        denied = run("use", "matches", "shorthand-lat", "--wire", "chat-completions", check=False)
+        assert denied.returncode != 0 and store.read_bytes() == saved_default
 
         # stdin-only modes preserve exact whitespace and command-looking text.
         for args, piped, expected in [
@@ -238,6 +275,19 @@ with tempfile.TemporaryDirectory(prefix="ion-cli-") as temporary:
                         workspace / "missing\x1b]52;c;QUJD\x07"])
         before = set((root / "ion").rglob("*.sqlite"))
         calls = len(requests)
+        for args, diagnostic in [
+            (["--model", "no-known-pattern"], b"no known model matches"),
+            (["--model", "twin"], b"ambiguous model pattern"),
+            (["--model", "first/namespaced:high"], b"within provider"),
+            (["--provider", "first", "--model", "other"], b"within provider"),
+        ]:
+            database = root / "denied-pattern.sqlite"
+            denied = run("--cwd", workspace, "--session", database, *args, "run", "not admitted", check=False)
+            assert denied.returncode != 0 and diagnostic in denied.stderr, denied.stderr
+            assert not database.exists() and not marker.exists() and len(requests) == calls
+            assert store.read_bytes() == saved_default
+            if "twin" in args:
+                assert b"matches/twin" in denied.stderr and b"second/twin" in denied.stderr
         near_limit = workspace / "near-limit"
         near_limit.write_bytes(b"x" * (7 * 1024 * 1024))
         aggregate_session = root / "aggregate.sqlite"
@@ -321,4 +371,4 @@ with tempfile.TemporaryDirectory(prefix="ion-cli-") as temporary:
         thread.join(timeout=5)
         assert not thread.is_alive()
 
-print("CLI ordered prompt Turns, first-only attachments/stdin, failure/Stop, models and pre-admission boundaries: OK")
+print("CLI model patterns/canonical authority, ordered Turns, first-only context, failure/Stop and pre-admission boundaries: OK")

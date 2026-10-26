@@ -4,7 +4,7 @@ use std::collections::BTreeMap;
 use anyhow::Result;
 use ion_ai::{ModelRef, ProviderErrorKind, Reasoning};
 use ion_core::CodingAgentError;
-use ion_host::{CredentialStatus, Host, SessionControl};
+use ion_host::{CredentialStatus, Host, Selection, SessionControl};
 use ion_terminal::{Screen, TerminalSession};
 
 use super::picker::PickerItem;
@@ -236,14 +236,13 @@ pub(super) async fn select_model(
     terminal: &mut TerminalSession,
     screen: &mut Screen,
     program: &mut ProgramStatusState,
-    model: ModelRef,
+    selection: Selection,
 ) -> Result<Result<()>> {
     let access = (|| -> Result<_> {
         anyhow::ensure!(
             !runtime.is_busy(),
             "This action is available after the operation"
         );
-        let selection = services.models().resolve_identity(&model)?;
         let missing = selection.credential_missing(services.credentials())?;
         Ok((selection, missing))
     })();
@@ -266,5 +265,5 @@ pub(super) async fn select_model(
     }
     Ok(selection
         .require_access(services.credentials())
-        .and_then(|()| runtime.select_model(model)))
+        .and_then(|()| runtime.select_model(selection.identity())))
 }

@@ -114,6 +114,12 @@ async fn run_cli(cli: Invocation) -> Result<()> {
             max_output_tokens,
             images,
         } => {
+            let (provider, model) = if endpoint.is_none() {
+                let selected = models.resolve_pattern(&model, Some(&provider), credentials)?;
+                (selected.provider, selected.model)
+            } else {
+                (provider, model)
+            };
             let saved = SavedSelection {
                 provider,
                 model,
@@ -541,7 +547,12 @@ async fn run_cli(cli: Invocation) -> Result<()> {
             let interactive_setup = matches!(action, Action::Chat { .. })
                 && io::stdin().is_terminal()
                 && io::stdout().is_terminal();
-            let selection = models.choose(cli.model, previous, credentials);
+            let selection = match cli.model {
+                Some(pattern) => {
+                    models.resolve_pattern(&pattern.text, pattern.provider.as_deref(), credentials)
+                }
+                None => models.choose(None, previous, credentials),
+            };
             let selected = if interactive_setup {
                 let selected = match selection {
                     Ok(selected) => Some(selected),

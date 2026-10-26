@@ -35,34 +35,50 @@ fn completion_policy_is_explicit_scoped_and_defaults_to_inbox() {
 }
 
 #[test]
-fn model_overrides_accept_qualified_and_namespaced_exact_ids_in_both_positions() {
-    for args in [
-        vec!["ion", "--model", "openrouter/vendor/model", "run", "hello"],
-        vec!["ion", "run", "hello", "--model", "openrouter/vendor/model"],
-        vec![
-            "ion",
-            "--provider",
-            "openrouter",
-            "run",
-            "--model",
-            "vendor/model",
-            "hello",
-        ],
+fn model_patterns_preserve_provider_scope_namespaces_and_literal_suffixes() {
+    for (args, provider, text) in [
+        (
+            vec!["ion", "--model", "openrouter/vendor/model", "run", "hello"],
+            None,
+            "openrouter/vendor/model",
+        ),
+        (
+            vec!["ion", "run", "hello", "--model", "openrouter/vendor/model"],
+            None,
+            "openrouter/vendor/model",
+        ),
+        (
+            vec![
+                "ion",
+                "--provider",
+                "openrouter",
+                "run",
+                "--model",
+                "vendor/model:high",
+                "hello",
+            ],
+            Some("openrouter"),
+            "vendor/model:high",
+        ),
+        (
+            vec!["ion", "--model", "Friendly model"],
+            None,
+            "Friendly model",
+        ),
     ] {
-        let cli = parse(&args, true).unwrap();
         assert_eq!(
-            cli.model.unwrap(),
-            ModelRef {
-                provider: "openrouter".into(),
-                model: "vendor/model".into()
+            parse(&args, true).unwrap().model.unwrap(),
+            ModelPattern {
+                provider: provider.map(str::to_owned),
+                text: text.into(),
             }
         );
     }
     for args in [
         vec!["ion", "--provider", "openai"],
-        vec!["ion", "--model", "bare-id"],
-        vec!["ion", "--model", "/model"],
-        vec!["ion", "--model", "provider/"],
+        vec!["ion", "--model", ""],
+        vec!["ion", "--model", "  "],
+        vec!["ion", "--provider", "", "--model", "model"],
     ] {
         assert!(parse(&args, true).is_err(), "{args:?}");
     }

@@ -337,7 +337,7 @@ async fn detailed_help_and_binding_orientation_are_presentation_not_input() {
     assert!(
         Builtin::help_for("model", &KeyBindings::default())
             .unwrap()
-            .contains("/model [PROVIDER/MODEL]")
+            .contains("/model [MODEL]")
     );
     assert!(
         command::handle_builtin(

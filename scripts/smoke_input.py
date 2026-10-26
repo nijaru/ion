@@ -603,6 +603,9 @@ def exercise_tasks(work, env):
 def exercise_orientation(work, env, endpoint):
     subprocess.run([binary, "use", "other", "vendor/model", "--endpoint", endpoint,
                     "--wire", "chat-completions"], env=env, check=True, capture_output=True)
+    for provider in ("other", "smoke"):
+        subprocess.run([binary, "use", provider, "shared-pattern", "--endpoint", endpoint,
+                        "--wire", "chat-completions"], env=env, check=True, capture_output=True)
     subprocess.run([binary, "use", "smoke", "smoke-model", "--endpoint", endpoint,
                     "--wire", "chat-completions"], env=env, check=True, capture_output=True)
     defaults = (work / "ion/models.json").read_bytes()
@@ -612,19 +615,31 @@ def exercise_orientation(work, env, endpoint):
         previous = set((work / "ion").rglob("*.sqlite"))
         before = len(requests)
         terminal = Terminal(cwd, env, mode, ["--cwd", str(cwd), "--tui-mode", mode,
-                                            "--model", "other/vendor/model", "chat"])
+                                            "--model", "other/VENDOR", "chat"])
         try:
             terminal.wait(lambda: "other/vendor/model · /help" in terminal.text())
-            assert str(cwd) in terminal.text() and "Session " in terminal.text(), terminal.text()
             database, = set((work / "ion").rglob("*.sqlite")) - previous
             with sqlite3.connect(f"file:{database}?mode=ro", uri=True) as connection:
                 assert connection.execute("SELECT count(*) FROM entries").fetchone()[0] == 0
+                header = json.loads(connection.execute("SELECT header FROM session WHERE id=1").fetchone()[0])
+            assert Path(header["cwd"]).resolve() == cwd.resolve()
+            terminal.wait(lambda: "Session " + header["id"][:8] in terminal.text())
             terminal.send("/name Release\r")
             terminal.wait(lambda: " · Release" in terminal.text())
             terminal.send("/help model\r")
-            terminal.wait(lambda: "Usage: /model [PROVIDER/MODEL]" in terminal.text())
+            terminal.wait(lambda: "Usage: /model [MODEL]" in terminal.text())
+            with sqlite3.connect(f"file:{database}?mode=ro", uri=True) as connection:
+                facts = connection.execute("SELECT count(*) FROM entries").fetchone()[0]
+            terminal.send("/model shared-pattern\r")
+            terminal.wait(lambda: "ambiguous model pattern" in terminal.text())
+            terminal.send("_RECOVERED")
+            terminal.wait(lambda: "/model shared-pattern_RECOVERED" in terminal.text())
+            with sqlite3.connect(f"file:{database}?mode=ro", uri=True) as connection:
+                assert connection.execute("SELECT count(*) FROM entries").fetchone()[0] == facts
+            assert len(requests) == before, "failed model selection issued a request"
+            terminal.send(b"\x15\x0b")
             terminal.output.clear()
-            terminal.send("/model smoke/smoke-model\r")
+            terminal.send("/model smoke-model\r")
             terminal.wait(lambda: "smoke/smoke-model · /help" in terminal.text())
             previous = set((work / "ion").rglob("*.sqlite"))
             terminal.output.clear()
@@ -654,7 +669,7 @@ def exercise_orientation(work, env, endpoint):
         finally:
             terminal.close()
         assert (work / "ion/models.json").read_bytes() == defaults, "Session model changed the global default"
-        print(f"Orientation {mode}: live binding, name/new, detailed help and exact draft (tiny resize in fullscreen): OK", flush=True)
+        print(f"Orientation {mode}: canonical model patterns, failed-selection custody, name/new, help and exact draft (tiny resize in fullscreen): OK", flush=True)
 
 
 def exercise_configuration(work, base_env, endpoint):

@@ -4,7 +4,6 @@
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
-use ion_ai::ModelRef;
 use ion_host::SessionControl;
 use ion_terminal::{Screen, TerminalSession};
 
@@ -119,21 +118,23 @@ pub(super) async fn dispatch_command(
             }
         }
         CommandKind::Builtin(Builtin::Model) if !args.is_empty() => {
-            let result = match args
-                .parse::<ModelRef>()
-                .map_err(anyhow::Error::msg)
-                .context("use /model PROVIDER/MODEL")
+            let result = match services
+                .models()
+                .resolve_pattern(args, None, services.credentials())
             {
-                Ok(model) => {
+                Ok(selection) => {
                     super::configuration::select_model(
-                        runtime, services, terminal, screen, program, model,
+                        runtime, services, terminal, screen, program, selection,
                     )
                     .await?
                 }
                 Err(error) => Err(error),
             };
             match result {
-                Ok(()) => ui.status = format!("Selected {args}"),
+                Ok(()) => {
+                    let model = runtime.agent().model();
+                    ui.status = format!("Selected {}/{}", model.provider, model.model);
+                }
                 Err(error) => {
                     if let Some(source) = input.into_editor() {
                         ui.restore_editor(source);

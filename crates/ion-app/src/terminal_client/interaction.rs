@@ -172,10 +172,15 @@ pub(super) async fn apply_picker(
             };
         }
         PickerValue::Session(path) => runtime.switch_session(path),
-        PickerValue::Model(model) => {
-            super::configuration::select_model(runtime, services, terminal, screen, program, model)
+        PickerValue::Model(model) => match services.models().resolve_identity(&model) {
+            Ok(selection) => {
+                super::configuration::select_model(
+                    runtime, services, terminal, screen, program, selection,
+                )
                 .await?
-        }
+            }
+            Err(error) => Err(error),
+        },
         PickerValue::Reasoning(reasoning) => {
             let result = runtime.select_reasoning(reasoning);
             ui.status = match result {
