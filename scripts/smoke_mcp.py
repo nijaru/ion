@@ -429,7 +429,7 @@ def check_owned_cleanup():
         cases = [
             ("exit", "ready", ["rpc"], None),
             ("preflight", "ready", ["--reasoning", "budget:128", "rpc"], "exact reasoning-token budgets"),
-            ("input-setup", "ready", ["run", "/probe 'unfinished"], "quote"),
+            ("input-preflight", "ready", ["run", "/probe 'unfinished"], "quote"),
             ("init-fault", "init-error", ["rpc"], "initialization failed"),
             ("listing-fault", "list-error", ["rpc"], "tool listing failed"),
             ("diagnostic-io", "ready", ["rpc"], None),
@@ -447,6 +447,9 @@ def check_owned_cleanup():
                 configured["broken"] = {"command": str(work / "missing-server")}
             config_path.write_text(json.dumps({"servers": configured}))
             pid = None
+            input_database = workspace / "must-not-exist.sqlite"
+            if name == "input-preflight":
+                args = ["--session", str(input_database), *args]
             try:
                 # File-backed output separates CLI exit from inherited stderr
                 # still held by a leaked MCP root; inspect its PID separately.
@@ -466,6 +469,14 @@ def check_owned_cleanup():
                     err.seek(0)
                     response.stdout = out.read()
                     response.stderr = err.read()
+                if name == "input-preflight":
+                    # Complete headless input validation now precedes Session/MCP
+                    # startup; there is no root to clean up for invalid input.
+                    assert response.returncode == 1 and error in response.stderr, response
+                    assert not input_database.exists(), "invalid input allocated a Session"
+                    assert not (workspace / "owned.pid").exists(), "invalid input started MCP"
+                    assert not (workspace / "owned.eof").exists(), "unexpected MCP transport"
+                    continue
                 pid = int((workspace / "owned.pid").read_text())
                 process = subprocess.run(["ps", "-p", str(pid), "-o", "pid="], capture_output=True, text=True)
                 assert not process.stderr, process
@@ -475,7 +486,7 @@ def check_owned_cleanup():
                     assert error in response.stderr, response
                 if name == "preflight":
                     assert "cannot start MCP server broken" in response.stderr, response
-                expected_failure = name in ("preflight", "input-setup", "diagnostic-io", "preflight-io")
+                expected_failure = name in ("preflight", "diagnostic-io", "preflight-io")
                 assert (response.returncode != 0) == expected_failure, response
             finally:
                 # On regression, clean up only the root still running this exact
@@ -486,7 +497,7 @@ def check_owned_cleanup():
                     command = subprocess.run(["ps", "-ww", "-p", str(pid), "-o", "command="], capture_output=True, text=True).stdout
                     if str(fixture) in command:
                         os.kill(pid, signal.SIGKILL)
-    print("Ion MCP owned roots on normal exit, preflight and startup faults: OK")
+    print("Ion MCP pre-effect input rejection and owned roots on exit/preflight/startup faults: OK")
 
 
 check_owned_cleanup()
