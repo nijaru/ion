@@ -242,6 +242,7 @@ pub async fn chat(init: ChatInit) -> Result<()> {
     let application_owner = runtime.owner();
     let background = runtime.background();
     let mut background_revision = 0;
+    let mut completion_revision = 0;
     let mut ui = Frontend {
         mode: init.tui_mode,
         keys: init.keys,
@@ -288,7 +289,14 @@ pub async fn chat(init: ChatInit) -> Result<()> {
                 continue;
             }
             let retry_inline = screen.reconciliation_pending() && !terminal.is_alt_screen()?;
+            let readiness = runtime.completion_changes();
             let event = tokio::select! {
+                _ = readiness.changed(completion_revision) => {
+                    completion_revision = readiness.revision();
+                    if let Some(owner) = &background { tasks::refresh(&mut ui, owner); }
+                    poll_control = true;
+                    continue;
+                },
                 // Idle is eager. Disable this branch until another UI action
                 // can have produced work or reliable updates.
                 update = runtime.next(), if poll_control => {
@@ -661,6 +669,7 @@ fn transcript_item_turn(item: &TranscriptItem) -> Option<u64> {
     match item {
         TranscriptItem::User(message) | TranscriptItem::Assistant(message) => message.turn,
         TranscriptItem::ActivityGroup(group) => Some(group.turn),
+        TranscriptItem::Readiness { turn, .. } => Some(*turn),
         TranscriptItem::UserShell(_) => None,
     }
 }

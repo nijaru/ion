@@ -85,6 +85,10 @@ impl From<&OperationOutcome> for OutcomeSnapshot {
 /// lossy and never part of this result-recovery channel.
 #[derive(Debug, Serialize)]
 pub enum UpdateSnapshot<T> {
+    Automated {
+        operation: OperationId,
+        turn: Option<u64>,
+    },
     Input {
         id: InputId,
         delivery: Delivery,
@@ -107,6 +111,7 @@ pub enum UpdateSnapshot<T> {
         preparation_error: Option<String>,
     },
     Settled {
+        automated: bool,
         operation: OperationId,
         outcome: OutcomeSnapshot,
         stop_requested: bool,
@@ -253,6 +258,10 @@ fn update_snapshot<M, T>(
     metadata: &mut impl FnMut(&M) -> T,
 ) -> Option<UpdateSnapshot<T>> {
     Some(match update {
+        ControlUpdate::Automated { operation, turn } => UpdateSnapshot::Automated {
+            operation: *operation,
+            turn: *turn,
+        },
         ControlUpdate::Input {
             id,
             delivery,
@@ -286,6 +295,7 @@ fn update_snapshot<M, T>(
             preparation_error: input.preparation_error.as_ref().map(ToString::to_string),
         },
         ControlUpdate::Settled(settlement) => UpdateSnapshot::Settled {
+            automated: settlement.automated,
             operation: settlement.operation,
             outcome: (&settlement.outcome).into(),
             stop_requested: settlement.stop_requested,

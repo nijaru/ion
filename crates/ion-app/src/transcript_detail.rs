@@ -143,6 +143,11 @@ impl DetailView {
                             render_tool(&mut rows, tool_number, activity, width)
                         }
                         Entry::Item(item, provisional) => match item {
+                            TranscriptItem::Readiness { turn, notices } => push_wrapped(
+                                &mut rows,
+                                &crate::transcript_render::readiness_text(*turn, notices),
+                                width,
+                            ),
                             TranscriptItem::User(message) => {
                                 push_wrapped(
                                     &mut rows,

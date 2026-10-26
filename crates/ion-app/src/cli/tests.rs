@@ -5,6 +5,36 @@ fn parse(args: &[&str], interactive: bool) -> Result<Invocation> {
 }
 
 #[test]
+fn completion_policy_is_explicit_scoped_and_defaults_to_inbox() {
+    use ion_core::CompletionDelivery;
+    assert_eq!(
+        parse(&["ion", "rpc"], false).unwrap().completion_delivery,
+        CompletionDelivery::Inbox
+    );
+    for policy in CompletionDelivery::ALL {
+        for args in [
+            vec![
+                "ion",
+                "--completion-delivery",
+                policy.as_str(),
+                "run",
+                "task",
+            ],
+            vec!["ion", "rpc", "--completion-delivery", policy.as_str()],
+        ] {
+            assert_eq!(parse(&args, false).unwrap().completion_delivery, policy);
+        }
+    }
+    for args in [
+        vec!["ion", "--completion-delivery", "wake", "inspect"],
+        vec!["ion", "usage", "--completion-delivery", "wake"],
+        vec!["ion", "--completion-delivery", "always", "chat"],
+    ] {
+        assert!(parse(&args, true).is_err(), "{args:?}");
+    }
+}
+
+#[test]
 fn model_overrides_accept_qualified_and_namespaced_exact_ids_in_both_positions() {
     for args in [
         vec!["ion", "--model", "openrouter/vendor/model", "run", "hello"],

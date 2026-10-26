@@ -4,13 +4,17 @@ use super::*;
 impl<M: Serialize + Send + 'static> SessionControl<M> {
     /// Stop intent is retained even if Core has already completed successfully.
     pub fn request_stop(&mut self) {
+        // Cancel execution before taking inbox locks: an atomic final commit
+        // must not open a window for another request while Stop waits for it.
+        if let Some(active) = &self.active {
+            active.work.stop();
+        }
         self.stop_requested = true;
+        self.completions
+            .revoke(ion_core::CompletionRevocation::Stopped);
         lock(&self.custody).steering_target = None;
         if let Some(questions) = &self.setup.questions {
             questions.cancel_pending(self.owner, "stopped");
-        }
-        if let Some(active) = &self.active {
-            active.work.stop();
         }
         if let Some((_, preparing)) = &self.preparing {
             preparing.request_stop();
@@ -263,10 +267,7 @@ impl<M: Serialize + Send + 'static> SessionControl<M> {
                     _reservation: Some(reservation),
                 };
                 let instructions = pending.instructions.clone();
-                let inbox = Arc::new(SteeringInbox::new(
-                    self.setup.runtime.agent.limits(),
-                    self.budget.clone(),
-                ));
+                let inbox = self.turn_inbox();
                 let state = self.custody.clone();
                 let observations = self.observations.clone();
                 custody.updates.push_back(ControlUpdate::Dispatched {
@@ -296,11 +297,14 @@ impl<M: Serialize + Send + 'static> SessionControl<M> {
                     root: Some(root),
                     work: Work::Turn(work),
                     inbox,
+                    automated: false,
                     metadata: None,
                     turn_stop,
                 });
             }
         }
+        drop(custody);
+        self.advance_completions();
     }
 
     pub(super) fn finish_preparation(&mut self, result: Result<Message>) {

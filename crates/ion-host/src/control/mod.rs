@@ -20,6 +20,7 @@ use tokio_util::sync::CancellationToken;
 use crate::{SessionSetup, image_input::ImageSource, question::TurnStopScope};
 
 mod admission;
+mod completion;
 mod custody;
 use custody::{Custody, Input, InputContent, InputState, PendingInput, turn_observer};
 mod input;
@@ -49,6 +50,7 @@ struct Active<M> {
     root: Option<InputId>,
     work: Work,
     inbox: Arc<SteeringInbox<InputId>>,
+    automated: bool,
     metadata: Option<(M, InputReservation)>,
     /// Exact root stop bound to question custody while this Turn owns control.
     turn_stop: Option<TurnStopScope>,
@@ -79,6 +81,7 @@ impl Work {
 /// a next/shutdown future cannot discard a transition, error, or recoverable input.
 pub struct SessionControl<M = ()> {
     pub(crate) setup: SessionSetup,
+    pub(crate) completions: Arc<crate::completion::CompletionReceiver>,
     custody: Arc<Mutex<Custody<M>>>,
     budget: InputBudget,
     input_changes: Arc<tokio::sync::Notify>,
@@ -107,6 +110,11 @@ impl<M: Serialize + Send + 'static> SessionControl<M> {
     pub(crate) fn from_setup(setup: SessionSetup) -> Self {
         let (observations, receiver) = broadcast::channel(OBSERVATION_CAPACITY);
         let owner = uuid::Uuid::now_v7();
+        let completions = crate::completion::CompletionReceiver::new(setup.session.id());
+        completions.set_policy(setup.initial_completion_delivery);
+        if let Some(application) = setup.owner() {
+            application.completions().register(owner, &completions);
+        }
         let question_changes = setup.questions.as_ref().map(|questions| {
             questions
                 .bind_control(owner, setup.session.id())
@@ -118,6 +126,7 @@ impl<M: Serialize + Send + 'static> SessionControl<M> {
             .map_or(0, |changes| *changes.borrow());
         Self {
             setup,
+            completions,
             custody: Arc::new(Mutex::new(Custody::default())),
             budget: InputBudget::default(),
             input_changes: Arc::new(tokio::sync::Notify::new()),
@@ -202,7 +211,9 @@ impl<M: Serialize + Send + 'static> SessionControl<M> {
             busy: self.active.is_some()
                 || self.starting.is_some()
                 || self.preparing.is_some()
-                || !custody.inputs.is_empty(),
+                || !custody.inputs.is_empty()
+                || self.wake_is_runnable(custody),
+            completion_delivery: self.completion_delivery(),
             preparing_input: self.preparing.is_some(),
             pending_steering,
             pending_follow_ups,
@@ -229,7 +240,10 @@ impl<M: Serialize + Send + 'static> SessionControl<M> {
         }
         ensure!(!self.closed, "session control is closed");
         ensure!(
-            !self.is_busy(),
+            self.active.is_none()
+                && self.starting.is_none()
+                && self.preparing.is_none()
+                && lock(&self.custody).inputs.is_empty(),
             "session control has active work or pending inputs"
         );
         ensure!(
@@ -284,6 +298,10 @@ impl<M: Serialize + Send + 'static> SessionControl<M> {
     fn finish_operation(&mut self, outcome: OperationOutcome) {
         lock(&self.custody).steering_target = None;
         let active = self.active.take().expect("retained Core operation");
+        if outcome.failed() {
+            self.completions
+                .revoke(ion_core::CompletionRevocation::OperationFailed);
+        }
         self.clear_turn_stop(active.turn_stop);
         // Settlement supersedes any unread provisional stream for this owner.
         // Explicitly invalidate it rather than leaking old deltas into the next Turn.
@@ -374,6 +392,7 @@ impl<M: Serialize + Send + 'static> SessionControl<M> {
             .push_back(ControlUpdate::Settled(Settlement {
                 operation: active.id,
                 turn,
+                automated: active.automated,
                 outcome,
                 stop_requested: self.stop_requested,
                 accepted,
@@ -447,6 +466,10 @@ impl<M: Serialize + Send + 'static> SessionControl<M> {
 
 impl<M> Drop for SessionControl<M> {
     fn drop(&mut self) {
+        if let Some(active) = &self.active {
+            active.work.stop();
+        }
+        self.completions.close();
         let mut custody = lock(&self.custody);
         custody.steering_target = None;
         for input in custody.inputs.values() {
@@ -460,11 +483,10 @@ impl<M> Drop for SessionControl<M> {
         if let Some(questions) = &self.setup.questions {
             questions.close(self.owner, "control_dropped");
         }
-        if let Some(active) = &self.active {
-            active.work.stop();
-            if let (Some(questions), Some(scope)) = (&self.setup.questions, active.turn_stop) {
-                questions.clear_turn_stop(self.owner, self.setup.session.id(), scope);
-            }
+        if let Some(active) = &self.active
+            && let (Some(questions), Some(scope)) = (&self.setup.questions, active.turn_stop)
+        {
+            questions.clear_turn_stop(self.owner, self.setup.session.id(), scope);
         }
         if let Some((_, preparation)) = &self.preparing {
             preparation.request_stop();

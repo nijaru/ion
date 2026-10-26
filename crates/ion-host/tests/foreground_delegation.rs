@@ -26,6 +26,8 @@ use tokio::sync::{Notify, watch};
 mod application_scope;
 #[path = "foreground_delegation/background.rs"]
 mod background;
+#[path = "foreground_delegation/completion.rs"]
+mod completion;
 #[path = "foreground_delegation/deadline.rs"]
 mod deadline;
 #[path = "foreground_delegation/join.rs"]
@@ -133,6 +135,7 @@ struct Delegate {
     wait: Wait,
     steering: std::sync::Mutex<Option<ion_host::ChildSteering>>,
     progress: std::sync::Mutex<Option<ion_host::ChildProgress>>,
+    completion: std::sync::Mutex<Option<ion_host::CompletionTarget>>,
 }
 impl CodingToolSource for Delegate {
     fn registrations(self: Arc<Self>) -> Vec<ToolRegistration> {
@@ -180,6 +183,9 @@ impl ToolExecutor for Delegate {
                         };
                         if let Some(progress) = progress {
                             permit = permit.with_progress(progress);
+                        }
+                        if let Some(target) = self.completion.lock().unwrap().clone() {
+                            permit = permit.with_completion(target);
                         }
                         match self.wait {
                             Wait::StopBeforeTransfer => {
@@ -406,6 +412,7 @@ impl Fixture {
             wait,
             steering: std::sync::Mutex::new(None),
             progress: std::sync::Mutex::new(None),
+            completion: std::sync::Mutex::new(None),
         });
         let first = if composed {
             call(

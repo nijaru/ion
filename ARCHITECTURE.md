@@ -444,6 +444,45 @@ grant, not after owner loss. Receipt changes invalidate the supervising owner
 without a new task or reader-owned wakeup; pending intent/projections are not a
 second durable ledger. Committed child input remains in the child Session.
 
+### Receiving-owned completion delivery
+
+Readiness, report retrieval, acknowledgement and permission to execute are separate.
+A receiving Host chooses `inbox` (default), `continue` or `wake`. Inbox alone adds
+neither a model request nor a Turn: it offers ready handles at the next natural
+request. Continue may extend the captured active Turn at a complete safe boundary,
+without waiting for unfinished children or starting an idle Turn. Wake additionally
+permits a new automated Turn while idle. Already admitted human input and reliable
+results have priority. Coalesce ready notices into an authorized request; do not
+split a tool-call/result group or interpose client-generated model steps.
+
+A live receiving grant binds permission, Session, context anchor and irrevocable
+epoch. The receiver may authorize a parent or a peer; parent-only topology is not
+an engine invariant. Serialized coordinates, ancestry and child arguments grant
+no permission. Reserve bounded receiving custody before new child execution;
+all producers share the receiver's 64 waiting/queued slots. Grants retain no
+Session writer. Stop revokes them permanently, even after a fresh explicit Start.
+Successful context/binding/model/reasoning/resource changes and policy changes
+invalidate old grants; failed preflight leaves the usable binding intact.
+Shutdown closes receiving intake before joining execution owners. Revoking a
+notice does not stop an application-owned transferred child or erase its report.
+
+Offer readiness only after the retained outer child operation actually joins,
+not merely after its relationship outcome commits. A notice contains source
+Session, run and child Session UUIDs, not child text, approval or a user instruction.
+Core commits typed automated provenance at admission or a safe active boundary;
+a new automated Turn uses the ordinary engine, authority and cancellation path,
+not synthetic user acceptance. Human history/draft restoration must distinguish
+it even when a provider adapter encodes its canonical envelope with the user role.
+
+`waiting`, `queued`, `offered` and `revoked` are live custody projections. Offered
+means committed into receiving context, not provider receipt or model read.
+Retrieval does not acknowledge a report; explicit source acknowledgement withdraws
+an uncommitted notice but cannot recall a committed offer. Source reports retain
+their existing custody and failure semantics. Weak grants, read-only invalidations
+and coordinates are not a durable queue, restart permission or exactly-once
+workflow. Receiver registration, authentication and cross-process transport have
+separate Host authority; they must reuse these semantics rather than a new loop.
+
 A swarm coordinator may choose roles, topology, message routing, budgets and
 scheduling. Ion supplies execution identity, authority, observable relationships,
 stop/join and outcomes. Concurrent agents sharing files need conflict policy;
@@ -531,7 +570,7 @@ to a foreground child's application caller.
 Do not fabricate user instructions or successful answers to deliver
 notifications. Automatic root continuation must not silently select or adopt a
 managed child; explicit child selection remains available. Live-model adherence,
-service-scale delegation and native GUI visual acceptance remain qualification,
+service-scale delegation and human daily-driver acceptance remain qualification,
 not reasons to narrow the designed coding workflow.
 
 ## Managed native programs

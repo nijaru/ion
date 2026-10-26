@@ -151,9 +151,12 @@ async fn serve(
     shutdown: CancellationToken,
     finish: CancellationToken,
 ) -> SessionControl<Metadata> {
+    let mut completion_revision = 0;
     loop {
         let state = control.state();
+        let readiness = control.completion_changes();
         tokio::select! {
+            _ = readiness.changed(completion_revision) => { completion_revision = readiness.revision(); }
             // Transport output is NEVER awaited here. Stop/closure are separate
             // supervisor capabilities, not queued behind inspection or publication.
             _ = shutdown.cancelled(), if !state.closed => control.request_shutdown(),

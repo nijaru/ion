@@ -56,6 +56,19 @@ pub(super) fn status(run: &BackgroundRunSnapshot) -> String {
         state(run.joined, progress.map(|progress| &progress.status)),
         if run.joined { "joined" } else { "pending" }
     );
+    if let Some(completion) = &run.completion {
+        let status = match completion {
+            ion_core::CompletionStatus::Waiting => "waiting for join".into(),
+            ion_core::CompletionStatus::Queued => "queued; report not acknowledged".into(),
+            ion_core::CompletionStatus::Offered { turn } => {
+                format!("offered in Turn {turn}; not proof of model read")
+            }
+            ion_core::CompletionStatus::Revoked { reason } => {
+                format!("revoked ({reason:?}); report retained")
+            }
+        };
+        text.push_str(&format!("\nReadiness: {status}"));
+    }
     if let Some(error) = &run.error {
         text.push_str(&format!("\nerror: {error}"));
     }
@@ -301,6 +314,7 @@ mod tests {
             }),
         };
         BackgroundRunSnapshot {
+            completion: None,
             receipt: DelegationReceipt {
                 record,
                 transferred: true,
@@ -315,6 +329,7 @@ mod tests {
 
     fn job(run: &BackgroundRunSnapshot) -> BackgroundJobStatus {
         BackgroundJobStatus {
+            completion: run.completion.clone(),
             id: run.receipt.record.run,
             model: run.receipt.record.spec.model.clone(),
             parent: run.receipt.record.site.session,
@@ -465,6 +480,7 @@ mod tests {
     fn summaries_distinguish_custody_and_show_only_content_free_observations() {
         let run = observation();
         let mut job = BackgroundJobStatus {
+            completion: None,
             id: run.receipt.record.run,
             model: run.receipt.record.spec.model.clone(),
             parent: run.receipt.record.site.session,

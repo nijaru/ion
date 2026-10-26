@@ -39,6 +39,7 @@ pub(super) async fn connection<R: AsyncBufRead + Unpin, W: AsyncWrite + Unpin>(
     let application_owner = control.host.owner();
     let background = control.host.background();
     let mut background_revision = 0;
+    let mut completion_revision = 0;
     let result: Result<()> = async {
         // Bind the actual transport consumer before admitting any work. Setup
         // failures still pass through the same unconditional stop/join below.
@@ -46,7 +47,12 @@ pub(super) async fn connection<R: AsyncBufRead + Unpin, W: AsyncWrite + Unpin>(
         loop {
             control.publish_gap(&mut output)?;
             control.publish_question_change(&mut output)?;
+            let readiness = control.host.completion_changes();
             tokio::select! {
+                _ = readiness.changed(completion_revision) => {
+                    completion_revision = readiness.revision();
+                    poll_host = true;
+                }
                 published = output.advance(), if output.has_pending() => { published?; }
                 update = control.host.next(), if poll_host => {
                     poll_host = !matches!(update, ControlUpdate::Idle);

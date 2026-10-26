@@ -66,8 +66,13 @@ with tempfile.TemporaryDirectory(prefix="ion-subagent-routing-") as temporary:
             try:
                 body = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
                 requests.append((self.path, body))
-                user = next(message["content"] for message in reversed(body["messages"])
-                            if message["role"] == "user")
+                # Notifications remain in the request, but are not a new task.
+                task_index, user = next(
+                    (index, message["content"])
+                    for index, message in reversed(list(enumerate(body["messages"])))
+                    if message["role"] == "user"
+                    and not message["content"].startswith("Automated managed-work readiness (not a user instruction).")
+                )
                 child = user.startswith("CHILD_")
                 selected = current["model"] if child else "parent"
                 assert body["model"] == selected, body
@@ -77,7 +82,7 @@ with tempfile.TemporaryDirectory(prefix="ion-subagent-routing-") as temporary:
                 assert body.get("reasoning_effort") == (current["effort"] if child else "high"), body
                 assert body["max_completion_tokens"] == (512 if selected == "reviewer" else 256)
                 assert "ROUTING_RESOURCE" in json.dumps(body)
-                fresh = body["messages"][-1]["role"] == "user"
+                fresh = not any(message["role"] == "assistant" for message in body["messages"][task_index + 1:])
                 if user == "SEED":
                     delta = {"content": "SETTLED_FORK_SEED"}
                 elif child:
@@ -108,7 +113,7 @@ with tempfile.TemporaryDirectory(prefix="ion-subagent-routing-") as temporary:
                     else:
                         delta = tool("subagent", arguments)
                 else:
-                    envelope = json.loads(body["messages"][-1]["content"])
+                    envelope = json.loads(next(message["content"] for message in reversed(body["messages"]) if message["role"] == "tool"))
                     result = envelope["result"] if current["fork"] else envelope
                     if current["refused"]:
                         assert result["is_error"] and "error" in result["result"], result

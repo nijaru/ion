@@ -39,6 +39,7 @@ pub struct OperationState {
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
 pub struct ControlState {
+    pub completion_delivery: crate::CompletionDelivery,
     pub operation: Option<OperationState>,
     pub busy: bool,
     pub preparing_input: bool,
@@ -152,6 +153,8 @@ impl OperationOutcome {
 }
 
 pub struct Settlement<M> {
+    /// No fabricated user input or client correlation accompanies this operation.
+    pub automated: bool,
     pub operation: OperationId,
     pub turn: Option<u64>,
     pub outcome: OperationOutcome,
@@ -179,6 +182,10 @@ pub enum Observation {
 }
 
 pub enum ControlUpdate<M> {
+    Automated {
+        operation: OperationId,
+        turn: Option<u64>,
+    },
     Input {
         id: InputId,
         delivery: Delivery,
@@ -216,7 +223,9 @@ impl<M> ControlUpdate<M> {
                 for input in &mut settlement.accepted {
                     input.reservation.take();
                 }
-                settlement.accepted.len() + usize::from(settlement.metadata.is_some())
+                settlement.accepted.len()
+                    + usize::from(settlement.metadata.is_some())
+                    + usize::from(settlement.automated)
             }
             _ => 0,
         }
@@ -240,6 +249,7 @@ impl ControlObserver {
                     let boundary = matches!(
                         event.as_ref(),
                         AgentEvent::TurnAccepted { .. }
+                            | AgentEvent::CompletionCommitted { .. }
                             | AgentEvent::AssistantCommitted { .. }
                             | AgentEvent::ResponseRestarted
                             | AgentEvent::TurnEnded { .. }

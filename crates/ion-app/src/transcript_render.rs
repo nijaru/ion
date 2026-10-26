@@ -79,6 +79,9 @@ pub fn rows(
             rows.push(Line::default());
         }
         match item {
+            TranscriptItem::Readiness { turn, notices } => {
+                render_readiness(&mut rows, *turn, notices, width);
+            }
             TranscriptItem::User(message) => {
                 render_message(&mut rows, message, true, width, thinking)
             }
@@ -93,6 +96,34 @@ pub fn rows(
         rows.pop();
     }
     rows
+}
+
+pub(super) fn readiness_text(turn: u64, notices: &[ion_core::CompletionNotice]) -> String {
+    let mut text = format!(
+        "Managed-work readiness · Turn {turn} · not a user instruction; reports not acknowledged"
+    );
+    for notice in notices {
+        use std::fmt::Write;
+        write!(
+            text,
+            "\nSource {} · run {} · child {}",
+            notice.source_session, notice.run, notice.child_session
+        )
+        .expect("String write");
+    }
+    text
+}
+fn render_readiness(
+    rows: &mut Vec<Line<'static>>,
+    turn: u64,
+    notices: &[ion_core::CompletionNotice],
+    width: usize,
+) {
+    let start = rows.len();
+    push_wrapped(rows, &readiness_text(turn, notices), width);
+    for row in &mut rows[start..] {
+        row.style = style(Role::Secondary);
+    }
 }
 
 fn hidden_thinking(item: &TranscriptItem, thinking: ThinkingVisibility) -> bool {
@@ -189,6 +220,11 @@ pub(super) fn live_rows(
         && let Some((item_index, focus)) = focus
     {
         match focus {
+            TranscriptItem::Readiness { turn, notices } => {
+                let mut preview = Vec::new();
+                render_readiness(&mut preview, *turn, notices, width);
+                selected.extend(preview.into_iter().take(remaining));
+            }
             TranscriptItem::ActivityGroup(group) => {
                 let pinned_index = pinned
                     .filter(|(index, _)| *index == item_index)

@@ -73,140 +73,11 @@ fn user_text(prompt: String) -> Message {
     }
 }
 
-/// Host-owned prepared input and metadata waiting for a Session commit.
-/// A failed write retains both for recovery; only the message enters the Session.
-pub struct SteeringInbox<M = ()> {
-    pending: Mutex<VecDeque<crate::AcceptedInput<M>>>,
-    budget: crate::InputBudget,
-    limits: AgentLimits,
-}
-
-impl<M> SteeringInbox<M> {
-    pub fn new(limits: AgentLimits, budget: crate::InputBudget) -> Self {
-        Self {
-            pending: Mutex::new(VecDeque::new()),
-            budget,
-            limits,
-        }
-    }
-
-    pub fn push_message(&self, input: Message, metadata: M) -> Result<(), AgentError>
-    where
-        M: serde::Serialize,
-    {
-        let input = self.budget.admit(input, metadata, self.limits)?;
-        self.push_admitted(input);
-        Ok(())
-    }
-
-    /// Move existing admission custody without releasing/re-acquiring its budget.
-    pub fn push_admitted(&self, input: crate::AcceptedInput<M>) {
-        self.pending
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .push_back(input);
-    }
-
-    /// Return inputs that never entered the Session. Call after joining the
-    /// operation; the host can restore them to its editor or queue.
-    pub fn take_uncommitted(&self) -> Vec<crate::AcceptedInput<M>> {
-        self.pending
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .drain(..)
-            .collect()
-    }
-
-    fn record_pending(
-        &self,
-        session: &Session,
-        turn: u64,
-        limits: AgentLimits,
-    ) -> Result<Vec<Message>, AgentError> {
-        let mut pending = self
-            .pending
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        if pending.is_empty() {
-            return Ok(Vec::new());
-        }
-        validate_steering(&pending, limits)?;
-        session.record_steerings(
-            turn,
-            pending
-                .iter()
-                .map(|input| input.message().clone())
-                .collect(),
-        )?;
-        let accepted = pending.drain(..).collect::<Vec<_>>();
-        drop(pending);
-        // Host metadata may run user-defined Drop code. Never release it while
-        // holding the inbox lock, including after the atomic Session commit.
-        Ok(accepted
-            .into_iter()
-            .map(crate::AcceptedInput::into_message)
-            .collect())
-    }
-
-    #[expect(
-        clippy::too_many_arguments,
-        reason = "assistant execution metadata is committed atomically with steering"
-    )]
-    fn record_assistant(
-        &self,
-        session: &Session,
-        turn: u64,
-        message: ion_ai::Message,
-        tool_activities: Vec<StoredToolActivity>,
-        execution: ModelExecution,
-        usage: ion_ai::Usage,
-        limits: AgentLimits,
-    ) -> Result<(bool, Vec<Message>), AgentError> {
-        let mut pending = self
-            .pending
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        validate_steering(&pending, limits)?;
-        let complete = session.record_assistant_with_steering(
-            turn,
-            message,
-            tool_activities,
-            execution,
-            usage,
-            pending
-                .iter()
-                .map(|input| input.message().clone())
-                .collect(),
-        )?;
-        let accepted = pending.drain(..).collect::<Vec<_>>();
-        drop(pending);
-        Ok((
-            complete,
-            accepted
-                .into_iter()
-                .map(crate::AcceptedInput::into_message)
-                .collect(),
-        ))
-    }
-}
-
-impl SteeringInbox<()> {
-    pub fn push(&self, prompt: String) -> Result<(), AgentError> {
-        self.push_message(user_text(prompt), ())
-    }
-}
-
-fn validate_steering<M>(
-    pending: &VecDeque<crate::AcceptedInput<M>>,
-    limits: AgentLimits,
-) -> Result<(), AgentError> {
-    // Embedded callers may pass an inbox admitted under another route. Validate
-    // that boundary too; live clients use the active agent's limits at admission.
-    for input in pending {
-        crate::input::validate_input(input.message(), limits)?;
-    }
-    Ok(())
-}
+mod completion;
+pub use completion::CompletionSubmission;
+mod inbox;
+use inbox::CommittedInputs;
+pub use inbox::SteeringInbox;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
 pub struct PromptCacheWarmingPolicy {
@@ -607,6 +478,7 @@ impl Agent {
                                 turn,
                                 interrupted,
                                 resumed: None,
+                                completion: Vec::new(),
                                 catalog,
                             },
                             instructions,
@@ -694,6 +566,7 @@ impl Agent {
                 turn,
                 interrupted,
                 resumed: None,
+                completion: Vec::new(),
                 catalog,
             },
             instructions,
@@ -750,6 +623,12 @@ impl Agent {
     {
         if let Some(point) = start.resumed {
             observe(AgentEvent::TurnResumed { point });
+        } else if !start.completion.is_empty() {
+            observe(AgentEvent::CompletionCommitted {
+                turn: start.turn,
+                notices: start.completion.clone(),
+                new_turn: true,
+            });
         } else {
             observe(AgentEvent::TurnAccepted { turn: start.turn });
         }
@@ -783,6 +662,8 @@ impl Agent {
             let mut replay_rebased = false;
             let mut route_reason = if start.resumed.is_some() {
                 ModelRouteReason::Recovery
+            } else if !start.completion.is_empty() {
+                ModelRouteReason::DelegationCompletion
             } else {
                 ModelRouteReason::UserRequest
             };
@@ -808,9 +689,9 @@ impl Agent {
                     // Catalog refresh and compaction can await new guidance.
                     // Recheck on every rebuild, before freezing the next request.
                     if let Some(inbox) = steering {
-                        for input in inbox.record_pending(session, turn, self.limits)? {
-                            observe(AgentEvent::SteeringCommitted { turn, input });
-                        }
+                        inbox
+                            .record_pending(session, turn, self.limits)?
+                            .observe(turn, observe);
                     }
                     if stop.is_cancelled() {
                         return Err(AgentError::Cancelled);
@@ -1028,7 +909,7 @@ impl Agent {
                             response.usage,
                             false,
                         )?,
-                        Vec::new(),
+                        CommittedInputs::default(),
                     )
                 };
                 observe(AgentEvent::AssistantCommitted {
@@ -1037,9 +918,8 @@ impl Agent {
                     tool_activities,
                     termination: response.termination,
                 });
-                for input in committed_steering {
-                    observe(AgentEvent::SteeringCommitted { turn, input });
-                }
+                let human_continuation = !committed_steering.steering.is_empty();
+                committed_steering.observe(turn, observe);
                 // Persistence acknowledgements precede fallible calibration.
                 prepared.record_observed_input(session, &execution, response.usage)?;
                 assistant_seen_in_turn = true;
@@ -1051,8 +931,10 @@ impl Agent {
                     observe(AgentEvent::Final(final_text.clone()));
                     return Ok(final_text);
                 }
-                route_reason = if calls.is_empty() {
+                route_reason = if calls.is_empty() && human_continuation {
                     ModelRouteReason::Steering
+                } else if calls.is_empty() {
+                    ModelRouteReason::DelegationCompletion
                 } else {
                     ModelRouteReason::ToolContinuation
                 };
@@ -1204,6 +1086,12 @@ pub enum AgentEvent {
     },
     TurnAccepted {
         turn: u64,
+    },
+    /// A durable automated context offer, never a human input acceptance.
+    CompletionCommitted {
+        turn: u64,
+        notices: Vec<crate::CompletionNotice>,
+        new_turn: bool,
     },
     TurnEnded {
         turn: u64,
@@ -3247,6 +3135,176 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn completion_modes_preserve_natural_requests_and_typed_idle_turns() {
+        use crate::{
+            CompletionDelivery as Mode, CompletionInbox, CompletionNotice, CompletionStatus,
+            SessionEntry,
+        };
+        for mode in [Mode::Inbox, Mode::Continue, Mode::Wake] {
+            let root = std::env::temp_dir().join(format!("ion-notice-{}", uuid::Uuid::now_v7()));
+            std::fs::create_dir(&root).unwrap();
+            let session =
+                Arc::new(CodingSession::create(root.join("session.sqlite"), Some(&root)).unwrap());
+            let first = ModelResponse {
+                message: Message {
+                    role: Role::Assistant,
+                    content: vec![Content::Text("first".into())],
+                    provider_replay: None,
+                },
+                usage: Usage::unknown(),
+                termination: ResponseTermination::Completed,
+                returned_model: None,
+            };
+            let scripts = Arc::new(ScriptedModelService::new([
+                Script::Stream(vec![
+                    ModelStreamEvent::TextDelta("first".into()),
+                    ModelStreamEvent::Completed(first),
+                ]),
+                response(vec![Content::Text("handled".into())]),
+            ]));
+            let agent = Agent::new(scripts.clone(), Arc::new(TestTools::new(&root)), model());
+            let completions = CompletionInbox::new(session.id());
+            let permit = Arc::new(completions.reserve(0, Some(1), mode).unwrap());
+            let receipt = permit.receipt();
+            let notice = CompletionNotice {
+                source_session: uuid::Uuid::now_v7(),
+                run: uuid::Uuid::now_v7(),
+                child_session: uuid::Uuid::now_v7(),
+            };
+            let inbox = Arc::new(
+                SteeringInbox::<()>::new(agent.limits(), crate::InputBudget::default())
+                    .with_completions(completions.clone()),
+            );
+            let offer = permit.clone();
+            let data = notice.clone();
+            let answer = agent
+                .submit_with_steering(
+                    session.clone(),
+                    "original".into(),
+                    "test".into(),
+                    CancellationToken::new(),
+                    inbox.clone(),
+                    move |event| {
+                        if matches!(event, AgentEvent::TextDelta(_)) {
+                            offer.offer(data.clone());
+                        }
+                    },
+                )
+                .await
+                .unwrap();
+            if mode == Mode::Inbox {
+                assert_eq!(answer, "first");
+                assert_eq!(
+                    scripts.requests().len(),
+                    1,
+                    "inbox must not extend the Turn"
+                );
+                assert_eq!(receipt.snapshot(), CompletionStatus::Queued);
+                agent
+                    .submit_with_steering(
+                        session.clone(),
+                        "natural follow-up".into(),
+                        "test".into(),
+                        CancellationToken::new(),
+                        inbox,
+                        |_| {},
+                    )
+                    .await
+                    .unwrap();
+                assert_eq!(receipt.snapshot(), CompletionStatus::Offered { turn: 2 });
+            } else {
+                assert_eq!(answer, "handled");
+                assert_eq!(receipt.snapshot(), CompletionStatus::Offered { turn: 1 });
+            }
+            assert_eq!(scripts.requests().len(), 2);
+            let requests = scripts.requests();
+            assert!(requests[1].messages.iter().any(|message| *message
+                == crate::completion::notice_message(std::slice::from_ref(&notice))));
+            let view = session.view().unwrap();
+            assert!(view.entries.iter().any(|entry| matches!(entry, SessionEntry::Completion { notices, .. } if notices == &vec![notice.clone()])));
+            drop(session);
+            std::fs::remove_dir_all(root).unwrap();
+        }
+
+        let root = std::env::temp_dir().join(format!("ion-idle-notice-{}", uuid::Uuid::now_v7()));
+        std::fs::create_dir(&root).unwrap();
+        let path = root.join("session.sqlite");
+        let session = Arc::new(CodingSession::create(&path, Some(&root)).unwrap());
+        let scripts = Arc::new(ScriptedModelService::new([
+            response(vec![Content::Text("root done".into())]),
+            response(vec![Content::Text("wake done".into())]),
+        ]));
+        let agent = Agent::new(scripts.clone(), Arc::new(TestTools::new(&root)), model());
+        agent
+            .submit(
+                session.clone(),
+                "original".into(),
+                "test".into(),
+                CancellationToken::new(),
+                |_| {},
+            )
+            .await
+            .unwrap();
+        let completions = CompletionInbox::new(session.id());
+        let permit = completions.reserve(1, Some(1), Mode::Wake).unwrap();
+        permit.offer(CompletionNotice {
+            source_session: uuid::Uuid::now_v7(),
+            run: uuid::Uuid::now_v7(),
+            child_session: uuid::Uuid::now_v7(),
+        });
+        let inbox = Arc::new(
+            SteeringInbox::<()>::new(agent.limits(), crate::InputBudget::default())
+                .with_completions(completions),
+        );
+        let events = Arc::new(Mutex::new(Vec::new()));
+        let observed = events.clone();
+        let CompletionSubmission { turn, operation } = agent
+            .submit_completions(
+                session.clone(),
+                "test".into(),
+                CancellationToken::new(),
+                inbox,
+                move |event| observed.lock().unwrap().push(event),
+            )
+            .unwrap()
+            .unwrap();
+        assert_eq!(turn, 2);
+        assert_eq!(operation.await.unwrap(), "wake done");
+        let events = events.lock().unwrap();
+        assert!(
+            !events
+                .iter()
+                .any(|event| matches!(event, AgentEvent::TurnAccepted { .. }))
+        );
+        assert!(events.iter().any(|event| matches!(
+            event,
+            AgentEvent::CompletionCommitted { new_turn: true, .. }
+        )));
+        let view = session.view().unwrap();
+        assert!(view.entries.iter().any(|entry| matches!(entry, SessionEntry::Assistant { turn: 2, execution, .. } if execution.route.reason == ModelRouteReason::DelegationCompletion)));
+        let automated = view.entries.iter().position(|entry| matches!(entry, SessionEntry::TurnStarted { completion, .. } if !completion.is_empty())).unwrap() as u64 + 1;
+        assert!(
+            !view
+                .context_points()
+                .iter()
+                .find(|point| point.entry == automated)
+                .unwrap()
+                .restore_input
+        );
+        assert!(
+            crate::TranscriptProjection::from_session(&view)
+                .items
+                .iter()
+                .any(|item| matches!(item, crate::TranscriptItem::Readiness { turn: 2, .. }))
+        );
+        drop(session);
+        let reopened = CodingSession::open(&path).unwrap();
+        assert!(reopened.view().unwrap().unfinished_turn.is_none());
+        drop(reopened);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[tokio::test]
     async fn rejected_steering_stays_available_to_the_host() {
         let root =
             std::env::temp_dir().join(format!("ion-steering-fault-{}", uuid::Uuid::now_v7()));
@@ -3552,6 +3610,9 @@ mod tests {
                                 | TranscriptItem::Assistant(message) => message.turn == Some(turn),
                                 TranscriptItem::ActivityGroup(group) => group.turn == turn,
                                 TranscriptItem::UserShell(_) => false,
+                                TranscriptItem::Readiness {
+                                    turn: notice_turn, ..
+                                } => *notice_turn == turn,
                             })
                             .collect::<Vec<_>>();
                         assert_eq!(
@@ -3594,6 +3655,9 @@ mod tests {
                 }
                 TranscriptItem::ActivityGroup(group) => group.turn == turn,
                 TranscriptItem::UserShell(_) => false,
+                TranscriptItem::Readiness {
+                    turn: notice_turn, ..
+                } => *notice_turn == turn,
             })
             .collect::<Vec<_>>();
         assert_eq!(live.projection().items, items);
@@ -3787,7 +3851,8 @@ mod tests {
                     .record_pending(&session, turn, AgentLimits::default())
                     .unwrap()
             };
-            assert_eq!(messages, vec![user_text("prepared".into())]);
+            assert_eq!(messages.steering, vec![user_text("prepared".into())]);
+            assert!(messages.completions.is_empty());
             assert_eq!(dropped.load(Ordering::SeqCst), 1);
             assert!(inbox.take_uncommitted().is_empty());
             assert!(

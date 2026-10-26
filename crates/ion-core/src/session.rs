@@ -119,6 +119,11 @@ pub enum SessionEntry {
         turn: u64,
         input: Message,
     },
+    /// Automated readiness, distinct from submitted or steered user input.
+    Completion {
+        turn: u64,
+        notices: Vec<crate::CompletionNotice>,
+    },
     /// Provider usage from a best-effort prompt-cache refresh. This is an
     /// accounting fact only and never enters model context.
     CacheWarm {
@@ -138,6 +143,8 @@ pub enum SessionEntry {
         turn: u64,
         input: Message,
         model: ModelRef,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        completion: Vec<crate::CompletionNotice>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         request: Option<RequestKey>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -525,9 +532,12 @@ impl State {
                 turn,
                 input,
                 recovery,
+                completion,
                 ..
             } => {
-                if self.active.is_some()
+                if (!completion.is_empty()
+                    && *input != crate::completion::notice_message(completion))
+                    || self.active.is_some()
                     || self.pending_shell.is_some()
                     || *turn != self.last_id.saturating_add(1)
                     || !valid_user_message(input)
@@ -540,6 +550,15 @@ impl State {
                 self.recovery = recovery.clone();
                 self.last_id = *turn;
                 messages.push(ProjectedMessage::new(self.sequence + 1, input.clone()));
+            }
+            SessionEntry::Completion { turn, notices } => {
+                if self.active != Some(*turn) || !self.pending.is_empty() || notices.is_empty() {
+                    return Err(SessionError::InvalidHistory);
+                }
+                messages.push(ProjectedMessage::new(
+                    self.sequence + 1,
+                    crate::completion::notice_message(notices),
+                ));
             }
             SessionEntry::Steering { turn, input } => {
                 if self.active != Some(*turn)
@@ -1441,6 +1460,11 @@ impl Session {
         }
     }
 
+    pub(crate) fn selected_context_path(&self) -> Result<Vec<u64>, SessionError> {
+        let store = self.store.lock().map_err(|_| SessionError::Poisoned)?;
+        Ok(store.context_index.path(store.context_index.head()))
+    }
+
     pub(crate) fn admit_turn(
         &self,
         input: Message,
@@ -1448,7 +1472,20 @@ impl Session {
         request: Option<RequestKey>,
         recovery: Option<RecoveryBinding>,
     ) -> Result<TurnAdmission, SessionError> {
-        if !valid_user_message(&input) {
+        self.admit_turn_input(input, model, request, recovery, Vec::new())
+    }
+
+    pub(crate) fn admit_turn_input(
+        &self,
+        input: Message,
+        model: ModelRef,
+        request: Option<RequestKey>,
+        recovery: Option<RecoveryBinding>,
+        completion: Vec<crate::CompletionNotice>,
+    ) -> Result<TurnAdmission, SessionError> {
+        if !valid_user_message(&input)
+            || (!completion.is_empty() && input != crate::completion::notice_message(&completion))
+        {
             return Err(SessionError::InvalidUserInput);
         }
         let mut store = self.store.lock().map_err(|_| SessionError::Poisoned)?;
@@ -1469,6 +1506,7 @@ impl Session {
             turn,
             input,
             model,
+            completion,
             request,
             recovery,
         });
@@ -1545,12 +1583,17 @@ impl Session {
             usage,
             continue_turn,
             Vec::new(),
+            Vec::new(),
         )
     }
 
     /// Publish the completed assistant and queued steering in one batch; a
     /// failed transaction must leave both unpublished for the host to recover.
-    pub(crate) fn record_assistant_with_steering(
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "assistant execution and typed input facts share one atomic commit"
+    )]
+    pub(crate) fn record_assistant_with_inputs(
         &self,
         turn: u64,
         message: Message,
@@ -1558,8 +1601,9 @@ impl Session {
         execution: ModelExecution,
         usage: Usage,
         steering: Vec<Message>,
+        completion: Vec<crate::CompletionNotice>,
     ) -> Result<bool, SessionError> {
-        let continue_turn = !steering.is_empty();
+        let continue_turn = !steering.is_empty() || !completion.is_empty();
         self.record_assistant_entries(
             turn,
             message,
@@ -1568,6 +1612,7 @@ impl Session {
             usage,
             continue_turn,
             steering,
+            completion,
         )
     }
 
@@ -1584,6 +1629,7 @@ impl Session {
         usage: Usage,
         continue_turn: bool,
         steering: Vec<Message>,
+        completion: Vec<crate::CompletionNotice>,
     ) -> Result<bool, SessionError> {
         let has_calls = message
             .content
@@ -1609,6 +1655,12 @@ impl Session {
                 .into_iter()
                 .map(|input| SessionEntry::Steering { turn, input }),
         );
+        if !completion.is_empty() {
+            entries.push(SessionEntry::Completion {
+                turn,
+                notices: completion,
+            });
+        }
         let mut store = self.store.lock().map_err(|_| SessionError::Poisoned)?;
         append(&mut store, &entries)?;
         Ok(!has_calls && !continue_turn)
@@ -1662,18 +1714,34 @@ impl Session {
         Ok(results)
     }
 
+    #[cfg(test)]
     pub(crate) fn record_steerings(
         &self,
         turn: u64,
         inputs: Vec<Message>,
     ) -> Result<(), SessionError> {
-        if inputs.is_empty() {
-            return Ok(());
-        }
-        let entries = inputs
+        self.record_inputs(turn, inputs, Vec::new())
+    }
+
+    pub(crate) fn record_inputs(
+        &self,
+        turn: u64,
+        inputs: Vec<Message>,
+        completion: Vec<crate::CompletionNotice>,
+    ) -> Result<(), SessionError> {
+        let mut entries = inputs
             .into_iter()
             .map(|input| SessionEntry::Steering { turn, input })
             .collect::<Vec<_>>();
+        if !completion.is_empty() {
+            entries.push(SessionEntry::Completion {
+                turn,
+                notices: completion,
+            });
+        }
+        if entries.is_empty() {
+            return Ok(());
+        }
         let mut store = self.store.lock().map_err(|_| SessionError::Poisoned)?;
         append(&mut store, &entries)
     }
@@ -2143,6 +2211,9 @@ fn message_from_entry(coordinate: u64, entry: &SessionEntry) -> Option<Message> 
     match entry {
         SessionEntry::TurnStarted { input, .. } => Some(input.clone()),
         SessionEntry::Steering { input, .. } => Some(input.clone()),
+        SessionEntry::Completion { notices, .. } => {
+            Some(crate::completion::notice_message(notices))
+        }
         SessionEntry::Assistant { message, .. } => Some(message.clone()),
         SessionEntry::ToolResult { result, .. } => Some(result.message(coordinate, false)),
         SessionEntry::ChildToolAdmitted { .. }
@@ -2457,6 +2528,8 @@ fn lock(path: &Path) -> Result<SessionLock, SessionError> {
 
 #[derive(Debug, Error)]
 pub enum SessionError {
+    #[error("completion inbox belongs to another receiving Session")]
+    CompletionTargetMismatch,
     #[error("context changed since this preview; inspect history again")]
     StaleContextPosition,
     #[error("context selection must use a committed, complete call/result boundary")]

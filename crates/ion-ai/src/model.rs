@@ -28,6 +28,7 @@ pub enum ModelRouteReason {
     Recovery,
     ToolContinuation,
     Steering,
+    DelegationCompletion,
     Retry,
     Auxiliary,
 }

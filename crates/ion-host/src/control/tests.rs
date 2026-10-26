@@ -11,6 +11,8 @@ use std::{
 };
 use tokio::sync::{Notify, Semaphore};
 
+#[path = "completion_tests.rs"]
+mod completions;
 #[path = "preparation_tests.rs"]
 mod preparation;
 #[path = "snapshot_tests.rs"]

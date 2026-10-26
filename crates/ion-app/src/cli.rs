@@ -26,6 +26,7 @@ pub(crate) struct Invocation {
     pub image: Vec<PathBuf>,
     pub tui_mode: TuiMode,
     pub json: bool,
+    pub completion_delivery: ion_core::CompletionDelivery,
     pub code_mode: bool,
     pub read_only: bool,
     pub tool_selection: ToolSelection,
@@ -194,6 +195,9 @@ fn options() -> Vec<Arg> {
             .help("Submit a prompt or piped stdin headlessly, then exit"),
         Arg::new("json").long("json").action(ArgAction::SetTrue)
             .help("Emit JSONL progress records for a headless prompt"),
+        Arg::new("completion_delivery").long("completion-delivery")
+            .value_parser(clap::builder::PossibleValuesParser::new(ion_core::CompletionDelivery::ALL.map(ion_core::CompletionDelivery::as_str)).map(|value| value.parse::<ion_core::CompletionDelivery>().expect("listed delivery is valid")))
+            .value_name("POLICY").help("Managed-work readiness: inbox (default), active continue, or automatic idle wake"),
         Arg::new("code_mode").long("code-mode").action(ArgAction::SetTrue)
             .help("Enable bounded JavaScript composition alongside direct tools"),
         Arg::new("tools").long("tools").action(ArgAction::Append).value_delimiter(',')
@@ -242,7 +246,7 @@ fn applicable(command: &str, option: &str) -> bool {
         "session" | "continue_session" => coding || saved,
         "resume_session" => matches!(command, "chat" | "run") || saved,
         "provider" | "model" | "reasoning" => coding || command == "compact",
-        "code_mode" | "tools" | "exclude_tools" | "read_only" => coding,
+        "completion_delivery" | "code_mode" | "tools" | "exclude_tools" | "read_only" => coding,
         "image" => matches!(command, "run" | "chat"),
         "json" => command == "run",
         "tui_mode" => command == "chat",
@@ -412,6 +416,7 @@ fn normalize(mut matches: ArgMatches, interactive: bool) -> Result<Invocation> {
         image: many(&mut levels, "image"),
         tui_mode: one(&mut levels, "tui_mode")?.unwrap_or(TuiMode::Inline),
         json,
+        completion_delivery: one(&mut levels, "completion_delivery")?.unwrap_or_default(),
         code_mode: one(&mut levels, "code_mode")?.unwrap_or(false),
         read_only,
         tool_selection,

@@ -68,9 +68,21 @@ pub(super) async fn apply_picker(
     program: &mut super::ProgramStatusState,
     value: PickerValue,
 ) -> Result<()> {
+    if let PickerValue::CompletionDelivery(policy) = value {
+        match runtime.set_completion_delivery(policy) {
+            Ok(()) => {
+                ui.status = format!(
+                    "Managed-work completion: {policy} · prior grants revoked; reports remain inspectable"
+                );
+                ui.open_settings(runtime.completion_delivery());
+            }
+            Err(error) => ui.status = format!("{error:#}"),
+        }
+        return Ok(());
+    }
     if let PickerValue::Setting(setting) = value {
         ui.apply_setting(setting);
-        ui.open_settings();
+        ui.open_settings(runtime.completion_delivery());
         return Ok(());
     }
     if let PickerValue::Task(choice) = value {
@@ -141,7 +153,7 @@ pub(super) async fn apply_picker(
             };
             return Ok(());
         }
-        PickerValue::Setting(_) | PickerValue::Task(_) => {
+        PickerValue::Setting(_) | PickerValue::Task(_) | PickerValue::CompletionDelivery(_) => {
             unreachable!("handled above")
         }
     };

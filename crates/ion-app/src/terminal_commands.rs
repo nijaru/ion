@@ -54,7 +54,7 @@ commands! {
     Attach => (Work, "attach", "[ID]", "Attach to a running PTY program; Ctrl-] detaches"),
     Tools => (Work, "tools", "", "List recorded tool operations"),
     Tool => (Work, "tool", "[N]", "Inspect recorded tool evidence"),
-    Settings => (Editor, "settings", "[compact|expanded|thinking show|thinking hide]", "Change terminal presentation"),
+    Settings => (Editor, "settings", "[compact|expanded|thinking show|thinking hide|completion POLICY]", "Change presentation or receiving completion policy"),
     Tui => (Editor, "tui", "[inline|fullscreen]", "Choose the transcript surface"),
     Image => (Editor, "image", "PATH", "Attach an image to the next input"),
     Copy => (Editor, "copy", "", "Copy the last completed answer"),

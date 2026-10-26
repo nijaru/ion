@@ -205,6 +205,7 @@ impl SessionDelegation {
             task,
             steering,
             progress,
+            completion: None,
         })
     }
 }

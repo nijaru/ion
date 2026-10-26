@@ -885,6 +885,7 @@ async fn settled_shell_is_reconciled_and_shutdown_errors_remain_visible() {
 async fn unfinished_history_anchors_are_stable_on_initial_load_and_reinspection() {
     let mut fixture = Fixture::new();
     let started = |turn, text: &str| SessionEntry::TurnStarted {
+        completion: Vec::new(),
         turn,
         input: Message::user_input(text.into(), []),
         model: ModelRef {
@@ -996,6 +997,7 @@ async fn context_selection_restarts_publication_without_losing_an_unsent_draft()
     let mut view = fixture.control.session().view().unwrap();
     view.entries = vec![
         SessionEntry::TurnStarted {
+            completion: Vec::new(),
             turn: 1,
             input,
             model: model.clone(),
@@ -1132,14 +1134,19 @@ fn shell_syntax_and_output_settings_remain_editor_operations() {
         );
     }
     let mut ui = Frontend::default();
-    ui.output_settings("expanded").unwrap();
-    ui.output_settings("thinking show").unwrap();
+    ui.output_settings("expanded", ion_core::CompletionDelivery::Inbox)
+        .unwrap();
+    ui.output_settings("thinking show", ion_core::CompletionDelivery::Inbox)
+        .unwrap();
     assert_eq!(ui.output_detail, crate::tool_output::OutputDetail::Expanded);
     assert_eq!(
         ui.thinking_visibility,
         crate::transcript_render::ThinkingVisibility::Visible
     );
-    assert!(ui.output_settings("thinking sometimes").is_err());
+    assert!(
+        ui.output_settings("thinking sometimes", ion_core::CompletionDelivery::Inbox)
+            .is_err()
+    );
 }
 
 #[tokio::test]
@@ -1172,6 +1179,39 @@ async fn configuration_selectors_preserve_unsent_input_without_admission() {
         assert!(fixture.control.session().view().unwrap().entries.is_empty());
         assert!(!fixture.control.is_busy());
     }
+    for policy in ion_core::CompletionDelivery::ALL {
+        command::handle_builtin(
+            &mut fixture.control,
+            &fixture.host,
+            &mut ui,
+            Builtin::Settings,
+            &format!("completion {policy}"),
+        )
+        .unwrap();
+        assert_eq!(fixture.control.completion_delivery(), policy);
+        command::handle_builtin(
+            &mut fixture.control,
+            &fixture.host,
+            &mut ui,
+            Builtin::Settings,
+            "",
+        )
+        .unwrap();
+        assert!(
+            ui.pickers
+                .active()
+                .unwrap()
+                .items
+                .iter()
+                .any(
+                    |item| matches!(item.value, PickerValue::CompletionDelivery(_))
+                        && item.label.ends_with(policy.as_str())
+                )
+        );
+        assert_eq!((ui.draft.as_str(), ui.cursor), ("unsent 🦀", 3));
+        assert_note(&ui.images[0], "attached");
+        assert!(fixture.control.session().view().unwrap().entries.is_empty());
+    }
     fixture.control.shutdown().await;
 }
 
@@ -1183,7 +1223,8 @@ fn settings_cycle_only_rendered_choices_and_keep_search_and_draft() {
         thinking_visibility: crate::transcript_render::ThinkingVisibility::Visible,
         ..Frontend::default()
     };
-    ui.output_settings("").unwrap();
+    ui.output_settings("", ion_core::CompletionDelivery::Inbox)
+        .unwrap();
     assert!(matches!(
         ui.key(KeyEvent::new(KeyCode::Enter, Modifiers::NONE), None, None),
         Action::None
@@ -1196,7 +1237,7 @@ fn settings_cycle_only_rendered_choices_and_keep_search_and_draft() {
             panic!("rendered settings can cycle");
         };
         ui.apply_setting(setting);
-        ui.open_settings();
+        ui.open_settings(ion_core::CompletionDelivery::Inbox);
         assert!(ui.pickers.active().is_some());
         assert!(
             matches!(
@@ -1215,11 +1256,30 @@ fn settings_cycle_only_rendered_choices_and_keep_search_and_draft() {
         panic!("filtered setting is selectable");
     };
     ui.apply_setting(setting);
-    ui.open_settings();
+    ui.open_settings(ion_core::CompletionDelivery::Inbox);
     assert_eq!(ui.pickers.active().unwrap().query, "Thinking");
     assert_eq!(
         ui.thinking_visibility,
         crate::transcript_render::ThinkingVisibility::Hidden
+    );
+    ui.pickers.close();
+    ui.open_settings(ion_core::CompletionDelivery::Inbox);
+    ui.pickers.insert("Managed-work");
+    modal_rows(&mut ui, None, None, 100, 20);
+    assert!(matches!(
+        ui.key(KeyEvent::new(KeyCode::Enter, Modifiers::NONE), None, None),
+        Action::Pick(PickerValue::CompletionDelivery(
+            ion_core::CompletionDelivery::Continue
+        ))
+    ));
+    assert_eq!(ui.pickers.active().unwrap().query, "Managed-work");
+    ui.open_settings(ion_core::CompletionDelivery::Continue);
+    assert!(
+        matches!(
+            ui.key(KeyEvent::new(KeyCode::Enter, Modifiers::NONE), None, None),
+            Action::None
+        ),
+        "a changed Host policy choice requires another paint"
     );
     assert_eq!((ui.draft.as_str(), ui.cursor), ("unsent 🦀", 3));
 }

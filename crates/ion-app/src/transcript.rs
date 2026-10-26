@@ -36,7 +36,27 @@ pub fn render(view: &SessionView) -> String {
             continue;
         }
         match entry {
-            SessionEntry::TurnStarted { turn, input, .. } => {
+            SessionEntry::Completion { turn, notices } => {
+                let _ = writeln!(
+                    text,
+                    "\n{}",
+                    crate::transcript_render::readiness_text(*turn, notices)
+                );
+            }
+            SessionEntry::TurnStarted {
+                turn,
+                input,
+                completion,
+                ..
+            } => {
+                if !completion.is_empty() {
+                    let _ = writeln!(
+                        text,
+                        "\n{}",
+                        crate::transcript_render::readiness_text(*turn, completion)
+                    );
+                    continue;
+                }
                 let _ = write!(text, "\nTurn {turn} · user\n");
                 message(&mut text, input);
             }
@@ -260,6 +280,7 @@ mod tests {
             name: None,
             entries: vec![
                 SessionEntry::TurnStarted {
+                    completion: Vec::new(),
                     turn: 1,
                     input: Message {
                         role: Role::User,

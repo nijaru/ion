@@ -70,6 +70,8 @@ impl Wake for ObservationWake {
 #[derive(Default)]
 struct State {
     reserved: usize,
+    /// Joined sources remain in flight until recipient intake is published.
+    offering: usize,
     runs: BTreeMap<uuid::Uuid, Run>,
     failures: Vec<String>,
 }
@@ -81,10 +83,13 @@ struct Run {
     result: Option<Result<(), CodingSessionError>>,
     steering: Option<ChildSteering>,
     progress: Option<ChildProgress>,
+    completion: Option<Arc<ion_core::CompletionPermit>>,
 }
 
 /// Cold live destination, not serialized authority.
 pub struct BackgroundDestination {
+    completion_target: Option<crate::CompletionTarget>,
+    completion: Option<Arc<ion_core::CompletionPermit>>,
     steering: Option<ChildSteering>,
     progress: Option<ChildProgress>,
     shared: Arc<Shared>,
@@ -102,6 +107,7 @@ pub struct BackgroundSnapshot {
 }
 #[derive(Clone, Serialize)]
 pub struct BackgroundJobStatus {
+    pub completion: Option<ion_core::CompletionStatus>,
     pub id: uuid::Uuid,
     pub model: ion_ai::ModelRef,
     pub parent: uuid::Uuid,
@@ -119,6 +125,7 @@ pub struct BackgroundSummary {
 }
 #[derive(Clone, Serialize)]
 pub struct BackgroundRunSnapshot {
+    pub completion: Option<ion_core::CompletionStatus>,
     pub receipt: DelegationReceipt,
     /// Actual retained operation joined, not merely visible run completion.
     pub joined: bool,
@@ -159,6 +166,10 @@ pub struct BackgroundWait {
 impl Run {
     fn snapshot(&self) -> BackgroundRunSnapshot {
         BackgroundRunSnapshot {
+            completion: self
+                .completion
+                .as_ref()
+                .map(|permit| permit.receipt().snapshot()),
             receipt: self.receipt.clone(),
             joined: self.operation.is_none(),
             progress: self.progress.as_ref().and_then(ChildProgress::snapshot),
@@ -198,6 +209,8 @@ impl BackgroundOwner {
     }
     pub fn destination(&self) -> BackgroundDestination {
         BackgroundDestination {
+            completion_target: None,
+            completion: None,
             steering: None,
             progress: None,
             shared: self.shared.clone(),
@@ -220,7 +233,9 @@ impl BackgroundOwner {
     }
     pub fn has_work(&self) -> bool {
         let state = self.shared.lock();
-        state.reserved != 0 || state.runs.values().any(|run| run.operation.is_some())
+        state.reserved != 0
+            || state.offering != 0
+            || state.runs.values().any(|run| run.operation.is_some())
     }
     /// Sticky after acknowledgement. Joining enriches an early task-loss signal
     /// with original operation errors; neither a reader nor a tool can clear it.
@@ -268,6 +283,10 @@ impl BackgroundOwner {
                     _ => (None, None),
                 };
                 BackgroundJobStatus {
+                    completion: run
+                        .completion
+                        .as_ref()
+                        .map(|permit| permit.receipt().snapshot()),
                     id: receipt.record.run,
                     model: receipt.record.spec.model.clone(),
                     parent: receipt.record.site.session,
@@ -350,6 +369,7 @@ impl BackgroundOwner {
             let mut completed = false;
             let mut busy = false;
             let mut failures = Vec::new();
+            let mut offers = Vec::new();
             for run in state.runs.values_mut() {
                 if let Some(operation) = &mut run.operation {
                     match Pin::new(operation).poll(&mut operation_context) {
@@ -372,6 +392,18 @@ impl BackgroundOwner {
                             if let Err(error) = &result {
                                 failures.push(error.to_string());
                             }
+                            if result.is_ok()
+                                && let Some(permit) = &run.completion
+                            {
+                                offers.push((
+                                    permit.clone(),
+                                    ion_core::CompletionNotice {
+                                        source_session: run.receipt.record.site.session,
+                                        run: run.receipt.record.run,
+                                        child_session: run.receipt.record.child,
+                                    },
+                                ));
+                            }
                             run.operation = None;
                             run.result = Some(result);
                             completed = true;
@@ -386,7 +418,23 @@ impl BackgroundOwner {
             if completed {
                 self.shared.invalidate();
             }
-            if completed || !busy || notified.as_mut().poll(cx).is_ready() {
+            let ready = completed || !busy || notified.as_mut().poll(cx).is_ready();
+            let open = !self.shared.closed.load(Ordering::SeqCst);
+            let offering = offers.len();
+            state.offering += offering;
+            drop(state);
+            // Receiver intake cannot run under source custody: receiving
+            // admission consults its own application/background owner.
+            if open {
+                for (permit, notice) in offers {
+                    permit.offer(notice);
+                }
+            }
+            if offering != 0 {
+                self.shared.lock().offering -= offering;
+                self.shared.invalidate();
+            }
+            if ready {
                 Poll::Ready(())
             } else {
                 Poll::Pending
@@ -480,8 +528,13 @@ impl BackgroundOwner {
         Ok(())
     }
     pub fn request_shutdown(&self) {
-        let _state = self.shared.lock();
+        let state = self.shared.lock();
         self.shared.close(false);
+        for run in state.runs.values() {
+            if let Some(permit) = &run.completion {
+                permit.withdraw();
+            }
+        }
     }
     /// Natural completion without stopping runs. Interrupted waits retain all
     /// operations/results; the application must still explicitly close and join.
@@ -510,6 +563,13 @@ impl BackgroundOwner {
             return None;
         }
         let run = state.runs.remove(&run)?;
+        if let Some(permit) = &run.completion {
+            permit.acknowledge();
+        }
+        let completion = run
+            .completion
+            .as_ref()
+            .map(|permit| permit.receipt().snapshot());
         let steering = run
             .steering
             .as_ref()
@@ -517,6 +577,7 @@ impl BackgroundOwner {
         let progress = run.progress.as_ref().and_then(ChildProgress::snapshot);
         let result = run.result.expect("joined run retains its result");
         let snapshot = BackgroundRunSnapshot {
+            completion,
             receipt: run.receipt,
             joined: true,
             error: result.as_ref().err().map(ToString::to_string),
@@ -573,6 +634,11 @@ impl Drop for BackgroundDestination {
     }
 }
 impl BackgroundDestination {
+    /// Explicit receiving grant; unrelated peers are allowed when authorized.
+    pub fn with_completion(mut self, target: crate::CompletionTarget) -> Self {
+        self.completion_target = Some(target);
+        self
+    }
     /// Attach the read-only observation belonging to this prepared child.
     /// Snapshot coordinates identify the actual observed Session/request.
     pub fn with_progress(mut self, progress: ChildProgress) -> Self {
@@ -601,6 +667,11 @@ impl BackgroundSlot for BackgroundDestination {
         }
         if state.reserved + state.runs.len() == self.shared.capacity {
             return Err("background custody is full".into());
+        }
+        if let Some(target) = &self.completion_target {
+            self.completion = Some(Arc::new(
+                target.reserve().map_err(|error| error.to_string())?,
+            ));
         }
         state.reserved += 1;
         self.reserved = true;
@@ -648,6 +719,7 @@ impl BackgroundSlot for BackgroundDestination {
                 result: None,
                 steering: self.steering.take(),
                 progress: self.progress.take(),
+                completion: self.completion.take(),
             },
         );
         state.reserved -= 1;

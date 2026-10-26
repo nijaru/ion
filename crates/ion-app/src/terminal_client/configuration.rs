@@ -142,7 +142,7 @@ impl Picker {
 }
 
 impl Frontend {
-    pub(super) fn open_settings(&mut self) {
+    pub(super) fn open_settings(&mut self, completion: ion_core::CompletionDelivery) {
         let (query, selected) = self.pickers.active().map_or_else(
             || (String::new(), 0),
             |picker| (picker.query.clone(), picker.selected),
@@ -154,6 +154,11 @@ impl Frontend {
         let next_thinking = match self.thinking_visibility {
             ThinkingVisibility::Visible => ThinkingVisibility::Hidden,
             ThinkingVisibility::Hidden => ThinkingVisibility::Visible,
+        };
+        let next_completion = match completion {
+            ion_core::CompletionDelivery::Inbox => ion_core::CompletionDelivery::Continue,
+            ion_core::CompletionDelivery::Continue => ion_core::CompletionDelivery::Wake,
+            ion_core::CompletionDelivery::Wake => ion_core::CompletionDelivery::Inbox,
         };
         self.pickers.open(Picker {
             title: "Settings",
@@ -169,6 +174,11 @@ impl Frontend {
                     label: format!("Thinking: {}", self.thinking_visibility.label()),
                     detail: Some("Presentation only, independent of generation effort. Recorded source remains available.".into()),
                     value: PickerValue::Setting(Setting::Thinking(next_thinking)),
+                },
+                PickerItem {
+                    label: format!("Managed-work completion: {completion}"),
+                    detail: Some("Receiving Host policy: inbox waits for natural requests; continue extends active Turns; wake also starts idle Turns. Changes revoke prior grants.".into()),
+                    value: PickerValue::CompletionDelivery(next_completion),
                 },
             ],
         });
@@ -195,17 +205,23 @@ impl Frontend {
         self.fullscreen_rows = 0;
     }
 
-    pub(super) fn output_settings(&mut self, args: &str) -> Result<()> {
+    pub(super) fn output_settings(
+        &mut self,
+        args: &str,
+        completion: ion_core::CompletionDelivery,
+    ) -> Result<()> {
         let setting = match args {
             "" => {
-                self.open_settings();
+                self.open_settings(completion);
                 return Ok(());
             }
             "compact" => Setting::Output(OutputDetail::Compact),
             "expanded" => Setting::Output(OutputDetail::Expanded),
             "thinking show" => Setting::Thinking(ThinkingVisibility::Visible),
             "thinking hide" => Setting::Thinking(ThinkingVisibility::Hidden),
-            _ => anyhow::bail!("use /settings compact|expanded or /settings thinking show|hide"),
+            _ => anyhow::bail!(
+                "use /settings compact|expanded, /settings thinking show|hide or /settings completion inbox|continue|wake"
+            ),
         };
         self.apply_setting(setting);
         Ok(())

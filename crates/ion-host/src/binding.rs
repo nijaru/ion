@@ -13,6 +13,7 @@ use crate::{
 
 /// Configuration, not execution. Consume this to create the sole control owner.
 pub struct SessionSetup {
+    pub(crate) initial_completion_delivery: crate::CompletionDelivery,
     application: Arc<dyn Application>,
     pub(crate) catalog: SessionCatalog,
     pub(crate) session: Arc<CodingSession>,
@@ -23,6 +24,11 @@ pub struct SessionSetup {
 }
 
 impl SessionSetup {
+    /// Initial receiving policy; live changes belong to SessionControl.
+    pub fn with_completion_delivery(mut self, delivery: crate::CompletionDelivery) -> Self {
+        self.initial_completion_delivery = delivery;
+        self
+    }
     /// An omitted model restores the Session preference, then the application's
     /// default for a fresh Session. Omitted reasoning restores its saved value.
     pub fn new(
@@ -69,6 +75,7 @@ impl SessionSetup {
             runtime.agent.validate_reasoning(session.reasoning()?)?;
         }
         Ok(Self {
+            initial_completion_delivery: crate::CompletionDelivery::Inbox,
             application,
             catalog,
             session,
@@ -174,6 +181,7 @@ impl<M: Serialize + Send + 'static> SessionControl<M> {
     pub fn reload_resources(&mut self) -> Result<()> {
         let resources = self.setup.application.resources(self.setup.session.cwd())?;
         let commands = self.setup.application.commands(self.setup.session.cwd())?;
+        self.completions.invalidate_binding();
         self.setup.resources = resources;
         self.setup.commands = commands;
         Ok(())
@@ -189,6 +197,7 @@ impl<M: Serialize + Send + 'static> SessionControl<M> {
         )?;
         validate_model(&runtime, Some(&model))?;
         runtime.agent.select_model(&self.setup.session)?;
+        self.completions.invalidate_binding();
         self.setup.runtime = runtime;
         self.setup.commands = commands;
         Ok(())
@@ -200,6 +209,7 @@ impl<M: Serialize + Send + 'static> SessionControl<M> {
             .runtime
             .agent
             .select_reasoning(&self.setup.session, reasoning)?;
+        self.completions.invalidate_binding();
         Ok(())
     }
 
@@ -319,6 +329,7 @@ impl<M: Serialize + Send + 'static> SessionControl<M> {
         if let Some(questions) = &self.setup.questions {
             questions.rebind_session(self.owner, session.id());
         }
+        self.completions.rebind(session.id());
         self.setup.session = session;
         self.setup.runtime = runtime;
         self.setup.resources = resources;

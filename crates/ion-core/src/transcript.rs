@@ -80,6 +80,10 @@ pub enum TranscriptItem {
     Assistant(TranscriptMessage),
     ActivityGroup(ActivityGroup),
     UserShell(UserShellActivity),
+    Readiness {
+        turn: u64,
+        notices: Vec<crate::CompletionNotice>,
+    },
 }
 
 #[derive(Debug, Clone, Default, PartialEq)]
@@ -96,8 +100,28 @@ impl TranscriptProjection {
                 continue;
             }
             match entry {
-                SessionEntry::TurnStarted { turn, input, .. } => {
-                    builder.push_user(Some(*turn), false, input);
+                SessionEntry::TurnStarted {
+                    turn,
+                    input,
+                    completion,
+                    ..
+                } => {
+                    if completion.is_empty() {
+                        builder.push_user(Some(*turn), false, input);
+                    } else {
+                        builder.close_group();
+                        builder.projection.items.push(TranscriptItem::Readiness {
+                            turn: *turn,
+                            notices: completion.clone(),
+                        });
+                    }
+                }
+                SessionEntry::Completion { turn, notices } => {
+                    builder.close_group();
+                    builder.projection.items.push(TranscriptItem::Readiness {
+                        turn: *turn,
+                        notices: notices.clone(),
+                    });
                 }
                 SessionEntry::Steering { turn, input } => {
                     builder.push_user(Some(*turn), true, input);
@@ -500,6 +524,17 @@ impl LiveTranscript {
                     }
                 }
             }
+            AgentEvent::CompletionCommitted { turn, notices, .. } => {
+                self.turn = Some(*turn);
+                self.builder.close_group();
+                self.builder
+                    .projection
+                    .items
+                    .push(TranscriptItem::Readiness {
+                        turn: *turn,
+                        notices: notices.clone(),
+                    });
+            }
             AgentEvent::TurnResumed { point } => {
                 self.turn = Some(point.turn);
                 self.note("Interrupted Turn continued; reconcile committed history".into());
@@ -770,6 +805,7 @@ mod tests {
                     turn: 1,
                     input: Message::user_input("inspect".into(), std::iter::empty()),
                     model,
+                    completion: Vec::new(),
                     request: None,
                     recovery: None,
                 },

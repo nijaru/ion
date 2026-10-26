@@ -86,6 +86,7 @@ impl<M: Serialize + Send + 'static> SessionControl<M> {
                 drop(custody);
                 if delivery == Delivery::Start {
                     self.stop_requested = false;
+                    self.completions.rearm();
                     self.starting = Some((id, OperationId(identity())));
                 }
                 self.advance();
@@ -158,10 +159,7 @@ impl<M: Serialize + Send + 'static> SessionControl<M> {
         };
         let (message, _, inflight) = prepared.into_parts();
         let operation = OperationId(identity());
-        let inbox = Arc::new(SteeringInbox::new(
-            self.setup.runtime.agent.limits(),
-            self.budget.clone(),
-        ));
+        let inbox = self.turn_inbox();
         let instructions = self.setup.resources.instructions().to_owned();
         let mut custody = lock(&self.custody);
         custody.inputs.insert(
@@ -183,6 +181,7 @@ impl<M: Serialize + Send + 'static> SessionControl<M> {
         );
         // Hold custody until the callback has a complete root to acknowledge.
         let turn_stop = self.bind_turn_stop(stop.clone());
+        self.completions.rearm();
         let result = self.setup.runtime.agent.submit_request(
             self.setup.session.clone(),
             ion_core::SubmissionRequest {
@@ -219,6 +218,7 @@ impl<M: Serialize + Send + 'static> SessionControl<M> {
                     root: Some(id),
                     work: Work::Turn(work),
                     inbox,
+                    automated: false,
                     metadata: None,
                     turn_stop: turn_stop.as_ref().map(|binding| binding.scope()),
                 });
@@ -277,14 +277,12 @@ impl<M: Serialize + Send + 'static> SessionControl<M> {
             Err(error) => return Err((metadata, error)),
         };
         let operation = OperationId(identity());
-        let inbox = Arc::new(SteeringInbox::new(
-            self.setup.runtime.agent.limits(),
-            self.budget.clone(),
-        ));
+        let inbox = self.turn_inbox();
         let stop = self.work_stop();
         let turn_stop = self.bind_turn_stop(stop.clone());
         // Publish the lease under the same fence as acceptance/end callbacks.
         let mut custody = lock(&self.custody);
+        self.completions.rearm();
         let result = self.setup.runtime.agent.resume_turn(
             self.setup.session.clone(),
             point,
@@ -316,6 +314,7 @@ impl<M: Serialize + Send + 'static> SessionControl<M> {
             root: None,
             work: Work::Turn(work),
             inbox,
+            automated: false,
             metadata: Some((metadata, reservation)),
             turn_stop: turn_stop.as_ref().map(|binding| binding.scope()),
         });
@@ -519,15 +518,14 @@ impl<M: Serialize + Send + 'static> SessionControl<M> {
         reservation: InputReservation,
     ) {
         self.stop_requested = false;
+        self.completions.rearm();
         self.active = Some(Active {
             id,
             turn: None,
             root: None,
             work,
-            inbox: Arc::new(SteeringInbox::new(
-                self.setup.runtime.agent.limits(),
-                self.budget.clone(),
-            )),
+            inbox: self.turn_inbox(),
+            automated: false,
             metadata: Some((metadata, reservation)),
             turn_stop: None,
         });

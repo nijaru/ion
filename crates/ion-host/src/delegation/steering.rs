@@ -20,16 +20,24 @@ pub struct PreparedDelegation {
     pub task: DelegationTask,
     pub steering: ChildSteering,
     pub progress: super::ChildProgress,
+    pub(super) completion: Option<crate::CompletionTarget>,
 }
 impl PreparedDelegation {
+    /// The receiving Host, not the child or its saved coordinates, grants delivery.
+    pub fn with_completion_target(mut self, target: crate::CompletionTarget) -> Self {
+        self.completion = Some(target);
+        self
+    }
     /// Transfer execution and its matching control grant to the same owner.
     pub fn in_background(self, owner: &BackgroundOwner) -> DelegationTask {
-        self.task.in_background(
-            owner
-                .destination()
-                .with_steering(self.steering)
-                .with_progress(self.progress),
-        )
+        let mut destination = owner
+            .destination()
+            .with_steering(self.steering)
+            .with_progress(self.progress);
+        if let Some(target) = self.completion {
+            destination = destination.with_completion(target);
+        }
+        self.task.in_background(destination)
     }
 
     /// Join within a budget, transferring the same execution and its grant only
@@ -39,13 +47,14 @@ impl PreparedDelegation {
         owner: &BackgroundOwner,
         join_timeout: std::time::Duration,
     ) -> DelegationTask {
-        self.task.in_background_after(
-            owner
-                .destination()
-                .with_steering(self.steering)
-                .with_progress(self.progress),
-            join_timeout,
-        )
+        let mut destination = owner
+            .destination()
+            .with_steering(self.steering)
+            .with_progress(self.progress);
+        if let Some(target) = self.completion {
+            destination = destination.with_completion(target);
+        }
+        self.task.in_background_after(destination, join_timeout)
     }
 }
 

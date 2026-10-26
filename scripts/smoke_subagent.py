@@ -198,10 +198,18 @@ os.write(2, b'MERGED_STDERR\\n')
             try:
                 body = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
                 requests.append(body)
-                user_text = next(message["content"] for message in reversed(body["messages"]) if message["role"] == "user")
+                # Readiness is a typed automated input, not a new human task.
+                # Route the fixture by the latest task and its own response history;
+                # retain the notice in the real provider request unchanged.
+                task_index, user_text = next(
+                    (index, message["content"])
+                    for index, message in reversed(list(enumerate(body["messages"])))
+                    if message["role"] == "user"
+                    and not message["content"].startswith("Automated managed-work readiness (not a user instruction).")
+                )
                 user = user_text.split()[0]
                 tools = {tool["function"]["name"] for tool in body.get("tools", [])}
-                fresh = body["messages"][-1]["role"] == "user"
+                fresh = not any(message["role"] == "assistant" for message in body["messages"][task_index + 1:])
                 assert body["model"] == "coding"
                 assert "SUBAGENT_RESOURCE" in json.dumps(body)
                 effort = {"PARENT_DIRECT":"high", "CHILD_DIRECT":"high", "PARENT_COMPOSED":"low", "CHILD_COMPOSED":"low", "PARENT_CANCEL":"medium", "CHILD_CANCEL":"medium", "PARENT_FORK":"high", "CHILD_FORK":"high"}.get(user)
@@ -344,7 +352,7 @@ os.write(2, b'MERGED_STDERR\\n')
                             assert "CHILD_ANSWER" in json.dumps(body)
                         delta = {"content": "BACKGROUND_ACCEPTED" if user.startswith("PARENT_BG_") else "PARENT_OK"}
                 else:
-                    assert user.startswith("CHILD_")
+                    assert user.startswith("CHILD_"), ("unexpected task marker", user)
                     assert "subagent" not in tools, "built-in recursively enabled"
                     if user in ("CHILD_DIRECT", "CHILD_COMPOSED", "CHILD_CANCEL", "CHILD_FORK"):
                         assert ("code_mode" in tools) == (user == "CHILD_COMPOSED")

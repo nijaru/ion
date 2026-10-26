@@ -267,7 +267,17 @@ pub(super) fn handle_builtin(
             };
             ui.print(help);
         }
-        Builtin::Settings => ui.output_settings(args)?,
+        Builtin::Settings => {
+            if let Some(policy) = args.strip_prefix("completion ") {
+                let policy = policy.parse().map_err(anyhow::Error::msg)?;
+                runtime.set_completion_delivery(policy)?;
+                ui.status = format!(
+                    "Managed-work completion: {policy} · prior grants revoked; reports remain inspectable"
+                );
+            } else {
+                ui.output_settings(args, runtime.completion_delivery())?;
+            }
+        }
         Builtin::Reasoning => {
             if args.is_empty() {
                 ui.pickers.open(Picker::reasoning(runtime)?);

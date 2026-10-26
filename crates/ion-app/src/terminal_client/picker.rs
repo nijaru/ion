@@ -25,6 +25,7 @@ pub(super) enum PickerValue {
     Reasoning(ion_ai::Reasoning),
     Login(String),
     Setting(super::configuration::Setting),
+    CompletionDelivery(ion_core::CompletionDelivery),
     Task(super::tasks::TaskChoice),
     Fork(ForkPickerValue),
     Context(super::navigation::ContextPickerValue),
@@ -509,11 +510,18 @@ impl Pickers {
             {
                 let index = picker.matches().get(picker.selected).copied();
                 let index = index.filter(|index| self.rendered_selected == Some(*index));
-                if let Some(index) = index
-                    && let PickerValue::Setting(setting) = picker.items[index].value
-                {
-                    self.rendered_selected = None;
-                    return Some(PickerValue::Setting(setting));
+                if let Some(index) = index {
+                    let setting = match picker.items[index].value {
+                        PickerValue::Setting(setting) => Some(PickerValue::Setting(setting)),
+                        PickerValue::CompletionDelivery(policy) => {
+                            Some(PickerValue::CompletionDelivery(policy))
+                        }
+                        _ => None,
+                    };
+                    if setting.is_some() {
+                        self.rendered_selected = None;
+                        return setting;
+                    }
                 }
                 let value = index.map(|index| picker.items.remove(index).value);
                 if value.is_some() {

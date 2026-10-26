@@ -93,6 +93,10 @@ impl Activity {
         update: ControlUpdate<EditorDraft>,
     ) -> Result<Option<anyhow::Error>> {
         match update {
+            ControlUpdate::Automated { .. } => {
+                self.live = None;
+                ui.status = "Managed-work readiness · automatic Turn".into();
+            }
             ControlUpdate::Input {
                 delivery, phase, ..
             } => {
@@ -122,8 +126,14 @@ impl Activity {
                     // Manual compaction has no live Turn transcript.
                     ui.note(note);
                 }
-                if let CodingAgentEvent::TurnAccepted { turn } = event.as_ref() {
-                    // A fresh TurnAccepted is the only safe start for this strict
+                if let CodingAgentEvent::TurnAccepted { turn }
+                | CodingAgentEvent::CompletionCommitted {
+                    turn,
+                    new_turn: true,
+                    ..
+                } = event.as_ref()
+                {
+                    // A fresh typed Turn start is the only safe start for this strict
                     // projection. It is not a tolerant reader for missing tool or
                     // thinking prefixes after an observation gap.
                     if ui
@@ -149,19 +159,26 @@ impl Activity {
                             return Ok(Some(error));
                         }
                     };
-                    let input = view
-                        .entries
-                        .iter()
-                        .find_map(|entry| match entry {
-                            SessionEntry::TurnStarted {
-                                turn: candidate,
-                                input,
-                                ..
-                            } if candidate == turn => Some(input),
-                            _ => None,
-                        })
-                        .context("accepted Turn has no committed input")?;
-                    let mut live = LiveTranscript::with_user_input(input);
+                    let mut live = if matches!(
+                        event.as_ref(),
+                        CodingAgentEvent::CompletionCommitted { new_turn: true, .. }
+                    ) {
+                        LiveTranscript::default()
+                    } else {
+                        let input = view
+                            .entries
+                            .iter()
+                            .find_map(|entry| match entry {
+                                SessionEntry::TurnStarted {
+                                    turn: candidate,
+                                    input,
+                                    ..
+                                } if candidate == turn => Some(input),
+                                _ => None,
+                            })
+                            .context("accepted Turn has no committed input")?;
+                        LiveTranscript::with_user_input(input)
+                    };
                     live.observe(&event);
                     self.live = Some((operation, live));
                 } else if let Some((id, live)) = &mut self.live
@@ -172,6 +189,7 @@ impl Activity {
                     event.as_ref(),
                     CodingAgentEvent::AssistantCommitted { .. }
                         | CodingAgentEvent::SteeringCommitted { .. }
+                        | CodingAgentEvent::CompletionCommitted { .. }
                         | CodingAgentEvent::ToolFinished { .. }
                         | CodingAgentEvent::ChildToolAdmitted { .. }
                         | CodingAgentEvent::ChildToolFinished { .. }

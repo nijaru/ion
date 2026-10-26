@@ -348,9 +348,10 @@ impl SessionView {
             let coordinate = offset as u64 + 1;
             let tool_message;
             let (message, restore_input) = match entry {
-                SessionEntry::TurnStarted { input, .. } | SessionEntry::Steering { input, .. } => {
-                    (input, true)
-                }
+                SessionEntry::TurnStarted {
+                    input, completion, ..
+                } => (input, completion.is_empty()),
+                SessionEntry::Steering { input, .. } => (input, true),
                 SessionEntry::Assistant { message, .. } if index.can_select(coordinate) => {
                     (message, false)
                 }

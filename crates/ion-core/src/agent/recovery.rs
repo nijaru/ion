@@ -9,6 +9,7 @@ pub(super) struct TurnStart {
     pub interrupted: usize,
     pub resumed: Option<RecoveryPoint>,
     pub catalog: Option<ToolCatalog>,
+    pub completion: Vec<crate::CompletionNotice>,
 }
 
 impl Agent {
@@ -91,6 +92,7 @@ impl Agent {
                                 turn: point.turn,
                                 interrupted,
                                 resumed: Some(point),
+                                completion: Vec::new(),
                                 catalog,
                             },
                             instructions,

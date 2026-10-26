@@ -4,6 +4,13 @@ use serde_json::{Value, json};
 
 pub(super) fn event_record(event: &CodingAgentEvent) -> Value {
     match event {
+        CodingAgentEvent::CompletionCommitted {
+            turn,
+            notices,
+            new_turn,
+        } => {
+            json!({"type":"completion_committed","turn":turn,"notices":notices,"new_turn":new_turn,"automated":true})
+        }
         CodingAgentEvent::TurnResumed { point } => json!({"type":"turn_resumed","point":point}),
         CodingAgentEvent::TurnAccepted { turn } => json!({"type":"turn_accepted","turn":turn}),
         CodingAgentEvent::TurnEnded { turn, reason } => {
@@ -131,6 +138,13 @@ pub(super) fn diagnostic(event: &CodingAgentEvent) -> Option<String> {
         CodingAgentEvent::ChildToolFinished { outcome, .. } => {
             output_diagnostic("child result", &child_output(outcome))
         }
+        CodingAgentEvent::CompletionCommitted {
+            notices, new_turn, ..
+        } => format!(
+            "[{}managed-work readiness: {} report(s) ready; not acknowledged]",
+            if *new_turn { "automated Turn · " } else { "" },
+            notices.len()
+        ),
         CodingAgentEvent::TurnResumed { point } => format!(
             "[continued interrupted Turn {} at checkpoint {}]",
             point.turn, point.checkpoint

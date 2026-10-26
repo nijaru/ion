@@ -29,6 +29,7 @@ pub(super) struct Subagent {
     directory: PathBuf,
     cwd: PathBuf,
     owner: Arc<BackgroundOwner>,
+    completions: Arc<crate::completion::CompletionRegistry>,
     authority: AuthorityScope,
 }
 /// Actual selected route, not a lookup key redirected by later model-store edits.
@@ -64,6 +65,7 @@ impl Subagent {
         cwd: &Path,
         selected: &Selection,
         owner: Arc<BackgroundOwner>,
+        completions: Arc<crate::completion::CompletionRegistry>,
         environment: Arc<crate::CommandEnvironment>,
         search_settings: Arc<crate::SearchSettings>,
     ) -> Self {
@@ -88,6 +90,7 @@ impl Subagent {
                 .join("children"),
             cwd: cwd.to_path_buf(),
             owner,
+            completions,
             // This coding binding makes no durable same-environment claim.
             // Durable hosts supply and re-attest their own versioned scope.
             authority: AuthorityScope::new(format!("ion.coding.live/{}", uuid::Uuid::now_v7()))
@@ -376,6 +379,15 @@ impl ToolExecutor for Subagent {
                     let task = match recipe.prepare(Message::user_input(task, [])) {
                         Ok(task) => task,
                         Err(error) => return failure(error),
+                    };
+                    let target = match self.completions.parent_target(origin) {
+                        Ok(target) => target,
+                        Err(error) => return failure(error),
+                    };
+                    let task = if let Some(target) = target {
+                        task.with_completion_target(target)
+                    } else {
+                        task
                     };
                     let join_timeout_ms = matches!(mode, Mode::Foreground)
                         .then(|| join_timeout_ms.unwrap_or(DEFAULT_JOIN_MS));

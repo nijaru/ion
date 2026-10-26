@@ -11,6 +11,7 @@ use crate::{BackgroundOwner, ProcessOwner};
 pub struct ApplicationOwner {
     background: Arc<BackgroundOwner>,
     processes: Arc<ProcessOwner>,
+    completions: Arc<crate::completion::CompletionRegistry>,
 }
 
 impl ApplicationOwner {
@@ -18,7 +19,12 @@ impl ApplicationOwner {
         Self {
             background,
             processes,
+            completions: Arc::default(),
         }
+    }
+
+    pub(crate) fn completions(&self) -> &Arc<crate::completion::CompletionRegistry> {
+        &self.completions
     }
 
     pub fn background(&self) -> &Arc<BackgroundOwner> {
@@ -31,6 +37,7 @@ impl ApplicationOwner {
 
     /// Close both admission paths before awaiting either resource family.
     pub fn request_shutdown(&self) {
+        self.completions.close();
         self.background.request_shutdown();
         self.processes.request_shutdown();
     }

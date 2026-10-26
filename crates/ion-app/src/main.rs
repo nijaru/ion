@@ -698,6 +698,7 @@ async fn run_cli(cli: Invocation) -> Result<()> {
                 // Keeping the original Arc here would pin its exclusive writer
                 // lock after a client switches to a different Session.
                 drop(preflight_session.take());
+                let setup = setup.with_completion_delivery(cli.completion_delivery);
                 match client {
                     Client::Headless(request, json) => headless::run(setup, request, json).await,
                     Client::Rpc => rpc::run(setup, host).await,

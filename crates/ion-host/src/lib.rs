@@ -11,6 +11,9 @@ pub mod catalog;
 pub mod code_mode;
 mod command_args;
 mod command_environment;
+mod completion;
+pub use completion::CompletionTarget;
+pub use ion_core::CompletionDelivery;
 mod control;
 mod credentials;
 pub use background::{

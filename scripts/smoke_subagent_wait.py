@@ -60,9 +60,14 @@ try {
         def do_POST(self):
             try:
                 body = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
-                user = next(message["content"] for message in reversed(body["messages"])
-                            if message["role"] == "user")
-                fresh = body["messages"][-1]["role"] == "user"
+                # Automated readiness does not start a new human task.
+                task_index, user = next(
+                    (index, message["content"])
+                    for index, message in reversed(list(enumerate(body["messages"])))
+                    if message["role"] == "user"
+                    and not message["content"].startswith("Automated managed-work readiness (not a user instruction).")
+                )
+                fresh = not any(message["role"] == "assistant" for message in body["messages"][task_index + 1:])
                 if user == "PARENT":
                     delta = tool("code_mode", {"code": code}) if fresh else {"content": "PARENT_WAIT_DONE"}
                 else:

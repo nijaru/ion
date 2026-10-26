@@ -41,6 +41,23 @@ impl Control {
         output: &mut Output<W>,
     ) -> Result<()> {
         match update {
+            ControlUpdate::Automated { operation, turn } => {
+                ensure!(
+                    self.turn_reply.is_none(),
+                    "automated Turn cannot replace a client reply"
+                );
+                self.turn_reply = Some(OperationReply {
+                    operation,
+                    turn,
+                    id: None,
+                    credit: None,
+                });
+                if let Some(turn) = turn
+                    && !output.try_enqueue(json!({"type":"automated_turn_started","operation":operation,"turn":turn,"resync":"inspect"}))?
+                {
+                    self.mark_gap(1);
+                }
+            }
             ControlUpdate::Input { id, phase, .. } => {
                 let item = self
                     .correlations
@@ -68,7 +85,7 @@ impl Control {
                 self.turn_reply = Some(OperationReply {
                     operation,
                     id: item.id.clone(),
-                    credit: item.credit.clone(),
+                    credit: Some(item.credit.clone()),
                     turn: item.turn,
                 });
             }
@@ -85,7 +102,7 @@ impl Control {
                     self.turn_reply = Some(OperationReply {
                         operation,
                         id: item.id.clone(),
-                        credit: item.credit.clone(),
+                        credit: Some(item.credit.clone()),
                         turn: Some(turn),
                     });
                     let record = match item.command {
@@ -159,7 +176,7 @@ impl Control {
                             Ok(changed) => record["changed"] = json!(changed),
                             Err(error) => record["error"] = json!(format!("{error:#}")),
                         }
-                        (record, metadata.credit)
+                        (record, Some(metadata.credit))
                     }
                     OperationOutcome::Shell(result) => {
                         if let Err(error) = &result {
@@ -183,7 +200,7 @@ impl Control {
                                 json!({"type":"shell_end","id":metadata.id,"status":"failed","error":format!("{error:#}")})
                             }
                         };
-                        (record, metadata.credit)
+                        (record, Some(metadata.credit))
                     }
                 };
                 for accepted in settlement.accepted {
@@ -194,11 +211,22 @@ impl Control {
                 record["progress_complete"] = json!(progress_complete);
                 record["resync"] = json!("inspect");
                 if output.is_healthy() {
-                    if self.has_gap() {
-                        output.enqueue_reliable(self.gap_record(), credit.clone())?;
-                        self.reset_gap();
+                    if let Some(credit) = credit {
+                        if self.has_gap() {
+                            output.enqueue_reliable(self.gap_record(), credit.clone())?;
+                            self.reset_gap();
+                        }
+                        output.enqueue_reliable(record, credit)?;
+                    } else {
+                        record["automated"] = json!(true);
+                        record
+                            .as_object_mut()
+                            .expect("lifecycle object")
+                            .remove("id");
+                        if !output.try_enqueue(record)? {
+                            self.mark_gap(1);
+                        }
                     }
-                    output.enqueue_reliable(record, credit)?;
                 }
                 if let Some(error) = fatal {
                     return Err(error);

@@ -100,9 +100,15 @@ async fn foreground(
     };
     let background = control.background();
     let mut background_revision = 0;
+    let mut completion_revision = 0;
+    let mut poll_control = true;
     let mut parent_result = None;
     let result = loop {
-        if parent_result.is_some() && !background.as_ref().is_some_and(|owner| owner.has_work()) {
+        if parent_result.is_some()
+            && !poll_control
+            && !control.is_busy()
+            && !background.as_ref().is_some_and(|owner| owner.has_work())
+        {
             let result = parent_result.take().expect("settled parent");
             break match &background {
                 Some(owner) => match (result, owner.check()) {
@@ -114,7 +120,12 @@ async fn foreground(
                 None => result,
             };
         }
+        let readiness = control.completion_changes();
         tokio::select! {
+            _ = readiness.changed(completion_revision) => {
+                completion_revision = readiness.revision();
+                poll_control = true;
+            }
             _ = signal.recv(), if listening => {
                 listening = false;
                 control.request_stop();
@@ -140,7 +151,8 @@ async fn foreground(
                     if let Err(error) = record { publication_error = Some(error); control.request_stop(); request_shutdown(); }
                 }
             }
-            update = control.next(), if parent_result.is_none() => match update {
+            update = control.next(), if poll_control => match update {
+                ControlUpdate::Automated { .. } => {}
                 ControlUpdate::Activity(Observation::Event { event, .. }) => {
                     // Final is delivered reliably from settlement, never twice
                     // and never dependent on a provisional observation ring.
@@ -178,11 +190,15 @@ async fn foreground(
                 ControlUpdate::Settled(settlement) => {
                     let result = answer(settlement.outcome);
                     if result.is_err() { request_shutdown(); }
-                    parent_result = Some(result);
+                    // Failed/cancelled work cannot be hidden by a later result.
+                    if parent_result.as_ref().is_none_or(Result::is_ok) { parent_result = Some(result); }
                 }
                 ControlUpdate::Idle => {
-                    request_shutdown();
-                    parent_result = Some(Err(rejected.take().unwrap_or_else(|| anyhow!("operation ended without settlement"))));
+                    poll_control = false;
+                    if parent_result.is_none() {
+                        request_shutdown();
+                        parent_result = Some(Err(rejected.take().unwrap_or_else(|| anyhow!("operation ended without settlement"))));
+                    }
                 }
                 ControlUpdate::Input { .. }
                 | ControlUpdate::Dispatched { .. }

@@ -242,6 +242,7 @@ impl CodingApplication {
                 cwd,
                 selected,
                 owner.background().clone(),
+                owner.completions().clone(),
                 environment,
                 search_settings,
             )));

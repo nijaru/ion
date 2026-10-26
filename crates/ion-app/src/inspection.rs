@@ -81,6 +81,10 @@ enum EntryInspection {
         #[serde(serialize_with = "omit")]
         input: Message,
     },
+    Completion {
+        turn: u64,
+        notices: Vec<ion_core::CompletionNotice>,
+    },
     CacheWarm {
         turn: u64,
         execution: ModelExecution,
@@ -94,6 +98,8 @@ enum EntryInspection {
     },
     TurnStarted {
         turn: u64,
+        #[serde(skip_serializing_if = "Vec::is_empty")]
+        completion: Vec<ion_core::CompletionNotice>,
         #[serde(serialize_with = "omit")]
         input: Message,
         model: ModelRef,
@@ -414,6 +420,7 @@ mod tests {
                 context: context.clone(),
             },
             SessionEntry::TurnStarted {
+                completion: Vec::new(),
                 turn: 1,
                 input: input.clone(),
                 model: model.clone(),

@@ -2,6 +2,7 @@
 
 mod agent;
 mod code_gateway;
+mod completion;
 mod composition;
 mod delegation;
 mod generation;
@@ -18,11 +19,15 @@ mod tool_result;
 mod tool_set;
 mod transcript;
 
+pub use completion::{
+    CompletionDelivery, CompletionInbox, CompletionNotice, CompletionPermit, CompletionReceipt,
+    CompletionRevocation, CompletionSignal, CompletionStatus,
+};
 pub use operation::{IdleSession, Operation, OperationError};
 
 pub use agent::{
     Agent as CodingAgent, AgentError as CodingAgentError, AgentEvent as CodingAgentEvent,
-    AgentLimits, PromptCacheWarmingPolicy, RequestSubmission, SteeringInbox,
+    AgentLimits, CompletionSubmission, PromptCacheWarmingPolicy, RequestSubmission, SteeringInbox,
 };
 pub use delegation::{
     BackgroundJob, BackgroundSlot, BackgroundStartError, DelegationCompletion, DelegationFailure,

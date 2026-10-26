@@ -300,7 +300,9 @@ additional rows are omitted with an ellipsis. Ctrl-O or `/tool N` shows the full
 recorded capture, including truncation, without interpreting its contents as
 Markdown.
 
-`/settings` opens a searchable list showing tool-output and thinking presentation.
+`/settings` opens a searchable list showing tool-output and thinking presentation
+and the receiving Session's completion-delivery policy. Unlike the display rows,
+completion delivery can authorize additional model work; see [Completion delivery](#completion-delivery).
 Enter (or Space with an empty search) cycles the selected value immediately; the
 list stays open until Esc. `/settings compact` (the default) or `/settings expanded`
 also changes output detail without changing model behavior.
@@ -442,7 +444,7 @@ answer. `final` is the committed answer. Other commands are `steer`,
 `inspect`, `get_context`, `navigate_context`, `list_sessions`, `list_turns`, `list_models`,
 `list_resources`, `reload_resources`, `shell`, `compact`, `set_model`, `new_session`,
 `clone_session`, `fork`, `switch_session`, `set_reasoning`, `get_background`,
-`cancel_background`, `acknowledge_background` and `set_name`.
+`cancel_background`, `acknowledge_background`, `set_completion_delivery` and `set_name`.
 `set_name.name` must be a string; null or omission clears it. `fork.after` must
 be a boolean when present and defaults to false when omitted. Wrong field types
 are rejected before mutation.
@@ -451,6 +453,15 @@ and selectable `head_entry` coordinates. `navigate_context` requires that token
 as `expected` and a `head_entry`; stale previews fail rather than discard newer
 work. It changes context without submitting input or changing files.
 `get_state.reasoning` reports the active Session's generation preference.
+`get_state.completion_delivery` reports `inbox`, `continue` or `wake`;
+`{"type":"set_completion_delivery","delivery":"wake"}` changes that receiving
+policy and revokes existing delivery grants, without upgrading earlier jobs.
+Idle wakes emit `automated_turn_started` with operation/Turn coordinates, not a
+client ID or prompt acknowledgement. Their `turn_end` has `automated: true` and no
+client ID. Admission failure emits `operation_failed` with `automated: true`, not
+a started Turn. These automatic lifecycle records are bounded, lossy observations:
+reconcile gaps with `inspect` and `get_background`. Client-command replies retain
+their reliable reply credits; unsolicited work cannot acquire those credits.
 `prompt`, `steer` and `follow_up` accept `images` as an array of local paths (relative to the
 Session's working directory) or inline `{ "mime_type": "image/png", "data": "BASE64" }`
 objects. Ion validates and normalizes both before accepting the input.
@@ -1191,6 +1202,20 @@ clients still reconcile snapshots rather than treating notification as delivery.
 Snapshots are privileged custody views, not an authenticated remote service or
 atomic Core/Host snapshots.
 
+For an explicitly authorized parent or peer receiver, choose a live policy with
+`SessionSetup::with_completion_delivery` or `SessionControl::set_completion_delivery`,
+then obtain `receiver.completion_target(CompletionDelivery::Wake)?` (or a weaker
+mode). Attach it using `PreparedDelegation::with_completion_target` before either
+background helper, or `BackgroundDestination::with_completion` for manual assembly.
+The target retains no Session writer and cannot be reconstructed from saved IDs.
+A restricted receiver keeps its own tools/model/authority; it does not inherit the
+producer's coding recipe. Drive its ordinary shared control and select the
+read-only `completion_changes().changed(revision)` invalidation while idle, as in
+the [service example](crates/ion-app/examples/service.rs). Do not start a second
+loop or fabricate user input. Coding's first consumer targets the initiating
+parent automatically; arbitrary peer registration/transport is not built into
+CLI/RPC, and no cross-process broker is supplied.
+
 `owner.steer(id, &request_key, &message, &stop).await` uses the grant captured
 with that actual run, checked against both its Session and request identity.
 An old run's stop or control grant cannot follow a later run in the same Session. Live request keys reconcile identical input within that
@@ -1711,8 +1736,8 @@ ID and subsequent `committed`, `returned` or `unknown` status. A returned report
 contains the original uncommitted input. Guidance cannot be recalled after
 admission, even if the parent stops waiting. Cancelling readiness leaves the child
 running. New guidance to a stopped, settled, unknown or acknowledged run fails;
-it never implicitly resumes it. Named persistent conversations, unfinished-child
-recovery and completion inbox delivery remain unfinished.
+it never implicitly resumes it. Named persistent conversations and unfinished-child
+recovery remain unfinished.
 
 `start` accepts `execution_timeout_ms`, defaulting to 1800000 (30 minutes), with
 1–7200000 milliseconds allowed. This bounds child model/tool execution from task
@@ -1778,6 +1803,47 @@ from storage, and execution, cleanup or storage failure clears it. Treat it as
 the child's claim, not verification of its work. Raw child conversation,
 thinking and intermediate tool output do not automatically enter parent context.
 
+### Completion delivery
+
+Choose how this receiving Session handles joined child readiness:
+
+| Policy | Extra model work |
+| --- | --- |
+| `inbox` (default) | None on its own. Ready handles join the next natural model request. |
+| `continue` | May extend the initiating active Turn at a complete boundary; never starts an idle Turn. |
+| `wake` | Also permits a new automated Turn after the parent has settled, without a keypress or client prompt. |
+
+For example, `ion --completion-delivery wake chat` enables autonomous handling for
+new managed jobs. The flag also works with `run` and `rpc`, not metadata commands.
+In chat, `/settings completion inbox|continue|wake` or the completion row in
+`/settings` changes the live receiving policy. RPC uses `set_completion_delivery`.
+Continue and Wake can incur additional model charges; neither is the default.
+Policy changes revoke old grants rather than upgrading already-started jobs.
+
+Readiness contains only source Session, run and child Session IDs. It does not
+insert child output, fabricate a human instruction, select the child or acknowledge
+its report. The model may retrieve the retained report with `status`/`wait`.
+`/tasks` and `get_background` expose `completion`: `waiting`, `queued`,
+`offered` (with the receiving Turn), or `revoked` (with a reason). Offered means
+saved into context, not proof of provider receipt or model read. Reading/waiting
+never releases a report; explicit acknowledgement does, and also withdraws a
+still-queued notice. Already committed notices remain history.
+
+Stop permanently revokes old grants, including after a fresh Start. Successful
+Session/context/model/reasoning/resource changes also revoke them. The transferred
+child can still finish and retain its report under the application owner; a late
+result cannot silently restart the stopped or changed recipient. Ready wakes wait
+behind admitted human input and unread reliable results. Intake bounds 64
+reservations/queued notices across producers; a full inbox refuses new delegated
+execution rather than silently dropping readiness.
+
+These are live grants, not durable delivery or restart scheduling. A stopped,
+closed or lost receiver does not promise later automatic handling. A saved UUID
+cannot reauthorize it. Headless retains ownership through authorized follow-on
+work and emits one final result; interrupt/EOF/quit still stop and join owned work.
+The [Rust SDK](#rust-embedding) also supports explicitly authorized peer
+targets; CLI/RPC currently use the parent, without a cross-process broker.
+
 Managed files live under the workspace catalog's `children/`, outside automatic
 `--continue` root selection; use the returned path to inspect or explicitly open
 one. The same workspace is not conflict isolation, and native tools retain host
@@ -1787,8 +1853,8 @@ application shutdown. Cancellation
 does not roll back effects. Normal headless completion lets delegated agents
 finish, then stops and joins managed programs. Interruption, RPC EOF and terminal
 quit stop and join both. These are
-offline lifecycle guarantees; live-model adherence, service scale and native
-GUI visual acceptance remain open.
+offline lifecycle guarantees; live-model adherence, service scale and human
+daily-driver acceptance remain open.
 
 ## Optional Code Mode
 
@@ -1944,7 +2010,7 @@ contracts are not all implemented:
 | --- | --- | --- |
 | Application setup | Caller-owned model/tool/instruction configuration, workspace-free Sessions and explicit shell/local-image authority. Opt-in continuation checks a saved authority reference and declarations. | Changed-authority reconciliation. Applications must reconstruct and attest live bindings on reopen; the reference is not a credential or sandbox. |
 | Durability | SQLite conversation/effect history, conservative recovery, restart-safe direct admission through the Rust SDK and keyed RPC literal text; explicit same-Turn continuation through the Rust SDK. | Durable pending queues, wire-protocol delivery IDs and automatic restart/continuation. Coding CLI/TUI/RPC submissions do not opt in to continuation. |
-| Delegation | Main coding preset exposes fresh/fork foreground and background Sessions with inherited route/reasoning, application-owned retained results, wait/status/cancel/acknowledge and joined original answers. SDK children use the same stable identity, complete environments and conservative recovery; Code Mode nested tools remain distinct. | Live-model/service-scale delegation qualification and native-app visual acceptance remain open. Model arguments never grant execution authority. |
+| Delegation | Main coding preset exposes fresh/fork foreground and background Sessions with inherited route/reasoning, application-owned retained results, wait/status/cancel/acknowledge, joined original answers and receiver-owned Inbox/Continue/Wake delivery with optional SDK peer targets. SDK children use the same stable identity, complete environments and conservative recovery; Code Mode nested tools remain distinct. | Live-model/service-scale delegation qualification and native-app visual acceptance remain open. Model arguments never grant execution authority. |
 | Native programs | Scoped pipe/PTY programs, stdin interaction, bounded raw capture and screen pages, terminal resize, retained wait/close/release and shared application cleanup; live human attachment lease with a Ctrl-] terminal view; child-job scope reclaimed before answer release. | Concurrent model/human input, shell environment capture, graphical terminal protocols and restart attachment. |
 | Controls and trust | Model-loadout include/exclude selection, read-only model tools, MCP direct/deferred/hidden exposure, digest-bound project MCP/command trust, explicit named user commands and host-permission execution. | Per-call approval/consent, OS sandboxing, arbitrary extension handlers/hooks/UI contributions, MCP OAuth and per-tool exposure patterns. Loadout selection and trust are not security boundaries. |
 | Remote use | Foreground stdio RPC, lossy progress and complete pull snapshots through shared control. A service embedding retains/drives the owner independently of connections. | No built-in authenticated network server, reliable activity replay or durable queue/metadata recovery. RPC EOF still stops/joins work. |
