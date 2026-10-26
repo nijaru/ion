@@ -86,7 +86,7 @@ pub async fn choose_session(
                     program.published = None;
                 }
                 InputEvent::Key(key) => {
-                    if let Some(PickerValue::Session(path)) = ui.pickers.key(key, keys) {
+                    if let Some(PickerValue::Session { path, .. }) = ui.pickers.key(key, keys) {
                         return Ok(Some(path));
                     }
                     if ui.pickers.active().is_none() {

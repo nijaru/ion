@@ -662,7 +662,10 @@ fn picker_selection_stays_visible_beside_wrapped_query_and_status() {
                 .map(|index| PickerItem {
                     label: format!("{index:02}-matching-long-project-file.rs"),
                     detail: None,
-                    value: PickerValue::Session(format!("file-{index}").into()),
+                    value: PickerValue::Session {
+                        path: format!("file-{index}").into(),
+                        named: false,
+                    },
                 })
                 .collect(),
         });
@@ -703,7 +706,7 @@ fn session_picker_detail_never_hides_the_selected_row() {
                     "id 019abcdef0123456789abcdef0123456{index} · {} turn(s)\nmodel smoke/model · file activity 2026-10-19 12:34:56 UTC (2m ago)",
                     index + 1
                 )),
-                value: PickerValue::Session(PathBuf::from(format!("/session-{index}"))),
+                value: PickerValue::Session { path: PathBuf::from(format!("/session-{index}")), named: false },
             })
             .collect(),
     });

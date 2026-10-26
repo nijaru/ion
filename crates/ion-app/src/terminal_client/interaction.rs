@@ -171,7 +171,7 @@ pub(super) async fn apply_picker(
                 }
             };
         }
-        PickerValue::Session(path) => runtime.switch_session(path),
+        PickerValue::Session { path, .. } => runtime.switch_session(path),
         PickerValue::Model(model) => match services.models().resolve_identity(&model) {
             Ok(selection) => {
                 super::configuration::select_model(

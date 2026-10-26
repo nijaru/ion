@@ -382,6 +382,7 @@ def exercise_keybindings(work, base_env, endpoint):
             "tui.select.down": "ctrl+n", "tui.select.up": "ctrl+p",
             "app.tools.expand": "alt+o", "app.message.copy": [],
             "app.session.toggleScope": "ctrl+f",
+            "app.session.toggleNamedFilter": "alt+n",
         }
         config.write_text(json.dumps(keys))
         (cwd / "named-file.txt").touch()
@@ -777,7 +778,7 @@ def exercise_configuration(work, base_env, endpoint):
 def exercise_resume(work, base_env, endpoint):
     def selected(terminal):
         # The query also starts with ›; only a rendered Session ID is a result.
-        return re.search(r"› [0-9a-f]{8}-[0-9a-f]{3}  RESUME_BETA", terminal.text())
+        return re.search(r"› [0-9a-f]{8}-[0-9a-f]{3}  BETA_NAMED  RESUME_BETA", terminal.text())
 
     for mode in ("inline", "fullscreen"):
         sandbox = work / (mode + "-resume")
@@ -817,21 +818,70 @@ def exercise_resume(work, base_env, endpoint):
             subprocess.run([binary, "--cwd", cwd, "-p", prompt], env=env, capture_output=True, check=True)
         paths = set(home.rglob("*.sqlite"))
         assert len(paths) == 2
+        by_cwd = {}
+        for path in paths:
+            with closing(sqlite3.connect(path)) as connection:
+                header = json.loads(connection.execute("SELECT header FROM session WHERE id=1").fetchone()[0])
+            by_cwd[Path(header["cwd"]).resolve()] = path
+        # Give one Session a real name through the existing user entry point.
+        terminal = Terminal(b, env, mode, ["--session", by_cwd[b.resolve()], "--tui-mode", mode, "chat"])
+        try:
+            terminal.wait(lambda: "resume-saved/saved-model" in terminal.text())
+            terminal.send("/name BETA_NAMED\r")
+            terminal.wait(lambda: "BETA_NAMED" in terminal.text())
+            terminal.finish()
+        finally:
+            terminal.close()
+        with closing(sqlite3.connect(by_cwd[b.resolve()])) as connection:
+            assert json.loads(connection.execute("SELECT header FROM session WHERE id=1").fetchone()[0])["name"] == "BETA_NAMED"
         subprocess.run([binary, "use", "resume-default", "default-model", "--endpoint", endpoint,
                         "--wire", "chat-completions"], env=env, capture_output=True, check=True)
         defaults = (home / "models.json").read_bytes()
         before_requests = len(requests)
 
-        # Preserve a filtered query across scope changes; browsing/cancel never
-        # opens a Session or picks a model, even with a working saved default.
+        # Live /resume uses the same name filter and honors a remapped shortcut.
+        # Its empty named result remains reversible without changing saved facts.
+        snapshots = {path: path.read_bytes() for path in paths}
+        keymap = home / "keybindings.json"
+        keymap.write_text(json.dumps({"app.session.toggleNamedFilter": "alt+n"}))
+        terminal = Terminal(a, env, mode, ["--session", by_cwd[a.resolve()], "--tui-mode", mode, "chat"])
+        try:
+            terminal.wait(lambda: "resume-saved/saved-model" in terminal.text())
+            terminal.send("/resume\r")
+            terminal.wait(lambda: "1 match(es)" in terminal.text())
+            terminal.output.clear()
+            terminal.send(b"\x0e")  # disabled default Ctrl-N must not filter
+            terminal.paint()
+            assert "named only · 0 match(es)" not in terminal.text()
+            terminal.send(b"\x1bn")
+            terminal.wait(lambda: "named only · 0 match(es)" in terminal.text())
+            terminal.output.clear()
+            terminal.send(b"\x1bn")
+            terminal.wait(lambda: "1 match(es)" in terminal.text())
+            terminal.send(b"\x1b")
+            terminal.paint()
+            terminal.finish()
+        finally:
+            terminal.close()
+            keymap.unlink()
+        assert {path: path.read_bytes() for path in paths} == snapshots, "filtering changed Session facts"
+        assert len(requests) == before_requests and (home / "models.json").read_bytes() == defaults
+
+        # Preserve a filtered query AND named-only mode across scope changes;
+        # browsing/cancel never opens a Session or picks a model.
         terminal = Terminal(a, env, mode, ["-r", "--tui-mode", mode])
         try:
             terminal.wait(lambda: "RESUME_ALPHA" in terminal.text())
+            terminal.send(b"\x0e")
+            terminal.wait(lambda: "named only · 0 match(es)" in terminal.text())
             terminal.send("RESUME_BETA")
             terminal.paint()
+            terminal.output.clear()
             terminal.send(b"\t")
             terminal.wait(lambda: selected(terminal))
+            assert "named only · 1 match(es)" in terminal.text()
             terminal.finish()
+            assert {path: path.read_bytes() for path in paths} == snapshots
             assert set(home.rglob("*.sqlite")) == paths
             assert (home / "models.json").read_bytes() == defaults
             assert len(requests) == before_requests
@@ -954,7 +1004,7 @@ def exercise_resume(work, base_env, endpoint):
             backup = path.with_suffix(".held")
             terminal = Terminal(cwd, env, mode, ["--resume", "--tui-mode", mode])
             try:
-                terminal.wait(lambda: re.search(r"› [0-9a-f]{8}-[0-9a-f]{3}  " + prompt, terminal.text()))
+                terminal.wait(lambda: re.search(r"› [0-9a-f]{8}-[0-9a-f]{3}  " + ("BETA_NAMED  " if prompt == "RESUME_BETA" else "") + prompt, terminal.text()))
                 if stage == "key setup":
                     terminal.send(b"\r")
                     terminal.wait(lambda: "openai API key:" in terminal.text())

@@ -276,7 +276,13 @@ pub(super) fn session_items(
             PickerItem {
                 label,
                 detail: Some(detail),
-                value: PickerValue::Session(session.path),
+                value: PickerValue::Session {
+                    named: session
+                        .name
+                        .as_deref()
+                        .is_some_and(|name| !name.trim().is_empty()),
+                    path: session.path,
+                },
             }
         })
         .collect()

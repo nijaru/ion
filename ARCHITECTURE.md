@@ -1179,7 +1179,12 @@ protocol output. Explicit paths/IDs and `--continue` remain unattended selectors
 fresh launch stays fresh. Only fresh no-model onboarding saves a chosen default;
 repairing a resumed or explicit model choice changes that binding, not the global
 default. In-chat browsing remains within the live binding's
-captured workspace rather than silently changing its authority.
+captured workspace rather than silently changing its authority. Both browsers
+start with all Sessions and offer a configurable Ctrl-N named-only filter using
+nonblank stored names, not preview text. The filter preserves query and folder
+scope, retains a still-visible selection and revokes old rendered confirmation
+before the next draw. It changes neither facts nor discovery custody, starts no
+scan, and resets when the browser closes.
 
 Without an explicit command, terminal stdin and stdout select chat; redirected
 I/O selects headless execution. Launch prompt operands start the selected client;

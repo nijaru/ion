@@ -169,7 +169,8 @@ answer channel and omits it. Unattended RPC clients can use
 session; `--continue` reopens the most recently active one in that directory.
 `-r` or `--resume` opens a searchable launch-time chooser before model setup or
 Session/MCP admission. It starts in the current folder; Tab switches to all coding
-folders and shows each Session's recorded directory. Esc or Ctrl-C exits without
+folders and shows each Session's recorded directory. Ctrl-N toggles named Sessions
+only, retaining the search query and folder scope. Esc or Ctrl-C exits without
 creating a Session or changing the default model. Empty results still allow scope
 changes. The chooser requires terminal stdin/stdout, is unavailable in RPC or with
 `--json`, and conflicts with `--session`/`--continue`; use those explicit selectors
@@ -232,7 +233,10 @@ not automatically imported or migrated.
 
 `/resume` opens a searchable saved-Session browser within the active workspace
 and marks the current Session. Unlike the launch-time chooser, it does not switch
-the live binding's working directory.
+the live binding's working directory. Ctrl-N toggles named Sessions only here too;
+empty filtered results remain reversible. The filter resets on close and does not
+change any saved Session. Rebind or disable `app.session.toggleNamedFilter` in
+`keybindings.json` alongside the other controls.
 The selected conversation shows its full ID, Turn count, recorded model and file
 activity timestamp/age. Activity is a discovery-time snapshot, not execution
 status. Discovery runs outside the input loop; Esc dismisses the browser while

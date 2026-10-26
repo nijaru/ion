@@ -20,7 +20,7 @@ use tokio_util::sync::CancellationToken;
 use super::navigation::{ForkPickerValue, session_items};
 
 pub(super) enum PickerValue {
-    Session(PathBuf),
+    Session { path: PathBuf, named: bool },
     Model(ModelRef),
     Reasoning(ion_ai::Reasoning),
     Login(String),
@@ -45,12 +45,15 @@ pub(super) struct Picker {
 }
 
 impl Picker {
-    pub fn matches(&self) -> Vec<usize> {
+    pub fn matches(&self, named_only: bool) -> Vec<usize> {
         let query = self.query.to_ascii_lowercase();
         self.items
             .iter()
             .enumerate()
             .filter_map(|(index, item)| {
+                if named_only && !matches!(item.value, PickerValue::Session { named: true, .. }) {
+                    return None;
+                }
                 item.label
                     .to_ascii_lowercase()
                     .contains(&query)
@@ -117,6 +120,8 @@ pub(super) struct Pickers {
     // not a draft range. Only the editor derives replacement ranges.
     files: Option<(FileScope, Vec<String>)>,
     sessions: Option<SessionRequest>,
+    // Presentation-only state; never captured by discovery jobs or persisted.
+    named_only: bool,
 }
 
 impl Pickers {
@@ -142,6 +147,17 @@ impl Pickers {
                 keys.hint(KeyAction::Toggle)
             ));
         }
+        if self.sessions.is_some() {
+            controls.push_str(&format!(
+                " · {}: {}",
+                keys.hint(KeyAction::NamedSessions),
+                if self.named_only {
+                    "all Sessions"
+                } else {
+                    "named only"
+                },
+            ));
+        }
         if let Some(request) = &self.sessions
             && matches!(request.browser, SessionBrowser::Launch)
         {
@@ -164,11 +180,16 @@ impl Pickers {
         let Some(picker) = &self.active else {
             return Vec::new();
         };
-        let matching = picker.matches();
-        let mut rows = vec![if self.loading() {
-            format!("{} · {}", picker.title, self.loading_label())
+        let matching = picker.matches(self.named_only);
+        let title = if self.named_only {
+            format!("{} · named only", picker.title)
         } else {
-            format!("{} · {} match(es)", picker.title, matching.len())
+            picker.title.to_owned()
+        };
+        let mut rows = vec![if self.loading() {
+            format!("{title} · {}", self.loading_label())
+        } else {
+            format!("{title} · {} match(es)", matching.len())
         }];
         if let Some(notice) = &self.notice {
             push_wrapped(&mut rows, notice, width);
@@ -244,6 +265,7 @@ impl Pickers {
         self.waiting = None;
         self.files = None;
         self.sessions = None;
+        self.named_only = false;
         if let Some(job) = &self.job {
             job.stop.cancel();
         }
@@ -296,10 +318,11 @@ impl Pickers {
                 all_workspaces: false,
             },
             String::new(),
+            false,
         );
     }
 
-    fn load_sessions(&mut self, request: SessionRequest, query: String) {
+    fn load_sessions(&mut self, request: SessionRequest, query: String, named_only: bool) {
         self.open(Picker {
             title: if matches!(request.browser, SessionBrowser::Active(_)) {
                 "Resume session"
@@ -313,6 +336,7 @@ impl Pickers {
             items: Vec::new(),
         });
         self.sessions = Some(request.clone());
+        self.named_only = named_only;
         self.waiting = Some(PickerRequest::Sessions(request));
         self.admit();
     }
@@ -410,7 +434,7 @@ impl Pickers {
                     picker.items = items;
                     picker.selected = picker
                         .selected
-                        .min(picker.matches().len().saturating_sub(1));
+                        .min(picker.matches(self.named_only).len().saturating_sub(1));
                 }
                 self.rendered_selected = None;
                 if empty && matches!(request.browser, SessionBrowser::Active(_)) {
@@ -478,7 +502,23 @@ impl Pickers {
                 .expect("Session browser is active")
                 .query
                 .clone();
-            self.load_sessions(request, query);
+            self.load_sessions(request, query, self.named_only);
+            return None;
+        }
+        if action == Some(KeyAction::NamedSessions) && self.sessions.is_some() {
+            let picker = self.active.as_mut().expect("Session browser is active");
+            let selected = picker
+                .matches(self.named_only)
+                .get(picker.selected)
+                .copied();
+            self.named_only = !self.named_only;
+            let matching = picker.matches(self.named_only);
+            // Keep the same Session if it survives; filtering must not silently
+            // turn a selection into a different conversation.
+            picker.selected = selected
+                .and_then(|selected| matching.iter().position(|index| *index == selected))
+                .unwrap_or(0);
+            self.rendered_selected = None;
             return None;
         }
         let loading = self.loading();
@@ -490,8 +530,8 @@ impl Pickers {
                 self.rendered_selected = None;
             }
             Some(KeyAction::SelectDown) => {
-                picker.selected =
-                    (picker.selected + 1).min(picker.matches().len().saturating_sub(1));
+                picker.selected = (picker.selected + 1)
+                    .min(picker.matches(self.named_only).len().saturating_sub(1));
                 self.rendered_selected = None;
             }
             Some(KeyAction::Backspace) => {
@@ -508,7 +548,10 @@ impl Pickers {
                                 .iter()
                                 .any(|item| matches!(item.value, PickerValue::Setting(_))))) =>
             {
-                let index = picker.matches().get(picker.selected).copied();
+                let index = picker
+                    .matches(self.named_only)
+                    .get(picker.selected)
+                    .copied();
                 let index = index.filter(|index| self.rendered_selected == Some(*index));
                 if let Some(index) = index {
                     let setting = match picker.items[index].value {
@@ -635,7 +678,10 @@ mod tests {
                 .map(|label| PickerItem {
                     label: (*label).into(),
                     detail: None,
-                    value: PickerValue::Session(PathBuf::from(label)),
+                    value: PickerValue::Session {
+                        path: PathBuf::from(label),
+                        named: false,
+                    },
                 })
                 .collect(),
         });
@@ -684,7 +730,7 @@ mod tests {
         assert!(rows.iter().any(|row| row == "› alpha"));
         assert!(matches!(
             pickers.key(KeyEvent::new(KeyCode::Enter, Modifiers::NONE), &KeyBindings::default()),
-            Some(PickerValue::Session(path)) if path == Path::new("alpha")
+            Some(PickerValue::Session { path, .. }) if path == Path::new("alpha")
         ));
         assert!(pickers.active().is_none());
 
@@ -717,7 +763,7 @@ mod tests {
         assert!(rows.iter().any(|row| row == "› beta"));
         assert!(matches!(
             pickers.key(KeyEvent::new(KeyCode::Enter, Modifiers::NONE), &KeyBindings::default()),
-            Some(PickerValue::Session(path)) if path == Path::new("beta")
+            Some(PickerValue::Session { path, .. }) if path == Path::new("beta")
         ));
     }
 
@@ -840,6 +886,70 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn named_sessions_filter_metadata_without_rescanning_or_accepting_stale_rows() {
+        let request = session_request("current");
+        let summaries = [
+            ("/unnamed", None),
+            ("/named", Some("Task")),
+            ("/blank", Some(" \t")),
+        ]
+        .into_iter()
+        .map(|(path, name)| SessionSummary {
+            id: path.into(),
+            path: path.into(),
+            cwd: Some("/workspace".into()),
+            name: name.map(str::to_owned),
+            // A preview mentioning names must not make an unnamed Session named.
+            preview: Some("saved named prompt".into()),
+            model: None,
+            turns: 1,
+            updated: UNIX_EPOCH,
+        })
+        .collect();
+        let (mut pickers, release) = held_job(
+            request.clone(),
+            "Resume session",
+            Ok(PickerOutput::Sessions(summaries)),
+        );
+        let PickerRequest::Sessions(request) = request else {
+            unreachable!()
+        };
+        pickers.sessions = Some(request);
+        pickers.active.as_mut().unwrap().query = "saved".into();
+        let keys = KeyBindings::default();
+        let toggle = KeyEvent::new(KeyCode::Char('n'), Modifiers::CONTROL);
+        let enter = KeyEvent::new(KeyCode::Enter, Modifiers::NONE);
+        let worker = pickers.job.as_ref().unwrap().task.id();
+        pickers.key(toggle, &keys);
+        assert_eq!(pickers.job.as_ref().unwrap().task.id(), worker);
+        release.send(()).unwrap();
+        assert!(pickers.complete().await.is_none());
+        assert!(pickers.rows(100, 10)[0].contains("1 match(es)"));
+        assert_eq!(pickers.active().unwrap().query, "saved");
+        assert!(!pickers.has_job());
+
+        pickers.key(toggle, &keys);
+        assert!(pickers.rows(100, 10)[0].contains("3 match(es)"));
+        assert_eq!(
+            pickers.active().unwrap().selected,
+            1,
+            "selected Session survives"
+        );
+        pickers.key(KeyEvent::new(KeyCode::Up, Modifiers::NONE), &keys);
+        pickers.rows(100, 10);
+        pickers.key(toggle, &keys);
+        assert!(
+            pickers.key(enter, &keys).is_none(),
+            "old rows authorize nothing"
+        );
+        pickers.rows(100, 10);
+        assert!(
+            matches!(pickers.key(enter, &keys), Some(PickerValue::Session { path, .. }) if path == Path::new("/named"))
+        );
+        assert!(pickers.active().is_none());
+    }
+
+    #[tokio::test]
     async fn session_scope_switch_keeps_query_and_joins_before_replacement() {
         let (mut pickers, release) = held_session_job(sessions("/stale"));
         let PickerRequest::Sessions(request) = &pickers.job.as_ref().unwrap().request else {
@@ -849,11 +959,16 @@ mod tests {
         request.browser = SessionBrowser::Launch;
         pickers.sessions = Some(request);
         pickers.key(
+            KeyEvent::new(KeyCode::Char('n'), Modifiers::CONTROL),
+            &KeyBindings::default(),
+        );
+        pickers.key(
             KeyEvent::new(KeyCode::Tab, Modifiers::NONE),
             &KeyBindings::default(),
         );
         assert_eq!(pickers.active().unwrap().query, "draft query");
         assert!(pickers.sessions.as_ref().unwrap().all_workspaces);
+        assert!(pickers.rows(100, 10)[0].contains("named only"));
         assert!(pickers.job.as_ref().unwrap().stop.is_cancelled());
         assert!(pickers.waiting.is_some());
         release.send(()).unwrap();
@@ -869,6 +984,7 @@ mod tests {
             "an empty scope must still allow Tab"
         );
         assert_eq!(pickers.active().unwrap().query, "draft query");
+        assert!(pickers.rows(100, 10)[0].contains("named only"));
         assert!(
             pickers
                 .key(
@@ -909,7 +1025,7 @@ mod tests {
         assert!(detail.contains("2 turn(s)"));
         let rows = pickers.rows(80, 10);
         assert!(rows.iter().any(|row| row.starts_with("› ")));
-        let Some(PickerValue::Session(path)) = pickers.key(
+        let Some(PickerValue::Session { path, .. }) = pickers.key(
             KeyEvent::new(KeyCode::Enter, Modifiers::NONE),
             &KeyBindings::default(),
         ) else {

@@ -404,7 +404,7 @@ mod tests {
         let mut previous = actions(&job(&run));
         previous.query = "task".into();
         assert!(matches!(
-            previous.items[previous.matches()[0]].value,
+            previous.items[previous.matches(false)[0]].value,
             PickerValue::Task(TaskChoice::Stop(_))
         ));
         run.joined = true;

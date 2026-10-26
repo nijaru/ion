@@ -42,6 +42,7 @@ actions! {
     FollowUp, "app.message.followUp", COMPOSER, ["alt+enter"], "Queue a follow-up";
     Dequeue, "app.message.dequeue", COMPOSER, ["alt+up"], "Recover queued or returned input";
     Scope, "app.session.toggleScope", PICKER, ["tab"], "Toggle launch Session folder scope";
+    NamedSessions, "app.session.toggleNamedFilter", PICKER, ["ctrl+n"], "Toggle named Sessions only";
     Submit, "tui.input.submit", EDIT, ["enter"], "Submit composer or custom answer";
     NewLine, "tui.input.newLine", EDIT, ["shift+enter", "ctrl+enter", "ctrl+j"], "Insert newline";
     Tab, "tui.input.tab", EDIT | COMPLETION, ["tab"], "Complete a path/command; otherwise insert tab";

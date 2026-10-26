@@ -221,6 +221,7 @@ fn custom_question_controls_share_editing_without_accepting_clipped_answers() {
         br#"{
         "tui.select.confirm":"alt+enter",
         "tui.select.down":"ctrl+n",
+        "app.session.toggleNamedFilter":[],
         "tui.select.cancel":"alt+x",
         "tui.input.submit":"alt+s",
         "tui.input.newLine":"ctrl+r"
