@@ -230,6 +230,12 @@ impl Screen {
         self.reconciliation_pending() || size != self.primary_size()
     }
 
+    /// Physical geometry used for fullscreen layout, independent of the primary
+    /// inline footprint. Intake can compare it with the current kernel size.
+    pub fn fullscreen_size(&self) -> (u16, u16) {
+        self.fullscreen_size
+    }
+
     /// Alternate geometry is independent of the retained primary footprint.
     pub fn resize_fullscreen(&mut self, width: u16, height: u16) {
         let size = (width.max(1), height.max(1));

@@ -61,6 +61,54 @@ pub(super) fn submit_editor(
     }
 }
 
+pub(super) fn submit_initial_prompts(
+    runtime: &mut SessionControl<EditorDraft>,
+    ui: &mut Frontend,
+    prompts: Vec<String>,
+) {
+    if prompts.is_empty() {
+        return;
+    }
+    let mut images = std::mem::take(&mut ui.images);
+    let mut files = std::mem::take(&mut ui.files);
+    let inputs = prompts
+        .into_iter()
+        .map(|literal| {
+            let source = EditorDraft::at_end(literal);
+            let input = UserInput::Prompt {
+                text: source.literal.clone(),
+                images: std::mem::take(&mut images),
+                files: std::mem::take(&mut files),
+            };
+            (input, source)
+        })
+        .collect();
+    match runtime.submit_batch(inputs) {
+        Ok(_) => {
+            ui.scroll = 0;
+            ui.status.clear();
+        }
+        Err(rejected) => {
+            let ion_host::RejectedBatch { inputs, reason } = *rejected;
+            let mut drafts = inputs.into_iter().map(|(input, source)| {
+                let UserInput::Prompt { images, files, .. } = input else {
+                    unreachable!("terminal launch submits raw prompts")
+                };
+                super::RecoveredDraft {
+                    source,
+                    images,
+                    files,
+                }
+            });
+            if let Some(first) = drafts.next() {
+                ui.show_draft(first);
+            }
+            ui.recovered.extend(drafts);
+            ui.status = format!("Input was not queued: {reason:#}");
+        }
+    }
+}
+
 pub(super) async fn apply_picker(
     runtime: &mut SessionControl<EditorDraft>,
     services: &Host,

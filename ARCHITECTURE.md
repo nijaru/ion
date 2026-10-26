@@ -1167,20 +1167,24 @@ default. In-chat browsing remains within the live binding's
 captured workspace rather than silently changing its authority.
 
 Without an explicit command, terminal stdin and stdout select chat; redirected
-I/O selects headless execution. An optional launch prompt starts the selected
-client; explicit `chat` also accepts it. Terminal launch attempts that prompt once,
-after acquiring terminal input/output and drawing, through ordinary shared-control
-admission with literal recovery metadata and file/image snapshots. Rejection/return
-retains the original text, cursor and attachments for editing; startup never resumes
-unknown effects or retries implicitly.
+I/O selects headless execution. Launch prompt operands start the selected client;
+explicit `chat` also accepts them. Each prompt is a separate ordered Turn, not
+space-joined text. Terminal launch admits the batch once after acquiring terminal
+input/output and drawing. Host shared control owns its Start and FollowUps, literal
+recovery metadata and file/image snapshots. Rejection returns every original in
+order: the first is editable and the rest use existing recovered-draft custody.
+Startup never resumes unknown effects or retries implicitly.
 CLI prompt text may expand resources but never invokes terminal built-ins or direct
 user-shell syntax. Bound it to the editor's recovery capacity before Session/MCP
 admission. Explicit `@file` operands also trigger that one initial submission when
 there is no prompt. Without either, attached `--image` inputs stay unsent.
 
-Bare launch, `run` and `chat` accept multiple explicit file operands and at most
-one prompt; they neither join extra text arguments nor create a startup Turn queue.
-`--` protects a literal prompt, including leading `@` and reserved command names.
+Bare launch, `run` and `chat` accept multiple explicit file and prompt operands.
+All files, `--image` attachments and literal stdin accompany only the first prompt;
+subsequent prompts expand resources independently and receive no new attachments.
+`--` protects every following prompt, including leading `@` and reserved command
+names. This is the current Pi-aligned operand interpretation, not a permanent
+compatibility commitment.
 Relative operands use the selected Session cwd; `@~/...` expands HOME. Host reads
 regular files or symlinks to them through verified bounded descriptors; special
 files fail closed. Supported images use the existing normalization/capability
@@ -1190,14 +1194,28 @@ from original prompt recovery metadata. Expand only the original prompt, then
 compose JSON-framed filenames/text and typed images into ordinary message content.
 File data is not resource or command authority; framing is not a prompt-injection
 guarantee. No live paths, implicit rereads or new Core Session format are involved.
-The source read bound is 32 MiB per file; aggregate encoded launch input must fit
-the existing request bound (8 MiB by default), without truncation.
+The source read bound is 32 MiB per file; each composed input must fit the existing
+request bound (8 MiB by default), without truncation.
 
-Validate the complete launch candidate before Session creation or MCP startup.
-Headless expansion and literal stdin composition precede this check; interactive
-resource errors remain ordinary recoverable Host admission. One prepared Resources
-snapshot serves preflight and initial binding, supplied explicitly to
-`CodingApplication::setup`; setup must not rediscover a competing snapshot.
+Validate file/image loading and complete encoded candidates before Session creation
+or MCP startup. Headless expansion and literal stdin composition precede this check;
+Host also preflights the batch's 64-input capacity and conservative retained-byte
+accounting against its existing 32 MiB budget. Accounting includes originals,
+prepared messages and metadata, not just the sum of prompt bytes. Expand and check
+incrementally rather than retaining an oversized expanded batch. Interactive resource
+and batch-budget errors remain recoverable Host admission after first draw. One
+prepared Resources snapshot serves preflight and initial binding, supplied explicitly
+to `CodingApplication::setup`; setup must not rediscover a competing snapshot.
+
+`SessionControl::submit_batch` validates and reserves the entire local batch before
+inserting any input or starting work, rechecking shared capacity against concurrent
+steering. Empty or refused batches neither clear Stop nor rearm completion authority.
+Successful explicit Start opens fresh intent; queued tails are ordinary FollowUps.
+This is volatile input custody, not a durable queue or a transaction over Turns.
+Asynchronous preparation keeps its existing cancellation/join and failure fences;
+Stop or a failed operation withdraws unstarted inputs without replay. Headless output
+retains the existing stream and one final last answer on success; partial success
+cannot hide a later failure or cancellation.
 Once committed, file context remains complete ordinary history. Editor restoration
 and Up/Down history recall obey the same 64 KiB capacity; oversized entries leave
 the current draft/cursor intact and remain traversable without being installed.
@@ -1299,6 +1317,8 @@ leaving or dismissing the token retires it. File and Session discovery
 share one cooperative scan owner, with cancelled work joined before replacement.
 A layout proposal is not selection authority: deferred inline reconciliation or
 a rejected geometry-fenced paint revokes acceptance until a frame is published.
+Check current kernel geometry before menu keys as well: a key can arrive before
+its resize notification and must not accept rows from the old viewport.
 Draft replacement invalidates draft-bound completion ranges and cancels discovery without
 abandoning the worker's join. Text editing has bounded terminal-local undo/redo
 and kill/yank recovery, independent of durable input custody. Ordinary typing

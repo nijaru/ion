@@ -60,9 +60,9 @@ pub use control::{
     AcceptedMetadata, ControlObserver, ControlSnapshot, ControlState, ControlUpdate, Delivery,
     InputAcceptance, InputCustodyPhase, InputId, InputPhase, InputSnapshot, Observation,
     OperationId, OperationKind, OperationOutcome, OperationState, OutcomeSnapshot,
-    RecoveryAdmission, RejectedInput, RequestAdmission, ReturnReason, ReturnSnapshot,
-    ReturnedInput, SessionControl, Settlement, ShutdownReport, SnapshotCursor, SteeringReceipt,
-    SteeringStatus, TurnSteering, UpdateSnapshot, UserInput,
+    RecoveryAdmission, RejectedBatch, RejectedInput, RequestAdmission, ReturnReason,
+    ReturnSnapshot, ReturnedInput, SessionControl, Settlement, ShutdownReport, SnapshotCursor,
+    SteeringReceipt, SteeringStatus, TurnSteering, UpdateSnapshot, UserInput, preflight_messages,
 };
 pub use credentials::{CredentialResolutionError, CredentialResolver};
 pub use delegation::{

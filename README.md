@@ -81,26 +81,41 @@ own input modes. `-p` selects headless mode independently of the prompt, so
 that starts with a dash, starts with `@`, or matches a command name. For example,
 `ion -- @literal` sends literal text rather than reading a file.
 
-A terminal launch prompt is submitted once, after any model setup or Session
-selection. Pass at most one prompt as a quoted argument. Skills/templates expand
-normally, but terminal built-ins and `!`/`!!` shell syntax are model input here,
-not local commands. Initial prompt text is limited to the editor's 64 KiB recovery
-capacity; rejected or unaccepted input retains its literal text, cursor and
-file/image attachments for editing. A launch prompt does not automatically
-continue an interrupted Turn. `--image` attaches to the initial prompt when
-present; without a prompt or `@file` operand, images stay unsent.
+Each prompt argument is a separate ordered Turn. Quote words that belong to one
+prompt; Ion does not join extra arguments with spaces. This is the current
+Pi-aligned default, not a permanent compatibility promise:
 
-Bare launch, `run` and `chat` accept multiple explicit `@file` operands with that
-one prompt, or files alone. Relative files resolve from the selected Session's
+```sh
+ion run 'Review the changes' 'Now suggest focused tests'
+ion @notes.md 'Review this context' 'Summarize the findings'
+ion run -- '@literal first prompt' 'usage'
+```
+
+Terminal launch submits the batch once after model setup or Session selection,
+then stays interactive. Skills/templates expand separately for each prompt, but
+terminal built-ins and `!`/`!!` syntax are model input here, not local commands.
+Each interactive prompt is limited to the editor's 64 KiB recovery capacity.
+Refused batches retain the first literal prompt/cursor/attachments in the editor
+and the remaining prompts in existing recovered-draft custody. Stop or a failed
+operation cancels unstarted inputs; nothing automatically retries or continues an
+interrupted Turn. The queue is local and volatile, not a durable batch transaction.
+Headless output keeps one final last answer on success and reports any failure,
+even after earlier successful Turns. Files, `--image` and literal stdin accompany
+only the first prompt; without a prompt or `@file`, images stay unsent.
+
+Bare launch, `run` and `chat` accept multiple explicit `@file` operands alongside
+prompts, or files alone. Relative files resolve from the selected Session's
 working directory; `@~/...` uses HOME. Ion reads each regular file (or symlink to
 one) once: UTF-8 text becomes literal JSON-framed context, and supported images
 use normal image normalization and model-capability checks. Only the prompt
 expands resources, not file contents or stdin. Empty files are retained; a leading
 UTF-8 BOM is stripped. Invalid UTF-8, binary NUL bytes and special files are
 rejected, not silently converted or truncated. Sources are bounded to 32 MiB each,
-and the complete encoded launch input must fit the 8 MiB request bound before
-Session creation or MCP startup. Interactive template expansion still uses normal
-recoverable admission. File snapshots survive source edits and rejected input;
+and each complete encoded input must fit the 8 MiB request bound. Headless launch
+also checks the whole batch before Session/MCP startup: at most 64 inputs and the
+existing 32 MiB retained-input budget, including originals, prepared messages and
+metadata. Interactive template and batch-budget errors use normal recoverable
+admission after first draw. File snapshots survive source edits and rejected input;
 committed history stores the complete context, not live paths. History too large
 for the 64 KiB editor is visibly refused without replacing the current draft.
 Typing or completing `@path` inside chat does **not** import a file.
@@ -2179,7 +2194,12 @@ service scale or remote-effect quiescence.
 Use `submit(Delivery, UserInput, metadata)` for input. `Prompt` expands only its
 `text` once, normalizes images and composes literal `TextFile` snapshots from
 `files`; `prompt_files::prepare_files` performs explicit bounded file loading.
-An already-prepared `Message` stays literal.
+An already-prepared `Message` stays literal. `submit_batch(Vec<(UserInput, M)>)`
+admits one Start and ordered FollowUps together or returns all originals and metadata
+in `RejectedBatch`. It reserves the existing shared capacity/byte budget before
+starting work; later preparation and execution retain ordinary Stop/failure behavior.
+For literal unit-metadata launch batches, `preflight_messages` checks count, message
+validity and conservative retained-byte accounting before application setup.
 Refusal returns the original input and metadata. The returned `InputId` means
 Host custody, not durable acceptance. Client metadata requires `Serialize + Send`
 but not `Clone`; it never enters model content or Session records.

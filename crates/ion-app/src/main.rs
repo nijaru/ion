@@ -620,57 +620,71 @@ async fn run_cli(cli: Invocation) -> Result<()> {
                 Headless(headless::Request, bool),
                 Rpc,
                 Terminal {
-                    prompt: Option<String>,
+                    prompts: Vec<String>,
                     images: Vec<ion_ai::LoadedImage>,
                     files: Vec<ion_host::prompt_files::TextFile>,
                 },
             }
             let client = match action {
                 Action::Run { input } => {
-                    let prompt = cli::with_piped_input(
+                    let mut prompts = input.into_prompts();
+                    let first = cli::with_piped_input(
                         expand_input(
                             &resources,
-                            input.prompt().unwrap_or_default().to_owned(),
+                            prompts.next().unwrap_or_default(),
                             ion_core::AgentLimits::default().max_request_bytes,
                         )?,
                         cli.piped_input,
                     );
-                    let message = ion_host::prompt_files::compose_prompt(prompt, &files, images);
-                    drop(files);
-                    Client::Headless(headless::Request::Prompt(message), cli.json)
+                    let first = ion_host::prompt_files::compose_prompt(first, &files, images);
+                    let messages = std::iter::once(Ok(first)).chain(prompts.map(|prompt| {
+                        expand_input(
+                            &resources,
+                            prompt,
+                            ion_core::AgentLimits::default().max_request_bytes,
+                        )
+                        .map(|text| ion_ai::Message::user_input(text, []))
+                    }));
+                    let messages = ion_host::preflight_messages(
+                        messages,
+                        ion_core::AgentLimits {
+                            image_input: selected.image_input,
+                            ..ion_core::AgentLimits::default()
+                        },
+                    )?;
+                    Client::Headless(headless::Request::Prompts(messages), cli.json)
                 }
-                Action::Chat { input } => Client::Terminal {
-                    prompt: input
-                        .prompt()
-                        .map(str::to_owned)
-                        .or_else(|| input.files().next().is_some().then(String::new)),
-                    images,
-                    files,
-                },
+                Action::Chat { input } => {
+                    let files_only = input.files().next().is_some();
+                    let mut prompts: Vec<_> = input.into_prompts().collect();
+                    if prompts.is_empty() && files_only {
+                        prompts.push(String::new());
+                    }
+                    Client::Terminal {
+                        prompts,
+                        images,
+                        files,
+                    }
+                }
                 Action::Compact => Client::Headless(headless::Request::Compact, false),
                 Action::Rpc => Client::Rpc,
                 _ => unreachable!("non-agent action handled above"),
             };
-            let bytes = match &client {
-                Client::Headless(headless::Request::Prompt(message), _) => {
-                    serde_json::to_vec(message)?.len()
-                }
-                Client::Terminal {
-                    prompt,
-                    files,
-                    images,
-                } => serde_json::to_vec(&ion_host::prompt_files::compose_prompt(
-                    prompt.clone().unwrap_or_default(),
+            if let Client::Terminal {
+                prompts,
+                files,
+                images,
+            } = &client
+            {
+                validate_launch_size(&ion_host::prompt_files::compose_prompt(
+                    prompts.first().cloned().unwrap_or_default(),
                     files,
                     images.clone(),
-                ))?
-                .len(),
-                _ => 0,
-            };
-            ensure!(
-                bytes <= ion_core::AgentLimits::default().max_request_bytes,
-                "launch input exceeds input byte limit"
-            );
+                ))?;
+                for prompt in prompts.iter().skip(1) {
+                    validate_launch_size(&ion_ai::Message::user_input(prompt.clone(), []))?;
+                }
+            }
             let session = Arc::new(if existing.is_some() {
                 CodingSession::open(&path)?
             } else {
@@ -763,7 +777,7 @@ async fn run_cli(cli: Invocation) -> Result<()> {
                     Client::Headless(request, json) => headless::run(setup, request, json).await,
                     Client::Rpc => rpc::run(setup, host).await,
                     Client::Terminal {
-                        prompt,
+                        prompts,
                         images,
                         files,
                     } => {
@@ -773,7 +787,7 @@ async fn run_cli(cli: Invocation) -> Result<()> {
                             images,
                             files,
                             startup_diagnostics,
-                            initial_prompt: prompt,
+                            initial_prompts: prompts,
                             tui_mode: cli.tui_mode,
                             keys,
                         })
@@ -831,6 +845,14 @@ fn print_stdout(arguments: std::fmt::Arguments<'_>) -> Result<()> {
 
 fn print_stderr(arguments: std::fmt::Arguments<'_>) -> Result<()> {
     writeln!(io::stderr().lock(), "{arguments}").context("cannot write CLI stderr")
+}
+
+fn validate_launch_size(message: &ion_ai::Message) -> Result<()> {
+    ensure!(
+        serde_json::to_vec(message)?.len() <= ion_core::AgentLimits::default().max_request_bytes,
+        "launch input exceeds input byte limit"
+    );
+    Ok(())
 }
 
 fn expand_input(resources: &Resources, prompt: String, max_output_bytes: usize) -> Result<String> {

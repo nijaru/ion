@@ -5,8 +5,8 @@ use anyhow::{Result, anyhow};
 use ion_ai::Message;
 use ion_core::{CodingAgentError, CodingAgentEvent};
 use ion_host::{
-    ControlUpdate, Delivery, Observation, OperationOutcome, ReturnReason, SessionControl,
-    SessionSetup, UserInput,
+    ControlUpdate, Observation, OperationOutcome, ReturnReason, SessionControl, SessionSetup,
+    UserInput,
 };
 use serde_json::json;
 use tokio::io::Interest;
@@ -14,7 +14,7 @@ use tokio::io::Interest;
 use crate::{agent_events, publication::Output, stdio::Stdio};
 
 pub(super) enum Request {
-    Prompt(Message),
+    Prompts(Vec<Message>),
     Compact,
 }
 
@@ -76,9 +76,14 @@ async fn foreground(
     // Install before scheduling work; a listener error cannot strand an operation.
     let mut signal = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::interrupt())?;
     match request {
-        Request::Prompt(message) => {
+        Request::Prompts(messages) => {
             control
-                .submit(Delivery::Start, UserInput::Message(message), ())
+                .submit_batch(
+                    messages
+                        .into_iter()
+                        .map(|message| (UserInput::Message(message), ()))
+                        .collect(),
+                )
                 .map_err(|rejected| rejected.reason)?;
         }
         Request::Compact => {
@@ -178,10 +183,16 @@ async fn foreground(
                     suppress_progress = true;
                 }
                 ControlUpdate::Returned(input) => {
-                    rejected = Some(match input.reason {
+                    let stopped = matches!(input.reason, ReturnReason::Stopped);
+                    let error = match input.reason {
                         ReturnReason::Preparation(error) => error,
                         ReturnReason::Stopped => CodingAgentError::Cancelled.into(),
                         reason => anyhow!("input was not accepted: {reason:?}"),
+                    };
+                    rejected = Some(match rejected.take() {
+                        None => error,
+                        Some(primary) if stopped => primary,
+                        Some(primary) => primary.context(format!("another input also failed: {error:#}")),
                     });
                     if let Some(error) = input.preparation_error {
                         rejected = rejected.map(|first| first.context(format!("preparation also failed: {error:#}")));
@@ -195,9 +206,16 @@ async fn foreground(
                 }
                 ControlUpdate::Idle => {
                     poll_control = false;
+                    if let Some(error) = rejected.take() {
+                        request_shutdown();
+                        parent_result = Some(match parent_result.take() {
+                            Some(Err(primary)) => Err(primary.context(format!("input also returned: {error:#}"))),
+                            _ => Err(error),
+                        });
+                    }
                     if parent_result.is_none() {
                         request_shutdown();
-                        parent_result = Some(Err(rejected.take().unwrap_or_else(|| anyhow!("operation ended without settlement"))));
+                        parent_result = Some(Err(anyhow!("operation ended without settlement")));
                     }
                 }
                 ControlUpdate::Input { .. }

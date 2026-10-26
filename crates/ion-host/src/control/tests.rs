@@ -221,6 +221,126 @@ fn non_sync_metadata_does_not_prevent_sending_the_owner_or_its_waits() {
 }
 
 #[tokio::test]
+async fn batch_admission_preserves_all_originals_and_rolls_back_before_start() {
+    let model = Model::new(1);
+    let mut fixture = Fixture::new(model.clone(), false);
+    fixture.control.request_stop();
+    let before = fixture.control.session().view().unwrap().entries.len();
+    let rejected = fixture
+        .control
+        .submit_batch(vec![
+            (prompt("valid first"), meta("first 🦀")),
+            (prompt(""), meta("second")),
+        ])
+        .unwrap_err();
+    assert_eq!(
+        rejected
+            .inputs
+            .iter()
+            .map(|(_, m)| m.literal.as_str())
+            .collect::<Vec<_>>(),
+        ["first 🦀", "second"]
+    );
+    assert!(rejected.inputs.iter().all(|(_, m)| m.marker.get() == 7));
+    assert!(!fixture.control.is_busy());
+    assert!(
+        fixture
+            .control
+            .submit(
+                Delivery::FollowUp,
+                prompt("no implicit restart"),
+                meta("kept")
+            )
+            .is_err()
+    );
+    let over_capacity = fixture
+        .control
+        .submit_batch(
+            (0..=MAX_ADMISSIONS)
+                .map(|_| (prompt("queued"), meta("retained")))
+                .collect(),
+        )
+        .unwrap_err();
+    assert_eq!(over_capacity.inputs.len(), MAX_ADMISSIONS + 1);
+
+    // Force failure while staging ready messages, after all original/metadata
+    // reservations fit. The identity's maximum encoded width leaves room for
+    // one ready message, but not two, independently of concurrent identity use.
+    let original = "original ".repeat(12);
+    let inputs = vec![
+        (prompt(&original), meta("one")),
+        (prompt(&original), meta("two")),
+    ];
+    let message = Message::user_input(original, []);
+    let originals: usize = inputs
+        .iter()
+        .map(|(input, metadata)| {
+            serde_json::to_vec(&(&message, &(input, metadata)))
+                .unwrap()
+                .len()
+        })
+        .sum();
+    let limit = originals + serde_json::to_vec(&(&message, u64::MAX)).unwrap().len();
+    fixture.control.budget = ion_core::InputBudget::new(limit);
+    let rejected = fixture.control.submit_batch(inputs).unwrap_err();
+    assert!(
+        rejected
+            .reason
+            .downcast_ref::<ion_core::CodingAgentError>()
+            .is_some_and(|error| matches!(
+                error,
+                ion_core::CodingAgentError::InputQueueFull { .. }
+            ))
+    );
+    assert_eq!(rejected.inputs.len(), 2);
+    assert_eq!(
+        fixture.control.session().view().unwrap().entries.len(),
+        before
+    );
+    assert_eq!(model.calls.load(Ordering::SeqCst), 0);
+    let overhead = serde_json::to_vec(&(Message::user_input(String::new(), []), ()))
+        .unwrap()
+        .len();
+    let entire_budget = fixture
+        .control
+        .budget
+        .reserve(
+            &Message::user_input("p".repeat(limit - overhead), []),
+            &(),
+            AgentLimits::default(),
+        )
+        .expect("every staged reservation must roll back");
+    drop(entire_budget);
+
+    let ids = fixture
+        .control
+        .submit_batch(vec![
+            (prompt("one"), meta("one")),
+            (prompt("two"), meta("two")),
+        ])
+        .unwrap();
+    assert_eq!(ids.len(), 2);
+    assert_ne!(ids[0], ids[1]);
+    model.release();
+    model.release();
+    for _ in 0..2 {
+        let (returned, settled) = settle(&mut fixture.control).await;
+        assert!(returned.is_empty());
+        assert!(!settled.outcome.failed());
+    }
+    let requests = model.requests.lock().unwrap();
+    assert_eq!(requests.len(), 2);
+    assert_eq!(
+        requests[0].messages.last(),
+        Some(&Message::user_input("one".into(), []))
+    );
+    assert_eq!(
+        requests[1].messages.last(),
+        Some(&Message::user_input("two".into(), []))
+    );
+}
+
+#[tokio::test]
 async fn dispatched_prompt_is_not_prepared_again_before_acceptance() {
     let model = Model::new(1);
     let mut fixture = Fixture::new(model.clone(), false);

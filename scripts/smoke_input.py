@@ -16,6 +16,7 @@ import tempfile
 import termios
 import threading
 import time
+from contextlib import closing
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
@@ -472,6 +473,11 @@ def exercise_keybindings(work, base_env, endpoint):
                     pass
         # The launch chooser receives the same map before opening a Session.
         sessions = set((root / "ion").rglob("*.sqlite"))
+        database, = sessions
+        with closing(sqlite3.connect(f"file:{database}?mode=ro", uri=True)) as connection:
+            header = json.loads(connection.execute("SELECT header FROM session WHERE id=1").fetchone()[0])
+        assert Path(header["cwd"]).resolve() == cwd.resolve()
+        session_label = "Session " + header["id"][:8]
         other = root / "other"
         other.mkdir()
         terminal = Terminal(other, env, mode, ["--resume", "--tui-mode", mode, "chat"])
@@ -483,7 +489,10 @@ def exercise_keybindings(work, base_env, endpoint):
             terminal.paint()
             terminal.output.clear()
             terminal.send(b"\x1b[13;3u")
-            terminal.wait(lambda: str(cwd.resolve()) in terminal.text() and b"state=idle" in terminal.output)
+            # Fullscreen may elide a long cwd. The selected saved identity and
+            # its independently checked cwd prove reopening without relying on
+            # the fixture's TMPDIR length or terminal width.
+            terminal.wait(lambda: session_label in terminal.text() and b"state=idle" in terminal.output)
             terminal.paint()
             terminal.send(b"\x11")
             terminal.wait_exit()

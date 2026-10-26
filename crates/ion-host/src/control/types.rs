@@ -83,6 +83,33 @@ pub struct RecoveryAdmission {
     pub point: ion_core::RecoveryPoint,
 }
 
+/// No input in this batch was queued. Originals and metadata retain their order.
+pub struct RejectedBatch<M> {
+    pub inputs: Vec<(UserInput, M)>,
+    pub reason: anyhow::Error,
+}
+
+impl<M> std::fmt::Debug for RejectedBatch<M> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("RejectedBatch")
+            .field("count", &self.inputs.len())
+            .field("reason", &self.reason)
+            .finish_non_exhaustive()
+    }
+}
+
+impl<M> std::fmt::Display for RejectedBatch<M> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        self.reason.fmt(f)
+    }
+}
+
+impl<M> std::error::Error for RejectedBatch<M> {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        Some(self.reason.as_ref())
+    }
+}
+
 pub struct RejectedInput<M> {
     pub delivery: Delivery,
     pub input: UserInput,

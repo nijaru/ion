@@ -1,6 +1,43 @@
 //! Validation and result-capacity reservation before effects.
 use super::*;
 
+/// Check a literal, unit-metadata launch batch before application setup has effects. Retain
+/// both original-input and ready-message accounting for the entire batch. Local
+/// identities use their maximum encoded width; live custody rechecks its state.
+pub fn preflight_messages(
+    messages: impl IntoIterator<Item = Result<Message>>,
+    limits: ion_core::AgentLimits,
+) -> Result<Vec<Message>> {
+    let messages = messages.into_iter();
+    ensure_capacity(messages.size_hint().0, 0)?;
+    let budget = ion_core::InputBudget::default();
+    let mut reservations = Vec::new();
+    let mut output = Vec::new();
+    for message in messages {
+        ensure_capacity(output.len() + 1, 0)?;
+        let original = UserInput::Message(message?);
+        let UserInput::Message(message) = &original else {
+            unreachable!("preflight constructs literal messages")
+        };
+        reservations.push(budget.reserve(message, &(&original, ()), limits)?);
+        reservations.push(budget.reserve(message, &InputId(u64::MAX), limits)?);
+        let UserInput::Message(message) = original else {
+            unreachable!("preflight constructs literal messages")
+        };
+        output.push(message);
+    }
+    ensure!(!output.is_empty(), "input batch is empty");
+    Ok(output)
+}
+
+fn ensure_capacity(count: usize, occupied: usize) -> Result<()> {
+    ensure!(
+        count <= MAX_ADMISSIONS - occupied,
+        "session result/admission capacity is full; drain lifecycle updates"
+    );
+    Ok(())
+}
+
 struct Admission {
     reservation: InputReservation,
     content: AdmissionContent,
@@ -18,81 +55,129 @@ impl<M: Serialize + Send + 'static> SessionControl<M> {
         input: UserInput,
         metadata: M,
     ) -> Result<InputId, Box<RejectedInput<M>>> {
-        match self.admit(delivery, &input, &metadata) {
-            Err(reason) => Err(Box::new(RejectedInput {
-                delivery,
-                input,
-                metadata,
-                reason,
-            })),
-            Ok(Admission {
+        self.submit_inputs(delivery, vec![(input, metadata)])
+            .map(|mut ids| ids.pop().expect("one submitted input"))
+            .map_err(|rejected| {
+                let RejectedBatch { mut inputs, reason } = *rejected;
+                let (input, metadata) = inputs.pop().expect("one rejected input");
+                Box::new(RejectedInput {
+                    delivery,
+                    input,
+                    metadata,
+                    reason,
+                })
+            })
+    }
+
+    /// Queue an explicit Start followed by ordered FollowUps, or return every
+    /// original without queuing any. Admission is local and volatile, not a
+    /// transaction over subsequent Turns or asynchronous image preparation.
+    pub fn submit_batch(
+        &mut self,
+        inputs: Vec<(UserInput, M)>,
+    ) -> Result<Vec<InputId>, Box<RejectedBatch<M>>> {
+        self.submit_inputs(Delivery::Start, inputs)
+    }
+
+    fn submit_inputs(
+        &mut self,
+        delivery: Delivery,
+        inputs: Vec<(UserInput, M)>,
+    ) -> Result<Vec<InputId>, Box<RejectedBatch<M>>> {
+        let admissions = (|| {
+            ensure!(!inputs.is_empty(), "input batch is empty");
+            ensure_capacity(inputs.len(), lock(&self.custody).occupied)?;
+            inputs
+                .iter()
+                .enumerate()
+                .map(|(index, (input, metadata))| {
+                    // An explicit new Start can clear retained stop intent only
+                    // after the whole batch passes. Validate its tail against that
+                    // unchanged Start eligibility, not against stale follow-up intent.
+                    let admission = self.admit(delivery, input, metadata);
+                    if inputs.len() == 1 {
+                        admission
+                    } else {
+                        admission.with_context(|| format!("input {}", index + 1))
+                    }
+                })
+                .collect::<Result<Vec<_>>>()
+        })();
+        let admissions = match admissions {
+            Ok(admissions) => admissions,
+            Err(reason) => return Err(Box::new(RejectedBatch { inputs, reason })),
+        };
+        let mut custody = lock(&self.custody);
+        let staged: Result<Vec<_>> = (|| {
+            // Live steering may have filled capacity during validation.
+            ensure_capacity(inputs.len(), custody.occupied)?;
+            let mut staged = Vec::with_capacity(admissions.len());
+            for Admission {
                 reservation,
                 content,
-            }) => {
-                let mut custody = lock(&self.custody);
-                // A live steering producer may have filled capacity during validation.
-                if custody.occupied == MAX_ADMISSIONS {
-                    return Err(Box::new(RejectedInput {
-                        delivery,
-                        input,
-                        metadata,
-                        reason: anyhow::anyhow!("session result/admission capacity is full"),
-                    }));
-                }
+            } in admissions
+            {
                 // Identity order is admission order, not validation start order.
                 let id = InputId(identity());
                 let (content, phase) = match content {
-                    AdmissionContent::Images(text) => {
-                        (InputContent::Images(text), InputPhase::Preparing)
+                    AdmissionContent::Images(message) => {
+                        (InputContent::Images(message), InputPhase::Preparing)
                     }
                     AdmissionContent::Ready(message) => {
-                        match self
-                            .budget
-                            .admit(message, id, self.setup.runtime.agent.limits())
-                        {
-                            Ok(prepared) => (InputContent::Ready(prepared), InputPhase::Queued),
-                            Err(reason) => {
-                                return Err(Box::new(RejectedInput {
-                                    delivery,
-                                    input,
-                                    metadata,
-                                    reason: reason.into(),
-                                }));
-                            }
-                        }
+                        let prepared =
+                            self.budget
+                                .admit(message, id, self.setup.runtime.agent.limits())?;
+                        (InputContent::Ready(prepared), InputPhase::Queued)
                     }
                 };
-                custody.occupied += 1;
-                custody.inputs.insert(
-                    id,
-                    Input {
-                        delivery,
-                        metadata,
-                        reservation,
-                        state: InputState::Pending(Box::new(PendingInput {
-                            original: input,
-                            instructions: self.setup.resources.instructions().to_owned(),
-                            content,
-                            withdrawn: None,
-                        })),
-                        steering_status: None,
-                    },
-                );
-                custody.updates.push_back(ControlUpdate::Input {
-                    id,
-                    delivery,
-                    phase,
-                });
-                drop(custody);
-                if delivery == Delivery::Start {
-                    self.stop_requested = false;
-                    self.completions.rearm();
-                    self.starting = Some((id, OperationId(identity())));
-                }
-                self.advance();
-                Ok(id)
+                staged.push((id, reservation, content, phase));
             }
+            Ok(staged)
+        })();
+        let staged = match staged {
+            Ok(staged) => staged,
+            Err(reason) => return Err(Box::new(RejectedBatch { inputs, reason })),
+        };
+        let mut ids = Vec::with_capacity(staged.len());
+        for (index, ((input, metadata), (id, reservation, content, phase))) in
+            inputs.into_iter().zip(staged).enumerate()
+        {
+            let input_delivery = if index == 0 {
+                delivery
+            } else {
+                Delivery::FollowUp
+            };
+            custody.occupied += 1;
+            custody.inputs.insert(
+                id,
+                Input {
+                    delivery: input_delivery,
+                    metadata,
+                    reservation,
+                    state: InputState::Pending(Box::new(PendingInput {
+                        original: input,
+                        instructions: self.setup.resources.instructions().to_owned(),
+                        content,
+                        withdrawn: None,
+                    })),
+                    steering_status: None,
+                },
+            );
+            custody.updates.push_back(ControlUpdate::Input {
+                id,
+                delivery: input_delivery,
+                phase,
+            });
+            ids.push(id);
         }
+        drop(custody);
+        if delivery == Delivery::Start {
+            self.stop_requested = false;
+            self.completions.rearm();
+            self.starting = Some((ids[0], OperationId(identity())));
+        }
+        self.advance();
+        Ok(ids)
     }
 
     /// Durably admit a literal message, or reconcile the same delivery without

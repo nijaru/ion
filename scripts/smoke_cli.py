@@ -3,7 +3,10 @@
 import base64
 import json
 import os
+import signal
+import sqlite3
 import subprocess
+from contextlib import closing
 import sys
 import tempfile
 import threading
@@ -14,6 +17,8 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 BINARY = Path(os.environ.get("ION_SMOKE_BIN", ROOT / "target/debug/ion"))
 requests = []
+batch_waiting = threading.Event()
+batch_release = threading.Event()
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -24,6 +29,19 @@ class Handler(BaseHTTPRequestHandler):
             {"choices": [{"index": 0, "delta": {}, "finish_reason": "stop"}]},
         ]
         prompt = requests[-1]["messages"][-1]["content"]
+        if prompt == "BATCH_FAIL":
+            payload = json.dumps({"error": {"message": "BATCH_FAILURE", "type": "invalid_request_error"}}).encode()
+            self.send_response(400)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(payload)))
+            self.end_headers()
+            self.wfile.write(payload)
+            return
+        if prompt == "BATCH_WAIT":
+            batch_waiting.set()
+            assert batch_release.wait(5), "batch cancellation fixture was not released"
+        if prompt == "!touch UNEXPECTED_BATCH_EFFECT":
+            events[0]["choices"][0]["delta"]["content"] = "BATCH_LAST_OK"
         if prompt in ("default", "restore"):
             events[-1]["model"] = "served-alias"
             events[-1]["usage"] = {
@@ -37,7 +55,10 @@ class Handler(BaseHTTPRequestHandler):
         self.send_header("Content-Type", "text/event-stream")
         self.send_header("Content-Length", str(len(payload)))
         self.end_headers()
-        self.wfile.write(payload)
+        try:
+            self.wfile.write(payload)
+        except (BrokenPipeError, ConnectionResetError):
+            assert prompt == "BATCH_WAIT", "unexpected fixture disconnect"
 
     def log_message(self, *_args):
         pass
@@ -62,6 +83,11 @@ with tempfile.TemporaryDirectory(prefix="ion-cli-") as temporary:
         if check:
             assert result.returncode == 0, (args, result.stdout, result.stderr)
         return result
+
+    def ended(database):
+        with closing(sqlite3.connect(f"file:{database}?mode=ro", uri=True)) as connection:
+            return [json.loads(row[0])["data"]["reason"] for row in connection.execute(
+                "SELECT body FROM entries WHERE json_extract(body, '$.kind') = 'turn_ended' ORDER BY seq")]
 
     try:
         endpoint = f"http://127.0.0.1:{server.server_port}/v1/chat/completions"
@@ -123,6 +149,62 @@ with tempfile.TemporaryDirectory(prefix="ion-cli-") as temporary:
         assert sum(part["type"] == "image_url" for part in parts) == 2, parts
         assert any(part.get("text", "").endswith("review") for part in parts), parts
         assert any("Attached image file:" in part.get("text", "") and "image.png" in part["text"] for part in parts), parts
+        # Positional prompts are distinct ordered Turns, not joined text or
+        # editor actions. Imports and literal stdin belong only to the first.
+        batch_session = root / "batch.sqlite"
+        count = len(requests)
+        result = run("--cwd", workspace, "--session", batch_session, "--json",
+                     "--model", "pictures/model", "run", "@" + context.name, "@image.png",
+                     "/hello", "/hello", "/help", "!touch UNEXPECTED_BATCH_EFFECT", input=b"/hello")
+        batch = requests[count:]
+        assert len(batch) == 4, batch
+        users = [message["content"] for message in batch[-1]["messages"] if message["role"] == "user"]
+        first_text = next(part["text"] for part in users[0] if part["type"] == "text")
+        assert json.loads(first_text.splitlines()[1])["text"] == literal
+        assert first_text.endswith("/hello\nEXPANDED_ARGUMENT\n"), first_text
+        assert sum(part["type"] == "image_url" for part in users[0]) == 1
+        assert users[1:] == ["EXPANDED_ARGUMENT\n", "/help", "!touch UNEXPECTED_BATCH_EFFECT"], users[1:]
+        assert not (workspace / "UNEXPECTED_BATCH_EFFECT").exists()
+        records = [json.loads(line) for line in result.stdout.splitlines()]
+        assert [record for record in records if record["type"] == "final"] == [{"type": "final", "text": "BATCH_LAST_OK"}], records
+        assert records[-1] == {"type": "run_end", "status": "completed"}
+        assert ended(batch_session) == ["completed"] * 4
+        count = len(requests)
+        run("--cwd", workspace, "run", "--", "@literal-first", "usage", "@literal-last")
+        assert [request["messages"][-1]["content"] for request in requests[count:]] == ["@literal-first", "usage", "@literal-last"]
+
+        # Failure after partial success remains failure; Stop/failure discard
+        # the unstarted tail rather than retrying it or hiding the first fault.
+        for prefix in ([], ["successful first"]):
+            database = root / f"failed-{len(prefix)}.sqlite"
+            count = len(requests)
+            result = run("--cwd", workspace, "--session", database, "--json", "run",
+                         *prefix, "BATCH_FAIL", "NEVER_RUN", check=False)
+            assert result.returncode != 0
+            assert len(requests) == count + len(prefix) + 1
+            records = [json.loads(line) for line in result.stdout.splitlines()]
+            assert records[-1]["status"] == "failed" and "BATCH_FAILURE" in records[-1]["error"], records
+            assert not any(record["type"] == "final" for record in records)
+            reasons = ended(database)
+            assert reasons[:-1] == ["completed"] * len(prefix) and "failed" in reasons[-1], reasons
+        database = root / "cancelled-batch.sqlite"
+        count = len(requests)
+        child = subprocess.Popen([BINARY, "--cwd", workspace, "--session", database, "--json",
+                                  "run", "BATCH_WAIT", "NEVER_RUN"], env=env,
+                                 stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        try:
+            assert batch_waiting.wait(5), "first batch Turn did not reach fixture"
+            child.send_signal(signal.SIGINT)
+            output, errors = child.communicate(timeout=5)
+            assert child.returncode != 0, errors
+            assert json.loads(output.splitlines()[-1])["status"] == "cancelled", output
+            assert len(requests) == count + 1 and ended(database) == ["cancelled"]
+        finally:
+            batch_release.set()
+            if child.poll() is None:
+                child.kill()
+                child.communicate(timeout=5)
+
         file_session = root / "files.sqlite"
         run("--cwd", workspace, "--session", file_session, "run", "@" + context.name, "first")
         run("--session", file_session, "run", "@" + context.name, "second")
@@ -163,6 +245,17 @@ with tempfile.TemporaryDirectory(prefix="ion-cli-") as temporary:
                      input=b"y" * (2 * 1024 * 1024), check=False)
         assert denied.returncode != 0, denied
         assert not aggregate_session.exists() and not marker.exists(), "aggregate input preflight admitted setup effects"
+        for tail in ("/hello '", ""):
+            database = root / "invalid-later.sqlite"
+            denied = run("--cwd", workspace, "--session", database, "run", "valid first", tail, check=False)
+            assert denied.returncode != 0 and not database.exists()
+            assert not marker.exists() and len(requests) == calls, "later prompt preflight admitted effects"
+        (prompts / "bulk.md").write_text("b" * (1024 * 1024))
+        for label, operands in (("capacity", ["small"] * 65), ("retained-bytes", ["/bulk"] * 11)):
+            database = root / f"batch-{label}.sqlite"
+            denied = run("--cwd", workspace, "--session", database, "run", *operands, check=False)
+            assert denied.returncode != 0 and not database.exists() and not marker.exists(), (label, "batch bounds admitted setup effects", denied.stderr)
+            assert len(requests) == calls
         for path in invalid:
             result = run("--cwd", workspace, "run", "@" + str(path), check=False)
             assert result.returncode != 0, path
@@ -222,9 +315,10 @@ with tempfile.TemporaryDirectory(prefix="ion-cli-") as temporary:
             assert b"--model" not in help_text and b"--cwd" not in help_text
         assert b"openai-responses" in run("use", "--help").stdout
     finally:
+        batch_release.set()
         server.shutdown()
         server.server_close()
         thread.join(timeout=5)
         assert not thread.is_alive()
 
-print("CLI qualified models, stdin-only input, scoped help and pre-admission boundaries: OK")
+print("CLI ordered prompt Turns, first-only attachments/stdin, failure/Stop, models and pre-admission boundaries: OK")

@@ -100,12 +100,12 @@ pub(crate) enum Action {
     Sessions,
     /// List skills and prompt templates available in the working directory.
     Resources,
-    /// Submit one prompt and print the committed final answer.
+    /// Submit ordered prompts as separate Turns and print the last answer.
     Run {
         #[command(flatten)]
         input: LaunchInput,
     },
-    /// Open terminal chat, optionally starting with a prompt.
+    /// Open terminal chat, optionally starting with ordered prompts.
     Chat {
         #[command(flatten)]
         input: LaunchInput,
@@ -201,9 +201,9 @@ pub(crate) enum McpAction {
 fn options() -> Vec<Arg> {
     vec![
         Arg::new("print").short('p').long("print").action(ArgAction::SetTrue)
-            .help("Submit a prompt or piped stdin headlessly, then exit"),
+            .help("Submit prompts or piped stdin headlessly, then exit"),
         Arg::new("json").long("json").action(ArgAction::SetTrue)
-            .help("Emit JSONL progress records for a headless prompt"),
+            .help("Emit JSONL progress records for a headless run"),
         Arg::new("completion_delivery").long("completion-delivery")
             .value_parser(clap::builder::PossibleValuesParser::new(ion_core::CompletionDelivery::ALL.map(ion_core::CompletionDelivery::as_str)).map(|value| value.parse::<ion_core::CompletionDelivery>().expect("listed delivery is valid")))
             .value_name("POLICY").help("Managed-work readiness: inbox (default), active continue, or automatic idle wake"),
@@ -306,7 +306,7 @@ pub(crate) fn parse() -> Result<Invocation> {
             invocation.piped_input = read_pipe(io::stdin().lock())?;
         }
         ensure!(
-            !input.prompt().unwrap_or_default().trim().is_empty()
+            !input.prompts().next().unwrap_or_default().trim().is_empty()
                 || input.files().next().is_some()
                 || !invocation.piped_input.trim().is_empty()
                 || !invocation.image.is_empty(),
@@ -340,7 +340,9 @@ fn normalize(mut matches: ArgMatches, interactive: bool) -> Result<Invocation> {
     }
     if let Action::Chat { input } = &action {
         ensure!(
-            input.prompt().map_or(0, str::len) <= crate::terminal_client::MAX_DRAFT,
+            input
+                .prompts()
+                .all(|prompt| prompt.len() <= crate::terminal_client::MAX_DRAFT),
             "interactive initial prompt exceeds 64 KiB"
         );
     }

@@ -20,6 +20,7 @@ use tokio_util::sync::CancellationToken;
 use crate::{SessionSetup, image_input::ImageSource, question::TurnStopScope};
 
 mod admission;
+pub use admission::preflight_messages;
 mod completion;
 mod custody;
 use custody::{Custody, Input, InputContent, InputState, PendingInput, turn_observer};

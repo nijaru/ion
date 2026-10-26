@@ -97,17 +97,17 @@ fn headless_modes_share_one_action_and_explicit_chat_stays_explicit() {
             panic!("expected headless action")
         };
         assert_eq!(
-            input.prompt().unwrap_or_default(),
-            expected.unwrap_or_default()
+            input.prompts().collect::<Vec<_>>(),
+            expected.into_iter().collect::<Vec<_>>()
         );
     }
     assert!(matches!(
         parse(&["ion"], true).unwrap().action,
-        Action::Chat { input } if input.prompt().is_none()
+        Action::Chat { input } if input.prompts().next().is_none()
     ));
     assert!(matches!(
         parse(&["ion", "chat"], false).unwrap().action,
-        Action::Chat { input } if input.prompt().is_none()
+        Action::Chat { input } if input.prompts().next().is_none()
     ));
     assert!(matches!(
         parse(&["ion", "rpc"], false).unwrap().action,
@@ -117,15 +117,15 @@ fn headless_modes_share_one_action_and_explicit_chat_stays_explicit() {
 }
 
 #[test]
-fn file_operands_are_explicit_and_literal_escape_keeps_one_prompt() {
+fn file_operands_are_explicit_and_literal_escape_preserves_prompt_order() {
     for prefix in [vec!["ion"], vec!["ion", "chat"], vec!["ion", "run"]] {
         let mut args = prefix.clone();
-        args.extend(["@first.md", "review 🦀", "@image.png"]);
+        args.extend(["@first.md", "review 🦀", "@image.png", "check"]);
         let cli = parse(&args, true).unwrap();
         let (Action::Run { input } | Action::Chat { input }) = cli.action else {
             panic!("launch")
         };
-        assert_eq!(input.prompt(), Some("review 🦀"));
+        assert_eq!(input.prompts().collect::<Vec<_>>(), ["review 🦀", "check"]);
         assert_eq!(
             input.files().collect::<Vec<_>>(),
             vec![
@@ -135,18 +135,19 @@ fn file_operands_are_explicit_and_literal_escape_keeps_one_prompt() {
         );
 
         let mut args = prefix;
-        args.extend(["@first.md", "--", "@literal"]);
+        args.extend(["@first.md", "before", "--", "@literal", "usage"]);
         let cli = parse(&args, true).unwrap();
         let (Action::Run { input } | Action::Chat { input }) = cli.action else {
             panic!("launch")
         };
-        assert_eq!(input.prompt(), Some("@literal"));
+        assert_eq!(
+            input.prompts().collect::<Vec<_>>(),
+            ["before", "@literal", "usage"]
+        );
         assert_eq!(input.files().count(), 1);
     }
     for args in [
         vec!["ion", "@"],
-        vec!["ion", "run", "one", "two"],
-        vec!["ion", "one", "--", "two"],
         vec!["ion", "@file", "inspect"],
         vec!["ion", "usage", "@file"],
     ] {
@@ -155,7 +156,7 @@ fn file_operands_are_explicit_and_literal_escape_keeps_one_prompt() {
 }
 
 #[test]
-fn interactive_launch_preserves_one_prompt_and_rejects_unrecoverable_or_unused_text() {
+fn interactive_launch_preserves_prompts_and_rejects_unrecoverable_or_unused_text() {
     let text = "  launch 🦀\nwith context  ";
     for args in [
         vec!["ion", text],
@@ -166,20 +167,16 @@ fn interactive_launch_preserves_one_prompt_and_rejects_unrecoverable_or_unused_t
     ] {
         let cli = parse(&args, true).unwrap();
         assert!(
-            matches!(cli.action, Action::Chat { input } if input.prompt() == Some(text)),
+            matches!(cli.action, Action::Chat { input } if input.prompts().eq([text])),
             "{args:?}"
         );
     }
-    for args in [
-        vec!["ion", text, "auth"],
-        vec!["ion", text, "chat"],
-        vec!["ion", "chat", "one", "two"],
-    ] {
+    for args in [vec!["ion", text, "auth"], vec!["ion", text, "chat"]] {
         assert!(parse(&args, true).is_err(), "{args:?}");
     }
     let exact = "🦀".repeat(crate::terminal_client::MAX_DRAFT / 4);
     assert!(parse(&["ion", "chat", &exact], true).is_ok());
-    assert!(parse(&["ion", "chat", &format!("{exact}x")], true).is_err());
+    assert!(parse(&["ion", "chat", "first", &format!("{exact}x")], true).is_err());
 }
 
 #[test]
@@ -206,7 +203,7 @@ fn resume_is_an_explicit_terminal_chooser_not_a_session_operand() {
     assert!(!parse(&["ion"], true).unwrap().resume_session);
     let cli = parse(&["ion", "--resume", "saved"], true).unwrap();
     assert!(cli.resume_session);
-    assert!(matches!(cli.action, Action::Chat { input } if input.prompt() == Some("saved")));
+    assert!(matches!(cli.action, Action::Chat { input } if input.prompts().eq(["saved"])));
 }
 
 #[test]

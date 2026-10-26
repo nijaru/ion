@@ -54,7 +54,7 @@ use command::{CommandInput, dispatch_command};
 use composer::input_window;
 use editing::{Edit, vertical_cursor};
 use editor_recovery::EditorRecovery;
-use interaction::{apply_picker, submit_editor};
+use interaction::{apply_picker, submit_editor, submit_initial_prompts};
 use picker::{Picker, PickerValue, Pickers};
 use question::{QuestionAction, QuestionModal};
 pub use setup::{choose_session, setup_model};
@@ -232,7 +232,7 @@ pub struct ChatInit {
     pub images: Vec<LoadedImage>,
     pub files: Vec<ion_host::prompt_files::TextFile>,
     pub startup_diagnostics: Vec<String>,
-    pub initial_prompt: Option<String>,
+    pub initial_prompts: Vec<String>,
     pub tui_mode: TuiMode,
     pub(crate) keys: KeyBindings,
 }
@@ -253,7 +253,7 @@ pub async fn chat(init: ChatInit) -> Result<()> {
         files: init.files,
         ..Frontend::default()
     };
-    let mut initial_prompt = init.initial_prompt;
+    let mut initial_prompts = Some(init.initial_prompts).filter(|prompts| !prompts.is_empty());
     let mut activity = Activity::default();
     let mut program = ProgramStatusState::default();
     let mut terminal_owner = None;
@@ -283,12 +283,11 @@ pub async fn chat(init: ChatInit) -> Result<()> {
             if std::env::var_os("ION_SMOKE_PANIC_AFTER_FIRST_DRAW").is_some() {
                 panic!("ION smoke panic after first terminal draw");
             }
-            // CLI text is a prompt, not a simulated editor key: never interpret
-            // it as a terminal command or direct shell invocation. Attempt once
-            // after terminal entry/first draw; normal Host rejection/return keeps
-            // its literal source and attachments available in the editor.
-            if let Some(prompt) = initial_prompt.take() {
-                submit_editor(&mut runtime, &mut ui, Delivery::Start, EditorDraft::at_end(prompt));
+            // CLI text is not simulated editor input. Admit the ordered batch
+            // once after first draw, without interpreting terminal commands.
+            // Host custody owns all subsequent Turns, rejection and Stop.
+            if let Some(prompts) = initial_prompts.take() {
+                submit_initial_prompts(&mut runtime, &mut ui, prompts);
                 poll_control = true;
                 continue;
             }
@@ -351,6 +350,18 @@ pub async fn chat(init: ChatInit) -> Result<()> {
                         runtime.request_stop();
                         poll_control = true;
                         continue;
+                    }
+                    // A key can beat SIGWINCH delivery. A menu published in the
+                    // old geometry must lose authority before handling that key.
+                    let published_size = if terminal.is_alt_screen()? {
+                        screen.fullscreen_size()
+                    } else {
+                        screen.primary_size()
+                    };
+                    if terminal.size()? != published_size {
+                        ui.completion.invalidate_visibility();
+                        ui.pickers.invalidate_visibility();
+                        screen.note_resize();
                     }
                     if ui.question_owns_input() {
                         let action = ui

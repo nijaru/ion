@@ -673,6 +673,53 @@ async fn host_rejection_restores_exact_editor_and_images() {
 }
 
 #[tokio::test]
+async fn rejected_launch_batch_keeps_empty_attached_first_and_ordered_literal_tail() {
+    let mut fixture = Fixture::new();
+    fs::create_dir_all(fixture.root.join(".ion/prompts")).unwrap();
+    fs::write(fixture.root.join(".ion/prompts/check.md"), "Expanded $1").unwrap();
+    fixture.control.reload_resources().unwrap();
+    let before = fixture.control.session().view().unwrap().entries.len();
+    let mut ui = Frontend {
+        images: vec![image("first image")],
+        files: vec![ion_host::prompt_files::TextFile {
+            name: "frozen.md".into(),
+            text: "/check literal 🦀".into(),
+        }],
+        ..Frontend::default()
+    };
+    let malformed = "/check '🦀";
+    interaction::submit_initial_prompts(
+        &mut fixture.control,
+        &mut ui,
+        vec![String::new(), malformed.into(), "/help".into()],
+    );
+    assert_eq!((ui.draft.as_str(), ui.cursor), ("", 0));
+    assert_note(&ui.images[0], "first image");
+    assert_eq!(ui.files[0].text, "/check literal 🦀");
+    assert_eq!(
+        ui.recovered
+            .iter()
+            .map(|draft| draft.source.literal.as_str())
+            .collect::<Vec<_>>(),
+        [malformed, "/help"]
+    );
+    assert_eq!(ui.recovered[0].source.cursor, malformed.len());
+    assert!(
+        ui.recovered
+            .iter()
+            .all(|draft| draft.images.is_empty() && draft.files.is_empty())
+    );
+    assert!(ui.status.contains("not queued"));
+    assert!(!fixture.control.is_busy());
+    assert!(matches!(fixture.control.next().await, ControlUpdate::Idle));
+    assert_eq!(
+        fixture.control.session().view().unwrap().entries.len(),
+        before
+    );
+    fixture.control.shutdown().await;
+}
+
+#[tokio::test]
 async fn asynchronous_preparation_return_retains_raw_source_and_other_edits() {
     let mut fixture = Fixture::new();
     fs::create_dir_all(fixture.root.join(".ion/prompts")).unwrap();
