@@ -9,7 +9,7 @@ use two_face::re_exports::syntect::{
 };
 
 use super::View;
-use crate::presentation_style::{Role, style};
+use crate::presentation_style::{Role, Theme};
 
 // Presentation is synchronous. Limit grammar work, not displayed/source content;
 // an oversized block or line remains literal code, without partial tokenization.
@@ -50,7 +50,7 @@ impl View<'_> {
         if !info.is_empty() {
             self.spans.push(Span::styled(
                 format!("code · {info}"),
-                style(Role::Secondary),
+                self.theme.style(Role::Secondary),
             ));
             self.flush();
         }
@@ -69,10 +69,10 @@ impl View<'_> {
         // The parser's final newline terminates the block, not an extra row.
         let source = source.strip_suffix('\n').unwrap_or(&source);
         self.push_prefix("  ".into(), "  ".into());
-        self.spans = highlight(source, &info, self.style()).unwrap_or_else(|| {
+        self.spans = highlight(source, &info, self.style(), self.theme).unwrap_or_else(|| {
             vec![Span::styled(
                 source.to_owned(),
-                self.style().patch(style(Role::Code)),
+                self.style().patch(self.theme.style(Role::Code)),
             )]
         });
         self.flush();
@@ -81,7 +81,7 @@ impl View<'_> {
     }
 }
 
-fn highlight(source: &str, info: &str, base: Style) -> Option<Vec<Span<'static>>> {
+fn highlight(source: &str, info: &str, base: Style, theme: &Theme) -> Option<Vec<Span<'static>>> {
     let token = info.split_whitespace().next()?.to_ascii_lowercase();
     if source.is_empty()
         || matches!(token.as_str(), "text" | "txt" | "plain" | "plaintext")
@@ -112,7 +112,7 @@ fn highlight(source: &str, info: &str, base: Style) -> Option<Vec<Span<'static>>
                     .iter()
                     .find_map(|&(prefix, role)| prefix.is_prefix_of(scope).then_some(role))
             });
-            let style = role.map_or(base, |role| base.patch(style(role)));
+            let style = role.map_or(base, |role| base.patch(theme.style(role)));
             if let Some(last) = spans.last_mut().filter(|span| span.style == style) {
                 last.content.to_mut().push_str(text);
             } else {
@@ -133,17 +133,28 @@ mod tests {
             "x".repeat(MAX_LINE_BYTES + 1),
             "// line\n".repeat(MAX_BLOCK_BYTES / 8 + 1),
         ] {
-            assert!(highlight(&source, "rust", Style::default()).is_none());
+            assert!(highlight(&source, "rust", Style::default(), &Theme::default()).is_none());
         }
-        assert!(highlight("fn main() {}", "/tmp/example.rs", Style::default()).is_none());
+        assert!(
+            highlight(
+                "fn main() {}",
+                "/tmp/example.rs",
+                Style::default(),
+                &Theme::default()
+            )
+            .is_none()
+        );
         let source = "fn main() {\n  /* unfinished";
-        let spans = highlight(source, "rust", Style::default()).unwrap();
+        let spans = highlight(source, "rust", Style::default(), &Theme::default()).unwrap();
         assert_eq!(
             spans.iter().map(|s| s.content.as_ref()).collect::<String>(),
             source
         );
-        assert_eq!(spans.last().unwrap().style, style(Role::SyntaxComment));
-        let fresh = highlight("let n = 42;", "rust", Style::default()).unwrap();
-        assert_eq!(fresh[0].style, style(Role::SyntaxKeyword));
+        assert_eq!(
+            spans.last().unwrap().style,
+            Theme::default().style(Role::SyntaxComment)
+        );
+        let fresh = highlight("let n = 42;", "rust", Style::default(), &Theme::default()).unwrap();
+        assert_eq!(fresh[0].style, Theme::default().style(Role::SyntaxKeyword));
     }
 }

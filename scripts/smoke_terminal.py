@@ -480,7 +480,9 @@ with tempfile.TemporaryDirectory(prefix="ion-terminal-") as temporary:
             assert b"MARKDOWN_BOLD and literal_code docs (https://example.org/ion)" in plain_output, "assistant Markdown was not rendered"
             assert b"TABLE_CELL \xe2\x94\x82 TABLE_VISIBLE" in plain_output, "assistant table was not laid out"
             assert b"fn syntax_probe()" in plain_output and b'"SYNTAX_LITERAL"; // syntax comment' in plain_output, "syntax rendering changed code text"
-            assert b'\x1b[32m"SYNTAX_LITERAL"' in output, "syntax string color did not reach terminal publication"
+            # This fixture answers no palette queries. Both SGR spellings mean
+            # ANSI slot 2; system fallback need not encode it as basic SGR 32.
+            assert re.search(rb'\x1b\[(?:32|38;5;2)m"SYNTAX_LITERAL"', output), "syntax string color did not reach terminal publication"
             assert b"-sample data" in plain_output and b"+sample data updated" in plain_output, "actual edit patch was not rendered"
             assert b"+created by ion" in plain_output, "actual write patch was not rendered"
             assert "• ".encode() in output, "semantic activity group header was not rendered"

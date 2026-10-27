@@ -224,7 +224,7 @@ async fn drive(
             }
             InputEvent::Resize(_) => {}
             InputEvent::Rejected(error) => notice = Some(error.to_string()),
-            InputEvent::Mouse(_) => {}
+            InputEvent::Mouse(_) | InputEvent::ColorsChanged => {}
         }
     }
 }

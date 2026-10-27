@@ -1,8 +1,6 @@
 //! Presentation of a recorded edit or write observation; patch syntax never determines effect state.
-use crate::presentation_style::{Role, style};
+use crate::presentation_style::Role;
 use ion_core::{ActivityState, ToolActivityKind, TranscriptActivity};
-#[cfg(test)]
-use ratatui::style::Color;
 use ratatui::text::{Line, Span};
 use serde_json::{Map, Value};
 use unicode_width::UnicodeWidthStr;
@@ -36,7 +34,7 @@ pub(crate) fn render(
     activity: &TranscriptActivity,
     prefix: &str,
     width: usize,
-    detail: &crate::tool_output::OutputOptions,
+    detail: &crate::tool_output::RenderOptions<'_>,
 ) {
     let Some(diff) = recorded(activity) else {
         return;
@@ -62,10 +60,10 @@ pub(crate) fn render(
         let last = index + 1 == lines.len() && footer.is_none();
         // These are syntax styles only. The Completed state above comes from Core facts.
         let style = match text.as_bytes().first() {
-            Some(b'+') => style(Role::Added),
-            Some(b'-') => style(Role::Removed),
-            Some(b'@') => style(Role::Hunk),
-            _ => style(Role::Secondary),
+            Some(b'+') => detail.theme.style(Role::Added),
+            Some(b'-') => detail.theme.style(Role::Removed),
+            Some(b'@') => detail.theme.style(Role::Hunk),
+            _ => detail.theme.style(Role::Secondary),
         };
         // Bound physical preview rows; long source lines remain in inspection.
         let visible = if expanded {
@@ -91,7 +89,7 @@ pub(crate) fn render(
                     &footer,
                     width.saturating_sub(prefix.width() + 2).max(1),
                 ),
-                style(Role::Secondary),
+                detail.theme.style(Role::Secondary),
             ),
             width,
         );
@@ -132,9 +130,11 @@ mod tests {
             &activity,
             "  ",
             80,
-            &crate::tool_output::OutputOptions::new(
+            &crate::tool_output::RenderOptions::new(
                 crate::tool_output::OutputDetail::Compact,
                 &crate::keybindings::KeyBindings::default(),
+                &crate::presentation_style::Theme::default(),
+                crate::transcript_render::ThinkingVisibility::Hidden,
             ),
         );
         assert!(rows.iter().any(|row| row.to_string().contains("+new")));
@@ -172,9 +172,11 @@ mod tests {
                 &activity,
                 "│ ",
                 width,
-                &crate::tool_output::OutputOptions::new(
+                &crate::tool_output::RenderOptions::new(
                     crate::tool_output::OutputDetail::Compact,
                     &crate::keybindings::KeyBindings::default(),
+                    &crate::presentation_style::Theme::default(),
+                    crate::transcript_render::ThinkingVisibility::Hidden,
                 ),
             );
             assert!(rows.len() <= 9, "width {width}: {} rows", rows.len());
@@ -183,14 +185,20 @@ mod tests {
                     .all(|row| row.width() <= width && !row.to_string().contains('\u{1b}'))
             );
             assert!(rows.iter().any(|row| {
-                row.spans
-                    .iter()
-                    .any(|span| span.style.fg == Some(Color::Red))
+                row.spans.iter().any(|span| {
+                    span.style.fg
+                        == crate::presentation_style::Theme::default()
+                            .style(Role::Removed)
+                            .fg
+                })
             }));
             assert!(rows.iter().any(|row| {
-                row.spans
-                    .iter()
-                    .any(|span| span.style.fg == Some(Color::Green))
+                row.spans.iter().any(|span| {
+                    span.style.fg
+                        == crate::presentation_style::Theme::default()
+                            .style(Role::Added)
+                            .fg
+                })
             }));
         }
         let mut expanded = Vec::new();
@@ -199,9 +207,11 @@ mod tests {
             &activity,
             "  ",
             80,
-            &crate::tool_output::OutputOptions::new(
+            &crate::tool_output::RenderOptions::new(
                 crate::tool_output::OutputDetail::Expanded,
                 &crate::keybindings::KeyBindings::default(),
+                &crate::presentation_style::Theme::default(),
+                crate::transcript_render::ThinkingVisibility::Hidden,
             ),
         );
         let expanded = expanded

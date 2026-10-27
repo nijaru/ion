@@ -42,7 +42,10 @@ fn completion_consumed_keys_interrupt_composer_yank_affinity() {
 #[tokio::test]
 async fn reload_publishes_prepared_keys_and_discards_only_obsolete_status_hints() {
     let mut fixture = super::tests::Fixture::new();
-    let mut ui = Frontend::default();
+    let mut ui = Frontend {
+        themes: crate::themes::Themes::load(fixture.host.config_root(), None).unwrap(),
+        ..Frontend::default()
+    };
     ui.replace_draft_atomic("literal 🦀 draft".into());
     ui.cursor = "literal ".len();
     command::handle_builtin(
@@ -73,6 +76,22 @@ async fn reload_publishes_prepared_keys_and_discards_only_obsolete_status_hints(
         br#"{"app.model.select":"alt+m","tui.editor.pageUp":"f7"}"#,
     )
     .unwrap();
+    let settings = fixture.host.config_root().join("settings.json");
+    fs::write(&settings, br#"{"theme":"missing"}"#).unwrap();
+    let original_theme = ui.themes.theme().clone();
+    assert!(
+        command::handle_builtin(
+            &mut fixture.control,
+            &fixture.host,
+            &mut ui,
+            Builtin::Reload,
+            ""
+        )
+        .is_err()
+    );
+    assert_eq!(ui.keys.label(KeyAction::Model), "Ctrl-L");
+    assert_eq!(ui.themes.theme(), &original_theme);
+    fs::write(&settings, br#"{"theme":"light"}"#).unwrap();
     command::handle_builtin(
         &mut fixture.control,
         &fixture.host,
@@ -81,6 +100,10 @@ async fn reload_publishes_prepared_keys_and_discards_only_obsolete_status_hints(
         "",
     )
     .unwrap();
+    assert_eq!(
+        ui.themes.theme(),
+        &crate::presentation_style::Theme::fixed(false)
+    );
     assert_eq!(ui.keys.label(KeyAction::Model), "Alt-M");
     assert!(
         ui.status.is_empty(),
@@ -238,7 +261,7 @@ fn custom_question_controls_share_editing_without_accepting_clipped_answers() {
         }],
     }];
     let mut question = QuestionModal::new(request, questions.clone());
-    question.render(3, 1, &keys);
+    question.render(3, 1, &keys, &crate::presentation_style::Theme::default());
     assert!(matches!(
         question.key(KeyEvent::new(KeyCode::Enter, Modifiers::ALT), &keys),
         QuestionAction::None

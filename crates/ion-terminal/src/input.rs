@@ -179,6 +179,8 @@ pub enum InputEvent {
     Rejected(InputError),
     Mouse(MouseEvent),
     Resize(Size),
+    /// The neutral color snapshot or its refresh-needed status changed.
+    ColorsChanged,
 }
 
 #[derive(Debug)]
@@ -260,6 +262,7 @@ impl InputStream {
     }
 
     pub(crate) fn resume(&mut self) -> io::Result<()> {
+        self.replies.end_mode_capture();
         let Some(file) = self.file.take() else {
             return Ok(());
         };
@@ -290,7 +293,9 @@ impl InputStream {
         self.parser = InputParser::new();
         self.utf8.clear();
         self.paste.quarantine();
-        self.replies = TerminalReplyFilter::default();
+        // Keep protocol framing and observations: a delayed terminal reply
+        // must not become secret input, and quarantine is not a scheme change.
+        self.replies.quarantine();
         self.escape_deadline = None;
         let mut error = None;
         while let Ok(chunk) = self.chunks.try_recv() {
@@ -309,6 +314,9 @@ impl InputStream {
                 }
             }
         }
+        // Discard key prefixes gathered while draining too; only positively
+        // identified protocol framing may cross the credential boundary.
+        self.replies.quarantine();
         error.map_or(Ok(()), Err)
     }
 
@@ -342,6 +350,7 @@ impl InputStream {
                 Err(error) => return Err(error),
             }
         }
+        self.replies.quarantine();
         self.resume()
     }
 
@@ -363,14 +372,61 @@ impl InputStream {
     }
 
     fn discard_secret_chunk(&mut self, bytes: &[u8]) {
-        let _discarded = self.paste.feed(bytes);
+        self.replies.end_mode_capture();
+        for frame in self.paste.feed(bytes) {
+            match frame {
+                InputFrame::Bytes(bytes) => {
+                    // Observe protocol outside literal paste, but discard all
+                    // decoded input/events at this credential custody boundary.
+                    self.replies.feed(&bytes, false, false);
+                }
+                InputFrame::PasteStart => self.replies.paste_boundary(),
+                InputFrame::Paste(_) | InputFrame::Rejected(_) => {}
+            }
+        }
         self.paste.quarantine();
     }
 
+    pub(crate) fn colors(&self) -> crate::TerminalColors {
+        self.replies.colors
+    }
+
+    pub(crate) fn colors_need_refresh(&self) -> bool {
+        self.replies.colors_need_refresh()
+    }
+
+    pub(crate) fn reacquire_colors(&mut self) {
+        self.replies.reacquire();
+    }
+
+    pub(crate) fn begin_color_probe(&mut self, query_mode: bool) -> bool {
+        self.replies.begin_color_probe(query_mode)
+    }
+
+    pub(crate) async fn color_observations(&mut self, query_mode: bool) -> io::Result<Option<u8>> {
+        // DA1 is untagged: a keyboard query can have completed on flags while
+        // its DA1 is still in flight. Do not mistake that old reply for a color
+        // fence. All eighteen replies settle early; otherwise use one 100ms
+        // absolute budget, including the optional DECRQM observation.
+        self.await_reply(
+            |replies| replies.color_probe_complete(query_mode).then_some(()),
+            false,
+            Duration::from_millis(100),
+        )
+        .await?;
+        self.replies.finish_color_probe();
+        Ok(self.replies.appearance_mode)
+    }
+
     pub(crate) async fn keyboard_support(&mut self) -> io::Result<Option<bool>> {
+        self.replies.end_mode_capture();
         self.replies.keyboard = None;
         let (support, _) = self
-            .await_reply(|replies| replies.keyboard.take(), false)
+            .await_reply(
+                |replies| replies.keyboard.take(),
+                false,
+                Duration::from_millis(500),
+            )
             .await?;
         Ok(support)
     }
@@ -388,9 +444,14 @@ impl InputStream {
     }
 
     pub(crate) async fn cursor_position(&mut self) -> io::Result<Option<(u16, u16)>> {
+        self.replies.end_mode_capture();
         self.replies.cursor = None;
         let (result, resized) = self
-            .await_reply(|replies| replies.cursor.take(), true)
+            .await_reply(
+                |replies| replies.cursor.take(),
+                true,
+                Duration::from_millis(500),
+            )
             .await?;
         let cursor = result.ok_or_else(|| {
             io::Error::new(io::ErrorKind::TimedOut, "terminal cursor query timed out")
@@ -402,13 +463,18 @@ impl InputStream {
         &mut self,
         reply: impl Fn(&mut TerminalReplyFilter) -> Option<T>,
         cursor_query: bool,
+        timeout: Duration,
     ) -> io::Result<(Option<T>, bool)> {
-        let deadline = tokio::time::Instant::now() + Duration::from_millis(500);
+        let deadline = tokio::time::Instant::now() + timeout;
         let mut resized = false;
         loop {
+            self.expire_replies();
             let now = tokio::time::Instant::now();
             if now >= deadline {
-                self.parse(&[], false);
+                self.replies.end_mode_capture();
+                if self.escape_deadline.is_some_and(|escape| now >= escape) {
+                    self.parse(&[], false);
+                }
                 return Ok((None, resized));
             }
             if let Some(value) = reply(&mut self.replies) {
@@ -419,6 +485,7 @@ impl InputStream {
                 continue;
             }
             let escape_deadline = self.escape_deadline;
+            let reply_deadline = self.replies.reply_deadline();
             let chunk = tokio::select! {
                 biased;
                 _ = self.resize.recv(), if cursor_query => {
@@ -430,15 +497,16 @@ impl InputStream {
                 },
                 chunk = self.chunks.recv() => chunk,
                 () = tokio::time::sleep_until(deadline) => continue,
-                () = wait_escape(escape_deadline) => continue,
+                () = wait_deadline(escape_deadline) => continue,
+                () = wait_deadline(reply_deadline) => continue,
             };
             match chunk {
                 Some(Ok(bytes)) => {
                     if tokio::time::Instant::now() >= deadline {
                         // Receive has transferred custody; preserve late type-ahead
                         // through ordinary intake, never as an accepted query reply.
+                        self.replies.end_mode_capture();
                         self.parse(&bytes, true);
-                        self.parse(&[], false);
                         return Ok((None, resized));
                     }
                     self.parse_for_query(&bytes, true, cursor_query);
@@ -457,7 +525,11 @@ impl InputStream {
     /// Read the next decoded event, preserving stream termination and I/O
     /// errors for the owning runtime to handle explicitly.
     pub(crate) async fn next(&mut self) -> Option<io::Result<InputEvent>> {
+        // Exclusive ordinary intake means a previously borrowed color probe
+        // was cancelled. Its outstanding DECRQM is no longer fresh authority.
+        self.replies.end_mode_capture();
         loop {
+            self.expire_replies();
             if let Some(event) = self.pending.pop_front() {
                 return Some(Ok(event));
             }
@@ -465,11 +537,14 @@ impl InputStream {
                 return None;
             }
             let escape_deadline = self.escape_deadline;
+            let reply_deadline = self.replies.reply_deadline();
             tokio::select! {
                 result = self.chunks.recv() => match result {
                     None => {
                         self.eof = true;
                         self.parse(&[], false);
+                        let frames = self.replies.finish();
+                        self.parse_reply_frames(frames, false);
                         if !self.utf8.is_empty() {
                             self.utf8.clear();
                             self.pending.push_back(InputEvent::Rejected(InputError::InvalidUtf8));
@@ -490,7 +565,8 @@ impl InputStream {
                         Err(error) => return Some(Err(error)),
                     }
                 },
-                () = wait_escape(escape_deadline) => self.parse(&[], false),
+                () = wait_deadline(escape_deadline) => self.parse(&[], false),
+                () = wait_deadline(reply_deadline) => self.expire_replies(),
             }
         }
     }
@@ -503,6 +579,10 @@ impl InputStream {
         for frame in self.paste.feed(bytes) {
             match frame {
                 InputFrame::Bytes(bytes) => self.parse_keys(&bytes, maybe_more, cursor_query),
+                InputFrame::PasteStart => {
+                    self.parse_keys(&[], false, cursor_query);
+                    self.replies.paste_boundary();
+                }
                 InputFrame::Paste(text) => {
                     self.parse_keys(&[], false, cursor_query);
                     self.pending.push_back(InputEvent::Paste(text));
@@ -520,15 +600,33 @@ impl InputStream {
         self.escape_deadline = maybe_more.then(|| tokio::time::Instant::now() + self.escape_grace);
     }
 
+    fn expire_replies(&mut self) {
+        let frames = self.replies.expire(tokio::time::Instant::now());
+        self.parse_reply_frames(frames, false);
+    }
+
     fn parse_keys(&mut self, bytes: &[u8], maybe_more: bool, cursor_query: bool) {
-        for frame in self.replies.feed(bytes, !maybe_more, cursor_query) {
+        let frames = self.replies.feed(bytes, !maybe_more, cursor_query);
+        self.parse_reply_frames(frames, maybe_more);
+        if !maybe_more {
+            self.parse_key_bytes(&[], false);
+        }
+    }
+
+    fn parse_reply_frames(&mut self, frames: Vec<query::KeyFrame>, maybe_more: bool) {
+        for frame in frames {
             match frame {
                 query::KeyFrame::Bytes(bytes) => self.parse_key_bytes(&bytes, maybe_more),
                 query::KeyFrame::Reply => self.parse_key_bytes(&[], false),
+                query::KeyFrame::ColorsChanged => {
+                    if self.pending.back() != Some(&InputEvent::ColorsChanged) {
+                        self.pending.push_back(InputEvent::ColorsChanged);
+                    }
+                }
+                query::KeyFrame::Rejected(error) => {
+                    self.pending.push_back(InputEvent::Rejected(error))
+                }
             }
-        }
-        if !maybe_more {
-            self.parse_key_bytes(&[], false);
         }
     }
 
@@ -604,7 +702,7 @@ impl InputStream {
     }
 }
 
-async fn wait_escape(deadline: Option<tokio::time::Instant>) {
+async fn wait_deadline(deadline: Option<tokio::time::Instant>) {
     match deadline {
         Some(deadline) => tokio::time::sleep_until(deadline).await,
         None => std::future::pending().await,
@@ -704,10 +802,13 @@ fn decode_modifiers(modifiers: term_input::Modifiers) -> Modifiers {
 }
 
 #[cfg(test)]
+mod colors_tests;
+
+#[cfg(test)]
 mod tests {
     use super::*;
 
-    fn stream(chunks: mpsc::Receiver<io::Result<Vec<u8>>>) -> InputStream {
+    pub(super) fn stream(chunks: mpsc::Receiver<io::Result<Vec<u8>>>) -> InputStream {
         InputStream {
             reader: None,
             file: None,
@@ -1130,6 +1231,7 @@ mod tests {
                         events.extend(parser.parse_as_vec(&bytes, false))
                     }
                     query::KeyFrame::Reply => events.extend(parser.parse_as_vec(&[], false)),
+                    query::KeyFrame::ColorsChanged | query::KeyFrame::Rejected(_) => {}
                 }
             }
             assert!(

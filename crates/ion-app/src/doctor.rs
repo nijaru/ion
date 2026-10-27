@@ -23,6 +23,18 @@ pub(crate) fn run(host: &Host, cwd: &Path) -> Result<()> {
         status,
         message,
     });
+    let (status, message) = match crate::themes::Themes::load(host.config_root(), None) {
+        Ok(_) => (
+            ConfigurationStatus::Ok,
+            "theme preference and selected files valid (system when absent)".into(),
+        ),
+        Err(error) => (ConfigurationStatus::Failed, format!("{error:#}")),
+    };
+    checks.push(ConfigurationCheck {
+        area: "theme",
+        status,
+        message,
+    });
     let mut output = io::stdout().lock();
     for check in &checks {
         let status = match check.status {

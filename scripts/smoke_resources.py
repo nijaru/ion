@@ -298,7 +298,10 @@ with tempfile.TemporaryDirectory(prefix="ion-resources-") as temporary:
                         checkpoint = len(output)
                         os.write(master, b"/reload\r")
                         phase = 3
-                    elif phase == 3 and b"Reloaded keybindings, resources and commands" in current:
+                    # Wait for the reload acknowledgement, not its incidental
+                    # list of presentation components. Prompt/rule effects are
+                    # checked independently below.
+                    elif phase == 3 and b"Reloaded keybindings" in current:
                         checkpoint = len(output)
                         os.write(master, b"/reasoning high\r")
                         reasoning_retry_at = time.monotonic() + 0.1

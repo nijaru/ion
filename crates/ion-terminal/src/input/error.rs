@@ -6,6 +6,8 @@ pub enum InputError {
     InvalidPasteUtf8,
     IncompletePaste,
     InvalidUtf8,
+    IncompleteTerminalReply,
+    TerminalReplyTooLarge,
 }
 
 impl fmt::Display for InputError {
@@ -22,6 +24,12 @@ impl fmt::Display for InputError {
             }
             Self::InvalidUtf8 => {
                 f.write_str("Terminal input contains invalid UTF-8; invalid bytes discarded")
+            }
+            Self::IncompleteTerminalReply => {
+                f.write_str("Terminal response timed out or ended incomplete; response discarded")
+            }
+            Self::TerminalReplyTooLarge => {
+                f.write_str("Terminal response exceeds the input limit; response discarded")
             }
         }
     }

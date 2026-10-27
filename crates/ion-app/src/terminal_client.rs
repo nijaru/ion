@@ -50,6 +50,7 @@ mod question;
 mod session_search;
 mod setup;
 mod tasks;
+mod theme_selection;
 use clipboard_input::*;
 use command::{CommandInput, dispatch_command};
 use composer::input_window;
@@ -132,6 +133,9 @@ use activity::{ActiveOperation, Activity};
 #[derive(Default)]
 struct Frontend {
     keys: KeyBindings,
+    themes: crate::themes::Themes,
+    theme_preview_name: Option<String>,
+    theme_picker: Option<theme_selection::ThemePicker>,
     mode: TuiMode,
     output_detail: crate::tool_output::OutputDetail,
     thinking_visibility: crate::transcript_render::ThinkingVisibility,
@@ -236,6 +240,7 @@ pub struct ChatInit {
     pub initial_prompts: Vec<String>,
     pub tui_mode: TuiMode,
     pub(crate) keys: KeyBindings,
+    pub(crate) themes: crate::themes::Themes,
 }
 
 pub async fn chat(init: ChatInit) -> Result<()> {
@@ -250,6 +255,7 @@ pub async fn chat(init: ChatInit) -> Result<()> {
     let mut ui = Frontend {
         mode: init.tui_mode,
         keys: init.keys,
+        themes: init.themes,
         images: init.images.into_iter().map(Into::into).collect(),
         files: init.files,
         ..Frontend::default()
@@ -273,6 +279,8 @@ pub async fn chat(init: ChatInit) -> Result<()> {
             ui.note(diagnostic);
         }
         let mut poll_control = true;
+        let mut theme_poll = tokio::time::interval(Duration::from_secs(1));
+        theme_poll.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
         loop {
             terminal.check_active().context("terminal lifecycle failed")?;
             ui.sync_question(questions.as_ref());
@@ -319,6 +327,15 @@ pub async fn chat(init: ChatInit) -> Result<()> {
                     continue;
                 },
                 _ = tokio::time::sleep(Duration::from_millis(50)), if retry_inline => continue,
+                notice = async {
+                    loop {
+                        theme_poll.tick().await;
+                        if let Some(notice) = ui.themes.check_files() { break notice; }
+                    }
+                }, if ui.themes.watches_file() => {
+                    ui.status = notice;
+                    continue;
+                },
                 event = terminal.next_input() => event,
                 joined = async { (&mut ui.clipboard_job.as_mut().expect("pending clipboard").task).await }, if ui.clipboard_job.is_some() => {
                     if let Err(error) = finish_joined_clipboard_paste(&mut ui, joined) {
@@ -449,10 +466,12 @@ pub async fn chat(init: ChatInit) -> Result<()> {
                     screen.note_resize();
                 },
                 InputEvent::Mouse(mouse) => ui.mouse(mouse.kind()),
+                InputEvent::ColorsChanged => {},
             }
         }
         Ok(())
     }.await;
+    ui.themes.cancel_preview();
     ui.pickers.close();
     // shutdown closes admission, stops and joins both preparation and Core work.
     // Process every reliable return/settlement even when presentation has failed.
@@ -925,8 +944,12 @@ impl Frontend {
             self.history_published_items..self.pending_history_target,
             true,
             width.saturating_sub(1).max(1),
-            &crate::tool_output::OutputOptions::new(self.output_detail, &self.keys),
-            self.thinking_visibility,
+            &crate::tool_output::RenderOptions::new(
+                self.output_detail,
+                &self.keys,
+                self.themes.theme(),
+                self.thinking_visibility,
+            ),
         );
         if self.pending_history_banner.is_none()
             && self.history_published_items > 0
@@ -997,6 +1020,15 @@ impl Frontend {
             self.break_edit_focus();
             self.completion.clear();
             return self.detail_key(key);
+        }
+        if self.theme_picker.is_some()
+            && matches!(
+                self.keys.action(crate::keybindings::PICKER, key),
+                Some(KeyAction::Cancel | KeyAction::Interrupt)
+            )
+        {
+            self.cancel_theme_picker();
+            return Action::None;
         }
         if self.pickers.active().is_some() {
             self.break_edit_focus();
@@ -1327,6 +1359,11 @@ async fn draw(
     operation: Option<ActiveOperation>,
     model: Option<&ModelRef>,
 ) -> Result<()> {
+    if terminal.colors_need_refresh() {
+        terminal.refresh_colors().await?;
+    }
+    ui.themes.observe(terminal.colors());
+    ui.sync_theme_preview();
     // Layout is not publication: a deferred geometry reconciliation cannot
     // leave an old menu authorized as a keyboard target.
     ui.completion.invalidate_visibility();
@@ -1432,16 +1469,29 @@ fn draw_prepared(
         live_items,
         width,
         content_budget,
-        ui.thinking_visibility,
-        &crate::tool_output::OutputOptions::new(
+        &crate::tool_output::RenderOptions::new(
             crate::tool_output::OutputDetail::Compact,
             &ui.keys,
+            ui.themes.theme(),
+            ui.thinking_visibility,
         ),
     );
-    live_rows.extend(chrome.into_iter().map(Line::raw));
+    live_rows.extend(chrome.into_iter().map(|row| {
+        Line::styled(
+            row,
+            ui.themes
+                .theme()
+                .style(crate::presentation_style::Role::Secondary),
+        )
+    }));
     let composer_offset = live_rows.len();
     for line in &composer.lines {
-        live_rows.push(Line::raw(line.as_str()));
+        live_rows.push(Line::styled(
+            line.as_str(),
+            ui.themes
+                .theme()
+                .style(crate::presentation_style::Role::UserInput),
+        ));
     }
     let cursor_row = composer_offset + composer.cursor_row;
     live_rows.extend(footer);
@@ -1563,15 +1613,23 @@ fn draw_chat_fullscreen(
         0..ui.history.items.len(),
         false,
         width,
-        &crate::tool_output::OutputOptions::new(ui.output_detail, &ui.keys),
-        ui.thinking_visibility,
+        &crate::tool_output::RenderOptions::new(
+            ui.output_detail,
+            &ui.keys,
+            ui.themes.theme(),
+            ui.thinking_visibility,
+        ),
     );
     if let Some(progress) = progress {
         let live = crate::transcript_render::rows(
             &progress.projection().items,
             width,
-            &crate::tool_output::OutputOptions::new(ui.output_detail, &ui.keys),
-            ui.thinking_visibility,
+            &crate::tool_output::RenderOptions::new(
+                ui.output_detail,
+                &ui.keys,
+                ui.themes.theme(),
+                ui.thinking_visibility,
+            ),
         );
         if !live.is_empty()
             && !content.is_empty()
@@ -1627,18 +1685,33 @@ fn draw_chat_fullscreen(
     if let Some(status) = status
         && status_height > 0
     {
-        rows[next_row] = Line::raw(fit_line(&status, width));
+        rows[next_row] = Line::styled(
+            fit_line(&status, width),
+            ui.themes
+                .theme()
+                .style(crate::presentation_style::Role::Secondary),
+        );
         next_row += 1;
     }
     for row in completions {
         if next_row < height {
-            rows[next_row] = Line::raw(row);
+            rows[next_row] = Line::styled(
+                row,
+                ui.themes
+                    .theme()
+                    .style(crate::presentation_style::Role::Text),
+            );
             next_row += 1;
         }
     }
     for (index, line) in composer.lines.iter().enumerate() {
         if next_row + index < height {
-            rows[next_row + index] = Line::raw(line.as_str());
+            rows[next_row + index] = Line::styled(
+                line.as_str(),
+                ui.themes
+                    .theme()
+                    .style(crate::presentation_style::Role::UserInput),
+            );
         }
     }
     for (index, line) in footer.into_iter().enumerate() {
@@ -1661,11 +1734,12 @@ fn draw_question_fullscreen(
     width: u16,
     height: u16,
 ) -> Result<()> {
-    let frame = ui
-        .question
-        .as_mut()
-        .expect("question owns input")
-        .render(width, height, &ui.keys);
+    let frame = ui.question.as_mut().expect("question owns input").render(
+        width,
+        height,
+        &ui.keys,
+        ui.themes.theme(),
+    );
     screen.draw_fullscreen(&mut terminal.output()?, &frame.rows, frame.cursor)?;
     Ok(())
 }
@@ -1780,35 +1854,50 @@ fn modal_rows(
     let viewport = height.saturating_sub(composer_height + status_height);
     // Picker rows are only physical when the details view is not covering them.
     let picker_rows = if ui.details.is_none() {
-        ui.pickers.rows(width, viewport)
+        ui.pickers.rows(width, viewport, ui.themes.theme())
     } else {
         Vec::new()
     };
-    let content = ui
-        .details
-        .as_ref()
-        .map_or(picker_rows.as_slice(), DetailView::rows);
+    let content = ui.details.as_ref().map_or_else(
+        || picker_rows,
+        |view| {
+            view.rows()
+                .iter()
+                .map(|row| Line::raw(fit_line(row, width)))
+                .collect()
+        },
+    );
     let scroll = ui.details.as_ref().map_or(0, |view| view.scroll);
     let end = content.len().saturating_sub(scroll.min(content.len()));
     let start = end.saturating_sub(viewport);
     let mut rows = vec![Line::raw(""); height];
     let padding = viewport.saturating_sub(end - start);
     for (index, row) in content[start..end].iter().enumerate() {
-        rows[padding + index] = Line::raw(fit_line(row, width));
+        rows[padding + index] = row.clone();
     }
 
     let mut cursor = None;
     let mut next_row = viewport;
     for label in controls.iter().chain(status.iter()).take(status_height) {
         if next_row < height {
-            rows[next_row] = Line::raw(fit_line(label, width));
+            rows[next_row] = Line::styled(
+                fit_line(label, width),
+                ui.themes
+                    .theme()
+                    .style(crate::presentation_style::Role::Secondary),
+            );
             next_row += 1;
         }
     }
     if let Some(composer) = composer {
         for (index, line) in composer.lines.into_iter().enumerate() {
             if next_row + index < height {
-                rows[next_row + index] = Line::raw(line);
+                rows[next_row + index] = Line::styled(
+                    line,
+                    ui.themes
+                        .theme()
+                        .style(crate::presentation_style::Role::UserInput),
+                );
             }
         }
         let row = next_row + composer.cursor_row;

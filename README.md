@@ -372,8 +372,8 @@ additional rows are omitted with an ellipsis. Ctrl-O or `/tool N` shows the full
 recorded capture, including truncation, without interpreting its contents as
 Markdown.
 
-`/settings` opens a searchable list showing tool-output and thinking presentation
-and the receiving Session's completion-delivery policy. Unlike the display rows,
+`/settings` opens a searchable list showing theme, tool-output and thinking
+presentation and the receiving Session's completion-delivery policy. Unlike the display rows,
 completion delivery can authorize additional model work; see [Completion delivery](#completion-delivery).
 Enter (or Space with an empty search) cycles the selected value immediately; the
 list stays open until Esc. `/settings compact` (the default) or `/settings expanded`
@@ -397,6 +397,74 @@ human text, while final-answer copy excludes it. Adapters project known readable
 text/summary fields only; signatures, encrypted/redacted blocks and opaque replay
 never enter presentation. Replay custody is unchanged, and human thinking does
 not become answer text or standalone model context.
+
+### Themes
+
+`/settings` → Theme (or `/settings theme`) opens a searchable theme picker.
+Moving the selection previews its colors, including a small semantic sample;
+Enter saves the choice; Esc restores the active theme. Both return to the parent
+settings list, or to the composer when opened directly with `/settings theme`.
+Drafts, attachments and model settings do not change. Failure before publication leaves the choice
+available for retry or cancellation. If publication succeeds but the final directory
+sync fails, the selection applies with a crash-durability warning. The preference
+is user-only `~/.ion/settings.json`:
+
+```json
+{"theme": "system"}
+```
+
+`system` is the default. It queries the terminal's foreground, background and ANSI
+palette with a bounded initial wait. Readable reported colors are retained;
+low-contrast semantic text moves toward black or white to reach 4.5:1 against the
+reported background. Missing background replies use terminal-default text and
+ANSI colors without faint text. Supported appearance notifications trigger a
+refresh; Ion preserves the original notification-mode state. It never changes
+the emulator's palette or appearance preferences.
+
+`dark` and `light` are fixed palettes. Choose Automatic in the picker to select
+light and dark names separately, then Apply to save the pair. Esc from either name list returns without changing that
+slot; Esc from the automatic menu cancels the whole preview. A value such as
+`"light/dark"` selects the first name on a light terminal and the second on a dark
+one; custom names also work in pairs. Reported background/foreground take
+precedence over appearance notifications, then `COLORFGBG`, then dark. `ion chat --use-theme NAME` overrides
+the preference for that invocation without saving it.
+
+Put custom files in `~/.ion/themes/NAME.json` (or `$ION_HOME/themes/NAME.json`):
+
+```json
+{
+  "name": "my-theme",
+  "base": "system",
+  "vars": {"accent": "#9ad"},
+  "colors": {"user_input": "accent", "error": "#e45757", "added": 2}
+}
+```
+
+The name must match the filename; `system`, `dark` and `light` are reserved.
+`base` defaults to `system` and may also be `dark` or `light`. Missing roles inherit
+that base. Colors are `#RGB`, `#RRGGBB`, ANSI indices 0–255, `""` for the terminal
+default, or references to `vars` (at most 32 levels). Colors set foregrounds;
+semantic bold/italic and selected-row emphasis remain intact. Available roles:
+`text`, `heading`, `secondary`, `selected`, `user_input`, `error`, `warning`,
+`running`, `code`, `link`, `added`, `removed`, `hunk`, `syntax_keyword`,
+`syntax_string`, `syntax_number`, `syntax_function`, `syntax_type`, `syntax_comment`.
+Files are bounded to 64 KiB; unknown fields/roles, invalid values and cyclic or
+missing variables are errors. Optional `$schema` metadata is accepted. This is
+Ion's native format, not a Pi or VS Code theme importer.
+
+The active custom file is checked for edits once a second. An invalid edit keeps
+the last valid palette and shows an error. Reopen the picker to discover new files;
+`/reload` rereads the saved preference together with theme files, keys, resources
+and commands, preserving the current presentation if preparation fails. Project
+and package themes are not discovered by this user-file workflow.
+
+Changes repaint mutable inline/fullscreen views and affect future publication.
+Already-published native history is neither rewritten nor replayed. Literal tool
+observations, attached programs, source inspection, captures and copied/exported
+text are not recolored. Explicit custom colors remain the author's choice; the
+system palette's contrast correction does not override them.
+
+### Terminal views and status
 
 Inline remains the default, but persistent fullscreen is also available with
 `--tui-mode fullscreen`; use `/tui inline` or `/tui fullscreen` to switch

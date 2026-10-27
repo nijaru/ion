@@ -233,6 +233,7 @@ fn scopes_reject_unused_options_in_both_positions_and_help_matches() {
         ("usage", "--model", "openai/gpt-5.4"),
         ("rpc", "--image", "photo.png"),
         ("run", "--tui-mode", "fullscreen"),
+        ("run", "--use-theme", "dark"),
         ("chat", "--json", ""),
         ("doctor", "--model", "openai/gpt-5.4"),
         ("doctor", "--session", "saved"),
@@ -274,6 +275,16 @@ fn scopes_reject_unused_options_in_both_positions_and_help_matches() {
     assert!(help.contains("--model"));
     assert!(help.contains("--json"));
     assert!(!help.contains("--tui-mode"));
+    assert!(!help.contains("--use-theme"));
+    for args in [
+        vec!["ion", "--use-theme", "light/dark", "chat"],
+        vec!["ion", "chat", "--use-theme", "light/dark"],
+    ] {
+        assert_eq!(
+            parse(&args, true).unwrap().use_theme.as_deref(),
+            Some("light/dark")
+        );
+    }
     for args in [
         vec!["ion", "doctor", "--cwd", "/tmp"],
         vec!["ion", "--cwd", "/tmp", "doctor"],

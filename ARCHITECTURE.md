@@ -1381,8 +1381,40 @@ physical-control leases. Enhanced keyboards can distinguish chords that legacy
 terminal bytes alias; application configuration cannot recover those distinctions.
 Key names and examples belong in the usage guide; the registry owns defaults.
 
+Themes are immutable App-owned semantic styles, borrowed through Markdown,
+transcript, tool labels and terminal chrome. The selected user `settings.json`
+`theme` name is presentation data; Host file storage does not resolve palettes or
+put them in execution, authority, provider or Session state. Prepare startup
+selection before terminal/Session admission. `/settings` previews reversibly;
+only explicit confirmation saves the preference. Failure before publication leaves
+the choice unsaved, and cancellation restores the active selection. If rename
+succeeded but directory sync failed, apply the published choice and warn about
+uncertain crash durability rather than implying rollback. Patch a fresh settings document
+under the cooperating-writer lock, preserving unrelated sections and permissions;
+external editors do not participate in that lock. Contention returns for retry,
+not an unbounded wait in the input loop.
+
+The default `system` theme uses neutral terminal color observations. Query them
+through the single intake with bounded waiting, preserving typeahead and literal
+paste. Missing replies use terminal defaults/ANSI colors, not faint text. Correct
+semantic text contrast when the background is known. Capture notification-mode
+state before changing it and restore only owned changes; never change terminal
+palette entries or GUI preferences. Defer probes during masked credential and
+attached-program input, and refresh when ordinary UI ownership returns.
+
+User theme files are inert, bounded data, not executable renderers. Reject unknown
+fields/roles, invalid colors and missing/cyclic variables. Explicit light/dark
+pairs follow observed appearance. An invalid live edit keeps the last valid
+palette and surfaces a diagnostic; `/reload` prepares theme and keys before
+resource reload and publishes both only on success. Theme changes affect mutable
+views and future native publication without resetting publication cursors or
+replaying history. Literal observations, program content, source inspection,
+captures and copied/exported source stay independent of palettes. Project/package
+theme discovery and import formats are separate resource workflows, not implicit
+trust or compatibility granted by a user theme file.
+
 Routine configuration commands offer choices as well as explicit arguments.
-Settings show current terminal-local values and remain open for repeated changes;
+Settings show current presentation values and remain open for repeated changes;
 they never select generation effort or rewrite published history. Effort choices
 come from the bound agent's adapter preflight for coding and summary, with the
 current preference preselected; the client owns no parallel wire-capability table.

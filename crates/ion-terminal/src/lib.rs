@@ -4,6 +4,7 @@
 //! contract. Application state and runtime effects stay in the `ion` crate.
 
 mod capabilities;
+mod colors;
 mod input;
 mod program_status;
 mod requirements;
@@ -12,6 +13,7 @@ mod session;
 pub mod screen;
 
 pub use capabilities::{CapabilitySupport, TerminalCapabilities};
+pub use colors::{Appearance, TerminalColors};
 pub use input::{
     InputError, InputEvent, KeyCode, KeyEvent, Modifiers, MouseEvent, MouseKind, Size,
 };

@@ -386,7 +386,7 @@ mod tests {
                 ui.key(KeyEvent::new(KeyCode::Enter, Modifiers::NONE), None, None),
                 Action::None
             ));
-            ui.pickers.rows(100, 20);
+            ui.pickers.rows(100, 20, ui.themes.theme());
             assert!(matches!(
                 ui.key(KeyEvent::new(KeyCode::Enter, Modifiers::NONE), None, None),
                 Action::Pick(PickerValue::Task(TaskChoice::Progress(_)))
@@ -412,7 +412,7 @@ mod tests {
         refresh_selection(&mut next, &previous);
         let mut ui = Frontend::default();
         ui.pickers.open(next);
-        ui.pickers.rows(100, 20);
+        ui.pickers.rows(100, 20, ui.themes.theme());
         assert!(matches!(
             ui.key(KeyEvent::new(KeyCode::Enter, Modifiers::NONE), None, None),
             Action::Pick(PickerValue::Task(TaskChoice::Progress(_)))

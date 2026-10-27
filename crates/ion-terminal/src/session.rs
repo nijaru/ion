@@ -137,6 +137,7 @@ impl TerminalSession {
         };
         session.lock().activate()?;
         session.negotiate_keyboard().await?;
+        session.refresh_colors().await?;
         Ok(session)
     }
 
@@ -203,6 +204,45 @@ impl TerminalSession {
             None => CapabilitySupport::Unknown,
         };
         self.lock().set_keyboard_support(support)
+    }
+
+    /// Snapshot of terminal-reported values, with no presentation fallbacks.
+    pub fn colors(&self) -> crate::TerminalColors {
+        self.input.colors()
+    }
+
+    /// Observations are stale, a probe was cancelled, or a drained old mode
+    /// report made fresh capture possible. Intake never issues queries.
+    pub fn colors_need_refresh(&self) -> bool {
+        self.input.colors_need_refresh()
+    }
+
+    /// Explicitly sample defaults and ANSI colors using the single input reader.
+    /// Missing color values are normal; query waiting is bounded to 100ms.
+    /// Incomplete framing is reported through ordinary input rejection. Call
+    /// only while owning ordinary UI output, not during secrets or attachment.
+    pub async fn refresh_colors(&mut self) -> io::Result<()> {
+        self.check_active()?;
+        let query_mode = self.input.begin_color_probe(true);
+        {
+            let mut output = self.output()?;
+            if query_mode {
+                output.write_all(crate::colors::MODE_QUERY)?;
+            }
+            output.write_all(crate::colors::QUERY)?;
+            output.flush()?;
+        }
+        // Never hold physical output custody across a read/await.
+        let mode = self
+            .input
+            .color_observations(query_mode)
+            .await
+            .inspect_err(|_| self.lock().fail())?;
+        self.check_active()?;
+        if query_mode {
+            self.lock().set_appearance_mode(mode)?;
+        }
+        Ok(())
     }
 
     /// Own a keyboard push on the alternate surface while it is in use.
@@ -339,7 +379,10 @@ impl TerminalSession {
 
     pub async fn resume(&mut self) -> io::Result<()> {
         self.input.resume()?;
+        self.input.reacquire_colors();
         self.lock().activate()?;
+        // The returning ordinary UI owner explicitly refreshes before drawing.
+        // Resume can also occur during restricted input/output ownership.
         self.negotiate_keyboard().await
     }
 

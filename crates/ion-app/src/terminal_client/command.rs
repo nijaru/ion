@@ -338,12 +338,14 @@ pub(super) fn handle_builtin(
         ),
         Builtin::Reload => {
             let keys = crate::keybindings::KeyBindings::load(services.config_root())?;
+            let themes = ui.themes.reloaded()?;
             runtime.reload_resources()?;
             ui.break_edit_focus();
             ui.keys = keys;
+            ui.themes = themes;
             ui.status.clear();
             ui.print(format!(
-                "Reloaded keybindings, resources and commands ({} diagnostic(s))",
+                "Reloaded keybindings, theme, resources and commands ({} diagnostic(s))",
                 runtime.resources().diagnostics().len() + runtime.commands().diagnostics().len()
             ));
         }

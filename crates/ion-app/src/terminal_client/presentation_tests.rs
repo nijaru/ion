@@ -245,8 +245,12 @@ fn local_output_keeps_history_order_across_publication_and_reflow() {
             0..2,
             false,
             width,
-            &crate::tool_output::OutputOptions::new(ui.output_detail, &ui.keys),
-            ui.thinking_visibility,
+            &crate::tool_output::RenderOptions::new(
+                ui.output_detail,
+                &ui.keys,
+                ui.themes.theme(),
+                ui.thinking_visibility,
+            ),
         );
         assert!(rows.iter().all(|row| row.width() <= width));
         let text = rows

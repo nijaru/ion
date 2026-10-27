@@ -57,7 +57,7 @@ impl View<'_> {
                     } else {
                         self.style()
                     };
-                    let mut cell = View::new(&mut lines, usize::MAX, base);
+                    let mut cell = View::new(&mut lines, usize::MAX, base, self.theme);
                     for event in events.by_ref() {
                         if event == Event::End(TagEnd::TableCell) {
                             break;

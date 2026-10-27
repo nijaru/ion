@@ -7,6 +7,8 @@ const END: &[u8] = b"\x1b[201~";
 
 pub(super) enum Frame {
     Bytes(Vec<u8>),
+    // A positively identified opener also ends any unfinished reply framing.
+    PasteStart,
     Paste(String),
     Rejected(InputError),
 }
@@ -71,6 +73,7 @@ impl PasteFramer {
                         frames.push(Frame::Bytes(std::mem::take(&mut normal)));
                     }
                     self.prefix.clear();
+                    frames.push(Frame::PasteStart);
                     self.active = Some(Active {
                         body: Some(Vec::new()),
                         end: Vec::new(),

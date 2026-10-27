@@ -20,18 +20,28 @@ pub(super) fn rows(
         // Keep the Session recognizable even when its workspace path is long.
         let session = fit_line(&ui.session_label, width / 2);
         let remaining = width.saturating_sub(UnicodeWidthStr::width(session.as_str()) + 3);
-        rows.push(Line::raw(fit_line(
-            &format!(
-                "{} · {session}",
-                fit_line(&ui.cwd.to_string_lossy(), remaining)
+        rows.push(Line::styled(
+            fit_line(
+                &format!(
+                    "{} · {session}",
+                    fit_line(&ui.cwd.to_string_lossy(), remaining)
+                ),
+                width,
             ),
-            width,
-        )));
+            ui.themes
+                .theme()
+                .style(crate::presentation_style::Role::Secondary),
+        ));
     }
-    rows.push(Line::raw(fit_line(
-        &format!("{}/{} · /help", model.provider, model.model),
-        width,
-    )));
+    rows.push(Line::styled(
+        fit_line(
+            &format!("{}/{} · /help", model.provider, model.model),
+            width,
+        ),
+        ui.themes
+            .theme()
+            .style(crate::presentation_style::Role::Secondary),
+    ));
     rows
 }
 

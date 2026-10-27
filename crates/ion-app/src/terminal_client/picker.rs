@@ -1,5 +1,7 @@
 //! Modal choices and cooperative discovery shared with non-modal completion.
 //! One retained scan joins before its replacement can start.
+use crate::presentation_style::{Role, Theme};
+use ratatui::text::Line;
 use std::path::PathBuf;
 use std::time::SystemTime;
 
@@ -29,6 +31,9 @@ pub(super) enum PickerValue {
     Reasoning(ion_ai::Reasoning),
     Login(String),
     Setting(super::configuration::Setting),
+    Themes,
+    Theme(String),
+    ThemeAction(super::theme_selection::ThemeAction),
     CompletionDelivery(ion_core::CompletionDelivery),
     Task(super::tasks::TaskChoice),
     Fork(ForkPickerValue),
@@ -49,6 +54,15 @@ pub(super) struct Picker {
 }
 
 impl Picker {
+    pub fn is_theme(&self) -> bool {
+        self.items.iter().any(|item| {
+            matches!(
+                item.value,
+                PickerValue::Theme(_) | PickerValue::ThemeAction(_)
+            )
+        })
+    }
+
     pub fn matches(&self, named_only: bool) -> Vec<usize> {
         let query = self.query.to_ascii_lowercase();
         let mut sessions = None;
@@ -136,6 +150,18 @@ impl Pickers {
         self.active.as_ref()
     }
 
+    pub fn take_active(&mut self) -> Option<Picker> {
+        let active = self.active.take();
+        self.close();
+        active
+    }
+
+    pub fn selected_value(&self) -> Option<&PickerValue> {
+        let picker = self.active.as_ref()?;
+        let index = *picker.matches(self.named_only).get(picker.selected)?;
+        Some(&picker.items[index].value)
+    }
+
     pub fn controls(&self, keys: &crate::keybindings::KeyBindings) -> Option<String> {
         use crate::keybindings::KeyAction;
         let picker = self.active.as_ref()?;
@@ -182,7 +208,7 @@ impl Pickers {
     }
 
     /// Render against the final budget, after composer and status allocation.
-    pub fn rows(&mut self, width: usize, height: usize) -> Vec<String> {
+    pub fn rows(&mut self, width: usize, height: usize, theme: &Theme) -> Vec<Line<'static>> {
         self.rendered_selected = None;
         let Some(picker) = &self.active else {
             return Vec::new();
@@ -193,18 +219,60 @@ impl Pickers {
         } else {
             picker.title.to_owned()
         };
-        let mut rows = vec![if self.loading() {
+        let title = if self.loading() {
             format!("{title} · {}", self.loading_label())
         } else {
             format!("{title} · {} match(es)", matching.len())
-        }];
+        };
+        let mut rows = vec![Line::styled(
+            crate::display_text::fit_line(&title, width),
+            theme.style(Role::Heading),
+        )];
         if let Some(notice) = &self.notice {
-            push_wrapped(&mut rows, notice, width);
+            let mut wrapped = Vec::new();
+            push_wrapped(&mut wrapped, notice, width);
+            rows.extend(
+                wrapped
+                    .into_iter()
+                    .map(|row| Line::styled(row, theme.style(Role::Secondary))),
+            );
         }
         // At small sizes the selected result outranks metadata and notices:
         // Confirmation must not select a row clipped away by another row.
         let selected_row = usize::from(!matching.is_empty());
         rows.truncate(height.saturating_sub(selected_row));
+        if picker.is_theme() {
+            use ratatui::text::Span;
+            let mut sample = Vec::new();
+            for roles in [
+                &[
+                    ("Heading", Role::Heading),
+                    ("warning", Role::Warning),
+                    ("error", Role::Error),
+                ][..],
+                &[
+                    ("Code", Role::Code),
+                    ("keyword", Role::SyntaxKeyword),
+                    ("string", Role::SyntaxString),
+                ],
+                &[
+                    ("Added", Role::Added),
+                    ("removed", Role::Removed),
+                    ("link", Role::Link),
+                ],
+            ] {
+                let mut spans = Vec::new();
+                for (index, (label, role)) in roles.iter().enumerate() {
+                    if index > 0 {
+                        spans.push(Span::raw(" · "));
+                    }
+                    spans.push(Span::styled(*label, theme.style(*role)));
+                }
+                crate::display_text::push_styled(&mut sample, "", "", Line::from(spans), width);
+            }
+            let available = height.saturating_sub(rows.len() + selected_row);
+            rows.extend(sample.into_iter().take(available));
+        }
         if let Some(detail) = matching
             .get(picker.selected)
             .and_then(|index| picker.items[*index].detail.as_deref())
@@ -214,7 +282,11 @@ impl Pickers {
                 let mut detail_rows = Vec::new();
                 push_wrapped(&mut detail_rows, detail, width);
                 detail_rows.truncate(available);
-                rows.extend(detail_rows);
+                rows.extend(
+                    detail_rows
+                        .into_iter()
+                        .map(|row| Line::styled(row, theme.style(Role::Secondary))),
+                );
             }
         }
         let visible = height.saturating_sub(rows.len());
@@ -233,7 +305,10 @@ impl Pickers {
                 (marker.to_string(), false)
             };
             selected_visible |= selected && candidate_visible;
-            rows.push(row);
+            rows.push(Line::styled(
+                row,
+                theme.style(if selected { Role::Selected } else { Role::Text }),
+            ));
         }
         if selected_visible {
             self.rendered_selected = matching.get(picker.selected).copied();
@@ -563,6 +638,7 @@ impl Pickers {
                 if let Some(index) = index {
                     let setting = match picker.items[index].value {
                         PickerValue::Setting(setting) => Some(PickerValue::Setting(setting)),
+                        PickerValue::Themes => Some(PickerValue::Themes),
                         PickerValue::CompletionDelivery(policy) => {
                             Some(PickerValue::CompletionDelivery(policy))
                         }
@@ -695,7 +771,7 @@ mod tests {
     #[test]
     fn confirmation_requires_the_selected_candidate_in_the_latest_frame() {
         let mut pickers = open_labels(&["alpha", "beta"]);
-        assert!(pickers.rows(80, 0).is_empty());
+        assert!(pickers.rows(80, 0, &Theme::default()).is_empty());
         assert!(
             pickers
                 .key(
@@ -706,8 +782,14 @@ mod tests {
         );
         assert!(pickers.active().is_some());
 
-        let marker_only = pickers.rows(2, 10);
-        assert_eq!(&marker_only[1..], ["›", " "]);
+        let marker_only = pickers.rows(2, 10, &Theme::default());
+        assert_eq!(
+            marker_only[1..]
+                .iter()
+                .map(ToString::to_string)
+                .collect::<Vec<_>>(),
+            ["›", " "]
+        );
         assert!(
             pickers
                 .key(
@@ -718,8 +800,14 @@ mod tests {
         );
         assert!(pickers.active().is_some());
 
-        let ellipsis_only = pickers.rows(3, 10);
-        assert_eq!(&ellipsis_only[1..], ["› …", "  …"]);
+        let ellipsis_only = pickers.rows(3, 10, &Theme::default());
+        assert_eq!(
+            ellipsis_only[1..]
+                .iter()
+                .map(ToString::to_string)
+                .collect::<Vec<_>>(),
+            ["› …", "  …"]
+        );
         assert!(
             pickers
                 .key(
@@ -730,8 +818,8 @@ mod tests {
         );
         assert!(pickers.active().is_some());
 
-        let rows = pickers.rows(80, 10);
-        assert!(rows.iter().any(|row| row == "› alpha"));
+        let rows = pickers.rows(80, 10, &Theme::default());
+        assert!(rows.iter().any(|row| row.to_string() == "› alpha"));
         assert!(matches!(
             pickers.key(KeyEvent::new(KeyCode::Enter, Modifiers::NONE), &KeyBindings::default()),
             Some(PickerValue::Login(value)) if value == "alpha"
@@ -739,8 +827,8 @@ mod tests {
         assert!(pickers.active().is_none());
 
         let mut pickers = open_labels(&["alpha", "beta"]);
-        pickers.rows(80, 10);
-        pickers.rows(1, 10);
+        pickers.rows(80, 10, &Theme::default());
+        pickers.rows(1, 10, &Theme::default());
         assert!(
             pickers
                 .key(
@@ -749,7 +837,7 @@ mod tests {
                 )
                 .is_none()
         );
-        pickers.rows(80, 10);
+        pickers.rows(80, 10, &Theme::default());
         pickers.key(
             KeyEvent::new(KeyCode::Char('b'), Modifiers::NONE),
             &KeyBindings::default(),
@@ -763,8 +851,8 @@ mod tests {
                 .is_none()
         );
         assert_eq!(pickers.active().unwrap().query, "b");
-        let rows = pickers.rows(80, 10);
-        assert!(rows.iter().any(|row| row == "› beta"));
+        let rows = pickers.rows(80, 10, &Theme::default());
+        assert!(rows.iter().any(|row| row.to_string() == "› beta"));
         assert!(matches!(
             pickers.key(KeyEvent::new(KeyCode::Enter, Modifiers::NONE), &KeyBindings::default()),
             Some(PickerValue::Login(value)) if value == "beta"
@@ -1003,25 +1091,33 @@ mod tests {
         assert_eq!(pickers.job.as_ref().unwrap().task.id(), worker);
         release.send(()).unwrap();
         assert!(pickers.complete().await.is_none());
-        assert!(pickers.rows(100, 10)[0].contains("1 match(es)"));
+        assert!(
+            pickers.rows(100, 10, &Theme::default())[0]
+                .to_string()
+                .contains("1 match(es)")
+        );
         assert_eq!(pickers.active().unwrap().query, "saved");
         assert!(!pickers.has_job());
 
         pickers.key(toggle, &keys);
-        assert!(pickers.rows(100, 10)[0].contains("3 match(es)"));
+        assert!(
+            pickers.rows(100, 10, &Theme::default())[0]
+                .to_string()
+                .contains("3 match(es)")
+        );
         assert_eq!(
             pickers.active().unwrap().selected,
             1,
             "selected Session survives"
         );
         pickers.key(KeyEvent::new(KeyCode::Up, Modifiers::NONE), &keys);
-        pickers.rows(100, 10);
+        pickers.rows(100, 10, &Theme::default());
         pickers.key(toggle, &keys);
         assert!(
             pickers.key(enter, &keys).is_none(),
             "old rows authorize nothing"
         );
-        pickers.rows(100, 10);
+        pickers.rows(100, 10, &Theme::default());
         assert!(
             matches!(pickers.key(enter, &keys), Some(PickerValue::Session { path, .. }) if path == Path::new("/named"))
         );
@@ -1047,7 +1143,11 @@ mod tests {
         );
         assert_eq!(pickers.active().unwrap().query, "draft query");
         assert!(pickers.sessions.as_ref().unwrap().all_workspaces);
-        assert!(pickers.rows(100, 10)[0].contains("named only"));
+        assert!(
+            pickers.rows(100, 10, &Theme::default())[0]
+                .to_string()
+                .contains("named only")
+        );
         assert!(pickers.job.as_ref().unwrap().stop.is_cancelled());
         assert!(pickers.waiting.is_some());
         release.send(()).unwrap();
@@ -1063,7 +1163,11 @@ mod tests {
             "an empty scope must still allow Tab"
         );
         assert_eq!(pickers.active().unwrap().query, "draft query");
-        assert!(pickers.rows(100, 10)[0].contains("named only"));
+        assert!(
+            pickers.rows(100, 10, &Theme::default())[0]
+                .to_string()
+                .contains("named only")
+        );
         assert!(
             pickers
                 .key(
@@ -1102,8 +1206,8 @@ mod tests {
         let detail = picker.items[0].detail.as_deref().unwrap();
         assert!(detail.contains("019abcdef0123456789abcdef01234567"));
         assert!(detail.contains("2 turn(s)"));
-        let rows = pickers.rows(80, 10);
-        assert!(rows.iter().any(|row| row.starts_with("› ")));
+        let rows = pickers.rows(80, 10, &Theme::default());
+        assert!(rows.iter().any(|row| row.to_string().starts_with("› ")));
         let Some(PickerValue::Session { path, .. }) = pickers.key(
             KeyEvent::new(KeyCode::Enter, Modifiers::NONE),
             &KeyBindings::default(),

@@ -10,6 +10,10 @@ use std::{
 use rustix::fs::{Mode, OFlags, open};
 use tokio_util::sync::CancellationToken;
 
+#[derive(Debug, thiserror::Error)]
+#[error("file published, but syncing its directory failed: {0}")]
+pub(crate) struct PublicationSyncError(io::Error);
+
 /// Serializes cooperating Ion mutations, not external editors or `exec` writes.
 /// A fresh parent-directory descriptor survives target-inode replacement and
 /// coordinates separate instances/processes without leaving lock files behind.
@@ -23,6 +27,20 @@ impl FileMutation {
         path: &Path,
         create_parents: bool,
         stop: &CancellationToken,
+    ) -> io::Result<Self> {
+        Self::acquire(path, create_parents, stop, true)
+    }
+
+    /// Presentation saves must not block the control loop behind another writer.
+    pub(crate) fn try_open(path: &Path) -> io::Result<Self> {
+        Self::acquire(path, false, &CancellationToken::new(), false)
+    }
+
+    fn acquire(
+        path: &Path,
+        create_parents: bool,
+        stop: &CancellationToken,
+        wait: bool,
     ) -> io::Result<Self> {
         let cancelled =
             || io::Error::new(io::ErrorKind::Interrupted, "cancelled before file mutation");
@@ -70,7 +88,15 @@ impl FileMutation {
             }
             match parent.try_lock() {
                 Ok(()) => break,
-                Err(TryLockError::WouldBlock) => std::thread::sleep(Duration::from_millis(5)),
+                Err(TryLockError::WouldBlock) if wait => {
+                    std::thread::sleep(Duration::from_millis(5));
+                }
+                Err(TryLockError::WouldBlock) => {
+                    return Err(io::Error::new(
+                        io::ErrorKind::WouldBlock,
+                        "configuration writer is busy; retry the save",
+                    ));
+                }
                 Err(TryLockError::Error(error)) => return Err(error),
             }
         }
@@ -124,7 +150,9 @@ impl FileMutation {
             fs::rename(&temporary, &self.target)?;
             // Once renamed, finish publication even if stop arrives: report
             // the actual effect rather than implying it was cancelled away.
-            self.parent.sync_all()?;
+            self.parent
+                .sync_all()
+                .map_err(|error| io::Error::new(error.kind(), PublicationSyncError(error)))?;
             Ok(())
         })();
         if result.is_err() {
@@ -180,6 +208,23 @@ pub fn read_bounded(path: &Path, limit: usize) -> io::Result<Vec<u8>> {
 mod tests {
     use super::*;
     use std::{fs, os::unix::fs::symlink};
+
+    #[test]
+    fn directory_sync_failure_reports_the_already_published_effect() {
+        let root = std::env::temp_dir().join(format!("ion-publish-{}", uuid::Uuid::now_v7()));
+        fs::create_dir(&root).unwrap();
+        let target = root.join("settings.json");
+        fs::write(&target, "old").unwrap();
+        let mut mutation = FileMutation::try_open(&target).unwrap();
+        // Fault the sync boundary with a non-syncable descriptor. The target
+        // path and rename are real; no production fault switch is needed.
+        mutation.parent = File::open("/dev/null").unwrap();
+        let error = mutation.replace(b"new", None).unwrap_err();
+        assert_eq!(fs::read(&target).unwrap(), b"new");
+        assert!(error.get_ref().unwrap().is::<PublicationSyncError>());
+        assert!(error.to_string().contains("file published"));
+        fs::remove_dir_all(root).unwrap();
+    }
 
     #[test]
     fn bounded_reads_follow_regular_symlinks_and_reject_special_files() {

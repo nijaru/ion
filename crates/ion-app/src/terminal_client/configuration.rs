@@ -180,6 +180,11 @@ impl Frontend {
                     detail: Some("Receiving Host policy: inbox waits for natural requests; continue extends active Turns; wake also starts idle Turns. Changes revoke prior grants.".into()),
                     value: PickerValue::CompletionDelivery(next_completion),
                 },
+                PickerItem {
+                    label: format!("Theme: {}", self.themes.name()),
+                    detail: Some("Preview a terminal theme; Enter saves the user preference".into()),
+                    value: PickerValue::Themes,
+                },
             ],
         });
     }
@@ -215,12 +220,16 @@ impl Frontend {
                 self.open_settings(completion);
                 return Ok(());
             }
+            "theme" => {
+                self.open_theme_picker()?;
+                return Ok(());
+            }
             "compact" => Setting::Output(OutputDetail::Compact),
             "expanded" => Setting::Output(OutputDetail::Expanded),
             "thinking show" => Setting::Thinking(ThinkingVisibility::Visible),
             "thinking hide" => Setting::Thinking(ThinkingVisibility::Hidden),
             _ => anyhow::bail!(
-                "use /settings compact|expanded, /settings thinking show|hide or /settings completion inbox|continue|wake"
+                "use /settings theme, /settings compact|expanded, /settings thinking show|hide or /settings completion inbox|continue|wake"
             ),
         };
         self.apply_setting(setting);

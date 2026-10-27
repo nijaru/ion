@@ -34,6 +34,7 @@ mod stdio;
 mod terminal_client;
 mod terminal_commands;
 mod terminal_completion;
+mod themes;
 mod tool_output;
 mod transcript;
 mod transcript_detail;
@@ -407,12 +408,22 @@ async fn run_cli(cli: Invocation) -> Result<()> {
             } else {
                 keybindings::KeyBindings::default()
             };
+            let themes = if cli.resume_session
+                || (matches!(action, Action::Chat { .. })
+                    && io::stdin().is_terminal()
+                    && io::stdout().is_terminal())
+            {
+                themes::Themes::load(host.config_root(), cli.use_theme.as_deref())?
+            } else {
+                themes::Themes::default()
+            };
             let explicit_cwd = cli.cwd.is_some();
             let cwd = cli.cwd.unwrap_or(std::env::current_dir()?).canonicalize()?;
             ensure!(cwd.is_dir(), "working directory is not a directory");
             let catalog = host.sessions(Some(cwd.clone()));
             let path = if cli.resume_session {
-                let Some(path) = terminal_client::choose_session(catalog.clone(), &keys).await?
+                let Some(path) =
+                    terminal_client::choose_session(catalog.clone(), &keys, &themes).await?
                 else {
                     return Ok(());
                 };
@@ -563,7 +574,8 @@ async fn run_cli(cli: Invocation) -> Result<()> {
                 };
                 let choose_default = existing.is_none() && selected.is_none();
                 let Some(selected) =
-                    terminal_client::setup_model(&host, selected, choose_default, &keys).await?
+                    terminal_client::setup_model(&host, selected, choose_default, &keys, &themes)
+                        .await?
                 else {
                     return Ok(());
                 };
@@ -803,6 +815,7 @@ async fn run_cli(cli: Invocation) -> Result<()> {
                             initial_prompts: prompts,
                             tui_mode: cli.tui_mode,
                             keys,
+                            themes,
                         })
                         .await
                     }

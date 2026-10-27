@@ -258,7 +258,14 @@ impl QuestionModal {
         &self.questions[self.index].options
     }
 
-    pub(super) fn render(&mut self, width: u16, height: u16, keys: &KeyBindings) -> QuestionFrame {
+    pub(super) fn render(
+        &mut self,
+        width: u16,
+        height: u16,
+        keys: &KeyBindings,
+        theme: &crate::presentation_style::Theme,
+    ) -> QuestionFrame {
+        use crate::presentation_style::Role;
         let width = width.max(1) as usize;
         let height = height.max(1) as usize;
         self.too_small = width < 8;
@@ -267,7 +274,7 @@ impl QuestionModal {
             push_wrapped(&mut notice, "Resize terminal to answer", width);
             let mut rows = vec![Line::raw(""); height];
             for (row, line) in rows.iter_mut().zip(notice) {
-                *row = Line::raw(line);
+                *row = Line::styled(line, theme.style(Role::Warning));
             }
             return QuestionFrame { rows, cursor: None };
         }
@@ -400,10 +407,18 @@ impl QuestionModal {
         };
         let mut rows = vec![Line::raw(""); height];
         for (index, line) in content.iter().skip(start).take(viewport).enumerate() {
-            rows[index] = Line::raw(line.clone());
+            let role = if index + start == focus && self.editor.is_none() {
+                Role::Selected
+            } else if index + start == 0 {
+                Role::Heading
+            } else {
+                Role::Text
+            };
+            rows[index] = Line::styled(line.clone(), theme.style(role));
         }
         for (index, line) in footer.iter().enumerate() {
-            rows[height - footer.len() + index] = Line::raw(line.clone());
+            rows[height - footer.len() + index] =
+                Line::styled(line.clone(), theme.style(Role::Secondary));
         }
         let cursor = cursor.and_then(|(row, column)| {
             (row >= start && row < start + viewport)
@@ -507,7 +522,14 @@ mod tests {
         modal.key(space, &KeyBindings::default());
         assert!(modal.answers.is_empty());
         assert_eq!(modal.index, 0);
-        let rows = modal.render(80, 16, &KeyBindings::default()).rows;
+        let rows = modal
+            .render(
+                80,
+                16,
+                &KeyBindings::default(),
+                &crate::presentation_style::Theme::default(),
+            )
+            .rows;
         assert!(rows.iter().any(|row| row.to_string().contains("[x] Alpha")));
         assert!(rows.iter().any(|row| row.to_string().contains("[x] Beta")));
         for _ in 0..3 {
@@ -515,7 +537,14 @@ mod tests {
         }
         assert_eq!(modal.selected, 3);
         modal.key(space, &KeyBindings::default()); // Next is not a checkable option.
-        let rows = modal.render(24, 2, &KeyBindings::default()).rows;
+        let rows = modal
+            .render(
+                24,
+                2,
+                &KeyBindings::default(),
+                &crate::presentation_style::Theme::default(),
+            )
+            .rows;
         assert!(rows.iter().any(|row| row.to_string().contains("› Next")));
         assert!(matches!(
             modal.key(enter(), &KeyBindings::default()),
@@ -610,7 +639,12 @@ mod tests {
         for (width, multi_select) in [(1, false), (2, false), (1, true), (2, true)] {
             let mut modal = modal();
             modal.questions[0].multi_select = multi_select;
-            let frame = modal.render(width, 1, &KeyBindings::default());
+            let frame = modal.render(
+                width,
+                1,
+                &KeyBindings::default(),
+                &crate::presentation_style::Theme::default(),
+            );
             assert_eq!(frame.rows.len(), 1);
             assert!(frame.cursor.is_none());
             assert!(!frame.rows[0].to_string().is_empty());
@@ -623,7 +657,12 @@ mod tests {
             assert!(modal.answers.is_empty());
         }
         let mut modal = modal();
-        modal.render(20, 1, &KeyBindings::default());
+        modal.render(
+            20,
+            1,
+            &KeyBindings::default(),
+            &crate::presentation_style::Theme::default(),
+        );
         assert!(!modal.too_small);
         assert!(matches!(
             modal.key(enter(), &KeyBindings::default()),
@@ -635,7 +674,12 @@ mod tests {
     #[test]
     fn one_row_editor_keeps_cursor_and_text_visible_at_narrow_geometry() {
         let mut modal = modal();
-        modal.render(20, 1, &KeyBindings::default());
+        modal.render(
+            20,
+            1,
+            &KeyBindings::default(),
+            &crate::presentation_style::Theme::default(),
+        );
         modal.key(
             KeyEvent::new(KeyCode::Down, Modifiers::NONE),
             &KeyBindings::default(),
@@ -646,7 +690,12 @@ mod tests {
         );
         modal.key(enter(), &KeyBindings::default());
         modal.paste("x");
-        let frame = modal.render(8, 1, &KeyBindings::default());
+        let frame = modal.render(
+            8,
+            1,
+            &KeyBindings::default(),
+            &crate::presentation_style::Theme::default(),
+        );
         assert!(frame.cursor.is_some());
         let (row, _) = frame.cursor.unwrap();
         assert!(frame.rows[row].to_string().contains('x'));
@@ -656,7 +705,12 @@ mod tests {
     #[test]
     fn short_viewport_keeps_selected_row_and_editor_cursor_visible() {
         let mut modal = modal();
-        let frame = modal.render(30, 4, &KeyBindings::default());
+        let frame = modal.render(
+            30,
+            4,
+            &KeyBindings::default(),
+            &crate::presentation_style::Theme::default(),
+        );
         assert!(
             frame
                 .rows
@@ -667,7 +721,12 @@ mod tests {
             KeyEvent::new(KeyCode::Down, Modifiers::NONE),
             &KeyBindings::default(),
         );
-        let frame = modal.render(30, 3, &KeyBindings::default());
+        let frame = modal.render(
+            30,
+            3,
+            &KeyBindings::default(),
+            &crate::presentation_style::Theme::default(),
+        );
         assert!(
             frame
                 .rows
@@ -686,7 +745,12 @@ mod tests {
         );
         modal.key(enter(), &KeyBindings::default());
         modal.paste("cursor");
-        let frame = modal.render(30, 3, &KeyBindings::default());
+        let frame = modal.render(
+            30,
+            3,
+            &KeyBindings::default(),
+            &crate::presentation_style::Theme::default(),
+        );
         assert!(frame.cursor.is_some());
         assert!(frame.cursor.unwrap().0 < frame.rows.len());
     }

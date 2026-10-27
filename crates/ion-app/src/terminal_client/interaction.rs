@@ -118,6 +118,21 @@ pub(super) async fn apply_picker(
     program: &mut super::ProgramStatusState,
     value: PickerValue,
 ) -> Result<()> {
+    let theme_result = match &value {
+        PickerValue::Themes => Some(ui.open_theme_picker()),
+        PickerValue::Theme(name) => Some(ui.choose_theme(name)),
+        PickerValue::ThemeAction(action) => Some(ui.theme_action(*action)),
+        _ => None,
+    };
+    if let Some(result) = theme_result {
+        if let Err(error) = result {
+            if ui.pickers.active().is_none() {
+                ui.cancel_theme_picker();
+            }
+            ui.status = format!("{error:#}");
+        }
+        return Ok(());
+    }
     if let PickerValue::CompletionDelivery(policy) = value {
         match runtime.set_completion_delivery(policy) {
             Ok(()) => {
@@ -208,7 +223,12 @@ pub(super) async fn apply_picker(
             };
             return Ok(());
         }
-        PickerValue::Setting(_) | PickerValue::Task(_) | PickerValue::CompletionDelivery(_) => {
+        PickerValue::Setting(_)
+        | PickerValue::Task(_)
+        | PickerValue::CompletionDelivery(_)
+        | PickerValue::Themes
+        | PickerValue::Theme(_)
+        | PickerValue::ThemeAction(_) => {
             unreachable!("handled above")
         }
     };

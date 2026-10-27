@@ -1,12 +1,12 @@
 //! Pure compact rendering for the typed coding transcript.
 use crate::{
     display_text::fit_line,
-    presentation_style::{Role, style},
-    tool_output::{OutputDetail, OutputOptions},
+    presentation_style::{Role, Theme},
+    tool_output::{OutputDetail, RenderOptions},
 };
 use ion_core::{
-    ActivityGroup, ActivityResult, ActivityState, ToolActivityKind, TranscriptActivity,
-    TranscriptItem, TranscriptMessage, TranscriptPart, UserShellActivity,
+    ActivityGroup, ActivityState, ToolActivityKind, TranscriptActivity, TranscriptItem,
+    TranscriptMessage, TranscriptPart, UserShellActivity,
 };
 use ratatui::{
     style::Style,
@@ -16,7 +16,7 @@ use ratatui::{
 #[cfg(test)]
 use ion_core::TranscriptProjection;
 #[cfg(test)]
-use ratatui::style::{Color, Modifier};
+use ratatui::style::Modifier;
 
 pub(super) fn kind_label(kind: ToolActivityKind) -> &'static str {
     match kind {
@@ -66,13 +66,12 @@ const MAX_COALESCED_SUBJECTS: usize = 3;
 pub fn rows(
     items: &[TranscriptItem],
     width: usize,
-    detail: &OutputOptions,
-    thinking: ThinkingVisibility,
+    detail: &RenderOptions<'_>,
 ) -> Vec<Line<'static>> {
     let width = width.max(1);
     let mut rows = Vec::new();
     for item in items {
-        if hidden_thinking(item, thinking) {
+        if hidden_thinking(item, detail.thinking) {
             continue;
         }
         if !rows.is_empty() && rows.last().is_some_and(|row: &Line<'_>| row.width() > 0) {
@@ -80,13 +79,13 @@ pub fn rows(
         }
         match item {
             TranscriptItem::Readiness { turn, notices } => {
-                render_readiness(&mut rows, *turn, notices, width);
+                render_readiness(&mut rows, *turn, notices, width, detail.theme);
             }
             TranscriptItem::User(message) => {
-                render_message(&mut rows, message, true, width, thinking)
+                render_message(&mut rows, message, true, width, detail)
             }
             TranscriptItem::Assistant(message) => {
-                render_message(&mut rows, message, false, width, thinking)
+                render_message(&mut rows, message, false, width, detail)
             }
             TranscriptItem::ActivityGroup(group) => render_group(&mut rows, group, width, detail),
             TranscriptItem::UserShell(shell) => render_shell(&mut rows, shell, width, detail),
@@ -118,11 +117,12 @@ fn render_readiness(
     turn: u64,
     notices: &[ion_core::CompletionNotice],
     width: usize,
+    theme: &Theme,
 ) {
     let start = rows.len();
     push_wrapped(rows, &readiness_text(turn, notices), width);
     for row in &mut rows[start..] {
-        row.style = style(Role::Secondary);
+        row.style = theme.style(Role::Secondary);
     }
 }
 
@@ -137,15 +137,14 @@ pub(super) fn live_rows(
     items: &[TranscriptItem],
     width: usize,
     budget: usize,
-    thinking: ThinkingVisibility,
-    detail: &OutputOptions,
+    detail: &RenderOptions<'_>,
 ) -> Vec<Line<'static>> {
     if budget == 0 {
         return Vec::new();
     }
     // Expanded capture is for publication/fullscreen. Inline progress stays a
     // compact semantic preview instead of allocating a whole capture each tick.
-    let rendered = rows(items, width, detail, thinking);
+    let rendered = rows(items, width, detail);
     if rendered.len() <= budget {
         return rendered;
     }
@@ -174,7 +173,7 @@ pub(super) fn live_rows(
             width.max(1),
         );
         for row in &mut selected {
-            row.style = style(Role::Heading);
+            row.style = detail.theme.style(Role::Heading);
         }
         selected.truncate(budget.saturating_sub(2).clamp(1, 3));
         if budget > selected.len()
@@ -200,6 +199,7 @@ pub(super) fn live_rows(
                     exception.state,
                     model_result_notice(exception).is_some(),
                     false,
+                    detail.theme,
                 ),
             ));
         }
@@ -209,39 +209,32 @@ pub(super) fn live_rows(
                 &format!("… earlier conversation · {}", detail.details_key),
                 width,
             ),
-            style(Role::Secondary),
+            detail.theme.style(Role::Secondary),
         ));
     }
     let remaining = budget.saturating_sub(selected.len());
     let focus = items.iter().enumerate().rfind(|(_, item)| {
         matches!(item, TranscriptItem::ActivityGroup(group) if group.activities.iter().any(|a| a.state == ActivityState::Running))
-    }).or_else(|| items.iter().enumerate().rfind(|(_, item)| !hidden_thinking(item, thinking)));
+    }).or_else(|| items.iter().enumerate().rfind(|(_, item)| !hidden_thinking(item, detail.thinking)));
     if remaining > 0
         && let Some((item_index, focus)) = focus
     {
         match focus {
             TranscriptItem::Readiness { turn, notices } => {
                 let mut preview = Vec::new();
-                render_readiness(&mut preview, *turn, notices, width);
+                render_readiness(&mut preview, *turn, notices, width, detail.theme);
                 selected.extend(preview.into_iter().take(remaining));
             }
             TranscriptItem::ActivityGroup(group) => {
                 let pinned_index = pinned
                     .filter(|(index, _)| *index == item_index)
                     .map(|(_, index)| index);
-                render_current_group(
-                    &mut selected,
-                    group,
-                    width,
-                    remaining,
-                    pinned_index,
-                    &detail.details_key,
-                )
+                render_current_group(&mut selected, group, width, remaining, pinned_index, detail)
             }
             TranscriptItem::User(message) | TranscriptItem::Assistant(message) => {
                 let user = matches!(focus, TranscriptItem::User(_));
                 let mut preview = Vec::new();
-                render_message(&mut preview, message, user, width, thinking);
+                render_message(&mut preview, message, user, width, detail);
                 let omitted = preview.len().saturating_sub(remaining);
                 if omitted > 0 {
                     preview.drain(..omitted);
@@ -299,7 +292,7 @@ fn render_current_group(
     width: usize,
     budget: usize,
     pinned_index: Option<usize>,
-    details_key: &str,
+    detail: &RenderOptions<'_>,
 ) {
     let display = display_activities(&group.activities, OutputDetail::Compact);
     let capacity = budget.saturating_sub(1);
@@ -311,7 +304,7 @@ fn render_current_group(
     }
     rows.push(Line::styled(
         fit_line("• Current activity", width),
-        style(Role::Heading),
+        detail.theme.style(Role::Heading),
     ));
     let reserve_omission = usize::from(indices.len() > capacity && capacity > 1);
     indices.sort_by_key(|&index| (display[index].priority(), std::cmp::Reverse(index)));
@@ -336,13 +329,13 @@ fn render_current_group(
                 ),
                 width,
             ),
-            display[index].style(),
+            display[index].style(detail.theme),
         ));
     }
     if reserve_omission > 0 {
         rows.push(Line::styled(
-            fit_line(&format!("└ {omitted} more · {details_key}"), width),
-            style(Role::Secondary),
+            fit_line(&format!("└ {omitted} more · {}", detail.details_key), width),
+            detail.theme.style(Role::Secondary),
         ));
     }
 }
@@ -352,20 +345,24 @@ pub(super) fn render_message(
     message: &TranscriptMessage,
     user: bool,
     width: usize,
-    thinking: ThinkingVisibility,
+    detail: &RenderOptions<'_>,
 ) {
     if user {
+        let start = rows.len();
         render_source_message(rows, message, true, width);
+        for row in &mut rows[start..] {
+            row.style = detail.theme.style(Role::UserInput);
+        }
         return;
     }
     for part in &message.parts {
         match part {
             TranscriptPart::Thinking(text) => {
-                if thinking == ThinkingVisibility::Visible {
-                    render_thinking(rows, text, width);
+                if detail.thinking == ThinkingVisibility::Visible {
+                    render_thinking(rows, text, width, detail.theme);
                 }
             }
-            TranscriptPart::Text(text) => crate::markdown::render(rows, text, width),
+            TranscriptPart::Text(text) => crate::markdown::render(rows, text, width, detail.theme),
             TranscriptPart::Image { mime_type } => {
                 push_wrapped(rows, &format!("[image: {mime_type}]"), width)
             }
@@ -373,16 +370,16 @@ pub(super) fn render_message(
     }
 }
 
-fn render_thinking(rows: &mut Vec<Line<'static>>, text: &str, width: usize) {
+fn render_thinking(rows: &mut Vec<Line<'static>>, text: &str, width: usize, theme: &Theme) {
     rows.push(Line::styled(
         fit_line("Thinking", width),
-        style(Role::Secondary),
+        theme.style(Role::Secondary),
     ));
     crate::display_text::push_styled(
         rows,
         "  ",
         "  ",
-        Line::from(Span::styled(text, style(Role::Secondary))),
+        Line::from(Span::styled(text, theme.style(Role::Secondary))),
         width,
     );
 }
@@ -394,11 +391,13 @@ pub(super) fn render_source_message(
     user: bool,
     width: usize,
 ) {
-    let start = rows.len();
     let mut first = true;
     for part in &message.parts {
         match part {
-            TranscriptPart::Thinking(text) => render_thinking(rows, text, width),
+            TranscriptPart::Thinking(text) => {
+                push_wrapped(rows, "Thinking", width);
+                push_prefixed(rows, "  ", "  ", text, width);
+            }
             TranscriptPart::Text(text) => {
                 if user {
                     let prefix = if first {
@@ -427,18 +426,13 @@ pub(super) fn render_source_message(
         }
         first = false;
     }
-    if user {
-        for row in &mut rows[start..] {
-            row.style = style(Role::UserInput);
-        }
-    }
 }
 
 fn render_shell(
     rows: &mut Vec<Line<'static>>,
     shell: &UserShellActivity,
     width: usize,
-    detail: &OutputOptions,
+    detail: &RenderOptions<'_>,
 ) {
     let prefix = if shell.exclude_from_context {
         "› !!"
@@ -448,7 +442,7 @@ fn render_shell(
     let start = rows.len();
     push_prefixed(rows, prefix, "  ", &shell.command, width);
     for row in &mut rows[start..] {
-        row.style = style(Role::UserInput);
+        row.style = detail.theme.style(Role::UserInput);
     }
     let ion_core::UserShellOutcome::Observed { output, is_error } = &shell.outcome else {
         if shell.exclude_from_context {
@@ -457,7 +451,7 @@ fn render_shell(
         let start = rows.len();
         push_wrapped(rows, ion_core::UserShellOutcome::unknown_notice(), width);
         for row in &mut rows[start..] {
-            row.style = style(Role::Warning);
+            row.style = detail.theme.style(Role::Warning);
         }
         return;
     };
@@ -485,9 +479,9 @@ fn render_shell(
     let start = rows.len();
     push_wrapped(rows, &format!("  {state}"), width);
     let style = if *is_error {
-        style(Role::Error)
+        detail.theme.style(Role::Error)
     } else {
-        style(Role::Secondary)
+        detail.theme.style(Role::Secondary)
     };
     for row in &mut rows[start..] {
         row.style = style;
@@ -505,8 +499,13 @@ struct DisplayActivity {
 }
 
 impl DisplayActivity {
-    fn style(&self) -> Style {
-        activity_style(self.state, self.model_notice.is_some(), self.observation)
+    fn style(&self, theme: &Theme) -> Style {
+        activity_style(
+            self.state,
+            self.model_notice.is_some(),
+            self.observation,
+            theme,
+        )
     }
 
     fn priority(&self) -> u8 {
@@ -529,21 +528,22 @@ fn render_group(
     rows: &mut Vec<Line<'static>>,
     group: &ActivityGroup,
     width: usize,
-    detail: &OutputOptions,
+    detail: &RenderOptions<'_>,
 ) {
     if group.activities.is_empty() {
         return;
     }
+    let theme = detail.theme;
     let display = display_activities(&group.activities, detail.detail);
 
     if group.activities.len() == 1 {
         let item = &display[0];
-        push_activity(rows, "• ", "  ", item, width);
+        push_activity(rows, "• ", "  ", item, width, theme);
         if group.activities[0].children.is_empty()
             && group.activities[0].activity.kind != ToolActivityKind::Command
             && let Some(detail) = &item.detail
         {
-            push_detail(rows, "  └ ", "    ", detail, width);
+            push_detail(rows, "  └ ", "    ", detail, width, theme);
         }
         crate::tool_output::render_activity(rows, &group.activities[0], "  ", width, detail);
         crate::edit_diff::render(rows, &group.activities[0], "  ", width, detail);
@@ -553,13 +553,20 @@ fn render_group(
 
     rows.push(Line::styled(
         fit_line(&group_header(group.activities.iter()), width),
-        style(Role::Heading),
+        theme.style(Role::Heading),
     ));
     let total_children = display.len();
     for (index, item) in display.iter().enumerate() {
         let last = index + 1 == total_children;
         let branch = if last { "└ " } else { "├ " };
-        push_activity(rows, branch, if last { "  " } else { "│ " }, item, width);
+        push_activity(
+            rows,
+            branch,
+            if last { "  " } else { "│ " },
+            item,
+            width,
+            theme,
+        );
         if group.activities[item.source.start].children.is_empty()
             && group.activities[item.source.start].activity.kind != ToolActivityKind::Command
             && let Some(detail) = &item.detail
@@ -571,6 +578,7 @@ fn render_group(
                 if last { "    " } else { "│   " },
                 detail,
                 width,
+                theme,
             );
         }
         if item.source.len() == 1 {
@@ -612,8 +620,9 @@ fn render_children(
     children: &[TranscriptActivity],
     prefix: &str,
     width: usize,
-    detail: &OutputOptions,
+    detail: &RenderOptions<'_>,
 ) {
+    let theme = detail.theme;
     let display = display_activities(children, detail.detail);
     for (index, item) in display.iter().enumerate() {
         let last = index + 1 == display.len();
@@ -624,6 +633,7 @@ fn render_children(
             &continuation,
             item,
             width,
+            theme,
         );
         crate::edit_diff::render(
             rows,
@@ -658,6 +668,7 @@ fn render_children(
                 &format!("{continuation}  "),
                 detail,
                 width,
+                theme,
             );
         }
     }
@@ -868,7 +879,7 @@ fn display_activity(activity: &TranscriptActivity, index: usize) -> DisplayActiv
         summary.push_str(&format!(" · {}", kind_label(kind)));
     }
     append_result_summary(&mut summary, activity);
-    let child_detail = activity
+    let detail = activity
         .children
         .iter()
         .rfind(|child| {
@@ -890,15 +901,6 @@ fn display_activity(activity: &TranscriptActivity, index: usize) -> DisplayActiv
                 child.activity.subject.as_deref().unwrap_or(&child.name)
             )
         });
-    let detail = child_detail.or_else(|| {
-        activity.result.as_ref().and_then(|result| {
-            if kind == ToolActivityKind::Command {
-                command_detail(result)
-            } else {
-                None
-            }
-        })
-    });
     let observation = is_observation(kind) && activity.children.is_empty();
     DisplayActivity {
         summary,
@@ -975,30 +977,6 @@ fn append_result_summary(summary: &mut String, activity: &TranscriptActivity) {
         }
         _ => {}
     }
-}
-
-fn command_detail(result: &ActivityResult) -> Option<String> {
-    let stderr = result
-        .value
-        .get("stderr")
-        .and_then(serde_json::Value::as_str)
-        .unwrap_or_default();
-    let stdout = result
-        .value
-        .get("stdout")
-        .and_then(serde_json::Value::as_str)
-        .unwrap_or_default();
-    let preferred = if result.is_error && !stderr.trim().is_empty() {
-        stderr
-    } else {
-        stdout
-    };
-    preferred
-        .lines()
-        .rev()
-        .find(|line| !line.trim().is_empty())
-        .map(clean_inline)
-        .filter(|line| !line.is_empty())
 }
 
 fn is_observation(kind: ToolActivityKind) -> bool {
@@ -1081,7 +1059,7 @@ fn clean_inline(text: &str) -> String {
         .join(" ")
 }
 
-fn activity_style(state: ActivityState, notice: bool, observation: bool) -> Style {
+fn activity_style(state: ActivityState, notice: bool, observation: bool, theme: &Theme) -> Style {
     let role = if notice {
         Role::Warning
     } else {
@@ -1095,7 +1073,7 @@ fn activity_style(state: ActivityState, notice: bool, observation: bool) -> Styl
             ActivityState::Queued | ActivityState::Completed => Role::Secondary,
         }
     };
-    style(role)
+    theme.style(role)
 }
 fn push_prefixed(
     rows: &mut Vec<Line<'static>>,
@@ -1121,11 +1099,12 @@ fn push_activity(
     continuation: &str,
     item: &DisplayActivity,
     width: usize,
+    theme: &Theme,
 ) {
     let start = rows.len();
     push_prefixed(rows, prefix, continuation, &item.summary, width);
     for row in &mut rows[start..] {
-        row.style = item.style();
+        row.style = item.style(theme);
     }
 }
 fn push_detail(
@@ -1134,17 +1113,222 @@ fn push_detail(
     continuation: &str,
     text: &str,
     width: usize,
+    theme: &Theme,
 ) {
     let start = rows.len();
     push_prefixed(rows, prefix, continuation, text, width);
     for row in &mut rows[start..] {
-        row.style = style(Role::Secondary);
+        row.style = theme.style(Role::Secondary);
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use ratatui::style::Color;
+
+    fn distinct_theme() -> Theme {
+        let mut theme = Theme::default();
+        for (role, color) in [
+            (Role::Heading, Color::Rgb(1, 2, 3)),
+            (Role::Secondary, Color::Rgb(4, 5, 6)),
+            (Role::Error, Color::Rgb(7, 8, 9)),
+            (Role::Running, Color::Rgb(10, 11, 12)),
+            (Role::Added, Color::Rgb(13, 14, 15)),
+            (Role::Removed, Color::Rgb(16, 17, 18)),
+            (Role::Hunk, Color::Rgb(19, 20, 21)),
+            (Role::Text, Color::Rgb(22, 23, 24)),
+            (Role::Code, Color::Rgb(25, 26, 27)),
+            (Role::Link, Color::Rgb(28, 29, 30)),
+            (Role::SyntaxKeyword, Color::Rgb(31, 32, 33)),
+            (Role::SyntaxString, Color::Rgb(34, 35, 36)),
+        ] {
+            theme.set_color(role, color);
+        }
+        theme
+    }
+
+    fn has_color(rows: &[Line<'_>], text: &str, color: Color) -> bool {
+        rows.iter().any(|row| {
+            row.spans.iter().any(|span| {
+                span.content.contains(text) && row.style.patch(span.style).fg == Some(color)
+            })
+        })
+    }
+
+    #[test]
+    fn custom_theme_reaches_nested_markdown_without_theming_source_inspection() {
+        let theme = distinct_theme();
+        let keys = crate::keybindings::KeyBindings::default();
+        let options = RenderOptions::new(
+            OutputDetail::Compact,
+            &keys,
+            &theme,
+            ThinkingVisibility::Visible,
+        );
+        let message = TranscriptMessage {
+            turn: Some(1),
+            steering: false,
+            parts: vec![
+                TranscriptPart::Text("body\n\n> - | Field | Value |\n>   | --- | --- |\n>   | table | `inline` [link](https://example.org) |\n>\n>   ```rust\n>   let n = \"value\";\n>   ```\n\nafter".into()),
+                TranscriptPart::Thinking("thought".into()),
+            ],
+        };
+        let items = [TranscriptItem::Assistant(message.clone())];
+        // Exercise aligned and stacked table cells as well as a nested code block.
+        for width in [24, 120] {
+            let rendered = rows(&items, width, &options);
+            assert!(rendered.iter().all(|row| row.width() <= width));
+            for (text, color) in [
+                ("body", Color::Rgb(22, 23, 24)),
+                ("table", Color::Rgb(22, 23, 24)),
+                ("inline", Color::Rgb(25, 26, 27)),
+                ("link", Color::Rgb(28, 29, 30)),
+                ("code · rust", Color::Rgb(4, 5, 6)),
+                ("let", Color::Rgb(31, 32, 33)),
+                ("value", Color::Rgb(34, 35, 36)),
+                ("after", Color::Rgb(22, 23, 24)),
+                ("thought", Color::Rgb(4, 5, 6)),
+            ] {
+                assert!(
+                    has_color(&rendered, text, color),
+                    "missing themed {text} at width {width}: {rendered:?}"
+                );
+            }
+        }
+        for user in [false, true] {
+            let mut source = Vec::new();
+            render_source_message(&mut source, &message, user, 120);
+            assert!(
+                source
+                    .iter()
+                    .any(|row| row.to_string().contains("`inline`"))
+            );
+            assert!(source.iter().all(|row| row.style == Style::default()
+                && row.spans.iter().all(|span| span.style == Style::default())));
+        }
+    }
+
+    #[test]
+    fn custom_theme_styles_activity_and_diff_semantics_but_not_observations() {
+        use serde_json::json;
+        let theme = distinct_theme();
+        let keys = crate::keybindings::KeyBindings::default();
+        let mut parent = activity(
+            "parent",
+            ToolActivityKind::External,
+            "composition",
+            ActivityState::Running,
+            None,
+        );
+        parent.children = vec![
+            activity(
+                "command",
+                ToolActivityKind::Command,
+                "test",
+                ActivityState::Failed,
+                Some(
+                    json!({"exit_code":7,"stdout":"OBSERVED_NATIVE","stderr":"OBSERVED_ERROR","error":"OBSERVED_TOOL_ERROR"}),
+                ),
+            ),
+            activity(
+                "read",
+                ToolActivityKind::Read,
+                "file",
+                ActivityState::Completed,
+                Some(json!({"content":"OBSERVED_READ"})),
+            ),
+        ];
+        let items = [TranscriptItem::ActivityGroup(ActivityGroup {
+            turn: 1,
+            open: true,
+            activities: vec![
+                parent,
+                activity(
+                    "r1",
+                    ToolActivityKind::Read,
+                    "one",
+                    ActivityState::Completed,
+                    Some(json!({"content":"OBSERVED_ONE","start_line":2,"next_line":3})),
+                ),
+                activity(
+                    "r2",
+                    ToolActivityKind::Read,
+                    "two",
+                    ActivityState::Completed,
+                    Some(json!({"content":"OBSERVED_TWO","has_more":true})),
+                ),
+                activity(
+                    "edit",
+                    ToolActivityKind::Edit,
+                    "file",
+                    ActivityState::Completed,
+                    Some(
+                        json!({"diff":{"text":"--- old\n+++ new\n@@ hunk\n-old\n+new","truncated":true}}),
+                    ),
+                ),
+            ],
+        })];
+        for detail in [OutputDetail::Compact, OutputDetail::Expanded] {
+            let options = RenderOptions::new(detail, &keys, &theme, ThinkingVisibility::Hidden);
+            let rendered = rows(&items, 160, &options);
+            for (text, color) in [
+                ("• 4 actions", Color::Rgb(1, 2, 3)),
+                ("composition", Color::Rgb(10, 11, 12)),
+                ("Exited 7", Color::Rgb(7, 8, 9)),
+            ] {
+                assert!(
+                    has_color(&rendered, text, color),
+                    "missing themed {text}: {rendered:?}"
+                );
+            }
+            for (text, color) in [
+                ("stdout", Color::Rgb(4, 5, 6)),
+                ("diff capture truncated", Color::Rgb(4, 5, 6)),
+                ("@@ hunk", Color::Rgb(19, 20, 21)),
+                ("-old", Color::Rgb(16, 17, 18)),
+                ("+new", Color::Rgb(13, 14, 15)),
+            ] {
+                assert!(has_color(&rendered, text, color), "missing themed {text}");
+            }
+            for text in [
+                "OBSERVED_NATIVE",
+                "OBSERVED_ERROR",
+                "OBSERVED_TOOL_ERROR",
+                "OBSERVED_READ",
+            ] {
+                let row = rendered
+                    .iter()
+                    .find(|row| row.to_string().contains(text))
+                    .unwrap();
+                assert_eq!(row.style, Style::default(), "{text}");
+                assert!(
+                    row.spans.iter().all(|span| span.style == Style::default()),
+                    "{text}"
+                );
+            }
+            if detail == OutputDetail::Compact {
+                for text in [
+                    "read outputs folded",
+                    "earlier lines not recorded",
+                    "file continues",
+                ] {
+                    assert!(
+                        has_color(&rendered, text, Color::Rgb(4, 5, 6)),
+                        "missing themed {text}"
+                    );
+                }
+            }
+            let live = live_rows(&items, 160, 4, &options);
+            assert!(
+                live.iter()
+                    .any(|row| row.style.fg == Some(Color::Rgb(1, 2, 3)))
+            );
+            assert!(live.iter().any(|row| row.to_string().contains("Exited 7")
+                && row.style.fg == Some(Color::Rgb(7, 8, 9))));
+        }
+    }
+
     #[test]
     fn disclosure_hints_follow_configured_or_disabled_detail_action() {
         use serde_json::json;
@@ -1190,8 +1374,14 @@ mod tests {
             (r#"{"app.tools.expand":[]}"#, "unbound"),
         ] {
             let keys = crate::keybindings::KeyBindings::parse(config.as_bytes()).unwrap();
-            let options = OutputOptions::new(OutputDetail::Compact, &keys);
-            let published = rows(&items, 160, &options, ThinkingVisibility::Hidden);
+            let theme = Theme::default();
+            let options = RenderOptions::new(
+                OutputDetail::Compact,
+                &keys,
+                &theme,
+                ThinkingVisibility::Hidden,
+            );
+            let published = rows(&items, 160, &options);
             for label in [
                 "read outputs folded",
                 "earlier stdout",
@@ -1204,7 +1394,7 @@ mod tests {
                     .unwrap();
                 assert!(notice.to_string().contains(expected), "{notice}");
             }
-            let live = live_rows(&items, 160, 4, ThinkingVisibility::Hidden, &options);
+            let live = live_rows(&items, 160, 4, &options);
             assert!(live.iter().any(|row| row.to_string().contains(expected)));
             assert!(
                 published
@@ -1237,11 +1427,12 @@ mod tests {
             let hidden = rows(
                 &projection.items,
                 width,
-                &OutputOptions::new(
+                &RenderOptions::new(
                     OutputDetail::Expanded,
                     &crate::keybindings::KeyBindings::default(),
+                    &Theme::default(),
+                    ThinkingVisibility::Hidden,
                 ),
-                ThinkingVisibility::Hidden,
             );
             assert!(
                 !hidden
@@ -1253,31 +1444,34 @@ mod tests {
                     &projection.items,
                     width,
                     3,
-                    ThinkingVisibility::Hidden,
-                    &OutputOptions::new(
+                    &RenderOptions::new(
                         OutputDetail::Compact,
-                        &crate::keybindings::KeyBindings::default()
+                        &crate::keybindings::KeyBindings::default(),
+                        &Theme::default(),
+                        ThinkingVisibility::Hidden,
                     )
                 ),
                 live_rows(
                     &projection.items[..1],
                     width,
                     3,
-                    ThinkingVisibility::Hidden,
-                    &OutputOptions::new(
+                    &RenderOptions::new(
                         OutputDetail::Compact,
-                        &crate::keybindings::KeyBindings::default()
+                        &crate::keybindings::KeyBindings::default(),
+                        &Theme::default(),
+                        ThinkingVisibility::Hidden,
                     )
                 )
             );
             let visible = rows(
                 &projection.items,
                 width,
-                &OutputOptions::new(
+                &RenderOptions::new(
                     OutputDetail::Compact,
                     &crate::keybindings::KeyBindings::default(),
+                    &Theme::default(),
+                    ThinkingVisibility::Visible,
                 ),
-                ThinkingVisibility::Visible,
             );
             assert!(
                 visible
@@ -1288,11 +1482,12 @@ mod tests {
         let shown = rows(
             &projection.items,
             80,
-            &OutputOptions::new(
+            &RenderOptions::new(
                 OutputDetail::Compact,
                 &crate::keybindings::KeyBindings::default(),
+                &Theme::default(),
+                ThinkingVisibility::Visible,
             ),
-            ThinkingVisibility::Visible,
         );
         assert!(shown.iter().any(|line| {
             line.to_string() == "  **human thought**"
@@ -1318,10 +1513,11 @@ mod tests {
             &long.items,
             80,
             3,
-            ThinkingVisibility::Visible,
-            &OutputOptions::new(
+            &RenderOptions::new(
                 OutputDetail::Compact,
                 &crate::keybindings::KeyBindings::default(),
+                &Theme::default(),
+                ThinkingVisibility::Visible,
             ),
         );
         assert_eq!(preview.len(), 3);
@@ -1346,11 +1542,12 @@ mod tests {
         super::rows(
             &projection.items,
             width,
-            &OutputOptions::new(
+            &RenderOptions::new(
                 OutputDetail::Compact,
                 &crate::keybindings::KeyBindings::default(),
+                &Theme::default(),
+                ThinkingVisibility::Hidden,
             ),
-            ThinkingVisibility::Hidden,
         )
         .iter()
         .map(ToString::to_string)
@@ -1365,17 +1562,18 @@ mod tests {
             &projection.items,
             width,
             budget,
-            ThinkingVisibility::Hidden,
-            &OutputOptions::new(
+            &RenderOptions::new(
                 OutputDetail::Compact,
                 &crate::keybindings::KeyBindings::default(),
+                &Theme::default(),
+                ThinkingVisibility::Hidden,
             ),
         )
         .iter()
         .map(ToString::to_string)
         .collect()
     }
-    use ion_core::{ToolActivity, TranscriptActivity};
+    use ion_core::{ActivityResult, ToolActivity, TranscriptActivity};
 
     #[test]
     fn output_modes_disclose_ranges_streams_and_uncoalesced_observations() {
@@ -1418,11 +1616,12 @@ mod tests {
         let compact_rows = rows(
             &single.items,
             120,
-            &OutputOptions::new(
+            &RenderOptions::new(
                 OutputDetail::Compact,
                 &crate::keybindings::KeyBindings::default(),
+                &Theme::default(),
+                ThinkingVisibility::Hidden,
             ),
-            ThinkingVisibility::Hidden,
         );
         // Ranges, omission notices and capture paths are essential evidence,
         // not decoration whose legibility may depend on terminal faint support.
@@ -1484,11 +1683,12 @@ mod tests {
             let expanded = rows(
                 &grouped.items,
                 width,
-                &OutputOptions::new(
+                &RenderOptions::new(
                     OutputDetail::Expanded,
                     &crate::keybindings::KeyBindings::default(),
+                    &Theme::default(),
+                    ThinkingVisibility::Hidden,
                 ),
-                ThinkingVisibility::Hidden,
             );
             assert!(expanded.iter().all(|row| row.width() <= width));
             assert!(
@@ -1500,11 +1700,12 @@ mod tests {
         let expanded = rows(
             &grouped.items,
             120,
-            &OutputOptions::new(
+            &RenderOptions::new(
                 OutputDetail::Expanded,
                 &crate::keybindings::KeyBindings::default(),
+                &Theme::default(),
+                ThinkingVisibility::Hidden,
             ),
-            ThinkingVisibility::Hidden,
         )
         .iter()
         .map(ToString::to_string)
@@ -1551,11 +1752,12 @@ mod tests {
         let rows = super::rows(
             &projection.items,
             24,
-            &OutputOptions::new(
+            &RenderOptions::new(
                 OutputDetail::Compact,
                 &crate::keybindings::KeyBindings::default(),
+                &Theme::default(),
+                ThinkingVisibility::Hidden,
             ),
-            ThinkingVisibility::Hidden,
         );
         let read = rows
             .iter()
@@ -1566,8 +1768,14 @@ mod tests {
             .position(|row| row.to_string().starts_with("└ Edit failed"))
             .unwrap();
         assert!(failed > read + 1);
-        assert_eq!(rows[read].style.fg, Some(Color::Cyan));
-        assert_eq!(rows[failed].style.fg, Some(Color::Red));
+        assert_eq!(
+            rows[read].style.fg,
+            Theme::default().style(Role::Running).fg
+        );
+        assert_eq!(
+            rows[failed].style.fg,
+            Theme::default().style(Role::Error).fg
+        );
         let wrapped = rows[read..failed]
             .iter()
             .map(ToString::to_string)
@@ -1583,14 +1791,21 @@ mod tests {
             &projection.items,
             24,
             6,
-            ThinkingVisibility::Hidden,
-            &OutputOptions::new(
+            &RenderOptions::new(
                 OutputDetail::Compact,
                 &crate::keybindings::KeyBindings::default(),
+                &Theme::default(),
+                ThinkingVisibility::Hidden,
             ),
         );
-        assert!(live.iter().any(|row| row.style.fg == Some(Color::Red)));
-        assert!(live.iter().any(|row| row.style.fg == Some(Color::Cyan)));
+        assert!(
+            live.iter()
+                .any(|row| row.style.fg == Theme::default().style(Role::Error).fg)
+        );
+        assert!(
+            live.iter()
+                .any(|row| row.style.fg == Theme::default().style(Role::Running).fg)
+        );
     }
 
     #[test]
@@ -1612,10 +1827,11 @@ mod tests {
                         &projection.items,
                         narrow,
                         3,
-                        ThinkingVisibility::Hidden,
-                        &OutputOptions::new(
+                        &RenderOptions::new(
                             OutputDetail::Compact,
-                            &crate::keybindings::KeyBindings::default()
+                            &crate::keybindings::KeyBindings::default(),
+                            &Theme::default(),
+                            ThinkingVisibility::Hidden,
                         )
                     )
                     .iter()
@@ -1626,10 +1842,11 @@ mod tests {
                 &projection.items,
                 width,
                 3,
-                ThinkingVisibility::Hidden,
-                &OutputOptions::new(
+                &RenderOptions::new(
                     OutputDetail::Compact,
                     &crate::keybindings::KeyBindings::default(),
+                    &Theme::default(),
+                    ThinkingVisibility::Hidden,
                 ),
             );
             let first = &rows[1];
@@ -1647,7 +1864,7 @@ mod tests {
                     first
                         .spans
                         .iter()
-                        .any(|span| span.style.fg == Some(Color::Magenta)),
+                        .any(|span| span.style.fg == Theme::default().style(Role::Code).fg),
                     "{first:?}"
                 );
             }
@@ -1668,7 +1885,12 @@ mod tests {
             &message,
             false,
             80,
-            ThinkingVisibility::Hidden,
+            &RenderOptions::new(
+                OutputDetail::Compact,
+                &crate::keybindings::KeyBindings::default(),
+                &Theme::default(),
+                ThinkingVisibility::Hidden,
+            ),
         );
         let formatted = formatted
             .iter()
@@ -1689,7 +1911,18 @@ mod tests {
             source
         );
         let mut user = Vec::new();
-        render_message(&mut user, &message, true, 80, ThinkingVisibility::Hidden);
+        render_message(
+            &mut user,
+            &message,
+            true,
+            80,
+            &RenderOptions::new(
+                OutputDetail::Compact,
+                &crate::keybindings::KeyBindings::default(),
+                &Theme::default(),
+                ThinkingVisibility::Hidden,
+            ),
+        );
         let user = user
             .iter()
             .map(ToString::to_string)

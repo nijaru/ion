@@ -28,6 +28,7 @@ pub(crate) struct Invocation {
     pub reasoning: Option<Reasoning>,
     pub image: Vec<PathBuf>,
     pub tui_mode: TuiMode,
+    pub use_theme: Option<String>,
     pub json: bool,
     pub completion_delivery: ion_core::CompletionDelivery,
     pub code_mode: bool,
@@ -241,6 +242,8 @@ fn options() -> Vec<Arg> {
         Arg::new("image").long("image").action(ArgAction::Append)
             .value_parser(clap::value_parser!(PathBuf)).value_name("PATH")
             .help("Attach an image to the first prompt (repeatable)"),
+        Arg::new("use_theme").long("use-theme").value_name("NAME")
+            .help("Terminal theme for this invocation; does not change the saved preference"),
         Arg::new("tui_mode").long("tui-mode").value_parser(clap::value_parser!(TuiMode))
             .value_name("MODE").help("Interactive surface: inline native scrollback (default) or fullscreen"),
     ]
@@ -267,7 +270,7 @@ fn applicable(command: &str, option: &str) -> bool {
         "completion_delivery" | "code_mode" | "tools" | "exclude_tools" | "read_only" => coding,
         "image" => matches!(command, "run" | "chat"),
         "json" => command == "run",
-        "tui_mode" => command == "chat",
+        "tui_mode" | "use_theme" => command == "chat",
         _ => false,
     }
 }
@@ -432,6 +435,7 @@ fn normalize(mut matches: ArgMatches, interactive: bool) -> Result<Invocation> {
         reasoning: one(&mut levels, "reasoning")?,
         image: many(&mut levels, "image"),
         tui_mode: one(&mut levels, "tui_mode")?.unwrap_or(TuiMode::Inline),
+        use_theme: one(&mut levels, "use_theme")?,
         json,
         completion_delivery: one(&mut levels, "completion_delivery")?.unwrap_or_default(),
         code_mode: one(&mut levels, "code_mode")?.unwrap_or(false),

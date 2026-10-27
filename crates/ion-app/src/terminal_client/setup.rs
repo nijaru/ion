@@ -15,6 +15,7 @@ pub async fn setup_model(
     selected: Option<Selection>,
     choose_default: bool,
     keys: &KeyBindings,
+    themes: &crate::themes::Themes,
 ) -> Result<Option<Selection>> {
     let selected = match selected {
         Some(selection) if !selection.credential_missing(host.credentials())? => {
@@ -30,6 +31,7 @@ pub async fn setup_model(
             selected,
             choose_default,
             keys,
+            themes,
             &mut terminal,
             &mut screen,
         )
@@ -49,10 +51,12 @@ pub async fn setup_model(
 pub async fn choose_session(
     catalog: SessionCatalog,
     keys: &KeyBindings,
+    themes: &crate::themes::Themes,
 ) -> Result<Option<PathBuf>> {
     let mut terminal = TerminalSession::enter().await?;
     let mut ui = Frontend {
         keys: keys.clone(),
+        themes: themes.clone(),
         status: "Choose a Session · type to filter".into(),
         ..Frontend::default()
     };
@@ -101,7 +105,7 @@ pub async fn choose_session(
                     ui.pickers.invalidate_visibility();
                     screen.note_resize();
                 }
-                InputEvent::Mouse(_) => {}
+                InputEvent::Mouse(_) | InputEvent::ColorsChanged => {}
             }
         }
     }
@@ -134,11 +138,13 @@ async fn run(
     mut selected: Option<Selection>,
     choose_default: bool,
     keys: &KeyBindings,
+    themes: &crate::themes::Themes,
     terminal: &mut TerminalSession,
     screen: &mut Screen,
 ) -> Result<Option<Selection>> {
     let mut ui = Frontend {
         keys: keys.clone(),
+        themes: themes.clone(),
         status: "Select a model · type to filter".into(),
         ..Frontend::default()
     };
@@ -213,7 +219,7 @@ async fn run(
             }
             InputEvent::Rejected(error) => ui.status = error.to_string(),
             InputEvent::Resize(_) => screen.note_resize(),
-            InputEvent::Mouse(_) => {}
+            InputEvent::Mouse(_) | InputEvent::ColorsChanged => {}
         }
     }
 }

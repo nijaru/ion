@@ -121,6 +121,15 @@ def exercise_doctor(root, base_env, endpoint):
     ):
         (home / "settings.json").write_text(json.dumps({"search": {"fallbacks": fallbacks}}))
         doctor(1, ("fail\tsettings", "ok\tmodel"))
+    themes = home / "themes"
+    themes.mkdir()
+    (home / "settings.json").write_text(json.dumps({"theme": "fixture"}))
+    (themes / "fixture.json").write_text(json.dumps({"name": "fixture", "colors": {"code": "#9ad"}}))
+    doctor(terms=("ok\ttheme", "ok\tsettings"))
+    (themes / "fixture.json").write_text(json.dumps({"name": "fixture", "colors": {"code": secret}}))
+    doctor(1, ("fail\ttheme", "ok\tsettings"))
+    (home / "settings.json").write_text(json.dumps({"theme": {"bad": secret}}))
+    doctor(1, ("fail\ttheme", "ok\tsettings", "line 1"))
     (home / "settings.json").unlink()
     os.mkfifo(home / "keybindings.json")
     doctor(1, ("fail\tkeybindings", "ok\tmodel", "ok\tmcp"))
@@ -214,6 +223,10 @@ with tempfile.TemporaryDirectory(prefix="ion-cli-") as temporary:
         run("use", "second", "other")
         saved_default = store.read_bytes()
 
+        # Malformed but unused presentation data cannot block headless work or
+        # leak into model context. Doctor validates it separately above.
+        presentation = root / "ion" / "settings.json"
+        presentation.write_text(json.dumps({"theme": {"bad": "CLI_PRIVATE_THEME_VALUE"}}))
         # Human patterns resolve once to canonical requests and Session facts.
         # They neither change the global default nor interpret colon IDs as effort.
         for args, expected in [
@@ -229,6 +242,8 @@ with tempfile.TemporaryDirectory(prefix="ion-cli-") as temporary:
             view = json.loads(run("inspect", "--session", database).stdout)
             assert view["last_model"] == {"provider": "matches", "model": expected}, view
             assert store.read_bytes() == saved_default
+            assert "CLI_PRIVATE_THEME_VALUE" not in json.dumps(requests[-1])
+        presentation.unlink()
 
         run("use", "matches", "shorthand")
         assert json.loads(store.read_bytes())["default"] == {"provider": "matches", "model": "shorthand-latest"}

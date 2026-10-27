@@ -41,7 +41,7 @@ mod search_tools;
 pub mod session_catalog;
 mod tool_veto;
 mod user_commands;
-mod user_settings;
+pub mod user_settings;
 mod web_tools;
 
 use std::{

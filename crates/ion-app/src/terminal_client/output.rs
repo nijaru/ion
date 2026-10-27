@@ -4,7 +4,7 @@ use std::ops::Range;
 use ion_core::TranscriptItem;
 use ratatui::text::Line;
 
-use crate::{tool_output::OutputOptions, transcript_render::ThinkingVisibility};
+use crate::tool_output::RenderOptions;
 
 #[derive(Default)]
 pub(super) struct Output {
@@ -48,8 +48,7 @@ impl Output {
         range: Range<usize>,
         pending: bool,
         width: usize,
-        detail: &OutputOptions,
-        thinking: ThinkingVisibility,
+        detail: &RenderOptions<'_>,
     ) -> Vec<Line<'static>> {
         let mut rows = Vec::new();
         let mut cursor = range.start;
@@ -62,19 +61,14 @@ impl Output {
             assert!(entry.after_item >= cursor);
             append(
                 &mut rows,
-                crate::transcript_render::rows(
-                    &history[cursor..entry.after_item],
-                    width,
-                    detail,
-                    thinking,
-                ),
+                crate::transcript_render::rows(&history[cursor..entry.after_item], width, detail),
             );
             append(&mut rows, super::notice_rows(&entry.text, width));
             cursor = entry.after_item;
         }
         append(
             &mut rows,
-            crate::transcript_render::rows(&history[cursor..range.end], width, detail, thinking),
+            crate::transcript_render::rows(&history[cursor..range.end], width, detail),
         );
         rows
     }

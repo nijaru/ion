@@ -1,5 +1,8 @@
 //! Literal observed output disclosure, independent of effect state and model delivery.
-use crate::presentation_style::{Role, style};
+use crate::{
+    presentation_style::{Role, Theme},
+    transcript_render::ThinkingVisibility,
+};
 use ion_core::{ActivityState, ToolActivityKind, TranscriptActivity};
 use ratatui::text::Line;
 use serde_json::Value;
@@ -20,15 +23,24 @@ impl OutputDetail {
     }
 }
 
-pub(crate) struct OutputOptions {
+pub(crate) struct RenderOptions<'a> {
+    pub theme: &'a Theme,
     pub detail: OutputDetail,
+    pub thinking: ThinkingVisibility,
     pub details_key: String,
 }
 
-impl OutputOptions {
-    pub(crate) fn new(detail: OutputDetail, keys: &crate::keybindings::KeyBindings) -> Self {
+impl<'a> RenderOptions<'a> {
+    pub(crate) fn new(
+        detail: OutputDetail,
+        keys: &crate::keybindings::KeyBindings,
+        theme: &'a Theme,
+        thinking: ThinkingVisibility,
+    ) -> Self {
         Self {
+            theme,
             detail,
+            thinking,
             details_key: keys.hint(crate::keybindings::KeyAction::Detail),
         }
     }
@@ -44,7 +56,7 @@ pub(crate) fn render_activity(
     activity: &TranscriptActivity,
     prefix: &str,
     width: usize,
-    detail: &OutputOptions,
+    detail: &RenderOptions<'_>,
 ) {
     if !matches!(
         activity.state,
@@ -62,7 +74,13 @@ pub(crate) fn render_activity(
         ToolActivityKind::Command => render_command(rows, &result.value, prefix, width, detail, 3),
         ToolActivityKind::Read => {
             if let Some(text) = result.value["content"].as_str() {
-                note(rows, prefix, &read_label(&result.value), width);
+                note(
+                    rows,
+                    prefix,
+                    &read_label(&result.value),
+                    width,
+                    detail.theme,
+                );
                 render_text(
                     rows,
                     text,
@@ -81,6 +99,7 @@ pub(crate) fn render_activity(
                         prefix,
                         "… earlier file lines are outside this recorded range",
                         width,
+                        detail.theme,
                     );
                 }
                 if result.value["has_more"].as_bool() == Some(true) {
@@ -89,6 +108,7 @@ pub(crate) fn render_activity(
                         prefix,
                         "… file continues beyond this recorded range",
                         width,
+                        detail.theme,
                     );
                 }
             }
@@ -96,7 +116,7 @@ pub(crate) fn render_activity(
         _ => return,
     }
     if let Some(error) = result.value["error"].as_str() {
-        note(rows, prefix, "error", width);
+        note(rows, prefix, "error", width, detail.theme);
         render_text(
             rows,
             error,
@@ -126,7 +146,7 @@ pub(crate) fn render_folded_reads(
     activities: &[TranscriptActivity],
     prefix: &str,
     width: usize,
-    detail: &OutputOptions,
+    detail: &RenderOptions<'_>,
 ) {
     if activities
         .first()
@@ -143,6 +163,7 @@ pub(crate) fn render_folded_reads(
             detail.details_key
         ),
         width,
+        detail.theme,
     );
     for activity in activities {
         let Some(result) = &activity.result else {
@@ -180,6 +201,7 @@ pub(crate) fn render_folded_reads(
                     }
                 ),
                 width,
+                detail.theme,
             );
         }
     }
@@ -190,12 +212,12 @@ pub(crate) fn render_command(
     output: &Value,
     prefix: &str,
     width: usize,
-    detail: &OutputOptions,
+    detail: &RenderOptions<'_>,
     compact_lines: usize,
 ) {
     for stream in ["stdout", "stderr"] {
         if let Some(text) = output[stream].as_str().filter(|text| !text.is_empty()) {
-            note(rows, prefix, stream, width);
+            note(rows, prefix, stream, width, detail.theme);
             render_text(
                 rows,
                 text,
@@ -212,6 +234,7 @@ pub(crate) fn render_command(
                 prefix,
                 &format!("… {stream} capture incomplete · omitted byte count unknown"),
                 width,
+                detail.theme,
             );
         } else if output[format!("{stream}_truncated")].as_bool() == Some(true) {
             let notice = match output[format!("{stream}_omitted_bytes")].as_u64() {
@@ -221,7 +244,7 @@ pub(crate) fn render_command(
                 ),
                 None => format!("… {stream} truncated · {}", detail.details_key),
             };
-            note(rows, prefix, &notice, width);
+            note(rows, prefix, &notice, width, detail.theme);
         }
         if output[format!("{stream}_lossy")].as_bool() == Some(true) {
             note(
@@ -231,6 +254,7 @@ pub(crate) fn render_command(
                     "… {stream} decoding loss · UTF-8 replacement used (possibly at tail boundary)"
                 ),
                 width,
+                detail.theme,
             );
         }
         if let Some(path) = output[format!("{stream}_full_path")].as_str() {
@@ -239,6 +263,7 @@ pub(crate) fn render_command(
                 prefix,
                 &format!("… {stream} temporary raw capture: {path}"),
                 width,
+                detail.theme,
             );
         }
         if let Some(error) = output[format!("{stream}_full_error")].as_str() {
@@ -247,6 +272,7 @@ pub(crate) fn render_command(
                 prefix,
                 &format!("… {stream} capture error: {error}"),
                 width,
+                detail.theme,
             );
         }
     }
@@ -258,7 +284,7 @@ fn render_text(
     prefix: &str,
     label: &str,
     width: usize,
-    detail: &OutputOptions,
+    detail: &RenderOptions<'_>,
     preview: Preview,
 ) {
     let (compact_lines, tail) = match preview {
@@ -313,16 +339,16 @@ fn render_text(
                 detail.details_key
             )
         };
-        note(rows, prefix, &notice, width);
+        note(rows, prefix, &notice, width, detail.theme);
     }
 }
 
-fn note(rows: &mut Vec<Line<'static>>, prefix: &str, text: &str, width: usize) {
+fn note(rows: &mut Vec<Line<'static>>, prefix: &str, text: &str, width: usize, theme: &Theme) {
     crate::display_text::push_styled(
         rows,
         &format!("{prefix}└ "),
         &format!("{prefix}  "),
-        Line::styled(text.to_owned(), style(Role::Secondary)),
+        Line::styled(text.to_owned(), theme.style(Role::Secondary)),
         width,
     );
 }
@@ -348,7 +374,12 @@ mod tests {
                 }),
                 "",
                 120,
-                &OutputOptions::new(detail, &crate::keybindings::KeyBindings::default()),
+                &RenderOptions::new(
+                    detail,
+                    &crate::keybindings::KeyBindings::default(),
+                    &Theme::default(),
+                    ThinkingVisibility::Hidden,
+                ),
                 3,
             );
             let text = rows
@@ -373,7 +404,12 @@ mod tests {
                 &json!({"stdout": "\u{fffd}", "stdout_lossy": false, "stdout_complete": true}),
                 "",
                 120,
-                &OutputOptions::new(detail, &crate::keybindings::KeyBindings::default()),
+                &RenderOptions::new(
+                    detail,
+                    &crate::keybindings::KeyBindings::default(),
+                    &Theme::default(),
+                    ThinkingVisibility::Hidden,
+                ),
                 3,
             );
             assert!(

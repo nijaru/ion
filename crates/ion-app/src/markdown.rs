@@ -11,10 +11,8 @@ use unicode_width::UnicodeWidthStr;
 
 use crate::{
     display_text::push_styled,
-    presentation_style::{Role, style},
+    presentation_style::{Role, Theme},
 };
-#[cfg(test)]
-use ratatui::style::Color;
 
 struct Prefix {
     first: String,
@@ -24,6 +22,7 @@ struct Prefix {
 
 struct View<'a> {
     rows: &'a mut Vec<Line<'static>>,
+    theme: &'a Theme,
     width: usize,
     spans: Vec<Span<'static>>,
     separator: Option<Line<'static>>,
@@ -33,9 +32,9 @@ struct View<'a> {
     links: Vec<(String, usize)>,
 }
 
-pub(super) fn render(rows: &mut Vec<Line<'static>>, source: &str, width: usize) {
+pub(super) fn render(rows: &mut Vec<Line<'static>>, source: &str, width: usize, theme: &Theme) {
     let start = rows.len();
-    let mut view = View::new(rows, width, Style::default());
+    let mut view = View::new(rows, width, theme.style(Role::Text), theme);
     let mut events = Parser::new_ext(source, Options::ENABLE_TABLES);
     while let Some(event) = events.next() {
         match event {
@@ -51,9 +50,10 @@ pub(super) fn render(rows: &mut Vec<Line<'static>>, source: &str, width: usize) 
 }
 
 impl<'a> View<'a> {
-    fn new(rows: &'a mut Vec<Line<'static>>, width: usize, base: Style) -> Self {
+    fn new(rows: &'a mut Vec<Line<'static>>, width: usize, base: Style, theme: &'a Theme) -> Self {
         Self {
             rows,
+            theme,
             width,
             spans: Vec::new(),
             separator: None,
@@ -73,7 +73,7 @@ impl<'a> View<'a> {
             }
             Event::Code(text) => self.spans.push(Span::styled(
                 text.into_string(),
-                self.style().patch(style(Role::Code)),
+                self.style().patch(self.theme.style(Role::Code)),
             )),
             Event::SoftBreak => self.text(" ".into()),
             Event::HardBreak => self.text("\n".into()),
@@ -194,7 +194,8 @@ impl<'a> View<'a> {
             }
             Tag::Link { dest_url, .. } | Tag::Image { dest_url, .. } => {
                 self.links.push((dest_url.into_string(), self.spans.len()));
-                self.styles.push(self.style().patch(style(Role::Link)));
+                self.styles
+                    .push(self.style().patch(self.theme.style(Role::Link)));
                 if image {
                     self.text("[image: ".into());
                 }
@@ -277,7 +278,7 @@ mod tests {
 
     fn view(source: &str, width: usize) -> Vec<Line<'static>> {
         let mut rows = Vec::new();
-        render(&mut rows, source, width);
+        render(&mut rows, source, width, &Theme::default());
         rows
     }
 
@@ -310,7 +311,8 @@ mod tests {
         assert!(
             rows.iter()
                 .flat_map(|row| &row.spans)
-                .any(|span| span.content == "code" && span.style.fg == Some(Color::Magenta))
+                .any(|span| span.content == "code"
+                    && span.style.fg == Theme::default().style(Role::Code).fg)
         );
     }
 
@@ -370,7 +372,7 @@ mod tests {
             assert!(
                 rows.iter()
                     .flat_map(|line| &line.spans)
-                    .any(|span| span.style.fg == Some(Color::Magenta))
+                    .any(|span| span.style.fg == Theme::default().style(Role::Code).fg)
             );
             if width == 7 {
                 let joined = rows.iter().map(ToString::to_string).collect::<String>();
@@ -424,12 +426,13 @@ mod tests {
         assert_ne!(token_style("fn"), token_style("main"));
         assert_eq!(token_style("comment"), token_style("still comment"));
         assert_ne!(token_style("still comment"), token_style("let"));
-        assert_eq!(token_style("after"), Style::default());
+        assert_eq!(token_style("after"), Theme::default().style(Role::Text));
         for label in ["python", "sh", "typescript", "tsx", "json", "toml"] {
             let rows = view(&format!("```{label}\nvalue = \"literal\"\n```"), 80);
             assert!(
                 rows.iter().flat_map(|row| &row.spans).any(|span| {
-                    span.content.contains("literal") && span.style.fg == Some(Color::Green)
+                    span.content.contains("literal")
+                        && span.style.fg == Theme::default().style(Role::SyntaxString).fg
                 }),
                 "{label}: {rows:?}"
             );
@@ -449,7 +452,7 @@ mod tests {
             assert!(text.ends_with("plain"), "{text}");
             assert_eq!(
                 rows.last().unwrap().spans.last().unwrap().style,
-                Style::default()
+                Theme::default().style(Role::Text)
             );
             if width == 80 {
                 assert!(text.contains("│     let e\u{0301} = \"界�[2J\";"), "{text}");
@@ -469,7 +472,7 @@ mod tests {
                     .flat_map(|row| &row.spans)
                     .filter(|span| !span.content.trim().is_empty()
                         && !span.content.starts_with("code ·"))
-                    .all(|span| span.style.fg == Some(Color::Magenta))
+                    .all(|span| span.style.fg == Theme::default().style(Role::Code).fg)
             );
             assert_eq!(rows.last().unwrap().to_string(), "  ");
         }
@@ -506,7 +509,10 @@ mod tests {
                 .any(|span| span.content.contains("e\u{0301}")
                     && span.style.add_modifier.contains(Modifier::BOLD))
         );
-        assert!(rows.last().unwrap().spans.last().unwrap().style == Style::default());
+        assert_eq!(
+            rows.last().unwrap().spans.last().unwrap().style,
+            Theme::default().style(Role::Text)
+        );
         assert!(view("界\t界", 1).iter().all(|row| row.width() <= 1));
     }
 }

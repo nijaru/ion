@@ -15,7 +15,8 @@ pub(crate) struct InvalidSettings {
     line: usize,
     column: usize,
 }
-pub(crate) struct UserSettings {
+/// A bounded operator configuration snapshot. Unused recipe sections stay opaque.
+pub struct UserSettings {
     bytes: Vec<u8>,
 }
 impl Default for UserSettings {
@@ -28,15 +29,19 @@ impl Default for UserSettings {
 
 #[derive(Default, Deserialize)]
 #[serde(default, deny_unknown_fields)]
-struct Sections<S: Default, Q: Default, V: Default> {
+struct Sections<S: Default, Q: Default, V: Default, T: Default = IgnoredAny> {
     shell: S,
     search: Q,
     tool_veto: V,
+    theme: T,
 }
 impl UserSettings {
-    pub(crate) fn load(root: &Path) -> Result<Self> {
-        let path = root.join("settings.json");
-        let settings = match crate::file_io::read_bounded(&path, MAX_BYTES) {
+    pub fn load(root: &Path) -> Result<Self> {
+        Self::read(&root.join("settings.json"))
+    }
+
+    fn read(path: &Path) -> Result<Self> {
+        let settings = match crate::file_io::read_bounded(path, MAX_BYTES) {
             Ok(bytes) => Self { bytes },
             Err(error) if error.kind() == io::ErrorKind::NotFound => Self::default(),
             Err(error) => {
@@ -65,6 +70,59 @@ impl UserSettings {
             )?
             .tool_veto)
     }
+    /// Theme names are presentation data; App owns their meaning and validation.
+    pub fn theme(&self) -> Result<Option<String>> {
+        Ok(self
+            .decode::<Sections<IgnoredAny, IgnoredAny, IgnoredAny, Option<String>>>("theme")?
+            .theme)
+    }
+
+    /// Patch only the preference in a fresh document under the cooperating
+    /// writer lock. External editors do not participate in this lock.
+    /// Success means the preference was published. An optional warning reports
+    /// that directory sync failed afterward, so crash durability is uncertain.
+    pub fn save_theme(root: &Path, theme: &str) -> Result<Option<String>> {
+        use std::os::unix::fs::{DirBuilderExt, PermissionsExt};
+        std::fs::DirBuilder::new()
+            .recursive(true)
+            .mode(0o700)
+            .create(root)?;
+        let mutation = crate::file_io::FileMutation::try_open(&root.join("settings.json"))?;
+        let fresh = Self::read(mutation.path())?;
+        let mut document: serde_json::Value = fresh.decode("user")?;
+        document
+            .as_object_mut()
+            .expect("validated settings object")
+            .insert("theme".into(), serde_json::Value::String(theme.into()));
+        let mut bytes = serde_json::to_vec_pretty(&document)?;
+        bytes.push(b'\n');
+        anyhow::ensure!(
+            bytes.len() <= MAX_BYTES,
+            "settings.json exceeds its byte bound"
+        );
+        let permissions = match std::fs::metadata(mutation.path()) {
+            Ok(metadata) => {
+                mutation.ensure_writable()?;
+                metadata.permissions()
+            }
+            Err(error) if error.kind() == io::ErrorKind::NotFound => {
+                std::fs::Permissions::from_mode(0o600)
+            }
+            Err(error) => return Err(error.into()),
+        };
+        match mutation.replace(&bytes, Some(permissions)) {
+            Ok(()) => Ok(None),
+            Err(error)
+                if error
+                    .get_ref()
+                    .is_some_and(|cause| cause.is::<crate::file_io::PublicationSyncError>()) =>
+            {
+                Ok(Some(error.to_string()))
+            }
+            Err(error) => Err(error).context("save theme preference"),
+        }
+    }
+
     fn decode<T: DeserializeOwned>(&self, section: &'static str) -> Result<T> {
         // Parse the captured bytes, not a Value clone: retain genuine positions
         // without printing Serde's invalid value (which can be private code/keys).
@@ -82,6 +140,51 @@ impl UserSettings {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn theme_saves_patch_fresh_data_and_fail_promptly_behind_an_owned_writer() {
+        use std::os::unix::fs::PermissionsExt;
+        let root = std::env::temp_dir().join(format!("ion-theme-save-{}", uuid::Uuid::now_v7()));
+        std::fs::create_dir(&root).unwrap();
+        let path = root.join("settings.json");
+        std::fs::write(&path, r#"{"search":{"native":false},"theme":"dark"}"#).unwrap();
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o640)).unwrap();
+        let captured = UserSettings::load(&root).unwrap();
+        let lock = crate::file_io::FileMutation::try_open(&path).unwrap();
+        let before = std::time::Instant::now();
+        assert!(UserSettings::save_theme(&root, "light").is_err());
+        assert!(before.elapsed() < std::time::Duration::from_secs(1));
+        assert_eq!(
+            UserSettings::load(&root)
+                .unwrap()
+                .theme()
+                .unwrap()
+                .as_deref(),
+            Some("dark")
+        );
+        // A cooperating writer publishes a newer unrelated setting after capture.
+        lock.replace(br#"{"search":{"native":true},"tool_veto":{"program":"PRIVATE_PROGRAM"},"theme":"dark"}"#, Some(std::fs::Permissions::from_mode(0o640))).unwrap();
+        drop(lock);
+        UserSettings::save_theme(&root, "light").unwrap();
+        let fresh = UserSettings::load(&root).unwrap();
+        assert_eq!(captured.theme().unwrap().as_deref(), Some("dark"));
+        assert_eq!(fresh.theme().unwrap().as_deref(), Some("light"));
+        assert!(fresh.search().unwrap().native);
+        let document: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+        assert_eq!(document["tool_veto"]["program"], "PRIVATE_PROGRAM");
+        assert_eq!(
+            std::fs::metadata(&path).unwrap().permissions().mode() & 0o777,
+            0o640
+        );
+        std::fs::write(&path, r#"{"theme":{"bad":"PRIVATE_VALUE"}}"#).unwrap();
+        let unused = UserSettings::load(&root).unwrap();
+        assert!(unused.search().is_ok());
+        let error = unused.theme().unwrap_err().to_string();
+        assert!(!error.contains("PRIVATE_VALUE"));
+        assert!(error.contains("line 1"));
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
     #[test]
     fn captured_sections_are_stable_and_unused_sections_are_not_interpreted() {
         let root = std::env::temp_dir().join(format!("ion-settings-{}", uuid::Uuid::now_v7()));
