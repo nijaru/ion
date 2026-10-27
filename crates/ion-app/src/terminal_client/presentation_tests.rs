@@ -662,10 +662,7 @@ fn picker_selection_stays_visible_beside_wrapped_query_and_status() {
                 .map(|index| PickerItem {
                     label: format!("{index:02}-matching-long-project-file.rs"),
                     detail: None,
-                    value: PickerValue::Session {
-                        path: format!("file-{index}").into(),
-                        named: false,
-                    },
+                    value: PickerValue::Login(format!("file-{index}")),
                 })
                 .collect(),
         });
@@ -696,19 +693,26 @@ fn session_picker_detail_never_hides_the_selected_row() {
         title: "Resume session",
         query: "saved".into(),
         selected: 2,
-        items: (0..3)
-            .map(|index| PickerItem {
-                label: format!(
-                    "{}0{index}-saved-task  saved prompt",
-                    if index == 2 { "[current] " } else { "" }
-                ),
-                detail: Some(format!(
-                    "id 019abcdef0123456789abcdef0123456{index} · {} turn(s)\nmodel smoke/model · file activity 2026-10-19 12:34:56 UTC (2m ago)",
-                    index + 1
-                )),
-                value: PickerValue::Session { path: PathBuf::from(format!("/session-{index}")), named: false },
-            })
-            .collect(),
+        items: navigation::session_items(
+            (0..3)
+                .map(|index| ion_host::SessionSummary {
+                    id: format!("019abcdef0{index:02}-4567-89ab-cdef01234567"),
+                    path: PathBuf::from(format!("/session-{index}")),
+                    cwd: None,
+                    name: Some("saved task".into()),
+                    preview: Some("saved prompt".into()),
+                    model: Some(ion_ai::ModelRef {
+                        provider: "smoke".into(),
+                        model: "model".into(),
+                    }),
+                    turns: index + 1,
+                    updated: std::time::UNIX_EPOCH,
+                })
+                .collect(),
+            Some("019abcdef002-4567-89ab-cdef01234567"),
+            false,
+            std::time::UNIX_EPOCH,
+        ),
     });
     for width in [8, 12, 80] {
         for height in 2..12 {
@@ -718,7 +722,7 @@ fn session_picker_detail_never_hides_the_selected_row() {
             assert!(
                 rows.iter().any(|row| {
                     let row = row.to_string();
-                    row.starts_with('›') && (width < 24 || row.contains("02-"))
+                    row.starts_with('›') && (width < 24 || row.contains("019abcdef002"))
                 }),
                 "selected Session hidden at {width}x{height}"
             );

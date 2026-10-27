@@ -776,9 +776,10 @@ def exercise_configuration(work, base_env, endpoint):
 
 
 def exercise_resume(work, base_env, endpoint):
-    def selected(terminal):
+    def selected(terminal, current=False):
         # The query also starts with ›; only a rendered Session ID is a result.
-        return re.search(r"› [0-9a-f]{8}-[0-9a-f]{3}  BETA_NAMED  RESUME_BETA", terminal.text())
+        marker = r"\[current\] " if current else ""
+        return re.search(r"› " + marker + r"[0-9a-f]{8}-[0-9a-f]{3}  BETA_NAMED  RESUME_BETA", terminal.text())
 
     for mode in ("inline", "fullscreen"):
         sandbox = work / (mode + "-resume")
@@ -829,11 +830,26 @@ def exercise_resume(work, base_env, endpoint):
             terminal.wait(lambda: "resume-saved/saved-model" in terminal.text())
             terminal.send("/name BETA_NAMED\r")
             terminal.wait(lambda: "BETA_NAMED" in terminal.text())
+            browse_requests = len(requests)
+            terminal.send("/resume\r")
+            terminal.wait(lambda: "1 match(es)" in terminal.text())
+            query = '"BETA_NAMED" "RESUME_BETA"'
+            terminal.send(query)
+            terminal.paint()
+            assert query in terminal.text() and selected(terminal, current=True), terminal.text()[-2500:]
+            terminal.output.clear()
+            terminal.send(b"\x0e")
+            # Incremental publication need not repaint the unchanged result row.
+            terminal.wait(lambda: "named only · 1 match(es)" in terminal.text())
+            assert len(requests) == browse_requests
+            terminal.send(b"\x1b")
+            terminal.paint()
             terminal.finish()
         finally:
             terminal.close()
         with closing(sqlite3.connect(by_cwd[b.resolve()])) as connection:
-            assert json.loads(connection.execute("SELECT header FROM session WHERE id=1").fetchone()[0])["name"] == "BETA_NAMED"
+            beta_header = json.loads(connection.execute("SELECT header FROM session WHERE id=1").fetchone()[0])
+            assert beta_header["name"] == "BETA_NAMED"
         subprocess.run([binary, "use", "resume-default", "default-model", "--endpoint", endpoint,
                         "--wire", "chat-completions"], env=env, capture_output=True, check=True)
         defaults = (home / "models.json").read_bytes()
@@ -874,7 +890,9 @@ def exercise_resume(work, base_env, endpoint):
             terminal.wait(lambda: "RESUME_ALPHA" in terminal.text())
             terminal.send(b"\x0e")
             terminal.wait(lambda: "named only · 0 match(es)" in terminal.text())
-            terminal.send("RESUME_BETA")
+            # Full identity suffix is not in the short painted row. Separate
+            # terms also match the name and captured folder independently.
+            terminal.send(f'{beta_header["id"][-12:]} "BETA_NAMED" beta')
             terminal.paint()
             terminal.output.clear()
             terminal.send(b"\t")

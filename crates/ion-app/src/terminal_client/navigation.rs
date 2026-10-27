@@ -277,10 +277,7 @@ pub(super) fn session_items(
                 label,
                 detail: Some(detail),
                 value: PickerValue::Session {
-                    named: session
-                        .name
-                        .as_deref()
-                        .is_some_and(|name| !name.trim().is_empty()),
+                    search: super::session_search::SessionSearch::new(&session),
                     path: session.path,
                 },
             }

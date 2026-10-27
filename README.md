@@ -237,6 +237,11 @@ the live binding's working directory. Ctrl-N toggles named Sessions only here to
 empty filtered results remain reversible. The filter resets on close and does not
 change any saved Session. Rebind or disable `app.session.toggleNamedFilter` in
 `keybindings.json` alongside the other controls.
+Both browsers search names, full IDs, folders and first-prompt previews, ignoring
+case and keeping recent order. Separate words can match different fields; quote
+`"a phrase"` to match it within one field. Unquoted name/folder words also allow
+fuzzy character matching. IDs and previews use literal text. This searches captured
+metadata, not full conversation text or regular expressions.
 The selected conversation shows its full ID, Turn count, recorded model and file
 activity timestamp/age. Activity is a discovery-time snapshot, not execution
 status. Discovery runs outside the input loop; Esc dismisses the browser while

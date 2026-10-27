@@ -18,9 +18,13 @@ use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
 
 use super::navigation::{ForkPickerValue, session_items};
+use super::session_search::{SessionQuery, SessionSearch};
 
 pub(super) enum PickerValue {
-    Session { path: PathBuf, named: bool },
+    Session {
+        path: PathBuf,
+        search: SessionSearch,
+    },
     Model(ModelRef),
     Reasoning(ion_ai::Reasoning),
     Login(String),
@@ -47,17 +51,20 @@ pub(super) struct Picker {
 impl Picker {
     pub fn matches(&self, named_only: bool) -> Vec<usize> {
         let query = self.query.to_ascii_lowercase();
+        let mut sessions = None;
         self.items
             .iter()
             .enumerate()
             .filter_map(|(index, item)| {
-                if named_only && !matches!(item.value, PickerValue::Session { named: true, .. }) {
-                    return None;
-                }
-                item.label
-                    .to_ascii_lowercase()
-                    .contains(&query)
-                    .then_some(index)
+                let matching = if let PickerValue::Session { search, .. } = &item.value {
+                    (!named_only || search.named())
+                        && sessions
+                            .get_or_insert_with(|| SessionQuery::new(&self.query))
+                            .matches(search)
+                } else {
+                    !named_only && item.label.to_ascii_lowercase().contains(&query)
+                };
+                matching.then_some(index)
             })
             .collect()
     }
@@ -678,10 +685,7 @@ mod tests {
                 .map(|label| PickerItem {
                     label: (*label).into(),
                     detail: None,
-                    value: PickerValue::Session {
-                        path: PathBuf::from(label),
-                        named: false,
-                    },
+                    value: PickerValue::Login((*label).into()),
                 })
                 .collect(),
         });
@@ -730,7 +734,7 @@ mod tests {
         assert!(rows.iter().any(|row| row == "› alpha"));
         assert!(matches!(
             pickers.key(KeyEvent::new(KeyCode::Enter, Modifiers::NONE), &KeyBindings::default()),
-            Some(PickerValue::Session { path, .. }) if path == Path::new("alpha")
+            Some(PickerValue::Login(value)) if value == "alpha"
         ));
         assert!(pickers.active().is_none());
 
@@ -763,7 +767,7 @@ mod tests {
         assert!(rows.iter().any(|row| row == "› beta"));
         assert!(matches!(
             pickers.key(KeyEvent::new(KeyCode::Enter, Modifiers::NONE), &KeyBindings::default()),
-            Some(PickerValue::Session { path, .. }) if path == Path::new("beta")
+            Some(PickerValue::Login(value)) if value == "beta"
         ));
     }
 
@@ -883,6 +887,81 @@ mod tests {
                 assert!(pickers.active().is_none());
             }
         }
+    }
+
+    #[test]
+    fn session_search_matches_independent_metadata_fields_not_painted_labels() {
+        let summaries = [
+            (
+                "00000000-0000-4000-8000-123456789abc",
+                Some("Beta Fix"),
+                "/work/AlphaProject",
+                "needle haystack",
+            ),
+            (
+                "11111111-1111-4111-8111-abcdef012345",
+                None,
+                "/work/Other",
+                "B e t a",
+            ),
+            (
+                "22222222-2222-4222-8222-987654321abc",
+                Some("École4 API2"),
+                "/work/café",
+                "tab\tline\nend",
+            ),
+        ]
+        .into_iter()
+        .map(|(id, name, cwd, preview)| SessionSummary {
+            id: id.into(),
+            path: id.into(),
+            name: name.map(str::to_owned),
+            cwd: Some(cwd.into()),
+            preview: Some(preview.into()),
+            model: None,
+            turns: 1,
+            updated: UNIX_EPOCH,
+        })
+        .collect();
+        let mut picker = Picker {
+            title: "Resume session",
+            query: String::new(),
+            selected: 0,
+            items: session_items(
+                summaries,
+                Some("00000000-0000-4000-8000-123456789abc"),
+                false,
+                UNIX_EPOCH,
+            ),
+        };
+        for (query, expected) in [
+            ("alpha beta", vec![0]),
+            ("123456789abc", vec![0]),
+            ("btfx alphprj", vec![0]),
+            ("\"beta fix\" needle", vec![0]),
+            ("\"beta needle\"", vec![]),
+            ("\"needle    haystack\"", vec![0]),
+            ("beta", vec![0]), // Preview characters do not acquire fuzzy matching.
+            ("[current]", vec![]),
+            ("needle missing", vec![]),
+            ("\"beta", vec![]),
+            ("ÉCL4 CAFÉ", vec![2]),
+            ("api4", vec![2]),
+            ("2api", vec![2]),
+            ("4ecole", vec![]),
+            ("\"tab line\"", vec![2]),
+            ("tabline", vec![]),
+            ("\"\" \" \"", vec![0, 1, 2]),
+            ("", vec![0, 1, 2]),
+        ] {
+            picker.query = query.into();
+            assert_eq!(picker.matches(false), expected, "{query}");
+        }
+        picker.query = "alpha beta".into();
+        assert_eq!(picker.matches(true), [0]);
+        picker.query = "other".into();
+        assert_eq!(picker.matches(false), [1]);
+        assert!(picker.matches(true).is_empty());
     }
 
     #[tokio::test]

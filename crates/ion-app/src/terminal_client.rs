@@ -47,6 +47,7 @@ mod orientation;
 mod output;
 mod picker;
 mod question;
+mod session_search;
 mod setup;
 mod tasks;
 use clipboard_input::*;

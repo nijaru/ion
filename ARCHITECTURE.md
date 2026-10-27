@@ -1184,7 +1184,12 @@ start with all Sessions and offer a configurable Ctrl-N named-only filter using
 nonblank stored names, not preview text. The filter preserves query and folder
 scope, retains a still-visible selection and revokes old rendered confirmation
 before the next draw. It changes neither facts nor discovery custody, starts no
-scan, and resets when the browser closes.
+scan, and resets when the browser closes. Search uses captured name, full ID,
+cwd and first-input preview, not rendered labels. Case-insensitive words may match
+different fields; quoted phrases match normalized whitespace within one field.
+Only unquoted names/cwd allow fuzzy subsequences and ASCII letter/number swaps;
+IDs/previews remain literal. Preserve recent order and the original query source.
+This is metadata search, not full-message, regex or relevance-ranked search.
 
 Without an explicit command, terminal stdin and stdout select chat; redirected
 I/O selects headless execution. Launch prompt operands start the selected client;
