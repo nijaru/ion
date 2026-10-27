@@ -15,6 +15,7 @@ mod request;
 mod session;
 mod session_usage;
 mod summary;
+mod tool_policy;
 mod tool_result;
 mod tool_set;
 mod transcript;
@@ -45,6 +46,7 @@ pub use session::{
     TurnEndReason, TurnSummary, UnobservedUserShell, UserShellOutcome,
 };
 pub use session_usage::{ModelUsage, SessionUsage, TokenCount, UsageTotals};
+pub use tool_policy::{ToolDecision, ToolPolicy, ToolPolicyRequest};
 pub use tool_set::{
     ToolActivity, ToolActivityKind, ToolCatalog, ToolDefinition, ToolExecutor, ToolExposure,
     ToolPresentation, ToolPresentationTarget, ToolRegistration, ToolResultSchema, ToolSelection,

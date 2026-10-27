@@ -97,6 +97,7 @@ pub struct CodingApplication {
     processes: Arc<crate::ProcessOwner>,
     command_environment: Option<Arc<crate::CommandEnvironment>>,
     search_settings: Option<Arc<crate::SearchSettings>>,
+    tool_veto: Option<Arc<crate::ToolVetoSettings>>,
 }
 
 const READ_ONLY_TOOLS: &[&str] = &[
@@ -129,6 +130,7 @@ impl CodingApplication {
             processes,
             command_environment: None,
             search_settings: None,
+            tool_veto: None,
         }
     }
 
@@ -144,6 +146,13 @@ impl CodingApplication {
     /// Supply complete search routing policy rather than reading user settings.
     pub fn with_search_settings(mut self, settings: Arc<crate::SearchSettings>) -> Self {
         self.search_settings = Some(settings);
+        self
+    }
+
+    /// Supply an operator program veto, captured across child recipes. Explicit
+    /// command environments otherwise skip ambient user settings, including vetoes.
+    pub fn with_tool_veto(mut self, settings: Arc<crate::ToolVetoSettings>) -> Self {
+        self.tool_veto = Some(settings);
         self
     }
 
@@ -221,6 +230,16 @@ impl CodingApplication {
             Some(settings) => settings.clone(),
             None => Arc::new(settings.search()?),
         };
+        let tool_veto = match &self.tool_veto {
+            Some(settings) => Some(settings.clone()),
+            None => settings.tool_veto()?.map(Arc::new),
+        };
+        let policy = tool_veto
+            .as_ref()
+            .map(|settings| {
+                crate::ToolVeto::new(cwd, settings.clone(), environment.clone()).map(Arc::new)
+            })
+            .transpose()?;
         let native = Arc::new(
             LocalTools::with_environment(cwd, environment.clone())?.with_project_instructions(),
         );
@@ -243,10 +262,10 @@ impl CodingApplication {
                 self,
                 cwd,
                 selected,
-                owner.background().clone(),
-                owner.completions().clone(),
-                environment,
+                owner,
+                environment.clone(),
                 search_settings,
+                tool_veto.clone(),
             )));
         }
         let ask_available = questions.is_some();
@@ -275,6 +294,11 @@ impl CodingApplication {
                 Arc::new(crate::code_mode::QuickJs),
                 ion_core::CodeLimits::default(),
             )
+        } else {
+            tools
+        };
+        let tools = if let Some(policy) = policy {
+            tools.with_policy(policy)
         } else {
             tools
         };

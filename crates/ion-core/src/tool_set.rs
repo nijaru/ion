@@ -221,15 +221,20 @@ impl ToolDefinition {
 }
 
 #[derive(Debug, Clone)]
-pub struct ToolExecution {
-    pub output: ToolOutput,
-    /// Deferred capabilities to add to the next request's declared loadout.
-    pub activate: Vec<String>,
+pub(crate) enum ToolExecution {
+    Observed {
+        output: ToolOutput,
+        /// Deferred capabilities to add to the next request's declared loadout.
+        activate: Vec<String>,
+    },
+    NotDispatched {
+        reason: String,
+    },
 }
 
 impl ToolExecution {
     pub(crate) fn output(output: ToolOutput) -> Self {
-        Self {
+        Self::Observed {
             output,
             activate: Vec::new(),
         }
@@ -323,6 +328,7 @@ pub trait ToolSource: Send + Sync {
 pub struct ToolSet {
     sources: Vec<Arc<dyn ToolSource>>,
     composition: Option<(Arc<dyn crate::CodeRuntime>, crate::CodeLimits)>,
+    policy: Option<Arc<dyn crate::ToolPolicy>>,
     history: bool,
     selection: ToolSelection,
 }
@@ -332,9 +338,17 @@ impl ToolSet {
         Self {
             sources: sources.into_iter().collect(),
             composition: None,
+            policy: None,
             history: false,
             selection: ToolSelection::all(),
         }
+    }
+
+    /// Capture an optional veto with each future catalog. Issued requests keep
+    /// their original policy and routes through refresh or binding replacement.
+    pub fn with_policy(mut self, policy: Arc<dyn crate::ToolPolicy>) -> Self {
+        self.policy = Some(policy);
+        self
     }
 
     /// Narrow the model-visible loadout without changing source registration or
@@ -436,7 +450,12 @@ impl ToolSet {
                 }
             }
         }
-        ToolCatalog::from_entries(entries, previous, self.selection.clone())
+        ToolCatalog::from_entries(
+            entries,
+            previous,
+            self.selection.clone(),
+            self.policy.clone(),
+        )
     }
 }
 
@@ -457,6 +476,7 @@ struct RoutedTool {
 /// Immutable tool schema/presentation/route view used by one model request and
 /// the tool calls produced from that request.
 pub struct ToolCatalog {
+    policy: Option<Arc<dyn crate::ToolPolicy>>,
     entries: Vec<RoutedTool>,
     positions: HashMap<String, usize>,
     declared: HashSet<String>,
@@ -468,6 +488,7 @@ impl ToolCatalog {
         mut entries: Vec<RoutedTool>,
         previous: &[ToolSpec],
         selection: ToolSelection,
+        policy: Option<Arc<dyn crate::ToolPolicy>>,
     ) -> Self {
         let mut positions = entries
             .iter()
@@ -512,6 +533,7 @@ impl ToolCatalog {
         }
 
         ToolCatalog {
+            policy,
             entries,
             positions,
             declared,
@@ -529,6 +551,7 @@ impl ToolCatalog {
                 .collect(),
             previous,
             self.selection.clone(),
+            self.policy.clone(),
         )
     }
 
@@ -618,13 +641,6 @@ impl ToolCatalog {
             })
     }
 
-    pub(crate) fn is_history(&self, name: &str) -> bool {
-        self.positions
-            .get(name)
-            .and_then(|index| self.entries.get(*index))
-            .is_some_and(|entry| matches!(entry.route, ToolRoute::History))
-    }
-
     pub fn activity(&self, call: &ToolCall) -> ToolActivity {
         self.definition(&call.name).map_or_else(
             || ToolActivity::external(&call.name),
@@ -647,13 +663,19 @@ impl ToolCatalog {
         &'a self,
         invocation: crate::ToolInvocation<'a>,
     ) -> BoxFuture<'a, ToolOutput> {
-        let dispatch = self.dispatch(invocation);
         Box::pin(async move {
-            match dispatch {
+            match self.dispatch(invocation).await {
                 ToolDispatch::Rejected(reason) => crate::ToolOutcome::NotDispatched { reason }
                     .inspection_output()
                     .into_owned(),
-                ToolDispatch::Execution(execution) => execution.await.output,
+                ToolDispatch::Execution(execution) => match execution.await {
+                    ToolExecution::Observed { output, .. } => output,
+                    ToolExecution::NotDispatched { reason } => {
+                        crate::ToolOutcome::NotDispatched { reason }
+                            .inspection_output()
+                            .into_owned()
+                    }
+                },
                 ToolDispatch::Composition(..) => ToolOutput {
                     value: serde_json::json!({"error":"code_mode requires the Session effect gateway"}),
                     images: Vec::new(),
@@ -670,7 +692,7 @@ impl ToolCatalog {
 
     /// Execute a model-issued call only when its definition was part of this
     /// request's declared loadout.
-    pub(crate) fn execute_model_call<'a>(
+    pub(crate) async fn execute_model_call<'a>(
         &'a self,
         invocation: crate::ToolInvocation<'a>,
     ) -> ToolDispatch<'a> {
@@ -681,47 +703,76 @@ impl ToolCatalog {
                 call.name
             ));
         }
-        self.dispatch(invocation)
+        self.dispatch(invocation).await
     }
 
-    fn dispatch<'a>(&'a self, invocation: crate::ToolInvocation<'a>) -> ToolDispatch<'a> {
+    pub(crate) async fn dispatch<'a>(
+        &'a self,
+        invocation: crate::ToolInvocation<'a>,
+    ) -> ToolDispatch<'a> {
         let call = invocation.call();
         if call.raw_arguments.is_some() || !call.arguments.is_object() {
             return ToolDispatch::rejected(
                 "tool arguments were not a valid JSON object; submit a corrected call",
             );
         }
-        match self
+        let Some(entry) = self
             .positions
             .get(&call.name)
             .and_then(|index| self.entries.get(*index))
-        {
-            Some(RoutedTool {
-                route: ToolRoute::Search,
-                ..
-            }) => {
-                let execution = self.search_deferred(call);
-                ToolDispatch::Execution(Box::pin(async move { execution }))
+        else {
+            return ToolDispatch::rejected(format!("unknown tool: {}", call.name));
+        };
+        if let Some(policy) = &self.policy {
+            let Some(origin) = invocation.origin() else {
+                return ToolDispatch::rejected("tool policy requires an admitted invocation");
+            };
+            if invocation.stop().is_cancelled() {
+                return ToolDispatch::rejected("stopped before policy dispatch");
             }
-            Some(RoutedTool {
-                route: ToolRoute::Executor(executor),
-                ..
-            }) => {
+            let stop = invocation.stop().child_token();
+            let decision = policy
+                .decide(
+                    crate::ToolPolicyRequest {
+                        call,
+                        definition: &entry.definition,
+                        origin,
+                    },
+                    stop.clone(),
+                )
+                .await;
+            if stop.is_cancelled() {
+                return ToolDispatch::rejected("stopped before tool dispatch");
+            }
+            match decision {
+                Ok(crate::ToolDecision::Allow) => {}
+                Ok(crate::ToolDecision::Deny { reason }) => return ToolDispatch::Rejected(reason),
+                Err(error) => {
+                    return ToolDispatch::rejected(format!("tool policy failed: {error}"));
+                }
+            }
+        }
+        if invocation.stop().is_cancelled() {
+            return ToolDispatch::rejected("stopped before tool dispatch");
+        }
+        match &entry.route {
+            ToolRoute::Search => {
+                ToolDispatch::Execution(Box::pin(async move { self.search_deferred(call) }))
+            }
+            ToolRoute::Executor(executor) => {
                 // Selecting a frozen route grants no host authority. Even an
                 // executor's synchronous constructor runs only when polled.
                 ToolDispatch::Execution(Box::pin(async move {
+                    if invocation.stop().is_cancelled() {
+                        return ToolExecution::NotDispatched {
+                            reason: "stopped before executor dispatch".into(),
+                        };
+                    }
                     ToolExecution::output(executor.execute(invocation).await)
                 }))
             }
-            Some(RoutedTool {
-                route: ToolRoute::Composition(runtime, limits),
-                ..
-            }) => ToolDispatch::Composition(runtime, *limits),
-            Some(RoutedTool {
-                route: ToolRoute::History,
-                ..
-            }) => ToolDispatch::History,
-            None => ToolDispatch::rejected(format!("unknown tool: {}", call.name)),
+            ToolRoute::Composition(runtime, limits) => ToolDispatch::Composition(runtime, *limits),
+            ToolRoute::History => ToolDispatch::History,
         }
     }
 
@@ -810,7 +861,7 @@ impl ToolCatalog {
                 })
             })
             .collect::<Vec<_>>();
-        ToolExecution {
+        ToolExecution::Observed {
             output: ToolOutput {
                 value: serde_json::json!({
                     "loaded": tools,
@@ -978,9 +1029,13 @@ mod tests {
                 .value,
             json!("deferred")
         );
-        let ToolDispatch::Rejected(model_result) = catalog.execute_model_call(
-            crate::ToolInvocation::untracked(&call, CancellationToken::new()),
-        ) else {
+        let ToolDispatch::Rejected(model_result) = catalog
+            .execute_model_call(crate::ToolInvocation::untracked(
+                &call,
+                CancellationToken::new(),
+            ))
+            .await
+        else {
             panic!("an undeclared model call must be rejected");
         };
         assert_eq!(
@@ -998,17 +1053,23 @@ mod tests {
             arguments: json!({"query":"deferred"}),
             raw_arguments: None,
         };
-        let ToolDispatch::Execution(execution) = catalog.execute_model_call(
-            crate::ToolInvocation::untracked(&call, CancellationToken::new()),
-        ) else {
+        let ToolDispatch::Execution(execution) = catalog
+            .execute_model_call(crate::ToolInvocation::untracked(
+                &call,
+                CancellationToken::new(),
+            ))
+            .await
+        else {
             panic!("tool search cannot select the composition gateway");
         };
-        let execution = execution.await;
-        assert!(!execution.output.is_error);
-        assert_eq!(execution.activate, ["deferred"]);
-        assert_eq!(execution.output.value["count"], 1);
+        let ToolExecution::Observed { output, activate } = execution.await else {
+            panic!("search was rejected")
+        };
+        assert!(!output.is_error);
+        assert_eq!(activate, ["deferred"]);
+        assert_eq!(output.value["count"], 1);
 
-        let activate = execution.activate.into_iter().collect();
+        let activate = activate.into_iter().collect();
         let names = catalog
             .declared_specs_with(&activate)
             .into_iter()

@@ -304,13 +304,19 @@ async fn cancelled_wait_does_not_kill_and_close_really_joins() {
                     && name == "process"
                     && let Some(sender) = started_tx.take()
                 {
-                    trigger.cancel();
-                    let _ = sender.send(());
+                    // ToolStarted announces selection, before executor polling.
+                    // Cancel only after this poll can enter the pending wait.
+                    let trigger = trigger.clone();
+                    let cancel = tokio::spawn(async move {
+                        tokio::task::yield_now().await;
+                        trigger.cancel();
+                    });
+                    let _ = sender.send(cancel);
                 }
             },
         )
         .await;
-    started_rx.await.unwrap();
+    started_rx.await.unwrap().await.unwrap();
     assert!(
         matches!(result, Err(CodingAgentError::Cancelled)),
         "{result:?}"
@@ -370,6 +376,8 @@ async fn cancelled_close_reports_incomplete_join_and_retains_stop() {
 
     let stop = CancellationToken::new();
     let trigger = stop.clone();
+    let (cancel_tx, cancel_rx) = oneshot::channel();
+    let mut cancel_tx = Some(cancel_tx);
     let closer = agent(
         model(vec![response(vec![call(
             "close",
@@ -384,12 +392,21 @@ async fn cancelled_close_reports_incomplete_join_and_retains_stop() {
             String::new(),
             stop,
             move |event| {
-                if matches!(event, CodingAgentEvent::ToolStarted { .. }) {
-                    trigger.cancel();
+                if matches!(event, CodingAgentEvent::ToolStarted { .. })
+                    && let Some(sender) = cancel_tx.take()
+                {
+                    // Let close request its owned stop before cancelling its wait.
+                    let trigger = trigger.clone();
+                    let cancel = tokio::spawn(async move {
+                        tokio::task::yield_now().await;
+                        trigger.cancel();
+                    });
+                    let _ = sender.send(cancel);
                 }
             },
         )
         .await;
+    cancel_rx.await.unwrap().await.unwrap();
     let close = session
         .view()
         .unwrap()

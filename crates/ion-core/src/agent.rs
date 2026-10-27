@@ -964,17 +964,12 @@ impl Agent {
                         prepared.reasoning(),
                     );
                     let invocation = invocation.with_model_messages(&prepared.request().messages);
-                    let dispatch = tool_catalog.execute_model_call(invocation);
-                    let rejection = match &dispatch {
-                        ToolDispatch::Rejected(reason) => Some(reason.clone()),
-                        _ => None,
-                    };
-                    let rejected = rejection.is_some();
                     let tool = Box::pin(async {
                         if stop.is_cancelled() {
                             return Err(AgentError::Cancelled);
                         }
-                        if !rejected {
+                        let dispatch = tool_catalog.execute_model_call(invocation).await;
+                        if !matches!(dispatch, ToolDispatch::Rejected(_)) {
                             unstarted.remove(&call.id);
                             observe(AgentEvent::ToolStarted {
                                 call_id: call.id.clone(),
@@ -1003,11 +998,9 @@ impl Agent {
                             .await
                             .map(ToolExecution::output),
                             ToolDispatch::Execution(execution) => Ok(execution.await),
-                            ToolDispatch::Rejected(reason) => Ok(ToolExecution::output(
-                                crate::ToolOutcome::NotDispatched { reason }
-                                    .inspection_output()
-                                    .into_owned(),
-                            )),
+                            ToolDispatch::Rejected(reason) => {
+                                Ok(ToolExecution::NotDispatched { reason })
+                            }
                         }
                     });
                     let tool = Box::pin(async { gateway.run(session, stop, tool).await? });
@@ -1020,22 +1013,27 @@ impl Agent {
                             &mut cache_warmer,
                         )
                         .await?;
-                    let output = execution.output;
-                    activate_tools.extend(execution.activate);
+                    let (outcome, activated) = match execution {
+                        ToolExecution::NotDispatched { reason } => {
+                            (crate::ToolOutcome::NotDispatched { reason }, Vec::new())
+                        }
+                        ToolExecution::Observed { output, activate } => {
+                            let projection = output.model_projection(
+                                self.limits.image_input,
+                                self.limits.max_request_bytes,
+                            )?;
+                            (
+                                crate::ToolOutcome::Observed { output, projection },
+                                activate,
+                            )
+                        }
+                    };
+                    activate_tools.extend(activated);
                     let next_context = (index + 1 == call_count && !activate_tools.is_empty())
                         .then(|| ModelContextSnapshot {
                             instructions: instructions.clone(),
                             tools: tool_catalog.declared_specs_with(&activate_tools),
                         });
-                    let outcome = if let Some(reason) = rejection {
-                        crate::ToolOutcome::NotDispatched { reason }
-                    } else {
-                        let projection = output.model_projection(
-                            self.limits.image_input,
-                            self.limits.max_request_bytes,
-                        )?;
-                        crate::ToolOutcome::Observed { output, projection }
-                    };
                     session.record_tool_settlement_with_context(
                         turn,
                         crate::ToolSettlement {

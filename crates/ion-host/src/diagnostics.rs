@@ -94,6 +94,9 @@ impl Host {
             let settings = crate::user_settings::UserSettings::load(self.config_root())?;
             CommandEnvironment::coding_with_settings(settings.shell()?)?;
             settings.search()?.validate()?;
+            if let Some(settings) = settings.tool_veto()? {
+                settings.validate()?;
+            }
             anyhow::Ok(())
         })();
         match settings {
@@ -106,7 +109,7 @@ impl Host {
                 "settings",
                 Failed,
                 format!(
-                    "cannot use settings.json: {}; check shell path/setup and search settings",
+                    "cannot use settings.json: {}; check shell path/setup, search and tool veto settings",
                     problem(&error)
                 ),
             ),

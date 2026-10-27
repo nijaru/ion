@@ -20,7 +20,7 @@ use crate::{
     json_size::encoded_len,
     session::{Session, SessionError, code_inspection::InspectionError},
     tool_result::ToolOutput,
-    tool_set::ToolCatalog,
+    tool_set::{ToolCatalog, ToolDispatch, ToolExecution},
 };
 
 #[derive(Deserialize)]
@@ -641,14 +641,6 @@ pub(crate) async fn run<F: FnMut(AgentEvent) + Send>(
                     Ok(ChildOutcome::NotDispatched {
                         reason: "stopped before dispatch".into(),
                     })
-                } else if catalog.is_history(&admitted.intent.call.name) {
-                    let output = crate::session::history::execute(
-                        session,
-                        &admitted.intent.call,
-                        child_stop.clone(),
-                    )
-                    .await;
-                    Ok(ChildOutcome::Observed { output })
                 } else {
                     let (invocation, gateway) = crate::ToolInvocation::admitted(
                         &admitted.intent.call,
@@ -660,10 +652,36 @@ pub(crate) async fn run<F: FnMut(AgentEvent) + Send>(
                         reasoning,
                     );
                     let invocation = invocation.with_model_messages(model_messages);
+                    let execution = async {
+                        match catalog.dispatch(invocation).await {
+                            ToolDispatch::Rejected(reason) => {
+                                ToolExecution::NotDispatched { reason }
+                            }
+                            ToolDispatch::Execution(execution) => execution.await,
+                            ToolDispatch::History => ToolExecution::output(
+                                crate::session::history::execute(
+                                    session,
+                                    &admitted.intent.call,
+                                    child_stop.clone(),
+                                )
+                                .await,
+                            ),
+                            ToolDispatch::Composition(..) => ToolExecution::NotDispatched {
+                                reason: "intrinsic tools cannot be composed".into(),
+                            },
+                        }
+                    };
                     gateway
-                        .run(session, &child_stop, catalog.execute(invocation))
+                        .run(session, &child_stop, execution)
                         .await
-                        .map(|output| ChildOutcome::Observed { output })
+                        .map(|execution| match execution {
+                            ToolExecution::Observed { output, .. } => {
+                                ChildOutcome::Observed { output }
+                            }
+                            ToolExecution::NotDispatched { reason } => {
+                                ChildOutcome::NotDispatched { reason }
+                            }
+                        })
                 };
                 (admitted, outcome)
             }));

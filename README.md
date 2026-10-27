@@ -234,7 +234,7 @@ not automatically imported or migrated.
 
 Run `ion doctor` to check local setup without starting a coding client. Use
 `ion doctor --cwd DIR` to inspect another workspace. It checks the default or
-environment-selected model, credential presence, shell/search settings, resources,
+environment-selected model, credential presence, shell/search/tool-veto settings, resources,
 command/MCP manifests and keybindings. Independent checks continue after a failure.
 Output rows use `ok`, `warn` or `fail`; any failed check exits 1. Omitted resources
 and skipped/invalid optional manifests can warn while exiting 0. Unsupported options
@@ -1598,6 +1598,60 @@ Coding requests use the catalog model's output ceiling, reduced when the
 current context leaves less estimated room; there is no separate 16k app cap.
 A completed response with no answer or tool call fails the Turn; it does not
 save an empty assistant message that would break later provider replay.
+
+## Tool veto
+
+An optional operator program can allow or deny each admitted model tool call,
+including `history`, deferred discovery, Code Mode parents and their tool children.
+Configure it in user-only `~/.ion/settings.json` (or `$ION_HOME/settings.json`):
+
+```json
+{
+  "tool_veto": {
+    "program": "/usr/bin/python3",
+    "args": ["/absolute/path/to/veto.py"],
+    "timeout_ms": 30000
+  }
+}
+```
+
+The program receives one JSON object on stdin followed by EOF. Fields are
+`tool_name`, original `arguments`, `call_id`, Core `origin` (Session, Turn,
+occurrence and optional composed child), and canonical `cwd`. For example:
+
+```python
+import json, sys
+call = json.load(sys.stdin)
+reply = {"decision": "allow"}
+if call["tool_name"] == "write":
+    reply = {"decision": "deny", "reason": "Writes are disabled by operator policy"}
+print(json.dumps(reply))
+```
+
+Exit successfully with exactly one allow/deny JSON reply on stdout. Extra fields,
+invalid JSON, nonzero exit, I/O failure, Stop and expiry fail closed. The timeout
+must be positive; omitted timeout defaults to 30 seconds. Replies are limited to
+64 KiB; denial reasons must be nonblank and at most 4096 bytes. Reasons are visible
+to the model and in saved facts; stderr is drained and discarded, not disclosed.
+The captured shell/setup also runs for this program: keep setup stdout silent.
+Ion ends the one-shot process-group scope and joins the direct child before
+publishing a decision. Cleanup may outlast the timeout.
+
+Policy cannot rewrite approved arguments/results, add capabilities or grant
+replay. Denied calls persist as `not_dispatched`, including composed children.
+The program itself runs with host permissions and may have effects: this is not
+a sandbox, rollback or a guarantee about escaped descendants. Explicit operator
+shell commands and named commands are separate authority, not model tool calls.
+
+Each runtime captures settings and command environment; coding children inherit
+that capture with their own cwd. Restart or replace the runtime binding to apply
+changed settings; resource `/reload` alone does not replace them. Program and
+transitive executable bytes are not frozen. `ion doctor` validates settings
+without running the program or proving it can execute. Rust applications can use
+`ToolPolicy` with `ToolSet::with_policy`, or explicitly opt into `ToolVeto`;
+restricted/service recipes do not implicitly inherit coding policy. Interactive
+approval dialogs, project hook discovery and extension packaging are not provided
+by this consumer.
 
 ## Managed programs
 

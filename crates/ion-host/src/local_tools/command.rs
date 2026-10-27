@@ -164,14 +164,21 @@ pub(crate) async fn stop_child(
     }
     match tokio::time::timeout(Duration::from_secs(1), child.wait()).await {
         Ok(status) => status,
-        Err(_) => {
-            if let Some(pid) = pid {
-                let _ = kill_process_group(pid, Signal::KILL);
-            }
-            child.kill().await?;
-            child.wait().await
-        }
+        Err(_) => kill_child(child, pid).await,
     }
+}
+
+/// Terminate the owned group before reaping its direct child. Protocol workers
+/// use this without a grace period when a reply can no longer be accepted.
+pub(crate) async fn kill_child(
+    child: &mut tokio::process::Child,
+    pid: Option<Pid>,
+) -> std::io::Result<std::process::ExitStatus> {
+    if let Some(pid) = pid {
+        let _ = kill_process_group(pid, Signal::KILL);
+    }
+    child.kill().await?;
+    child.wait().await
 }
 
 struct Captured {

@@ -67,10 +67,10 @@ impl Subagent {
         parent: &CodingApplication,
         cwd: &Path,
         selected: &Selection,
-        owner: Arc<BackgroundOwner>,
-        completions: Arc<crate::completion::CompletionRegistry>,
+        owner: &crate::ApplicationOwner,
         environment: Arc<crate::CommandEnvironment>,
         search_settings: Arc<crate::SearchSettings>,
+        tool_veto: Option<Arc<crate::ToolVetoSettings>>,
     ) -> Self {
         Self {
             application: Arc::new(ChildApplication {
@@ -83,6 +83,7 @@ impl Subagent {
                     processes: parent.processes.clone(),
                     command_environment: Some(environment),
                     search_settings: Some(search_settings),
+                    tool_veto,
                 },
                 selected: selected.clone(),
             }),
@@ -92,8 +93,8 @@ impl Subagent {
                 .directory()
                 .join("children"),
             cwd: cwd.to_path_buf(),
-            owner,
-            completions,
+            owner: owner.background().clone(),
+            completions: owner.completions().clone(),
             // This coding binding makes no durable same-environment claim.
             // Durable hosts supply and re-attest their own versioned scope.
             authority: AuthorityScope::new(format!("ion.coding.live/{}", uuid::Uuid::now_v7()))

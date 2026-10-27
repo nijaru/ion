@@ -28,9 +28,10 @@ impl Default for UserSettings {
 
 #[derive(Default, Deserialize)]
 #[serde(default, deny_unknown_fields)]
-struct Sections<S: Default, Q: Default> {
+struct Sections<S: Default, Q: Default, V: Default> {
     shell: S,
     search: Q,
+    tool_veto: V,
 }
 impl UserSettings {
     pub(crate) fn load(root: &Path) -> Result<Self> {
@@ -42,18 +43,27 @@ impl UserSettings {
                 return Err(error).with_context(|| format!("cannot read {}", path.display()));
             }
         };
-        settings.decode::<Sections<IgnoredAny, IgnoredAny>>("user")?;
+        settings.decode::<Sections<IgnoredAny, IgnoredAny, IgnoredAny>>("user")?;
         Ok(settings)
     }
     pub(crate) fn shell(&self) -> Result<crate::command_environment::ShellSettings> {
         Ok(self
-            .decode::<Sections<crate::command_environment::ShellSettings, IgnoredAny>>("shell")?
+            .decode::<Sections<crate::command_environment::ShellSettings, IgnoredAny, IgnoredAny>>(
+                "shell",
+            )?
             .shell)
     }
     pub(crate) fn search(&self) -> Result<crate::SearchSettings> {
         Ok(self
-            .decode::<Sections<IgnoredAny, crate::SearchSettings>>("search")?
+            .decode::<Sections<IgnoredAny, crate::SearchSettings, IgnoredAny>>("search")?
             .search)
+    }
+    pub(crate) fn tool_veto(&self) -> Result<Option<crate::ToolVetoSettings>> {
+        Ok(self
+            .decode::<Sections<IgnoredAny, IgnoredAny, Option<crate::ToolVetoSettings>>>(
+                "tool veto",
+            )?
+            .tool_veto)
     }
     fn decode<T: DeserializeOwned>(&self, section: &'static str) -> Result<T> {
         // Parse the captured bytes, not a Value clone: retain genuine positions
@@ -77,11 +87,13 @@ mod tests {
         let root = std::env::temp_dir().join(format!("ion-settings-{}", uuid::Uuid::now_v7()));
         std::fs::create_dir(&root).unwrap();
         let path = root.join("settings.json");
-        std::fs::write(&path,r#"{"shell":{"path":"PRIVATE_INVALID_VALUE","extra":"PRIVATE_INVALID_VALUE"},"search":{"native":false,"fallbacks":[]}}"#).unwrap();
+        std::fs::write(&path,r#"{"shell":{"path":"PRIVATE_INVALID_VALUE","extra":"PRIVATE_INVALID_VALUE"},"search":{"native":false,"fallbacks":[]},"tool_veto":{"program":"PRIVATE_INVALID_VALUE","timeout_ms":"PRIVATE_INVALID_VALUE"}}"#).unwrap();
         let captured = UserSettings::load(&root).unwrap();
         std::fs::write(&path, r#"{"search":{"native":true}}"#).unwrap();
         assert!(!captured.search().unwrap().native);
         assert!(UserSettings::load(&root).unwrap().search().unwrap().native);
+        let veto_error = captured.tool_veto().err().unwrap().to_string();
+        assert!(veto_error.contains("line 1") && !veto_error.contains("PRIVATE_INVALID_VALUE"));
         let error = captured.shell().err().unwrap().to_string();
         assert!(
             error.contains("line 1") && !error.contains("PRIVATE_INVALID_VALUE"),

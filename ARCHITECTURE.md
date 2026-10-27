@@ -838,8 +838,8 @@ or workflow language.
   command output is not a fabricated user message or model tool call.
 - **Lifecycle hooks:** receive immutable committed facts at named boundaries.
   A pre-dispatch decision hook can allow or veto a specific invocation, not rewrite
-  its arguments or observed result. Deliver that seam with an actual policy or
-  approval consumer, not unused hook variants. Stop/shutdown retains and joins
+  its arguments or observed result. The optional tool veto below supplies that
+  seam; it is not a generic lifecycle event bus. Stop/shutdown retains and joins
   started hook work; observer loss cannot silently abandon it.
 - **UI contributions:** produce bounded presentation data through the client owner,
   not raw terminal writes. They cannot change execution, input custody or history;
@@ -848,6 +848,56 @@ or workflow language.
   custom endpoint settings are configuration data. A generic command, tool or hook
   cannot rewrite issued requests, headers, signed replay or active provider state.
   Replacement follows ordinary preflight and captured-binding rules.
+
+### Operator tool veto
+
+Core captures an optional `ToolPolicy` with each frozen `ToolCatalog`. It receives
+only the original call, frozen definition, admitted `ToolOrigin` and a child Stop
+scope—not mutable input, model history, a Session writer, executor or delegation
+port. Core checks valid-object arguments, route existence and direct-model
+exposure before asking policy. This is not complete JSON Schema validation;
+executors retain their semantic argument checks. Allow cannot make an invalid or
+unavailable capability executable.
+
+The same gate covers direct executors, deferred tools, `tool_search`, `history`,
+parent composition and admitted Code Mode children, including child history.
+Bridge metadata discovery/description and saved-child inspection are not new
+admitted tool calls. Policy-enabled catalogs reject untracked execution rather
+than manufacturing provenance. Existing policy-free low-level SDK calls remain
+available; trusted host code is not isolated by this interface.
+
+Denial, policy error and cancellation settle the selected invocation as typed
+`NotDispatched`, not an observed executor error. Core rechecks Stop before effect
+dispatch. It retains pending decisions through Stop and keeps existing intent,
+result-before-consumption, foreground joining and recovery owners. An approval
+is neither a reusable grant nor replay authority. Policy programs themselves
+have host permissions and can perform effects; vetoing the selected tool does
+not roll those effects back or establish all-descendant quiescence.
+
+The coding consumer is optional operator `settings.json` `tool_veto` data: a
+literal program and fixed argv run in the binding's cwd/captured command
+environment, with original invocation facts as JSON on stdin. Only exit 0 and one
+strict allow/deny JSON reply can authorize dispatch; stderr is drained without
+retention/disclosure, and stdout is bounded to 64 KiB without spooling. Denial
+reasons are nonblank, at most 4096 bytes and intentionally visible in tool results.
+The positive timeout defaults to 30000 ms and covers pipe exchange and exit;
+every terminal path ends the one-shot process-group scope and joins the direct
+child and owned pipe work. Non-reaping exit observation reserves the owned PID
+until that final signal, including protocol/nonzero-exit failures. Cleanup can
+outlast the budget. Discovery, validation, `doctor` and
+binding preparation never launch the program.
+
+Each runtime binding captures the policy; replacement or restart captures new
+settings through ordinary preflight. Resource `/reload` does not replace runtime
+settings. Executable bytes are not frozen by a program/argv snapshot. Coding
+children inherit the captured program policy
+and environment, using their own cwd, without rereading mutable user settings.
+Explicit service command environments skip ambient settings, with an explicit
+veto builder available. Restricted applications inherit no coding policy.
+Direct user shell, named commands, PTY input and tool-source discovery/refresh
+remain separate authority, not covered by a model-tool veto. This consumer reads
+operator configuration only; project hook packaging/trust, interactive approval
+and automatic risk classification are not established by it.
 
 Project executable contributions require an explicit trust decision binding their
 manifest identity and digest to the canonical project root. Trust of an MCP file
@@ -1172,7 +1222,7 @@ changing the saved global default.
 
 `doctor` is an offline, read-only configuration consumer, not coding application
 startup. Host checks the default/environment model selection, local credential
-presence, shell capture/search settings, resources and inert command/MCP manifests;
+presence, shell/search/tool-veto settings, resources and inert command/MCP manifests;
 App adds keybinding validation and control-safe human output. Reuse the real
 configuration readers and static validators without constructing a model service,
 executing shell setup or connecting MCP. Check independent areas even when one

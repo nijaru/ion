@@ -90,6 +90,8 @@ jobs:
         run: python3 scripts/smoke_rpc_requests.py
       - name: RPC direct-shell authority and recovery smoke
         run: python3 scripts/smoke_rpc_shell.py
+      - name: Operator tool veto smoke
+        run: python3 scripts/smoke_tool_veto.py
       - name: Code Mode effect and inspection smoke
         run: python3 scripts/smoke_code_mode.py
       - name: MCP refresh smoke
