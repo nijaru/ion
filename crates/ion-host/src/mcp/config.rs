@@ -6,7 +6,8 @@ use serde_json::Value;
 use sha2::{Digest, Sha256};
 use std::{
     collections::BTreeMap,
-    fs::{self, DirBuilder, File},
+    fs::{DirBuilder, File},
+    io::Read,
     os::unix::fs::DirBuilderExt,
     path::{Path, PathBuf},
 };
@@ -140,7 +141,7 @@ impl McpConfig {
             "user",
         );
         if let Some(project) = &self.project {
-            match fs::read(&project.path) {
+            match read_config(&project.path) {
                 Ok(bytes) => {
                     let digest = digest(&bytes);
                     match self.project_is_trusted(project, &digest) {
@@ -191,7 +192,7 @@ impl McpConfig {
             .project
             .as_ref()
             .context("no project MCP configuration")?;
-        let bytes = fs::read(&project.path).with_context(|| {
+        let bytes = read_config(&project.path).with_context(|| {
             format!(
                 "cannot read project MCP config {}; create it with `ion mcp add --project`",
                 project.path.display()
@@ -234,7 +235,7 @@ impl McpConfig {
     }
 
     fn read_trust(&self) -> Result<TrustFile> {
-        match fs::read(&self.trust) {
+        match read_config(&self.trust) {
             Ok(bytes) => serde_json::from_slice(&bytes)
                 .with_context(|| format!("invalid MCP trust store {}", self.trust.display())),
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(TrustFile::default()),
@@ -299,8 +300,16 @@ impl McpConfig {
     }
 }
 
+// Configuration is a file, not a pipe/device transport. Use the same verified
+// descriptor for inspection and reading, including project and trust sources.
+fn read_config(path: &Path) -> std::io::Result<Vec<u8>> {
+    let mut bytes = Vec::new();
+    crate::file_io::open_regular(path)?.read_to_end(&mut bytes)?;
+    Ok(bytes)
+}
+
 fn read_servers(path: &Path) -> Result<BTreeMap<String, Value>> {
-    match fs::read(path) {
+    match read_config(path) {
         Ok(bytes) => Ok(serde_json::from_slice::<RawServers>(&bytes)
             .with_context(|| format!("invalid MCP config {}", path.display()))?
             .servers),
@@ -445,7 +454,10 @@ pub(super) fn validate_name(name: &str) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::{Arc, Barrier};
+    use std::{
+        fs,
+        sync::{Arc, Barrier},
+    };
 
     #[test]
     fn exposure_defaults_to_direct_and_round_trips_explicit_modes() {

@@ -65,6 +65,7 @@ printf 'Explain this project' | ion run
 ion --continue             # reopen the latest session in this directory
 ion -r                     # choose a saved Session; Tab browses all folders
 ion sessions               # list saved sessions and their IDs
+ion doctor                 # offline, read-only configuration checks
 ion --session ID inspect   # committed history for a selected session as JSON
 ion --continue usage       # recorded token usage, without a model request
 ion --continue clone       # copy the latest conversation to a new session
@@ -230,6 +231,22 @@ in `~/.ion/models.json`, with concurrent saves serialized. Ion keeps user
 configuration, credentials, resources and saved Sessions under `~/.ion`; set
 `ION_HOME` to choose another directory for all of them. Existing XDG data is
 not automatically imported or migrated.
+
+Run `ion doctor` to check local setup without starting a coding client. Use
+`ion doctor --cwd DIR` to inspect another workspace. It checks the default or
+environment-selected model, credential presence, shell/search settings, resources,
+command/MCP manifests and keybindings. Independent checks continue after a failure.
+Output rows use `ok`, `warn` or `fail`; any failed check exits 1. Omitted resources
+and skipped/invalid optional manifests can warn while exiting 0. Unsupported options
+such as `--model`, `--session` and `--json` are invocation errors (exit 2).
+
+Doctor makes no network request, runs no shell setup/tool/command/MCP server,
+opens no Session and writes no files or trust records. It withholds credential
+values, endpoint URLs and configuration bodies; resource paths remain visible.
+A present key is **not authenticated**, and success is not a Session-integrity,
+remote-access, writability or complete runtime-health guarantee. There is no
+implicit repair or cleanup. MCP configuration/trust and keybinding sources must
+be regular files or symlinks to them, not FIFOs or devices.
 
 `/resume` opens a searchable saved-Session browser within the active workspace
 and marks the current Session. Unlike the launch-time chooser, it does not switch

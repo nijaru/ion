@@ -19,6 +19,7 @@ mod cli;
 mod clipboard;
 mod clipboard_reader;
 mod display_text;
+mod doctor;
 mod edit_diff;
 mod external_editor;
 mod headless;
@@ -84,6 +85,7 @@ async fn run_cli(cli: Invocation) -> Result<()> {
         Action::ClipboardRead | Action::SyntaxLicenses => {
             unreachable!("standalone command handled before Host setup")
         }
+        Action::Doctor => doctor::run(&host, &configured_cwd(cli.cwd)?),
         Action::Models { query } => {
             let query = query.unwrap_or_default().to_ascii_lowercase();
             for choice in models.choices(credentials)? {

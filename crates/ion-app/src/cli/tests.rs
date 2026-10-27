@@ -234,6 +234,9 @@ fn scopes_reject_unused_options_in_both_positions_and_help_matches() {
         ("rpc", "--image", "photo.png"),
         ("run", "--tui-mode", "fullscreen"),
         ("chat", "--json", ""),
+        ("doctor", "--model", "openai/gpt-5.4"),
+        ("doctor", "--session", "saved"),
+        ("doctor", "--json", ""),
     ] {
         let mut before = vec!["ion", flag];
         if !value.is_empty() {
@@ -271,6 +274,22 @@ fn scopes_reject_unused_options_in_both_positions_and_help_matches() {
     assert!(help.contains("--model"));
     assert!(help.contains("--json"));
     assert!(!help.contains("--tui-mode"));
+    for args in [
+        vec!["ion", "doctor", "--cwd", "/tmp"],
+        vec!["ion", "--cwd", "/tmp", "doctor"],
+    ] {
+        let cli = parse(&args, false).unwrap();
+        assert!(matches!(cli.action, Action::Doctor));
+        assert_eq!(cli.cwd, Some(PathBuf::from("/tmp")));
+    }
+    let doctor_help = command()
+        .try_get_matches_from(["ion", "doctor", "--help"])
+        .err()
+        .unwrap()
+        .to_string();
+    assert!(doctor_help.contains("--cwd") && !doctor_help.contains("--model"));
+    let literal = parse(&["ion", "--", "doctor"], false).unwrap();
+    assert!(matches!(literal.action, Action::Run { input } if input.prompts().eq(["doctor"])));
     let use_help = command()
         .try_get_matches_from(["ion", "use", "--help"])
         .err()

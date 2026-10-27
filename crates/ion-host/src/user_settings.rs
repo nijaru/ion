@@ -7,6 +7,14 @@ use serde::{
 use std::{io, path::Path};
 
 pub(crate) const MAX_BYTES: usize = 64 * 1024;
+
+#[derive(Debug, thiserror::Error)]
+#[error("invalid {section} settings.json at line {line}, column {column}")]
+pub(crate) struct InvalidSettings {
+    section: &'static str,
+    line: usize,
+    column: usize,
+}
 pub(crate) struct UserSettings {
     bytes: Vec<u8>,
 }
@@ -47,15 +55,16 @@ impl UserSettings {
             .decode::<Sections<IgnoredAny, crate::SearchSettings>>("search")?
             .search)
     }
-    fn decode<T: DeserializeOwned>(&self, section: &str) -> Result<T> {
+    fn decode<T: DeserializeOwned>(&self, section: &'static str) -> Result<T> {
         // Parse the captured bytes, not a Value clone: retain genuine positions
         // without printing Serde's invalid value (which can be private code/keys).
         serde_json::from_slice(&self.bytes).map_err(|error| {
-            anyhow::anyhow!(
-                "invalid {section} settings.json at line {}, column {}",
-                error.line(),
-                error.column()
-            )
+            InvalidSettings {
+                section,
+                line: error.line(),
+                column: error.column(),
+            }
+            .into()
         })
     }
 }

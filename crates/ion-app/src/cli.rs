@@ -51,6 +51,8 @@ pub(crate) enum Action {
     ClipboardRead,
     /// Print license notices for bundled syntax definitions (no model or Session setup).
     SyntaxLicenses,
+    /// Check local configuration without running models, tools or MCP servers.
+    Doctor,
     /// List models Ion can route to; account access may differ.
     Models { query: Option<String> },
     /// Select a catalog model, or configure a custom compatible endpoint.
@@ -256,7 +258,7 @@ fn applicable(command: &str, option: &str) -> bool {
                 || saved
                 || matches!(
                     command,
-                    "sessions" | "resources" | "commands" | "trust" | "untrust" | "mcp"
+                    "sessions" | "resources" | "commands" | "trust" | "untrust" | "mcp" | "doctor"
                 )
         }
         "session" | "continue_session" => coding || saved,

@@ -64,6 +64,115 @@ class Handler(BaseHTTPRequestHandler):
         pass
 
 
+def exercise_doctor(root, base_env, endpoint):
+    sandbox = root / "doctor"
+    workspace = sandbox / "workspace"
+    workspace.mkdir(parents=True)
+    home = sandbox / "ion"
+    home.mkdir()
+    env = dict(base_env, HOME=str(sandbox / "home"), ION_HOME=str(home))
+
+    def call(*args, expected=0):
+        result = subprocess.run([BINARY, *map(str, args)], env=env, cwd=workspace,
+                                capture_output=True, timeout=15)
+        assert result.returncode == expected, (args, result.stdout, result.stderr)
+        return result
+
+    call("use", "fixture", "doctor-model", "--endpoint", endpoint, "--wire", "chat-completions")
+    marker = sandbox / "UNEXPECTED_EXECUTION"
+    program = [sys.executable, "-c", f"from pathlib import Path; Path({str(marker)!r}).touch()"]
+    (home / "mcp.json").write_text(json.dumps({"servers": {
+        "sentinel": {"command": program[0], "args": program[1:]}}}))
+    (home / "commands.json").write_text(json.dumps({"commands": {
+        "sentinel": {"description": "Sentinel", "program": program[0], "args": program[1:],
+                     "share_with_model": False}}}))
+    secret = "DOCTOR_PRIVATE_VALUE"
+    (home / "settings.json").write_text(json.dumps({"shell": {
+        "path": "/bin/sh", "setup": f"# {secret}\nprintf executed > '{marker}'"}}))
+
+    def doctor(expected=0, terms=()):
+        before = {p.relative_to(sandbox): p.read_bytes() for p in sandbox.rglob("*") if p.is_file()}
+        calls = len(requests)
+        result = call("--cwd", workspace, "doctor", expected=expected)
+        text = (result.stdout + result.stderr).decode()
+        assert all(term in text for term in terms), text
+        assert secret not in text and endpoint not in text and "\x1b" not in text, text
+        assert not marker.exists() and len(requests) == calls, text
+        after = {p.relative_to(sandbox): p.read_bytes() for p in sandbox.rglob("*") if p.is_file()}
+        assert before == after, "doctor changed local files or allocated a Session"
+        return text
+
+    doctor(terms=("ok\tmodel", "ok\tcredentials", "ok\tsettings", "ok\tresources",
+                  "ok\tcommands", "ok\tmcp", "ok\tkeybindings", "Offline"))
+    model = (home / "models.json").read_bytes()
+    (home / "models.json").write_text(json.dumps({"custom": secret}))
+    (home / "keybindings.json").write_text(json.dumps({"tui.select.down": "ctrl+n"}))
+    doctor(1, ("fail\tmodel", "fail\tkeybindings", "ok\tsettings", "ok\tmcp", "line 1"))
+    (home / "models.json").write_bytes(model)
+    (home / "keybindings.json").unlink()
+    (home / "settings.json").write_text(json.dumps({"shell": {"setup": [secret]}}))
+    doctor(1, ("fail\tsettings", "ok\tmodel", "ok\tresources", "line 1"))
+    (home / "settings.json").write_text(json.dumps({"search": {"fallbacks": [
+        {"provider": "brave", "endpoint": "file:///" + secret}]}}))
+    doctor(1, ("fail\tsettings", "ok\tmodel"))
+    for fallbacks in (
+        [{"provider": "brave"}, {"provider": "brave"}],
+        [{"provider": "brave", "endpoint": "http://127.0.0.1/" + "x" * 8193}],
+    ):
+        (home / "settings.json").write_text(json.dumps({"search": {"fallbacks": fallbacks}}))
+        doctor(1, ("fail\tsettings", "ok\tmodel"))
+    (home / "settings.json").unlink()
+    os.mkfifo(home / "keybindings.json")
+    doctor(1, ("fail\tkeybindings", "ok\tmodel", "ok\tmcp"))
+    (home / "keybindings.json").unlink()
+    project = workspace / ".ion"
+    project.mkdir()
+    (project / "mcp.json").write_text((home / "mcp.json").read_text())
+    (project / "commands.json").write_text((home / "commands.json").read_text())
+    skills = home / "skills" / "broken\x1b[2J"
+    skills.mkdir(parents=True)
+    (skills / "SKILL.md").write_text(f"---\nname: [{secret}]\n---\n")
+    doctor(terms=("warn\tresources", "warn\tcommands", "warn\tmcp", "SKILL.md"))
+    # Inert inspection must reject pipe/device config sources rather than block.
+    for path in (home / "mcp.json", project / "mcp.json", home / "mcp-trust.json"):
+        original = path.read_bytes() if path.exists() else None
+        path.unlink(missing_ok=True)
+        os.mkfifo(path)
+        doctor(terms=("warn\tmcp", "ok\tmodel"))
+        path.unlink()
+        if original is not None:
+            path.write_bytes(original)
+    call("use", "fixture", "doctor-model", "--endpoint", endpoint, "--wire", "chat-completions",
+         "--api-key-env", "DOCTOR_TEST_KEY")
+    doctor(terms=("ok\tcredentials", "requires no API key"))
+    # Use the actual bundled catalog, not an invented required-key custom route.
+    route = next(line.split("\t")[0] for line in call("models", "openai").stdout.decode().splitlines()
+                 if line.startswith("openai/"))
+    call("use", *route.split("/", 1))
+    doctor(1, ("ok\tmodel", "fail\tcredentials", "ion login"))
+    env["OPENAI_API_KEY"] = secret
+    doctor(terms=("ok\tcredentials", "environment credential present"))
+    del env["OPENAI_API_KEY"]
+    credentials = home / "credentials"
+    credentials.mkdir(mode=0o700)
+    key = credentials / "openai.key"
+    key.write_text(secret)
+    key.chmod(0o600)
+    doctor(terms=("ok\tcredentials", "saved credential present"))
+    key.chmod(0o644)
+    doctor(1, ("fail\tcredentials", "permissions"))
+
+    # A fresh, unconfigured operator home stays absent, even on failure.
+    import shutil
+    shutil.rmtree(home)
+    doctor(1, ("fail\tmodel", "ok\tsettings", "ok\tkeybindings"))
+    assert not home.exists()
+    for args in [("doctor", "--json"), ("--model", "fixture/doctor-model", "doctor"),
+                 ("doctor", "--session", "ignored.sqlite")]:
+        call(*args, expected=2)
+    print("Offline doctor: independent failures, safe diagnostics, trust and zero execution/writes: OK")
+
+
 with tempfile.TemporaryDirectory(prefix="ion-cli-") as temporary:
     root = Path(temporary)
     workspace = root / "workspace"
@@ -91,6 +200,7 @@ with tempfile.TemporaryDirectory(prefix="ion-cli-") as temporary:
 
     try:
         endpoint = f"http://127.0.0.1:{server.server_port}/v1/chat/completions"
+        exercise_doctor(root, env, endpoint)
         run("use", "pictures", "model", "--endpoint", endpoint, "--wire", "chat-completions", "--images")
         for provider, model in (("first", "vendor/model"), ("second", "other")):
             run("use", provider, model, "--endpoint", endpoint, "--wire", "chat-completions")

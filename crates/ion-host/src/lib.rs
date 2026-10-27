@@ -21,6 +21,8 @@ pub use background::{
     BackgroundRunSnapshot, BackgroundSnapshot, BackgroundSummary, BackgroundWait,
 };
 mod delegation;
+mod diagnostics;
+pub use diagnostics::{ConfigurationCheck, ConfigurationStatus};
 mod edit_diff;
 pub mod file_io;
 pub mod image_input;

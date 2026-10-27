@@ -1,5 +1,5 @@
 //! Application keys over decoded terminal events; never secret or raw-program input.
-use std::{fs::File, io::Read, path::Path};
+use std::path::Path;
 
 use anyhow::{Context, Result, bail};
 use ion_terminal::{KeyCode, KeyEvent, Modifiers};
@@ -109,20 +109,14 @@ impl Default for KeyBindings {
 
 impl KeyBindings {
     pub(crate) fn load(root: &Path) -> Result<Self> {
-        let file = match File::open(root.join("keybindings.json")) {
-            Ok(file) => file,
+        let bytes = match ion_host::file_io::read_bounded(&root.join("keybindings.json"), 64 * 1024)
+        {
+            Ok(bytes) => bytes,
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
                 return Ok(Self::default());
             }
             Err(error) => return Err(error).context("read keybindings.json"),
         };
-        let mut bytes = Vec::new();
-        file.take(64 * 1024 + 1)
-            .read_to_end(&mut bytes)
-            .context("read keybindings.json")?;
-        if bytes.len() > 64 * 1024 {
-            bail!("keybindings.json exceeds 64 KiB");
-        }
         Self::parse(&bytes)
     }
 
@@ -330,13 +324,8 @@ mod tests {
         let error = KeyBindings::load(&root).err().unwrap().to_string();
         assert!(error.contains("line 2"), "{error}");
         std::fs::write(&path, vec![b' '; 64 * 1024 + 1]).unwrap();
-        assert!(
-            KeyBindings::load(&root)
-                .err()
-                .unwrap()
-                .to_string()
-                .contains("exceeds 64 KiB")
-        );
+        let error = KeyBindings::load(&root).err().unwrap();
+        assert!(format!("{error:#}").contains("65536-byte read bound"));
         std::fs::remove_dir_all(root).unwrap();
     }
 

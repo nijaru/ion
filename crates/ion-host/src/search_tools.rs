@@ -95,6 +95,43 @@ impl Default for SearchSettings {
     }
 }
 
+impl SearchSettings {
+    pub(crate) fn validate(&self) -> Result<()> {
+        validate_fallbacks(self.fallbacks.iter().map(|fallback| fallback.provider))?;
+        for fallback in &self.fallbacks {
+            validate_endpoint(
+                fallback
+                    .endpoint
+                    .as_deref()
+                    .unwrap_or(fallback.provider.default_endpoint()),
+            )?;
+            ensure!(
+                fallback.api_key_env.as_deref() != Some(""),
+                "credential environment name is empty"
+            );
+        }
+        Ok(())
+    }
+}
+
+fn validate_fallbacks(backends: impl Iterator<Item = SearchBackend>) -> Result<()> {
+    let mut seen = Vec::new();
+    for backend in backends {
+        ensure!(
+            seen.len() < 3 && backend.direct(),
+            "search fallbacks must be Exa, DeepSeek or Brave"
+        );
+        ensure!(!seen.contains(&backend), "duplicate search fallback");
+        seen.push(backend);
+    }
+    Ok(())
+}
+
+fn validate_endpoint(endpoint: &str) -> Result<()> {
+    ensure!(endpoint.len() <= 8192, "search endpoint exceeds 8192 bytes");
+    Ok(HttpModelService::validate_endpoint(endpoint)?)
+}
+
 /// Endpoint and credential authority supplied by the host; never tool arguments.
 pub struct SearchRoute {
     backend: SearchBackend,
@@ -111,8 +148,7 @@ impl SearchRoute {
         credentials: Arc<dyn CredentialResolver>,
         requires_key: bool,
     ) -> Result<Self> {
-        ensure!(endpoint.len() <= 8192, "search endpoint exceeds 8192 bytes");
-        HttpModelService::validate_endpoint(endpoint)?;
+        validate_endpoint(endpoint)?;
         ensure!(
             backend.direct() || model.as_ref().is_some_and(|m| !m.model.is_empty()),
             "native search requires an execution model"
@@ -139,18 +175,7 @@ impl SearchTools {
                 .is_none_or(|r| !matches!(r.backend, SearchBackend::Exa | SearchBackend::Brave)),
             "invalid native search backend"
         );
-        ensure!(
-            fallbacks.len() <= 3 && fallbacks.iter().all(|r| r.backend.direct()),
-            "search fallbacks must be Exa, DeepSeek or Brave"
-        );
-        for (index, route) in fallbacks.iter().enumerate() {
-            ensure!(
-                !fallbacks[..index]
-                    .iter()
-                    .any(|r| r.backend == route.backend),
-                "duplicate search fallback"
-            );
-        }
+        validate_fallbacks(fallbacks.iter().map(|route| route.backend))?;
         let client = Client::builder()
             .redirect(reqwest::redirect::Policy::none())
             .retry(reqwest::retry::never())
@@ -175,6 +200,7 @@ impl SearchTools {
         store: &CredentialStore,
         settings: &SearchSettings,
     ) -> Result<Self> {
+        settings.validate()?;
         let backend = match selected.wire {
             HttpWire::AnthropicMessages => Some(SearchBackend::Anthropic),
             HttpWire::DeepSeekChat => Some(SearchBackend::Deepseek),
@@ -230,10 +256,6 @@ impl SearchTools {
             .fallbacks
             .iter()
             .map(|fallback| {
-                ensure!(
-                    fallback.provider.direct(),
-                    "native backends cannot be configured as search fallbacks"
-                );
                 SearchRoute::new(
                     fallback.provider,
                     fallback

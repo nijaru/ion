@@ -75,7 +75,8 @@ must be considered explicitly rather than hidden under broad claims of parity:
   and budgets. Context-token calibration is not a spending budget.
 - **Clients and distribution:** ACP/editor adapters, non-Rust SDK bindings,
   browser/WASM hosts, platform support beyond currently qualified environments,
-  installation/update workflows and user-facing health/trace diagnostics.
+  installation/update workflows and health/trace diagnostics beyond offline
+  configuration checks.
 
 These are unresolved product/delivery decisions, not promises to copy every
 reference feature or permanent exclusions from V1. A selected capability needs
@@ -1147,6 +1148,26 @@ selected command, including when placed before it; unsupported options fail
 rather than being silently ignored. Invocation overrides bind the Session without
 changing the saved global default.
 
+`doctor` is an offline, read-only configuration consumer, not coding application
+startup. Host checks the default/environment model selection, local credential
+presence, shell capture/search settings, resources and inert command/MCP manifests;
+App adds keybinding validation and control-safe human output. Reuse the real
+configuration readers and static validators without constructing a model service,
+executing shell setup or connecting MCP. Check independent areas even when one
+fails. Show safe structural error locations/categories and relevant resource paths,
+not arbitrary parser errors, config bodies, endpoints or credential values.
+Configuration files are not pipe/device transports: MCP manifests/trust and bounded
+keybinding reads use verified regular descriptors, including symlinks to files.
+
+`doctor --cwd DIR` selects discovery scope, not Session authority or a model
+override. It opens/allocates no Session, changes no configuration/trust, executes
+no configured program/tool and issues no network request. Report `ok`, `warn` and
+`fail`; failed required local configuration exits 1, while omitted optional
+resources or skipped/invalid inert manifests may warn with exit 0. Unused flags
+remain invocation errors. Credential presence is not authentication, and success
+proves neither remote access nor application execution, Session integrity,
+writability, platform health or a cleanup/repair capability.
+
 Human model selection (`--model`, `use` without a new endpoint, and typed `/model`)
 resolves known catalog/configured routes through one Host matcher before binding.
 Accept exact identities and case-insensitive ID/display-name substrings. Exact
@@ -1280,7 +1301,8 @@ terminal acquisition. Missing files use defaults; malformed/unreadable files fai
 explicitly with sanitized diagnostics. `/reload` prepares replacement keys before
 resource reload and publishes them only on success, discarding retained old-key
 status hints without replacing the draft. There is no project keymap or watcher.
-Headless, RPC, metadata commands and standalone login ignore the unused file.
+Headless, RPC, other metadata commands and standalone login ignore the unused
+file; offline `doctor` explicitly validates it without acquiring the terminal.
 Mapped Stop and Unix suspend keep precedence over ordinary modal/question input.
 Masked credential input and attached-program forwarding keep their separate
 physical-control leases. Enhanced keyboards can distinguish chords that legacy
