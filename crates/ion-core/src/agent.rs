@@ -708,7 +708,7 @@ impl Agent {
                         Ok(prepared) => prepared,
                         Err(AgentError::ContextTooLarge) if !prefix_bound_continuation => {
                             if self
-                                .compact_inner(session, stop, self.keep_bytes(), observe)
+                                .compact_inner(None, session, stop, self.keep_bytes(), observe)
                                 .await?
                                 .is_some()
                             {
@@ -765,7 +765,7 @@ impl Agent {
                         && !prefix_bound_continuation
                         && !recovered_overflow
                         && self
-                            .compact_inner(session, stop, self.keep_bytes(), observe)
+                            .compact_inner(None, session, stop, self.keep_bytes(), observe)
                             .await?
                             .is_some()
                     {
@@ -2782,7 +2782,7 @@ mod tests {
             }
             assert!(
                 agent
-                    .compact(reopened.clone(), CancellationToken::new(), |_| {})
+                    .compact(None, reopened.clone(), CancellationToken::new(), |_| {})
                     .await
                     .unwrap()
             );
@@ -4156,13 +4156,25 @@ mod tests {
             )
             .await
             .unwrap();
+        let focus = "Preserve exact API observations: 雪";
         assert!(
             agent
-                .compact(session.clone(), CancellationToken::new(), |_| {})
+                .compact(
+                    Some(focus.into()),
+                    session.clone(),
+                    CancellationToken::new(),
+                    |_| {}
+                )
                 .await
                 .unwrap()
         );
         assert!(scripts.requests()[1].tools.is_empty());
+        assert!(
+            scripts.requests()[1].messages[0]
+                .content
+                .iter()
+                .any(|part| matches!(part, Content::Text(text) if text.contains(focus)))
+        );
         let provider_id = session.provider_session_id().to_string();
         drop(session);
         let session = Arc::new(CodingSession::open(&path).unwrap());
@@ -4184,6 +4196,10 @@ mod tests {
             request.provider_session_id.as_deref() == Some(provider_id.as_str())
         }));
         assert_eq!(requests[2].messages.len(), 2);
+        assert!(
+            !serde_json::to_string(&requests[2]).unwrap().contains(focus),
+            "request-local focus must not become a standing instruction after reopen"
+        );
         assert!(
             requests
                 .iter()
@@ -5016,7 +5032,7 @@ mod tests {
                     ..AgentLimits::default()
                 });
             let outcome = agent
-                .compact(session.clone(), CancellationToken::new(), |_| {})
+                .compact(None, session.clone(), CancellationToken::new(), |_| {})
                 .await;
             let requests = scripts.requests();
             let typed_images = requests
@@ -5086,7 +5102,7 @@ mod tests {
         let agent = Agent::new(scripts, Arc::new(TestTools::new(&root)), model());
         assert!(
             agent
-                .compact(session.clone(), CancellationToken::new(), |_| {})
+                .compact(None, session.clone(), CancellationToken::new(), |_| {})
                 .await
                 .is_err()
         );
@@ -5187,7 +5203,7 @@ mod tests {
             ])]));
             let agent = Agent::new(scripts, Arc::new(TestTools::new(&root)), model());
             let error = agent
-                .compact(session.clone(), CancellationToken::new(), |_| {})
+                .compact(None, session.clone(), CancellationToken::new(), |_| {})
                 .await
                 .unwrap_err();
             assert!(matches!(error, AgentError::InvalidSummary(actual) if actual == reason));
@@ -5262,7 +5278,7 @@ mod tests {
             model(),
         );
         assert!(matches!(
-            agent.compact(session.clone(), stop, |_| {}).await,
+            agent.compact(None, session.clone(), stop, |_| {}).await,
             Err(AgentError::Cancelled)
         ));
         let after = session.view().unwrap();
@@ -5382,11 +5398,16 @@ mod tests {
             let cuts = Arc::new(Mutex::new(Vec::new()));
             let observed_cuts = cuts.clone();
             let changed = agent
-                .compact(session.clone(), CancellationToken::new(), move |event| {
-                    if let AgentEvent::ContextCompacted { through_entry } = event {
-                        observed_cuts.lock().unwrap().push(through_entry);
-                    }
-                })
+                .compact(
+                    None,
+                    session.clone(),
+                    CancellationToken::new(),
+                    move |event| {
+                        if let AgentEvent::ContextCompacted { through_entry } = event {
+                            observed_cuts.lock().unwrap().push(through_entry);
+                        }
+                    },
+                )
                 .await;
             let cuts = cuts.lock().unwrap();
             let after = session.view().unwrap().entries;
@@ -5452,7 +5473,8 @@ mod tests {
                 )
                 .unwrap();
         }
-        let raw_before = session.view().unwrap().entries.len();
+        let focus = "Retain observed effects and \"雪\" constraints, not guesses";
+        let raw_before = session.view().unwrap().entries;
         let scripts = Arc::new(ScriptedModelService::new((0..40).map(|index| {
             response(vec![Content::Text(format!(
                 "Summary through chunk {index}"
@@ -5467,11 +5489,16 @@ mod tests {
         let observed_cuts = cuts.clone();
         assert!(
             agent
-                .compact(session.clone(), CancellationToken::new(), move |event| {
-                    if let AgentEvent::ContextCompacted { through_entry } = event {
-                        observed_cuts.lock().unwrap().push(through_entry);
+                .compact(
+                    Some(focus.into()),
+                    session.clone(),
+                    CancellationToken::new(),
+                    move |event| {
+                        if let AgentEvent::ContextCompacted { through_entry } = event {
+                            observed_cuts.lock().unwrap().push(through_entry);
+                        }
                     }
-                })
+                )
                 .await
                 .unwrap()
         );
@@ -5486,10 +5513,19 @@ mod tests {
         );
         assert_eq!(
             session.view().unwrap().entries.len(),
-            raw_before + cuts.len()
+            raw_before.len() + cuts.len()
+        );
+        assert_eq!(
+            &session.view().unwrap().entries[..raw_before.len()],
+            raw_before.as_slice()
         );
         assert!(scripts.requests().iter().all(|request| {
-            request.tools.is_empty() && serde_json::to_vec(request).unwrap().len() <= 2_000
+            request.tools.is_empty()
+                && serde_json::to_vec(request).unwrap().len() <= 2_000
+                && request.messages[0]
+                    .content
+                    .iter()
+                    .any(|part| matches!(part, Content::Text(text) if text.contains(focus)))
         }));
         drop(session);
         let reopened = Arc::new(CodingSession::open(&path).unwrap());
@@ -5499,7 +5535,7 @@ mod tests {
         );
         assert_eq!(
             reopened.view().unwrap().entries.len(),
-            raw_before + cuts.len()
+            raw_before.len() + cuts.len()
         );
         drop(reopened);
         std::fs::remove_dir_all(root).unwrap();
@@ -5591,7 +5627,7 @@ mod tests {
             });
         assert!(matches!(
             agent
-                .compact(session.clone(), CancellationToken::new(), |_| {})
+                .compact(None, session.clone(), CancellationToken::new(), |_| {})
                 .await,
             Err(AgentError::ContextTooLarge)
         ));

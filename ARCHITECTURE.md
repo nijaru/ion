@@ -940,7 +940,12 @@ old projection when cancelled before commit. Preserve retrieval coordinates with
 replay or implicit evidence injection. Summary requests frame historical records as
 data and place the current summary task after all records and typed images; charge
 that framing in prefix admission. These cues do not establish semantic truth or
-prompt-injection resistance. Measure continuation quality, not compression alone.
+prompt-injection resistance. Explicit manual compaction may supply literal summary
+focus. Apply it to that operation's chunks and retries, outside historical data,
+and charge it in retained-input admission and summary-request sizing. It is not a
+User Turn, execution authority or a standing instruction for later compaction.
+The committed summary and covered coordinates remain the durable compaction fact;
+the focus is request-local. Measure continuation quality, not compression alone.
 
 The coding application supplies a read-only `history` tool for recovering committed
 evidence after compaction or withheld output. Other applications opt in explicitly;

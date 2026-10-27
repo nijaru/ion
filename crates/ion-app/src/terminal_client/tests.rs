@@ -654,7 +654,7 @@ async fn host_rejection_restores_exact_editor_and_images() {
     // No coding operation is targeted by this direct compaction ID.
     let operation = fixture
         .control
-        .compact(EditorDraft::at_end("compact".into()))
+        .compact(None, EditorDraft::at_end("compact".into()))
         .unwrap();
     submit_editor(
         &mut fixture.control,
@@ -940,7 +940,7 @@ async fn settled_shell_is_reconciled_and_shutdown_errors_remain_visible() {
     );
     fixture
         .control
-        .compact(EditorDraft::at_end("compact".into()))
+        .compact(None, EditorDraft::at_end("compact".into()))
         .unwrap();
     let report = fixture.control.shutdown().await;
     let mut outcome = Err(anyhow::anyhow!("terminal output disconnected"));

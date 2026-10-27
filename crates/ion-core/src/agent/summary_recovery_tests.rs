@@ -194,7 +194,7 @@ async fn summary_recovery_stops_without_replacing_context_on_refusal_output_or_c
         let stop = CancellationToken::new();
         let observed_stop = stop.clone();
         let result = agent
-            .compact(session.clone(), stop, move |event| {
+            .compact(None, session.clone(), stop, move |event| {
                 if cancel && matches!(event, AgentEvent::ContextCompactionRetry { .. }) {
                     observed_stop.cancel();
                 }

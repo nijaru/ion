@@ -11,6 +11,32 @@ use std::{
 };
 use tokio::sync::{Notify, Semaphore};
 
+#[tokio::test]
+async fn compaction_focus_is_charged_before_admission_and_returns_exact_metadata() {
+    let model = Model::new(1);
+    let mut fixture = Fixture::new(model.clone(), false);
+    let before = fixture.control.session().view().unwrap().entries;
+    fixture.control.budget = InputBudget::new(256);
+    let (source, error) = fixture
+        .control
+        .compact(Some("focus".repeat(256)), meta("  /compact literal 雪\n"))
+        .unwrap_err();
+    assert_eq!(source.literal, "  /compact literal 雪\n");
+    assert!(matches!(
+        error.downcast_ref::<ion_core::CodingAgentError>(),
+        Some(ion_core::CodingAgentError::InputQueueFull { .. })
+    ));
+    assert!(!fixture.control.is_busy());
+    assert_eq!(fixture.control.session().view().unwrap().entries, before);
+    assert_eq!(model.calls.load(Ordering::SeqCst), 0);
+    assert!(fixture.control.compact(Some(" \n".into()), source).is_ok());
+    assert!(matches!(
+        fixture.control.next().await,
+        ControlUpdate::Settled(_)
+    ));
+    assert!(!fixture.control.is_busy());
+}
+
 #[path = "completion_tests.rs"]
 mod completions;
 #[path = "preparation_tests.rs"]

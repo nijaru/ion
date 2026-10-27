@@ -358,7 +358,7 @@ async fn run(workspace: &std::path::Path, state: &std::path::Path) -> Result<()>
 
     let compaction_started = Instant::now();
     let compacted = long_agent
-        .compact(long.clone(), CancellationToken::new(), |_| {})
+        .compact(None, long.clone(), CancellationToken::new(), |_| {})
         .await?;
     println!(
         "compaction_long: changed={} elapsed_us={} entries_after={}",

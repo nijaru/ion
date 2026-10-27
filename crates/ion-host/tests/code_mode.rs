@@ -353,7 +353,7 @@ async fn history_retrieves_compacted_evidence_through_direct_and_code_mode_route
         + 1;
     assert!(
         agent
-            .compact(session.clone(), CancellationToken::new(), |_| {})
+            .compact(None, session.clone(), CancellationToken::new(), |_| {})
             .await
             .unwrap()
     );
@@ -1135,7 +1135,7 @@ async fn failed_guest_evidence_is_rediscovered_after_cut_and_reopen_without_reex
     );
     assert!(
         agent
-            .compact(session.clone(), CancellationToken::new(), |_| {})
+            .compact(None, session.clone(), CancellationToken::new(), |_| {})
             .await
             .unwrap()
     );

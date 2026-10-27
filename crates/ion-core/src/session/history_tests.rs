@@ -170,7 +170,7 @@ fn compaction_keeps_original_tool_output_bounded_states_and_utf8_pages() {
         )
         .unwrap();
     let plan = session
-        .compaction_plan(0, usize::MAX, true, u64::MAX)
+        .compaction_plan(None, 0, usize::MAX, true, u64::MAX)
         .unwrap()
         .unwrap();
     session

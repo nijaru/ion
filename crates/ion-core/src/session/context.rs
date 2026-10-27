@@ -48,6 +48,7 @@ impl Session {
     /// The returned prefix includes the previous summary, if any.
     pub(crate) fn compaction_plan(
         &self,
+        instructions: Option<&str>,
         keep_bytes: usize,
         max_summary_bytes: usize,
         summary_images: bool,
@@ -73,7 +74,7 @@ impl Session {
             .transpose()?
             .map_or(0, |bytes| bytes + 1);
         let suffix_budget = keep_bytes.saturating_sub(summary_bytes);
-        let mut prefix_bytes = crate::summary::framing_bytes()?;
+        let mut prefix_bytes = crate::summary::framing_bytes(instructions)?;
         if let Some((through, summary)) = &store.state.compaction {
             prefix_bytes = prefix_bytes.saturating_add(crate::summary::content_bytes(
                 &summary_message(*through, summary),

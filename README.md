@@ -73,6 +73,7 @@ ion --continue turns       # list Turn numbers and prompt previews
 ion --continue fork 2      # new session before Turn 2, preserving the source
 ion --continue fork 2 --after # new session after settled Turn 2
 ion --continue compact     # summarize old context; retain the raw Session
+ion --continue compact 'Preserve API decisions and unresolved failures'
 ```
 
 Without a command, Ion opens chat when stdin and stdout are terminals; piped or
@@ -588,7 +589,9 @@ answer. `final` is the committed answer. Other commands are `steer`,
 `cancel_background`, `acknowledge_background`, `set_completion_delivery` and `set_name`.
 `set_name.name` must be a string; null or omission clears it. `fork.after` must
 be a boolean when present and defaults to false when omitted. Wrong field types
-are rejected before mutation.
+are rejected before mutation. `compact` accepts optional string `instructions`,
+for example `{"type":"compact","instructions":"Preserve API decisions"}`;
+null and non-string values are rejected before admission.
 `get_context` returns a `position` token and message points with stable `entry`
 and selectable `head_entry` coordinates. `navigate_context` requires that token
 as `expected` and a `head_entry`; stale previews fail rather than discard newer
@@ -1589,7 +1592,17 @@ nears a known model's context window or exceeds its transport bound, and can
 retry one model request after a provider reports context overflow. Classification
 uses admitted upstream error text even when its displayed diagnostic is clipped.
 The raw conversation remains inspectable; `compact` and `/compact` also trigger this
-explicitly. Longer saved histories are summarized in bounded steps when one
+explicitly. Add literal focus with `/compact Preserve API decisions and failures`
+or `ion --continue compact 'Preserve API decisions and failures'`. Focus applies
+to every chunk and retry of that manual operation, not later automatic compaction.
+It is not a new User Turn or execution permission, and `@paths`, `/commands` and
+quoted text are not expanded. Empty or whitespace-only focus behaves like the
+bare command. Focus shares retained-input and summary-request byte bounds; Ion
+rejects oversized input rather than truncating it. Only the generated summary
+and covered coordinates are committed as compaction facts, not a separate copy
+of the focus. A refused chat command stays in the editor; after admission it is
+consumed, even on Stop or failure. Use explicit editor recall to retry it.
+Longer saved histories are summarized in bounded steps when one
 summary request cannot fit. If a provider rejects a summary for context size before
 any generated output, Ion retries strictly smaller settled prefixes on the same
 model. `context_compaction_retry` reports the rejected `through_entry` and smaller

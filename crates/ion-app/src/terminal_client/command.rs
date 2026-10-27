@@ -143,11 +143,12 @@ pub(super) async fn dispatch_command(
                 }
             }
         }
-        CommandKind::Builtin(Builtin::Compact) if args.is_empty() => {
+        CommandKind::Builtin(Builtin::Compact) => {
+            let instructions = (!args.is_empty()).then(|| args.to_owned());
             let source = input
                 .into_editor()
-                .unwrap_or_else(|| EditorDraft::at_end(Builtin::Compact.usage()));
-            match runtime.compact(source) {
+                .unwrap_or_else(|| EditorDraft::at_end("/compact".into()));
+            match runtime.compact(instructions, source) {
                 Ok(_) => ui.status.clear(),
                 Err((source, error)) => {
                     ui.restore_editor(source);

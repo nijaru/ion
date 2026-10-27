@@ -5,6 +5,17 @@ fn parse(args: &[&str], interactive: bool) -> Result<Invocation> {
 }
 
 #[test]
+fn manual_compaction_accepts_literal_focus_without_launch_input_expansion() {
+    assert!(parse(&["ion", "compact"], false).is_ok());
+    let focus = "Keep @paths, /commands and \"雪\" decisions\nexactly";
+    let Action::Compact { instructions } = parse(&["ion", "compact", focus], false).unwrap().action
+    else {
+        panic!("expected manual compaction");
+    };
+    assert_eq!(instructions.as_deref(), Some(focus));
+}
+
+#[test]
 fn completion_policy_is_explicit_scoped_and_defaults_to_inbox() {
     use ion_core::CompletionDelivery;
     assert_eq!(

@@ -567,7 +567,13 @@ impl<M: Serialize + Send + 'static> SessionControl<M> {
         self.shell(mapped.command, !mapped.share_with_model, metadata)
     }
 
-    pub fn compact(&mut self, metadata: M) -> Result<OperationId, (M, anyhow::Error)> {
+    /// Start explicit compaction; focus is request-local, never a new User Turn.
+    pub fn compact(
+        &mut self,
+        instructions: Option<String>,
+        metadata: M,
+    ) -> Result<OperationId, (M, anyhow::Error)> {
+        let instructions = instructions.filter(|text| !text.trim().is_empty());
         let prepared = (|| {
             self.ensure_replaceable()?;
             ensure!(
@@ -575,7 +581,7 @@ impl<M: Serialize + Send + 'static> SessionControl<M> {
                 "session result/admission capacity is full"
             );
             Ok(self.budget.reserve(
-                &Message::user_input("compact".into(), []),
+                &Message::user_input(instructions.as_deref().unwrap_or("compact").to_owned(), []),
                 &metadata,
                 self.setup.runtime.agent.limits(),
             )?)
@@ -588,6 +594,7 @@ impl<M: Serialize + Send + 'static> SessionControl<M> {
         let observations = self.observations.clone();
         lock(&self.custody).occupied += 1;
         let work = self.setup.runtime.agent.compact(
+            instructions,
             self.setup.session.clone(),
             self.work_stop(),
             move |event| {

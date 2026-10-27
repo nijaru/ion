@@ -15,8 +15,10 @@ use crate::{
 
 impl Agent {
     /// Summarize a settled prefix while retaining the complete raw Session.
+    /// Optional literal focus applies only to this operation, including its chunks.
     pub fn compact<F>(
         &self,
+        instructions: Option<String>,
         session: Arc<Session>,
         stop: CancellationToken,
         observe: F,
@@ -24,12 +26,15 @@ impl Agent {
     where
         F: FnMut(AgentEvent) + Send + 'static,
     {
+        let instructions = instructions.filter(|text| !text.trim().is_empty());
         let agent = self.clone();
         session.operations.start(stop.clone(), {
             let session = session.clone();
             async move {
                 let (mut observe, failed) = contained_observer(observe, stop.clone());
-                let result = agent.compact_owned(&session, stop, &mut observe).await;
+                let result = agent
+                    .compact_owned(instructions.as_deref(), &session, stop, &mut observe)
+                    .await;
                 observation_result(result, failed.load(std::sync::atomic::Ordering::Relaxed))
             }
         })
@@ -37,6 +42,7 @@ impl Agent {
 
     async fn compact_owned<F>(
         &self,
+        instructions: Option<&str>,
         session: &Session,
         stop: CancellationToken,
         observe: &mut F,
@@ -56,7 +62,7 @@ impl Agent {
         let mut changed = false;
         loop {
             match self
-                .compact_inner(session, &stop, keep_bytes, observe)
+                .compact_inner(instructions, session, &stop, keep_bytes, observe)
                 .await?
             {
                 Some(chunked) => {
@@ -80,6 +86,7 @@ impl Agent {
 
     pub(super) async fn compact_inner<F>(
         &self,
+        instructions: Option<&str>,
         session: &Session,
         stop: &CancellationToken,
         keep_bytes: usize,
@@ -95,6 +102,7 @@ impl Agent {
                 return Err(AgentError::Cancelled);
             }
             let Some(plan) = session.compaction_plan(
+                instructions,
                 keep_bytes,
                 self.limits.max_request_bytes,
                 self.limits.image_input,
@@ -102,7 +110,13 @@ impl Agent {
             )?
             else {
                 return if session
-                    .compaction_plan(keep_bytes, usize::MAX, self.limits.image_input, u64::MAX)?
+                    .compaction_plan(
+                        instructions,
+                        keep_bytes,
+                        usize::MAX,
+                        self.limits.image_input,
+                        u64::MAX,
+                    )?
                     .is_some()
                 {
                     Err(AgentError::ContextTooLarge)
@@ -115,6 +129,7 @@ impl Agent {
                 provider_session_id: Some(session.provider_session_id().to_string()),
                 instructions: Some(crate::summary::INSTRUCTIONS.into()),
                 messages: vec![crate::summary::input(
+                    instructions,
                     plan.messages,
                     self.limits.image_input,
                 )?],

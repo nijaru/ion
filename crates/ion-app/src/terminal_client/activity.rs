@@ -358,7 +358,7 @@ mod tests {
         let mut fixture = super::super::tests::Fixture::new();
         let id = fixture
             .control
-            .compact(EditorDraft::at_end("compact".into()))
+            .compact(None, EditorDraft::at_end("compact".into()))
             .unwrap();
         let mut activity = Activity::default();
         let mut ui = Frontend::default();
@@ -426,7 +426,7 @@ mod tests {
         let mut fixture = super::super::tests::Fixture::new();
         let id = fixture
             .control
-            .compact(super::super::EditorDraft::at_end("compact".into()))
+            .compact(None, super::super::EditorDraft::at_end("compact".into()))
             .unwrap();
         let mut live = LiveTranscript::default();
         live.observe(&CodingAgentEvent::TurnAccepted { turn: 1 });

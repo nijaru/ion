@@ -144,7 +144,11 @@ pub(crate) enum Action {
         after: bool,
     },
     /// Summarize settled history for continued work, retaining the raw log.
-    Compact,
+    Compact {
+        /// Literal summary focus; quote instructions containing spaces.
+        #[arg(value_name = "INSTRUCTIONS")]
+        instructions: Option<String>,
+    },
 }
 
 #[derive(Clone, Copy, Debug, clap::ValueEnum)]

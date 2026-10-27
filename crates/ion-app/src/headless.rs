@@ -15,7 +15,7 @@ use crate::{agent_events, publication::Output, stdio::Stdio};
 
 pub(super) enum Request {
     Prompts(Vec<Message>),
-    Compact,
+    Compact(Option<String>),
 }
 
 pub(super) async fn run(setup: SessionSetup, request: Request, json_output: bool) -> Result<()> {
@@ -86,8 +86,10 @@ async fn foreground(
                 )
                 .map_err(|rejected| rejected.reason)?;
         }
-        Request::Compact => {
-            control.compact(()).map_err(|(_, error)| error)?;
+        Request::Compact(instructions) => {
+            control
+                .compact(instructions, ())
+                .map_err(|(_, error)| error)?;
         }
     }
     let mut listening = true;

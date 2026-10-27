@@ -180,8 +180,12 @@ impl Control {
                     Ok(json!({"skills":self.host.resources().skills().count(),"prompts":self.host.resources().templates().count()}))
                 }
                 "compact" => {
+                    fields(&value, &["type", "id", "instructions"])?;
+                    let instructions = value.get("instructions").map(|text| {
+                        text.as_str().context("instructions must be a string").map(str::to_owned)
+                    }).transpose()?;
                     let metadata = RpcMetadata { id: id.clone(), command: "compact", credit: credit.clone() };
-                    self.host.compact(metadata).map_err(|(_, error)| error)?;
+                    self.host.compact(instructions, metadata).map_err(|(_, error)| error)?;
                     Ok(json!({"disposition":"started"}))
                 }
                 "shell" => {

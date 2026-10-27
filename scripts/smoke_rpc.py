@@ -31,7 +31,7 @@ class Handler(BaseHTTPRequestHandler):
         body = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
         requests.append(body)
         if any(message.get("role") == "system" and isinstance(message.get("content"), str)
-               and message["content"].startswith("Summarize the coding conversation")
+               and message["content"].startswith("Summarize the conversation")
                for message in body["messages"]):
             summary_requests.append(body)
             if len(summary_requests) == 1:
@@ -350,7 +350,14 @@ with tempfile.TemporaryDirectory(prefix="ion-rpc-") as temporary:
             send(child, {"id": f"capacity-seed-{index}", "type": "prompt", "message": f"CAPACITY_SEED_{index} " * 64})
             seeded = until(child, lambda record: record["type"] == "turn_end")[-1]
             assert seeded["status"] == "completed", seeded
-        send(child, {"id": "compact", "type": "compact"})
+        focus = 'Keep "雪" API decisions, @paths and /commands\nwithout new work'
+        calls_before_compact = len(requests)
+        for invalid in [None, 1, False, []]:
+            send(child, {"id": "bad-compact", "type": "compact", "instructions": invalid})
+            rejected = read_response(child)
+            assert rejected["id"] == "bad-compact" and not rejected["success"], rejected
+        assert len(requests) == calls_before_compact, "invalid focus reached the model"
+        send(child, {"id": "compact", "type": "compact", "instructions": focus})
         compact_ack = read_response(child)
         assert compact_ack["id"] == "compact" and compact_ack["success"]
         assert compact_ack["data"]["disposition"] == "started", compact_ack
@@ -362,6 +369,7 @@ with tempfile.TemporaryDirectory(prefix="ion-rpc-") as temporary:
         assert len(summary_requests) >= 2, "wrapped rejection did not reach summary recovery"
         assert len(json.dumps(summary_requests[1]["messages"])) < len(json.dumps(summary_requests[0]["messages"])), "summary input did not shrink"
         assert all(request["model"] == summary_requests[0]["model"] and not request.get("tools")
+                   and any(focus in str(message["content"]) for message in request["messages"] if message["role"] == "user")
                    for request in summary_requests), summary_requests
         assert requests[-1]["reasoning_effort"] == "high" and not requests[-1].get("tools"), requests[-1]
 

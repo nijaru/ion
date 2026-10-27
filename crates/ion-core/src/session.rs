@@ -2942,7 +2942,7 @@ mod tests {
             assert_eq!(context.contains("external effect unknown"), !excluded);
             // Settled prefix cuts cannot bisect shell intent and outcome.
             let plan = session
-                .compaction_plan(0, usize::MAX, true, u64::MAX)
+                .compaction_plan(None, 0, usize::MAX, true, u64::MAX)
                 .unwrap()
                 .unwrap();
             assert!(plan.through_entry >= 2);
@@ -3342,7 +3342,7 @@ mod tests {
         assert!(!context.contains("external effect unknown"));
         assert!(!context.contains("private"));
         let plan = reopened
-            .compaction_plan(0, usize::MAX, true, u64::MAX)
+            .compaction_plan(None, 0, usize::MAX, true, u64::MAX)
             .unwrap()
             .unwrap();
         assert!(
@@ -4036,27 +4036,32 @@ mod tests {
         let (root, path) = fixture();
         let session = Session::create(&path, Some(&root)).unwrap();
         let assert_input_budget = || {
-            let plan = session
-                .compaction_plan(0, usize::MAX, true, u64::MAX)
-                .unwrap()
-                .unwrap();
-            let input = crate::summary::input(plan.messages, true).unwrap();
-            let bytes = serde_json::to_vec(&input.content).unwrap().len();
-            assert_eq!(
-                session
-                    .compaction_plan(0, bytes, true, u64::MAX)
+            for instructions in [
+                None,
+                Some("Keep \"雪\" and paths\\literal\nwithout guessing"),
+            ] {
+                let plan = session
+                    .compaction_plan(instructions, 0, usize::MAX, true, u64::MAX)
                     .unwrap()
-                    .unwrap()
-                    .through_entry,
-                plan.through_entry
-            );
-            assert!(
-                session
-                    .compaction_plan(0, bytes - 1, true, u64::MAX)
-                    .unwrap()
-                    .is_none(),
-                "the sole settled prefix must include framing exactly once, including a prior summary"
-            );
+                    .unwrap();
+                let input = crate::summary::input(instructions, plan.messages, true).unwrap();
+                let bytes = serde_json::to_vec(&input.content).unwrap().len();
+                assert_eq!(
+                    session
+                        .compaction_plan(instructions, 0, bytes, true, u64::MAX)
+                        .unwrap()
+                        .unwrap()
+                        .through_entry,
+                    plan.through_entry
+                );
+                assert!(
+                    session
+                        .compaction_plan(instructions, 0, bytes - 1, true, u64::MAX)
+                        .unwrap()
+                        .is_none(),
+                    "the sole settled prefix must include framing exactly once, including a prior summary"
+                );
+            }
         };
         let model = ModelRef {
             provider: "test".into(),
@@ -4078,7 +4083,7 @@ mod tests {
             )
             .unwrap();
         let plan = session
-            .compaction_plan(0, usize::MAX, true, u64::MAX)
+            .compaction_plan(None, 0, usize::MAX, true, u64::MAX)
             .unwrap()
             .unwrap();
         assert_eq!(plan.through_entry, 3);
@@ -4969,7 +4974,7 @@ mod tests {
                 .unwrap();
         }
         let plan = session
-            .compaction_plan(1_000, usize::MAX, true, u64::MAX)
+            .compaction_plan(None, 1_000, usize::MAX, true, u64::MAX)
             .unwrap()
             .unwrap();
         let summarized = plan.messages.len();
@@ -5042,7 +5047,7 @@ mod tests {
             .unwrap();
         assert!(
             session
-                .compaction_plan(0, usize::MAX, true, u64::MAX)
+                .compaction_plan(None, 0, usize::MAX, true, u64::MAX)
                 .unwrap()
                 .is_none()
         );
@@ -5060,7 +5065,7 @@ mod tests {
             .unwrap();
         assert_eq!(
             session
-                .compaction_plan(0, usize::MAX, true, u64::MAX)
+                .compaction_plan(None, 0, usize::MAX, true, u64::MAX)
                 .unwrap()
                 .unwrap()
                 .through_entry,
@@ -5068,7 +5073,7 @@ mod tests {
         );
         assert_eq!(
             session
-                .compaction_plan(1000, usize::MAX, true, u64::MAX)
+                .compaction_plan(None, 1000, usize::MAX, true, u64::MAX)
                 .unwrap()
                 .unwrap()
                 .through_entry,
@@ -5120,7 +5125,7 @@ mod tests {
             .end_turn(turn, TurnEndReason::Cancelled, &BTreeSet::new())
             .unwrap();
         let plan = session
-            .compaction_plan(1, usize::MAX, false, u64::MAX)
+            .compaction_plan(None, 1, usize::MAX, false, u64::MAX)
             .unwrap()
             .unwrap();
         assert_eq!(plan.messages.len(), 3);
@@ -5134,7 +5139,7 @@ mod tests {
             .unwrap();
         assert!(
             session
-                .compaction_plan(1, usize::MAX, false, u64::MAX)
+                .compaction_plan(None, 1, usize::MAX, false, u64::MAX)
                 .unwrap()
                 .is_none()
         );
@@ -5145,7 +5150,7 @@ mod tests {
         assert_eq!(reopened.context_messages().unwrap(), context);
         assert!(
             reopened
-                .compaction_plan(1, usize::MAX, false, u64::MAX)
+                .compaction_plan(None, 1, usize::MAX, false, u64::MAX)
                 .unwrap()
                 .is_none()
         );
@@ -5207,7 +5212,7 @@ mod tests {
             )
             .unwrap();
         let plan = session
-            .compaction_plan(1000, usize::MAX, true, u64::MAX)
+            .compaction_plan(None, 1000, usize::MAX, true, u64::MAX)
             .unwrap()
             .unwrap();
         assert_eq!(plan.through_entry, 3);
@@ -5266,7 +5271,7 @@ mod tests {
             .unwrap();
         assert_eq!(
             session
-                .compaction_plan(0, usize::MAX, true, u64::MAX)
+                .compaction_plan(None, 0, usize::MAX, true, u64::MAX)
                 .unwrap()
                 .unwrap()
                 .through_entry,
@@ -5276,7 +5281,7 @@ mod tests {
         let reopened = Session::open(&path).unwrap();
         assert_eq!(
             reopened
-                .compaction_plan(0, usize::MAX, true, u64::MAX)
+                .compaction_plan(None, 0, usize::MAX, true, u64::MAX)
                 .unwrap()
                 .unwrap()
                 .through_entry,

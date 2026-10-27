@@ -438,7 +438,7 @@ async fn run_cli(cli: Invocation) -> Result<()> {
                     | Action::Usage
                     | Action::Export { .. }
                     | Action::Turns
-                    | Action::Compact
+                    | Action::Compact { .. }
                     | Action::Clone
                     | Action::Fork { .. }
             ) {
@@ -546,7 +546,7 @@ async fn run_cli(cli: Invocation) -> Result<()> {
                 print_stdout(format_args!("Forked session as {}", metadata_field(&id)))?;
                 return Ok(());
             }
-            if matches!(action, Action::Compact) {
+            if matches!(action, Action::Compact { .. }) {
                 ensure!(existing.is_some(), "session does not exist");
             }
             let session_cwd = match &existing {
@@ -691,7 +691,9 @@ async fn run_cli(cli: Invocation) -> Result<()> {
                         files,
                     }
                 }
-                Action::Compact => Client::Headless(headless::Request::Compact, false),
+                Action::Compact { instructions } => {
+                    Client::Headless(headless::Request::Compact(instructions), false)
+                }
                 Action::Rpc => Client::Rpc,
                 _ => unreachable!("non-agent action handled above"),
             };
@@ -710,6 +712,9 @@ async fn run_cli(cli: Invocation) -> Result<()> {
                     validate_launch_size(&ion_ai::Message::user_input(prompt.clone(), []))?;
                 }
             }
+            if let Client::Headless(headless::Request::Compact(Some(instructions)), _) = &client {
+                validate_launch_size(&ion_ai::Message::user_input(instructions.clone(), []))?;
+            }
             let session = Arc::new(if existing.is_some() {
                 CodingSession::open(&path)?
             } else {
@@ -721,7 +726,7 @@ async fn run_cli(cli: Invocation) -> Result<()> {
                     "saved Session identity or working directory changed during startup; reopen it explicitly"
                 );
             }
-            let startup = if matches!(client, Client::Headless(headless::Request::Compact, _)) {
+            let startup = if matches!(client, Client::Headless(headless::Request::Compact(_), _)) {
                 ion_host::McpStartup::default()
             } else {
                 host.external_tools(

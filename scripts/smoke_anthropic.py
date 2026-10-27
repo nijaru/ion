@@ -119,7 +119,7 @@ class Handler(BaseHTTPRequestHandler):
         elif self.path == "/retry/v1/messages":
             retry_requests.append(body)
             payload = response(0, overloaded=len(retry_requests) == 1)
-        elif str(body.get("system", "")).startswith("Summarize the coding conversation"):
+        elif str(body.get("system", "")).startswith("Summarize the conversation"):
             summary_requests.append(body)
             payload = response(0)
         else:
