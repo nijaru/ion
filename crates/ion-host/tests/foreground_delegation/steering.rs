@@ -116,7 +116,14 @@ async fn cold_readiness_wait_cancellation_neither_admits_nor_stops_prepared_work
     let prepared = f
         .delegate
         .child
-        .prepare(Message::user_input("cold".into(), []))
+        .clone()
+        .prepare(
+            Message::user_input("cold".into(), []),
+            &CancellationToken::new(),
+        )
+        .unwrap()
+        .join()
+        .await
         .unwrap();
     let message = Message::user_input("guide".into(), []);
     let stop = CancellationToken::new();

@@ -1188,11 +1188,24 @@ not a live lease, capability grant, replay permission or evidence of settlement.
 Rust applications can prepare a child with Host's
 `SessionDelegation` and request it through `ToolInvocation::delegate`. Its
 private live admission port is separate from the historical origin. The complete
-child application, authority assertion and environment are explicit. `prepare`
-returns `PreparedDelegation { task, steering }`: pass `task` for foreground work,
+child application, authority assertion and environment are explicit.
+`recipe.prepare(input, &stop)?` consumes the recipe and returns a retained
+`DelegationPreparation` without blocking the control executor. Await its
+`join().await?` to obtain `PreparedDelegation`: pass `task` for foreground work,
 retaining a clone of `steering` when another caller needs to guide it. Its
 `steer(&request_key, &message, &stop).await` waits for readiness without starting
 work itself, then queues literal input through the child's shared control.
+`startup_timeout_ms: Some(ms)` sets a positive budget from preparation start for
+workspace checks and resource/runtime capture; `None` leaves policy to the
+application. Expiry requests cancellation and joins started preparation, even if
+a blocking application hook outlives the budget. Local `request_stop()` and Drop
+do not cancel the parent token. Cancelling a borrowed join retains the worker;
+resume joining to retrieve its result. Stop before result publication revokes a
+retained cold task, including one whose preparation has already completed.
+`DelegationPreparationError::TimedOut` is a pre-admission failure, not a child
+execution timeout: no managed child is admitted, and any late failure remains in
+the error chain. Trusted application panics remain panics. A startup budget does
+not roll back effects performed by an application hook.
 `execution_timeout_ms: Some(ms)` sets a positive runtime budget from linked child
 request submission, after materialization/preflight; `None` leaves that policy to
 the application. Progress and parent waits do not refresh it. Expiry requests
@@ -1235,7 +1248,8 @@ owner epoch at that invocation conflicts. `SessionView::delegations()` and
 `parent_delegation()` expose typed relationships without parsing tool prose.
 
 For bounded foreground joining, retain a Host `BackgroundOwner` and use
-`recipe.prepare(input)?.in_background_after(&owner, Duration::from_secs(60))`.
+`prepared.in_background_after(&owner, Duration::from_secs(60))` after joining
+preparation.
 Core reserves capacity before intent, then joins until completion or that budget.
 Full completion wins a ready expiry race and releases the reservation without a
 background report. At expiry the same pinned execution transfers, retaining its
@@ -1243,10 +1257,11 @@ run/request, live control and original execution deadline. Parent stop before
 transfer still stops and joins it; abandoning the result waiter retains foreground
 joining, not an implicit handoff. A refused/failed transfer also stops and joins
 already-started work before release. This budget includes child setup after live
-admission, not synchronous recipe preflight; zero selects immediate transfer.
+admission, not separately budgeted recipe preflight; zero selects immediate
+transfer.
 
 For background work, retain a Host `BackgroundOwner` and choose its live
-destination: `recipe.prepare(input)?.in_background(&owner)`. The
+destination: `prepared.in_background(&owner)` after joining preparation. The
 coding application owns one owner for its lifetime, shared across runtime reload
 and binding replacement; a child recipe does not capture it. Core reconciles
 exact repeats first, then reserves Host custody before admitting new work. Even a
@@ -1771,8 +1786,8 @@ arguments cannot choose tools, endpoints, credentials or arbitrary authority.
 
 Foreground `start` joins for up to `join_timeout_ms` (default 60000; 1–600000 ms).
 It reserves application capacity before starting and includes child setup after
-live admission, not synchronous recipe preflight. Full completion returns the
-joined outcome with `join_expired: false`, without transfer or a retained slot.
+live admission, not separately budgeted startup preflight. Full completion returns
+the joined outcome with `join_expired: false`, without transfer or a retained slot.
 If still joining at expiry, it transfers the **same run**, returns `join_expired:
 true` and `joined: false`, and continues under the returned `id`. Use wait/status;
 never relaunch it because the join expired. This does not stop work or reset its
@@ -1815,7 +1830,20 @@ running. New guidance to a stopped, settled, unknown or acknowledged run fails;
 it never implicitly resumes it. Named persistent conversations and unfinished-child
 recovery remain unfinished.
 
-`start` accepts `execution_timeout_ms`, defaulting to 1800000 (30 minutes), with
+`start` accepts `startup_timeout_ms`, defaulting to 30000 (30 seconds), with
+1–300000 milliseconds allowed. One budget covers model-route lookup, resume
+locator resolution, workspace checks and resource/runtime capture before child
+admission. It is separate from foreground joining and child execution; those
+budgets have not started yet. Expiry requests cancellation and fully joins
+started preparation before returning `startup_timed_out: true`, the applied
+budget and observed `elapsed_ms`, without a child run ID. A late preparation
+failure remains in the diagnostic; a blocking filesystem or application call can
+outlive the budget. Stop before publication refuses the cold task, and delayed
+executor polling cannot make preparation completed after its deadline eligible.
+Successful starts report their applied startup budget. No automatic retry or
+rollback is implied.
+
+`start` also accepts `execution_timeout_ms`, defaulting to 1800000 (30 minutes), with
 1–7200000 milliseconds allowed. This bounds child model/tool execution from task
 submission after preflight, not how long a parent waits. For example,
 `{"action":"start","task":"Inspect the parser","mode":"background","execution_timeout_ms":120000}`
@@ -1840,7 +1868,7 @@ Discarded retry text is not combined with a new response, and missing progress
 is flagged instead of joining an orphan suffix. The same failed report remains
 available in status, wait, acknowledgement and committed relationship inspection.
 Successful runs have `partial_output: null` and their independently validated
-answer. Separately bounded startup remains unfinished.
+answer. Startup failures occur before these child-run reports exist.
 
 Owned `status`, `list` and `wait` reports include ephemeral `progress` once
 the actual child starts: `child_session`/`request`, live `elapsed_ms`, observed UTC

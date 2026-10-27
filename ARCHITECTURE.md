@@ -321,11 +321,27 @@ outcome must be available without parsing prose or overwriting previous reports.
   before the parent releases it. Detaching a handle is not a transfer. Parent
   cancellation and service shutdown have distinct, documented scopes.
 
+Host owns child preflight before relationship admission. `SessionDelegation`
+starts a retained `DelegationPreparation`, moving synchronous workspace/resource/
+runtime capture off the control executor; joining yields a cold task, not a child
+run. A positive optional `startup_timeout_ms` sets one monotonic budget from
+preparation start, separate from foreground joining and execution. Stop/expiry
+closes publication and requests cancellation, then joins every started preparation
+worker even beyond the budget. Cancelling a borrowed join retains custody; Drop
+requests stop without abandoning the worker or cancelling its parent scope.
+Local stop before consuming a retained success revokes that cold task. A worker
+completed after the deadline cannot escape expiry merely because both completion
+and the timer are ready when the executor resumes. Pre-admission timeout has a
+typed Host error and retains late failure causes; it creates no managed child or
+relationship and is never inferred as `execution_timed_out`. Trusted application
+panics retain infrastructure semantics. Blocking hooks cannot be forcibly
+interrupted, and cancellation grants neither rollback nor replay authority.
+
 A bounded foreground join reserves a live background destination before intent.
 Its record names an intended owner, not an already-committed transfer. The budget
 starts at live Core admission, includes child materialization/control setup, and
-excludes synchronous recipe preflight. Prefer actual full completion to a ready
-join expiry. Otherwise commit transfer before releasing the parent, moving the
+excludes separately budgeted recipe preflight. Prefer actual full completion to a
+ready join expiry. Otherwise commit transfer before releasing the parent, moving the
 same pinned callback, run, request, stop scope and steering grant. Do not restart
 work, reload authority or refresh an execution deadline. Until transfer, parent
 stop cancels and fully joins even beyond the join budget. An abandoned result
@@ -505,10 +521,16 @@ routes and missing required access fail preflight before child admission. There
 is no fallback or additional child-route allowlist. Same-identity overrides retain
 the captured route; a different route is resolved and captured before admission.
 Overrides do not change the parent binding or operator configuration. Receipts
-report the actual child model and reasoning. Coding `start` additionally sets a
+report the actual child model and reasoning. Coding `start` applies
+`startup_timeout_ms`, default 30000 with 1–300000 milliseconds allowed, to one
+pre-admission phase covering route lookup, resume locator resolution, workspace
+checks and resource/runtime capture. On expiry, return `startup_timed_out` and
+observed startup timing only after joining preparation, without a child handle.
+The parent call's arguments/result own this pre-admission policy and failure;
+child relationship facts begin only at Core admission. Coding `start` also sets a
 child execution budget, default 30 minutes with `execution_timeout_ms` accepting
-1–7200000. This applies to foreground and background children independently of
-parent waits; general Host recipes choose their own positive optional budget.
+1–7200000. Both policies apply to foreground and background starts independently
+of parent waits; general Host recipes choose their own positive optional budgets.
 
 The workspace defaults to the parent's; explicit `cwd` selects an absolute path
 or one relative to the parent. Load project/home resources for that workspace,

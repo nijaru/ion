@@ -101,11 +101,14 @@ impl CodingToolSource for Delegate {
 impl ToolExecutor for Delegate {
     fn execute<'a>(&'a self, invocation: ToolInvocation<'a>) -> BoxFuture<'a, CodingToolOutput> {
         Box::pin(async move {
-            let task = match self
-                .child
-                .prepare(Message::user_input("perform the child effect".into(), []))
-            {
-                Ok(task) => task,
+            let task = match self.child.clone().prepare(
+                Message::user_input("perform the child effect".into(), []),
+                invocation.stop(),
+            ) {
+                Ok(mut preparation) => match preparation.join().await {
+                    Ok(task) => task,
+                    Err(error) => return output(json!(format!("{error:#}")), true),
+                },
                 Err(error) => return output(json!(error.to_string()), true),
             };
             let task = if let Some(owner) = &self.owner {
@@ -267,6 +270,7 @@ async fn main() -> Result<()> {
             }),
             model: Some(model("child")),
             reasoning: Reasoning::ProviderDefault,
+            startup_timeout_ms: Some(30_000),
             execution_timeout_ms: None,
             authority: AuthorityScope::new("example-child/environment/v1")?,
         },

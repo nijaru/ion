@@ -87,7 +87,7 @@ pub struct SessionControl<M = ()> {
     budget: InputBudget,
     input_changes: Arc<tokio::sync::Notify>,
     active: Option<Active<M>>,
-    preparing: Option<(InputId, crate::preparation::Preparation)>,
+    preparing: Option<(InputId, crate::preparation::Preparation<ion_ai::Message>)>,
     /// An initial prompt has operation identity even while its images prepare.
     starting: Option<(InputId, OperationId)>,
     observations: broadcast::Sender<Observation>,

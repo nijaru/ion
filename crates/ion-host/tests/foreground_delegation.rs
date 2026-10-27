@@ -32,6 +32,8 @@ mod completion;
 mod deadline;
 #[path = "foreground_delegation/join.rs"]
 mod join;
+#[path = "foreground_delegation/preparation.rs"]
+mod preparation;
 #[path = "foreground_delegation/progress.rs"]
 mod progress;
 #[path = "foreground_delegation/report.rs"]
@@ -145,7 +147,7 @@ impl CodingToolSource for Delegate {
 impl ToolExecutor for Delegate {
     fn execute<'a>(&'a self, invocation: ToolInvocation<'a>) -> BoxFuture<'a, CodingToolOutput> {
         Box::pin(async move {
-            let task = || {
+            let task = async || {
                 let input = Message::user_input("count two characters".into(), []);
                 let (task, steering, progress) = if matches!(self.wait, Wait::Panic) {
                     (
@@ -166,7 +168,14 @@ impl ToolExecutor for Delegate {
                         None,
                     )
                 } else {
-                    let prepared = self.child.prepare(input).unwrap();
+                    let prepared = self
+                        .child
+                        .clone()
+                        .prepare(input, invocation.stop())
+                        .unwrap()
+                        .join()
+                        .await
+                        .unwrap();
                     *self.steering.lock().unwrap() = Some(prepared.steering.clone());
                     *self.progress.lock().unwrap() = Some(prepared.progress.clone());
                     (
@@ -225,7 +234,7 @@ impl ToolExecutor for Delegate {
                 Wait::Abandon | Wait::AbandonBounded(_) => {
                     let mut started = self.effect.started.subscribe();
                     tokio::select! {
-                        result = invocation.delegate(task()) => result,
+                        result = invocation.delegate(task().await) => result,
                         _ = started.wait_for(|started| *started) => return output(json!("wait abandoned")),
                     }
                 }
@@ -237,24 +246,38 @@ impl ToolExecutor for Delegate {
                 | Wait::CloseBeforeTransfer
                 | Wait::Bounded(_)
                 | Wait::StopAtHandoff
-                | Wait::CloseAtHandoff => invocation.delegate(task()).await,
+                | Wait::CloseAtHandoff => invocation.delegate(task().await).await,
             };
             if let Ok(receipt) = result {
                 if matches!(self.wait, Wait::HoldAfterTransfer) {
                     invocation.stop().cancelled().await;
                 }
                 if matches!(self.wait, Wait::Repeat) {
-                    assert_eq!(invocation.delegate(task()).await.unwrap(), receipt);
+                    assert_eq!(invocation.delegate(task().await).await.unwrap(), receipt);
                     let different = self
                         .child
-                        .prepare(Message::user_input("different input".into(), []))
+                        .clone()
+                        .prepare(
+                            Message::user_input("different input".into(), []),
+                            invocation.stop(),
+                        )
+                        .unwrap()
+                        .join()
+                        .await
                         .unwrap();
                     assert!(invocation.delegate(different.task).await.is_err());
                     if self.owner.is_some() {
                         let other = ion_host::BackgroundOwner::new(1).unwrap();
                         let changed_owner = self
                             .child
-                            .prepare(Message::user_input("count two characters".into(), []))
+                            .clone()
+                            .prepare(
+                                Message::user_input("count two characters".into(), []),
+                                invocation.stop(),
+                            )
+                            .unwrap()
+                            .join()
+                            .await
                             .unwrap()
                             .in_background(&other);
                         assert!(invocation.delegate(changed_owner).await.is_err());
@@ -404,6 +427,7 @@ impl Fixture {
                 }),
                 model: None,
                 reasoning: ion_ai::Reasoning::ProviderDefault,
+                startup_timeout_ms: None,
                 execution_timeout_ms,
                 authority: AuthorityScope::new("fixture-child/v1").unwrap(),
             },

@@ -69,7 +69,8 @@ pub use control::{
 pub use credentials::{CredentialResolutionError, CredentialResolver};
 pub use delegation::{
     ChildActivity, ChildActivitySnapshot, ChildProgress, ChildProgressSnapshot, ChildSteering,
-    ChildSteeringReport, PreparedDelegation, SessionDelegation,
+    ChildSteeringReport, DelegationPreparation, DelegationPreparationError, PreparedDelegation,
+    SessionDelegation,
 };
 pub use local_tools::LocalTools;
 pub use mcp::{

@@ -1,6 +1,5 @@
-//! Concrete image-preparation stop-and-join custody, independent of Core's slot.
-use anyhow::{Result, anyhow};
-use ion_ai::Message;
+//! Retained stop-and-join custody for Host preparation outside Core's slot.
+use anyhow::Result;
 use std::{
     future::{Future, poll_fn},
     pin::Pin,
@@ -9,20 +8,19 @@ use std::{
 use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
 
-struct Retained {
-    task: Option<JoinHandle<Result<Message>>>,
+struct Retained<T> {
+    task: Option<JoinHandle<Result<T>>>,
 }
-pub(crate) struct Preparation {
+pub(crate) struct Preparation<T> {
     stop: CancellationToken,
-    retained: Arc<Mutex<Retained>>,
+    retained: Arc<Mutex<Retained<T>>>,
 }
-impl Preparation {
-    pub(crate) fn start<F, W>(work: F) -> Self
+impl<T: Send + 'static> Preparation<T> {
+    pub(crate) fn start<F, W>(stop: CancellationToken, work: F) -> Self
     where
         F: FnOnce(CancellationToken) -> W + Send + 'static,
-        W: Future<Output = Result<Message>> + Send + 'static,
+        W: Future<Output = Result<T>> + Send + 'static,
     {
-        let stop = CancellationToken::new();
         let retained = Arc::new(Mutex::new(Retained { task: None }));
         let mut state = retained
             .lock()
@@ -30,8 +28,8 @@ impl Preparation {
         let custody = retained.clone();
         let token = stop.clone();
         // The worker retains its custodian through completion even if the control
-        // is dropped. Unlike an aborted/dropped decoder future, this always joins
-        // the blocking decoder. Explicit shutdown also retrieves its result.
+        // is dropped. Unlike an aborted preparation future, this always joins
+        // its blocking work. Explicit joining also retrieves its result.
         state.task = Some(tokio::spawn(async move {
             let _custody = custody;
             work(token).await
@@ -42,7 +40,10 @@ impl Preparation {
     pub(crate) fn request_stop(&self) {
         self.stop.cancel();
     }
-    pub(crate) async fn join(&mut self) -> Result<Message> {
+    pub(crate) fn is_stopped(&self) -> bool {
+        self.stop.is_cancelled()
+    }
+    pub(crate) async fn join(&mut self) -> Result<T> {
         poll_fn(|cx| {
             let mut retained = self
                 .retained
@@ -56,18 +57,17 @@ impl Preparation {
                 std::task::Poll::Pending => std::task::Poll::Pending,
                 std::task::Poll::Ready(result) => {
                     retained.task = None;
-                    std::task::Poll::Ready(
-                        result.unwrap_or_else(|error| {
-                            Err(anyhow!("preparation task failed: {error}"))
-                        }),
-                    )
+                    std::task::Poll::Ready(result.unwrap_or_else(|error| {
+                        let context = format!("preparation task failed: {error}");
+                        Err(anyhow::Error::new(error).context(context))
+                    }))
                 }
             }
         })
         .await
     }
 }
-impl Drop for Preparation {
+impl<T> Drop for Preparation<T> {
     fn drop(&mut self) {
         self.stop.cancel();
     }

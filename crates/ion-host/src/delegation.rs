@@ -9,6 +9,10 @@ use ion_core::{
 };
 
 use crate::{Application, ControlUpdate, SessionCatalog, SessionSetup};
+use tokio_util::sync::CancellationToken;
+
+pub(crate) mod preparation;
+pub use preparation::{DelegationPreparation, DelegationPreparationError};
 
 mod progress;
 pub use progress::{ChildActivity, ChildActivitySnapshot, ChildProgress, ChildProgressSnapshot};
@@ -26,12 +30,17 @@ pub use steering::{ChildSteering, ChildSteeringReport, PreparedDelegation};
 /// Use the prepared task for foreground joining, or transfer it with
 /// `PreparedDelegation::in_background` to retain its matching live control grant.
 /// Core reserves custody only after exact reconciliation and before new admission.
+#[derive(Clone)]
 pub struct SessionDelegation {
     pub target: ion_core::DelegationTarget,
     pub cwd: Option<PathBuf>,
     pub application: Arc<dyn Application>,
     pub model: Option<ModelRef>,
     pub reasoning: Reasoning,
+    /// Pre-admission budget for capturing the runtime/resources. Expiry requests
+    /// cancellation but still joins started preparation. `None` leaves policy
+    /// to the application; this is separate from runtime and foreground waits.
+    pub startup_timeout_ms: Option<u64>,
     /// Runtime budget from linked child request submission; `None` leaves policy
     /// to this application. Expiry requests stop and still joins all cleanup.
     pub execution_timeout_ms: Option<u64>,
@@ -39,10 +48,25 @@ pub struct SessionDelegation {
 }
 
 impl SessionDelegation {
-    /// Preflight captures the complete runtime/resources before relationship
-    /// admission. The returned task is cold and owns everything needed to join
-    /// preparation, Core execution and shutdown outside the tool's borrowed wait.
-    pub fn prepare(&self, input: Message) -> Result<PreparedDelegation> {
+    /// Start retained preflight without blocking the control executor. Join the
+    /// returned owner before admitting its cold task. Stop/expiry joins started
+    /// work even beyond the budget; dropping the owner requests the same stop.
+    pub fn prepare(
+        self,
+        input: Message,
+        stop: &CancellationToken,
+    ) -> Result<DelegationPreparation> {
+        DelegationPreparation::start(self.startup_timeout_ms, stop, move |stop| {
+            self.preflight(input, &stop)
+        })
+    }
+
+    pub(crate) fn preflight(
+        self,
+        input: Message,
+        stop: &CancellationToken,
+    ) -> Result<PreparedDelegation> {
+        preparation::check_stop(stop)?;
         let directory = self
             .target
             .directory()
@@ -62,10 +86,13 @@ impl SessionDelegation {
             cwd.as_ref().is_none_or(|cwd| cwd.is_dir()),
             "child cwd must be a directory"
         );
+        preparation::check_stop(stop)?;
         let resources = self.application.resources(cwd.as_deref())?;
+        preparation::check_stop(stop)?;
         let runtime = self
             .application
             .runtime(cwd.as_deref(), self.model.as_ref(), None)?;
+        preparation::check_stop(stop)?;
         crate::binding::validate_model(&runtime, self.model.as_ref())?;
         runtime.agent.validate_reasoning(self.reasoning)?;
         let spec = DelegationSpec {

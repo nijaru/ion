@@ -197,20 +197,23 @@ impl<M: Serialize + Send + 'static> SessionControl<M> {
             let limits = self.setup.runtime.agent.limits();
             self.preparing = Some((
                 id,
-                crate::preparation::Preparation::start(move |stop| async move {
-                    let images = crate::image_input::prepare_images(
-                        &model,
-                        limits.image_input,
-                        sources,
-                        limits.max_request_bytes,
-                        stop,
-                    )
-                    .await?;
-                    message
-                        .content
-                        .extend(images.into_iter().flat_map(ion_ai::LoadedImage::into_parts));
-                    Ok(message)
-                }),
+                crate::preparation::Preparation::start(
+                    CancellationToken::new(),
+                    move |stop| async move {
+                        let images = crate::image_input::prepare_images(
+                            &model,
+                            limits.image_input,
+                            sources,
+                            limits.max_request_bytes,
+                            stop,
+                        )
+                        .await?;
+                        message
+                            .content
+                            .extend(images.into_iter().flat_map(ion_ai::LoadedImage::into_parts));
+                        Ok(message)
+                    },
+                ),
             ));
         }
         // Transfer prepared steering in admission order. A later ready steer

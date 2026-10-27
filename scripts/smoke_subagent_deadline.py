@@ -70,8 +70,10 @@ try {
   const invalid = [];
   for (const execution_timeout_ms of [0,7200001,null])
     invalid.push(await start('INVALID',{execution_timeout_ms}));
+  for (const startup_timeout_ms of [0,300001,null])
+    invalid.push(await start('INVALID',{startup_timeout_ms}));
   const [expired, survivor] = await Promise.all([
-    start('EXPIRE',{mode:'background',execution_timeout_ms:3000}),
+    start('EXPIRE',{mode:'background',startup_timeout_ms:60000,execution_timeout_ms:3000}),
     start('SURVIVE',{mode:'background'})
   ]);
   if (expired.is_error || survivor.is_error) return {unsupported:[expired,survivor]};
@@ -189,7 +191,9 @@ try {
         assert not failures, failures
         result = next(record["output"]["result"] for record in records if record["type"] == "tool_finished")
         assert "first" in result, result
-        assert all(item["is_error"] for item in result["invalid"]), result["invalid"]
+        assert len(result["invalid"]) == 6 and all(item["is_error"] for item in result["invalid"]), result["invalid"]
+        assert result["expired"]["value"]["startup_timeout_ms"] == 60000
+        assert result["survivor"]["value"]["startup_timeout_ms"] == 30000
         assert result["expired"]["value"]["execution_timeout_ms"] == 3000
         assert result["survivor"]["value"]["execution_timeout_ms"] == 1800000
         assert result["brief"]["value"]["wait_expired"] and not result["brief"]["is_error"]
@@ -254,6 +258,8 @@ try {
                 assert dead(int((workspace / (name + suffix)).read_text())), f"{name}{suffix} survived joining"
             assert (workspace / (name + ".after")).exists() == (name == "SURVIVE")
         start_schema = next(choice for choice in schemas[0]["oneOf"] if choice["properties"]["action"]["const"] == "start")
+        startup = start_schema["properties"]["startup_timeout_ms"]
+        assert (startup["minimum"], startup["maximum"], startup["default"]) == (1, 300000, 30000)
         budget = start_schema["properties"]["execution_timeout_ms"]
         assert (budget["minimum"], budget["maximum"], budget["default"]) == (1, 7200000, 1800000)
         parent = next(path for path in Path(env["ION_HOME"]).rglob("*.sqlite") if path.parent.name != "children")
