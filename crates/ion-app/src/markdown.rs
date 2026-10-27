@@ -1,4 +1,4 @@
-//! Assistant-only Markdown presentation. No HTML renderer, fetches or terminal links.
+//! Model-authored Markdown presentation. No HTML renderer, fetches or terminal links.
 use pulldown_cmark::{Event, Options, Parser, Tag, TagEnd};
 
 mod code;

@@ -354,7 +354,7 @@ pub async fn chat(init: ChatInit) -> Result<()> {
                 InputEvent::Key(key) => {
                     if ui.keys.matches(KeyAction::Suspend, key) {
                         ui.break_edit_focus();
-                        release_inline_surface(terminal, screen).await?;
+                        terminal.release_inline(screen).await?;
                         terminal.suspend_to_job_control().await.context("suspend terminal job")?;
                         program.published = None;
                         *screen = new_inline_screen(terminal).await.context("restore chat after job suspension")?;
@@ -379,6 +379,9 @@ pub async fn chat(init: ChatInit) -> Result<()> {
                     if terminal.size()? != published_size {
                         ui.completion.invalidate_visibility();
                         ui.pickers.invalidate_visibility();
+                        if let Some(question) = &mut ui.question {
+                            question.invalidate_visibility();
+                        }
                         screen.note_resize();
                     }
                     if ui.question_owns_input() {
@@ -463,6 +466,9 @@ pub async fn chat(init: ChatInit) -> Result<()> {
                 InputEvent::Resize(_) => {
                     ui.completion.invalidate_visibility();
                     ui.pickers.invalidate_visibility();
+                    if let Some(question) = &mut ui.question {
+                        question.invalidate_visibility();
+                    }
                     screen.note_resize();
                 },
                 InputEvent::Mouse(mouse) => ui.mouse(mouse.kind()),
@@ -556,22 +562,6 @@ async fn new_inline_screen(terminal: &mut TerminalSession) -> Result<Screen> {
     }
 }
 
-// Yield only reconciled, unpublished primary cells before another terminal
-// consumer writes at the cursor. In particular, a secret prompt must not be
-// appended to an old editor line or leave stale identity chrome below it.
-async fn release_inline_surface(terminal: &mut TerminalSession, screen: &mut Screen) -> Result<()> {
-    terminal.leave_alt_screen()?;
-    screen.invalidate();
-    loop {
-        if terminal.prepare_inline(screen).await?.is_some()
-            && terminal.paint_inline(screen, |screen, out| screen.release_inline(out))?
-        {
-            return Ok(());
-        }
-        tokio::task::yield_now().await;
-    }
-}
-
 async fn login_in_terminal(
     terminal: &mut TerminalSession,
     screen: &mut Screen,
@@ -580,7 +570,7 @@ async fn login_in_terminal(
     program: &mut ProgramStatusState,
 ) -> Result<Result<()>> {
     anyhow::ensure!(!provider.is_empty(), "use /login PROVIDER");
-    release_inline_surface(terminal, screen).await?;
+    terminal.release_inline(screen).await?;
     // Command admission allows credential entry only while foreground control is idle.
     program.blocked_auth = true;
     program.publish(terminal, false)?;
@@ -1333,7 +1323,7 @@ async fn prepare_draw(
         || ui.pickers.active().is_some()
         || ui.mode == TuiMode::Fullscreen
     {
-        terminal.enter_alt_screen()?;
+        terminal.enter_alt_screen(screen).await?;
         let (width, height) = terminal.size()?;
         screen.resize_fullscreen(width, height);
         return Ok(Some((width, height, false)));
@@ -1341,7 +1331,7 @@ async fn prepare_draw(
     let surface_reset = terminal.is_alt_screen()?;
     if surface_reset {
         // Restore first: the alternate cursor is not evidence about primary
-        // ownership. Keep the previous primary cells through reconciliation.
+        // ownership. Reconcile the parked, cleared primary tail before repaint.
         terminal.leave_alt_screen()?;
         screen.invalidate();
     }

@@ -245,9 +245,31 @@ impl TerminalSession {
         Ok(())
     }
 
-    /// Own a keyboard push on the alternate surface while it is in use.
-    pub fn enter_alt_screen(&mut self) -> io::Result<()> {
-        self.lock().enter_alt_screen()
+    /// Withdraw the mutable primary band before saving its cursor for an
+    /// alternate viewport. Resizing a dormant draft/footer can otherwise move
+    /// its saved cursor independently of the cells that identify it.
+    pub async fn enter_alt_screen(&mut self, screen: &mut Screen) -> io::Result<()> {
+        if !self.is_alt_screen()? {
+            self.release_inline(screen).await?;
+            self.lock().enter_alt_screen()?;
+        }
+        Ok(())
+    }
+
+    /// Yield only reconciled, unpublished primary cells. The parked cursor and
+    /// cleared tail replace the old mutable footprint; committed scrollback and
+    /// frontend publication acknowledgements remain untouched.
+    pub async fn release_inline(&mut self, screen: &mut Screen) -> io::Result<()> {
+        self.leave_alt_screen()?;
+        screen.invalidate();
+        loop {
+            if self.prepare_inline(screen).await?.is_some()
+                && self.paint_inline(screen, |screen, out| screen.release_inline(out))?
+            {
+                return Ok(());
+            }
+            tokio::task::yield_now().await;
+        }
     }
 
     /// Pop only the alternate push before restoring the primary surface.

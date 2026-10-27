@@ -147,10 +147,14 @@ class Handler(BaseHTTPRequestHandler):
             calls = [("question-1", "ask_user_question", {
                 "questions": [{
                     "question": "Which route should the fixture take?",
+                    "header": "Compare routes",
                     "multi_select": questions.startswith("multi"),
                     "options": [
-                        {"label": "Alpha", "description": "first"},
-                        {"label": "Beta", "description": "second"},
+                        {"label": "Alpha", "description": "first", **({"preview":
+                            '# Alpha design\n\n```rust\nlet marker = "ALPHA_PREVIEW";\n```\n\n```text\n'
+                            + '\n'.join(f'alpha-line-{n}' for n in range(40)) + '\n```'} if not questions.startswith("multi") else {})},
+                        {"label": "Beta", "description": "second", **({"preview":
+                            '**BETA_PREVIEW**\n\n```toml\nenabled = false\n```'} if not questions.startswith("multi") else {})},
                     ],
                 }],
             })]

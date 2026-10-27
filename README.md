@@ -1799,17 +1799,27 @@ that escaped descendants have stopped. `--read-only` excludes this capability.
 
 Terminal and bidirectional RPC coding offer `ask_user_question` within the current Turn.
 A request contains `questions`: 1–4 questions, each with question text and 2–6
-`{label, description?}` options. Set `multi_select: true` when multiple choices are
-valid; omission defaults to single-select. The dialog adds **Type something.**
-for a custom answer in either mode and **Next** for multi-select confirmation;
-do not author those labels or **Other** as options. Headers and rich previews
-are not implemented.
+`{label, description?, preview?}` options. An optional `header` gives a short
+context label. Set `multi_select: true` when multiple choices are valid; omission
+defaults to single-select. The dialog adds **Type something.** for a custom answer
+in either mode and **Next** for multi-select confirmation; do not author those
+labels or **Other** as options.
+
+For concrete single-select comparisons, an option's `preview` can contain Markdown,
+code, diagrams or configuration. At 100 columns or wider, previews sit beside the
+choices; narrower views stack them below. PageUp/PageDown scroll the focused
+preview using the configured bindings. Changing choices returns to the top; a
+choice without a preview remains available. Custom entry regains the full width.
+Previews fetch nothing and execute nothing; terminal controls are displayed safely.
+If the complete selected label or even one preview row cannot fit, resize before
+confirming. Headers and previews are request metadata, not extra answer fields
+or permission.
 
 In the terminal, use Up/Down and Enter to choose. Multi-select uses Space or Enter
 to toggle checkboxes without submitting; choose **Next** to confirm, including an
 explicit empty selection. A custom answer replaces all checkbox choices and
-supports Unicode editing and paste; Enter accepts it and Shift-Enter adds a newline. Answers advance through
-the batch and submit together. Esc cancels the whole questionnaire with an
+supports Unicode editing and paste; Enter accepts it and Shift-Enter adds a
+newline. Answers advance through the batch and submit together. Esc cancels the whole questionnaire with an
 explicit cancellation observation; the model may continue without an answer.
 Ctrl-C stops the Turn. The dialog preserves the composer draft and waits for an
 existing picker, detail view or attached PTY to release input rather than stealing
@@ -1828,9 +1838,12 @@ Pending questions are live-only: reopening a Session does not restart a dialog o
 reinterpret an old request as authorization.
 
 Requests are bounded to 64 KiB of serialized arguments. Question text is limited
-to 4096 UTF-8 bytes, labels to 120 bytes and descriptions to 1024 bytes. Custom
-answers are nonempty and at most 4096 UTF-8 bytes each; the serialized answer
-batch is bounded to 48 KiB. Invalid answers leave the request available for a
+to 4096 UTF-8 bytes, labels to 120 bytes and descriptions to 1024 bytes. Headers
+are nonblank single-line strings of at most 16 Unicode scalar values before outer
+whitespace is trimmed. A preview preserves its exact whitespace, must be nonblank
+and is limited to 16 KiB of UTF-8; previews on multi-select questions are rejected.
+These limits do not replace the aggregate 64 KiB bound. Custom answers are
+nonempty and at most 4096 UTF-8 bytes each; the serialized answer batch is bounded to 48 KiB. Invalid answers leave the request available for a
 corrected reply. Only one batch can wait per control; concurrent asks fail
 explicitly. Without a connected responder, an explicitly installed question tool
 returns unavailability rather than waiting or auto-answering. The tool also
@@ -1840,8 +1853,8 @@ not supply its owning Turn's stop authority, including inside Code Mode.
 RPC emits `question_changed` with `resync: "get_question"` when the live view
 changes. This is a coalesced invalidation, not the request itself: call
 `get_question` to retrieve `data.question`, either null or an object with
-`request` (a UUID nonce), `questions` and Core `origin` provenance. A notification
-can reflect an already closed request. The connection retains one pending
+`request` (a UUID nonce), `questions` (including any header/preview metadata) and
+Core `origin` provenance. A notification can reflect an already closed request. The connection retains one pending
 invalidation under output pressure; keep handling it independently of provisional
 model progress or `publication_gap` records.
 

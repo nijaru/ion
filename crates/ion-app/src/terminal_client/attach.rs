@@ -82,7 +82,8 @@ async fn view(
     let already_fullscreen = terminal.is_alt_screen()?;
     if !already_fullscreen {
         terminal
-            .enter_alt_screen()
+            .enter_alt_screen(screen)
+            .await
             .context("enter the attachment surface")?;
     }
     let outcome = drive(terminal, screen, &attachment).await;

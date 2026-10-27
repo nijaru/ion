@@ -86,10 +86,11 @@ pub use process::{
     TerminalAttachment, TerminalSummary,
 };
 pub use question::{
-    MAX_ANSWER_BYTES, MAX_OPTION_DESCRIPTION_BYTES, MAX_OPTION_LABEL_BYTES, MAX_OPTIONS,
-    MAX_QUESTION_BYTES, MAX_QUESTIONS, MAX_REQUEST_BYTES, PendingQuestion, Question,
-    QuestionAnswer, QuestionCustody, QuestionError, QuestionOption, QuestionRequestId,
-    QuestionResponder, SYNTHETIC_NEXT_LABEL, SYNTHETIC_TEXT_LABEL,
+    MAX_ANSWER_BYTES, MAX_OPTION_DESCRIPTION_BYTES, MAX_OPTION_LABEL_BYTES,
+    MAX_OPTION_PREVIEW_BYTES, MAX_OPTIONS, MAX_QUESTION_BYTES, MAX_QUESTION_HEADER_CHARS,
+    MAX_QUESTIONS, MAX_REQUEST_BYTES, PendingQuestion, Question, QuestionAnswer, QuestionCustody,
+    QuestionError, QuestionOption, QuestionRequestId, QuestionResponder, SYNTHETIC_NEXT_LABEL,
+    SYNTHETIC_TEXT_LABEL,
 };
 pub use question_tool::QuestionTools;
 pub use resources::{PromptTemplate, ResourceDiagnostic, Resources, Skill};

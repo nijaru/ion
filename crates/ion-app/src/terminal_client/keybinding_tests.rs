@@ -254,10 +254,12 @@ fn custom_question_controls_share_editing_without_accepting_clipped_answers() {
     let request = ion_host::QuestionRequestId(uuid::Uuid::now_v7());
     let questions = vec![ion_host::Question {
         question: "Choose".into(),
+        header: None,
         multi_select: false,
         options: vec![ion_host::QuestionOption {
             label: "Option".into(),
             description: None,
+            preview: None,
         }],
     }];
     let mut question = QuestionModal::new(request, questions.clone());
@@ -275,12 +277,14 @@ fn custom_question_controls_share_editing_without_accepting_clipped_answers() {
     );
     let mut question = QuestionModal::new(request, questions);
     question.key(KeyEvent::new(KeyCode::Char('n'), Modifiers::CONTROL), &keys);
+    question.render(80, 24, &keys, &crate::presentation_style::Theme::default());
     question.key(KeyEvent::new(KeyCode::Enter, Modifiers::ALT), &keys);
     for ch in "Exact 🦀".chars() {
         question.key(KeyEvent::new(KeyCode::Char(ch), Modifiers::NONE), &keys);
     }
     question.key(KeyEvent::new(KeyCode::Char('r'), Modifiers::CONTROL), &keys);
     question.paste("next");
+    question.render(80, 24, &keys, &crate::presentation_style::Theme::default());
     assert!(matches!(
         question.key(KeyEvent::new(KeyCode::Enter, Modifiers::NONE), &keys),
         QuestionAction::None

@@ -1136,7 +1136,16 @@ auto-answer. Terminal and bidirectional RPC coding connect an actual responder
 before admitting work; one-shot headless execution has no answer channel.
 
 `ask_user_question` accepts one batch of 1–4 questions, each with 2–6 labeled
-options and optional descriptions. Optional `multi_select` defaults to false;
+options and optional descriptions. An optional short `header` and single-select
+option `preview` carry inert presentation metadata through the same Host request
+and RPC inspection. Preserve Markdown preview text exactly, bound it within the
+aggregate request limit and reject previews on multi-select questions. App renders
+previews using its current immutable theme, without fetching URLs/images or
+executing content. Wide views compare side by side; narrow views stack and page
+preview content, while custom entry uses the full width. Confirmation/toggling
+requires the complete selected label in the current painted geometry; resizing
+revokes visibility until repaint. Headers/previews do not enter answer payloads,
+rewrite observations or convey permission. Optional `multi_select` defaults to false;
 true permits an explicit set of unique option indices, including an empty set
 meaning none rather than cancellation. Replies must match the question's mode;
 labels and canonical request order come from the immutable live request, not the
@@ -1356,6 +1365,16 @@ rather than archiving them as conversation or writing a secret prompt into stale
 editor chrome. Help groups the existing command inventory and exposes
 argument grammar and keyboard controls on request; its responses use the same
 complete terminal-local publication as other client commands.
+
+Before the first primary-to-alternate transition, Terminal reconciles and
+withdraws the unpublished mutable band, then parks the cursor in its cleared tail.
+Modal views, persistent fullscreen and program attachment share this transition;
+already-alternate redraws do not leave and re-enter it. A dormant draft/footer
+must not become saved-cursor evidence across alternate-screen resize. On return,
+measure and reconcile the parked primary tail before repainting live state.
+Never reset publication acknowledgements or replay committed output to recover
+that geometry; clearing cannot undo mutable cells already scrolled into history
+by an earlier inline resize.
 
 Ordinary terminal keys resolve through one App-owned semantic action registry,
 shared by the composer, completion, launch/model selectors, questions, details and

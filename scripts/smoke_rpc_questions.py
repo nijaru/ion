@@ -16,7 +16,10 @@ from pathlib import Path
 root = Path(__file__).resolve().parent.parent
 binary = Path(os.environ.get("ION_SMOKE_BIN", root / "target/debug/ion"))
 questions = [
-    {"question": "Which route?", "options": [{"label": "Alpha"}, {"label": "Beta", "description": "second"}]},
+    {"question": "Which route?", "header": "Routes 🦀", "options": [
+        {"label": "Alpha", "preview": "x" * (16 * 1024)},
+        {"label": "Beta", "description": "second", "preview": "  ```toml\nenabled = false\n```\n\n"},
+    ]},
     {"question": "Which detail?", "options": [{"label": "One"}, {"label": "Two"}]},
     {"question": "Which features?", "multi_select": True, "options": [{"label": "Read"}, {"label": "Write"}, {"label": "Search"}]},
     {"question": "Anything else?", "multi_select": True, "options": [{"label": "One"}, {"label": "Two"}]},
@@ -135,7 +138,10 @@ class Client:
         for actual, expected in zip(pending["questions"], questions, strict=True):
             assert actual["question"] == expected["question"], pending
             assert actual["multi_select"] == expected.get("multi_select", False), pending
-            assert actual["options"] == [dict(label=option["label"], description=option.get("description")) for option in expected["options"]], pending
+            assert actual.get("header") == expected.get("header"), pending
+            assert actual["options"] == [dict(label=option["label"], description=option.get("description"),
+                                              **({"preview": option["preview"]} if "preview" in option else {}))
+                                         for option in expected["options"]], pending
         assert pending["origin"]["session"] == self.session, pending
         assert not (self.cwd / "question-effect.txt").exists(), "dependent call ran before the answer"
         return pending["request"]

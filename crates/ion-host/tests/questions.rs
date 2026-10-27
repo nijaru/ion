@@ -215,9 +215,15 @@ async fn wait_for_settlement(fixture: &mut Fixture) -> Settlement<()> {
 
 #[tokio::test]
 async fn answer_resumes_the_same_turn_and_dispatches_dependent_effect_once() {
+    let Content::ToolCall(mut call) = question_call() else {
+        unreachable!("fixture constructs a tool call")
+    };
+    let preview = "  # Beta\n\n    preserve this indentation\n\n";
+    call.arguments["questions"][0]["header"] = json!("  Routes 🦀  ");
+    call.arguments["questions"][0]["options"][1]["preview"] = json!(preview);
     let mut fixture = fixture(
         vec![
-            response(vec![question_call()]),
+            response(vec![Content::ToolCall(call)]),
             response(vec![effect_call()]),
             response(vec![Content::Text("done".into())]),
         ],
@@ -235,20 +241,38 @@ async fn answer_resumes_the_same_turn_and_dispatches_dependent_effect_once() {
             (),
         )
         .unwrap();
-    let pending = wait_for_pending(&mut fixture).await;
+    let mut pending = wait_for_pending(&mut fixture).await;
     assert_eq!(pending.origin.session(), fixture.control.session().id());
     assert!(pending.origin.turn() > 0);
     assert!(pending.origin.occurrence().assistant_entry > 0);
+    let snapshot = fixture
+        .control
+        .snapshot(|_| ())
+        .unwrap()
+        .pending_question
+        .unwrap();
+    assert_eq!(snapshot.origin, pending.origin);
+    let serialized = serde_json::to_value(&pending).unwrap();
     assert_eq!(
-        fixture
-            .control
-            .snapshot(|_| ())
-            .unwrap()
-            .pending_question
-            .unwrap()
-            .origin,
-        pending.origin
+        serialized["questions"],
+        json!([{
+            "question": "Which route?",
+            "header": "Routes 🦀",
+            "options": [
+                {"label": "Alpha", "description": null},
+                {"label": "Beta", "description": null, "preview": preview}
+            ],
+            "multi_select": false
+        }])
     );
+    assert_eq!(
+        serde_json::to_value(snapshot).unwrap()["questions"],
+        serialized["questions"]
+    );
+    // A frontend's copy cannot rewrite the immutable labels used for answers.
+    pending.questions[0].options[1].label = "forged label".into();
+    pending.questions[0].options[1].preview = Some("forged preview".into());
+    pending.questions[0].header = Some("forged header".into());
     fixture
         .responder
         .as_ref()
@@ -272,10 +296,22 @@ async fn answer_resumes_the_same_turn_and_dispatches_dependent_effect_once() {
     assert_eq!(fs::read_to_string(&fixture.effect).unwrap(), "chosen once");
     let requests = fixture.service.requests();
     assert_eq!(requests.len(), 3);
-    assert!(
-        serde_json::to_string(&requests[1].messages)
-            .unwrap()
-            .contains("\"label\":\"Beta\"")
+    let result = requests[1]
+        .messages
+        .iter()
+        .flat_map(|message| &message.content)
+        .find_map(|part| match part {
+            Content::ToolResult(result) if result.call_id == "question" => Some(result),
+            _ => None,
+        })
+        .expect("question result reaches the next model request");
+    assert!(!result.is_error);
+    assert!(result.images.is_empty());
+    assert_eq!(
+        result.result,
+        json!({"status": "answered", "answers": [{
+            "kind": "option", "question": 1, "option": 1, "label": "Beta"
+        }]})
     );
     drop(fixture.responder);
     fixture.control.request_shutdown();

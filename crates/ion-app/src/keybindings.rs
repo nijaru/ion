@@ -69,8 +69,8 @@ actions! {
     Redo, "tui.editor.redo", COMPOSER, ["ctrl+alt+-"], "Redo composer edit";
     Yank, "tui.editor.yank", COMPOSER, ["ctrl+y"], "Yank last kill";
     YankPop, "tui.editor.yankPop", COMPOSER, ["alt+y"], "Cycle directly preceding yank";
-    PageUp, "tui.editor.pageUp", COMPOSER | DETAILS, ["pageup"], "Scroll transcript/details up";
-    PageDown, "tui.editor.pageDown", COMPOSER | DETAILS, ["pagedown"], "Scroll transcript/details down";
+    PageUp, "tui.editor.pageUp", COMPOSER | DETAILS | CHOICE, ["pageup"], "Scroll transcript/details or question preview up";
+    PageDown, "tui.editor.pageDown", COMPOSER | DETAILS | CHOICE, ["pagedown"], "Scroll transcript/details or question preview down";
     DetailUp, "app.details.up", DETAILS, ["up"], "Scroll details up one row";
     DetailDown, "app.details.down", DETAILS, ["down"], "Scroll details down one row";
     Earlier, "app.details.previousPage", DETAILS, ["left"], "Show earlier detail page";

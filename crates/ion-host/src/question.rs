@@ -17,8 +17,10 @@ pub const MAX_QUESTIONS: usize = 4;
 pub const MIN_OPTIONS: usize = 2;
 pub const MAX_OPTIONS: usize = 6;
 pub const MAX_QUESTION_BYTES: usize = 4096;
+pub const MAX_QUESTION_HEADER_CHARS: usize = 16;
 pub const MAX_OPTION_LABEL_BYTES: usize = 120;
 pub const MAX_OPTION_DESCRIPTION_BYTES: usize = 1024;
+pub const MAX_OPTION_PREVIEW_BYTES: usize = 16 * 1024;
 pub const MAX_REQUEST_BYTES: usize = 64 * 1024;
 pub const MAX_ANSWER_BYTES: usize = 4096;
 pub const MAX_ANSWER_BATCH_BYTES: usize = 48 * 1024;
@@ -30,11 +32,17 @@ pub(crate) const RESERVED_LABELS: [&str; 3] = ["Other", SYNTHETIC_TEXT_LABEL, SY
 pub struct QuestionOption {
     pub label: String,
     pub description: Option<String>,
+    /// Presentation-only Markdown, preserved verbatim; single-select only.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub preview: Option<String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 pub struct Question {
     pub question: String,
+    /// Optional short, trimmed, single-line presentation chip.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub header: Option<String>,
     pub options: Vec<QuestionOption>,
     pub multi_select: bool,
 }

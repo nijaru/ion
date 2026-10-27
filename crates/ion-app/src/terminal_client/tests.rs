@@ -1461,15 +1461,18 @@ fn question_modal_preserves_composer_draft_images_and_defers_to_other_views() {
     let request = ion_host::QuestionRequestId(uuid::Uuid::now_v7());
     let questions = vec![ion_host::Question {
         question: "Continue?".into(),
+        header: None,
         multi_select: false,
         options: vec![
             ion_host::QuestionOption {
                 label: "Yes".into(),
                 description: None,
+                preview: None,
             },
             ion_host::QuestionOption {
                 label: "No".into(),
                 description: None,
+                preview: None,
             },
         ],
     }];
@@ -1486,10 +1489,19 @@ fn question_modal_preserves_composer_draft_images_and_defers_to_other_views() {
         KeyEvent::new(KeyCode::Down, Modifiers::NONE),
         &KeyBindings::default(),
     );
-    question.key(
-        KeyEvent::new(KeyCode::Enter, Modifiers::NONE),
+    question.render(
+        80,
+        24,
         &KeyBindings::default(),
+        &crate::presentation_style::Theme::default(),
     );
+    assert!(matches!(
+        question.key(
+            KeyEvent::new(KeyCode::Enter, Modifiers::NONE),
+            &KeyBindings::default(),
+        ),
+        QuestionAction::Answer(_, _)
+    ));
     assert_eq!(ui.draft, "literal draft");
     assert_eq!(ui.cursor, "literal draft".len());
     assert_eq!(ui.images.len(), 1);

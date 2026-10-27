@@ -3,15 +3,18 @@ use super::*;
 fn question() -> Vec<Question> {
     vec![Question {
         question: "Which?".into(),
+        header: None,
         multi_select: false,
         options: vec![
             QuestionOption {
                 label: "Alpha".into(),
                 description: None,
+                preview: None,
             },
             QuestionOption {
                 label: "Beta".into(),
                 description: None,
+                preview: None,
             },
         ],
     }]

@@ -839,7 +839,15 @@ def exercise_questions():
                     wait(lambda: b"Question 1/1" in plain() and b"Type something." in plain(), "question modal")
                     assert b"\x1b]7501;state=blocked:kind=question:app=ion\x1b\\" in output, "question modal did not publish blocked status"
                     if mode == "select":
-                        os.write(master, b"\x1b[B\r")
+                        wait(lambda: b"ALPHA_PREVIEW" in plain(), "initial code preview")
+                        assert b"alpha-line-39" not in plain(), "long preview was not windowed"
+                        os.write(master, b"\x1b[6~\x1b[6~")
+                        wait(lambda: b"alpha-line-39" in plain(), "paged preview tail")
+                        assert not (workspace / "question-effect.txt").exists()
+                        assert len(trace.read_text().splitlines()) == 1, "preview paging issued a model request"
+                        os.write(master, b"\x1b[B")
+                        wait(lambda: b"BETA_PREVIEW" in plain(), "focused alternative preview")
+                        os.write(master, b"\r")
                         wait(lambda: b"QUESTION_DONE" in plain(), "selected answer effect")
                     elif mode == "multi":
                         os.write(master, b"\x1b[B ")  # Beta first.
