@@ -311,6 +311,10 @@ or client exit; it is not durable Session history or model input. Explicit repea
 commands produce fresh responses; identical consecutive diagnostics at the same
 history boundary coalesce. Unfinished recalled or resynchronized facts stay in a
 mutable preview rather than being irreversibly published.
+A hidden inline caret, including a collapsed question, reserves one blank
+cursor-parking row. At a one-row terminal height, only that blank anchor fits;
+question reopen, cancellation and Stop controls remain active. A visible composer
+caret needs no extra parking row.
 Inline paint waits 300 ms after resize notifications while input and coding work
 remain live, then measures the restored primary cursor before reclaiming mutable
 rows. It cannot remove live text the emulator has already moved into native history;

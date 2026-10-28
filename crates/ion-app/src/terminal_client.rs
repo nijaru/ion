@@ -1402,7 +1402,12 @@ fn draw_prepared(
     let commit_rows = ui.pending_history_rows(width.max(1) as usize);
     let history_committed = !commit_rows.is_empty();
     let width = width.max(1) as usize;
-    let row_budget = LIVE_REGION_MAX_ROWS.min(height.max(1) as usize);
+    let physical_budget = LIVE_REGION_MAX_ROWS.min(height.max(1) as usize);
+    // Screen keeps a blank parking row when question custody hides the caret.
+    // A one-row terminal renders only that anchor; the retained draft is inert.
+    let row_budget = physical_budget
+        .saturating_sub(usize::from(ui.question_owns_input()))
+        .max(1);
     let mut chrome = Vec::new();
     let notices = progress.map_or(&[][..], LiveTranscript::notices);
     if let Some(notice) = notices.last() {
@@ -1494,11 +1499,15 @@ fn draw_prepared(
     let cursor_row = composer_offset + composer.cursor_row;
     live_rows.extend(footer);
 
-    let desired_live_height = live_rows.len().clamp(1, row_budget);
     let cursor = (!ui.question_owns_input()).then_some((
         cursor_row,
         composer.cursor_col.min(width.saturating_sub(1)) as u16,
     ));
+    let frame = Frame {
+        live: &live_rows,
+        cursor,
+    };
+    let desired_live_height = frame.required_rows(width as u16).min(physical_budget);
     let painted = terminal.paint_inline(screen, |screen, out| {
         if history_committed {
             screen.commit_lines(out, &commit_rows)?;
@@ -1509,13 +1518,7 @@ fn draw_prepared(
         {
             screen.set_live_height(desired_live_height);
         }
-        screen.draw(
-            out,
-            &Frame {
-                live: &live_rows,
-                cursor,
-            },
-        )
+        screen.draw(out, &frame)
     })?;
     if painted {
         ui.finish_history_commit();

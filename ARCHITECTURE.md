@@ -1407,6 +1407,13 @@ editor chrome. Help groups the existing command inventory and exposes
 argument grammar and keyboard controls on request; its responses use the same
 complete terminal-local publication as other client commands.
 
+An inline frame without a visible caret reserves a blank bottom row for the
+hidden hardware cursor, including when clipping removes the requested caret.
+Paint a real space at its parking cell: a text-row start can move when native
+reflow crops that logical line. App budgets this row within the live band; a
+one-row viewport may contain only the anchor. Visible carets need no extra row.
+This does not authorize guessed cursor interpretations or history replay.
+
 Before the first primary-to-alternate transition, Terminal reconciles and
 withdraws the unpublished mutable band, then parks the cursor in its cleared tail.
 Modal views, persistent fullscreen and program attachment share this transition;

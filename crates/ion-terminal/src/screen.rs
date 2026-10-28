@@ -19,8 +19,25 @@ use ratatui::widgets::{Paragraph, Widget};
 /// Settled rows must be published separately through `commit_lines`.
 pub struct Frame<'a> {
     pub live: &'a [Line<'a>],
-    /// (live row, column); None hides the hardware cursor.
+    /// (live row, column). A hidden, invalid or clipped cursor reserves a
+    /// blank bottom parking row, leaving the other rows for live content.
     pub cursor: Option<(usize, u16)>,
+}
+
+impl Frame<'_> {
+    /// Unclipped inline reservation, including hidden-cursor parking.
+    #[must_use]
+    pub fn required_rows(&self, width: u16) -> usize {
+        self.live
+            .len()
+            .saturating_add(usize::from(self.valid_cursor(width).is_none()))
+            .max(1)
+    }
+
+    fn valid_cursor(&self, width: u16) -> Option<(usize, u16)> {
+        self.cursor
+            .filter(|(row, col)| *row < self.live.len() && *col < width)
+    }
 }
 
 /// A virtual terminal surface used by the renderer before bytes are emitted.
@@ -405,25 +422,29 @@ impl Screen {
         let height = self.avail();
         let band = self
             .live_height
-            .unwrap_or_else(|| frame.live.len().max(1))
+            .unwrap_or_else(|| frame.required_rows(self.width))
             .min(height as usize);
         self.live_height = Some(band);
-        let dropped = frame.live.len().saturating_sub(band);
-        let padding = band.saturating_sub(frame.live.len());
         let cursor = frame
-            .cursor
-            .filter(|(row, col)| *row < frame.live.len() && *col < self.width)
-            .and_then(|(row, col)| {
-                let row = row.checked_sub(dropped)? + padding;
-                (row < band).then_some((self.origin + row as u16, col))
-            });
+            .valid_cursor(self.width)
+            .filter(|(row, _)| *row >= frame.live.len().saturating_sub(band));
+        // A text-row cursor can be clamped to another cell when native reflow
+        // crops its logical line. An empty last line keeps hidden-cursor CPR
+        // anchored even through a one-cell viewport or an unpainted resize cycle.
+        let content_height = band - usize::from(cursor.is_none());
+        let dropped = frame.live.len().saturating_sub(content_height);
+        let padding = content_height.saturating_sub(frame.live.len());
+        let cursor = cursor.map(|(row, col)| (self.origin + (row - dropped + padding) as u16, col));
+        let parking = (self.origin + band as u16 - 1, 0);
+        let physical_cursor = cursor.unwrap_or(parking);
         let mut next = Surface::new(self.width, band as u16);
         for (index, line) in frame.live.iter().skip(dropped).enumerate() {
             next.render_line(line.clone(), (padding + index) as u16);
         }
         let mut painted = false;
         for row in 0..band as u16 {
-            let cursor_column = cursor.filter(|at| at.0 == self.origin + row).map(|at| at.1);
+            let cursor_column =
+                (physical_cursor.0 == self.origin + row).then_some(physical_cursor.1);
             // Include the cell under the cursor in the emitted extent. CPR
             // then denotes a real cell, not emulator-specific trailing-blank
             // or pending-wrap cursor policy.
@@ -435,7 +456,7 @@ impl Screen {
                 || cursor_column.is_some_and(|col| self.cursor_at != Some((self.origin + row, col)))
                 || self
                     .cursor_at
-                    .is_some_and(|at| at.0 == self.origin + row && cursor != Some(at))
+                    .is_some_and(|at| at.0 == self.origin + row && physical_cursor != at)
             {
                 emit_buffer_row(out, &next.buffer, row, self.origin, cursor_column)?;
                 painted = true;
@@ -458,7 +479,7 @@ impl Screen {
                 }
             }
         } else {
-            write!(out, "\x1b[{};1H", self.origin + band as u16)?;
+            write!(out, "\x1b[{};1H", parking.0 + 1)?;
             if self.cursor_shown != Some(false) {
                 write!(out, "\x1b[?25l")?;
             }
@@ -466,8 +487,8 @@ impl Screen {
         out.flush()?;
         self.repaint = false;
         self.cursor_shown = Some(cursor.is_some());
-        self.cursor_at = cursor;
-        self.physical_cursor = cursor.unwrap_or((self.origin + band as u16 - 1, 0));
+        self.cursor_at = Some(physical_cursor);
+        self.physical_cursor = physical_cursor;
         self.current = Some(next);
         Ok(())
     }
@@ -865,24 +886,115 @@ mod tests {
     }
 
     #[test]
-    fn removing_the_inline_cursor_hides_it() {
-        let mut screen = Screen::new(20, 0, 4);
-        let mut terminal = vt100::Parser::new(4, 20, 0);
-        let mut out = Vec::new();
-        for cursor in [Some((0, 0)), None] {
-            out.clear();
+    fn hidden_inline_cursor_has_a_blank_parking_row() {
+        for cursor in [None, Some((9, 0)), Some((0, 40)), Some((0, 0))] {
+            let mut screen = Screen::with_live_height(40, 0, 6, 3);
+            let mut terminal = vt100::Parser::new(6, 40, 0);
+            let mut out = Vec::new();
+            let live = if cursor == Some((0, 0)) {
+                // A valid cursor clipped off the top also needs safe parking.
+                vec![line("old"), line("older"), line("status"), line("footer")]
+            } else {
+                vec![line("status"), line("footer")]
+            };
             screen
                 .draw(
                     &mut out,
                     &Frame {
-                        live: &[line("prompt")],
+                        live: &live,
                         cursor,
                     },
                 )
                 .unwrap();
             terminal.process(&out);
+            let rows = terminal.screen().rows(0, 40).take(3).collect::<Vec<_>>();
+            assert_eq!(rows, ["status", "footer", " "], "{cursor:?}");
+            assert!(terminal.screen().hide_cursor());
+            assert_eq!(terminal.screen().cursor_position(), (2, 0));
+            assert_eq!(screen.physical_cursor, (2, 0));
+            assert_eq!(terminal.screen().cell(2, 0).unwrap().contents(), " ");
+        }
+    }
+
+    #[test]
+    fn hidden_inline_cursor_survives_a_one_cell_native_resize() {
+        let mut screen = Screen::with_live_height(120, 26, 32, 6);
+        let live = [
+            line("status"),
+            line("composer"),
+            line("native/fixture · /help"),
+        ];
+        let mut out = Vec::new();
+        screen
+            .draw(
+                &mut out,
+                &Frame {
+                    live: &live,
+                    cursor: None,
+                },
+            )
+            .unwrap();
+        assert_eq!(screen.current.as_ref().unwrap().row_text(5).trim(), "");
+        out.clear();
+        // Independently observed Rex CPRs for an explicitly blank last row.
+        // vt100::set_size does not model native reflow.
+        screen.reconcile_inline(&mut out, 1, 1, (0, 0)).unwrap();
+        screen
+            .draw(
+                &mut out,
+                &Frame {
+                    live: &live,
+                    cursor: None,
+                },
+            )
+            .unwrap();
+        assert_eq!(screen.current.as_ref().unwrap().row_text(0), " ");
+        screen.reconcile_inline(&mut out, 120, 32, (0, 31)).unwrap();
+        screen.ensure_live_height(&mut out, 6).unwrap();
+        screen
+            .draw(
+                &mut out,
+                &Frame {
+                    live: &live,
+                    cursor: None,
+                },
+            )
+            .unwrap();
+        let mut terminal = vt100::Parser::new(32, 120, 32);
+        terminal.process(&out);
+        assert_eq!(
+            terminal
+                .screen()
+                .contents()
+                .matches("native/fixture · /help")
+                .count(),
+            1
+        );
+        assert!(terminal.screen().hide_cursor());
+        assert_eq!(terminal.screen().cursor_position(), (31, 0));
+    }
+
+    #[test]
+    fn removing_the_inline_cursor_hides_it() {
+        let mut screen = Screen::new(20, 0, 4);
+        let mut terminal = vt100::Parser::new(4, 20, 0);
+        let mut out = Vec::new();
+        let live = [line("prompt")];
+        for cursor in [Some((0, 0)), None] {
+            out.clear();
+            let frame = Frame {
+                live: &live,
+                cursor,
+            };
+            screen
+                .ensure_live_height(&mut out, frame.required_rows(20))
+                .unwrap();
+            screen.draw(&mut out, &frame).unwrap();
+            terminal.process(&out);
         }
         assert!(terminal.screen().hide_cursor());
+        assert_eq!(terminal.screen().contents(), "prompt\n ");
+        assert_eq!(terminal.screen().cursor_position(), (1, 0));
     }
 
     #[test]
@@ -896,11 +1008,12 @@ mod tests {
                 &mut output,
                 &Frame {
                     live: &[line("MUTABLE")],
-                    cursor: None,
+                    cursor: Some((0, 0)),
                 },
             )
             .unwrap();
         terminal.process(&output);
+        assert!(terminal.screen().contents().contains("MUTABLE"));
         output.clear();
         screen.ensure_live_height(&mut output, 4).unwrap();
         terminal.process(&output);
@@ -1101,7 +1214,7 @@ mod tests {
                 &mut out,
                 &Frame {
                     live: &[line("one"), line("two"), line("three"), line("four")],
-                    cursor: None,
+                    cursor: Some((3, 0)),
                 },
             )
             .unwrap();
@@ -1113,7 +1226,7 @@ mod tests {
                 &mut out,
                 &Frame {
                     live: &[line("short")],
-                    cursor: None,
+                    cursor: Some((0, 0)),
                 },
             )
             .unwrap();
@@ -1127,25 +1240,6 @@ mod tests {
                 .collect::<Vec<_>>(),
             ["short", "", "", "", "", ""]
         );
-    }
-
-    #[test]
-    fn cursor_hidden_when_clipped_from_the_live_band() {
-        let mut screen = Screen::with_live_height(20, 0, 6, 2);
-        let mut out = Vec::new();
-        screen
-            .draw(
-                &mut out,
-                &Frame {
-                    live: &[line("old"), line("new"), line("prompt")],
-                    cursor: Some((0, 0)),
-                },
-            )
-            .unwrap();
-        assert!(!String::from_utf8_lossy(&out).contains("\x1b[?25h"));
-        let mut terminal = vt100::Parser::new(6, 20, 0);
-        terminal.process(&out);
-        assert!(terminal.screen().hide_cursor());
     }
 
     #[test]
