@@ -51,6 +51,8 @@ actions! {
     SelectUp, "tui.select.up", SELECT, ["up"], "Move up in completion or modal input";
     SelectDown, "tui.select.down", SELECT, ["down"], "Move down in completion or modal input";
     Toggle, "tui.select.toggle", PICKER | CHOICE, ["space"], "Toggle a setting or multi-select option";
+    QuestionNext, "tui.question.next", CHOICE, ["tab", "right"], "Next question or batch review";
+    QuestionPrevious, "tui.question.previous", CHOICE, ["shift+tab", "left"], "Previous question or batch review";
     CursorUp, "tui.editor.cursorUp", COMPOSER, ["up"], "Move up; browse history at first line";
     CursorDown, "tui.editor.cursorDown", COMPOSER, ["down"], "Move down; browse history at last line";
     Left, "tui.editor.cursorLeft", EDIT, ["left", "ctrl+b"], "Move left by grapheme";
@@ -69,8 +71,8 @@ actions! {
     Redo, "tui.editor.redo", COMPOSER, ["ctrl+alt+-"], "Redo composer edit";
     Yank, "tui.editor.yank", COMPOSER, ["ctrl+y"], "Yank last kill";
     YankPop, "tui.editor.yankPop", COMPOSER, ["alt+y"], "Cycle directly preceding yank";
-    PageUp, "tui.editor.pageUp", COMPOSER | DETAILS | CHOICE, ["pageup"], "Scroll transcript/details or question preview up";
-    PageDown, "tui.editor.pageDown", COMPOSER | DETAILS | CHOICE, ["pagedown"], "Scroll transcript/details or question preview down";
+    PageUp, "tui.editor.pageUp", COMPOSER | DETAILS | CHOICE, ["pageup"], "Scroll transcript/details or question preview/review up";
+    PageDown, "tui.editor.pageDown", COMPOSER | DETAILS | CHOICE, ["pagedown"], "Scroll transcript/details or question preview/review down";
     DetailUp, "app.details.up", DETAILS, ["up"], "Scroll details up one row";
     DetailDown, "app.details.down", DETAILS, ["down"], "Scroll details down one row";
     Earlier, "app.details.previousPage", DETAILS, ["left"], "Show earlier detail page";

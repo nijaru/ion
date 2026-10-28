@@ -1158,8 +1158,21 @@ responder. A separate free-text answer replaces all choices in either mode.
 Multi-select toggles remain unsent UI state until explicit Next confirmation;
 model-authored options cannot impersonate Next or Type something. Bound request,
 option and answer sizes, validate against the exact live request, and accept the
-whole batch atomically. Only one batch may
-wait on a control owner; concurrent asks fail explicitly rather than queue behind
+whole batch atomically, with one confirmed answer for every question.
+
+App's multi-question view retains per-question drafts and confirmed answers,
+allows question/review navigation, and requires explicit final submission from
+Review. Changing checkboxes invalidates that question's confirmation until Next;
+an explicitly confirmed empty set stays distinct from unanswered. Cursor-only
+browsing does not replace a confirmed answer. Custom text retains its exact draft
+and replaces choices on confirmation. Entering a question tab does not implicitly
+open its editor, and navigation bindings do not steal text-editing keys. Single
+questions still complete directly. Navigation, scrolling, resize and rejected
+publication revoke action visibility until repaint; Review's action labels must
+fit in the current view. This is App presentation over the existing responder,
+not a second question protocol or a persisted partial answer.
+
+Only one batch may wait on a control owner; concurrent asks fail explicitly rather than queue behind
 an unseen dialog. A non-clone responder lease and request nonce authorize the
 reply; display coordinates or copied origins alone do not. The optional question
 port is supplied by application configuration and retained across idle binding

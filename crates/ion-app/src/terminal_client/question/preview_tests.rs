@@ -75,7 +75,7 @@ fn previews_follow_focus_page_and_geometry_without_answering() {
     let frame = modal.render(120, 20, &keys, &theme);
     assert!(text(&frame).contains("preview-line-49"));
     assert!(!text(&frame).contains("CHOICE_A"));
-    assert!(modal.answers.is_empty());
+    assert!(super::tests::answered(&modal).is_empty());
     modal.key(KeyEvent::new(KeyCode::Down, Modifiers::NONE), &keys);
     let frame = modal.render(60, 18, &keys, &theme);
     assert!(text(&frame).contains("CHOICE_B"));
@@ -137,7 +137,7 @@ fn preview_bounds_control_safety_and_resize_visibility_are_explicit() {
                     modal.key(KeyEvent::new(KeyCode::Enter, Modifiers::NONE), &keys),
                     QuestionAction::None
                 ));
-                assert!(modal.answers.is_empty());
+                assert!(super::tests::answered(&modal).is_empty());
             }
         }
     }

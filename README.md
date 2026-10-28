@@ -1832,8 +1832,20 @@ In the terminal, use Up/Down and Enter to choose. Multi-select uses Space or Ent
 to toggle checkboxes without submitting; choose **Next** to confirm, including an
 explicit empty selection. A custom answer replaces all checkbox choices and
 supports Unicode editing and paste; Enter accepts it and Shift-Enter adds a
-newline. Answers advance through the batch and submit together. Esc cancels the whole questionnaire with an
-explicit cancellation observation; the model may continue without an answer.
+newline. A single question completes directly.
+
+For multiple questions, Tab/Right and Shift-Tab/Left cycle through question tabs
+and **Review**. Confirming the last answer opens Review rather than submitting.
+Revisit any question to correct it; choices and custom text are retained. Enter
+on **Type something.** reopens its text. Checkbox changes require **Next** again;
+unanswered or edited questions cannot be submitted as a partial batch. On Review,
+use Up/Down and Enter to choose **Submit answers** or **Cancel**; PageUp/PageDown
+scroll the answers. Tab and cursor keys still edit text while custom entry is
+open; Enter confirms it before tab navigation resumes. These navigation bindings
+are configurable as `tui.question.next` and `tui.question.previous`.
+
+Esc cancels the whole questionnaire with an explicit cancellation observation;
+the model may continue without an answer.
 Ctrl-C stops the Turn. The dialog preserves the composer draft and waits for an
 existing picker, detail view or attached PTY to release input rather than stealing
 keystrokes or revoking a terminal lease.

@@ -50,7 +50,20 @@ impl QuestionModal {
             return QuestionFrame { rows, cursor: None };
         }
 
+        if self.page == super::Page::Review {
+            return self.render_review(width, height, keys, theme);
+        }
         let mut footer = vec![fit_line(&self.controls(keys), width)];
+        if self.questions.len() > 1 && !self.editing {
+            footer.push(fit_line(
+                &format!(
+                    "{} / {} question/review tabs",
+                    keys.hint(KeyAction::QuestionNext),
+                    keys.hint(KeyAction::QuestionPrevious)
+                ),
+                width,
+            ));
+        }
         if self.has_preview() {
             footer.push(fit_line(
                 &format!(
@@ -80,7 +93,7 @@ impl QuestionModal {
             width
         };
         let choices = self.choice_rows(choice_width, theme);
-        let selected_option = self.current_options().get(self.selected);
+        let selected_option = self.current_options().get(self.draft().selected);
         let requires_preview = selected_option.is_some_and(|option| option.preview.is_some());
         let mut box_rows = Vec::new();
         if rich {
@@ -132,7 +145,7 @@ impl QuestionModal {
             (row >= start && row < start + choice_budget)
                 .then_some((row - start, col.min(width - 1) as u16))
         });
-        if self.editor.is_some() {
+        if self.editing {
             self.selection_visible = cursor.is_some();
         }
         let notice = if rich && box_rows.is_empty() && requires_preview {
@@ -186,6 +199,9 @@ impl QuestionModal {
     fn choice_rows(&self, width: usize, theme: &Theme) -> Choices {
         let question = &self.questions[self.index];
         let mut content = Vec::new();
+        if self.questions.len() > 1 {
+            content.push(self.tabs(width));
+        }
         let header = question
             .header
             .as_ref()
@@ -205,9 +221,13 @@ impl QuestionModal {
         let mut selected = 0..0;
         for (index, option) in question.options.iter().enumerate() {
             let start = content.len();
-            let marker = if index == self.selected { "› " } else { "  " };
+            let marker = if index == self.draft().selected {
+                "› "
+            } else {
+                "  "
+            };
             let checkbox = if question.multi_select {
-                if self.checked.contains(&index) {
+                if self.draft().checked.contains(&index) {
                     "[x] "
                 } else {
                     "[ ] "
@@ -215,12 +235,18 @@ impl QuestionModal {
             } else {
                 ""
             };
+            let confirmed = if matches!(self.draft().confirmed, Some(ion_host::QuestionAnswer::Option { index: chosen }) if chosen == index)
+            {
+                " ✓"
+            } else {
+                ""
+            };
             push_wrapped(
                 &mut content,
-                &format!("{marker}{checkbox}{}", option.label),
+                &format!("{marker}{checkbox}{}{confirmed}", option.label),
                 width,
             );
-            if index == self.selected {
+            if index == self.draft().selected {
                 selected = start..content.len();
             }
             if let Some(description) = &option.description {
@@ -229,7 +255,7 @@ impl QuestionModal {
         }
         let synthetic = question.options.len();
         let mut start = content.len();
-        let marker = if self.selected == synthetic {
+        let marker = if self.draft().selected == synthetic {
             "› "
         } else {
             "  "
@@ -239,12 +265,12 @@ impl QuestionModal {
             &format!("{marker}{SYNTHETIC_TEXT_LABEL}"),
             width,
         );
-        if self.selected == synthetic {
+        if self.draft().selected == synthetic {
             selected = start..content.len();
         }
         if question.multi_select {
             start = content.len();
-            let marker = if self.selected == synthetic + 1 {
+            let marker = if self.draft().selected == synthetic + 1 {
                 "› "
             } else {
                 "  "
@@ -254,11 +280,12 @@ impl QuestionModal {
                 &format!("{marker}{SYNTHETIC_NEXT_LABEL}"),
                 width,
             );
-            if self.selected == synthetic + 1 {
+            if self.draft().selected == synthetic + 1 {
                 selected = start..content.len();
             }
         }
-        let cursor = self.editor.as_ref().map(|editor| {
+        let cursor = self.editing.then(|| {
+            let editor = &self.draft().text;
             content.push(String::new());
             let base = content.len();
             let window = input_window(&editor.text, editor.cursor, width - 2, MAX_EDITOR_ROWS);
@@ -271,7 +298,7 @@ impl QuestionModal {
             .into_iter()
             .enumerate()
             .map(|(index, text)| {
-                let role = if selected.contains(&index) && self.editor.is_none() {
+                let role = if selected.contains(&index) && !self.editing {
                     Role::Selected
                 } else if index < heading_rows {
                     Role::Heading
@@ -289,7 +316,7 @@ impl QuestionModal {
     }
 
     fn controls(&self, keys: &KeyBindings) -> String {
-        let controls = if self.editor.is_some() {
+        let controls = if self.editing {
             format!(
                 "{} answer · {} newline",
                 keys.hint(KeyAction::Submit),

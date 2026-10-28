@@ -1,7 +1,7 @@
 use super::*;
 use ion_host::{Question, QuestionOption};
 
-fn modal() -> QuestionModal {
+pub(super) fn modal() -> QuestionModal {
     QuestionModal::new(
         QuestionRequestId(uuid::Uuid::now_v7()),
         vec![
@@ -45,12 +45,24 @@ fn modal() -> QuestionModal {
 
 // The real caller paints between input events; use its actual renderer here,
 // rather than authorizing a choice by mutating presentation flags in fixtures.
-fn press(modal: &mut QuestionModal, key: KeyEvent, keys: &KeyBindings) -> QuestionAction {
+pub(super) fn press(
+    modal: &mut QuestionModal,
+    key: KeyEvent,
+    keys: &KeyBindings,
+) -> QuestionAction {
     modal.render(80, 24, keys, &crate::presentation_style::Theme::default());
     modal.key(key, keys)
 }
 
-fn enter() -> KeyEvent {
+pub(super) fn answered(modal: &QuestionModal) -> Vec<QuestionAnswer> {
+    modal
+        .drafts
+        .iter()
+        .filter_map(|draft| draft.confirmed.clone())
+        .collect()
+}
+
+pub(super) fn enter() -> KeyEvent {
     KeyEvent::new(KeyCode::Enter, Modifiers::NONE)
 }
 
@@ -60,14 +72,57 @@ fn unseen_or_clipped_choices_do_not_answer() {
     let theme = crate::presentation_style::Theme::default();
     let mut modal = modal();
     modal.key(enter(), &keys);
-    assert!(modal.answers.is_empty(), "an unseen choice was accepted");
+    assert!(
+        super::tests::answered(&modal).is_empty(),
+        "an unseen choice was accepted"
+    );
     modal.questions[0].options[0].label = "An option that spans several rows".into();
     modal.render(8, 1, &keys, &theme);
     modal.key(enter(), &keys);
-    assert!(modal.answers.is_empty(), "a clipped choice was accepted");
+    assert!(
+        super::tests::answered(&modal).is_empty(),
+        "a clipped choice was accepted"
+    );
     modal.render(80, 24, &keys, &theme);
     modal.key(enter(), &keys);
-    assert_eq!(modal.answers, vec![QuestionAnswer::Option { index: 0 }]);
+    assert_eq!(
+        super::tests::answered(&modal),
+        vec![QuestionAnswer::Option { index: 0 }]
+    );
+}
+
+#[test]
+fn a_batch_can_revise_an_earlier_answer_before_one_final_submission() {
+    let keys = KeyBindings::default();
+    let mut modal = modal();
+    assert!(matches!(
+        press(&mut modal, enter(), &keys),
+        QuestionAction::None
+    ));
+    assert!(
+        matches!(press(&mut modal, enter(), &keys), QuestionAction::None),
+        "the last answer must open review, not submit the batch"
+    );
+    press(
+        &mut modal,
+        KeyEvent::new(KeyCode::Tab, Modifiers::NONE),
+        &keys,
+    );
+    press(
+        &mut modal,
+        KeyEvent::new(KeyCode::Down, Modifiers::NONE),
+        &keys,
+    );
+    press(&mut modal, enter(), &keys);
+    press(
+        &mut modal,
+        KeyEvent::new(KeyCode::Right, Modifiers::NONE),
+        &keys,
+    );
+    assert!(
+        matches!(press(&mut modal, enter(), &keys), QuestionAction::Answer(_, ref answers)
+        if answers == &vec![QuestionAnswer::Option { index: 1 }, QuestionAnswer::Option { index: 0 }])
+    );
 }
 
 #[test]
@@ -82,24 +137,31 @@ fn selection_advances_across_batch_and_text_row() {
         press(&mut modal, enter(), &KeyBindings::default()),
         QuestionAction::None
     ));
-    assert_eq!(modal.answers, vec![QuestionAnswer::Option { index: 1 }]);
-    press(
-        &mut modal,
-        KeyEvent::new(KeyCode::Down, Modifiers::NONE),
-        &KeyBindings::default(),
+    assert_eq!(
+        super::tests::answered(&modal),
+        vec![QuestionAnswer::Option { index: 1 }]
     );
     press(
         &mut modal,
         KeyEvent::new(KeyCode::Down, Modifiers::NONE),
         &KeyBindings::default(),
     );
-    assert_eq!(modal.selected, 2);
+    press(
+        &mut modal,
+        KeyEvent::new(KeyCode::Down, Modifiers::NONE),
+        &KeyBindings::default(),
+    );
+    assert_eq!(modal.draft().selected, 2);
     assert!(matches!(
         press(&mut modal, enter(), &KeyBindings::default()),
         QuestionAction::None
     ));
-    assert!(modal.editor.is_some());
+    assert!(modal.editing);
     modal.paste("café 🦀");
+    assert!(matches!(
+        press(&mut modal, enter(), &KeyBindings::default()),
+        QuestionAction::None
+    ));
     assert!(
         matches!(press(&mut modal,enter(), &KeyBindings::default()), QuestionAction::Answer(_, ref answers) if answers.last() == Some(&QuestionAnswer::Text { text: "café 🦀".into() }))
     );
@@ -121,7 +183,7 @@ fn multi_select_toggles_without_advancing_until_explicit_next() {
     press(&mut modal, enter(), &KeyBindings::default());
     press(&mut modal, enter(), &KeyBindings::default()); // Undo Alpha, then select it again.
     press(&mut modal, space, &KeyBindings::default());
-    assert!(modal.answers.is_empty());
+    assert!(super::tests::answered(&modal).is_empty());
     assert_eq!(modal.index, 0);
     let rows = modal
         .render(
@@ -136,7 +198,7 @@ fn multi_select_toggles_without_advancing_until_explicit_next() {
     for _ in 0..3 {
         press(&mut modal, down, &KeyBindings::default());
     }
-    assert_eq!(modal.selected, 3);
+    assert_eq!(modal.draft().selected, 3);
     press(&mut modal, space, &KeyBindings::default()); // Next is not a checkable option.
     let rows = modal
         .render(
@@ -152,13 +214,17 @@ fn multi_select_toggles_without_advancing_until_explicit_next() {
         QuestionAction::None
     ));
     assert_eq!(
-        modal.answers,
+        super::tests::answered(&modal),
         vec![QuestionAnswer::Options {
             indices: vec![0, 1]
         }]
     );
     assert_eq!(modal.index, 1);
-    assert!(modal.checked.is_empty());
+    assert!(modal.draft().checked.is_empty());
+    assert!(matches!(
+        press(&mut modal, enter(), &KeyBindings::default()),
+        QuestionAction::None
+    ));
     assert!(
         matches!(press(&mut modal,enter(), &KeyBindings::default()), QuestionAction::Answer(_, ref answers)
         if answers == &vec![QuestionAnswer::Options { indices: vec![0,1] }, QuestionAnswer::Option { index: 0 }])
@@ -168,8 +234,10 @@ fn multi_select_toggles_without_advancing_until_explicit_next() {
 #[test]
 fn multi_select_empty_is_explicit_and_custom_text_replaces_checkboxes() {
     for custom in [false, true] {
-        let mut modal = modal();
-        modal.questions.truncate(1);
+        let modal = modal();
+        let mut questions = modal.questions;
+        questions.truncate(1);
+        let mut modal = QuestionModal::new(modal.request, questions);
         modal.questions[0].multi_select = true;
         if custom {
             press(&mut modal, enter(), &KeyBindings::default());
@@ -198,7 +266,7 @@ fn multi_select_empty_is_explicit_and_custom_text_replaces_checkboxes() {
         assert!(
             matches!(press(&mut modal,enter(), &KeyBindings::default()), QuestionAction::Answer(_, ref answers) if answers == &vec![expected])
         );
-        assert!(modal.checked.is_empty());
+        assert!(modal.draft().checked.is_empty());
     }
 }
 
@@ -223,16 +291,16 @@ fn custom_editor_is_bounded_and_preserves_exact_unicode() {
     ));
     assert!(modal.status.contains("must not be empty"));
     modal.paste("  spaced ✓  ");
-    let before = modal.editor.as_ref().unwrap().text.clone();
+    let before = modal.draft().text.text.clone();
     modal.paste(&"x".repeat(MAX_ANSWER_BYTES));
-    assert_eq!(modal.editor.as_ref().unwrap().text, before);
+    assert_eq!(modal.draft().text.text, before);
     assert!(modal.status.contains("limited"));
     assert!(matches!(
         press(&mut modal, enter(), &KeyBindings::default()),
         QuestionAction::None
     ));
     assert_eq!(
-        modal.answers[0],
+        super::tests::answered(&modal)[0],
         QuestionAnswer::Text {
             text: "    spaced ✓  ".into()
         }
@@ -257,9 +325,9 @@ fn tiny_width_disables_submission_and_never_claims_invisible_selection() {
             modal.key(enter(), &KeyBindings::default()),
             QuestionAction::None
         ));
-        assert!(modal.answers.is_empty());
+        assert!(super::tests::answered(&modal).is_empty());
         modal.paste("invisible");
-        assert!(modal.answers.is_empty());
+        assert!(super::tests::answered(&modal).is_empty());
     }
     let mut modal = modal();
     modal.render(
@@ -273,7 +341,10 @@ fn tiny_width_disables_submission_and_never_claims_invisible_selection() {
         modal.key(enter(), &KeyBindings::default()),
         QuestionAction::None
     ));
-    assert_eq!(modal.answers, vec![QuestionAnswer::Option { index: 0 }]);
+    assert_eq!(
+        super::tests::answered(&modal),
+        vec![QuestionAnswer::Option { index: 0 }]
+    );
 }
 
 #[test]
