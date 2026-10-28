@@ -326,8 +326,9 @@ impl QuestionModal {
     fn controls(&self, keys: &KeyBindings) -> String {
         let controls = if self.editing {
             format!(
-                "{} answer · {} newline",
+                "{} answer · {} editor · {} newline",
                 keys.hint(KeyAction::Submit),
+                keys.hint(KeyAction::External),
                 keys.hint(KeyAction::NewLine)
             )
         } else if self.multi_select() {

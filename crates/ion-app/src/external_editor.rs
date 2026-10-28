@@ -100,10 +100,11 @@ mod tests {
                 .await
                 .is_err()
         );
-        assert!(
-            edit_with_command("/bin/sh -c 'printf long-output > \"$0\"'", "original", 4)
-                .await
-                .is_err()
-        );
+        for command in [
+            "/bin/sh -c 'printf long-output > \"$0\"'",
+            r#"/bin/sh -c 'printf "\377" > "$0"'"#,
+        ] {
+            assert!(edit_with_command(command, "original", 4).await.is_err());
+        }
     }
 }

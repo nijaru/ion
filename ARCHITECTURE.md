@@ -1186,6 +1186,18 @@ publication revoke action visibility until repaint; Review's action labels must
 fit in the current view. This is App presentation over the existing responder,
 not a second question protocol or a persisted partial answer.
 
+Custom-text entry can hand the terminal to the configured native editor through
+App’s existing draft-editing path. The native editor owns keyboard input until
+it exits; ordinary Ion shortcuts resume afterward. Core retains the running
+operation and Host retains the same responder. On return, App checks the live
+request nonce and target question before replacing only that draft, within the
+answer byte limit and ordinary text-control filtering. Editor failure preserves
+the original text and cursor. Success invalidates confirmation and paint authority;
+explicit confirmation after fresh publication is still required. Closing an
+editor never replies, admits a Turn or changes the composer. Choices, Review and
+collapsed questions do not open the editor. This adds no managed-program backend,
+question protocol or durable partial-answer state.
+
 App can hide a waiting question to uncover the conversation, restoring primary
 scrollback in inline mode and the chat viewport in fullscreen. Visibility and
 input custody are separate: the same live request retains its drafts, cursor,
@@ -1443,8 +1455,8 @@ status hints without replacing the draft. There is no project keymap or watcher.
 Headless, RPC, other metadata commands and standalone login ignore the unused
 file; offline `doctor` explicitly validates it without acquiring the terminal.
 Mapped Stop and Unix suspend keep precedence over ordinary modal/question input.
-Masked credential input and attached-program forwarding keep their separate
-physical-control leases. Enhanced keyboards can distinguish chords that legacy
+Masked credential input, native external editors and attached-program forwarding
+keep their separate physical-control leases. Enhanced keyboards can distinguish chords that legacy
 terminal bytes alias; application configuration cannot recover those distinctions.
 Key names and examples belong in the usage guide; the registry owns defaults.
 

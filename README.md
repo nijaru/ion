@@ -887,7 +887,8 @@ returned to the editor. Normal stop/failure rules still return unaccepted input.
 Do not resubmit a prompt to repair the display; inspect the Session and effects
 first.
 Ctrl-G edits the current draft in `$VISUAL`, then `$EDITOR`, falling back to
-`vi`; Ion keeps the original draft if the editor fails. Outside detail views,
+`vi`; Ion keeps the original draft if the editor fails. The native editor owns
+keyboard input while open; close it to return to Ion’s shortcuts. Outside detail views,
 Ctrl-X or `/copy` copies the last committed assistant answer to the system
 clipboard when one is available. On remote or displayless terminals, Ion sends an OSC 52
 clipboard request, whose support depends on the terminal.
@@ -1853,6 +1854,14 @@ to toggle checkboxes without submitting; choose **Next** to confirm, including a
 explicit empty selection. A custom answer replaces all checkbox choices and
 supports Unicode editing and paste; Enter accepts it and Shift-Enter adds a
 newline. A single question completes directly.
+
+While entering custom text, Ctrl-G opens the same configured native editor.
+Returning replaces only that answer’s draft; Enter still confirms it. Failure,
+invalid UTF-8 or output exceeding the 4096-byte answer limit retains the original
+text and cursor. Other answers and the composer are unchanged. The editor owns
+keyboard input until it exits; Ion then restores the question at the current
+terminal size. Configure or disable this shortcut as `app.editor.external`.
+It does not open from choices, Review or a hidden question.
 
 For multiple questions, Tab/Right and Shift-Tab/Left cycle through question tabs
 and **Review**. Confirming the last answer opens Review rather than submitting.

@@ -9,7 +9,7 @@ use ion_terminal::{Screen, TerminalSession};
 
 use super::{
     Builtin, EditorDraft, Frontend, Picker, ProgramStatusState, TuiMode, context_label,
-    copy_last_answer, edit_draft_in_terminal,
+    copy_last_answer, edit_text_in_terminal,
     interaction::{editor_delivery, submit_editor},
     login_in_terminal, navigation, tasks, tools,
 };
@@ -174,8 +174,11 @@ pub(super) async fn dispatch_command(
         }
         CommandKind::Builtin(Builtin::Editor) if args.is_empty() => {
             ui.completion.clear();
-            match edit_draft_in_terminal(terminal, screen, ui).await? {
-                Ok(()) => ui.status = "Draft returned from editor".into(),
+            match edit_text_in_terminal(terminal, screen, &ui.draft, super::MAX_DRAFT).await? {
+                Ok(text) => {
+                    ui.replace_draft_atomic(text);
+                    ui.status = "Draft returned from editor".into();
+                }
                 Err(error) => {
                     ui.status = format!("Editor failed: {error:#}; original draft retained")
                 }

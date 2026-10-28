@@ -390,7 +390,7 @@ pub async fn chat(init: ChatInit) -> Result<()> {
                             .as_mut()
                             .expect("question owns input")
                             .key(key, &ui.keys);
-                        apply_question_action(&mut ui, questions.as_ref(), action);
+                        apply_question_action(&mut ui, questions.as_ref(), action, terminal, screen).await?;
                         poll_control = true;
                         continue;
                     }
@@ -453,7 +453,7 @@ pub async fn chat(init: ChatInit) -> Result<()> {
                             .as_mut()
                             .expect("question owns input")
                             .paste(&text);
-                        apply_question_action(&mut ui, questions.as_ref(), action);
+                        apply_question_action(&mut ui, questions.as_ref(), action, terminal, screen).await?;
                         poll_control = true;
                     } else {
                         ui.insert(&text);
@@ -653,13 +653,14 @@ fn last_committed_answer(view: &SessionView) -> Result<String> {
 
 // The outer result owns terminal lifecycle; only the editor's own failure is
 // recoverable. Never resume admission after losing input or physical output.
-async fn edit_draft_in_terminal(
+async fn edit_text_in_terminal(
     terminal: &mut TerminalSession,
     screen: &mut Screen,
-    ui: &mut Frontend,
-) -> Result<Result<()>> {
+    text: &str,
+    max_bytes: usize,
+) -> Result<Result<String>> {
     terminal.suspend().context("suspend terminal for editor")?;
-    let edited = crate::external_editor::edit(&ui.draft, MAX_DRAFT).await;
+    let edited = crate::external_editor::edit(text, max_bytes).await;
     terminal
         .resume()
         .await
@@ -667,7 +668,7 @@ async fn edit_draft_in_terminal(
     *screen = new_inline_screen(terminal)
         .await
         .context("restore inline chat after editor")?;
-    Ok(edited.map(|edited| ui.replace_draft_atomic(edited)))
+    Ok(edited)
 }
 
 fn context_label(view: &ion_core::SessionView, window: Option<u32>) -> String {
@@ -1754,21 +1755,37 @@ fn draw_question_fullscreen(
     Ok(())
 }
 
-fn apply_question_action(
+async fn apply_question_action(
     ui: &mut Frontend,
     responder: Option<&QuestionResponder>,
     action: QuestionAction,
-) {
+    terminal: &mut TerminalSession,
+    screen: &mut Screen,
+) -> Result<()> {
     match action {
         QuestionAction::None => {}
         QuestionAction::Scroll { up } => {
             ui.scroll = ui.scroll.saturating_add_signed(if up { 10 } else { -10 });
         }
+        QuestionAction::Edit {
+            request,
+            index,
+            text,
+        } => {
+            let edited =
+                edit_text_in_terminal(terminal, screen, &text, ion_host::MAX_ANSWER_BYTES).await?;
+            // Core work runs independently. The question may have expired while
+            // the native editor owned the terminal; never reuse its old lease.
+            ui.sync_question(responder);
+            if let Some(question) = &mut ui.question {
+                question.finish_external_edit(request, index, edited);
+            }
+        }
         QuestionAction::Answer(request, answers) => {
             let Some(responder) = responder else {
                 ui.question = None;
                 ui.status = "Question responder is unavailable".into();
-                return;
+                return Ok(());
             };
             match responder.answer(request, answers) {
                 Ok(()) => {
@@ -1786,7 +1803,7 @@ fn apply_question_action(
             let Some(responder) = responder else {
                 ui.question = None;
                 ui.status = "Question responder is unavailable".into();
-                return;
+                return Ok(());
             };
             match responder.cancel(request) {
                 Ok(()) => {
@@ -1801,6 +1818,7 @@ fn apply_question_action(
             }
         }
     }
+    Ok(())
 }
 
 fn notice_rows(text: &str, width: usize) -> Vec<Line<'static>> {

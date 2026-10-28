@@ -107,6 +107,7 @@ def exercise(mode, supported=True, panic=False, editor_fault=None):
         env = {key: os.environ[key] for key in ("PATH", "LANG", "LC_ALL", "TMPDIR") if key in os.environ}
         env.update(HOME=str(work / "home"), ION_HOME=str(work / "ion"), XDG_CONFIG_HOME=str(work / "config"), XDG_STATE_HOME=str(work / "state"), TERM="xterm-256color")
         marker = work / "editor-flags"
+        question_edits = work / "question-edits.jsonl"
         editor = work / "editor"
         editor.write_text(
             "#!/usr/bin/env python3\n"
@@ -117,6 +118,13 @@ def exercise(mode, supported=True, panic=False, editor_fault=None):
             " while not re.search(rb'\\x1b\\[\\?(\\d+)u',data): data+=os.read(0,128)\n"
             f" open({str(marker)!r},'w').write(re.search(rb'\\x1b\\[\\?(\\d+)u',data)[1].decode())\n"
             "finally: termios.tcsetattr(0,termios.TCSANOW,old)\n"
+            "import json,sys\nfrom pathlib import Path\n"
+            "path=Path(sys.argv[-1]); seed=path.read_text()\n"
+            "if seed.startswith('café'):\n"
+            f" log=Path({str(question_edits)!r}); first=not log.exists()\n"
+            f" with log.open('a') as out: out.write(json.dumps(dict(seed=seed,path=str(path),flags=Path({str(marker)!r}).read_text()))+'\\n')\n"
+            " if first: sys.exit(7)\n"
+            " path.write_text('\\ufeffcafé 🦀\\n')\n"
         )
         if editor_fault:
             with editor.open("a") as script:
@@ -233,7 +241,26 @@ def exercise(mode, supported=True, panic=False, editor_fault=None):
                         os.write(master, b"\x1b[B\x1b[B\x1b[B\r")  # Next confirms none.
                         until(lambda: b"Custom answer?" in output)
                         os.write(master, b"\x1b[B\x1b[B\r")
-                        os.write(master, "café 🦀".encode() + b"\x1b[D\x1d")
+                        os.write(master, "café 🦀".encode() + b"\x1b[D")
+                        checkpoint = len(output)
+                        os.write(master, b"\x07")
+                        until(lambda: b"original draft retained" in output[checkpoint:] and terminal.alternate)
+                        assert len(requests) == 3, "editor failure answered the question"
+                        edits = [json.loads(line) for line in question_edits.read_text().splitlines()]
+                        assert [edit["seed"] for edit in edits] == ["café 🦀"]
+                        # Failure retains the mid-grapheme cursor. The next
+                        # editor must see the insertion before the crab.
+                        checkpoint = len(output)
+                        os.write(master, b"bad \x07")
+                        until(lambda: b"Draft returned from editor" in output[checkpoint:] and terminal.alternate)
+                        edits = [json.loads(line) for line in question_edits.read_text().splitlines()]
+                        assert [edit["seed"] for edit in edits] == ["café 🦀", "café bad 🦀"]
+                        assert all(edit["flags"] == "4" for edit in edits), edits
+                        assert all(not Path(edit["path"]).parent.exists() for edit in edits), "editor leaked private draft files"
+                        assert len(requests) == 3, "returning edited text submitted a question"
+                        # Success replaces rather than inserts, and moves the
+                        # caret to the end. Preserve collapse/cursor coverage.
+                        os.write(master, b"\x1b[D\x1d")
                         checkpoint = len(output)
                         until(lambda: b"Question hidden" in output[checkpoint:] and terminal.alternate == (mode == "fullscreen"))
                         assert terminal.stacks[terminal.alternate][-1] == 1
@@ -280,7 +307,7 @@ def exercise(mode, supported=True, panic=False, editor_fault=None):
                 assert child.wait() == 0, output[-2000:]
             assert not terminal.alternate
             assert terminal.stacks == [[4], [8]], terminal.stacks
-            outcome = editor_fault or ('panic' if panic else 'draft/editor/modal/exit')
+            outcome = editor_fault or ('panic' if panic else 'draft/question-editor/modal/exit')
             print(f"Ion {mode} {'supported' if supported else 'unsupported'} keyboard custody {outcome}: OK")
         finally:
             release_completion.set()

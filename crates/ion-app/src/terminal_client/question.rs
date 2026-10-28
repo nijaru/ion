@@ -54,7 +54,14 @@ struct TextEditor {
 
 pub(super) enum QuestionAction {
     None,
-    Scroll { up: bool },
+    Scroll {
+        up: bool,
+    },
+    Edit {
+        request: QuestionRequestId,
+        index: usize,
+        text: String,
+    },
     Answer(QuestionRequestId, Vec<QuestionAnswer>),
     Cancel(QuestionRequestId),
 }
@@ -254,6 +261,13 @@ impl QuestionModal {
         match action {
             Some(KeyAction::Cancel) => return QuestionAction::Cancel(self.request),
             Some(KeyAction::Submit) if self.selection_visible => return self.confirm_custom(),
+            Some(KeyAction::External) => {
+                return QuestionAction::Edit {
+                    request: self.request,
+                    index: self.index,
+                    text: self.draft().text.text.clone(),
+                };
+            }
             Some(KeyAction::NewLine) => self.insert("\n"),
             Some(KeyAction::Tab) => self.insert("\t"),
             Some(KeyAction::SelectUp | KeyAction::SelectDown) => {
@@ -290,6 +304,33 @@ impl QuestionModal {
         QuestionAction::None
     }
 
+    pub(super) fn finish_external_edit(
+        &mut self,
+        request: QuestionRequestId,
+        index: usize,
+        result: anyhow::Result<String>,
+    ) {
+        if self.request != request || self.index != index || !self.editing {
+            return;
+        }
+        self.invalidate_visibility();
+        match result {
+            Ok(text) => {
+                let text = clean_text(&text);
+                let draft = self.draft_mut();
+                draft.text = TextEditor {
+                    cursor: text.len(),
+                    text,
+                };
+                draft.confirmed = None;
+                self.status = "Draft returned from editor; Enter confirms".into();
+            }
+            Err(error) => {
+                self.status = format!("Editor failed: {error:#}; original draft retained")
+            }
+        }
+    }
+
     fn confirm_custom(&mut self) -> QuestionAction {
         let text = &self.draft().text.text;
         if text.trim().is_empty() {
@@ -323,15 +364,7 @@ impl QuestionModal {
         if !self.editing {
             return;
         }
-        let clean = text
-            .chars()
-            .filter_map(|ch| match ch {
-                '\n' | '\t' => Some(ch),
-                '\r' => None,
-                ch if ch.is_control() => None,
-                ch => Some(ch),
-            })
-            .collect::<String>();
+        let clean = clean_text(text);
         if self.draft().text.text.len().saturating_add(clean.len()) > MAX_ANSWER_BYTES {
             self.status = format!("A custom answer is limited to {MAX_ANSWER_BYTES} UTF-8 bytes");
             return;
@@ -369,6 +402,14 @@ impl QuestionModal {
     }
 }
 
+fn clean_text(text: &str) -> String {
+    text.chars()
+        .filter(|ch| matches!(ch, '\n' | '\t') || !ch.is_control())
+        .collect()
+}
+
+#[cfg(test)]
+mod external_edit_tests;
 #[cfg(test)]
 mod preview_tests;
 #[cfg(test)]

@@ -35,7 +35,7 @@ actions! {
     Suspend, "app.suspend", GLOBAL, ["ctrl+z"], "Suspend the terminal job";
     Exit, "app.exit", EDIT, ["ctrl+d"], "Delete forward; exit an empty composer";
     Model, "app.model.select", COMPOSER, ["ctrl+l"], "Choose Session model";
-    External, "app.editor.external", COMPOSER, ["ctrl+g"], "Open external editor";
+    External, "app.editor.external", EDIT, ["ctrl+g"], "Open external editor";
     Paste, "app.clipboard.pasteImage", COMPOSER, ["ctrl+v"], "Paste clipboard text or image";
     Copy, "app.message.copy", COMPOSER | DETAILS, ["ctrl+x"], "Copy answer or selected tool evidence";
     Detail, "app.tools.expand", COMPOSER | DETAILS, ["ctrl+o"], "Open/close transcript details";
