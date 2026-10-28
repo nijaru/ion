@@ -306,7 +306,49 @@ with tempfile.TemporaryDirectory(prefix="ion-fork-") as temporary:
         tree_view = json.loads(ion("--session", image_session, "inspect").stdout)
         assert tree_view["entries"][:len(image_view["entries"])] == image_view["entries"], "tree rewrote original facts"
         assert len([entry for entry in tree_view["entries"] if entry["kind"] == "context_selected"]) == 2
-        print("Ion fork/clone, durable context navigation, provider affinity, terminal control and image-note restoration: OK")
+        # Export through the passive CLI after a real same-Session branch change.
+        # A hidden branch must not survive inside HTML's source or media payload.
+        selected = max(index + 1 for index, entry in enumerate(tree_view["entries"])
+                       if entry["kind"] == "assistant" and index + 1 in tree_view["context_path"])
+        ion("--session", image_session, "run", "HIDDEN_ALTERNATIVE_EXPORT")
+        rpc = subprocess.Popen([binary, "--cwd", workspace, "--session", image_session, "rpc"], env=env,
+                               stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, bufsize=0)
+        try:
+            assert json.loads(rpc.stdout.readline())["type"] == "ready"
+            rpc.stdin.write(b'{"id":"position","type":"get_context"}\n')
+            rpc.stdin.flush()
+            position = json.loads(rpc.stdout.readline())["data"]["position"]
+            rpc.stdin.write((json.dumps({"id": "select", "type": "navigate_context", "expected": position,
+                                        "head_entry": selected}) + "\n").encode())
+            rpc.stdin.flush()
+            assert json.loads(rpc.stdout.readline())["success"]
+            rpc.stdin.close()
+            assert rpc.wait(timeout=8) == 0, rpc.stderr.read()
+        finally:
+            if rpc.poll() is None:
+                rpc.kill()
+                rpc.wait(timeout=5)
+        before = json.loads(ion("--session", image_session, "inspect").stdout)
+        assert "HIDDEN_ALTERNATIVE_EXPORT" in json.dumps(before), "fixture lost the alternative"
+        before_requests = len(requests)
+        html_path = workspace / "selected branch.HTML"
+        exported_path = ion("--session", image_session, "export", html_path.name).stdout.strip()
+        assert Path(exported_path) == Path(before["cwd"]) / html_path.name, (exported_path, before["cwd"])
+        assert Path(exported_path).resolve() == html_path.resolve()
+        exported = html_path.read_text()
+        assert exported.startswith("<!DOCTYPE html>")
+        assert "HIDDEN_ALTERNATIVE_EXPORT" not in exported
+        assert original[-1]["image_url"]["url"] in exported, "HTML lost the saved image"
+        assert "FORK_OK" in exported
+        assert html_path.stat().st_mode & 0o777 == 0o600
+        refused = ion("--session", image_session, "export", html_path.name, check=False)
+        assert refused.returncode != 0 and html_path.read_text() == exported
+        text = ion("--session", image_session, "export").stdout
+        assert text.startswith("Ion transcript\n") and "[image: image/png]" in text
+        assert "HIDDEN_ALTERNATIVE_EXPORT" not in text and "data:image" not in text
+        assert json.loads(ion("--session", image_session, "inspect").stdout) == before, "export changed Session facts"
+        assert len(requests) == before_requests, "export dispatched model work"
+        print("Ion fork/clone, durable context navigation, selected HTML/text export, provider affinity, terminal control and image-note restoration: OK")
     finally:
         server.shutdown()
         server.server_close()

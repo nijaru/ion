@@ -886,12 +886,28 @@ Ctrl-G edits the current draft in `$VISUAL`, then `$EDITOR`, falling back to
 `vi`; Ion keeps the original draft if the editor fails. Outside detail views,
 Ctrl-X or `/copy` copies the last committed assistant answer to the system
 clipboard when one is available. On remote or displayless terminals, Ion sends an OSC 52
-clipboard request, whose support depends on the terminal. `/export PATH`
-saves a readable transcript to a new file; `ion --continue export` prints it
-to stdout, and `ion --continue export PATH` saves it. Export includes prompts,
-shell commands and tool output, so review it before sharing. Image inputs are
-shown as markers rather than inline bytes; an existing target file is not
-overwritten.
+clipboard request, whose support depends on the terminal.
+
+`/export` saves an offline HTML snapshot to a new `ion-session-UUID.html` file
+in the Session working directory. `/export "shared transcript.html"` chooses a
+path; `/export transcript.txt` saves plain text instead. From the CLI,
+`ion --continue export transcript.html` saves HTML and `ion --continue export`
+prints plain text to stdout. File extensions `.html` and `.htm` select HTML
+(case-insensitive); other extensions select text. Relative paths use the saved
+Session working directory. Existing files and symlinks are never overwritten;
+repeated pathless terminal exports create separate snapshots.
+
+Both formats contain only committed facts on the selected context path, not
+hidden alternative branches or provisional streaming text. HTML renders assistant
+Markdown and retains its literal source, embeds saved input/tool images, and
+keeps thinking in expandable sections. User text, tool arguments and results
+remain literal. Raw HTML is inert; the document runs no scripts and loads no
+remote resources. Markdown image URLs are shown as text, not fetched; ordinary
+links remain user-initiated navigation. Plain text retains original Markdown and
+image markers without image bytes. Export includes prompts, thinking, paths,
+shell commands, tool output and, in HTML, saved images—even output withheld from
+model context. Review the artifact before sharing it. Export is a local snapshot,
+not an upload or a restorable Session backup.
 In the terminal, `!command` runs a shell command in the live working
 directory and shares the command and its outcome with later model context.
 `!!command` runs it without sharing the command or outcome with the model.

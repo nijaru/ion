@@ -305,6 +305,20 @@ and old opaque continuation; historical context is not current executor authorit
 Human conversation/export and model context follow the selected path; inspection
 and evidence retrieval retain original global coordinates and all alternatives.
 
+Text and offline HTML exports share one App-owned interpretation of committed
+selected-path facts. Export is passive: it creates no Turn, execution or grant,
+and includes no provisional stream, inactive-branch payload or opaque provider
+continuation. HTML retains literal assistant source alongside safe Markdown,
+embeds typed saved images (including model-withheld tool observations), and keeps
+user/tool content literal. Model text is never trusted HTML or executable code;
+no document scripts or automatic remote resources are allowed. Browser styling
+is independent of terminal palettes. Text stdout remains text; HTML file
+extensions select HTML. The terminal's pathless export creates a unique HTML
+snapshot in the Session directory. All file exports use private create-new
+publication, never overwrite an existing file or symlink, and preserve raw
+observed/not-dispatched/unknown distinctions. Artifacts require human review
+before sharing; they are neither uploads nor recoverable Session backups.
+
 ## Managed delegation and coordination
 
 A managed subagent uses an ordinary Session and explicit owned runs. Record each

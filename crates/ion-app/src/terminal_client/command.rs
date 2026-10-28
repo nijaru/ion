@@ -365,8 +365,16 @@ pub(super) fn handle_builtin(
             ));
         }
         Builtin::Export => {
-            anyhow::ensure!(!args.is_empty(), "use /export PATH");
-            let target = Path::new(args);
+            let requested = if args.is_empty() {
+                format!("ion-session-{}.html", uuid::Uuid::now_v7())
+            } else if args.starts_with(['"', '\'']) {
+                let mut paths = shlex::split(args).context("export path has unclosed quotes")?;
+                anyhow::ensure!(paths.len() == 1, "use /export [PATH]; quote a single path");
+                paths.remove(0)
+            } else {
+                args.to_owned()
+            };
+            let target = Path::new(&requested);
             let target = if target.is_absolute() {
                 target.to_owned()
             } else {

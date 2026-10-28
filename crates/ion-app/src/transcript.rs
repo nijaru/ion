@@ -1,33 +1,58 @@
-//! Readable export of committed Session facts for a user-controlled file or pipe.
+//! Selected, committed Session facts exported as text or offline HTML.
 use std::{
-    fmt::Write as _,
     fs::OpenOptions,
     io::{self, Write},
     os::unix::fs::OpenOptionsExt,
     path::Path,
 };
 
-use ion_ai::{Content, Message};
+use ion_ai::{Content, ImageContent, Message, Role};
 use ion_core::{SessionEntry, SessionView};
 
+mod html;
+#[cfg(test)]
+mod tests;
+mod text;
+
+/// The two renderers consume this same fact walk; neither interprets Session state.
+trait Document {
+    fn metadata(&mut self, label: &str, value: &str);
+    fn heading(&mut self, value: &str);
+    fn label(&mut self, value: &str);
+    fn literal(&mut self, value: &str);
+    fn markdown(&mut self, value: &str);
+    fn thinking(&mut self, value: &str);
+    fn image(&mut self, image: &ImageContent);
+    fn finish(self) -> String;
+
+    fn json(&mut self, value: &serde_json::Value) {
+        self.literal(&serde_json::to_string_pretty(value).expect("JSON values serialize"));
+    }
+}
+
 pub fn render(view: &SessionView) -> String {
-    let mut text = String::from("Ion transcript\n");
+    document(view, text::Text::new())
+}
+
+fn document(view: &SessionView, mut doc: impl Document) -> String {
+    doc.metadata("Session", &view.id.to_string());
     if let Some(cwd) = &view.cwd {
-        let _ = writeln!(text, "Directory: {}", cwd.display());
+        doc.metadata("Directory", &cwd.display().to_string());
     }
     if let Some(name) = &view.name {
-        let _ = writeln!(text, "Name: {name}");
+        doc.metadata("Name", name);
     }
     if view
         .entries
         .iter()
         .any(|entry| matches!(entry, SessionEntry::ContextSelected { .. }))
     {
-        let _ = writeln!(
-            text,
-            "Session: {}\nSelected context: through entry {} (other paths omitted; selection does not restore files)",
-            view.id,
-            view.context_position().head_entry
+        doc.metadata(
+            "Selected context",
+            &format!(
+                "through entry {} (other paths omitted; selection does not restore files)",
+                view.context_position().head_entry
+            ),
         );
     }
     let selected: std::collections::BTreeSet<_> = view.context_path.iter().copied().collect();
@@ -37,11 +62,7 @@ pub fn render(view: &SessionView) -> String {
         }
         match entry {
             SessionEntry::Completion { turn, notices } => {
-                let _ = writeln!(
-                    text,
-                    "\n{}",
-                    crate::transcript_render::readiness_text(*turn, notices)
-                );
+                doc.heading(&crate::transcript_render::readiness_text(*turn, notices));
             }
             SessionEntry::TurnStarted {
                 turn,
@@ -49,67 +70,62 @@ pub fn render(view: &SessionView) -> String {
                 completion,
                 ..
             } => {
-                if !completion.is_empty() {
-                    let _ = writeln!(
-                        text,
-                        "\n{}",
-                        crate::transcript_render::readiness_text(*turn, completion)
-                    );
-                    continue;
+                if completion.is_empty() {
+                    doc.heading(&format!("Turn {turn} · user"));
+                    message(&mut doc, input);
+                } else {
+                    doc.heading(&crate::transcript_render::readiness_text(*turn, completion));
                 }
-                let _ = write!(text, "\nTurn {turn} · user\n");
-                message(&mut text, input);
             }
             SessionEntry::Steering { input, .. } => {
-                let _ = write!(text, "\nSteering\n");
-                message(&mut text, input);
+                doc.heading("Steering");
+                message(&mut doc, input);
             }
             SessionEntry::Assistant {
                 message: answer, ..
             } => {
-                let _ = write!(text, "\nAssistant\n");
-                message(&mut text, answer);
+                doc.heading("Assistant");
+                message(&mut doc, answer);
             }
             SessionEntry::ToolResult { result, .. } => {
                 let output = result.outcome.inspection_output();
-                let _ = writeln!(
-                    text,
-                    "\nTool result · {} · {}",
-                    result.name,
-                    match &result.outcome {
-                        ion_core::ToolOutcome::Observed { output, .. } =>
-                            if output.is_error {
-                                "error"
-                            } else {
-                                "ok"
-                            },
-                        ion_core::ToolOutcome::NotDispatched { .. } => "not dispatched",
-                        ion_core::ToolOutcome::Unknown => "external effect unknown",
+                let state = match &result.outcome {
+                    ion_core::ToolOutcome::Observed { output, .. } => {
+                        if output.is_error {
+                            "error"
+                        } else {
+                            "ok"
+                        }
                     }
-                );
+                    ion_core::ToolOutcome::NotDispatched { .. } => "not dispatched",
+                    ion_core::ToolOutcome::Unknown => "external effect unknown",
+                };
+                doc.heading(&format!(
+                    "Tool result · {} · {} · {state}",
+                    result.name, result.call_id
+                ));
                 if let Some(notice) = result
                     .outcome
                     .projection()
                     .and_then(ion_core::ToolResultProjection::notice)
                 {
-                    let _ = writeln!(text, "  {notice}");
+                    doc.literal(notice);
                 }
-                json_value(&mut text, &output.value);
+                doc.json(&output.value);
                 for image in &output.images {
-                    let _ = writeln!(text, "  [image: {}]", image.mime_type().as_str());
+                    doc.image(image);
                 }
             }
             SessionEntry::ChildToolAdmitted { intent, .. } => {
-                let _ = writeln!(
-                    text,
-                    "\nChild tool · {} · {} · parent {}:{} · child {}",
+                doc.heading(&format!(
+                    "Child tool · {} · {} · parent {}:{} · child {}",
                     intent.call.name,
                     intent.call.id,
                     intent.parent.assistant_entry,
                     intent.parent.ordinal,
                     intent.child
-                );
-                json_value(&mut text, &intent.call.arguments);
+                ));
+                doc.json(&intent.call.arguments);
             }
             SessionEntry::ChildToolResult {
                 parent,
@@ -118,26 +134,24 @@ pub fn render(view: &SessionView) -> String {
                 ..
             } => {
                 let output = outcome.clone().inspection_output();
-                let _ = writeln!(
-                    text,
-                    "\nChild result · parent {}:{} · child {} · {}",
-                    parent.assistant_entry,
-                    parent.ordinal,
-                    child,
-                    match outcome {
-                        ion_core::ChildOutcome::Observed { .. } =>
-                            if output.is_error {
-                                "error"
-                            } else {
-                                "ok"
-                            },
-                        ion_core::ChildOutcome::NotDispatched { .. } => "not dispatched",
-                        ion_core::ChildOutcome::Unknown => "external effect unknown",
+                let state = match outcome {
+                    ion_core::ChildOutcome::Observed { .. } => {
+                        if output.is_error {
+                            "error"
+                        } else {
+                            "ok"
+                        }
                     }
-                );
-                json_value(&mut text, &output.value);
+                    ion_core::ChildOutcome::NotDispatched { .. } => "not dispatched",
+                    ion_core::ChildOutcome::Unknown => "external effect unknown",
+                };
+                doc.heading(&format!(
+                    "Child result · parent {}:{} · child {} · {state}",
+                    parent.assistant_entry, parent.ordinal, child
+                ));
+                doc.json(&output.value);
                 for image in &output.images {
-                    let _ = writeln!(text, "  [image: {}]", image.mime_type().as_str());
+                    doc.image(image);
                 }
             }
             SessionEntry::UserShellAdmitted {
@@ -145,37 +159,35 @@ pub fn render(view: &SessionView) -> String {
                 exclude_from_context,
             } => {
                 let outcome = view.user_shell_outcome(entry_index as u64 + 1);
-                let _ = writeln!(
-                    text,
-                    "\nUser shell · {} · {}\n$ {command}",
+                let state = match outcome {
+                    ion_core::UserShellOutcome::Observed { is_error: true, .. } => "error",
+                    ion_core::UserShellOutcome::Observed { .. } => "ok",
+                    ion_core::UserShellOutcome::Unknown => "external effect unknown",
+                };
+                doc.heading(&format!(
+                    "User shell · {} · {state}",
                     if *exclude_from_context {
                         "not shared with model"
                     } else {
                         "shared with model"
-                    },
-                    match outcome {
-                        ion_core::UserShellOutcome::Observed { is_error: true, .. } => "error",
-                        ion_core::UserShellOutcome::Observed { .. } => "ok",
-                        ion_core::UserShellOutcome::Unknown => "external effect unknown",
                     }
-                );
+                ));
+                doc.literal(&format!("$ {command}"));
                 match outcome {
-                    ion_core::UserShellOutcome::Observed { output, .. } => {
-                        json_value(&mut text, output)
-                    }
+                    ion_core::UserShellOutcome::Observed { output, .. } => doc.json(output),
                     ion_core::UserShellOutcome::Unknown => {
-                        let _ = writeln!(text, "{}", ion_core::UserShellOutcome::unknown_notice());
+                        doc.literal(ion_core::UserShellOutcome::unknown_notice())
                     }
                 }
             }
             SessionEntry::TurnEnded { reason, .. } => {
-                let _ = writeln!(text, "\nTurn ended · {reason:?}");
+                doc.heading(&format!("Turn ended · {reason:?}"))
             }
             SessionEntry::Compacted { through_entry, .. } => {
-                let _ = writeln!(text, "\nContext summarized through entry {through_entry}");
+                doc.heading(&format!("Context summarized through entry {through_entry}"))
             }
             SessionEntry::ProviderReplayRebased { .. } => {
-                let _ = writeln!(text, "\nProvider reasoning context reset");
+                doc.heading("Provider reasoning context reset")
             }
             SessionEntry::ContextSelected { .. }
             | SessionEntry::CacheWarm { .. }
@@ -191,134 +203,58 @@ pub fn render(view: &SessionView) -> String {
             | SessionEntry::ChildSessionOf { .. } => {}
         }
     }
-    text.chars()
-        .map(|ch| {
-            if ch == '\n' || ch == '\t' || !ch.is_control() {
-                ch
-            } else {
-                '�'
-            }
-        })
-        .collect()
+    doc.finish()
 }
 
-fn message(text: &mut String, message: &Message) {
+fn message(doc: &mut impl Document, message: &Message) {
     for part in &message.content {
         match part {
-            Content::Thinking(value) => {
-                let _ = writeln!(text, "  Thinking:");
-                for line in value.lines() {
-                    let _ = writeln!(text, "    {line}");
-                }
-            }
-            Content::Text(value) => {
-                for line in value.lines() {
-                    let _ = writeln!(text, "  {line}");
-                }
-            }
-            Content::Image(image) => {
-                let _ = writeln!(text, "  [image: {}]", image.mime_type().as_str());
-            }
+            Content::Thinking(value) => doc.thinking(value),
+            Content::Text(value) if message.role == Role::Assistant => doc.markdown(value),
+            Content::Text(value) => doc.literal(value),
+            Content::Image(image) => doc.image(image),
             Content::ToolCall(call) => {
-                let _ = writeln!(text, "  Tool call · {} · {}", call.name, call.id);
-                json_value(text, &call.arguments);
+                doc.label(&format!("Tool call · {} · {}", call.name, call.id));
+                doc.json(&call.arguments);
             }
             Content::ToolResult(result) => {
-                let _ = writeln!(text, "  Tool result · {} · {}", result.name, result.call_id);
-                json_value(text, &result.result);
+                doc.label(&format!(
+                    "Tool result · {} · {}",
+                    result.name, result.call_id
+                ));
+                doc.json(&result.result);
                 for image in &result.images {
-                    let _ = writeln!(text, "  [image: {}]", image.mime_type().as_str());
+                    doc.image(image);
                 }
             }
         }
     }
 }
 
-fn json_value(text: &mut String, value: &serde_json::Value) {
-    let rendered = serde_json::to_string_pretty(value).unwrap_or_else(|_| value.to_string());
-    for line in rendered.lines() {
-        let _ = writeln!(text, "  {line}");
-    }
-}
-
 pub fn save_new(view: &SessionView, path: &Path) -> io::Result<()> {
+    let is_html = path
+        .extension()
+        .and_then(|value| value.to_str())
+        .is_some_and(|value| {
+            value.eq_ignore_ascii_case("html") || value.eq_ignore_ascii_case("htm")
+        });
+    let content = if is_html {
+        document(view, html::Html::new())
+    } else {
+        render(view)
+    };
     let mut file = OpenOptions::new()
         .write(true)
         .create_new(true)
         .mode(0o600)
         .open(path)?;
-    if let Err(error) = file.write_all(render(view).as_bytes()) {
-        drop(file);
-        let _ = std::fs::remove_file(path);
-        return Err(error);
-    }
-    if let Err(error) = file.sync_all() {
+    if let Err(error) = file
+        .write_all(content.as_bytes())
+        .and_then(|()| file.sync_all())
+    {
         drop(file);
         let _ = std::fs::remove_file(path);
         return Err(error);
     }
     Ok(())
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use ion_ai::{Message, Role};
-    use ion_core::TurnEndReason;
-    use std::path::PathBuf;
-
-    #[test]
-    fn export_marks_images_without_emitting_payloads() {
-        let image = serde_json::from_value(serde_json::json!({
-            "mime_type":"image/png",
-            "data":"iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGP4z8DwHwAFAAH/iZk9HQAAAABJRU5ErkJggg=="
-        }))
-        .unwrap();
-        let view = SessionView {
-            id: Default::default(),
-            cwd: Some(PathBuf::from("/tmp/project")),
-            name: None,
-            entries: vec![
-                SessionEntry::TurnStarted {
-                    completion: Vec::new(),
-                    turn: 1,
-                    input: Message {
-                        role: Role::User,
-                        content: vec![
-                            Content::Text("inspect\u{1b}[31m this".into()),
-                            Content::Image(image),
-                        ],
-                        provider_replay: None,
-                    },
-                    model: ion_ai::ModelRef {
-                        provider: "test".into(),
-                        model: "test".into(),
-                    },
-                    request: None,
-                    recovery: None,
-                },
-                SessionEntry::TurnEnded {
-                    turn: 1,
-                    reason: TurnEndReason::Cancelled,
-                },
-            ],
-            context_path: vec![1, 2],
-            messages: vec![],
-            unfinished_turn: None,
-            unfinished_user_shell: None,
-            last_end: None,
-            last_model: None,
-            reasoning: ion_ai::Reasoning::ProviderDefault,
-            last_effective_model: None,
-            last_context: None,
-            compacted_through: None,
-            last_execution: None,
-            last_usage: None,
-        };
-        let rendered = render(&view);
-        assert!(rendered.contains("[image: image/png]"));
-        assert!(!rendered.contains("iVBORw0KGgo"));
-        assert!(!rendered.contains('\u{1b}'));
-        assert!(rendered.contains("Cancelled"));
-    }
 }

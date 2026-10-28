@@ -131,7 +131,7 @@ pub(crate) enum Action {
     Inspect,
     /// Show recorded Session token usage, not account billing or quota.
     Usage,
-    /// Print a readable committed transcript, or save it to a new file.
+    /// Print a text transcript, or save a new file (.html for offline HTML).
     Export { path: Option<PathBuf> },
     /// List numbered Turns in a saved Session.
     Turns,

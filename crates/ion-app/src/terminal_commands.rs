@@ -59,7 +59,7 @@ commands! {
     Image => (Editor, "image", "PATH", "Attach an image to the next input"),
     Copy => (Editor, "copy", "", "Copy the last completed answer"),
     Editor => (Editor, "editor", "", "Edit the draft in an external editor"),
-    Export => (Editor, "export", "PATH", "Save a readable transcript"),
+    Export => (Editor, "export", "[PATH]", "Save offline HTML (.html), or a text transcript"),
     Skills => (Resources, "skills", "", "List available skills"),
     Prompts => (Resources, "prompts", "", "List available prompt templates"),
     Commands => (Resources, "commands", "", "List enabled executable user commands"),

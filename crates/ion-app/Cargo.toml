@@ -15,7 +15,7 @@ ion-ai.workspace = true
 ion-core.workspace = true
 ion-host.workspace = true
 ion-terminal.workspace = true
-pulldown-cmark = { version = "0.13.4", default-features = false }
+pulldown-cmark = { version = "0.13.4", default-features = false, features = ["html"] }
 ratatui = "0.30.2"
 rustix = { version = "1.1.4", features = ["fs", "termios"] }
 serde = { version = "1.0.229", features = ["derive"] }
