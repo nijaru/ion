@@ -54,6 +54,66 @@ fn review_requires_confirmation_and_preserves_unsent_checkbox_edits() {
 }
 
 #[test]
+fn collapse_preserves_confirmed_none_custom_cursor_and_review() {
+    let keys = KeyBindings::default();
+    let theme = Theme::default();
+    let collapse = KeyEvent::new(KeyCode::Char(']'), Modifiers::CONTROL);
+    let mut modal = modal();
+    modal.questions[0].multi_select = true;
+    for _ in 0..3 {
+        press(&mut modal, key(KeyCode::Down), &keys);
+    }
+    press(&mut modal, enter(), &keys); // Explicit none.
+    for _ in 0..2 {
+        press(&mut modal, key(KeyCode::Down), &keys);
+    }
+    press(&mut modal, enter(), &keys);
+    modal.paste("café🦀");
+    press(&mut modal, key(KeyCode::Left), &keys);
+    press(&mut modal, collapse, &keys);
+    modal.paste("hidden");
+    modal.key(key(KeyCode::Char('x')), &keys);
+    assert!(matches!(
+        modal.key(key(KeyCode::PageUp), &keys),
+        QuestionAction::Scroll { up: true }
+    ));
+    modal.render(1, 1, &keys, &theme);
+    modal.key(collapse, &keys); // Reopen even when the underlying viewport is tiny.
+    modal.render(80, 24, &keys, &theme);
+    modal.paste("!"); // Same grapheme cursor, not the end of the retained text.
+    press(&mut modal, enter(), &keys);
+    press(&mut modal, collapse, &keys); // Review is collapsible too.
+    assert!(matches!(modal.key(enter(), &keys), QuestionAction::None));
+    assert!(matches!(
+        modal.key(key(KeyCode::Tab), &keys),
+        QuestionAction::None
+    ));
+    modal.key(collapse, &keys);
+    assert!(matches!(modal.key(enter(), &keys), QuestionAction::None));
+    assert!(
+        matches!(press(&mut modal, enter(), &keys), QuestionAction::Answer(_, answers)
+        if answers == vec![QuestionAnswer::Options { indices: vec![] },
+            QuestionAnswer::Text { text: "café!🦀".into() }])
+    );
+}
+
+#[test]
+fn collapsed_cancel_remains_available_without_visible_choices() {
+    let keys = KeyBindings::default();
+    let mut modal = modal();
+    let request = modal.request();
+    press(
+        &mut modal,
+        KeyEvent::new(KeyCode::Char(']'), Modifiers::CONTROL),
+        &keys,
+    );
+    modal.render(1, 1, &keys, &Theme::default());
+    assert!(
+        matches!(modal.key(key(KeyCode::Esc), &keys), QuestionAction::Cancel(id) if id == request)
+    );
+}
+
+#[test]
 fn custom_text_survives_revisits_and_text_keys_do_not_switch_tabs() {
     let keys = KeyBindings::default();
     let mut modal = modal();

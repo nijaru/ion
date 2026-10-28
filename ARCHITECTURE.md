@@ -1186,6 +1186,15 @@ publication revoke action visibility until repaint; Review's action labels must
 fit in the current view. This is App presentation over the existing responder,
 not a second question protocol or a persisted partial answer.
 
+App can hide a waiting question to uncover the conversation, restoring primary
+scrollback in inline mode and the chat viewport in fullscreen. Visibility and
+input custody are separate: the same live request retains its drafts, cursor,
+confirmations and review/preview position. Hidden input cannot edit the composer,
+change answers or submit; read-only conversation scrolling, reopen, batch cancel
+and Turn stop remain available. Both hiding and reopening revoke answer-paint
+authority until fresh publication. This state is terminal-local, not a Host
+request change, saved preference, reply, new Turn or authority grant.
+
 Only one batch may wait on a control owner; concurrent asks fail explicitly rather than queue behind
 an unseen dialog. A non-clone responder lease and request nonce authorize the
 reply; display coordinates or copied origins alone do not. The optional question

@@ -51,6 +51,7 @@ actions! {
     SelectUp, "tui.select.up", SELECT, ["up"], "Move up in completion or modal input";
     SelectDown, "tui.select.down", SELECT, ["down"], "Move down in completion or modal input";
     Toggle, "tui.select.toggle", PICKER | CHOICE, ["space"], "Toggle a setting or multi-select option";
+    QuestionCollapse, "tui.question.toggleCollapsed", CHOICE | TEXT, ["ctrl+]"], "Hide/reopen the pending question without releasing input";
     QuestionNext, "tui.question.next", CHOICE, ["tab", "right"], "Next question or batch review";
     QuestionPrevious, "tui.question.previous", CHOICE, ["shift+tab", "left"], "Previous question or batch review";
     CursorUp, "tui.editor.cursorUp", COMPOSER, ["up"], "Move up; browse history at first line";

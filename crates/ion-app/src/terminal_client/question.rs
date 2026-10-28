@@ -19,6 +19,7 @@ pub(super) struct QuestionModal {
     index: usize,
     page: Page,
     editing: bool,
+    collapsed: bool,
     status: String,
     too_small: bool,
     selection_visible: bool,
@@ -53,6 +54,7 @@ struct TextEditor {
 
 pub(super) enum QuestionAction {
     None,
+    Scroll { up: bool },
     Answer(QuestionRequestId, Vec<QuestionAnswer>),
     Cancel(QuestionRequestId),
 }
@@ -66,6 +68,7 @@ impl QuestionModal {
             index: 0,
             page: Page::Question,
             editing: false,
+            collapsed: false,
             status: String::new(),
             too_small: false,
             selection_visible: false,
@@ -93,9 +96,39 @@ impl QuestionModal {
         self.status = status;
     }
 
+    pub(super) fn is_collapsed(&self) -> bool {
+        self.collapsed
+    }
+
+    pub(super) fn collapsed_hint(keys: &KeyBindings) -> String {
+        format!(
+            "Question hidden · {} reopen · {} cancel",
+            keys.hint(KeyAction::QuestionCollapse),
+            keys.hint(KeyAction::Cancel),
+        )
+    }
+
     pub(super) fn key(&mut self, key: KeyEvent, keys: &KeyBindings) -> QuestionAction {
-        let context = if self.editing { TEXT } else { CHOICE };
+        let context = if self.editing && !self.collapsed {
+            TEXT
+        } else {
+            CHOICE
+        };
         let action = keys.action(context, key);
+        if action == Some(KeyAction::QuestionCollapse) {
+            self.collapsed = !self.collapsed;
+            self.invalidate_visibility();
+            return QuestionAction::None;
+        }
+        if self.collapsed {
+            return match action {
+                Some(KeyAction::Cancel) => QuestionAction::Cancel(self.request),
+                Some(KeyAction::PageUp | KeyAction::PageDown) => QuestionAction::Scroll {
+                    up: action == Some(KeyAction::PageUp),
+                },
+                _ => QuestionAction::None,
+            };
+        }
         if self.too_small && action != Some(KeyAction::Cancel) {
             return QuestionAction::None;
         }
@@ -148,7 +181,7 @@ impl QuestionModal {
     }
 
     pub(super) fn paste(&mut self, text: &str) -> QuestionAction {
-        if self.too_small || self.page == Page::Review {
+        if self.collapsed || self.too_small || self.page == Page::Review {
             return QuestionAction::None;
         }
         if !self.editing {

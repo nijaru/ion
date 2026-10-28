@@ -40,6 +40,14 @@ impl QuestionModal {
         let height = usize::from(height.max(1));
         self.too_small = width < 8;
         self.selection_visible = false;
+        if self.collapsed {
+            let mut rows = vec![Line::raw(""); height];
+            rows[0] = Line::styled(
+                fit_line(&Self::collapsed_hint(keys), width),
+                theme.style(Role::Secondary),
+            );
+            return QuestionFrame { rows, cursor: None };
+        }
         if self.too_small {
             let mut notice = Vec::new();
             push_wrapped(&mut notice, "Resize terminal to answer", width);
@@ -339,7 +347,8 @@ impl QuestionModal {
             )
         };
         format!(
-            "{controls} · {} cancel · {} stops Turn",
+            "{} hide · {controls} · {} cancel · {} stops Turn",
+            keys.hint(KeyAction::QuestionCollapse),
             keys.hint(KeyAction::Cancel),
             keys.hint(KeyAction::Interrupt)
         )

@@ -1860,6 +1860,14 @@ scroll the answers. Tab and cursor keys still edit text while custom entry is
 open; Enter confirms it before tab navigation resumes. These navigation bindings
 are configurable as `tui.question.next` and `tui.question.previous`.
 
+Ctrl-] hides/reopens the question so you can read the conversation without
+answering or cancelling. Drafts, cursor, choices and Review position are retained.
+While hidden, typing, paste and Enter cannot edit the composer or submit answers;
+PageUp/PageDown scroll the fullscreen conversation, and inline native scrollback
+is available again. Esc still cancels the batch and Ctrl-C stops the Turn.
+Configure or disable the toggle as `tui.question.toggleCollapsed` in keybindings.
+Reopening requires the choices to be painted again before confirmation.
+
 Esc cancels the whole questionnaire with an explicit cancellation observation;
 the model may continue without an answer.
 Ctrl-C stops the Turn. The dialog preserves the composer draft and waits for an

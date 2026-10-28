@@ -247,7 +247,8 @@ fn custom_question_controls_share_editing_without_accepting_clipped_answers() {
         "app.session.toggleNamedFilter":[],
         "tui.select.cancel":"alt+x",
         "tui.input.submit":"alt+s",
-        "tui.input.newLine":"ctrl+r"
+        "tui.input.newLine":"ctrl+r",
+        "tui.question.toggleCollapsed":"alt+q"
     }"#,
     )
     .unwrap();
@@ -284,6 +285,22 @@ fn custom_question_controls_share_editing_without_accepting_clipped_answers() {
     }
     question.key(KeyEvent::new(KeyCode::Char('r'), Modifiers::CONTROL), &keys);
     question.paste("next");
+    question.key(KeyEvent::new(KeyCode::Char(']'), Modifiers::CONTROL), &keys);
+    assert!(
+        !question.is_collapsed(),
+        "replaced default binding remained active"
+    );
+    question.key(KeyEvent::new(KeyCode::Char('q'), Modifiers::ALT), &keys);
+    assert!(question.is_collapsed());
+    assert!(matches!(
+        question.key(KeyEvent::new(KeyCode::Char('s'), Modifiers::ALT), &keys),
+        QuestionAction::None
+    ));
+    question.key(KeyEvent::new(KeyCode::Char('q'), Modifiers::ALT), &keys);
+    assert!(matches!(
+        question.key(KeyEvent::new(KeyCode::Char('s'), Modifiers::ALT), &keys),
+        QuestionAction::None
+    ));
     question.render(80, 24, &keys, &crate::presentation_style::Theme::default());
     assert!(matches!(
         question.key(KeyEvent::new(KeyCode::Enter, Modifiers::NONE), &keys),

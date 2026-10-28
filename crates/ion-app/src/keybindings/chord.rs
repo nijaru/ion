@@ -73,7 +73,10 @@ impl Chord {
             event.modifiers |= Modifiers::SHIFT;
         }
         if let KeyCode::Char(ch) = event.code {
-            if ch == '\x1f' {
+            if ch == '\x1d' {
+                event.code = KeyCode::Char(']');
+                event.modifiers |= Modifiers::CONTROL;
+            } else if ch == '\x1f' {
                 event.code = KeyCode::Char('-');
                 event.modifiers |= Modifiers::CONTROL;
             } else if ch.is_ascii_uppercase() {
@@ -163,6 +166,14 @@ mod tests {
     #[test]
     fn aliases_retain_legacy_undo_and_extended_shift_semantics() {
         for (text, event) in [
+            (
+                "ctrl+]",
+                KeyEvent::new(KeyCode::Char('\x1d'), Modifiers::NONE),
+            ),
+            (
+                "ctrl+alt+]",
+                KeyEvent::new(KeyCode::Char('\x1d'), Modifiers::ALT),
+            ),
             (
                 "ctrl+-",
                 KeyEvent::new(KeyCode::Char('\x1f'), Modifiers::NONE),

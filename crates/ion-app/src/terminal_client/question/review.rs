@@ -208,7 +208,8 @@ impl QuestionModal {
         rows[height - 2] = Line::styled(
             fit_line(
                 &format!(
-                    "{} / {} tabs · {} / {} choose · {} select",
+                    "{} hide · {} / {} tabs · {} / {} choose · {} select",
+                    keys.hint(KeyAction::QuestionCollapse),
                     keys.hint(KeyAction::QuestionNext),
                     keys.hint(KeyAction::QuestionPrevious),
                     keys.hint(KeyAction::SelectUp),

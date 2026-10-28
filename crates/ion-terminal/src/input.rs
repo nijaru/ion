@@ -1136,6 +1136,8 @@ mod tests {
             (b"\t", KeyCode::Tab, Modifiers::NONE),
             (b"\n", KeyCode::Enter, Modifiers::NONE),
             (b"\r", KeyCode::Enter, Modifiers::NONE),
+            (b"\x1d", KeyCode::Char('\x1d'), Modifiers::NONE),
+            (b"\x1b[93;5u", KeyCode::Char(']'), Modifiers::CONTROL),
             (b"\x1b[104;5u", KeyCode::Char('h'), Modifiers::CONTROL),
             (b"\x1b[105;5u", KeyCode::Char('i'), Modifiers::CONTROL),
             (b"\x1b[106;5u", KeyCode::Char('j'), Modifiers::CONTROL),

@@ -788,6 +788,14 @@ impl Frontend {
         self.question.is_some() && self.details.is_none() && self.pickers.active().is_none()
     }
 
+    fn question_visible(&self) -> bool {
+        self.question_owns_input()
+            && self
+                .question
+                .as_ref()
+                .is_some_and(|question| !question.is_collapsed())
+    }
+
     fn attach_image(&mut self, image: ImageSource) {
         self.reset_edit_baseline();
         self.images.push(image);
@@ -1318,7 +1326,7 @@ async fn prepare_draw(
     screen: &mut Screen,
     ui: &Frontend,
 ) -> Result<Option<(u16, u16, bool)>> {
-    if ui.question_owns_input()
+    if ui.question_visible()
         || ui.details.is_some()
         || ui.pickers.active().is_some()
         || ui.mode == TuiMode::Fullscreen
@@ -1376,7 +1384,7 @@ fn draw_prepared(
     if ui.details.is_some() || ui.pickers.active().is_some() {
         return draw_modal_fullscreen(terminal, screen, ui, progress, operation, width, height);
     }
-    if ui.question_owns_input() {
+    if ui.question_visible() {
         return draw_question_fullscreen(terminal, screen, ui, width, height);
     }
     if ui.mode == TuiMode::Fullscreen {
@@ -1487,7 +1495,7 @@ fn draw_prepared(
     live_rows.extend(footer);
 
     let desired_live_height = live_rows.len().clamp(1, row_budget);
-    let cursor = Some((
+    let cursor = (!ui.question_owns_input()).then_some((
         cursor_row,
         composer.cursor_col.min(width.saturating_sub(1)) as u16,
     ));
@@ -1559,13 +1567,22 @@ fn visible_status(ui: &Frontend, operation: Option<ActiveOperation>) -> Option<S
         .map_or_else(String::new, |operation| {
             format!(" · {} follow-up(s) queued", operation.pending_follow_ups)
         });
-    let status = if idle {
+    let mut status = if idle {
         format!("{attachment}{recovery}{queued}")
             .trim_start_matches(" · ")
             .to_owned()
     } else {
         format!("{}{attachment}{recovery}{queued}", ui.status)
     };
+    if ui.question_owns_input() && !ui.question_visible() {
+        let hint = QuestionModal::collapsed_hint(&ui.keys);
+        if status.is_empty() {
+            status = hint;
+        } else {
+            status.push_str(" · ");
+            status.push_str(&hint);
+        }
+    }
     if let Some(operation) = operation {
         let label = operation.label();
         return Some(if operation.is_cancelled() {
@@ -1708,7 +1725,7 @@ fn draw_chat_fullscreen(
         rows[next_row + composer_height + index] = line;
     }
     let cursor_row = next_row + composer.cursor_row;
-    let cursor = (cursor_row < height).then_some((
+    let cursor = (cursor_row < height && !ui.question_owns_input()).then_some((
         cursor_row,
         composer.cursor_col.min(width.saturating_sub(1)) as u16,
     ));
@@ -1741,6 +1758,9 @@ fn apply_question_action(
 ) {
     match action {
         QuestionAction::None => {}
+        QuestionAction::Scroll { up } => {
+            ui.scroll = ui.scroll.saturating_add_signed(if up { 10 } else { -10 });
+        }
         QuestionAction::Answer(request, answers) => {
             let Some(responder) = responder else {
                 ui.question = None;

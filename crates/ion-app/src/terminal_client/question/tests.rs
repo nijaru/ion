@@ -67,6 +67,42 @@ pub(super) fn enter() -> KeyEvent {
 }
 
 #[test]
+fn collapsing_keeps_hidden_input_inert_and_reopening_requires_paint() {
+    let keys = KeyBindings::default();
+    let theme = crate::presentation_style::Theme::default();
+    let collapse = KeyEvent::new(KeyCode::Char('\x1d'), Modifiers::NONE);
+    let batch = modal();
+    let request = batch.request();
+    let mut modal = QuestionModal::new(request, batch.questions.into_iter().take(1).collect());
+    press(&mut modal, collapse, &keys);
+    let frame = modal.render(80, 24, &keys, &theme);
+    assert!(
+        !frame
+            .rows
+            .iter()
+            .any(|row| row.to_string().contains("Choose a route")),
+        "collapsed question still exposes its choices"
+    );
+    assert!(frame.cursor.is_none());
+    for key in [
+        enter(),
+        KeyEvent::new(KeyCode::Down, Modifiers::NONE),
+        KeyEvent::new(KeyCode::Char(' '), Modifiers::NONE),
+        KeyEvent::new(KeyCode::Tab, Modifiers::NONE),
+        KeyEvent::new(KeyCode::Char('x'), Modifiers::NONE),
+    ] {
+        assert!(matches!(modal.key(key, &keys), QuestionAction::None));
+    }
+    assert!(matches!(modal.paste("hidden paste"), QuestionAction::None));
+    modal.key(collapse, &keys);
+    assert!(matches!(modal.key(enter(), &keys), QuestionAction::None));
+    assert!(
+        matches!(press(&mut modal, enter(), &keys), QuestionAction::Answer(id, answers)
+        if id == request && answers == vec![QuestionAnswer::Option { index: 0 }])
+    );
+}
+
+#[test]
 fn unseen_or_clipped_choices_do_not_answer() {
     let keys = KeyBindings::default();
     let theme = crate::presentation_style::Theme::default();

@@ -70,6 +70,7 @@ def exercise(mode, supported=True, panic=False, editor_fault=None):
         work = Path(temporary)
         requests = []
         release_completion = threading.Event()
+        release_question = threading.Event()
 
         class Provider(http.server.BaseHTTPRequestHandler):
             def log_message(self, *_):
@@ -79,6 +80,15 @@ def exercise(mode, supported=True, panic=False, editor_fault=None):
                 requests.append(json.loads(self.rfile.read(int(self.headers["Content-Length"]))))
                 head = b'data: {"choices":[{"index":0,"delta":{"content":"done"},"finish_reason":null}]}\n\n'
                 tail = b'data: {"choices":[{"index":0,"delta":{},"finish_reason":"stop"}]}\n\ndata: [DONE]\n\n'
+                if requests[-1]["messages"][-1].get("content") == "QUESTION_COLLAPSE":
+                    assert release_question.wait(8), "question response was not released"
+                    questions = [
+                        {"question": "Which features?", "multi_select": True, "options": [{"label": "Read"}, {"label": "Write"}]},
+                        {"question": "Custom answer?", "options": [{"label": "One"}, {"label": "Two"}]},
+                    ]
+                    delta = {"tool_calls": [{"index": 0, "id": "question-collapse", "type": "function", "function": {"name": "ask_user_question", "arguments": json.dumps({"questions": questions})}}]}
+                    head = b"data: " + json.dumps({"choices": [{"index": 0, "delta": delta, "finish_reason": None}]}).encode() + b"\n\n"
+                    tail = b'data: {"choices":[{"index":0,"delta":{},"finish_reason":"tool_calls"}]}\n\ndata: [DONE]\n\n'
                 self.send_response(200)
                 self.send_header("Content-Type", "text/event-stream")
                 self.send_header("Content-Length", str(len(head) + len(tail)))
@@ -212,6 +222,49 @@ def exercise(mode, supported=True, panic=False, editor_fault=None):
                     assert users[-1]["content"] == expected_input, users[-1]
                     if editor_fault:
                         assert b"not a regular file" in output, "editor special-file failure was not reported"
+                    else:
+                        until(lambda: settled in output[checkpoint:])
+                        os.write(master, b"QUESTION_COLLAPSE\r")
+                        until(lambda: len(requests) == 3)
+                        os.write(master, b"retained composer")
+                        drain()
+                        release_question.set()
+                        until(lambda: b"Which features?" in output and terminal.alternate)
+                        os.write(master, b"\x1b[B\x1b[B\x1b[B\r")  # Next confirms none.
+                        until(lambda: b"Custom answer?" in output)
+                        os.write(master, b"\x1b[B\x1b[B\r")
+                        os.write(master, "café 🦀".encode() + b"\x1b[D\x1d")
+                        checkpoint = len(output)
+                        until(lambda: b"Question hidden" in output[checkpoint:] and terminal.alternate == (mode == "fullscreen"))
+                        assert terminal.stacks[terminal.alternate][-1] == 1
+                        os.write(master, b"ignored\r\t\x1b[200~hidden paste\x1b[201~")
+                        drain(0.25)
+                        assert len(requests) == 3, "hidden input submitted the question or composer"
+                        os.write(master, b"\x1d")
+                        until(lambda: terminal.alternate and b"caf" in output[checkpoint:])
+                        checkpoint = len(output)
+                        os.write(master, b"x\r")
+                        until(lambda: b"Review" in output[checkpoint:])
+                        os.write(master, b"\x1d")
+                        checkpoint = len(output)
+                        until(lambda: b"Question hidden" in output[checkpoint:])
+                        os.write(master, b"\r")
+                        drain(0.25)
+                        assert len(requests) == 3, "collapsed review submitted answers"
+                        os.write(master, b"\x1d")
+                        checkpoint = len(output)
+                        until(lambda: b"Submit answers" in output[checkpoint:])
+                        os.write(master, b"\r")
+                        until(lambda: len(requests) == 4 and settled in output[checkpoint:])
+                        message = next(message for message in requests[-1]["messages"] if message.get("tool_call_id") == "question-collapse")
+                        envelope = json.loads(message["content"])
+                        assert envelope.get("result", envelope) == {"status": "answered", "answers": [
+                            {"kind": "options", "question": 1, "options": []},
+                            {"kind": "text", "question": 2, "text": "café x🦀"},
+                        ]}, envelope
+                        os.write(master, b"\r")  # The original composer, never the hidden keystrokes.
+                        until(lambda: len(requests) == 5)
+                        assert requests[-1]["messages"][-1]["content"] == "retained composer"
                 if mode == "inline":
                     os.write(master, b"\x0f")
                     until(lambda: terminal.alternate)
@@ -231,6 +284,7 @@ def exercise(mode, supported=True, panic=False, editor_fault=None):
             print(f"Ion {mode} {'supported' if supported else 'unsupported'} keyboard custody {outcome}: OK")
         finally:
             release_completion.set()
+            release_question.set()
             if child is not None and child.poll() is None:
                 child.kill()
             if slave is not None:
