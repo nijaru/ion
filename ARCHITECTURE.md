@@ -1613,6 +1613,16 @@ or replay safety. Check observed error and truncation/delivery markers before
 interpreting data. Discovery cannot change an outcome, unwrap an error, fetch a
 schema reference or activate a capability.
 
+The same frozen discovery reply includes an advisory TypeScript call declaration.
+It quotes the exact callable name, projects input types and retains the raw reply
+envelope with `value: unknown`; result hints cannot become promises about observed
+data. Types are not validation or executable VM input. Unsupported dialects,
+references and resource scopes remain unknown. Rendering work and type size are bounded; a limit
+produces a complete unknown argument type with a notice, never a truncated name
+or declaration. Full original schemas remain available, and declaration bytes
+share existing reply budgets. No new globals, aliases or dispatch authority follow
+from authoring metadata.
+
 Guest failure exposes a stable parent locator for bounded metadata/JSON inspection.
 Inspection preserves observed/not-dispatched/unknown, excludes private shell
 context, opaque replay and normalized image bytes, and grants no replay authority.

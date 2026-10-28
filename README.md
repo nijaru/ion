@@ -2176,7 +2176,8 @@ ASCII-insensitive name/description substrings, with exact ASCII-insensitive
 names first and frozen catalogue order within each rank, without duplicates.
 Global `describeTool(name)` looks up an exact, case-sensitive name in Core's
 frozen catalogue and returns
-`{name, description, input_schema, result_schema}`, or explicit `null` if missing.
+`{name, description, input_schema, result_schema, declaration}`, or explicit
+`null` if missing.
 `result_schema` is `null` when unknown, otherwise `{path, schema}`: a key path from
 the actual `{value, is_error, images}` reply and a standalone JSON Schema for the
 expected successful data there. Local schema references stay unchanged. Rust
@@ -2191,8 +2192,28 @@ references.
 Both include callable deferred tools and exclude intrinsic `tool_search` and
 `code_mode`. Discovery is read-only: it neither activates tools nor records child
 effects, and shares existing bridge, JSON, reply, cancellation and guest budgets.
-Value-conversion helpers, generated TypeScript declarations and persistent script
-state are not supplied by this discovery API.
+
+`declaration` is an advisory TypeScript call signature for the exact tool name and
+its input schema, with the actual `{value, is_error, images}` reply envelope.
+`value` stays `unknown`: an expected result schema does not validate an observation.
+The signature quotes names without creating aliases. Types omit constraints that
+TypeScript cannot express; the original `input_schema` remains the argument
+contract. Unversioned and explicit JSON Schema 2020-12 inputs can supply types
+through local JSON Pointer references. Other explicit dialects, external references
+and nested schema-resource scopes stay `unknown`. Excessive type size, depth or
+expansion produces a complete `unknown` argument type with a limitation notice,
+not a partial declaration. The new field shares normal reply budgets.
+
+Inspect a declaration without dispatching a tool:
+
+```js
+const definition = await describeTool('read');
+if (!definition) throw new Error('read is unavailable');
+text(definition.declaration);
+```
+
+The VM still accepts JavaScript function bodies, not TypeScript declarations.
+Value-conversion helpers and persistent script state remain separate capabilities.
 
 Select model-visible output with a JSON `return`, `text(value)` or `image(block)`:
 

@@ -1,4 +1,5 @@
 //! Session-owned composed effects. Guest completion is not effect settlement.
+mod declaration;
 use std::{
     collections::{BTreeMap, VecDeque},
     io::{self, Write},
@@ -33,6 +34,7 @@ struct ToolDescription<'a> {
     #[serde(flatten)]
     spec: &'a ion_ai::ToolSpec,
     result_schema: Option<ResultSchemaDescription<'a>>,
+    declaration: String,
 }
 
 #[derive(Serialize)]
@@ -168,6 +170,7 @@ impl<F: FnMut(AgentEvent)> Gate<'_, F> {
                     .filter(|_| !self.catalog.is_intrinsic(&name))
                     .map(|definition| ToolDescription {
                         spec: &definition.spec,
+                        declaration: declaration::render(&definition.spec),
                         result_schema: definition.result_schema.as_ref().map(|hint| {
                             ResultSchemaDescription {
                                 path: std::iter::once("value")

@@ -468,7 +468,7 @@ impl CodingToolSource for DiscoverySource {
                         "Similar discovery candidate_11"
                     }
                     .into(),
-                    input_schema: json!({"type":"object","properties":{"index":{"const":index}}}),
+                    input_schema: json!({"type":"object","properties":{"index":{"const":if refreshed { index + 100 } else { index }}}}),
                 });
                 let definition = if index == 11 {
                     definition.with_result_schema(if refreshed {
@@ -522,6 +522,10 @@ async fn discovery_is_exact_read_only_deferred_and_request_frozen() {
             r#"
             const page = await searchTools('SIMILAR');
             const exact = await describeTool('candidate_11');
+            const originalDeclaration = exact.declaration;
+            exact.declaration = 'forged';
+            const isolated = await describeTool(exact.name);
+            exact.declaration = originalDeclaration;
             const untyped = await describeTool('candidate_00');
             const bounded = await searchTools('SIMILAR', {limit: 2});
             const emptyOptions = await searchTools('SIMILAR', {});
@@ -531,7 +535,7 @@ async fn discovery_is_exact_read_only_deferred_and_request_frozen() {
             const exclusions = await Promise.all(['tool_search','code_mode'].map(query => searchTools(query)));
             await tools[exact.name]({});
             const frozen = await describeTool(exact.name);
-            return {page, bounded, emptyOptions, priority, one, exact, untyped, missing, exclusions, frozen};
+            return {page, bounded, emptyOptions, priority, one, exact, untyped, missing, exclusions, frozen, isolated};
         "#,
         )]),
         response(vec![code(
@@ -576,9 +580,15 @@ async fn discovery_is_exact_read_only_deferred_and_request_frozen() {
             .iter()
             .all(|item| item["name"] != "candidate_11" && item.as_object().unwrap().len() == 2)
     );
+    let declaration = result["exact"]["declaration"]
+        .as_str()
+        .expect("describeTool must include a callable declaration");
+    assert!(declaration.contains("\"candidate_11\"(args:"));
+    assert!(declaration.contains("\"index\"?: 11;"));
+    assert!(declaration.contains("value: unknown; is_error: boolean;"));
     assert_eq!(
         result["exact"],
-        json!({"name":"candidate_11","description":"Similar discovery candidate_11","input_schema":{"type":"object","properties":{"index":{"const":11}}},"result_schema":{"path":["value"],"schema":{"$ref":"#/$defs/Data","$defs":{"Data":{"type":"string"}}}}})
+        json!({"declaration":declaration,"name":"candidate_11","description":"Similar discovery candidate_11","input_schema":{"type":"object","properties":{"index":{"const":11}}},"result_schema":{"path":["value"],"schema":{"$ref":"#/$defs/Data","$defs":{"Data":{"type":"string"}}}}})
     );
     assert_eq!(
         result["bounded"],
@@ -596,6 +606,13 @@ async fn discovery_is_exact_read_only_deferred_and_request_frozen() {
     );
     assert_eq!(result["one"], json!([result["priority"][0]]));
     assert_eq!(result["frozen"], result["exact"]);
+    assert_eq!(result["isolated"], result["exact"]);
+    assert!(
+        outputs[1].value["result"]["declaration"]
+            .as_str()
+            .unwrap()
+            .contains("\"index\"?: 111;")
+    );
     assert_eq!(
         result["untyped"].get("result_schema"),
         Some(&serde_json::Value::Null)
