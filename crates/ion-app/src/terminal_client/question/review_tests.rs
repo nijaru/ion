@@ -148,10 +148,15 @@ fn review_safely_pages_long_answers_and_cancel_is_not_a_partial_answer() {
     let keys = KeyBindings::default();
     let theme = Theme::default();
     let mut modal = modal();
-    modal.questions[0].options[0].label = "line\n".repeat(40) + "\u{1b}]52;c;untrusted\u{7}tail";
+    modal.questions[0].options[0].label = "line\n".repeat(12) + "\u{1b}]52;c;untrusted\u{7}tail";
     // Long choice must be confirmed in a viewport showing the whole label.
     modal.render(80, 80, &keys, &theme);
     modal.key(enter(), &keys);
+    for _ in 0..2 {
+        press(&mut modal, key(KeyCode::Down), &keys);
+    }
+    press(&mut modal, enter(), &keys);
+    modal.paste(&"Custom detail\n".repeat(40));
     press(&mut modal, enter(), &keys);
     let first = modal.render(40, 10, &keys, &theme);
     assert!(
