@@ -1217,7 +1217,10 @@ Project configuration is inert until `ion trust` records its canonical project
 root and current file digest. Editing the file invalidates trust; untrusted
 entries are never connected. `ion mcp list` reports the project path and an
 untrusted diagnostic. Trusted project entries override user entries with the
-same name; `ion untrust` removes the trust record. Trust is an explicit launch
+same name. A project entry without `command` or `url` can override only `enabled`,
+`exposure` and `tool_exposure` of a valid user server, without copying its launch
+settings or credentials. Other project entries define complete servers.
+`ion untrust` removes the trust record. Trust is an explicit launch
 decision, not process isolation or a sandbox.
 `direct` is the default and declares the server's tools. `deferred` keeps them
 callable but out of the initial model loadout until `tool_search` activates a
@@ -1228,6 +1231,17 @@ is still configured and inherits the host environment if started. Exposure
 changes apply to future requests, never an already-issued request. `ion mcp list`
 and `ion mcp remove NAME` manage the saved user configuration; concurrent
 mutations serialize across Ion processes.
+
+To keep a server configured without starting it, use `ion mcp disable NAME`;
+`ion mcp enable NAME` restores startup. Add `--project` to edit a project entry
+or create a policy override for a user server, then re-trust changed contents. Both transports also accept `"enabled": false`
+in the manifest; omission means enabled. Listing marks disabled entries while
+retaining their exposure and tool rules. Disabled entries remain validated but
+are skipped before environment/credential resolution, process creation or HTTP
+access. A trusted disabled project entry still overrides an enabled user entry.
+These commands affect new clients only, not active connections or issued calls.
+Project overrides retain explicit `true` as well as `false`. Repeating the same
+saved setting leaves the manifest and its trust digest unchanged.
 
 To select individual tools, edit the server entry in `~/.ion/mcp.json` (or the
 trusted project file). `tool_exposure` overrides the default for names or `*`
@@ -1258,11 +1272,11 @@ Unmatched tools inherit the server default, including tools added by a later
 listing. These choices are captured at connection startup; edit and start
 a new coding client to replace them, and re-trust an edited project file.
 `ion mcp list` shows the server default followed by rules in their configured
-order. Unrelated MCP add/remove commands preserve that order.
+order. MCP add/remove and enable/disable commands preserve that order.
 Tool overrides do not expose a hidden server's resources or widen `--tools` /
 `--exclude-tools` selection. They do not stop the server from running.
 
-Ion starts configured servers when a coding client starts, discovers their
+Ion starts enabled configured servers when a coding client starts, discovers their
 tools, and exposes each as `mcp__LENGTH_NAME__TOOL` alongside read, edit, write and
 exec. `LENGTH` is the ASCII server-name length: `demo` uses `mcp__4_demo__TOOL`.
 This delimiter keeps server/tool pairs distinct even when names contain `__`.

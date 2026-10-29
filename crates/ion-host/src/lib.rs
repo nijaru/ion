@@ -316,6 +316,7 @@ mod tests {
             .add(
                 "user",
                 McpServer::Stdio(McpStdioServer {
+                    enabled: true,
                     cwd: None,
                     env: Default::default(),
                     command: "unused".into(),

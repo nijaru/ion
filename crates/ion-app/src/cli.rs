@@ -181,6 +181,18 @@ pub(crate) enum CommandsAction {
 #[derive(Subcommand)]
 pub(crate) enum McpAction {
     List,
+    /// Start this configured server in new clients (active clients are unchanged).
+    Enable {
+        name: String,
+        #[arg(long)]
+        project: bool,
+    },
+    /// Keep configuration but do not start this server in new clients.
+    Disable {
+        name: String,
+        #[arg(long)]
+        project: bool,
+    },
     Add {
         name: String,
         command: String,

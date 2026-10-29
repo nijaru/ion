@@ -678,7 +678,18 @@ rendered text and returned windows are not a second execution log.
 A registration binds definition, semantic metadata and executor. Freeze them as
 one request catalogue. MCP bindings capture connection and original remote name;
 unavailable connections fail instead of redirecting or replaying calls. Local
-capture cannot freeze a remote server's implementation.
+capture cannot freeze a remote server's implementation. MCP startup enablement
+is separate from exposure: omitted `enabled` means true; false entries stay in
+configuration but create no connection, tools or resources. Trusted project policy
+entries may override only enablement/exposure/rules of a valid user definition;
+transport and credentials stay with that definition. Missing and invalid bases
+are errors, not synthesized servers. Explicit policy values replace inheritance,
+including true; native definitions still default enabled. Filter only after
+user/trusted-project merging, so a disabled project override cannot reveal the
+user entry beneath it. Skip disabled entries before environment/credential
+resolution or transport preparation. Configuration edits affect new clients,
+not existing connections or issued catalogues; real project edits require renewed
+digest trust, while no-op enablement edits preserve the file.
 
 Callable authority and model exposure differ. Direct tools are declared; deferred
 tools are callable but omitted from the declared loadout until discovery activates

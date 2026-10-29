@@ -119,6 +119,7 @@ async fn resources_list_templates_read_and_capability_gating() {
         .add(
             "resource",
             McpServer::Stdio(McpStdioServer {
+                enabled: true,
                 cwd: None,
                 env: Default::default(),
                 command: "python3".into(),
@@ -132,6 +133,7 @@ async fn resources_list_templates_read_and_capability_gating() {
         .add(
             "broken",
             McpServer::Stdio(McpStdioServer {
+                enabled: true,
                 cwd: None,
                 env: Default::default(),
                 command: "python3".into(),
@@ -354,6 +356,7 @@ for line in sys.stdin:
         .add(
             "tools",
             McpServer::Stdio(McpStdioServer {
+                enabled: true,
                 cwd: None,
                 env: Default::default(),
                 command: "python3".into(),
@@ -411,6 +414,7 @@ for line in sys.stdin:
         .add(
             "stoppable",
             McpServer::Stdio(McpStdioServer {
+                enabled: true,
                 cwd: None,
                 env: Default::default(),
                 command: "python3".into(),
@@ -482,6 +486,7 @@ for line in sys.stdin:
         .add(
             "resources-only",
             McpServer::Stdio(McpStdioServer {
+                enabled: true,
                 cwd: None,
                 env: Default::default(),
                 command: "python3".into(),
@@ -520,6 +525,7 @@ async fn deferred_exposure_requires_discovery_and_hidden_exposure_removes_capabi
         .add(
             "deferred",
             McpServer::Stdio(McpStdioServer {
+                enabled: true,
                 cwd: None,
                 env: Default::default(),
                 command: "python3".into(),
@@ -558,6 +564,7 @@ async fn deferred_exposure_requires_discovery_and_hidden_exposure_removes_capabi
         .add(
             "hidden",
             McpServer::Stdio(McpStdioServer {
+                enabled: true,
                 cwd: None,
                 env: Default::default(),
                 command: "python3".into(),

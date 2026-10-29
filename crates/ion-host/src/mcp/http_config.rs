@@ -103,6 +103,7 @@ mod tests {
 
     fn server() -> McpHttpServer {
         McpHttpServer {
+            enabled: true,
             url: "https://example.test/mcp".into(),
             bearer_token_env: None,
             headers: BTreeMap::new(),

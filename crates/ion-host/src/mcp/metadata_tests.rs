@@ -27,6 +27,7 @@ for line in sys.stdin:
             .add(
                 server,
                 McpServer::Stdio(McpStdioServer {
+                    enabled: true,
                     cwd: None,
                     env: Default::default(),
                     command: "python3".into(),
@@ -110,6 +111,7 @@ for line in sys.stdin:
             .add(
                 name,
                 McpServer::Stdio(McpStdioServer {
+                    enabled: true,
                     cwd: None,
                     env: Default::default(),
                     command: "python3".into(),

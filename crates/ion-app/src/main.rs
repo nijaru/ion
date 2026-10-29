@@ -9,10 +9,7 @@ use std::{
 use anyhow::{Context, Result, bail, ensure};
 use ion_ai::{Content, Message};
 use ion_core::{CodingSession, CodingToolSource, ForkPoint};
-use ion_host::{
-    Application, CredentialStatus, Host, McpHttpServer, McpServer, McpStdioServer, Resources,
-    SavedSelection,
-};
+use ion_host::{Application, CredentialStatus, Host, Resources, SavedSelection};
 
 mod agent_events;
 mod cli;
@@ -26,6 +23,7 @@ mod headless;
 mod inspection;
 mod keybindings;
 mod markdown;
+mod mcp_cli;
 mod presentation_style;
 mod publication;
 mod rpc;
@@ -40,7 +38,7 @@ mod transcript;
 mod transcript_detail;
 mod transcript_render;
 
-use cli::{Action, CommandsAction, Invocation, McpAction};
+use cli::{Action, CommandsAction, Invocation};
 
 fn configured_cwd(cwd: Option<PathBuf>) -> Result<PathBuf> {
     let path = cwd.unwrap_or(std::env::current_dir()?);
@@ -300,133 +298,7 @@ async fn run_cli(cli: Invocation) -> Result<()> {
         Action::Mcp { action } => {
             let cwd = configured_cwd(cli.cwd.clone())?;
             let config = host.mcp_config_for(&cwd)?;
-            match action {
-                McpAction::List => {
-                    if let Some(path) = config.project_path().filter(|path| path.is_file()) {
-                        print_stderr(format_args!(
-                            "[mcp project: {}]",
-                            metadata_field(&path.to_string_lossy())
-                        ))?;
-                    }
-                    let listing = config.list()?;
-                    for diagnostic in listing.diagnostics {
-                        print_stderr(format_args!(
-                            "[mcp config: {}]",
-                            metadata_field(&diagnostic)
-                        ))?;
-                    }
-                    for (name, server) in listing.servers {
-                        match &server {
-                            McpServer::Stdio(server) => {
-                                print_stdout(format_args!(
-                                    "{}\t{}\t{} {}",
-                                    metadata_field(&name),
-                                    server.exposure.as_str(),
-                                    metadata_field(&server.command),
-                                    metadata_field(&server.args.join(" "))
-                                ))?;
-                                if let Some(cwd) = &server.cwd {
-                                    print_stdout(format_args!(
-                                        "  cwd\t{}",
-                                        metadata_field(&cwd.to_string_lossy())
-                                    ))?;
-                                }
-                                for name in server.env.keys() {
-                                    print_stdout(format_args!("  env\t{}", metadata_field(name)))?;
-                                }
-                            }
-                            McpServer::Http(server) => {
-                                print_stdout(format_args!(
-                                    "{}\t{}\t{}",
-                                    metadata_field(&name),
-                                    server.exposure.as_str(),
-                                    metadata_field(&server.url)
-                                ))?;
-                                for name in server.headers.keys() {
-                                    print_stdout(format_args!(
-                                        "  header\t{}",
-                                        metadata_field(name)
-                                    ))?;
-                                }
-                            }
-                        }
-                        for (tool, exposure) in server.tool_exposure() {
-                            print_stdout(format_args!(
-                                "  tool\t{}\t{}",
-                                metadata_field(tool),
-                                exposure.as_str()
-                            ))?;
-                        }
-                    }
-                }
-                McpAction::Add {
-                    name,
-                    command,
-                    project,
-                    exposure,
-                    server_cwd,
-                    env,
-                    args,
-                } => {
-                    let server = McpServer::Stdio(McpStdioServer {
-                        cwd: server_cwd,
-                        env: env.into_iter().collect(),
-                        command,
-                        args,
-                        exposure: exposure.into(),
-                        tool_exposure: Default::default(),
-                    });
-                    if project {
-                        config.add_project(&name, server)?;
-                        print_stdout(format_args!(
-                            "Added project MCP server {}; run `ion trust` to enable it",
-                            metadata_field(&name)
-                        ))?;
-                    } else {
-                        config.add(&name, server)?;
-                        print_stdout(format_args!("Added MCP server {}", metadata_field(&name)))?;
-                    }
-                }
-                McpAction::AddHttp {
-                    name,
-                    url,
-                    bearer_token_env,
-                    headers,
-                    project,
-                    exposure,
-                } => {
-                    let server = McpServer::Http(McpHttpServer {
-                        url,
-                        bearer_token_env,
-                        headers: headers.into_iter().collect(),
-                        exposure: exposure.into(),
-                        tool_exposure: Default::default(),
-                    });
-                    if project {
-                        config.add_project(&name, server)?;
-                        print_stdout(format_args!(
-                            "Added project MCP server {}; run `ion trust` to enable it",
-                            metadata_field(&name)
-                        ))?;
-                    } else {
-                        config.add(&name, server)?;
-                        print_stdout(format_args!("Added MCP server {}", metadata_field(&name)))?;
-                    }
-                }
-                McpAction::Remove { name, project } => {
-                    if project {
-                        config.remove_project(&name)?;
-                        print_stdout(format_args!(
-                            "Removed project MCP server {}",
-                            metadata_field(&name)
-                        ))?;
-                    } else {
-                        config.remove(&name)?;
-                        print_stdout(format_args!("Removed MCP server {}", metadata_field(&name)))?;
-                    }
-                }
-            }
-            Ok(())
+            mcp_cli::run(action, &config)
         }
         action => {
             let keys = if cli.resume_session

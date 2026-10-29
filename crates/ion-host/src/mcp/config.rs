@@ -23,6 +23,13 @@ pub enum McpServer {
 }
 
 impl McpServer {
+    pub fn enabled(&self) -> bool {
+        match self {
+            Self::Stdio(server) => server.enabled,
+            Self::Http(server) => server.enabled,
+        }
+    }
+
     pub fn exposure(&self) -> McpExposure {
         match self {
             Self::Stdio(server) => server.exposure,
@@ -68,6 +75,8 @@ impl McpExposure {
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct McpStdioServer {
+    #[serde(default = "enabled_by_default", skip_serializing_if = "is_enabled")]
+    pub enabled: bool,
     pub command: String,
     #[serde(default)]
     pub args: Vec<String>,
@@ -109,6 +118,8 @@ fn deserialize_value_map<'de, D: Deserializer<'de>>(
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct McpHttpServer {
+    #[serde(default = "enabled_by_default", skip_serializing_if = "is_enabled")]
+    pub enabled: bool,
     pub url: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub bearer_token_env: Option<String>,
@@ -124,6 +135,14 @@ pub struct McpHttpServer {
     /// Exact remote names win; otherwise the first matching `*` pattern wins.
     #[serde(default, skip_serializing_if = "IndexMap::is_empty")]
     pub tool_exposure: IndexMap<String, McpExposure>,
+}
+
+fn enabled_by_default() -> bool {
+    true
+}
+
+fn is_enabled(enabled: &bool) -> bool {
+    *enabled
 }
 
 #[derive(Serialize, Deserialize)]
@@ -190,7 +209,7 @@ impl McpConfig {
             read_servers(&self.user)?,
             &mut servers,
             &mut diagnostics,
-            "user",
+            ConfigScope::User,
         );
         if let Some(project) = &self.project {
             match read_config(&project.path) {
@@ -202,7 +221,7 @@ impl McpConfig {
                                 raw.servers,
                                 &mut servers,
                                 &mut diagnostics,
-                                "project",
+                                ConfigScope::Project,
                             ),
                             Err(error) => diagnostics.push(format!(
                                 "invalid project MCP config {}: {error}",
@@ -253,8 +272,21 @@ impl McpConfig {
         let raw = serde_json::from_slice::<RawServers>(&bytes)
             .with_context(|| format!("invalid project MCP config {}", project.path.display()))?;
         let mut servers = BTreeMap::new();
+        // Unrelated bad user peers stay isolated; project policies still need a valid base.
+        let mut user_diagnostics = Vec::new();
+        parse_servers(
+            read_servers(&self.user)?,
+            &mut servers,
+            &mut user_diagnostics,
+            ConfigScope::User,
+        );
         let mut diagnostics = Vec::new();
-        parse_servers(raw.servers, &mut servers, &mut diagnostics, "project");
+        parse_servers(
+            raw.servers,
+            &mut servers,
+            &mut diagnostics,
+            ConfigScope::Project,
+        );
         ensure!(
             diagnostics.is_empty(),
             "cannot trust invalid project MCP configuration: {}",
@@ -320,6 +352,53 @@ impl McpConfig {
         self.remove_at(&project.path, name, true)
     }
 
+    /// Persist startup enablement without changing any active connection.
+    pub fn set_enabled(&self, name: &str, enabled: bool) -> Result<()> {
+        self.set_enabled_at(&self.user, name, enabled, false)
+    }
+
+    /// Editing project enablement invalidates its existing digest trust.
+    pub fn set_project_enabled(&self, name: &str, enabled: bool) -> Result<()> {
+        let project = self
+            .project
+            .as_ref()
+            .context("no project MCP configuration")?;
+        self.set_enabled_at(&project.path, name, enabled, true)
+    }
+
+    fn set_enabled_at(&self, path: &Path, name: &str, enabled: bool, shared: bool) -> Result<()> {
+        let _lock = writer_lock(path, shared)?;
+        let mut servers = read_servers(path)?;
+        let raw = match servers.get(name) {
+            Some(raw) => raw.clone(),
+            None if shared => RawValue::from_string("{}".into())?,
+            None => bail!("MCP server {name} was not found"),
+        };
+        let mut fields = entry_fields(&raw)?;
+        let is_override = shared && !fields.contains_key("command") && !fields.contains_key("url");
+        let server = if is_override {
+            let base = read_servers(&self.user)?
+                .remove(name)
+                .map(|raw| parse_server(name, &raw))
+                .transpose()?;
+            parse_project_server(name, &raw, base.as_ref())?
+        } else {
+            parse_server(name, &raw)?
+        };
+        // An inherited value is not an explicit project policy. Save true too,
+        // so a later user-level change cannot silently remove that override.
+        if (!is_override || fields.contains_key("enabled")) && server.enabled() == enabled {
+            return Ok(());
+        }
+        fields.insert("enabled".into(), serde_json::value::to_raw_value(&enabled)?);
+        servers.insert(name.to_owned(), serde_json::value::to_raw_value(&fields)?);
+        if shared {
+            write_shared_json(path, &RawServers { servers })
+        } else {
+            write_json(path, &RawServers { servers })
+        }
+    }
+
     fn add_at(&self, path: &Path, name: &str, server: McpServer, shared: bool) -> Result<()> {
         validate_name(name)?;
         validate_server(&server)?;
@@ -372,19 +451,87 @@ fn read_servers(path: &Path) -> Result<BTreeMap<String, Box<RawValue>>> {
     }
 }
 
+enum ConfigScope {
+    User,
+    Project,
+}
+
+fn entry_fields(raw: &RawValue) -> Result<BTreeMap<String, Box<RawValue>>> {
+    serde_json::from_str(raw.get()).map_err(|_| anyhow::anyhow!("MCP entry must be an object"))
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ProjectPolicy {
+    #[serde(default, deserialize_with = "present_policy")]
+    enabled: Option<bool>,
+    #[serde(default, deserialize_with = "present_policy")]
+    exposure: Option<McpExposure>,
+    #[serde(default, deserialize_with = "present_policy")]
+    tool_exposure: Option<IndexMap<String, McpExposure>>,
+}
+
+// Missing means inherit; an explicitly supplied null is not a policy value.
+fn present_policy<'de, D: Deserializer<'de>, T: Deserialize<'de>>(
+    deserializer: D,
+) -> Result<Option<T>, D::Error> {
+    T::deserialize(deserializer).map(Some)
+}
+
+fn parse_project_server(name: &str, raw: &RawValue, base: Option<&McpServer>) -> Result<McpServer> {
+    let fields = entry_fields(raw)?;
+    if fields.contains_key("command") || fields.contains_key("url") {
+        return parse_server(name, raw);
+    }
+    let patch: ProjectPolicy = serde_json::from_str(raw.get())
+        .with_context(|| format!("invalid MCP project policy {name}"))?;
+    let mut server = base
+        .with_context(|| format!("MCP project override {name} needs a valid user server"))?
+        .clone();
+    let (enabled, exposure, tool_exposure) = match &mut server {
+        McpServer::Stdio(server) => (
+            &mut server.enabled,
+            &mut server.exposure,
+            &mut server.tool_exposure,
+        ),
+        McpServer::Http(server) => (
+            &mut server.enabled,
+            &mut server.exposure,
+            &mut server.tool_exposure,
+        ),
+    };
+    if let Some(value) = patch.enabled {
+        *enabled = value;
+    }
+    if let Some(value) = patch.exposure {
+        *exposure = value;
+    }
+    if let Some(value) = patch.tool_exposure {
+        *tool_exposure = value;
+    }
+    validate_server(&server)?;
+    Ok(server)
+}
+
 fn parse_servers(
     raw: BTreeMap<String, Box<RawValue>>,
     servers: &mut BTreeMap<String, McpServer>,
     diagnostics: &mut Vec<String>,
-    source: &str,
+    scope: ConfigScope,
 ) {
     for (name, value) in raw {
-        match parse_server(&name, &value) {
+        let parsed = match scope {
+            ConfigScope::User => parse_server(&name, &value),
+            ConfigScope::Project => parse_project_server(&name, &value, servers.get(&name)),
+        };
+        match parsed {
             Ok(server) => {
                 servers.insert(name, server);
             }
-            Err(error) if source == "user" => diagnostics.push(format!("{error:#}")),
-            Err(error) => diagnostics.push(format!("{source}: {error:#}")),
+            Err(error) => diagnostics.push(match scope {
+                ConfigScope::User => format!("{error:#}"),
+                ConfigScope::Project => format!("project: {error:#}"),
+            }),
         }
     }
 }
@@ -560,6 +707,7 @@ mod tests {
         .unwrap();
         assert_eq!(hidden.exposure, McpExposure::Hidden);
         let encoded = serde_json::to_value(McpStdioServer {
+            enabled: true,
             cwd: None,
             env: Default::default(),
             command: "python3".into(),
@@ -600,6 +748,164 @@ mod tests {
     }
 
     #[test]
+    fn enablement_edits_preserve_settings_order_peers_and_digest_trust() {
+        let root = std::env::temp_dir().join(format!("ion-mcp-enabled-{}", uuid::Uuid::now_v7()));
+        fs::create_dir_all(root.join(".git")).unwrap();
+        let config = McpConfig::with_project(&root.join("user"), &root).unwrap();
+        let manifest = r#"{"servers":{
+            "local":{"command":"python3","args":["worker.py"],"cwd":"data","env":{"TOKEN":"${MISSING}"},"exposure":"deferred","tool_exposure":{"z*":"hidden","*":"direct"}},
+            "remote":{"url":"https://example.com/mcp","headers":{"X-Key":"${MISSING}"},"exposure":"hidden","tool_exposure":{"z*":"hidden","*":"direct"}}
+        }}"#;
+        for project in [false, true] {
+            let path = if project {
+                config.project_path().unwrap()
+            } else {
+                &config.user
+            };
+            fs::create_dir_all(path.parent().unwrap()).unwrap();
+            fs::write(path, manifest).unwrap();
+            if project {
+                // A disabled project definition must still shadow the enabled user copy.
+                fs::write(&config.user, manifest).unwrap();
+            }
+            if !project {
+                let mut raw = read_servers(path).unwrap();
+                raw.insert(
+                    "invalid".into(),
+                    serde_json::value::to_raw_value(&json!({"command":7})).unwrap(),
+                );
+                write_json(path, &RawServers { servers: raw }).unwrap();
+            }
+            let before = fs::read(path).unwrap();
+            let expected: Value = serde_json::from_slice(&before).unwrap();
+            for name in ["local", "remote"] {
+                if project {
+                    config.trust_project().unwrap();
+                }
+                assert!(config.list().unwrap().servers[name].enabled());
+                for enabled in [false, true] {
+                    if project {
+                        config.set_project_enabled(name, enabled).unwrap();
+                        assert!(
+                            config
+                                .list()
+                                .unwrap()
+                                .diagnostics
+                                .iter()
+                                .any(|line| line.contains("not trusted"))
+                        );
+                        config.trust_project().unwrap();
+                    } else {
+                        config.set_enabled(name, enabled).unwrap();
+                    }
+                    let listing = config.list().unwrap();
+                    let server = &listing.servers[name];
+                    assert_eq!(server.enabled(), enabled);
+                    assert_eq!(
+                        server
+                            .tool_exposure()
+                            .keys()
+                            .map(String::as_str)
+                            .collect::<Vec<_>>(),
+                        ["z*", "*"]
+                    );
+                    let mut saved = serde_json::to_value(server).unwrap();
+                    saved.as_object_mut().unwrap().remove("enabled");
+                    assert_eq!(saved, expected["servers"][name]);
+                    let bytes = fs::read(path).unwrap();
+                    if project {
+                        config.set_project_enabled(name, enabled).unwrap();
+                        assert!(config.list().unwrap().diagnostics.is_empty());
+                    } else {
+                        config.set_enabled(name, enabled).unwrap();
+                        assert_eq!(
+                            read_servers(path).unwrap()["invalid"].get(),
+                            r#"{"command":7}"#
+                        );
+                    }
+                    assert_eq!(
+                        fs::read(path).unwrap(),
+                        bytes,
+                        "no-op toggle rewrote the manifest"
+                    );
+                }
+            }
+            let before_error = fs::read(path).unwrap();
+            let absent = if project {
+                config.set_project_enabled("absent", false)
+            } else {
+                config.set_enabled("invalid", false)
+            };
+            assert!(absent.is_err());
+            assert_eq!(fs::read(path).unwrap(), before_error);
+            fs::remove_file(path).unwrap();
+        }
+        for mut transport in [
+            json!({"command":"python3"}),
+            json!({"url":"https://example.com/mcp"}),
+        ] {
+            for invalid in [json!(null), json!(0), json!("false")] {
+                transport["enabled"] = invalid;
+                assert!(parse_server("invalid", transport.clone()).is_err());
+            }
+        }
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn project_policy_overrides_inherit_only_valid_user_launch_settings() {
+        let root = std::env::temp_dir().join(format!("ion-mcp-policy-{}", uuid::Uuid::now_v7()));
+        fs::create_dir_all(root.join(".ion")).unwrap();
+        let config = McpConfig::with_project(&root.join("user"), &root).unwrap();
+        fs::create_dir_all(config.user.parent().unwrap()).unwrap();
+        fs::write(&config.user, r#"{"servers":{
+            "local":{"command":"python3","env":{"TOKEN":"user-secret"},"enabled":false,"tool_exposure":{"z*":"hidden","*":"direct"}},
+            "remote":{"url":"https://example.com/mcp","headers":{"X-Key":"user-secret"}},
+            "invalid":{"command":7}
+        }}"#).unwrap();
+        let path = config.project_path().unwrap();
+        fs::write(path, r#"{"servers":{
+            "local":{"enabled":true,"exposure":"deferred","tool_exposure":{"b*":"direct","*":"hidden"}},
+            "remote":{"enabled":false}
+        }}"#).unwrap();
+        config.trust_project().unwrap();
+        let listing = config.list().unwrap();
+        assert!(listing.servers["local"].enabled());
+        assert!(!listing.servers["remote"].enabled());
+        assert_eq!(listing.servers["local"].exposure(), McpExposure::Deferred);
+        assert_eq!(
+            listing.servers["local"]
+                .tool_exposure()
+                .keys()
+                .map(String::as_str)
+                .collect::<Vec<_>>(),
+            ["b*", "*"]
+        );
+        config.set_project_enabled("local", false).unwrap();
+        config.trust_project().unwrap();
+        assert!(!config.list().unwrap().servers["local"].enabled());
+        config.set_project_enabled("local", true).unwrap();
+        let saved: Value = serde_json::from_slice(&fs::read(path).unwrap()).unwrap();
+        assert_eq!(saved["servers"]["local"]["enabled"], true);
+        assert!(saved["servers"]["local"].get("command").is_none());
+        assert!(!fs::read_to_string(path).unwrap().contains("user-secret"));
+        for invalid in [
+            r#"{"enabled":null}"#,
+            r#"{"exposure":null}"#,
+            r#"{"tool_exposure":null}"#,
+            r#"{"args":[]}"#,
+            r#"{"tool_exposure":{"":"direct"}}"#,
+            r#"{"enabled":true,"enabled":false}"#,
+        ] {
+            fs::write(path, format!(r#"{{"servers":{{"local":{invalid}}}}}"#)).unwrap();
+            assert!(config.trust_project().is_err(), "{invalid}");
+        }
+        fs::write(path, r#"{"servers":{"absent":{"enabled":false}}}"#).unwrap();
+        assert!(config.trust_project().is_err());
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
     fn ordered_tool_rules_survive_loading_and_unrelated_user_and_project_edits() {
         let root = std::env::temp_dir().join(format!("ion-mcp-order-{}", uuid::Uuid::now_v7()));
         fs::create_dir_all(root.join(".git")).unwrap();
@@ -635,6 +941,7 @@ mod tests {
                 }
                 if step == 0 {
                     let server = McpServer::Stdio(McpStdioServer {
+                        enabled: true,
                         command: "python3".into(),
                         args: Vec::new(),
                         cwd: None,
@@ -746,6 +1053,7 @@ mod tests {
         let config = McpConfig::new(&root);
         let remote = |url: &str, bearer_token_env: Option<&str>| {
             McpServer::Http(McpHttpServer {
+                enabled: true,
                 url: url.into(),
                 bearer_token_env: bearer_token_env.map(str::to_owned),
                 headers: Default::default(),
@@ -786,6 +1094,7 @@ mod tests {
         let config = McpConfig::with_project(&root.join("config"), &project_root).unwrap();
         let stdio = |command: &str| {
             McpServer::Stdio(McpStdioServer {
+                enabled: true,
                 cwd: None,
                 env: Default::default(),
                 command: command.into(),
@@ -883,6 +1192,7 @@ mod tests {
             .add(
                 "new",
                 McpServer::Stdio(McpStdioServer {
+                    enabled: true,
                     cwd: None,
                     env: Default::default(),
                     command: "echo".into(),
@@ -914,6 +1224,7 @@ mod tests {
         let config = McpConfig::new(&root);
         let server = || {
             McpServer::Stdio(McpStdioServer {
+                enabled: true,
                 cwd: None,
                 env: Default::default(),
                 command: "python3".into(),

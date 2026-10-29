@@ -609,6 +609,32 @@ with tempfile.TemporaryDirectory(prefix="ion-mcp-") as temporary:
         remote.redirect_followed = False
         remote.header_methods = []
         remote.received_paths = []
+        paused_script = work / "paused.py"
+        paused_script.write_text(server_source.replace("'mcp-events.txt'", "'enable-events.txt'"))
+        env.pop("ION_MCP_ENABLE_MISSING", None)
+        subprocess.run([binary, "mcp", "add", "paused-local", "--env", "TOKEN=${ION_MCP_ENABLE_MISSING}", sys.executable, str(paused_script)], env=env, check=True, capture_output=True)
+        subprocess.run([binary, "mcp", "add-http", "paused-remote", f"http://127.0.0.1:{remote.server_port}/mcp", "--bearer-token-env", "REMOTE_MCP_TOKEN", "--header", "X-Api-Key=${REMOTE_HEADER_KEY}", "--header", "X-Tenant=tenant", "--header", "X-Empty="], env=env, check=True, capture_output=True)
+        for name in ("paused-local", "paused-remote"):
+            subprocess.run([binary, "mcp", "disable", name], env=env, check=True, capture_output=True)
+        paused_env = {key: value for key, value in env.items() if key != "REMOTE_MCP_TOKEN"}
+        disabled = subprocess.run([binary, "--cwd", workspace, "rpc"], input="", env=paused_env, check=True, capture_output=True, text=True, timeout=15)
+        assert not disabled.stderr, disabled
+        assert not (workspace / "enable-events.txt").exists(), "disabled stdio server ran"
+        assert remote.received_paths == [], remote.received_paths
+        paused_listing = subprocess.run([binary, "mcp", "list"], env=env, check=True, capture_output=True, text=True)
+        assert "paused-local\tdisabled\t" in paused_listing.stdout and "paused-remote\tdisabled\t" in paused_listing.stdout, paused_listing
+        assert "  exposure\tdirect" in paused_listing.stdout and "${ION_MCP_ENABLE_MISSING}" not in paused_listing.stdout, paused_listing
+        for name in ("paused-local", "paused-remote"):
+            subprocess.run([binary, "mcp", "enable", name], env=env, check=True, capture_output=True)
+        enabled = subprocess.run([binary, "--cwd", workspace, "rpc"], input="", env={**env, "ION_MCP_ENABLE_MISSING": "fixture-token"}, check=True, capture_output=True, text=True, timeout=15)
+        assert not enabled.stderr, enabled
+        assert (workspace / "enable-events.txt").read_text() == "started\neof\n"
+        assert "/mcp" in remote.received_paths and set(remote.header_methods) == {"POST", "GET", "DELETE"}
+        assert requests == [] and remote_calls == [], "configuration management dispatched model/tool work"
+        for name in ("paused-local", "paused-remote"):
+            subprocess.run([binary, "mcp", "remove", name], env=env, check=True, capture_output=True)
+        remote.header_methods = []
+        remote.received_paths = []
         subprocess.run([binary, "mcp", "add-http", "redirected", f"http://127.0.0.1:{remote.server_port}/redirect", "--header", "Authorization=Bearer ${REMOTE_MCP_TOKEN}", "--header", "X-Api-Key=${REMOTE_HEADER_KEY}"], env=env, check=True, capture_output=True)
         redirected = subprocess.run([binary, "--cwd", workspace, "rpc"], input="", env=env, check=True, capture_output=True, text=True, timeout=15)
         assert "initialization failed" in redirected.stderr, redirected
@@ -725,7 +751,11 @@ with tempfile.TemporaryDirectory(prefix="ion-mcp-") as temporary:
         config_path.write_text(json.dumps(exposure_config))
         subprocess.run([binary, "mcp", "add", "order-probe", sys.executable, "-c", "import sys"], env=env, check=True, capture_output=True)
         subprocess.run([binary, "mcp", "remove", "order-probe"], env=env, check=True, capture_output=True)
-        assert list(json.loads(config_path.read_text())["servers"]["demo"]["tool_exposure"]) == ["p*", "*", "greet.user"]
+        for action in ("disable", "enable"):
+            subprocess.run([binary, "mcp", action, "demo"], env=env, check=True, capture_output=True)
+            saved_demo = json.loads(config_path.read_text())["servers"]["demo"]
+            assert list(saved_demo["tool_exposure"]) == ["p*", "*", "greet.user"]
+            assert saved_demo.get("enabled", True) == (action == "enable")
         exposed_listing = subprocess.run([binary, "mcp", "list"], env=env, check=True, capture_output=True, text=True)
         assert "demo\thidden\t" in exposed_listing.stdout and "  tool\tp*\tdeferred\n  tool\t*\thidden\n  tool\tgreet.user\tdirect" in exposed_listing.stdout, exposed_listing
         server.exposure_start = len(requests)
@@ -768,7 +798,21 @@ with tempfile.TemporaryDirectory(prefix="ion-mcp-") as temporary:
         subprocess.run([binary, "--cwd", workspace, "trust"], env=env, check=True, capture_output=True)
         added_listed = subprocess.run([binary, "--cwd", workspace, "mcp", "list"], env=env, check=True, capture_output=True, text=True)
         assert "project-added\thidden\t" in added_listed.stdout, added_listed
+        subprocess.run([binary, "--cwd", workspace, "mcp", "disable", "--project", "project-added"], env=env, check=True, capture_output=True)
+        pending = subprocess.run([binary, "--cwd", workspace, "mcp", "list"], env=env, check=True, capture_output=True, text=True)
+        assert "not trusted" in pending.stderr and "project-added" not in pending.stdout, pending
+        subprocess.run([binary, "--cwd", workspace, "trust"], env=env, check=True, capture_output=True)
+        disabled_project = subprocess.run([binary, "--cwd", workspace, "mcp", "list"], env=env, check=True, capture_output=True, text=True)
+        assert "project-added\tdisabled\t" in disabled_project.stdout, disabled_project
+        subprocess.run([binary, "--cwd", workspace, "mcp", "enable", "--project", "project-added"], env=env, check=True, capture_output=True)
+        subprocess.run([binary, "--cwd", workspace, "trust"], env=env, check=True, capture_output=True)
         subprocess.run([binary, "--cwd", workspace, "mcp", "remove", "--project", "project-added"], env=env, check=True, capture_output=True)
+        for action in ("disable", "enable"):
+            subprocess.run([binary, "--cwd", workspace, "mcp", action, "--project", "demo"], env=env, check=True, capture_output=True)
+            assert json.loads(project_config.read_text())["servers"]["demo"] == {"enabled": action == "enable"}, "project policy copied launch settings"
+            subprocess.run([binary, "--cwd", workspace, "trust"], env=env, check=True, capture_output=True)
+            scoped = subprocess.run([binary, "--cwd", workspace, "mcp", "list"], env=env, check=True, capture_output=True, text=True)
+            assert f"demo\t{'direct' if action == 'enable' else 'disabled'}\t" in scoped.stdout, scoped
         subprocess.run([binary, "--cwd", workspace, "untrust"], env=env, check=True, capture_output=True)
         project_config.unlink()
         (workspace / ".ion/mcp.lock").unlink(missing_ok=True)
@@ -784,6 +828,7 @@ with tempfile.TemporaryDirectory(prefix="ion-mcp-") as temporary:
         subprocess.run([binary, "mcp", "remove", "changing"], env=env, check=True, capture_output=True)
         subprocess.run([binary, "mcp", "remove", "remote"], env=env, check=True, capture_output=True)
         assert subprocess.run([binary, "mcp", "list"], env=env, check=True, capture_output=True, text=True).stdout == ""
+        print("Ion MCP persisted enablement, zero disabled startup I/O, re-enable and project trust: OK")
         print("Ion MCP discovery, tool call and child shutdown: OK")
         print("Ion MCP exact-first ordered patterns, persisted order and refreshed selection: OK")
         print("Ion MCP captured headers across POST/GET/DELETE, pre-network rejection and no credential redirects: OK")

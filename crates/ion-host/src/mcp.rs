@@ -123,6 +123,7 @@ impl McpTools {
         let mut servers = Vec::new();
         let attempts = saved
             .into_iter()
+            .filter(|(_, definition)| definition.enabled())
             .map(|(name, definition)| Self::connect_server(name, definition, cwd, catalog.clone()));
         for attempt in join_all(attempts).await {
             match attempt {
@@ -564,6 +565,7 @@ for line in sys.stdin:
             .add(
                 "bound",
                 McpServer::Stdio(McpStdioServer {
+                    enabled: true,
                     cwd: None,
                     env: Default::default(),
                     command: "python3".into(),
@@ -578,6 +580,18 @@ for line in sys.stdin:
         let source = startup.tools.unwrap();
         let tools = ion_core::ToolSet::new([source.clone() as Arc<dyn CodingToolSource>]);
         let issued = tools.snapshot();
+
+        // Persisted startup policy cannot revoke an active or issued capability.
+        let project = McpConfig::with_project(&root, &root).unwrap();
+        project.set_project_enabled("bound", false).unwrap();
+        project.trust_project().unwrap();
+        let disabled = McpTools::connect(&project, &root).await;
+        assert!(disabled.tools.is_none());
+        assert!(
+            disabled.diagnostics.is_empty(),
+            "{:?}",
+            disabled.diagnostics
+        );
 
         // Another consumer refreshes the source after this request was issued.
         source.servers[0]
@@ -665,6 +679,7 @@ for line in sys.stdin:
         print(json.dumps({"jsonrpc": "2.0", "method": "notifications/tools/list_changed"}), flush=True)
 "#;
                 config.add("settlement", McpServer::Stdio(McpStdioServer {
+                    enabled: true,
                     cwd: None,
                     env: Default::default(),
                     command: "python3".into(), args: vec!["-c".into(), server.into()],
