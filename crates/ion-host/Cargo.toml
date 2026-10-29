@@ -20,6 +20,7 @@ html5ever = "0.39"
 image = { version = "0.25.10", default-features = false, features = ["jpeg", "png", "gif", "webp"] }
 ion-ai.workspace = true
 ion-core.workspace = true
+jsonschema = { version = "0.60.2", default-features = false }
 reqwest = { version = "0.13.5", default-features = false, features = ["json", "stream", "rustls"] }
 regex = "1.13.1"
 rmcp = { version = "3.4.0", default-features = false, features = ["client", "transport-async-rw", "transport-streamable-http-client-reqwest"] }

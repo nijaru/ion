@@ -7,6 +7,7 @@ use serde_json::json;
 use super::{
     artifact::{save_full_mcp_output, save_raw_mcp_result},
     resource_content::{self, ResourceContent, ResourceData},
+    schema::{OutputSchema, OutputValidation},
 };
 
 /// Once a response is observed, its local processing remains owned through stop
@@ -27,11 +28,19 @@ pub(super) async fn run<T: Send + 'static>(work: impl FnOnce() -> T + Send + 'st
 /// unsupported blocks cannot expand into one warning per block.
 const MAX_INLINE_NOTICES: usize = 8;
 const MAX_NOTICE_CHARS: usize = 256;
-pub(super) fn convert_tool_result(name: &str, result: CallToolResult) -> CodingToolOutput {
+pub(super) fn convert_tool_result(
+    name: &str,
+    result: CallToolResult,
+    schema: Option<&OutputSchema>,
+) -> CodingToolOutput {
     // The remote error/success flag is the observed outcome. Local conversion
     // preserves it exactly and reports its own delivery failures beside it,
     // never as a replacement execution error.
     let is_error = result.is_error.unwrap_or(false);
+    let validation = schema.map(|schema| schema.validate(&result));
+    let validation_needs_raw = validation
+        .as_ref()
+        .is_some_and(OutputValidation::needs_raw_result);
     let mut content = Vec::new();
     let mut images = Vec::new();
     let mut notices = Vec::new();
@@ -60,10 +69,10 @@ pub(super) fn convert_tool_result(name: &str, result: CallToolResult) -> CodingT
             omitted_blocks - notices.len()
         ));
     }
-    // Retain the original full response privately whenever conversion omitted
-    // content. Its JSON streams into the artifact; only the retrieval
-    // reference enters the model context.
-    let (raw_result_path, raw_result_error) = if omitted_blocks > 0 {
+    // Retain the full response when conversion omitted content or conformance
+    // was not established. Validation never rewrites the server's observation.
+    let retain_raw = omitted_blocks > 0 || validation_needs_raw;
+    let (raw_result_path, raw_result_error) = if retain_raw {
         match save_raw_mcp_result(&result) {
             Ok(path) => (Some(path), None),
             Err(error) => (None, Some(format!("{error:#}"))),
@@ -80,8 +89,19 @@ pub(super) fn convert_tool_result(name: &str, result: CallToolResult) -> CodingT
         value["conversion_notices"] = json!(notices);
         value["retained_blocks"] = json!(retained_blocks);
         value["omitted_blocks"] = json!(omitted_blocks);
+    }
+    if retain_raw {
         value["raw_result_path"] = json!(raw_result_path);
         value["raw_result_error"] = json!(raw_result_error);
+    }
+    if let Some(validation) = validation {
+        value["output_schema_validation"] = serde_json::to_value(validation)
+            .expect("a validation status contains only JSON values");
+        if validation_needs_raw {
+            value["output_schema_validation"]["notice"] = json!(
+                "Conformance was not established. The raw reply and server outcome are preserved; this is not evidence that the call was not executed or permission to replay it."
+            );
+        }
     }
     let encoded = serde_json::to_string(&value).expect("a JSON value always encodes");
     if encoded.len() <= 64 * 1024 {

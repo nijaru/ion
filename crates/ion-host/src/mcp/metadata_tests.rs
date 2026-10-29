@@ -1,5 +1,6 @@
+use super::catalog::RegisteredTool;
 use super::*;
-use ion_ai::ToolCall;
+use ion_ai::{ToolCall, ToolSpec};
 
 #[tokio::test]
 async fn cross_server_aliases_and_descriptions_keep_frozen_routes_across_refresh() {
@@ -262,10 +263,7 @@ fn colliding_refresh_keeps_the_complete_previous_catalog() {
     let registered = |spec, original_name: &str, schema| RegisteredTool {
         spec,
         original_name: original_name.into(),
-        result_schema: Some(ToolResultSchema {
-            value_path: vec!["structured_content".into()],
-            schema,
-        }),
+        output_schema: Some(Arc::new(schema::OutputSchema::capture(schema))),
     };
     publish_tools(
         &catalog,
@@ -302,7 +300,12 @@ fn colliding_refresh_keeps_the_complete_previous_catalog() {
     assert_eq!(snapshot["a"][0].spec.name, "first");
     assert_eq!(snapshot["a"][0].original_name, "original-a");
     assert_eq!(
-        snapshot["a"][0].result_schema.as_ref().unwrap().schema,
+        snapshot["a"][0]
+            .output_schema
+            .as_ref()
+            .unwrap()
+            .hint()
+            .schema,
         json!({"type":"string"})
     );
     assert_eq!(snapshot["b"][0].spec.name, "second");

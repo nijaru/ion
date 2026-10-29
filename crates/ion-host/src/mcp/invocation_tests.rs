@@ -688,7 +688,7 @@ fn partial_conversion_keeps_supported_text_structured_and_outcome() {
         "structuredContent": {"rows": 2}
     }))
     .unwrap();
-    let output = convert_tool_result("mixed", result);
+    let output = convert_tool_result("mixed", result, None);
     assert!(!output.is_error, "{}", output.value);
     assert_eq!(output.value["is_error"], false, "{}", output.value);
     let content = output.value["content"].as_str().unwrap();
@@ -732,7 +732,7 @@ fn embedded_resources_deliver_supplied_data_without_reading_uris() {
         ],
         "structuredContent":{"rows":2}
     })).unwrap();
-    let output = convert_tool_result("embedded", result);
+    let output = convert_tool_result("embedded", result, None);
     assert!(!output.is_error);
     assert_eq!(output.value["structured_content"], json!({"rows":2}));
     assert!(
@@ -786,7 +786,7 @@ fn invalid_image_omission_keeps_following_content() {
         ]
     }))
     .unwrap();
-    let output = convert_tool_result("picture", result);
+    let output = convert_tool_result("picture", result, None);
     assert!(!output.is_error, "{}", output.value);
     assert_eq!(output.value["content"], "still here");
     assert!(
@@ -817,7 +817,7 @@ fn server_execution_error_is_not_replaced_by_conversion_notices() {
         "isError": true
     }))
     .unwrap();
-    let output = convert_tool_result("broken", result);
+    let output = convert_tool_result("broken", result, None);
     assert!(output.is_error, "{}", output.value);
     assert_eq!(output.value["is_error"], true);
     assert!(
@@ -849,7 +849,7 @@ fn truncated_conversion_keeps_notices_and_retrieval_references() {
             "isError": false
         }))
         .unwrap();
-        let output = convert_tool_result("big", result);
+        let output = convert_tool_result("big", result, None);
         assert!(!output.is_error, "{}", output.value);
         assert_eq!(output.value["truncated"], true);
         assert!(output.value["content"].as_str().unwrap().len() < 64 * 1024);
@@ -899,7 +899,7 @@ fn oversized_structured_content_is_not_retained_inline() {
     let result: CallToolResult =
         serde_json::from_value(json!({ "content": [], "structuredContent": { "rows": rows } }))
             .unwrap();
-    let output = convert_tool_result("wide", result);
+    let output = convert_tool_result("wide", result, None);
     let inline = serde_json::to_string(&output.value).unwrap();
     assert!(
         inline.len() < 64 * 1024,
@@ -933,7 +933,7 @@ fn omission_notices_stay_bounded_for_many_unsupported_blocks() {
         .map(|_| json!({"type": "audio", "data": "AAAA", "mimeType": "audio/wav"}))
         .collect();
     let result: CallToolResult = serde_json::from_value(json!({"content": blocks})).unwrap();
-    let output = convert_tool_result("many", result);
+    let output = convert_tool_result("many", result, None);
     assert!(!output.is_error, "{}", output.value);
     assert_eq!(output.value["omitted_blocks"], 64);
     assert_eq!(output.value["retained_blocks"], 0);

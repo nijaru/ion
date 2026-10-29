@@ -1372,6 +1372,25 @@ and no rejected image enters model context. When anything is omitted, the
 original response is written to a private `ion-mcp-raw-result-*.json` named by
 `raw_result_path`; a write failure reports `raw_result_error` instead.
 
+Advertised output schemas are checked against the original `structuredContent`
+before conversion. Results include `output_schema_validation.status`: `valid`,
+`invalid`, `indeterminate`, `not_checked` or `skipped_remote_error`. Missing data
+differs from explicit JSON null; remote errors skip success-data checking.
+No advertised schema means no status. A failed or unchecked check keeps the
+server's outcome and raw reply, with `raw_result_path` or `raw_result_error`;
+it does not mean the call failed to execute or permit replay. Status survives
+inline truncation and describes the original data, not the preview.
+
+Validation is offline, defaults to JSON Schema 2020-12 and respects supported
+explicit dialects. Source and reference expansion are bounded to 4096 JSON nodes,
+depth 64 and 1 MiB of key/string text. Recursive references, resource/anchor scopes,
+external references, `unevaluatedProperties`/`unevaluatedItems`, unsupported patterns
+and invalid schemas remain **unchecked**, with startup/refresh warnings; their
+tools stay available. Checked patterns use a shared ASCII subset (literals,
+positive word/range classes, anchors and greedy quantifiers) with a linear engine;
+dot, escapes, groups and regex-format checks remain unchecked rather than claiming
+ECMAScript semantics from Rust compilation. No reference is fetched.
+
 Servers that advertise resources also expose `list_mcp_resources`,
 `list_mcp_resource_templates` and `read_mcp_resource`; these tools are added
 when at least one configured server advertises resource capability.
@@ -2347,9 +2366,10 @@ registrations can use `ToolDefinition::with_result_schema(schema)` for the whole
 `value` (`path: ['value']`), or `ToolResultSchema.value_path` for a nested value.
 An advertised MCP output schema points to `['value', 'structured_content']`;
 content, errors, conversion notices, capture paths and images are not unwrapped
-or discarded. Hints do not validate or convert observations. Check `is_error` and
-truncation/delivery markers before interpreting data; discovery fetches no schema
-references.
+or discarded. Hints do not validate or convert observations. MCP execution reports its separate
+`output_schema_validation` status for the original structured reply; generic SDK
+hints do not trigger validation. Check `is_error`, that status and truncation/delivery
+markers before interpreting data; discovery fetches no schema references.
 
 Both include callable deferred tools and exclude intrinsic `tool_search` and
 `code_mode`. Discovery is read-only: it neither activates tools nor records child

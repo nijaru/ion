@@ -8,12 +8,13 @@ use rmcp::model::{
 };
 use tokio_util::sync::CancellationToken;
 
-use super::{Server, conversion, request::RequestError, tool_error};
+use super::{Server, conversion, request::RequestError, schema::OutputSchema, tool_error};
 
 /// Original identity and connection are frozen with the model-visible definition.
 pub(super) struct McpExecutor {
     pub server: Arc<Server>,
     pub original_name: String,
+    pub output_schema: Option<Arc<OutputSchema>>,
 }
 
 impl ToolExecutor for McpExecutor {
@@ -27,9 +28,11 @@ impl ToolExecutor for McpExecutor {
             let mut output = match self.call(call, stop).await {
                 Ok((result, cleanup_error)) => {
                     let name = call.name.clone();
-                    let mut output =
-                        conversion::run(move || conversion::convert_tool_result(&name, result))
-                            .await;
+                    let schema = self.output_schema.clone();
+                    let mut output = conversion::run(move || {
+                        conversion::convert_tool_result(&name, result, schema.as_deref())
+                    })
+                    .await;
                     if let Some(error) = cleanup_error {
                         output.value["cleanup_error"] = serde_json::Value::String(error);
                     }

@@ -1,34 +1,36 @@
 //! Explicit MCP tool connections. Session facts remain in ion-core.
 use std::{
-    collections::{BTreeMap, HashSet},
     path::Path,
     sync::{
         Arc, RwLock as SyncRwLock,
         atomic::{AtomicU64, Ordering},
     },
-    time::Duration,
 };
 
 use anyhow::{Context, Result, ensure};
 use futures_util::future::join_all;
 use indexmap::IndexMap;
-use ion_ai::{BoxFuture, ToolSpec};
+use ion_ai::BoxFuture;
 use ion_core::{
     CodingToolOutput, CodingToolSource, ToolActivityKind, ToolDefinition, ToolExposure,
-    ToolPresentation, ToolRegistration, ToolResultSchema,
+    ToolPresentation, ToolRegistration,
 };
 use rmcp::{
     ClientHandler, RoleClient,
     service::{NotificationContext, RunningService},
 };
-use serde_json::{Value, json};
-use sha2::{Digest, Sha256};
-#[cfg(test)]
-use std::fs;
+use serde_json::json;
 use tokio::sync::{Mutex, RwLock};
 use tokio_util::sync::CancellationToken;
+#[cfg(test)]
+use {
+    ion_core::ToolResultSchema,
+    serde_json::Value,
+    std::{fs, time::Duration},
+};
 
 mod artifact;
+mod catalog;
 mod config;
 mod connection;
 mod conversion;
@@ -40,9 +42,13 @@ mod launch;
 mod request;
 mod resource_content;
 mod resource_tools;
+mod schema;
 mod send;
 mod stderr;
 mod values;
+#[cfg(test)]
+use catalog::exposed_tool_name;
+use catalog::{Catalog, DiscoveredTools, fetch_tools, publish_tools, register_tools};
 use connection::{Connection, combine_cleanup};
 use invocation::McpExecutor;
 
@@ -54,6 +60,8 @@ mod lifecycle_tests;
 mod metadata_tests;
 #[cfg(test)]
 mod resource_tests;
+#[cfg(test)]
+mod schema_tests;
 
 pub use config::{McpConfig, McpExposure, McpHttpServer, McpListing, McpServer, McpStdioServer};
 use config::{validate_name, validate_server};
@@ -68,15 +76,6 @@ impl ClientHandler for ChangeHandler {
 }
 
 type Client = RunningService<RoleClient, ChangeHandler>;
-struct RegisteredTool {
-    spec: ToolSpec,
-    original_name: String,
-    result_schema: Option<ToolResultSchema>,
-}
-
-type RegisteredTools = Vec<RegisteredTool>;
-type Catalog = BTreeMap<String, RegisteredTools>;
-
 struct Server {
     name: String,
     description: Option<String>,
@@ -131,9 +130,10 @@ impl McpTools {
         for attempt in join_all(attempts).await {
             match attempt {
                 Ok((server, discovered)) => {
-                    let published = publish_tools(&catalog, &server.name, discovered);
+                    let published = publish_tools(&catalog, &server.name, discovered.tools);
                     match published {
                         Ok(()) => {
+                            diagnostics.extend(discovered.diagnostics);
                             if let Some(notice) = server
                                 .stderr
                                 .as_ref()
@@ -167,7 +167,7 @@ impl McpTools {
         definition: McpServer,
         cwd: &Path,
         catalog: Arc<SyncRwLock<Catalog>>,
-    ) -> Result<(Server, RegisteredTools)> {
+    ) -> Result<(Server, DiscoveredTools)> {
         validate_name(&name)?;
         validate_server(&definition)?;
         let changed = Arc::new(AtomicU64::new(0));
@@ -189,9 +189,15 @@ impl McpTools {
             .as_ref()
             .is_none_or(|info| info.capabilities.tools.is_some());
         let discovered = if advertises_tools {
-            discover_tools(&name, &client.client).await
+            match fetch_tools(&name, &client.client).await {
+                Ok(tools) => {
+                    let name = name.clone();
+                    conversion::run(move || register_tools(&name, tools)).await
+                }
+                Err(error) => Err(error),
+            }
         } else {
-            Ok(Vec::new())
+            Ok(DiscoveredTools::default())
         };
         let stderr = client.stderr_log();
         match discovered {
@@ -247,14 +253,28 @@ impl McpTools {
                 server.refreshed_version.store(version, Ordering::Release);
                 continue;
             };
-            let updated = tokio::select! {
+            let listed = tokio::select! {
                 () = server.retiring.cancelled() => break,
                 () = stop.cancelled() => break,
-                result = discover_tools(&server.name, &client.client) =>
-                    result.and_then(|updated| publish_tools(&self.catalog, &server.name, updated)),
+                result = fetch_tools(&server.name, &client.client) => result,
             };
+            let updated = match listed {
+                Ok(tools) => {
+                    let name = server.name.clone();
+                    // Once listing is observed, keep the compiler join and read
+                    // lease outside cancellation races. Shutdown joins it too.
+                    conversion::run(move || register_tools(&name, tools)).await
+                }
+                Err(error) => Err(error),
+            };
+            if stop.is_cancelled() || server.retiring.is_cancelled() {
+                break;
+            }
             match updated {
-                Ok(()) => {}
+                Ok(updated) => match publish_tools(&self.catalog, &server.name, updated.tools) {
+                    Ok(()) => diagnostics.extend(updated.diagnostics),
+                    Err(error) => diagnostics.push(format!("{error:#}")),
+                },
                 Err(error) => diagnostics.push(format!("{error:#}")),
             }
             // A failed listing keeps the previous snapshot and warns once.
@@ -345,95 +365,6 @@ impl Server {
     }
 }
 
-fn publish_tools(
-    catalog: &SyncRwLock<Catalog>,
-    server: &str,
-    tools: RegisteredTools,
-) -> Result<()> {
-    let mut catalog = catalog
-        .write()
-        .unwrap_or_else(std::sync::PoisonError::into_inner);
-    let mut names: HashSet<_> = catalog
-        .iter()
-        .filter(|(name, _)| name.as_str() != server)
-        .flat_map(|(_, tools)| tools.iter().map(|tool| tool.spec.name.as_str()))
-        .collect();
-    for tool in &tools {
-        ensure!(
-            names.insert(&tool.spec.name),
-            "MCP server {server} has colliding tool name {:?} (alias {}) in the complete MCP source",
-            tool.original_name,
-            tool.spec.name
-        );
-    }
-    catalog.insert(server.to_owned(), tools);
-    Ok(())
-}
-
-async fn discover_tools(name: &str, client: &Client) -> Result<RegisteredTools> {
-    let tools = tokio::time::timeout(Duration::from_secs(10), client.list_all_tools())
-        .await
-        .with_context(|| format!("MCP server {name} tool listing timed out"))?
-        .with_context(|| format!("MCP server {name} tool listing failed"))?;
-    let mut registered = Vec::new();
-    for tool in tools {
-        let tool_name = tool.name.to_string();
-        ensure!(
-            !tool_name.is_empty(),
-            "MCP server {name} listed an empty tool name"
-        );
-        let exposed = exposed_tool_name(name, &tool_name);
-        let description = tool.description.map_or_else(
-            || format!("Tool {tool_name} from MCP server {name}"),
-            |description| description.into_owned(),
-        );
-        registered.push(RegisteredTool {
-            spec: ToolSpec {
-                name: exposed,
-                description,
-                input_schema: Value::Object(Arc::unwrap_or_clone(tool.input_schema)),
-            },
-            original_name: tool_name,
-            result_schema: tool.output_schema.map(|schema| ToolResultSchema {
-                value_path: vec!["structured_content".into()],
-                schema: Value::Object(Arc::unwrap_or_clone(schema)),
-            }),
-        });
-    }
-    Ok(registered)
-}
-
-fn exposed_tool_name(server: &str, original: &str) -> String {
-    const MAX_NAME_BYTES: usize = 64;
-    const HASH_HEX_BYTES: usize = 16;
-    // A length-delimited server component cannot consume a tool's separator.
-    let mut exposed = format!("mcp__{}_{server}__", server.len());
-    exposed.extend(original.chars().map(|character| {
-        if character.is_ascii_alphanumeric() || character == '_' || character == '-' {
-            character
-        } else {
-            '_'
-        }
-    }));
-    if exposed.len() <= MAX_NAME_BYTES
-        && original
-            .bytes()
-            .all(|byte| byte.is_ascii_alphanumeric() || byte == b'_' || byte == b'-')
-    {
-        return exposed;
-    }
-
-    let mut hasher = Sha256::new();
-    hasher.update(server.as_bytes());
-    hasher.update([0]);
-    hasher.update(original.as_bytes());
-    let hash = format!("{:x}", hasher.finalize());
-    exposed.truncate(MAX_NAME_BYTES - HASH_HEX_BYTES - 1);
-    exposed.push('_');
-    exposed.push_str(&hash[..HASH_HEX_BYTES]);
-    exposed
-}
-
 impl CodingToolSource for McpTools {
     fn registrations(self: Arc<Self>) -> Vec<ToolRegistration> {
         let mut registrations = Vec::new();
@@ -472,7 +403,7 @@ impl CodingToolSource for McpTools {
                 registrations.push(ToolRegistration::new(
                     ToolDefinition {
                         spec,
-                        result_schema: tool.result_schema.clone(),
+                        result_schema: tool.output_schema.as_ref().map(|schema| schema.hint()),
                         presentation: ToolPresentation::static_target(
                             ToolActivityKind::External,
                             tool.original_name.clone(),
@@ -482,6 +413,7 @@ impl CodingToolSource for McpTools {
                     Arc::new(McpExecutor {
                         server: server.clone(),
                         original_name: tool.original_name.clone(),
+                        output_schema: tool.output_schema.clone(),
                     }),
                 ));
             }
@@ -816,6 +748,7 @@ for line in sys.stdin:
                 ContentBlock::text("a picture"),
                 ContentBlock::image(data, "image/png"),
             ]),
+            None,
         );
         assert!(!result.is_error, "{}", result.value);
         assert_eq!(result.images.len(), 1);
@@ -829,6 +762,7 @@ for line in sys.stdin:
         let mismatch = convert_tool_result(
             "picture",
             CallToolResult::success(vec![ContentBlock::image(data, "image/jpeg")]),
+            None,
         );
         // Validation still withholds the mismatched image; the server's
         // success survives with an indexed conversion notice instead of a
@@ -852,6 +786,7 @@ for line in sys.stdin:
         let output = convert_tool_result(
             "report",
             CallToolResult::success(vec![ContentBlock::text(full_text.clone())]),
+            None,
         );
         assert!(!output.is_error, "{}", output.value);
         assert_eq!(output.value["truncated"], true);

@@ -877,6 +877,25 @@ previews retain the outcome, notices and retrieval references. Validation still
 rejects invalid image data from image delivery; preserving a response is not
 permission to render or execute unsupported content.
 
+Capture each advertised MCP output schema with its offline validator in the same
+frozen registration as its executor and unchanged result hint. Check the original
+structured reply before delivery conversion: missing differs from explicit null,
+and remote errors skip success-data checking. Report `output_schema_validation`
+separately as `valid`, `invalid`, `indeterminate`, `not_checked` or
+`skipped_remote_error`; no advertised schema means no marker. Never rewrite the
+remote outcome, retry, repair or infer non-execution from a local schema failure.
+Retain raw replies privately when conformance is not established, with explicit
+artifact failures; preserve the status and references through truncation.
+Unsupported, malformed, unresolved or over-budget schemas leave tools available
+with bounded discovery warnings and `not_checked` results. Default to JSON Schema
+2020-12, respect supported explicit dialects and never retrieve references.
+Bound source and reference-expanded work; leave recursive/resource-scope and
+`unevaluated*` annotation checks unchecked rather than admitting implicit
+exponential revalidation. Check only a shared ASCII pattern subset with a linear
+engine; successful Rust regex compilation alone does not prove ECMAScript semantics.
+Compile off-thread and retain the join through controlled refresh cancellation
+and shutdown. Discovery hints remain advisory, not generic SDK result validation.
+
 Local MCP stderr is diagnostic data, never direct terminal publication or synthetic
 conversation. Capture a private 64 KiB prefix per connection, report omitted bytes
 and capture failures, and expose its reference through startup diagnostics and
