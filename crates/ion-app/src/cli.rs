@@ -189,6 +189,12 @@ pub(crate) enum McpAction {
         project: bool,
         #[arg(long, value_enum, default_value = "direct")]
         exposure: ExposureArg,
+        /// Server directory, relative to the Session directory; supports ~/.
+        #[arg(long, value_name = "DIR")]
+        server_cwd: Option<PathBuf>,
+        /// Override an inherited variable (repeatable); supports ${NAME} references.
+        #[arg(long, value_name = "NAME=VALUE", value_parser = parse_mcp_env)]
+        env: Vec<(String, String)>,
         /// Arguments passed to the server; use -- to separate overlapping Ion flags.
         #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
         args: Vec<String>,
@@ -208,6 +214,13 @@ pub(crate) enum McpAction {
         #[arg(long)]
         project: bool,
     },
+}
+
+fn parse_mcp_env(value: &str) -> Result<(String, String), String> {
+    value
+        .split_once('=')
+        .map(|(name, value)| (name.to_owned(), value.to_owned()))
+        .ok_or_else(|| "expected NAME=VALUE".to_owned())
 }
 
 /// Each option has one definition. Applicability owns both help and validation of

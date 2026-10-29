@@ -14,14 +14,18 @@ from pathlib import Path
 root = Path(__file__).resolve().parent.parent
 binary = Path(os.environ.get("ION_SMOKE_BIN", root / "target/debug/ion"))
 requests = []
+launch_requests = []
 remote_calls = []
 
 
 class Provider(BaseHTTPRequestHandler):
     def do_POST(self):
         body = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
-        requests.append(body)
-        if self.path == "/exposure/chat/completions":
+        if self.path != "/launch/chat/completions":
+            requests.append(body)
+        if self.path == "/launch/chat/completions":
+            changes = self.launch_changes(body)
+        elif self.path == "/exposure/chat/completions":
             changes = self.exposure_changes(body)
         elif len(requests) == 1:
             names = {tool["function"]["name"] for tool in body["tools"]}
@@ -199,6 +203,17 @@ class Provider(BaseHTTPRequestHandler):
         self.send_header("Content-Length", str(len(payload)))
         self.end_headers()
         self.wfile.write(payload)
+
+    def launch_changes(self, body):
+        launch_requests.append(body)
+        if len(launch_requests) == 1:
+            names = {tool["function"]["name"] for tool in body["tools"]}
+            assert all(name.startswith("mcp__6_launch__") for name in names if name.startswith("mcp__")), names
+            greet = next(name for name in names if name.startswith("mcp__6_launch__greet_user_"))
+            return [{"choices": [{"index": 0, "delta": {"tool_calls": [{"index": 0, "id": "launch", "type": "function", "function": {"name": greet, "arguments": '{"name":"Launch"}'}}]}, "finish_reason": "tool_calls"}]}]
+        assert len(launch_requests) == 2, launch_requests
+        assert any("Hello, Launch!" in message.get("content", "") for message in body["messages"] if message.get("role") == "tool"), body
+        return [{"choices": [{"index": 0, "delta": {"content": "MCP_LAUNCH_OK"}, "finish_reason": "stop"}]}]
 
     def exposure_changes(self, body):
         step = len(requests) - self.server.exposure_start
@@ -705,7 +720,7 @@ with tempfile.TemporaryDirectory(prefix="ion-mcp-") as temporary:
         listed = subprocess.run([binary, "--cwd", workspace, "mcp", "list"], env=env, check=True, capture_output=True, text=True)
         assert "project-demo\tdirect\t" in listed.stdout, listed
         changed_config = json.loads(project_config.read_text())
-        changed_config["servers"]["project-two"] = {"command": sys.executable, "args": ["-c", "import sys"]}
+        changed_config["servers"]["project-demo"]["env"] = {"TRUST_PROBE": "changed"}
         project_config.write_text(json.dumps(changed_config))
         changed = subprocess.run([binary, "--cwd", workspace, "mcp", "list"], env=env, check=True, capture_output=True, text=True)
         assert "project-demo" not in changed.stdout and "not trusted" in changed.stderr, changed
@@ -733,6 +748,58 @@ with tempfile.TemporaryDirectory(prefix="ion-mcp-") as temporary:
         subprocess.run([binary, "mcp", "remove", "remote"], env=env, check=True, capture_output=True)
         assert subprocess.run([binary, "mcp", "list"], env=env, check=True, capture_output=True, text=True).stdout == ""
         print("Ion MCP discovery, tool call and child shutdown: OK")
+
+        launch_directory = workspace / "server data"
+        launch_directory.mkdir()
+        launch_script = work / "launch.py"
+        launch_script.write_text(
+            "import os,json\nfrom pathlib import Path\n"
+            "Path('launch-observed.json').write_text(json.dumps({'cwd':os.getcwd(),"
+            "'env':{key:os.environ.get(key) for key in ['INHERITED','OVERRIDE','COPY','EMPTY','TOKEN','DEFAULT','COMMAND']}}))\n"
+            + server_source
+        )
+        env.update(INHERITED="parent-value", OVERRIDE="parent-override", ION_MCP_LAUNCH_TOKEN="sensitive-fixture-value")
+        env.pop("ION_MCP_MISSING", None)
+        subprocess.run([
+            binary, "mcp", "add", "launch", "--server-cwd", "server data",
+            "--env", "OVERRIDE=old", "--env", "OVERRIDE=new", "--env", "COPY=${INHERITED}",
+            "--env", "EMPTY=", "--env", "TOKEN=${ION_MCP_LAUNCH_TOKEN}",
+            "--env", "DEFAULT=${ION_MCP_MISSING:-fallback}", "--env", "COMMAND=!printf not-executed",
+            sys.executable, str(launch_script),
+        ], env=env, check=True, capture_output=True)
+        launch_config = json.loads(config_path.read_text())
+        assert launch_config["servers"]["launch"]["cwd"] == "server data"
+        assert launch_config["servers"]["launch"]["env"]["TOKEN"] == "${ION_MCP_LAUNCH_TOKEN}"
+        launch_config["servers"]["missing-env"] = {
+            "command": sys.executable, "args": [str(launch_script)],
+            "env": {"TOKEN": "${ION_MCP_MISSING}"},
+        }
+        launch_config["servers"]["missing-dir"] = {
+            "command": sys.executable, "args": [str(launch_script)], "cwd": "absent-directory",
+            "env": {"TOKEN": "sensitive-fixture-value"},
+        }
+        launch_config["servers"]["bad-env-shape"] = {
+            "command": sys.executable, "env": {"PIN": 731982654},
+        }
+        config_path.write_text(json.dumps(launch_config))
+        listed = subprocess.run([binary, "--cwd", workspace, "mcp", "list"], env=env, check=True, capture_output=True, text=True)
+        assert "  cwd\tserver data" in listed.stdout and "  env\tTOKEN" in listed.stdout, listed
+        assert all(value not in listed.stdout + listed.stderr for value in ["sensitive-fixture-value", "731982654", "${ION_MCP_LAUNCH_TOKEN}"]), listed
+        assert "bad-env-shape" in listed.stderr, listed
+        subprocess.run([binary, "use", "smoke", "mcp-model", "--endpoint", f"http://127.0.0.1:{server.server_port}/launch/chat/completions", "--wire", "chat-completions"], env=env, check=True, capture_output=True)
+        launched = subprocess.run([binary, "--cwd", workspace, "run", "Check local server launch."], env=env, check=True, capture_output=True, text=True, timeout=30)
+        assert launched.stdout.strip() == "MCP_LAUNCH_OK" and len(launch_requests) == 2, launched
+        assert "missing-env" in launched.stderr and "ION_MCP_MISSING" in launched.stderr and "missing-dir" in launched.stderr, launched
+        assert all(value not in launched.stdout + launched.stderr for value in ["sensitive-fixture-value", "731982654"]), launched
+        observed = json.loads((launch_directory / "launch-observed.json").read_text())
+        assert Path(observed["cwd"]).samefile(launch_directory), observed
+        assert observed["env"] == {
+            "INHERITED": "parent-value", "OVERRIDE": "new", "COPY": "parent-value", "EMPTY": "",
+            "TOKEN": "sensitive-fixture-value", "DEFAULT": "fallback", "COMMAND": "!printf not-executed",
+        }, observed
+        assert (launch_directory / "mcp-events.txt").read_text() == "started\ncalled:Launch\neof\n"
+        assert not (workspace / "launch-observed.json").exists(), "failed launch ran a process"
+        print("Ion MCP cwd, inherited/overridden environment, secret-safe diagnostics and pre-spawn failures: OK")
     finally:
         server.shutdown()
         server.server_close()

@@ -72,6 +72,8 @@ async fn native_roots_are_reaped_after_shutdown_and_failed_startup() {
                 .add(
                     "owned",
                     McpServer::Stdio(McpStdioServer {
+                        cwd: None,
+                        env: Default::default(),
                         command: "python3".into(),
                         args: vec!["-c".into(), SERVER.into(), mode.into()],
                         exposure: McpExposure::Direct,
@@ -153,6 +155,8 @@ async fn shutdown_reaps_root_while_protocol_send_is_backpressured() {
     let connection = Connection::start(
         "blocked",
         McpServer::Stdio(McpStdioServer {
+            cwd: None,
+            env: Default::default(),
             command: "python3".into(),
             args: vec!["-c".into(), SERVER.into(), "blocked-send".into()],
             exposure: McpExposure::Direct,
@@ -202,6 +206,8 @@ async fn stderr_is_bounded_private_and_drained_without_blocking_tool_results() {
         .add(
             "owned",
             McpServer::Stdio(McpStdioServer {
+                cwd: None,
+                env: Default::default(),
                 command: "python3".into(),
                 args: vec!["-c".into(), SERVER.into(), "stderr-flood".into()],
                 exposure: McpExposure::Direct,
@@ -261,6 +267,8 @@ async fn cancelled_shutdown_waiter_does_not_abandon_graceful_close() {
         .add(
             "owned",
             McpServer::Stdio(McpStdioServer {
+                cwd: None,
+                env: Default::default(),
                 command: "python3".into(),
                 args: vec!["-c".into(), SERVER.into(), "delayed-exit".into()],
                 exposure: McpExposure::Direct,

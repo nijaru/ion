@@ -325,6 +325,15 @@ async fn run_cli(cli: Invocation) -> Result<()> {
                                     metadata_field(&server.command),
                                     metadata_field(&server.args.join(" "))
                                 ))?;
+                                if let Some(cwd) = &server.cwd {
+                                    print_stdout(format_args!(
+                                        "  cwd\t{}",
+                                        metadata_field(&cwd.to_string_lossy())
+                                    ))?;
+                                }
+                                for name in server.env.keys() {
+                                    print_stdout(format_args!("  env\t{}", metadata_field(name)))?;
+                                }
                             }
                             McpServer::Http(server) => {
                                 print_stdout(format_args!(
@@ -349,9 +358,13 @@ async fn run_cli(cli: Invocation) -> Result<()> {
                     command,
                     project,
                     exposure,
+                    server_cwd,
+                    env,
                     args,
                 } => {
                     let server = McpServer::Stdio(McpStdioServer {
+                        cwd: server_cwd,
+                        env: env.into_iter().collect(),
                         command,
                         args,
                         exposure: exposure.into(),

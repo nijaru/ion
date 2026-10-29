@@ -793,7 +793,16 @@ provenance, not silent rule truncation. Project-scoped MCP configuration is iner
 until an explicit trust decision binds the canonical project root to the current
 file digest; editing the file invalidates trust. Untrusted entries are not
 connected, trusted project entries may override user entries by name, and trust is
-not sandboxing. MCP discovery isolates server failures and refreshes at later
+not sandboxing. Local server manifests may select a cwd relative to the Session
+(or an absolute/home path) and overlay a captured native environment. Resolve
+`${NAME}` and unset-only `${NAME:-fallback}` against that parent snapshot before
+launch, not against sibling overrides. Values are non-recursive data, not shell
+commands; bound override names plus expanded values to 1 MiB. Missing/invalid
+references reject that server without executing it; resolution diagnostics and
+configuration listing do not disclose values. The directory defaults to the
+Session cwd; configured `~` uses the parent's HOME, not an override. Existing
+project trust and owned process cleanup apply to this launch configuration.
+MCP discovery isolates server failures and refreshes at later
 request boundaries; possibly effectful invocations are never transparently
 retried. MCP shutdown retires every peer before joining connection cleanup;
 in-flight requests release read leases without requiring a remote response or

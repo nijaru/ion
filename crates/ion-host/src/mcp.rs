@@ -33,6 +33,7 @@ mod conversion;
 mod framing;
 mod http;
 mod invocation;
+mod launch;
 mod request;
 mod resource_tools;
 mod send;
@@ -554,6 +555,8 @@ for line in sys.stdin:
             .add(
                 "bound",
                 McpServer::Stdio(McpStdioServer {
+                    cwd: None,
+                    env: Default::default(),
                     command: "python3".into(),
                     args: vec!["-c".into(), server.into()],
                     exposure: McpExposure::Direct,
@@ -653,6 +656,8 @@ for line in sys.stdin:
         print(json.dumps({"jsonrpc": "2.0", "method": "notifications/tools/list_changed"}), flush=True)
 "#;
                 config.add("settlement", McpServer::Stdio(McpStdioServer {
+                    cwd: None,
+                    env: Default::default(),
                     command: "python3".into(), args: vec!["-c".into(), server.into()],
                     exposure: McpExposure::Direct,
                     tool_exposure: Default::default(),

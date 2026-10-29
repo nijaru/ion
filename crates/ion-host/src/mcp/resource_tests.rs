@@ -119,6 +119,8 @@ async fn resources_list_templates_read_and_capability_gating() {
         .add(
             "resource",
             McpServer::Stdio(McpStdioServer {
+                cwd: None,
+                env: Default::default(),
                 command: "python3".into(),
                 args: vec!["-c".into(), resource_server()],
                 exposure: McpExposure::Direct,
@@ -130,6 +132,8 @@ async fn resources_list_templates_read_and_capability_gating() {
         .add(
             "broken",
             McpServer::Stdio(McpStdioServer {
+                cwd: None,
+                env: Default::default(),
                 command: "python3".into(),
                 args: vec!["-c".into(), broken_resource_server()],
                 exposure: McpExposure::Direct,
@@ -350,6 +354,8 @@ for line in sys.stdin:
         .add(
             "tools",
             McpServer::Stdio(McpStdioServer {
+                cwd: None,
+                env: Default::default(),
                 command: "python3".into(),
                 args: vec!["-c".into(), server.into()],
                 exposure: McpExposure::Direct,
@@ -405,6 +411,8 @@ for line in sys.stdin:
         .add(
             "stoppable",
             McpServer::Stdio(McpStdioServer {
+                cwd: None,
+                env: Default::default(),
                 command: "python3".into(),
                 args: vec!["-c".into(), server.into()],
                 exposure: McpExposure::Direct,
@@ -474,6 +482,8 @@ for line in sys.stdin:
         .add(
             "resources-only",
             McpServer::Stdio(McpStdioServer {
+                cwd: None,
+                env: Default::default(),
                 command: "python3".into(),
                 args: vec!["-c".into(), server.into()],
                 exposure: McpExposure::Direct,
@@ -510,6 +520,8 @@ async fn deferred_exposure_requires_discovery_and_hidden_exposure_removes_capabi
         .add(
             "deferred",
             McpServer::Stdio(McpStdioServer {
+                cwd: None,
+                env: Default::default(),
                 command: "python3".into(),
                 args: vec!["-c".into(), resource_server()],
                 exposure: McpExposure::Deferred,
@@ -546,6 +558,8 @@ async fn deferred_exposure_requires_discovery_and_hidden_exposure_removes_capabi
         .add(
             "hidden",
             McpServer::Stdio(McpStdioServer {
+                cwd: None,
+                env: Default::default(),
                 command: "python3".into(),
                 args: vec!["-c".into(), resource_server()],
                 exposure: McpExposure::Hidden,

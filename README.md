@@ -1165,6 +1165,29 @@ Add local MCP tool servers explicitly with `ion mcp add NAME COMMAND [ARGS...]`.
 Server arguments can start with flags, as in `python3 -c '...'`. Use
 `COMMAND -- ARGS...` when a server's first option overlaps an Ion option such
 as `--cwd`.
+Local servers can use their own working directory and environment overrides:
+
+```sh
+ion mcp add docs --server-cwd ../docs --env 'DOCS_TOKEN=${DOCS_TOKEN}' docs-mcp
+```
+
+These persist as `cwd` and an `env` name-to-string map in the server entry.
+Relative directories resolve against the Session directory, not the manifest's
+location; absolute paths and `~` / `~/...` use the parent's HOME. Without `cwd`,
+the server runs in the Session directory. Environment overrides supplement the
+inherited environment; repeated `--env` names use the last value. Quote templates
+to keep your shell from expanding them before Ion saves the configuration.
+`${NAME}` reads the parent environment; `${NAME:-fallback}` supplies literal text
+only when the variable is unset (a present empty value stays empty). Overrides
+cannot reference each other, and inserted values are not expanded again.
+`$NAME` and `!command` remain literal: no shell commands are evaluated. Command
+and argument strings also remain literal. The combined override names and
+expanded values are limited to 1 MiB. Bad references or an unusable directory
+disable that server with a diagnostic; other servers can still start.
+`ion mcp list` shows the configured directory and environment names, never their
+values. Prefer references for secrets rather than saving literal credentials.
+Changes apply when a new coding client starts and require renewed project trust.
+
 Use `ion mcp add-http NAME URL` for a Streamable HTTP server; add
 `--bearer-token-env VARIABLE` when it requires a bearer token already set in
 the environment. Add `--exposure direct|deferred|hidden` to either command.
@@ -1221,8 +1244,8 @@ This delimiter keeps server/tool pairs distinct even when names contain `__`.
 MCP tool names that need normalization or shortening receive a stable
 hash suffix in the model-facing name; Ion calls the server with its original
 tool name. Headless, TUI and RPC use the same tool set. Local server processes inherit
-the user's environment and permissions and run in the Session's working
-directory. A repository file does not launch an MCP server merely because
+the user's environment and permissions, with configured environment/directory
+overrides described above. A repository file does not launch an MCP server merely because
 Ion opened that directory. A failing server is reported at startup while
 healthy servers and the coding client remain available; a failed
 tool call becomes an error result visible to the model. On controlled exit,

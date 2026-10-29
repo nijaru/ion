@@ -316,6 +316,8 @@ mod tests {
             .add(
                 "user",
                 McpServer::Stdio(McpStdioServer {
+                    cwd: None,
+                    env: Default::default(),
                     command: "unused".into(),
                     args: Vec::new(),
                     exposure: McpExposure::Direct,

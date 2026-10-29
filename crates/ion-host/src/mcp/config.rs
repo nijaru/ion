@@ -1,7 +1,7 @@
 //! MCP configuration validation and serialized atomic publication.
 use crate::model_setup::{write_json, write_shared_json};
 use anyhow::{Context, Result, bail, ensure};
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize, de::Error as _};
 use serde_json::Value;
 use sha2::{Digest, Sha256};
 use std::{
@@ -69,11 +69,39 @@ pub struct McpStdioServer {
     pub command: String,
     #[serde(default)]
     pub args: Vec<String>,
+    /// Relative paths are resolved against the Session working directory.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cwd: Option<PathBuf>,
+    /// Overrides inherited variables; `${NAME}` references the parent environment.
+    #[serde(
+        default,
+        deserialize_with = "deserialize_environment",
+        skip_serializing_if = "BTreeMap::is_empty"
+    )]
+    pub env: BTreeMap<String, String>,
     #[serde(default, skip_serializing_if = "McpExposure::is_direct")]
     pub exposure: McpExposure,
     /// Exact remote tool names, before Ion's alias normalization.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub tool_exposure: BTreeMap<String, McpExposure>,
+}
+
+// Generic string deserialization can echo malformed values (for example a
+// numeric PIN). Keep environment shape errors value-free at this boundary.
+fn deserialize_environment<'de, D: Deserializer<'de>>(
+    deserializer: D,
+) -> Result<BTreeMap<String, String>, D::Error> {
+    let error = || D::Error::custom("MCP environment must map names to strings");
+    let Value::Object(entries) = Value::deserialize(deserializer)? else {
+        return Err(error());
+    };
+    entries
+        .into_iter()
+        .map(|(name, value)| match value {
+            Value::String(value) => Ok((name, value)),
+            _ => Err(error()),
+        })
+        .collect()
 }
 
 #[derive(Clone, Serialize, Deserialize)]
@@ -427,7 +455,23 @@ pub(super) fn validate_server(server: &McpServer) -> Result<()> {
     );
     match server {
         McpServer::Stdio(server) => {
-            ensure!(!server.command.trim().is_empty(), "MCP command is empty")
+            ensure!(!server.command.trim().is_empty(), "MCP command is empty");
+            if let Some(cwd) = &server.cwd {
+                ensure!(
+                    !cwd.as_os_str().is_empty() && !cwd.as_os_str().as_encoded_bytes().contains(&0),
+                    "invalid MCP working directory"
+                );
+            }
+            for (name, value) in &server.env {
+                ensure!(
+                    valid_env_name(name),
+                    "invalid MCP environment variable name"
+                );
+                ensure!(
+                    !value.contains('\0'),
+                    "invalid MCP environment variable value"
+                );
+            }
         }
         McpServer::Http(server) => {
             let url = Url::parse(&server.url).context("invalid MCP server URL")?;
@@ -450,7 +494,7 @@ pub(super) fn validate_server(server: &McpServer) -> Result<()> {
     Ok(())
 }
 
-fn valid_env_name(name: &str) -> bool {
+pub(super) fn valid_env_name(name: &str) -> bool {
     let mut bytes = name.bytes();
     bytes
         .next()
@@ -498,6 +542,8 @@ mod tests {
         .unwrap();
         assert_eq!(hidden.exposure, McpExposure::Hidden);
         let encoded = serde_json::to_value(McpStdioServer {
+            cwd: None,
+            env: Default::default(),
             command: "python3".into(),
             args: Vec::new(),
             exposure: McpExposure::Direct,
@@ -532,6 +578,57 @@ mod tests {
                 value["tool_exposure"] = invalid;
                 assert!(parse_server("demo", value).is_err());
             }
+        }
+    }
+
+    #[test]
+    fn stdio_launch_options_round_trip_and_validate_native_fields() {
+        let value = json!({
+            "command": "python3", "args": [], "cwd": "server data",
+            "env": {"MODE": "local", "TOKEN": "${MCP_TOKEN}", "EMPTY": ""}
+        });
+        let server = parse_server("demo", value.clone()).unwrap();
+        assert_eq!(serde_json::to_value(server).unwrap(), value);
+        for invalid in [
+            json!({"cwd": ""}),
+            json!({"cwd": "bad\0path"}),
+            json!({"env": {"": "value"}}),
+            json!({"env": {"1KEY": "value"}}),
+            json!({"env": {"KEY": "bad\0value"}}),
+            json!({"env": {"KEY": 1}}),
+            json!({"env": []}),
+        ] {
+            let mut value = json!({"command": "python3"});
+            value
+                .as_object_mut()
+                .unwrap()
+                .extend(invalid.as_object().unwrap().clone());
+            assert!(parse_server("demo", value).is_err());
+        }
+        assert!(
+            parse_server(
+                "remote",
+                json!({
+                    "url": "https://example.com/mcp", "env": {"KEY": "value"}
+                })
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn malformed_environment_diagnostics_do_not_disclose_values() {
+        for env in [
+            json!({"PIN": 731982654}),
+            json!([731982654]),
+            json!(731982654),
+        ] {
+            let error = parse_server("demo", json!({"command": "python3", "env": env}))
+                .err()
+                .expect("non-string environments are rejected");
+            let diagnostic = format!("{error:#}");
+            assert!(diagnostic.contains("environment must map names to strings"));
+            assert!(!diagnostic.contains("731982654"));
         }
     }
 
@@ -581,6 +678,8 @@ mod tests {
         let config = McpConfig::with_project(&root.join("config"), &project_root).unwrap();
         let stdio = |command: &str| {
             McpServer::Stdio(McpStdioServer {
+                cwd: None,
+                env: Default::default(),
                 command: command.into(),
                 args: Vec::new(),
                 exposure: McpExposure::Direct,
@@ -676,6 +775,8 @@ mod tests {
             .add(
                 "new",
                 McpServer::Stdio(McpStdioServer {
+                    cwd: None,
+                    env: Default::default(),
                     command: "echo".into(),
                     args: Vec::new(),
                     exposure: McpExposure::Direct,
@@ -705,6 +806,8 @@ mod tests {
         let config = McpConfig::new(&root);
         let server = || {
             McpServer::Stdio(McpStdioServer {
+                cwd: None,
+                env: Default::default(),
                 command: "python3".into(),
                 args: Vec::new(),
                 exposure: McpExposure::Direct,

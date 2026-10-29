@@ -5,6 +5,7 @@ use super::{
     ChangeHandler, Client, McpServer,
     framing::{BoundedLineReader, MAX_MCP_MESSAGE_BYTES},
     http::OwnedHttpClient,
+    launch,
     send::Tracked,
     stderr,
 };
@@ -19,10 +20,7 @@ use rmcp::{
         streamable_http_client::{StreamableHttpClientTransportConfig, StreamableHttpError},
     },
 };
-use tokio::{
-    process::{Child, Command},
-    sync::oneshot,
-};
+use tokio::{process::Child, sync::oneshot};
 
 type HttpTransport = StreamableHttpClientTransport<OwnedHttpClient>;
 
@@ -51,12 +49,11 @@ impl Connection {
     ) -> Result<Self> {
         let (initialized, owned) = match definition {
             McpServer::Stdio(server) => {
+                let mut command = launch::command(&server, cwd)
+                    .with_context(|| format!("cannot prepare MCP server {name}"))?;
                 let diagnostics = stderr::Destination::create()
                     .with_context(|| format!("cannot create MCP server {name} stderr capture"))?;
-                let mut command = Command::new(&server.command);
                 command
-                    .args(&server.args)
-                    .current_dir(cwd)
                     .stdin(Stdio::piped())
                     .stdout(Stdio::piped())
                     .stderr(Stdio::piped())

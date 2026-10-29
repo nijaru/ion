@@ -61,6 +61,8 @@ async fn fixture(mode: &str) -> (PathBuf, Arc<McpTools>, ion_core::ToolSet) {
         .add(
             "custody",
             McpServer::Stdio(McpStdioServer {
+                cwd: None,
+                env: Default::default(),
                 command: "python3".into(),
                 args: vec!["-c".into(), SERVER.into(), mode.into()],
                 exposure: McpExposure::Direct,
