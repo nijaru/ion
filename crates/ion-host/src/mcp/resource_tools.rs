@@ -1,8 +1,8 @@
 //! Model-facing MCP resources: bounded read-only listing and reading.
-use std::{io::Write, path::PathBuf, sync::Arc};
+use std::sync::Arc;
 
 use futures_util::future::join_all;
-use ion_ai::{BoxFuture, ImageContent, ImageMime, ToolCall, normalize_image};
+use ion_ai::{BoxFuture, ImageContent, ToolCall};
 use ion_core::{
     CodingToolOutput, ToolDefinition, ToolExecutor, ToolExposure, ToolInvocation, ToolPresentation,
     ToolRegistration,
@@ -18,8 +18,10 @@ use tokio_util::sync::CancellationToken;
 
 use super::{
     Server,
-    conversion::{self, save_full_mcp_output},
+    artifact::save_full_mcp_output,
+    conversion,
     request::RequestError,
+    resource_content::{self, ResourceContent, ResourceData},
     tool_error,
 };
 
@@ -467,92 +469,39 @@ fn convert_read_contents(contents: Vec<ResourceContents>) -> Result<ReadConversi
     let empty = contents.is_empty();
     let mut conversion = ReadConversion::default();
     for content in contents {
-        match content {
-            ResourceContents::TextResourceContents {
-                uri,
-                mime_type,
-                text,
-                ..
-            } => {
+        let ResourceContent {
+            uri,
+            mime_type,
+            data,
+        } = resource_content::convert(&content)?;
+        match data {
+            ResourceData::Text(text) => {
                 if conversion.preview.is_none() {
                     conversion.preview = Some(preview(&text));
                 }
-                conversion.contents.push(json!({
-                    "uri": uri,
-                    "mimeType": mime_type,
-                    "text": text,
-                }));
+                conversion
+                    .contents
+                    .push(json!({"uri":uri, "mimeType":mime_type, "text":text}));
             }
-            ResourceContents::BlobResourceContents {
-                uri,
-                mime_type,
-                blob,
-                ..
-            } => {
-                let bytes =
-                    base64::Engine::decode(&base64::engine::general_purpose::STANDARD, &blob)
-                        .map_err(|_| format!("resource {uri} returned invalid base64 data"))?;
-                let image_mime = mime_type
-                    .as_deref()
-                    .is_some_and(|mime| mime.to_ascii_lowercase().starts_with("image/"));
-                if image_mime && let Some(detected) = ImageMime::detect(&bytes) {
-                    if mime_type
-                        .as_deref()
-                        .is_some_and(|mime| mime != detected.as_str())
-                    {
-                        return Err(format!(
-                            "resource {uri} image MIME type does not match its data"
+            ResourceData::Image(image) => {
+                conversion.contents.push(
+                    json!({"uri":uri, "mimeType":image.content.mime_type().as_str(), "image":true}),
+                );
+                conversion.images.push(image.content);
+            }
+            ResourceData::Blob { size, saved } => {
+                match saved {
+                    Ok(path) => conversion.contents.push(
+                        json!({"uri":uri, "mimeType":mime_type, "savedPath":path, "size":size}),
+                    ),
+                    Err(error) => {
+                        conversion.failed = true;
+                        conversion.warnings.push(format!(
+                            "resource {uri} could not be saved to a private file: {error}"
                         ));
-                    }
-                    let loaded = normalize_image(&bytes).map_err(|error| {
-                        format!("resource {uri} returned an invalid image: {error}")
-                    })?;
-                    conversion.contents.push(json!({
-                        "uri": uri,
-                        "mimeType": loaded.content.mime_type().as_str(),
-                        "image": true,
-                    }));
-                    conversion.images.push(loaded.content);
-                } else if image_mime && !is_text_mime(mime_type.as_deref()) {
-                    return Err(format!(
-                        "resource {uri} returned an unsupported image format"
-                    ));
-                } else if is_text_mime(mime_type.as_deref()) {
-                    let text = String::from_utf8_lossy(&bytes).into_owned();
-                    if conversion.preview.is_none() {
-                        conversion.preview = Some(preview(&text));
-                    }
-                    conversion.contents.push(json!({
-                        "uri": uri,
-                        "mimeType": mime_type,
-                        "text": text,
-                    }));
-                } else {
-                    let size = bytes.len();
-                    match save_resource_blob(&bytes, &uri) {
-                        Ok(path) => conversion.contents.push(json!({
-                            "uri": uri,
-                            "mimeType": mime_type,
-                            "savedPath": path,
-                            "size": size,
-                        })),
-                        Err(error) => {
-                            conversion.failed = true;
-                            conversion.warnings.push(format!(
-                                "resource {uri} could not be saved to a private file: {error}"
-                            ));
-                            conversion.contents.push(json!({
-                                "uri": uri,
-                                "mimeType": mime_type,
-                                "size": size,
-                                "savedError": error.to_string(),
-                            }));
-                        }
+                        conversion.contents.push(json!({"uri":uri, "mimeType":mime_type, "size":size, "savedError":error}));
                     }
                 }
-            }
-            _ => {
-                return Err("resource returned an unsupported content variant".into());
             }
         }
     }
@@ -626,22 +575,6 @@ fn request_error(server: &Server, error: RequestError) -> String {
     )
 }
 
-fn is_text_mime(mime_type: Option<&str>) -> bool {
-    let Some(mime_type) = mime_type else {
-        return false;
-    };
-    let media_type = mime_type
-        .split(';')
-        .next()
-        .unwrap_or("")
-        .trim()
-        .to_ascii_lowercase();
-    media_type.starts_with("text/")
-        || media_type == "application/json"
-        || media_type.ends_with("+json")
-        || media_type.ends_with("+xml")
-}
-
 fn is_mcp_app(uri: &str, mime_type: Option<&str>) -> bool {
     if uri.starts_with("ui://") {
         return true;
@@ -710,33 +643,4 @@ fn bound_read_result(value: Value, images: Vec<ImageContent>, failed: bool) -> C
         images,
         is_error: failed,
     }
-}
-
-fn save_resource_blob(bytes: &[u8], uri: &str) -> anyhow::Result<PathBuf> {
-    conversion::write_private_artifact(
-        conversion::private_artifact_path("ion-mcp-resource", &extension_of(uri))?,
-        |file| {
-            file.write_all(bytes)?;
-            Ok(())
-        },
-    )
-}
-
-fn extension_of(uri: &str) -> String {
-    let path = uri
-        .split(['?', '#'])
-        .next()
-        .unwrap_or(uri)
-        .trim_end_matches('/');
-    let name = path.rsplit('/').next().unwrap_or(path);
-    let Some((_, extension)) = name.rsplit_once('.') else {
-        return ".bin".into();
-    };
-    if extension.is_empty()
-        || extension.len() > 8
-        || !extension.bytes().all(|byte| byte.is_ascii_alphanumeric())
-    {
-        return ".bin".into();
-    }
-    format!(".{extension}")
 }

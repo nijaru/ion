@@ -688,15 +688,15 @@ fn partial_conversion_keeps_supported_text_structured_and_outcome() {
     let output = convert_tool_result("mixed", result);
     assert!(!output.is_error, "{}", output.value);
     assert_eq!(output.value["is_error"], false, "{}", output.value);
-    assert_eq!(output.value["content"], "kept\nalso kept");
+    let content = output.value["content"].as_str().unwrap();
+    assert!(content.starts_with("kept\n") && content.ends_with("\nalso kept"));
+    assert!(content.contains("mem://report") && content.contains("metadata only"));
     assert_eq!(output.value["structured_content"], json!({"rows": 2}));
-    assert_eq!(output.value["retained_blocks"], 2);
-    assert_eq!(output.value["omitted_blocks"], 2);
+    assert_eq!(output.value["retained_blocks"], 3);
+    assert_eq!(output.value["omitted_blocks"], 1);
     let notices = output.value["conversion_notices"].as_array().unwrap();
-    assert_eq!(notices.len(), 2);
+    assert_eq!(notices.len(), 1);
     assert!(notices[0].as_str().unwrap().contains("block 1"));
-    assert!(notices[1].as_str().unwrap().contains("block 2"));
-    assert!(notices[1].as_str().unwrap().contains("resource link"));
     assert!(output.images.is_empty());
     let raw = output.value["raw_result_path"].as_str().unwrap();
     assert!(
@@ -712,10 +712,73 @@ fn partial_conversion_keeps_supported_text_structured_and_outcome() {
 }
 
 #[test]
+fn embedded_resources_deliver_supplied_data_without_reading_uris() {
+    use base64::Engine;
+    use std::os::unix::fs::PermissionsExt;
+
+    let canary = std::env::temp_dir().join(format!("ion-mcp-link-{}", uuid::Uuid::now_v7()));
+    fs::write(&canary, "URI_TARGET_MUST_NOT_BE_READ").unwrap();
+    let binary = b"\0\x01binary";
+    let result: CallToolResult = serde_json::from_value(json!({
+        "content": [
+            {"type":"resource", "resource":{"uri":"mem://note", "mimeType":"text/plain", "text":"EMBEDDED_NOTE"}},
+            {"type":"resource", "resource":{"uri":"mem://data.json", "mimeType":"application/ld+json; charset=utf-8", "blob":"eyJyb3dzIjoyfQ=="}},
+            {"type":"resource", "resource":{"uri":"mem://image", "mimeType":"image/png", "blob":"iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg=="}},
+            {"type":"resource", "resource":{"uri":"mem://file.unsafe-ext?name=bad.png", "mimeType":"application/octet-stream", "blob":base64::engine::general_purpose::STANDARD.encode(binary)}},
+            {"type":"resource_link", "uri":format!("file://{}",canary.display()), "name":"canary", "_meta":{"private":"META_MUST_NOT_BE_PROJECTED"}}
+        ],
+        "structuredContent":{"rows":2}
+    })).unwrap();
+    let output = convert_tool_result("embedded", result);
+    assert!(!output.is_error);
+    assert_eq!(output.value["structured_content"], json!({"rows":2}));
+    assert!(
+        output.value.get("conversion_notices").is_none(),
+        "{}",
+        output.value
+    );
+    assert!(output.value.get("raw_result_path").is_none());
+    let content = output.value["content"].as_str().unwrap();
+    for expected in [
+        "mem://note",
+        "EMBEDDED_NOTE",
+        "mem://data.json",
+        r#"{"rows":2}"#,
+        "[image: image/png]",
+        "metadata only",
+    ] {
+        assert!(content.contains(expected), "{content}");
+    }
+    assert!(!content.contains("URI_TARGET_MUST_NOT_BE_READ"));
+    assert!(!content.contains("META_MUST_NOT_BE_PROJECTED"));
+    assert_eq!(output.images.len(), 1);
+    assert_eq!(output.images[0].mime_type().as_str(), "image/png");
+    let file = content
+        .lines()
+        .filter_map(|line| {
+            let start = line.find('{')?;
+            let metadata: Value = serde_json::from_str(&line[start..]).ok()?;
+            metadata.get("savedPath")?.as_str().map(PathBuf::from)
+        })
+        .next()
+        .expect("binary resource has no retrieval path");
+    assert_eq!(fs::read(&file).unwrap(), binary);
+    assert_eq!(
+        fs::metadata(&file).unwrap().permissions().mode() & 0o777,
+        0o600
+    );
+    assert_eq!(file.extension().unwrap(), "bin");
+    fs::remove_file(file).unwrap();
+    fs::remove_file(canary).unwrap();
+}
+
+#[test]
 fn invalid_image_omission_keeps_following_content() {
     let result: CallToolResult = serde_json::from_value(json!({
         "content": [
             {"type": "image", "data": "%%%", "mimeType": "image/png"},
+            {"type": "resource", "resource":{"uri":"mem://bad-picture", "mimeType":"image/png", "blob":"%%%"}},
+            {"type": "resource", "resource":{"uri":"mem://bad-blob", "mimeType":"application/octet-stream", "blob":"%%%"}},
             {"type": "text", "text": "still here"}
         ]
     }))
@@ -728,14 +791,16 @@ fn invalid_image_omission_keeps_following_content() {
         "invalid image must not be delivered"
     );
     let notices = output.value["conversion_notices"].as_array().unwrap();
-    assert_eq!(notices.len(), 1);
-    assert!(notices[0].as_str().unwrap().contains("block 0"));
-    assert!(notices[0].as_str().unwrap().contains("base64"));
+    assert_eq!(notices.len(), 3);
+    for (index, notice) in notices.iter().enumerate() {
+        let notice = notice.as_str().unwrap();
+        assert!(notice.contains(&format!("block {index}")) && notice.contains("base64"));
+    }
     assert_eq!(output.value["retained_blocks"], 1);
-    assert_eq!(output.value["omitted_blocks"], 1);
+    assert_eq!(output.value["omitted_blocks"], 3);
     let raw = output.value["raw_result_path"].as_str().unwrap();
     let saved: Value = serde_json::from_slice(&fs::read(raw).unwrap()).unwrap();
-    assert_eq!(saved["content"].as_array().unwrap().len(), 2);
+    assert_eq!(saved["content"].as_array().unwrap().len(), 4);
     fs::remove_file(raw).unwrap();
 }
 
@@ -768,46 +833,57 @@ fn server_execution_error_is_not_replaced_by_conversion_notices() {
 #[test]
 fn truncated_conversion_keeps_notices_and_retrieval_references() {
     let full_text = "start\n".to_owned() + &"é".repeat(40 * 1024) + "\nend";
-    let result: CallToolResult = serde_json::from_value(json!({
-        "content": [
-            {"type": "text", "text": full_text},
-            {"type": "audio", "data": "AAAA", "mimeType": "audio/wav"}
-        ],
-        "structuredContent": {"rows": 1},
-        "isError": false
-    }))
-    .unwrap();
-    let output = convert_tool_result("big", result);
-    assert!(!output.is_error, "{}", output.value);
-    assert_eq!(output.value["truncated"], true);
-    assert!(output.value["content"].as_str().unwrap().len() < 64 * 1024);
-    // The outcome flag, notices and retrieval references stay top-level even
-    // when the normalized body is truncated to an inline preview.
-    assert_eq!(output.value["is_error"], false);
-    assert_eq!(output.value["omitted_blocks"], 1);
-    assert!(
-        output.value["conversion_notices"][0]
-            .as_str()
-            .unwrap()
-            .contains("block 1")
-    );
-    let raw = output.value["raw_result_path"].as_str().unwrap();
-    let full = output.value["full_output_path"].as_str().unwrap();
-    assert!(output.value["full_output_error"].is_null());
-    assert_ne!(raw, full, "raw and normalized artifacts must be distinct");
-    let normalized: Value = serde_json::from_slice(&fs::read(full).unwrap()).unwrap();
-    assert_eq!(normalized["content"], full_text);
-    assert_eq!(normalized["structured_content"], json!({"rows": 1}));
-    assert_eq!(normalized["is_error"], false);
-    assert_eq!(
-        normalized["conversion_notices"],
-        output.value["conversion_notices"]
-    );
-    assert_eq!(normalized["raw_result_path"].as_str().unwrap(), raw);
-    let raw_saved: Value = serde_json::from_slice(&fs::read(raw).unwrap()).unwrap();
-    assert_eq!(raw_saved["content"].as_array().unwrap().len(), 2);
-    fs::remove_file(raw).unwrap();
-    fs::remove_file(full).unwrap();
+    for block in [
+        json!({"type":"text", "text":full_text}),
+        json!({"type":"resource", "resource":{"uri":"mem://large", "mimeType":"text/plain", "text":full_text}}),
+    ] {
+        let result: CallToolResult = serde_json::from_value(json!({
+            "content": [
+                block.clone(),
+                {"type": "audio", "data": "AAAA", "mimeType": "audio/wav"}
+            ],
+            "structuredContent": {"rows": 1},
+            "isError": false
+        }))
+        .unwrap();
+        let output = convert_tool_result("big", result);
+        assert!(!output.is_error, "{}", output.value);
+        assert_eq!(output.value["truncated"], true);
+        assert!(output.value["content"].as_str().unwrap().len() < 64 * 1024);
+        // The outcome flag, notices and retrieval references stay top-level even
+        // when the normalized body is truncated to an inline preview.
+        assert_eq!(output.value["is_error"], false);
+        assert_eq!(output.value["omitted_blocks"], 1);
+        assert!(
+            output.value["conversion_notices"][0]
+                .as_str()
+                .unwrap()
+                .contains("block 1")
+        );
+        let raw = output.value["raw_result_path"].as_str().unwrap();
+        let full = output.value["full_output_path"].as_str().unwrap();
+        assert!(output.value["full_output_error"].is_null());
+        assert_ne!(raw, full, "raw and normalized artifacts must be distinct");
+        let normalized: Value = serde_json::from_slice(&fs::read(full).unwrap()).unwrap();
+        if block["type"] == "text" {
+            assert_eq!(normalized["content"], full_text);
+        } else {
+            let content = normalized["content"].as_str().unwrap();
+            assert!(content.contains("mem://large") && content.ends_with(&full_text));
+        }
+        assert_eq!(normalized["structured_content"], json!({"rows": 1}));
+        assert_eq!(normalized["is_error"], false);
+        assert_eq!(
+            normalized["conversion_notices"],
+            output.value["conversion_notices"]
+        );
+        assert_eq!(normalized["raw_result_path"].as_str().unwrap(), raw);
+        let raw_saved: Value = serde_json::from_slice(&fs::read(raw).unwrap()).unwrap();
+        assert_eq!(raw_saved["content"].as_array().unwrap().len(), 2);
+        assert_eq!(raw_saved["content"][0], block);
+        fs::remove_file(raw).unwrap();
+        fs::remove_file(full).unwrap();
+    }
 }
 
 #[test]
@@ -878,7 +954,7 @@ fn failed_artifact_write_reports_error_and_removes_partial_file() {
     let root = std::env::temp_dir().join(format!("ion-mcp-artifact-{}", uuid::Uuid::now_v7()));
     fs::create_dir(&root).unwrap();
     let path = root.join("raw.json");
-    let failure = conversion::write_private_artifact(path.clone(), |file| {
+    let failure = artifact::write_private_artifact(path.clone(), |file| {
         file.write_all(b"{\"content\": [")?;
         Err(anyhow::anyhow!("simulated artifact failure"))
     });

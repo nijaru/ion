@@ -1312,16 +1312,23 @@ captures appear as `server_stderr` metadata with the path, byte counts and any
 capture error; startup diagnostics name servers that logged, and nothing is
 written directly to the terminal. The capture stops and joins with the root
 process, so descendants holding the pipe cannot stall shutdown.
-Current MCP support delivers text, structured data and
-normalized images. An audio block, embedded resource, resource link or invalid
-image is omitted from delivery without discarding the rest: its index and the
-validation reason appear under `conversion_notices` (bounded, with
-`retained_blocks` and `omitted_blocks` counts). The server's own `isError` stays
+
+MCP tool results deliver text, structured data and normalized images, including
+supplied embedded resources. Embedded text and text-like blobs become text;
+embedded images use the same validation and normalization as inline images.
+Other blobs are saved to private temporary files, with URI, MIME type, byte size
+and `savedPath` metadata in the result's text. Resource links expose their known
+metadata but are never fetched or treated as local filenames. Embedded content
+is supplied data, not an implicit resource read or an App UI runtime.
+
+An audio block, invalid image or undeliverable blob is omitted without discarding
+the rest: its index and the conversion reason appear under `conversion_notices`
+(bounded, with `retained_blocks` and `omitted_blocks` counts). The server's own `isError` stays
 the outcome flag, so a successful response is not rewritten as a failed call,
 and no rejected image enters model context. When anything is omitted, the
 original response is written to a private `ion-mcp-raw-result-*.json` named by
-`raw_result_path`; a write failure reports `raw_result_error` instead. Resource
-links are lower-trust metadata: Ion never fetches them or assumes a local path.
+`raw_result_path`; a write failure reports `raw_result_error` instead.
+
 Servers that advertise resources also expose `list_mcp_resources`,
 `list_mcp_resource_templates` and `read_mcp_resource`; these tools are added
 when at least one configured server advertises resource capability.

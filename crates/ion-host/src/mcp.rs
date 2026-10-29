@@ -28,6 +28,7 @@ use std::fs;
 use tokio::sync::{Mutex, RwLock};
 use tokio_util::sync::CancellationToken;
 
+mod artifact;
 mod config;
 mod connection;
 mod conversion;
@@ -37,6 +38,7 @@ mod http_config;
 mod invocation;
 mod launch;
 mod request;
+mod resource_content;
 mod resource_tools;
 mod send;
 mod stderr;

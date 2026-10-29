@@ -1,17 +1,13 @@
 //! Local MCP observation conversion and private artifact delivery.
-use std::{
-    fs::{self, OpenOptions},
-    io::{BufWriter, Write},
-    os::unix::fs::OpenOptionsExt,
-    path::PathBuf,
-};
-
-use anyhow::Result as AnyResult;
-use base64::{Engine, engine::general_purpose::STANDARD};
-use ion_ai::{ImageContent, ImageMime, LoadedImage, MAX_SOURCE_BYTES, normalize_image};
+use ion_ai::{ImageContent, LoadedImage};
 use ion_core::CodingToolOutput;
 use rmcp::model::{CallToolResult, ContentBlock};
 use serde_json::json;
+
+use super::{
+    artifact::{save_full_mcp_output, save_raw_mcp_result},
+    resource_content::{self, ResourceContent, ResourceData},
+};
 
 /// Once a response is observed, its local processing remains owned through stop
 /// and connection shutdown, including queued blocking dispatch. Do not race this
@@ -143,26 +139,52 @@ fn convert_block(
 ) -> Result<(Vec<String>, Option<ImageContent>), String> {
     match part {
         ContentBlock::Text(text) => Ok((vec![text.text.clone()], None)),
-        ContentBlock::Image(image) => {
-            let loaded = convert_image(name, &image.data, &image.mime_type)?;
-            let mut pieces = vec![format!("[image: {}]", loaded.content.mime_type().as_str())];
-            if let Some(note) = loaded.note {
-                pieces.push(note);
-            }
-            Ok((pieces, Some(loaded.content)))
-        }
+        ContentBlock::Image(image) => resource_content::image(&image.data, &image.mime_type)
+            .map(image_parts)
+            .map_err(|reason| format!("MCP tool {name} {reason}")),
         ContentBlock::Audio(audio) => Err(format!(
             "MCP tool {name} returned unsupported audio media ({}; not delivered)",
             audio.mime_type
         )),
-        ContentBlock::Resource(_) => Err(format!(
-            "MCP tool {name} returned unsupported embedded resource content (not delivered)"
-        )),
-        // Resource-link metadata is lower-trust data: never fetched and never
-        // assumed to name a local file.
-        ContentBlock::ResourceLink(link) => Err(format!(
-            "MCP tool {name} returned an unsupported resource link (name={}, uri={}; metadata only, not fetched)",
-            link.name, link.uri
+        ContentBlock::Resource(resource) => {
+            let ResourceContent {
+                uri,
+                mime_type,
+                data,
+            } = resource_content::convert(&resource.resource)?;
+            match data {
+                ResourceData::Text(text) => Ok((vec![format!("Resource {uri}:\n{text}")], None)),
+                ResourceData::Image(image) => {
+                    let (mut pieces, image) = image_parts(image);
+                    pieces.insert(0, format!("Resource {uri}:"));
+                    Ok((pieces, image))
+                }
+                ResourceData::Blob { size, saved } => {
+                    let path = saved.map_err(|error| {
+                        format!("resource {uri} could not be saved to a private file: {error}")
+                    })?;
+                    Ok((
+                        vec![format!(
+                            "Embedded resource saved to a private file: {}",
+                            json!({
+                                "uri": uri, "mimeType": mime_type, "savedPath": path, "size": size
+                            })
+                        )],
+                        None,
+                    ))
+                }
+            }
+        }
+        // Links remain lower-trust metadata: never fetched or treated as local paths.
+        ContentBlock::ResourceLink(link) => Ok((
+            vec![format!(
+                "Resource link (metadata only, not fetched): {}",
+                json!({
+                    "uri": link.uri, "name": link.name, "title": link.title,
+                    "description": link.description, "mimeType": link.mime_type, "size": link.size,
+                })
+            )],
+            None,
         )),
         _ => Err(format!(
             "MCP tool {name} returned unsupported non-image media or resource content (not delivered)"
@@ -170,22 +192,12 @@ fn convert_block(
     }
 }
 
-fn convert_image(name: &str, data: &str, mime_type: &str) -> Result<LoadedImage, String> {
-    if data.len() > MAX_SOURCE_BYTES.div_ceil(3) * 4 {
-        return Err(format!("MCP tool {name} image exceeds 32 MiB source bound"));
+fn image_parts(loaded: LoadedImage) -> (Vec<String>, Option<ImageContent>) {
+    let mut pieces = vec![format!("[image: {}]", loaded.content.mime_type().as_str())];
+    if let Some(note) = loaded.note {
+        pieces.push(note);
     }
-    let bytes = STANDARD
-        .decode(data)
-        .map_err(|_| format!("MCP tool {name} returned invalid base64 image data"))?;
-    let mime = ImageMime::detect(&bytes)
-        .ok_or_else(|| format!("MCP tool {name} returned an unsupported image format"))?;
-    if mime.as_str() != mime_type {
-        return Err(format!(
-            "MCP tool {name} image MIME type does not match its data"
-        ));
-    }
-    normalize_image(&bytes)
-        .map_err(|error| format!("MCP tool {name} returned an invalid image: {error}"))
+    (pieces, Some(loaded.content))
 }
 
 fn bound_notice(notice: String) -> String {
@@ -200,54 +212,4 @@ fn floor_char_boundary(text: &str, mut offset: usize) -> usize {
         offset -= 1;
     }
     offset
-}
-
-/// The original wire response, streamed to a private artifact. Nothing is
-/// cloned or base64-copied into the model context.
-fn save_raw_mcp_result(result: &CallToolResult) -> AnyResult<PathBuf> {
-    write_private_artifact(
-        private_artifact_path("ion-mcp-raw-result", ".json")?,
-        |file| {
-            let mut writer = BufWriter::new(file);
-            serde_json::to_writer(&mut writer, result)?;
-            writer.flush()?;
-            Ok(())
-        },
-    )
-}
-pub(super) fn save_full_mcp_output(bytes: &[u8]) -> AnyResult<PathBuf> {
-    write_private_artifact(private_artifact_path("ion-mcp-output", ".json")?, |file| {
-        file.write_all(bytes)?;
-        Ok(())
-    })
-}
-
-pub(super) fn private_artifact_path(prefix: &str, extension: &str) -> AnyResult<PathBuf> {
-    let mut nonce = [0u8; 16];
-    getrandom::fill(&mut nonce)
-        .map_err(|error| anyhow::anyhow!("cannot name MCP artifact: {error}"))?;
-    let serial = u128::from_ne_bytes(nonce);
-    Ok(std::env::temp_dir().join(format!(
-        "{prefix}-{}-{serial:032x}{extension}",
-        std::process::id()
-    )))
-}
-
-/// A private 0600 artifact. A failed write removes its partial file instead of
-/// leaving untrustworthy evidence, and reports the real error.
-pub(super) fn write_private_artifact(
-    path: PathBuf,
-    write: impl FnOnce(&mut fs::File) -> AnyResult<()>,
-) -> AnyResult<PathBuf> {
-    let mut file = OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .mode(0o600)
-        .open(&path)?;
-    if let Err(error) = write(&mut file) {
-        drop(file);
-        let _ = fs::remove_file(&path);
-        return Err(error);
-    }
-    Ok(path)
 }

@@ -843,8 +843,13 @@ model-context or artifact quotas. Tool and resource requests retain a recorded
 framing rejection even when connection shutdown joins concurrently.
 
 Conversion preserves the server's observed error/success flag, supported text and
-structured data even when another block cannot be delivered. Unsupported media or
-invalid images produce indexed conversion notices, not a replacement execution
+structured data even when another block cannot be delivered. Supplied embedded
+resources share the explicit resource-read conversion: text and text-like blobs
+become text, images use ordinary validation/normalization, and other blobs use
+private files with retrieval metadata. Resource links expose known metadata only;
+never fetch their URIs or interpret them as local paths. Supplied content grants
+no resource-read or App UI authority. Unsupported media, invalid images or failed
+blob writes produce indexed conversion notices, not a replacement execution
 failure. Retain the original response in a private artifact when conversion omits
 content; report artifact failures without inventing the missing evidence. Inline
 previews retain the outcome, notices and retrieval references. Validation still

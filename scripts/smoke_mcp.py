@@ -1,4 +1,4 @@
-"""Exercise explicit MCP stdio tool discovery, dispatch and lifecycle."""
+"""Exercise MCP configuration, tool/resource delivery, refresh and owned lifecycle."""
 
 import json
 import os
@@ -16,6 +16,25 @@ binary = Path(os.environ.get("ION_SMOKE_BIN", root / "target/debug/ion"))
 requests = []
 launch_requests = []
 remote_calls = []
+
+
+def check_embedded_delivery(body):
+    tool, images = body["messages"][-2:]
+    assert tool["role"] == "tool" and images["role"] == "user", body
+    envelope = json.loads(tool["content"])
+    assert envelope["is_error"] is False, envelope
+    value = envelope["result"]
+    content = value["content"]
+    assert not value["is_error"] and "conversion_notices" not in value, value
+    assert "EMBEDDED_NOTE" in content and '{"rows":2}' in content and "metadata only" in content, value
+    assert "LINK_TARGET_MUST_NOT_BE_READ" not in content, content
+    projected = [part["image_url"]["url"] for part in images["content"] if part["type"] == "image_url"]
+    assert len(projected) == 2 and all(url.startswith("data:image/png;base64,") for url in projected), images
+    assert projected[0] != projected[1], "distinct inline and embedded images were not retained"
+    metadata = next(json.loads(line[line.index("{"):]) for line in content.splitlines() if '"savedPath"' in line)
+    saved = Path(metadata["savedPath"])
+    assert saved.parent == work / "tmp" and saved.read_bytes() == b"\x00\x01binary", metadata
+    assert saved.stat().st_mode & 0o777 == 0o600 and metadata["size"] == 8, metadata
 
 
 class Provider(BaseHTTPRequestHandler):
@@ -42,8 +61,7 @@ class Provider(BaseHTTPRequestHandler):
                 {"id": "mcp", "choices": [{"index": 0, "delta": {}, "finish_reason": "tool_calls"}]},
             ]
         elif len(requests) == 4:
-            assert body["messages"][-2]["role"] == "tool" and "[image: image/png]" in body["messages"][-2]["content"], body
-            assert body["messages"][-1]["role"] == "user" and body["messages"][-1]["content"][1]["image_url"]["url"].startswith("data:image/png;base64,"), body
+            check_embedded_delivery(body)
             changes = [
                 {"id": "mcp", "choices": [{"index": 0, "delta": {"content": "MCP_IMAGE_OK"}, "finish_reason": None}]},
                 {"id": "mcp", "choices": [{"index": 0, "delta": {}, "finish_reason": "stop"}]},
@@ -232,7 +250,7 @@ class Provider(BaseHTTPRequestHandler):
         elif step == 3:
             name, arguments = "mcp__4_demo__picture", {}
         elif step == 4:
-            assert body["messages"][-1]["content"][1]["image_url"]["url"].startswith("data:image/png;base64,"), body
+            check_embedded_delivery(body)
             name, arguments = greet, {"name": "Exposure"}
         elif step == 5:
             assert "Hello, Exposure!" in body["messages"][-1]["content"], body
@@ -250,11 +268,18 @@ const hidden = 'mcp__4_demo__greet_user';
 const found = await searchTools('greet');
 if (found.some(tool => tool.name === hidden) || tools[hidden] !== undefined)
     throw new Error('hidden MCP tool leaked into Code Mode');
+const picture = await tools.mcp__4_demo__picture({{}});
+if (picture.is_error || picture.images.length !== 2 ||
+    !picture.value.content.includes('EMBEDDED_NOTE') ||
+    !picture.value.content.includes('savedPath') ||
+    !picture.value.content.includes('metadata only'))
+    throw new Error('embedded MCP data was not delivered through Code Mode');
+text('MCP_EMBEDDED_COMPOSED_OK');
 text(await tools[{json.dumps(greet)}]({{name: 'Composed'}}));
 """
             name, arguments = "code_mode", {"code": code}
         else:
-            assert step == 9 and "Hello, Composed!" in body["messages"][-1]["content"], body
+            assert step == 9 and all(marker in body["messages"][-1]["content"] for marker in ("Hello, Composed!", "MCP_EMBEDDED_COMPOSED_OK")), body
             return [{"id": "exposure", "choices": [{"index": 0, "delta": {"content": "MCP_EXPOSURE_OK"}, "finish_reason": "stop"}]}]
         return [
             {"id": "exposure", "choices": [{"index": 0, "delta": {"tool_calls": [{"index": 0, "id": f"exposure-{step}", "type": "function", "function": {"name": name, "arguments": json.dumps(arguments)}}]}, "finish_reason": None}]},
@@ -347,6 +372,12 @@ class RemoteMcp(BaseHTTPRequestHandler):
         self.wfile.write(payload)
 
     def do_GET(self):
+        if self.path == "/embedded-link":
+            self.server.link_fetches += 1
+            self.send_response(200)
+            self.end_headers()
+            self.wfile.write(b"LINK_TARGET_MUST_NOT_BE_READ")
+            return
         self.check_headers()
         self.send_response(405)
         self.end_headers()
@@ -390,7 +421,15 @@ for line in sys.stdin.buffer:
             result = {'content': [{'type': 'text', 'text': 'Hello, ' + name + '!'}], 'isError': False}
         elif request['params']['name'] == 'picture':
             with log.open('a') as output: output.write('called:picture\\n')
-            result = {'content': [{'type': 'text', 'text': 'A tiny picture'}, {'type': 'image', 'mimeType': 'image/png', 'data': 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGP4z8DwHwAFAAH/iZk9HQAAAABJRU5ErkJggg=='}], 'isError': False}
+            result = {'content': [
+                {'type': 'text', 'text': 'A tiny picture'},
+                {'type': 'image', 'mimeType': 'image/png', 'data': 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGP4z8DwHwAFAAH/iZk9HQAAAABJRU5ErkJggg=='},
+                {'type': 'resource', 'resource': {'uri': 'mem://note', 'mimeType': 'text/plain', 'text': 'EMBEDDED_NOTE'}},
+                {'type': 'resource', 'resource': {'uri': 'mem://data.json', 'mimeType': 'application/json', 'blob': 'eyJyb3dzIjoyfQ=='}},
+                {'type': 'resource', 'resource': {'uri': 'mem://picture', 'mimeType': 'image/png', 'blob': 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg=='}},
+                {'type': 'resource', 'resource': {'uri': 'mem://data.bin', 'mimeType': 'application/octet-stream', 'blob': 'AAFiaW5hcnk='}},
+                {'type': 'resource_link', 'uri': 'LINK_TARGET', 'name': 'Unfetched link', 'description': 'Metadata only'}
+            ], 'isError': False}
         elif request['params']['name'] == 'large_report':
             result = {'content': [{'type': 'text', 'text': 'START_MARKER\\n' + 'x' * (32 * 1024) + '\\nMIDDLE_MARKER\\n' + 'x' * (40 * 1024) + '\\nEND_MARKER'}], 'isError': False}
         else:
@@ -585,7 +624,6 @@ with tempfile.TemporaryDirectory(prefix="ion-mcp-") as temporary:
     workspace = work / "workspace"
     workspace.mkdir()
     server_script = work / "server.py"
-    server_script.write_text(server_source)
     bad_script = work / "bad-listing.py"
     bad_script.write_text(bad_listing_source)
     paired_script = work / "paired.py"
@@ -601,6 +639,9 @@ with tempfile.TemporaryDirectory(prefix="ion-mcp-") as temporary:
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
     remote = ThreadingHTTPServer(("127.0.0.1", 0), RemoteMcp)
+    remote.link_fetches = 0
+    server_source = server_source.replace("LINK_TARGET", f"http://127.0.0.1:{remote.server_port}/embedded-link")
+    server_script.write_text(server_source)
     remote_thread = threading.Thread(target=remote.serve_forever, daemon=True)
     remote_thread.start()
     try:
@@ -767,7 +808,9 @@ with tempfile.TemporaryDirectory(prefix="ion-mcp-") as temporary:
         assert len(requests) - server.exposure_start == 9, requests
         assert len(remote_calls) == previous_remote_calls, remote_calls
         events = (workspace / "mcp-events.txt").read_text()
-        assert events.count("called:Exposure") == 1 and events.count("called:Composed") == 1 and events.count("called:picture") == 1, events
+        assert events.count("called:Exposure") == 1 and events.count("called:Composed") == 1 and events.count("called:picture") == 2, events
+        assert "read:" not in events and remote.link_fetches == 0, (events, remote.link_fetches)
+        print("Ion MCP embedded text/image/binary resources and unfetched link metadata: OK")
         changed_events = (workspace / "changing-mcp-events.txt").read_text()
         for name in ("first", "second"):
             assert changed_events.count(f"called:{name}") - previous_changed_events.count(f"called:{name}") == 1, changed_events
