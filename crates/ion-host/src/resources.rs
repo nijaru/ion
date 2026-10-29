@@ -5,9 +5,8 @@ use std::{
     path::{Path, PathBuf},
 };
 
-use anyhow::{Context, Result, anyhow, bail};
-use ignore::WalkBuilder;
-use serde::{Deserialize, de::DeserializeOwned};
+use anyhow::{Context, Result, anyhow};
+use serde::de::DeserializeOwned;
 
 use crate::project_instructions;
 
@@ -23,27 +22,14 @@ pub struct ResourceDiagnostic {
     pub message: String,
 }
 
-#[derive(Debug, Clone)]
-pub struct Skill {
-    pub name: String,
-    pub description: String,
-    pub path: PathBuf,
-    pub disable_model_invocation: bool,
-}
+mod skills;
+pub use skills::{Skill, SkillSelection};
 
 pub struct Resources {
     instructions: String,
     skills: BTreeMap<String, Skill>,
     templates: BTreeMap<String, PromptTemplate>,
     diagnostics: Vec<ResourceDiagnostic>,
-}
-
-#[derive(Deserialize)]
-struct SkillFrontmatter {
-    name: String,
-    description: String,
-    #[serde(default, rename = "disable-model-invocation")]
-    disable_model_invocation: bool,
 }
 
 impl Resources {
@@ -57,41 +43,36 @@ impl Resources {
         }
     }
 
-    pub fn load(cwd: &Path, config_root: &Path) -> Result<Self> {
+    pub fn load(cwd: &Path, config_root: &Path, selection: &SkillSelection) -> Result<Self> {
         let home = std::env::var_os("HOME").map(PathBuf::from);
-        Self::load_with_home(cwd, config_root, home.as_deref())
+        Self::load_selected(cwd, config_root, home.as_deref(), selection)
     }
 
-    fn load_with_home(cwd: &Path, config_root: &Path, home: Option<&Path>) -> Result<Self> {
+    fn load_selected(
+        cwd: &Path,
+        config_root: &Path,
+        home: Option<&Path>,
+        selection: &SkillSelection,
+    ) -> Result<Self> {
         let cwd = cwd
             .canonicalize()
             .with_context(|| format!("cannot resolve {}", cwd.display()))?;
         let project = project_instructions::load(&cwd, config_root)?;
+        let (skills, diagnostics) = skills::discover(&cwd, config_root, home, selection);
         let mut resources = Self {
             instructions: project.text,
-            skills: BTreeMap::new(),
+            skills,
             templates: BTreeMap::new(),
             diagnostics: project.diagnostics,
         };
-        let mut skill_roots = vec![config_root.join("skills")];
-        if let Some(home) = home {
-            skill_roots.push(home.join(".agents/skills"));
-        }
+        resources.diagnostics.extend(diagnostics);
         let mut template_roots = vec![config_root.join("prompts")];
-        for directory in project_directories(&cwd) {
-            skill_roots.push(directory.join(".agents/skills"));
-            template_roots.push(directory.join(".ion/prompts"));
-        }
+        template_roots.extend(
+            project_directories(&cwd)
+                .into_iter()
+                .map(|directory| directory.join(".ion/prompts")),
+        );
         let mut seen = HashSet::new();
-        for root in skill_roots {
-            if let Ok(identity) = root.canonicalize()
-                && !seen.insert(identity)
-            {
-                continue;
-            }
-            resources.load_skills(&root);
-        }
-        seen.clear();
         for root in template_roots {
             if let Ok(identity) = root.canonicalize()
                 && !seen.insert(identity)
@@ -106,7 +87,7 @@ impl Resources {
             .any(|skill| !skill.disable_model_invocation)
         {
             resources.instructions.push_str(
-                "\nAvailable Agent Skills are listed below. Read the matching SKILL.md with the read tool when its description applies; follow paths relative to the skill directory. Do not treat project skills as higher priority than user instructions.\n",
+                "\nAvailable Agent Skills are listed below. Read a skill's listed file with the read tool when its description applies; resolve relative references against that file's parent directory. Do not treat project skills as higher priority than user instructions.\n",
             );
             for skill in resources
                 .skills
@@ -155,69 +136,11 @@ impl Resources {
             return self
                 .skills
                 .get(name)
-                .map(|skill| expand_skill(skill, raw_args, max_output_bytes));
+                .map(|skill| skills::expand(skill, raw_args, max_output_bytes));
         }
         self.templates
             .get(name.strip_prefix('/')?)
             .map(|template| template.expand(raw_args, max_output_bytes))
-    }
-
-    fn load_skills(&mut self, root: &Path) {
-        if !root.is_dir() {
-            return;
-        }
-        for entry in WalkBuilder::new(root)
-            .hidden(false)
-            .ignore(false)
-            .git_ignore(false)
-            .git_global(false)
-            .git_exclude(false)
-            .follow_links(true)
-            .build()
-        {
-            let entry = match entry {
-                Ok(entry) => entry,
-                Err(error) => {
-                    self.diagnostics.push(ResourceDiagnostic {
-                        path: root.to_owned(),
-                        message: error.to_string(),
-                    });
-                    continue;
-                }
-            };
-            let path = entry.path();
-            if path.file_name().is_none_or(|name| name != "SKILL.md")
-                || !entry.file_type().is_some_and(|kind| kind.is_file())
-            {
-                continue;
-            }
-            if path
-                .ancestors()
-                .skip(2)
-                .take_while(|ancestor| *ancestor != root)
-                .any(|ancestor| ancestor.join("SKILL.md").is_file())
-            {
-                continue;
-            }
-            match load_skill(path) {
-                Ok(skill) if self.skills.contains_key(&skill.name) => {
-                    self.diagnostics.push(ResourceDiagnostic {
-                        path: path.to_owned(),
-                        message: format!(
-                            "duplicate skill {}; first discovered copy wins",
-                            skill.name
-                        ),
-                    })
-                }
-                Ok(skill) => {
-                    self.skills.insert(skill.name.clone(), skill);
-                }
-                Err(error) => self.diagnostics.push(ResourceDiagnostic {
-                    path: path.to_owned(),
-                    message: format!("{error:#}"),
-                }),
-            }
-        }
     }
 
     fn load_templates(&mut self, root: &Path) {
@@ -269,55 +192,6 @@ impl Resources {
     }
 }
 
-fn expand_skill(skill: &Skill, raw_args: &str, max_output_bytes: usize) -> Result<String> {
-    if raw_args.len() > max_output_bytes {
-        bail!(
-            "request for /skill:{} exceeds the {} byte expansion limit; shorten the invocation",
-            skill.name,
-            max_output_bytes
-        );
-    }
-    let source = read_resource(&skill.path)?;
-    let (metadata, body): (SkillFrontmatter, _) = frontmatter(&source)?;
-    if metadata.name != skill.name {
-        return Err(anyhow!(
-            "skill name changed since discovery; reload resources"
-        ));
-    }
-    let request = raw_args.trim();
-    let path = serde_json::to_string(&skill.path).context("cannot encode skill path")?;
-    let header = format!("Skill {} from {path}:\n", skill.name);
-    const USER_REQUEST: &str = "\n\nUser request: ";
-    let suffix_bytes = if request.is_empty() {
-        0
-    } else {
-        USER_REQUEST
-            .len()
-            .checked_add(request.len())
-            .context("skill expansion size overflow")?
-    };
-    let bytes = header
-        .len()
-        .checked_add(body.len())
-        .and_then(|bytes| bytes.checked_add(suffix_bytes))
-        .context("skill expansion size overflow")?;
-    if bytes > max_output_bytes {
-        bail!(
-            "skill /skill:{} expands to more than the {} byte limit; shorten the skill or request",
-            skill.name,
-            max_output_bytes
-        );
-    }
-    let mut output = String::with_capacity(bytes);
-    output.push_str(&header);
-    output.push_str(body);
-    if !request.is_empty() {
-        output.push_str(USER_REQUEST);
-        output.push_str(request);
-    }
-    Ok(output)
-}
-
 fn project_directories(cwd: &Path) -> Vec<PathBuf> {
     let root = cwd
         .ancestors()
@@ -331,37 +205,6 @@ fn project_directories(cwd: &Path) -> Vec<PathBuf> {
         }
     }
     directories
-}
-
-fn load_skill(path: &Path) -> Result<Skill> {
-    if path.to_str().is_none() {
-        return Err(anyhow!(
-            "skill path is not representable as UTF-8 and cannot be advertised"
-        ));
-    }
-    let source = read_resource(path)?;
-    let (metadata, _): (SkillFrontmatter, _) = frontmatter(&source)?;
-    let name = &metadata.name;
-    if !valid_name(name)
-        || path
-            .parent()
-            .and_then(Path::file_name)
-            .and_then(|parent| parent.to_str())
-            != Some(name)
-    {
-        return Err(anyhow!(
-            "skill name must be a valid name matching its directory"
-        ));
-    }
-    if metadata.description.trim().is_empty() || metadata.description.len() > 1024 {
-        return Err(anyhow!("skill description must contain 1-1024 characters"));
-    }
-    Ok(Skill {
-        name: name.clone(),
-        description: metadata.description,
-        path: path.to_owned(),
-        disable_model_invocation: metadata.disable_model_invocation,
-    })
 }
 
 pub(super) fn read_resource(path: &Path) -> Result<String> {
@@ -414,7 +257,14 @@ pub(super) fn valid_name(name: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
+    use super::skills::load as load_skill;
     use super::*;
+
+    impl Resources {
+        fn load_with_home(cwd: &Path, config_root: &Path, home: Option<&Path>) -> Result<Self> {
+            Self::load_selected(cwd, config_root, home, &SkillSelection::default())
+        }
+    }
 
     // Representative of a caller-derived cap, not a product constant.
     fn cap() -> usize {

@@ -5,6 +5,37 @@ fn parse(args: &[&str], interactive: bool) -> Result<Invocation> {
 }
 
 #[test]
+fn skill_selection_is_ordered_and_scoped_to_resource_consumers() {
+    let defaults = parse(&["ion", "resources"], false).unwrap();
+    assert!(!defaults.no_skills && defaults.skills.is_empty());
+    for verb in ["run", "chat", "rpc", "resources", "doctor", "compact"] {
+        let cli = parse(
+            &[
+                "ion",
+                "--skill",
+                "one.md",
+                verb,
+                "--no-skills",
+                "--skill",
+                "two",
+            ],
+            true,
+        )
+        .unwrap();
+        assert!(cli.no_skills);
+        assert_eq!(cli.skills, [PathBuf::from("one.md"), PathBuf::from("two")]);
+    }
+    for verb in ["inspect", "models", "auth"] {
+        for args in [
+            vec!["ion", "--no-skills", verb],
+            vec!["ion", verb, "--skill", "one.md"],
+        ] {
+            assert!(parse(&args, true).is_err(), "{args:?}");
+        }
+    }
+}
+
+#[test]
 fn manual_compaction_accepts_literal_focus_without_launch_input_expansion() {
     assert!(parse(&["ion", "compact"], false).is_ok());
     let focus = "Keep @paths, /commands and \"雪\" decisions\nexactly";

@@ -188,6 +188,37 @@ with tempfile.TemporaryDirectory(prefix="ion-resources-") as temporary:
         assert "AUDIT_BODY_MARKER" in requests[baseline + 1]["messages"][-1]["content"]
         assert "User request: src/lib.rs" in requests[baseline + 1]["messages"][-1]["content"]
 
+        # Explicit paths are invocation-local, ordered and inert. A standalone
+        # Markdown file need not live in a directory matching its skill name.
+        selected_file = workspace / "chosen.md"
+        selected_source = "---\nname: selected\ndescription: Selected vocabulary.\n---\nSELECTED_BODY\n"
+        selected_file.write_text(selected_source)
+        selected_bundle = workspace / "bundles" / "extra"
+        selected_bundle.mkdir(parents=True)
+        (selected_bundle / "SKILL.md").write_text("---\nname: extra\ndescription: Extra vocabulary.\n---\nEXTRA_BODY\n")
+        home = Path(env["HOME"])
+        home.mkdir(exist_ok=True)
+        (home / "picked.md").symlink_to(selected_file)
+        selected_flags = ["--no-skills", "--skill", "chosen.md", "--skill", "~/picked.md", "--skill", "bundles"]
+        isolated = subprocess.run([binary, "--cwd", workspace, *selected_flags, "resources"], env=env, check=True, capture_output=True, text=True)
+        assert {line.split("\t")[1] for line in isolated.stdout.splitlines() if line.startswith("skill\t")} == {"extra", "selected"}, isolated
+        assert "prompt\tcheck\t" in isolated.stdout and not isolated.stderr, isolated
+        ordinary = subprocess.run([binary, "--cwd", workspace, "resources", "--skill", "chosen.md"], env=env, check=True, capture_output=True, text=True)
+        assert "skill\taudit\t" in ordinary.stdout and "skill\tselected\t" in ordinary.stdout, ordinary
+        fifo = workspace / "skill-pipe"
+        os.mkfifo(fifo)
+        invalid = subprocess.run([binary, "--cwd", workspace, "resources", "--no-skills", "--skill", "missing.md", "--skill", str(fifo)], env=env, check=True, capture_output=True, text=True, timeout=10)
+        assert "missing.md" in invalid.stderr and "regular Markdown" in invalid.stderr, invalid
+        assert not [line for line in invalid.stdout.splitlines() if line.startswith("skill\t")], invalid
+        before_selection = len(requests)
+        picked = subprocess.run([binary, "--cwd", workspace, *selected_flags, "run", "/skill:selected verify"], env=env, check=True, capture_output=True, text=True)
+        assert picked.stdout.strip() == "RESOURCE_OK" and len(requests) == before_selection + 1, picked
+        selected_instructions = requests[-1]["messages"][0]["content"]
+        assert "PROJECT_MARKER" in selected_instructions and "Selected vocabulary." in selected_instructions, selected_instructions
+        assert "SELECTED_BODY" not in selected_instructions
+        assert "SELECTED_BODY" in requests[-1]["messages"][-1]["content"]
+        assert "User request: verify" in requests[-1]["messages"][-1]["content"]
+
         # Over-expansion is refused before a provider request or a new Turn.
         # The template file stays small (~8 KiB) while a bounded argument
         # repeats into an expansion larger than the host raw-text cap. No giant
@@ -205,9 +236,17 @@ with tempfile.TemporaryDirectory(prefix="ion-resources-") as temporary:
         assert admitted_turns(work / "ion") == before_turns, "refusal admitted a Turn"
         # RPC must refuse before admission too, then remain usable in the same
         # process. Core still owns admission of the recovered ordinary prompt.
-        child = subprocess.Popen([binary, "--cwd", workspace, "rpc"], env=env, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, bufsize=0)
+        child = subprocess.Popen([binary, "--cwd", workspace, *selected_flags, "rpc"], env=env, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, bufsize=0)
         try:
             assert rpc_record(child)["type"] == "ready"
+            child.stdin.write(b'{"type":"list_resources","id":"selected"}\n')
+            selected = rpc_record(child)
+            assert selected["success"] and {s["name"] for s in selected["data"]["skills"]} == {"extra", "selected"}, selected
+            assert {p["name"] for p in selected["data"]["prompts"]} == {"amplify", "check"}, selected
+            selected_file.write_text(selected_source.replace("Selected vocabulary.", "Reloaded vocabulary."))
+            child.stdin.write(b'{"type":"reload_resources","id":"reload"}\n')
+            reloaded = rpc_record(child)
+            assert reloaded["success"] and reloaded["data"]["skills"] == 2 and reloaded["data"]["prompts"] == 2, reloaded
             child.stdin.write((json.dumps({"type": "prompt", "id": "oversized", "message": "/amplify " + "x" * 4000}) + "\n").encode())
             denied = rpc_record(child)
             assert denied["type"] == "response" and denied["id"] == "oversized" and not denied["success"], denied
@@ -220,6 +259,8 @@ with tempfile.TemporaryDirectory(prefix="ion-resources-") as temporary:
                     assert record["status"] == "completed", record
                     break
             assert requests[-1]["messages"][-1]["content"].strip() == "Check RPC_recovery; scope all."
+            assert "Reloaded vocabulary." in requests[-1]["messages"][0]["content"], requests[-1]
+            assert "Selected vocabulary." not in requests[-1]["messages"][0]["content"], requests[-1]
             assert len(requests) == before_refusal + 1 and admitted_turns(work / "ion") == before_turns + 1
             child.stdin.close()
             child.wait(timeout=10)
@@ -422,6 +463,7 @@ with tempfile.TemporaryDirectory(prefix="ion-resources-") as temporary:
                         child.kill()
                         child.wait(timeout=5)
                     os.close(master)
+        print("Ion resources: explicit skill files/directories, isolated defaults, aliases and retained RPC reload: OK")
         print("Ion resources: non-executing completion/reload and both-mode literal/cursor recovery: OK")
     finally:
         server.shutdown()

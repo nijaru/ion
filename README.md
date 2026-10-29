@@ -1092,8 +1092,28 @@ observed success or discard its attachments.
 Ion also discovers Agent Skills from `~/.agents/skills/`,
 `~/.ion/skills/` (under `ION_HOME` when overridden) and project
 `.agents/skills/` directories from the working directory up to its Git root.
-Each skill is a directory with `SKILL.md` and valid Agent Skills frontmatter.
-Only its name, description and path enter the standing model instructions;
+Default discovery expects a directory with `SKILL.md` and valid Agent Skills
+frontmatter. Add a Markdown skill file or directory with repeatable `--skill PATH`;
+use `--no-skills` to skip default discovery while still loading explicit paths:
+
+```sh
+ion --skill ./review/SKILL.md run 'Review the change'
+ion --no-skills --skill ./team-skills resources
+```
+
+An explicit directory loads its top-level `.md` files and nested skill directories;
+a directory containing `SKILL.md` contributes just that skill, not its examples.
+Explicit files require a valid frontmatter `name` and `description`; standalone
+`.md` files need not match their parent directory's name. `SKILL.md` retains the
+matching-directory requirement. Default locations load first, followed by explicit
+paths in argument order; the first valid copy of a name wins. Physical file aliases
+load once. Relative paths are anchored to the initial `--cwd` (or launch directory),
+and a leading `~` expands from HOME; environment references and commands do not
+expand. Session/workspace changes do not retarget these paths. Reload rereads them,
+and selection is invocation-local, not saved configuration. Project instructions
+and prompt templates are unaffected by `--no-skills`.
+
+Only each skill's name, description and path enter the standing model instructions;
 the model can read the full file when relevant. Use `/skill:NAME [request]` to
 load it explicitly. Prompt templates are direct `.md` files in
 `~/.ion/prompts/` (under `ION_HOME` when overridden) or project `.ion/prompts/`; `/NAME [arguments]`
@@ -2514,6 +2534,8 @@ sample, not a replacement for the terminal or RPC client.
 `CodingApplication::new(host, tools).setup(session, selected, reasoning, questions, resources)`
 supplies the coding preset. Prepare `resources` once from `Application::resources`
 for the selected cwd (or `host.resources(cwd)` for the default coding recipe).
+`host.with_skills(SkillSelection::new(cwd, include_defaults, paths)?)` captures
+an explicit skill selection shared by coding bindings, reloads and coding children.
 The same snapshot serves initial-input preflight and binding; CLI preflight runs
 before Session creation and MCP startup. The recipe supplies native tools; the
 optional `tools` source adds or overrides registrations, not a complete allowlist.

@@ -758,7 +758,12 @@ fn resource_completion_preserves_literal_commands_and_terminal_control_names() {
         "Must not shadow terminal control\n",
     )
     .unwrap();
-    let resources = Resources::load(&root, &root.join("config")).unwrap();
+    let resources = Resources::load(
+        &root,
+        &root.join("config"),
+        &ion_host::SkillSelection::default(),
+    )
+    .unwrap();
     let mut ui = Frontend {
         history_published_items: 7,
         ..Frontend::default()

@@ -77,7 +77,16 @@ async fn run_cli(cli: Invocation) -> Result<()> {
         }
         return Ok(io::stdout().lock().write_all(notices.as_bytes())?);
     }
-    let host = Arc::new(Host::from_environment()?);
+    let mut host = Host::from_environment()?;
+    if cli.no_skills || !cli.skills.is_empty() {
+        let cwd = configured_cwd(cli.cwd.clone())?;
+        host = host.with_skills(ion_host::SkillSelection::new(
+            &cwd,
+            !cli.no_skills,
+            cli.skills,
+        )?);
+    }
+    let host = Arc::new(host);
     let credentials = host.credentials();
     let models = host.models();
     match cli.action {

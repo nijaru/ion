@@ -801,6 +801,17 @@ recheck rules under the mutation lock. This is not atomic isolation from externa
 editors, other processes or commands. Explicit applications inherit no such policy
 unless they select it.
 
+The Host may capture ordered explicit skill paths and whether to discover default
+skills. Relative paths and leading-home expansion resolve once against the initial
+workspace/HOME; later binding or workspace changes reuse those paths. Default
+locations precede explicit paths, with first-valid-name precedence and physical-file
+alias deduplication. Explicit Markdown files retain validated name/description
+metadata; `SKILL.md` also requires its matching directory layout. Resource reload
+rereads selected paths. Disabling default skills changes neither standing project
+instructions nor prompt templates, and adds no execution authority. CLI, RPC,
+coding children and SDK bindings share this selection through the Host recipe;
+explicit non-coding applications still select their own resources.
+
 Resources do not execute repository text or start unconfigured servers. Instructions,
 skills/templates and results are lower-trust data. Report failures/omissions with
 provenance, not silent rule truncation. Project-scoped MCP configuration is inert

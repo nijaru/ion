@@ -93,7 +93,7 @@ pub use question::{
     SYNTHETIC_TEXT_LABEL,
 };
 pub use question_tool::QuestionTools;
-pub use resources::{PromptTemplate, ResourceDiagnostic, Resources, Skill};
+pub use resources::{PromptTemplate, ResourceDiagnostic, Resources, Skill, SkillSelection};
 pub use search_tools::{SearchBackend, SearchFallback, SearchRoute, SearchSettings, SearchTools};
 pub use session_catalog::{SessionCatalog, SessionSummary};
 pub use tool_veto::{ToolVeto, ToolVetoSettings};
@@ -107,6 +107,7 @@ pub struct Host {
     state_root: PathBuf,
     credentials: CredentialStore,
     models: ModelStore,
+    skills: SkillSelection,
 }
 
 impl Host {
@@ -118,6 +119,7 @@ impl Host {
             state_root,
             credentials,
             models,
+            skills: SkillSelection::default(),
         }
     }
 
@@ -143,8 +145,15 @@ impl Host {
         SessionCatalog::new(self.state_root.join("sessions"), cwd)
     }
 
+    /// Capture invocation-local skill selection for all coding bindings,
+    /// reloads and coding children using this Host.
+    pub fn with_skills(mut self, selection: SkillSelection) -> Self {
+        self.skills = selection;
+        self
+    }
+
     pub fn resources(&self, cwd: &Path) -> Result<Resources> {
-        Resources::load(cwd, &self.config_root)
+        Resources::load(cwd, &self.config_root, &self.skills)
     }
 
     /// User-level MCP configuration only. Callers that are loading a project

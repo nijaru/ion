@@ -27,6 +27,8 @@ pub(crate) struct Invocation {
     pub model: Option<ModelPattern>,
     pub reasoning: Option<Reasoning>,
     pub image: Vec<PathBuf>,
+    pub skills: Vec<PathBuf>,
+    pub no_skills: bool,
     pub tui_mode: TuiMode,
     pub use_theme: Option<String>,
     pub json: bool,
@@ -284,6 +286,11 @@ fn options() -> Vec<Arg> {
         Arg::new("image").long("image").action(ArgAction::Append)
             .value_parser(clap::value_parser!(PathBuf)).value_name("PATH")
             .help("Attach an image to the first prompt (repeatable)"),
+        Arg::new("skills").long("skill").action(ArgAction::Append)
+            .value_parser(clap::value_parser!(PathBuf)).value_name("PATH")
+            .help("Add a skill Markdown file or directory (repeatable)"),
+        Arg::new("no_skills").long("no-skills").action(ArgAction::SetTrue)
+            .help("Skip default skill discovery; explicit --skill paths still load"),
         Arg::new("use_theme").long("use-theme").value_name("NAME")
             .help("Terminal theme for this invocation; does not change the saved preference"),
         Arg::new("tui_mode").long("tui-mode").value_parser(clap::value_parser!(TuiMode))
@@ -311,6 +318,7 @@ fn applicable(command: &str, option: &str) -> bool {
         "provider" | "model" | "reasoning" => coding || command == "compact",
         "completion_delivery" | "code_mode" | "tools" | "exclude_tools" | "read_only" => coding,
         "image" => matches!(command, "run" | "chat"),
+        "skills" | "no_skills" => coding || matches!(command, "resources" | "doctor" | "compact"),
         "json" => command == "run",
         "tui_mode" | "use_theme" => command == "chat",
         _ => false,
@@ -476,6 +484,8 @@ fn normalize(mut matches: ArgMatches, interactive: bool) -> Result<Invocation> {
         model,
         reasoning: one(&mut levels, "reasoning")?,
         image: many(&mut levels, "image"),
+        skills: many(&mut levels, "skills"),
+        no_skills: one(&mut levels, "no_skills")?.unwrap_or(false),
         tui_mode: one(&mut levels, "tui_mode")?.unwrap_or(TuiMode::Inline),
         use_theme: one(&mut levels, "use_theme")?,
         json,
