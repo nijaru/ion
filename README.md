@@ -2644,7 +2644,10 @@ Drive `next()` while handling client I/O. Reliable updates distinguish local
 originals and `Settled` outcomes/metadata. `state()` derives activity and queue
 counts from this owner. Borrowing/cancelling a `next()` wait does not stop work.
 Keep polling to advance preparation and queued follow-ups; do not implement
-another preparation queue or infer acceptance from rendered progress.
+another preparation queue or infer acceptance from rendered progress. `next()`
+delivers an operation's remaining buffered activity before its `Settled` update,
+including failed outcomes. Real overflow still produces a gap; maintenance and
+shutdown may discard provisional activity.
 
 `request_stop()` is not completion. Await `shutdown()` before destroying the
 runtime, including on client errors: it closes admission, stops and joins

@@ -241,7 +241,7 @@ impl<M: Serialize + Send + 'static> SessionControl<M> {
     /// discarded; full pull snapshots remain available, even after subscriber loss.
     pub async fn maintain(&mut self) -> Option<Observation> {
         self.advance();
-        self.drive().await
+        self.drive(super::ActivityRetention::Discard).await
     }
 
     /// Explicit FIFO transfer to the controlling application, not an observer

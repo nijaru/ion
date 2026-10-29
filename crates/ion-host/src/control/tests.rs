@@ -536,6 +536,73 @@ async fn stopped_success_does_not_dispatch_a_deliberate_followup() {
 }
 
 #[tokio::test]
+async fn joined_operations_deliver_ready_activity_before_settlement() {
+    for burst in [1, OBSERVATION_CAPACITY * 4] {
+        let model = Model::new(burst);
+        let mut fixture = Fixture::new(model.clone(), false);
+        if burst == 1 {
+            fixture.fault("json_extract(NEW.body, '$.kind') = 'turn_ended'");
+        }
+        fixture
+            .control
+            .submit(Delivery::Start, prompt("root"), meta("root"))
+            .unwrap();
+        model.wait_calls(1).await;
+        model.release();
+        // Force completion's side of the select window: the owned task has joined,
+        // but its already-published observations have not been polled by control.
+        let outcome = fixture.control.active.as_mut().unwrap().work.join().await;
+        assert_eq!(outcome.failed(), burst == 1);
+        fixture
+            .control
+            .finish_operation(outcome, ActivityRetention::Retain);
+        let mut visible = String::new();
+        let mut gap = false;
+        let mut recovering = false;
+        loop {
+            match fixture.control.next().await {
+                ControlUpdate::Activity(Observation::Gap { skipped }) => {
+                    assert!(skipped > 0);
+                    gap = true;
+                    recovering = true;
+                    visible.clear();
+                }
+                ControlUpdate::Activity(Observation::Event { event, .. }) => match event.as_ref() {
+                    AgentEvent::TextDelta(text) => {
+                        assert!(!recovering, "orphaned suffix survived a real gap");
+                        visible.push_str(text);
+                    }
+                    AgentEvent::AssistantCommitted { content, .. } => {
+                        recovering = false;
+                        visible = content
+                            .iter()
+                            .filter_map(|part| match part {
+                                Content::Text(text) => Some(text.as_str()),
+                                _ => None,
+                            })
+                            .collect::<Vec<_>>()
+                            .join("\n");
+                    }
+                    _ => {}
+                },
+                ControlUpdate::Settled(settlement) => {
+                    assert_eq!(settlement.outcome.failed(), burst == 1);
+                    assert_eq!(gap, burst > OBSERVATION_CAPACITY);
+                    assert_eq!(
+                        visible,
+                        "x".repeat(burst),
+                        "published response was lost at settlement"
+                    );
+                    break;
+                }
+                ControlUpdate::Idle => panic!("joined operation has no retained settlement"),
+                _ => {}
+            }
+        }
+    }
+}
+
+#[tokio::test]
 async fn lag_and_dropped_passive_observers_do_not_cancel_work() {
     let model = Model::new(OBSERVATION_CAPACITY * 4);
     let mut fixture = Fixture::new(model.clone(), false);

@@ -56,6 +56,11 @@ struct Active<M> {
     /// Exact root stop bound to question custody while this Turn owns control.
     turn_stop: Option<TurnStopScope>,
 }
+enum ActivityRetention {
+    Retain,
+    Discard,
+}
+
 enum Work {
     Turn(Operation<String, CodingAgentError>),
     Compact(Operation<bool, CodingAgentError>),
@@ -260,7 +265,7 @@ impl<M: Serialize + Send + 'static> SessionControl<M> {
         Ok(())
     }
 
-    async fn drive(&mut self) -> Option<Observation> {
+    async fn drive(&mut self, activity: ActivityRetention) -> Option<Observation> {
         enum Progress {
             Prepared(Result<Message>),
             Settled(OperationOutcome),
@@ -288,7 +293,7 @@ impl<M: Serialize + Send + 'static> SessionControl<M> {
         // No await after consuming either completion until it is safely retained.
         match progress {
             Progress::Prepared(result) => self.finish_preparation(result),
-            Progress::Settled(result) => self.finish_operation(result),
+            Progress::Settled(result) => self.finish_operation(result, activity),
             Progress::Activity(observation) => return Some(observation),
             Progress::Question | Progress::Input => {}
         }
@@ -296,7 +301,7 @@ impl<M: Serialize + Send + 'static> SessionControl<M> {
         None
     }
 
-    fn finish_operation(&mut self, outcome: OperationOutcome) {
+    fn finish_operation(&mut self, outcome: OperationOutcome, activity: ActivityRetention) {
         lock(&self.custody).steering_target = None;
         let active = self.active.take().expect("retained Core operation");
         if outcome.failed() {
@@ -304,8 +309,19 @@ impl<M: Serialize + Send + 'static> SessionControl<M> {
                 .revoke(ion_core::CompletionRevocation::OperationFailed);
         }
         self.clear_turn_stop(active.turn_stop);
-        // Settlement supersedes any unread provisional stream for this owner.
-        // Explicitly invalidate it rather than leaking old deltas into the next Turn.
+        // Publication can race the select's earlier observer poll. The joined
+        // operation has finished publishing: retain its bounded ready tail before
+        // settlement, using the same lag/suffix filtering as ordinary intake.
+        // Snapshot maintenance and shutdown may discard activity instead.
+        if matches!(activity, ActivityRetention::Retain) {
+            let mut custody = lock(&self.custody);
+            while let Some(observation) = self.observer.try_next() {
+                custody
+                    .updates
+                    .push_back(ControlUpdate::Activity(observation));
+            }
+        }
+        // Never leak a previous operation's unread stream into the next Turn.
         let skipped = self.observer.receiver.len();
         self.observer = ControlObserver {
             receiver: self.observations.subscribe(),
@@ -402,8 +418,9 @@ impl<M: Serialize + Send + 'static> SessionControl<M> {
             }));
     }
 
-    /// Return reliable custody updates before provisional activity. There is no
-    /// background Host execution loop; Core and preparation continue independently.
+    /// Return custody updates before polling live activity, retaining an operation's
+    /// ready activity tail ahead of its settlement. There is no background Host
+    /// execution loop; Core and preparation continue independently.
     pub async fn next(&mut self) -> ControlUpdate<M> {
         loop {
             self.advance();
@@ -418,7 +435,7 @@ impl<M: Serialize + Send + 'static> SessionControl<M> {
             }
             // drive retains every completion before it can yield. Selecting away
             // from it only abandons a borrowed wait, never a task or local outcome.
-            if let Some(observation) = self.drive().await {
+            if let Some(observation) = self.drive(ActivityRetention::Retain).await {
                 return ControlUpdate::Activity(observation);
             }
         }
@@ -440,7 +457,7 @@ impl<M: Serialize + Send + 'static> SessionControl<M> {
         while self.is_busy() {
             self.advance();
             if self.is_busy() {
-                drop(self.drive().await);
+                drop(self.drive(ActivityRetention::Discard).await);
             }
         }
         if !self.shutdown_complete {

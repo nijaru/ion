@@ -1159,7 +1159,10 @@ that owner independently of transport connections. Observation loss/detachment
 cannot decide execution lifetime. Foreground clients may stop on genuine I/O loss,
 but saturation is backpressure, not execution failure. Reserve lifecycle/recovery
 capacity before effects; do not use unbounded deferred replies or put cancellation
-behind output.
+behind output. Normal controlling intake delivers still-buffered activity before
+its operation's settlement; joining alone is not an observation gap. Actual lag
+still requires reconciliation rather than suffix-splicing. Service maintenance
+and shutdown may discard provisional activity while retaining reliable results.
 
 Remote attachment must identify the Session/work and provide an authorized
 snapshot plus an ordered committed revision/cursor or equivalent reconciliation

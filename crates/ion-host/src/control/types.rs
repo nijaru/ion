@@ -268,30 +268,62 @@ pub struct ControlObserver {
     pub(super) initial: bool,
 }
 impl ControlObserver {
+    // Synchronous intake for the finite tail of an already joined publisher.
+    // Unlike polling recv(), try_recv() cannot yield to Tokio's cooperative
+    // budget while published messages are still ready.
+    pub(super) fn try_next(&mut self) -> Option<Observation> {
+        if std::mem::take(&mut self.initial) {
+            return Some(Observation::Gap { skipped: 0 });
+        }
+        loop {
+            match self.receiver.try_recv() {
+                Ok(observation) => {
+                    if let Some(observation) = self.filter_activity(observation) {
+                        return Some(observation);
+                    }
+                }
+                Err(broadcast::error::TryRecvError::Lagged(skipped)) => {
+                    self.suppress = true;
+                    return Some(Observation::Gap { skipped });
+                }
+                Err(
+                    broadcast::error::TryRecvError::Empty | broadcast::error::TryRecvError::Closed,
+                ) => return None,
+            }
+        }
+    }
+
+    fn filter_activity(&mut self, observation: Observation) -> Option<Observation> {
+        if let Observation::Event { event, .. } = &observation {
+            let boundary = matches!(
+                event.as_ref(),
+                AgentEvent::TurnAccepted { .. }
+                    | AgentEvent::CompletionCommitted { .. }
+                    | AgentEvent::AssistantCommitted { .. }
+                    | AgentEvent::ResponseRestarted
+                    | AgentEvent::TurnEnded { .. }
+            );
+            if boundary {
+                self.suppress = false;
+            }
+            if self.suppress {
+                return None;
+            }
+        }
+        Some(observation)
+    }
+
     pub async fn next(&mut self) -> Option<Observation> {
         if std::mem::take(&mut self.initial) {
             return Some(Observation::Gap { skipped: 0 });
         }
         loop {
             match self.receiver.recv().await {
-                Ok(Observation::Event { operation, event }) => {
-                    let boundary = matches!(
-                        event.as_ref(),
-                        AgentEvent::TurnAccepted { .. }
-                            | AgentEvent::CompletionCommitted { .. }
-                            | AgentEvent::AssistantCommitted { .. }
-                            | AgentEvent::ResponseRestarted
-                            | AgentEvent::TurnEnded { .. }
-                    );
-                    if self.suppress && !boundary {
-                        continue;
+                Ok(observation) => {
+                    if let Some(observation) = self.filter_activity(observation) {
+                        return Some(observation);
                     }
-                    if boundary {
-                        self.suppress = false;
-                    }
-                    return Some(Observation::Event { operation, event });
                 }
-                Ok(gap) => return Some(gap),
                 Err(broadcast::error::RecvError::Lagged(skipped)) => {
                     self.suppress = true;
                     return Some(Observation::Gap { skipped });

@@ -219,7 +219,7 @@ async fn preparation_refusal_retains_exact_input_and_blocks_silent_replacement()
         }
     ));
     while fixture.control.preparing.is_some() {
-        fixture.control.drive().await;
+        fixture.control.drive(ActivityRetention::Discard).await;
     }
     assert!(!fixture.control.is_busy());
     assert!(
