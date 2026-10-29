@@ -2,13 +2,14 @@ use super::*;
 use ion_ai::ToolCall;
 
 #[tokio::test]
-async fn cross_server_aliases_keep_both_frozen_routes() {
+async fn cross_server_aliases_and_descriptions_keep_frozen_routes_across_refresh() {
     let root = std::env::temp_dir().join(format!("ion-mcp-alias-{}", uuid::Uuid::now_v7()));
     fs::create_dir(&root).unwrap();
     let config = McpConfig::new(&root);
     let script = r#"
 import json, sys
 name = sys.argv[1]
+listings = 0
 for line in sys.stdin:
     request = json.loads(line)
     if "id" not in request: continue
@@ -16,7 +17,8 @@ for line in sys.stdin:
         result = {"protocolVersion": request["params"]["protocolVersion"],
                   "capabilities": {"tools": {}}, "serverInfo": {"name": name, "version": "1"}}
     elif request["method"] == "tools/list":
-        result = {"tools": [{"name": name, "inputSchema": {"type": "object"}}]}
+        listings += 1
+        result = {"tools": [{"name": name if listings == 1 else name + "_next", "description": "Remote tool", "inputSchema": {"type": "object"}}]}
     elif request["method"] == "tools/call":
         result = {"content": [], "structuredContent": {"called": request["params"]["name"]}}
     else: continue
@@ -28,6 +30,14 @@ for line in sys.stdin:
                 server,
                 McpServer::Stdio(McpStdioServer {
                     enabled: true,
+                    description: Some(
+                        if server == "a" {
+                            "  Catalog purpose  "
+                        } else {
+                            " \n "
+                        }
+                        .into(),
+                    ),
                     cwd: None,
                     env: Default::default(),
                     command: "python3".into(),
@@ -55,6 +65,39 @@ for line in sys.stdin:
                     CancellationToken::new(),
                 )
                 .await,
+        );
+    }
+    // Saved edits do not retarget an active connection, even at catalogue refresh.
+    for (name, mut server) in config.list().unwrap().servers {
+        match &mut server {
+            McpServer::Stdio(server) => server.description = Some("Replacement purpose".into()),
+            McpServer::Http(_) => unreachable!(),
+        }
+        config.remove(&name).unwrap();
+        config.add(&name, server).unwrap();
+    }
+    for server in &source.servers {
+        server.tool_list_version.fetch_add(1, Ordering::AcqRel);
+    }
+    assert!(source.refresh(CancellationToken::new()).await.is_empty());
+    let refreshed =
+        ion_core::ToolSet::new([source.clone() as Arc<dyn CodingToolSource>]).snapshot();
+    for (server, original) in [("a", "b__c"), ("a__b", "c")] {
+        let expected = if server == "a" {
+            "Remote tool\n\nMCP server a: Catalog purpose"
+        } else {
+            "Remote tool"
+        };
+        let original_name = exposed_tool_name(server, original);
+        let next_name = exposed_tool_name(server, &format!("{original}_next"));
+        assert_eq!(
+            issued.definition(&original_name).unwrap().spec.description,
+            expected
+        );
+        assert!(refreshed.definition(&original_name).is_none());
+        assert_eq!(
+            refreshed.definition(&next_name).unwrap().spec.description,
+            expected
         );
     }
     source.shutdown().await.unwrap();
@@ -112,6 +155,7 @@ for line in sys.stdin:
                 name,
                 McpServer::Stdio(McpStdioServer {
                     enabled: true,
+                    description: Some(format!("  {name} server purpose  ")),
                     cwd: None,
                     env: Default::default(),
                     command: "python3".into(),
@@ -175,6 +219,15 @@ for line in sys.stdin:
                 .await;
             assert_eq!(result.is_error, expected.is_none(), "{}", result.value);
             if expected.is_some() {
+                let definition = snapshot
+                    .definition(&exposed_tool_name(server, original))
+                    .unwrap();
+                assert_eq!(
+                    definition.spec.description,
+                    format!(
+                        "Tool {original} from MCP server {server}\n\nMCP server {server}: {server} server purpose"
+                    )
+                );
                 assert_eq!(result.value["structured_content"]["called"], original);
             }
         }

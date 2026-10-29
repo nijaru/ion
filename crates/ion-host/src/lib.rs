@@ -317,6 +317,7 @@ mod tests {
                 "user",
                 McpServer::Stdio(McpStdioServer {
                     enabled: true,
+                    description: None,
                     cwd: None,
                     env: Default::default(),
                     command: "unused".into(),

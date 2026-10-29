@@ -204,6 +204,9 @@ pub(crate) enum McpAction {
         /// Server directory, relative to the Session directory; supports ~/.
         #[arg(long, value_name = "DIR")]
         server_cwd: Option<PathBuf>,
+        /// Literal server purpose included in tool descriptions and discovery.
+        #[arg(long, value_name = "TEXT")]
+        description: Option<String>,
         /// Override an inherited variable (repeatable); supports ${NAME} references.
         #[arg(long, value_name = "NAME=VALUE", value_parser = parse_assignment)]
         env: Vec<(String, String)>,
@@ -216,6 +219,9 @@ pub(crate) enum McpAction {
         url: String,
         #[arg(long)]
         bearer_token_env: Option<String>,
+        /// Literal server purpose included in tool descriptions and discovery.
+        #[arg(long, value_name = "TEXT")]
+        description: Option<String>,
         /// HTTP header value; names are case-insensitive, repeatable, supports ${NAME}.
         #[arg(long = "header", value_name = "NAME=VALUE", value_parser = parse_http_header)]
         headers: Vec<(String, String)>,

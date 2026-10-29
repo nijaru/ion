@@ -243,10 +243,12 @@ class Provider(BaseHTTPRequestHandler):
         assert not any("mcp_resource" in name for name in names), names
         if step == 1:
             assert "mcp__8_changing__first" in names, names
+            description = next(tool["function"]["description"] for tool in body["tools"] if tool["function"]["name"] == greet)
+            assert description == "Greet a name\n\nMCP server demo: Visual laboratory ${UNSET_DESCRIPTION} !literal", description
             name, arguments = "mcp__4_demo__greet_user", {}
         elif step == 2:
             assert "tool was not declared for this request" in body["messages"][-1]["content"], body
-            name, arguments = "tool_search", {"query": "mcp__4_demo__picture"}
+            name, arguments = "tool_search", {"query": "Visual laboratory"}
         elif step == 3:
             name, arguments = "mcp__4_demo__picture", {}
         elif step == 4:
@@ -257,9 +259,11 @@ class Provider(BaseHTTPRequestHandler):
             name, arguments = "mcp__8_changing__first", {}
         elif step == 6:
             assert "mcp__8_changing__first" not in names and "mcp__8_changing__second" not in names, names
-            name, arguments = "tool_search", {"query": "mcp__8_changing__second"}
+            name, arguments = "tool_search", {"query": "Refreshed inventory"}
         elif step == 7:
             assert "mcp__8_changing__second" in names, names
+            description = next(tool["function"]["description"] for tool in body["tools"] if tool["function"]["name"] == "mcp__8_changing__second")
+            assert description == "second\n\nMCP server changing: Refreshed inventory", description
             name, arguments = "mcp__8_changing__second", {}
         elif step == 8:
             assert "SECOND" in body["messages"][-1]["content"], body
@@ -268,6 +272,14 @@ const hidden = 'mcp__4_demo__greet_user';
 const found = await searchTools('greet');
 if (found.some(tool => tool.name === hidden) || tools[hidden] !== undefined)
     throw new Error('hidden MCP tool leaked into Code Mode');
+const purpose = await searchTools('Visual laboratory');
+const expected = ['mcp__4_demo__picture', {json.dumps(greet)}].sort();
+if (JSON.stringify(purpose.map(tool => tool.name).sort()) !== JSON.stringify(expected))
+    throw new Error('server purpose did not find only exposed tools');
+const described = await describeTool('mcp__4_demo__picture');
+if (described.description !== 'Return a picture\\n\\nMCP server demo: Visual laboratory ${{UNSET_DESCRIPTION}} !literal')
+    throw new Error('server purpose replaced remote metadata or was expanded');
+text('MCP_PURPOSE_DISCOVERY_OK');
 const picture = await tools.mcp__4_demo__picture({{}});
 if (picture.is_error || picture.images.length !== 2 ||
     !picture.value.content.includes('EMBEDDED_NOTE') ||
@@ -279,7 +291,7 @@ text(await tools[{json.dumps(greet)}]({{name: 'Composed'}}));
 """
             name, arguments = "code_mode", {"code": code}
         else:
-            assert step == 9 and all(marker in body["messages"][-1]["content"] for marker in ("Hello, Composed!", "MCP_EMBEDDED_COMPOSED_OK")), body
+            assert step == 9 and all(marker in body["messages"][-1]["content"] for marker in ("Hello, Composed!", "MCP_EMBEDDED_COMPOSED_OK", "MCP_PURPOSE_DISCOVERY_OK")), body
             return [{"id": "exposure", "choices": [{"index": 0, "delta": {"content": "MCP_EXPOSURE_OK"}, "finish_reason": "stop"}]}]
         return [
             {"id": "exposure", "choices": [{"index": 0, "delta": {"tool_calls": [{"index": 0, "id": f"exposure-{step}", "type": "function", "function": {"name": name, "arguments": json.dumps(arguments)}}]}, "finish_reason": None}]},
@@ -698,18 +710,21 @@ with tempfile.TemporaryDirectory(prefix="ion-mcp-") as temporary:
         subprocess.run([binary, "mcp", "add", "paired-left", sys.executable, str(paired_script), "paired-left", "paired-right"], env=env, check=True, capture_output=True)
         subprocess.run([binary, "mcp", "add", "paired-right", sys.executable, str(paired_script), "paired-right", "paired-left"], env=env, check=True, capture_output=True)
         subprocess.run([binary, "mcp", "add", "changing", sys.executable, str(changing_script)], env=env, check=True, capture_output=True)
-        subprocess.run([binary, "mcp", "add-http", "remote", f"http://127.0.0.1:{remote.server_port}/mcp", "--bearer-token-env", "REMOTE_MCP_TOKEN", "--header", "X-Api-Key=obsolete", "--header", "x-api-key=${REMOTE_HEADER_KEY}", "--header", "X-Tenant=${REMOTE_HEADER_ABSENT:-tenant}", "--header", "X-Empty="], env=env, check=True, capture_output=True)
+        subprocess.run([binary, "mcp", "add-http", "remote", f"http://127.0.0.1:{remote.server_port}/mcp", "--description", "Remote text conversion", "--bearer-token-env", "REMOTE_MCP_TOKEN", "--header", "X-Api-Key=obsolete", "--header", "x-api-key=${REMOTE_HEADER_KEY}", "--header", "X-Tenant=${REMOTE_HEADER_ABSENT:-tenant}", "--header", "X-Empty="], env=env, check=True, capture_output=True)
         listing = subprocess.run([binary, "mcp", "list"], env=env, check=True, capture_output=True, text=True)
         assert "demo" in listing.stdout and "demo\tdirect\t" in listing.stdout, listing.stdout
         assert str(server_script) in listing.stdout and "/mcp" in listing.stdout
         assert "  header\tx-api-key" in listing.stdout and "header-fixture-value" not in listing.stdout + listing.stderr and "${REMOTE_HEADER_KEY}" not in listing.stdout
         rejected = subprocess.run([binary, "mcp", "add-http", "rejected", f"http://127.0.0.1:{remote.server_port}/must-not-connect", "--header", "Host=other.test"], env=env, capture_output=True, text=True)
         assert rejected.returncode != 0 and "reserved MCP HTTP header" in rejected.stderr, rejected
-        subprocess.run([binary, "mcp", "add", "flag-probe", "--exposure", "hidden", sys.executable, "-c", "import sys"], env=env, check=True, capture_output=True)
+        literal_purpose = "${UNSET_DESCRIPTION} !literal\n\x1b[2J"
+        subprocess.run([binary, "mcp", "add", "flag-probe", "--exposure", "hidden", "--description", literal_purpose, sys.executable, "-c", "import sys"], env=env, check=True, capture_output=True)
         flagged = subprocess.run([binary, "mcp", "list"], env=env, check=True, capture_output=True, text=True)
         assert "flag-probe\thidden\t" in flagged.stdout, flagged.stdout
+        assert "  description\t${UNSET_DESCRIPTION} !literal  [2J\n" in flagged.stdout and "\x1b" not in flagged.stdout, flagged.stdout
         flag_config = json.loads((Path(env["ION_HOME"]) / "mcp.json").read_text())
         assert flag_config["servers"]["flag-probe"]["args"] == ["-c", "import sys"], flag_config
+        assert flag_config["servers"]["flag-probe"]["description"] == literal_purpose, flag_config
         subprocess.run([binary, "mcp", "remove", "flag-probe"], env=env, check=True, capture_output=True)
         config_path = Path(env["ION_HOME"]) / "mcp.json"
         config = json.loads(config_path.read_text())
@@ -737,6 +752,8 @@ with tempfile.TemporaryDirectory(prefix="ion-mcp-") as temporary:
         assert "bad-listing" in response.stderr and "tool listing failed" in response.stderr, response
         assert "eof" in (workspace / "bad-mcp-events.txt").read_text()
         assert len(requests) == 2
+        remote_descriptions = [tool["function"]["description"] for tool in requests[0]["tools"] if tool["function"]["name"].startswith("mcp__6_remote__")]
+        assert remote_descriptions and all(description.endswith("\n\nMCP server remote: Remote text conversion") for description in remote_descriptions), remote_descriptions
         events = (workspace / "mcp-events.txt").read_text()
         assert "called:Ion" in events and "eof" in events, events
         image_response = subprocess.run([binary, "--cwd", workspace, "run", "Inspect an MCP picture."], env=env, check=True, capture_output=True, text=True)
@@ -782,10 +799,12 @@ with tempfile.TemporaryDirectory(prefix="ion-mcp-") as temporary:
         exposure_config = json.loads(saved_config)
         exposure_config["servers"]["demo"].update({
             "exposure": "hidden",
+            "description": "  Visual laboratory ${UNSET_DESCRIPTION} !literal  ",
             "tool_exposure": {"p*": "deferred", "*": "hidden", "greet.user": "direct"},
         })
         exposure_config["servers"]["changing"].update({
             "exposure": "hidden",
+            "description": "Refreshed inventory",
             "tool_exposure": {"s*": "deferred", "*": "hidden", "first": "direct"},
         })
         exposure_config["servers"]["remote"]["tool_exposure"] = {"*case": "hidden", "*": "direct"}
@@ -811,6 +830,7 @@ with tempfile.TemporaryDirectory(prefix="ion-mcp-") as temporary:
         assert events.count("called:Exposure") == 1 and events.count("called:Composed") == 1 and events.count("called:picture") == 2, events
         assert "read:" not in events and remote.link_fetches == 0, (events, remote.link_fetches)
         print("Ion MCP embedded text/image/binary resources and unfetched link metadata: OK")
+        print("Ion MCP literal server purpose in declarations, deferred search, Code Mode and refresh: OK")
         changed_events = (workspace / "changing-mcp-events.txt").read_text()
         for name in ("first", "second"):
             assert changed_events.count(f"called:{name}") - previous_changed_events.count(f"called:{name}") == 1, changed_events

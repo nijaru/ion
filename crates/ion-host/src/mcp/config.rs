@@ -30,6 +30,13 @@ impl McpServer {
         }
     }
 
+    pub fn description(&self) -> Option<&str> {
+        match self {
+            Self::Stdio(server) => server.description.as_deref(),
+            Self::Http(server) => server.description.as_deref(),
+        }
+    }
+
     pub fn exposure(&self) -> McpExposure {
         match self {
             Self::Stdio(server) => server.exposure,
@@ -77,6 +84,13 @@ impl McpExposure {
 pub struct McpStdioServer {
     #[serde(default = "enabled_by_default", skip_serializing_if = "is_enabled")]
     pub enabled: bool,
+    /// Literal server purpose included in its exposed tools' discovery metadata.
+    #[serde(
+        default,
+        deserialize_with = "present_policy",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub description: Option<String>,
     pub command: String,
     #[serde(default)]
     pub args: Vec<String>,
@@ -120,6 +134,13 @@ fn deserialize_value_map<'de, D: Deserializer<'de>>(
 pub struct McpHttpServer {
     #[serde(default = "enabled_by_default", skip_serializing_if = "is_enabled")]
     pub enabled: bool,
+    /// Literal server purpose included in its exposed tools' discovery metadata.
+    #[serde(
+        default,
+        deserialize_with = "present_policy",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub description: Option<String>,
     pub url: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub bearer_token_env: Option<String>,
@@ -466,6 +487,8 @@ struct ProjectPolicy {
     #[serde(default, deserialize_with = "present_policy")]
     enabled: Option<bool>,
     #[serde(default, deserialize_with = "present_policy")]
+    description: Option<String>,
+    #[serde(default, deserialize_with = "present_policy")]
     exposure: Option<McpExposure>,
     #[serde(default, deserialize_with = "present_policy")]
     tool_exposure: Option<IndexMap<String, McpExposure>>,
@@ -488,20 +511,25 @@ fn parse_project_server(name: &str, raw: &RawValue, base: Option<&McpServer>) ->
     let mut server = base
         .with_context(|| format!("MCP project override {name} needs a valid user server"))?
         .clone();
-    let (enabled, exposure, tool_exposure) = match &mut server {
+    let (enabled, description, exposure, tool_exposure) = match &mut server {
         McpServer::Stdio(server) => (
             &mut server.enabled,
+            &mut server.description,
             &mut server.exposure,
             &mut server.tool_exposure,
         ),
         McpServer::Http(server) => (
             &mut server.enabled,
+            &mut server.description,
             &mut server.exposure,
             &mut server.tool_exposure,
         ),
     };
     if let Some(value) = patch.enabled {
         *enabled = value;
+    }
+    if let Some(value) = patch.description {
+        *description = Some(value);
     }
     if let Some(value) = patch.exposure {
         *exposure = value;
@@ -688,6 +716,38 @@ mod tests {
     }
 
     #[test]
+    fn descriptions_are_optional_literal_strings_for_both_transports() {
+        for transport in [
+            json!({"command":"python3"}),
+            json!({"url":"https://example.com/mcp"}),
+        ] {
+            let absent = parse_server("purpose", transport.clone()).unwrap();
+            assert_eq!(absent.description(), None);
+            assert!(
+                serde_json::to_value(absent)
+                    .unwrap()
+                    .get("description")
+                    .is_none()
+            );
+            for description in ["", "  Inventory ${UNSET} !command\nmetadata  "] {
+                let mut configured = transport.clone();
+                configured["description"] = json!(description);
+                let server = parse_server("purpose", configured.clone()).unwrap();
+                assert_eq!(server.description(), Some(description));
+                assert_eq!(
+                    serde_json::to_value(server).unwrap()["description"],
+                    description
+                );
+            }
+            for invalid in [Value::Null, json!(false), json!(7), json!([]), json!({})] {
+                let mut configured = transport.clone();
+                configured["description"] = invalid;
+                assert!(parse_server("purpose", configured).is_err());
+            }
+        }
+    }
+
+    #[test]
     fn exposure_defaults_to_direct_and_round_trips_explicit_modes() {
         let direct: McpStdioServer = serde_json::from_value(serde_json::json!({
             "command": "python3"
@@ -708,6 +768,7 @@ mod tests {
         assert_eq!(hidden.exposure, McpExposure::Hidden);
         let encoded = serde_json::to_value(McpStdioServer {
             enabled: true,
+            description: None,
             cwd: None,
             env: Default::default(),
             command: "python3".into(),
@@ -859,19 +920,27 @@ mod tests {
         let config = McpConfig::with_project(&root.join("user"), &root).unwrap();
         fs::create_dir_all(config.user.parent().unwrap()).unwrap();
         fs::write(&config.user, r#"{"servers":{
-            "local":{"command":"python3","env":{"TOKEN":"user-secret"},"enabled":false,"tool_exposure":{"z*":"hidden","*":"direct"}},
-            "remote":{"url":"https://example.com/mcp","headers":{"X-Key":"user-secret"}},
+            "local":{"command":"python3","description":"User local purpose","env":{"TOKEN":"user-secret"},"enabled":false,"tool_exposure":{"z*":"hidden","*":"direct"}},
+            "remote":{"url":"https://example.com/mcp","description":"User remote purpose","headers":{"X-Key":"user-secret"}},
             "invalid":{"command":7}
         }}"#).unwrap();
         let path = config.project_path().unwrap();
         fs::write(path, r#"{"servers":{
-            "local":{"enabled":true,"exposure":"deferred","tool_exposure":{"b*":"direct","*":"hidden"}},
+            "local":{"enabled":true,"description":"Project purpose","exposure":"deferred","tool_exposure":{"b*":"direct","*":"hidden"}},
             "remote":{"enabled":false}
         }}"#).unwrap();
         config.trust_project().unwrap();
         let listing = config.list().unwrap();
         assert!(listing.servers["local"].enabled());
         assert!(!listing.servers["remote"].enabled());
+        assert_eq!(
+            listing.servers["local"].description(),
+            Some("Project purpose")
+        );
+        assert_eq!(
+            listing.servers["remote"].description(),
+            Some("User remote purpose")
+        );
         assert_eq!(listing.servers["local"].exposure(), McpExposure::Deferred);
         assert_eq!(
             listing.servers["local"]
@@ -889,7 +958,25 @@ mod tests {
         assert_eq!(saved["servers"]["local"]["enabled"], true);
         assert!(saved["servers"]["local"].get("command").is_none());
         assert!(!fs::read_to_string(path).unwrap().contains("user-secret"));
+        fs::write(path, r#"{"servers":{"local":{"description":""},"remote":{"description":"HTTP project purpose"}}}"#).unwrap();
+        assert!(
+            config
+                .list()
+                .unwrap()
+                .diagnostics
+                .iter()
+                .any(|message| message.contains("not trusted"))
+        );
+        config.trust_project().unwrap();
+        let listed = config.list().unwrap();
+        assert_eq!(listed.servers["local"].description(), Some(""));
+        assert_eq!(
+            listed.servers["remote"].description(),
+            Some("HTTP project purpose")
+        );
         for invalid in [
+            r#"{"description":null}"#,
+            r#"{"description":7}"#,
             r#"{"enabled":null}"#,
             r#"{"exposure":null}"#,
             r#"{"tool_exposure":null}"#,
@@ -942,6 +1029,7 @@ mod tests {
                 if step == 0 {
                     let server = McpServer::Stdio(McpStdioServer {
                         enabled: true,
+                        description: None,
                         command: "python3".into(),
                         args: Vec::new(),
                         cwd: None,
@@ -1054,6 +1142,7 @@ mod tests {
         let remote = |url: &str, bearer_token_env: Option<&str>| {
             McpServer::Http(McpHttpServer {
                 enabled: true,
+                description: None,
                 url: url.into(),
                 bearer_token_env: bearer_token_env.map(str::to_owned),
                 headers: Default::default(),
@@ -1095,6 +1184,7 @@ mod tests {
         let stdio = |command: &str| {
             McpServer::Stdio(McpStdioServer {
                 enabled: true,
+                description: None,
                 cwd: None,
                 env: Default::default(),
                 command: command.into(),
@@ -1193,6 +1283,7 @@ mod tests {
                 "new",
                 McpServer::Stdio(McpStdioServer {
                     enabled: true,
+                    description: None,
                     cwd: None,
                     env: Default::default(),
                     command: "echo".into(),
@@ -1225,6 +1316,7 @@ mod tests {
         let server = || {
             McpServer::Stdio(McpStdioServer {
                 enabled: true,
+                description: None,
                 cwd: None,
                 env: Default::default(),
                 command: "python3".into(),

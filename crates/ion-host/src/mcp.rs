@@ -79,6 +79,7 @@ type Catalog = BTreeMap<String, RegisteredTools>;
 
 struct Server {
     name: String,
+    description: Option<String>,
     exposure: McpExposure,
     tool_exposure: IndexMap<String, McpExposure>,
     /// The initialize handshake advertised resource operations. Capabilities are
@@ -171,6 +172,11 @@ impl McpTools {
         validate_server(&definition)?;
         let changed = Arc::new(AtomicU64::new(0));
         let handler = ChangeHandler(changed.clone());
+        let description = definition
+            .description()
+            .map(str::trim)
+            .filter(|description| !description.is_empty())
+            .map(str::to_owned);
         let exposure = definition.exposure();
         let tool_exposure = definition.tool_exposure().clone();
         let client = Connection::start(&name, definition, cwd, handler).await?;
@@ -192,6 +198,7 @@ impl McpTools {
             Ok(tools) => Ok((
                 Server {
                     name,
+                    description,
                     exposure,
                     tool_exposure,
                     resources,
@@ -457,9 +464,14 @@ impl CodingToolSource for McpTools {
                     McpExposure::Deferred => ToolExposure::Deferred,
                     McpExposure::Hidden => continue,
                 };
+                let mut spec = tool.spec.clone();
+                if let Some(description) = &server.description {
+                    spec.description
+                        .push_str(&format!("\n\nMCP server {}: {description}", server.name));
+                }
                 registrations.push(ToolRegistration::new(
                     ToolDefinition {
-                        spec: tool.spec.clone(),
+                        spec,
                         result_schema: tool.result_schema.clone(),
                         presentation: ToolPresentation::static_target(
                             ToolActivityKind::External,
@@ -568,6 +580,7 @@ for line in sys.stdin:
                 "bound",
                 McpServer::Stdio(McpStdioServer {
                     enabled: true,
+                    description: None,
                     cwd: None,
                     env: Default::default(),
                     command: "python3".into(),
@@ -682,6 +695,7 @@ for line in sys.stdin:
 "#;
                 config.add("settlement", McpServer::Stdio(McpStdioServer {
                     enabled: true,
+                    description: None,
                     cwd: None,
                     env: Default::default(),
                     command: "python3".into(), args: vec!["-c".into(), server.into()],

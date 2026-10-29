@@ -793,6 +793,7 @@ mod tests {
                 "oversize",
                 McpServer::Http(McpHttpServer {
                     enabled: true,
+                    description: None,
                     url: format!("http://{address}/mcp"),
                     bearer_token_env: None,
                     headers: Default::default(),

@@ -73,6 +73,7 @@ async fn native_roots_are_reaped_after_shutdown_and_failed_startup() {
                     "owned",
                     McpServer::Stdio(McpStdioServer {
                         enabled: true,
+                        description: None,
                         cwd: None,
                         env: Default::default(),
                         command: "python3".into(),
@@ -157,6 +158,7 @@ async fn shutdown_reaps_root_while_protocol_send_is_backpressured() {
         "blocked",
         McpServer::Stdio(McpStdioServer {
             enabled: true,
+            description: None,
             cwd: None,
             env: Default::default(),
             command: "python3".into(),
@@ -209,6 +211,7 @@ async fn stderr_is_bounded_private_and_drained_without_blocking_tool_results() {
             "owned",
             McpServer::Stdio(McpStdioServer {
                 enabled: true,
+                description: None,
                 cwd: None,
                 env: Default::default(),
                 command: "python3".into(),
@@ -271,6 +274,7 @@ async fn cancelled_shutdown_waiter_does_not_abandon_graceful_close() {
             "owned",
             McpServer::Stdio(McpStdioServer {
                 enabled: true,
+                description: None,
                 cwd: None,
                 env: Default::default(),
                 command: "python3".into(),
@@ -345,6 +349,7 @@ async fn failed_http_startup_closes_pending_request_before_runtime_teardown() {
             let config = McpConfig::new(&root);
             config.add("stalled", McpServer::Http(McpHttpServer {
                 enabled: true,
+                description: None,
                 url: format!("http://{address}/mcp"), bearer_token_env: None,
                 headers: Default::default(),
                 exposure: McpExposure::Direct,

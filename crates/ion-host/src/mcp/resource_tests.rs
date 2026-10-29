@@ -120,6 +120,7 @@ async fn resources_list_templates_read_and_capability_gating() {
             "resource",
             McpServer::Stdio(McpStdioServer {
                 enabled: true,
+                description: None,
                 cwd: None,
                 env: Default::default(),
                 command: "python3".into(),
@@ -134,6 +135,7 @@ async fn resources_list_templates_read_and_capability_gating() {
             "broken",
             McpServer::Stdio(McpStdioServer {
                 enabled: true,
+                description: None,
                 cwd: None,
                 env: Default::default(),
                 command: "python3".into(),
@@ -357,6 +359,7 @@ for line in sys.stdin:
             "tools",
             McpServer::Stdio(McpStdioServer {
                 enabled: true,
+                description: None,
                 cwd: None,
                 env: Default::default(),
                 command: "python3".into(),
@@ -415,6 +418,7 @@ for line in sys.stdin:
             "stoppable",
             McpServer::Stdio(McpStdioServer {
                 enabled: true,
+                description: None,
                 cwd: None,
                 env: Default::default(),
                 command: "python3".into(),
@@ -487,6 +491,7 @@ for line in sys.stdin:
             "resources-only",
             McpServer::Stdio(McpStdioServer {
                 enabled: true,
+                description: None,
                 cwd: None,
                 env: Default::default(),
                 command: "python3".into(),
@@ -526,6 +531,7 @@ async fn deferred_exposure_requires_discovery_and_hidden_exposure_removes_capabi
             "deferred",
             McpServer::Stdio(McpStdioServer {
                 enabled: true,
+                description: None,
                 cwd: None,
                 env: Default::default(),
                 command: "python3".into(),
@@ -565,6 +571,7 @@ async fn deferred_exposure_requires_discovery_and_hidden_exposure_removes_capabi
             "hidden",
             McpServer::Stdio(McpStdioServer {
                 enabled: true,
+                description: None,
                 cwd: None,
                 env: Default::default(),
                 command: "python3".into(),

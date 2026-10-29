@@ -823,6 +823,14 @@ headers and conflicting Authorization/bearer sources before network I/O.
 Configured values stay out of listing/resolution diagnostics and use sensitive
 typed headers through POST, GET and DELETE; redirects never forward them.
 Project trust and existing HTTP stop/join ownership still apply.
+Both transports may carry a literal configured server description. Capture its
+nonblank trimmed purpose at connection startup and append it to each exposed
+tool's remote description in the frozen catalogue. Direct declarations, deferred
+search and composed discovery share that metadata; hidden tools remain absent.
+Do not expand description templates or promote them to authority. Trusted project
+policy-only entries may replace or clear an inherited description; missing means
+inherit and null is invalid. Active connections retain their purpose across
+catalogue refresh; changing it requires a new binding and matching project trust.
 MCP discovery isolates server failures and refreshes at later
 request boundaries; possibly effectful invocations are never transparently
 retried. MCP shutdown retires every peer before joining connection cleanup;

@@ -62,6 +62,7 @@ async fn fixture(mode: &str) -> (PathBuf, Arc<McpTools>, ion_core::ToolSet) {
             "custody",
             McpServer::Stdio(McpStdioServer {
                 enabled: true,
+                description: None,
                 cwd: None,
                 env: Default::default(),
                 command: "python3".into(),
@@ -448,6 +449,7 @@ server.serve_forever()
             "http",
             McpServer::Http(McpHttpServer {
                 enabled: true,
+                description: None,
                 url: format!("http://127.0.0.1:{}/mcp", port.trim()),
                 bearer_token_env: None,
                 headers: Default::default(),
@@ -585,6 +587,7 @@ server.serve_forever()
             "http",
             McpServer::Http(McpHttpServer {
                 enabled: true,
+                description: None,
                 url: format!("http://127.0.0.1:{}/mcp", port.trim()),
                 bearer_token_env: None,
                 headers: Default::default(),

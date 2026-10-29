@@ -1168,7 +1168,8 @@ as `--cwd`.
 Local servers can use their own working directory and environment overrides:
 
 ```sh
-ion mcp add docs --server-cwd ../docs --env 'DOCS_TOKEN=${DOCS_TOKEN}' docs-mcp
+ion mcp add docs --description 'Project documentation' \
+  --server-cwd ../docs --env 'DOCS_TOKEN=${DOCS_TOKEN}' docs-mcp
 ```
 
 These persist as `cwd` and an `env` name-to-string map in the server entry.
@@ -1210,6 +1211,15 @@ session/protocol/routing headers cannot be overridden, including `Host`,
 Ion refuses redirects rather than forwarding credentials to another destination.
 This does not add OAuth or command-backed secret providers.
 
+Both commands accept `--description TEXT`, stored as `description` in the server
+entry. This literal server purpose appears alongside the remote tool descriptions
+in model declarations, deferred `tool_search` and Code Mode's `searchTools` /
+`describeTool`. It helps find tools by what their server offers. No environment
+references or commands are expanded in descriptions; they grant no authority.
+Empty or whitespace-only descriptions add no model metadata. Listing shows the
+saved description. Active connections retain their captured description across
+tool-list refresh; edits apply to new clients and require renewed project trust.
+
 Add `--exposure direct|deferred|hidden` to either command.
 Project servers live in `<repository root>/.ion/mcp.json`; write them with
 `ion mcp add --project ...` and remove them with `ion mcp remove --project NAME`.
@@ -1217,9 +1227,11 @@ Project configuration is inert until `ion trust` records its canonical project
 root and current file digest. Editing the file invalidates trust; untrusted
 entries are never connected. `ion mcp list` reports the project path and an
 untrusted diagnostic. Trusted project entries override user entries with the
-same name. A project entry without `command` or `url` can override only `enabled`,
-`exposure` and `tool_exposure` of a valid user server, without copying its launch
-settings or credentials. Other project entries define complete servers.
+same name. A project entry without `command` or `url` can override `enabled`,
+`description`, `exposure` and `tool_exposure` of a valid user server, without copying its launch
+settings or credentials. Missing fields inherit; an empty description clears
+an inherited purpose, and `null` is not a valid override. Other project entries
+define complete servers.
 `ion untrust` removes the trust record. Trust is an explicit launch
 decision, not process isolation or a sandbox.
 `direct` is the default and declares the server's tools. `deferred` keeps them

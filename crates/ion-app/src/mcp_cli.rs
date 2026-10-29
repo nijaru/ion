@@ -59,6 +59,12 @@ pub(super) fn run(action: McpAction, config: &McpConfig) -> Result<()> {
                         }
                     }
                 }
+                if let Some(description) = server.description() {
+                    print_stdout(format_args!(
+                        "  description\t{}",
+                        metadata_field(description)
+                    ))?;
+                }
                 if !server.enabled() {
                     print_stdout(format_args!("  exposure\t{}", server.exposure().as_str()))?;
                 }
@@ -77,11 +83,13 @@ pub(super) fn run(action: McpAction, config: &McpConfig) -> Result<()> {
             project,
             exposure,
             server_cwd,
+            description,
             env,
             args,
         } => {
             let server = McpServer::Stdio(McpStdioServer {
                 enabled: true,
+                description,
                 cwd: server_cwd,
                 env: env.into_iter().collect(),
                 command,
@@ -104,6 +112,7 @@ pub(super) fn run(action: McpAction, config: &McpConfig) -> Result<()> {
             name,
             url,
             bearer_token_env,
+            description,
             headers,
             project,
             exposure,
@@ -111,6 +120,7 @@ pub(super) fn run(action: McpAction, config: &McpConfig) -> Result<()> {
             let server = McpServer::Http(McpHttpServer {
                 enabled: true,
                 url,
+                description,
                 bearer_token_env,
                 headers: headers.into_iter().collect(),
                 exposure: exposure.into(),
