@@ -709,22 +709,25 @@ with tempfile.TemporaryDirectory(prefix="ion-mcp-") as temporary:
         selected = subprocess.run([binary, "--cwd", workspace, "--tools", "read,write", "run", "Read and write only."], env=env, check=True, capture_output=True, text=True)
         assert selected.stdout.strip() == "TOOL_SELECTION_OK", selected
 
-        # Select individual remote names without changing server startup or
+        # Select exact names and ordered patterns without changing startup or
         # resources. Newly listed tools must use the same captured overrides.
         saved_config = config_path.read_text()
         exposure_config = json.loads(saved_config)
         exposure_config["servers"]["demo"].update({
             "exposure": "hidden",
-            "tool_exposure": {"greet.user": "direct", "picture": "deferred"},
+            "tool_exposure": {"p*": "deferred", "*": "hidden", "greet.user": "direct"},
         })
         exposure_config["servers"]["changing"].update({
             "exposure": "hidden",
-            "tool_exposure": {"first": "direct", "second": "deferred"},
+            "tool_exposure": {"s*": "deferred", "*": "hidden", "first": "direct"},
         })
-        exposure_config["servers"]["remote"]["tool_exposure"] = {"uppercase": "hidden", "lowercase": "hidden"}
+        exposure_config["servers"]["remote"]["tool_exposure"] = {"*case": "hidden", "*": "direct"}
         config_path.write_text(json.dumps(exposure_config))
+        subprocess.run([binary, "mcp", "add", "order-probe", sys.executable, "-c", "import sys"], env=env, check=True, capture_output=True)
+        subprocess.run([binary, "mcp", "remove", "order-probe"], env=env, check=True, capture_output=True)
+        assert list(json.loads(config_path.read_text())["servers"]["demo"]["tool_exposure"]) == ["p*", "*", "greet.user"]
         exposed_listing = subprocess.run([binary, "mcp", "list"], env=env, check=True, capture_output=True, text=True)
-        assert "demo\thidden\t" in exposed_listing.stdout and "  tool\tgreet.user\tdirect" in exposed_listing.stdout and "  tool\tpicture\tdeferred" in exposed_listing.stdout, exposed_listing
+        assert "demo\thidden\t" in exposed_listing.stdout and "  tool\tp*\tdeferred\n  tool\t*\thidden\n  tool\tgreet.user\tdirect" in exposed_listing.stdout, exposed_listing
         server.exposure_start = len(requests)
         previous_remote_calls = len(remote_calls)
         previous_changed_events = (workspace / "changing-mcp-events.txt").read_text()
@@ -782,6 +785,7 @@ with tempfile.TemporaryDirectory(prefix="ion-mcp-") as temporary:
         subprocess.run([binary, "mcp", "remove", "remote"], env=env, check=True, capture_output=True)
         assert subprocess.run([binary, "mcp", "list"], env=env, check=True, capture_output=True, text=True).stdout == ""
         print("Ion MCP discovery, tool call and child shutdown: OK")
+        print("Ion MCP exact-first ordered patterns, persisted order and refreshed selection: OK")
         print("Ion MCP captured headers across POST/GET/DELETE, pre-network rejection and no credential redirects: OK")
 
         launch_directory = workspace / "server data"

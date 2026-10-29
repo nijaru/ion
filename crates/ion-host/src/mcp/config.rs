@@ -2,8 +2,9 @@
 use super::http_config;
 use crate::model_setup::{write_json, write_shared_json};
 use anyhow::{Context, Result, bail, ensure};
+use indexmap::IndexMap;
 use serde::{Deserialize, Deserializer, Serialize, de::Error as _};
-use serde_json::Value;
+use serde_json::{Value, value::RawValue};
 use sha2::{Digest, Sha256};
 use std::{
     collections::BTreeMap,
@@ -29,7 +30,7 @@ impl McpServer {
         }
     }
 
-    pub fn tool_exposure(&self) -> &BTreeMap<String, McpExposure> {
+    pub fn tool_exposure(&self) -> &IndexMap<String, McpExposure> {
         match self {
             Self::Stdio(server) => &server.tool_exposure,
             Self::Http(server) => &server.tool_exposure,
@@ -82,9 +83,9 @@ pub struct McpStdioServer {
     pub env: BTreeMap<String, String>,
     #[serde(default, skip_serializing_if = "McpExposure::is_direct")]
     pub exposure: McpExposure,
-    /// Exact remote tool names, before Ion's alias normalization.
-    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
-    pub tool_exposure: BTreeMap<String, McpExposure>,
+    /// Exact remote names win; otherwise the first matching `*` pattern wins.
+    #[serde(default, skip_serializing_if = "IndexMap::is_empty")]
+    pub tool_exposure: IndexMap<String, McpExposure>,
 }
 
 // Generic string deserialization can echo malformed values (for example a
@@ -120,15 +121,16 @@ pub struct McpHttpServer {
     pub headers: BTreeMap<String, String>,
     #[serde(default, skip_serializing_if = "McpExposure::is_direct")]
     pub exposure: McpExposure,
-    /// Exact remote tool names, before Ion's alias normalization.
-    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
-    pub tool_exposure: BTreeMap<String, McpExposure>,
+    /// Exact remote names win; otherwise the first matching `*` pattern wins.
+    #[serde(default, skip_serializing_if = "IndexMap::is_empty")]
+    pub tool_exposure: IndexMap<String, McpExposure>,
 }
 
 #[derive(Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct RawServers {
-    servers: BTreeMap<String, Value>,
+    // Retain nested rule order and malformed peers through unrelated config edits.
+    servers: BTreeMap<String, Box<RawValue>>,
 }
 
 pub struct McpListing {
@@ -327,7 +329,7 @@ impl McpConfig {
             !servers.contains_key(name),
             "MCP server {name} already exists"
         );
-        servers.insert(name.to_owned(), serde_json::to_value(server)?);
+        servers.insert(name.to_owned(), serde_json::value::to_raw_value(&server)?);
         if shared {
             write_shared_json(path, &RawServers { servers })
         } else {
@@ -358,7 +360,7 @@ fn read_config(path: &Path) -> std::io::Result<Vec<u8>> {
     Ok(bytes)
 }
 
-fn read_servers(path: &Path) -> Result<BTreeMap<String, Value>> {
+fn read_servers(path: &Path) -> Result<BTreeMap<String, Box<RawValue>>> {
     match read_config(path) {
         Ok(bytes) => Ok(serde_json::from_slice::<RawServers>(&bytes)
             .with_context(|| format!("invalid MCP config {}", path.display()))?
@@ -371,13 +373,13 @@ fn read_servers(path: &Path) -> Result<BTreeMap<String, Value>> {
 }
 
 fn parse_servers(
-    raw: BTreeMap<String, Value>,
+    raw: BTreeMap<String, Box<RawValue>>,
     servers: &mut BTreeMap<String, McpServer>,
     diagnostics: &mut Vec<String>,
     source: &str,
 ) {
     for (name, value) in raw {
-        match parse_server(&name, value) {
+        match parse_server(&name, &value) {
             Ok(server) => {
                 servers.insert(name, server);
             }
@@ -440,13 +442,16 @@ fn digest(bytes: &[u8]) -> String {
     format!("{:x}", hasher.finalize())
 }
 
-fn parse_server(name: &str, value: Value) -> Result<McpServer> {
+fn parse_server(name: &str, value: &RawValue) -> Result<McpServer> {
     (|| -> Result<McpServer> {
         validate_name(name)?;
-        let object = value.as_object().context("MCP server must be an object")?;
+        // Inspect transport keys without sorting the nested selection rules.
+        // Syntax was checked at the file boundary; keep non-object errors value-free.
+        let object: BTreeMap<String, &RawValue> = serde_json::from_str(value.get())
+            .map_err(|_| anyhow::anyhow!("MCP server must be an object"))?;
         let server = match (object.contains_key("command"), object.contains_key("url")) {
-            (true, false) => McpServer::Stdio(serde_json::from_value(value)?),
-            (false, true) => McpServer::Http(serde_json::from_value(value)?),
+            (true, false) => McpServer::Stdio(serde_json::from_str(value.get())?),
+            (false, true) => McpServer::Http(serde_json::from_str(value.get())?),
             (true, true) => bail!("MCP server cannot combine command and URL"),
             (false, false) => bail!("MCP server requires command or URL"),
         };
@@ -531,6 +536,10 @@ mod tests {
         sync::{Arc, Barrier},
     };
 
+    fn parse_server(name: &str, value: Value) -> Result<McpServer> {
+        super::parse_server(name, &serde_json::value::to_raw_value(&value)?)
+    }
+
     #[test]
     fn exposure_defaults_to_direct_and_round_trips_explicit_modes() {
         let direct: McpStdioServer = serde_json::from_value(serde_json::json!({
@@ -588,6 +597,67 @@ mod tests {
                 assert!(parse_server("demo", value).is_err());
             }
         }
+    }
+
+    #[test]
+    fn ordered_tool_rules_survive_loading_and_unrelated_user_and_project_edits() {
+        let root = std::env::temp_dir().join(format!("ion-mcp-order-{}", uuid::Uuid::now_v7()));
+        fs::create_dir_all(root.join(".git")).unwrap();
+        let config = McpConfig::with_project(&root.join("user"), &root).unwrap();
+        for project in [false, true] {
+            let path = if project {
+                config.project_path().unwrap()
+            } else {
+                &config.user
+            };
+            fs::create_dir_all(path.parent().unwrap()).unwrap();
+            fs::write(path, r#"{"servers":{
+                "local":{"command":"python3","tool_exposure":{"z*":"deferred","*":"hidden","zero":"direct"}},
+                "remote":{"url":"https://example.com/mcp","tool_exposure":{"z*":"deferred","*":"hidden","zero":"direct"}}
+            }}"#).unwrap();
+            for step in 0..3 {
+                if project {
+                    config.trust_project().unwrap();
+                }
+                let listed = config.list().unwrap();
+                assert!(listed.diagnostics.is_empty(), "{:?}", listed.diagnostics);
+                for name in ["local", "remote"] {
+                    let keys = listed.servers[name]
+                        .tool_exposure()
+                        .keys()
+                        .map(String::as_str)
+                        .collect::<Vec<_>>();
+                    assert_eq!(
+                        keys,
+                        ["z*", "*", "zero"],
+                        "{name}: project={project}, step={step}"
+                    );
+                }
+                if step == 0 {
+                    let server = McpServer::Stdio(McpStdioServer {
+                        command: "python3".into(),
+                        args: Vec::new(),
+                        cwd: None,
+                        env: Default::default(),
+                        exposure: McpExposure::Direct,
+                        tool_exposure: Default::default(),
+                    });
+                    if project {
+                        config.add_project("other", server).unwrap();
+                    } else {
+                        config.add("other", server).unwrap();
+                    }
+                } else if step == 1 {
+                    if project {
+                        config.remove_project("other").unwrap();
+                    } else {
+                        config.remove("other").unwrap();
+                    }
+                }
+            }
+            fs::remove_file(path).unwrap();
+        }
+        fs::remove_dir_all(root).unwrap();
     }
 
     #[test]

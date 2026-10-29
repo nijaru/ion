@@ -93,7 +93,7 @@ for line in sys.stdin:
                   "serverInfo": {"name": "exposure", "version": "1"}}
     elif request["method"] == "tools/list":
         result = {"tools": [{"name": name, "inputSchema": {"type": "object"}}
-                            for name in ["read.document", "search/document", "remove", "fallback"]]}
+                            for name in ["read.document", "search/document", "remove", "fallback", "family.read", "family.write", "family?literal"]]}
     elif request["method"] == "resources/read":
         result = {"contents": [{"uri": request["params"]["uri"], "text": "secret"}]}
     elif request["method"] == "tools/call":
@@ -115,13 +115,16 @@ for line in sys.stdin:
                     command: "python3".into(),
                     args: vec!["-c".into(), script.into()],
                     exposure,
-                    tool_exposure: BTreeMap::from([
+                    tool_exposure: IndexMap::from([
+                        ("family.*".into(), McpExposure::Deferred),
+                        ("family*".into(), McpExposure::Hidden),
+                        ("read.*".into(), McpExposure::Hidden),
                         ("read.document".into(), McpExposure::Direct),
+                        ("search/*".into(), McpExposure::Direct),
                         ("search/document".into(), McpExposure::Deferred),
                         ("remove".into(), McpExposure::Hidden),
-                        // Neither an alias nor a pattern is a remote tool name here.
+                        // Patterns and exact keys both use original names, not aliases.
                         (exposed_tool_name(name, "fallback"), McpExposure::Hidden),
-                        ("*".into(), McpExposure::Direct),
                     ]),
                 }),
             )
@@ -141,6 +144,9 @@ for line in sys.stdin:
             ("search/document", Some(ToolExposure::Deferred)),
             ("remove", None),
             ("fallback", fallback),
+            ("family.read", Some(ToolExposure::Deferred)),
+            ("family.write", Some(ToolExposure::Deferred)),
+            ("family?literal", None),
         ] {
             let name = exposed_tool_name(server, original);
             assert_eq!(

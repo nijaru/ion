@@ -50,7 +50,7 @@ pub use tool_policy::{ToolDecision, ToolPolicy, ToolPolicyRequest};
 pub use tool_set::{
     ToolActivity, ToolActivityKind, ToolCatalog, ToolDefinition, ToolExecutor, ToolExposure,
     ToolPresentation, ToolPresentationTarget, ToolRegistration, ToolResultSchema, ToolSelection,
-    ToolSet, ToolSource as CodingToolSource,
+    ToolSet, ToolSource as CodingToolSource, tool_name_matches,
 };
 
 pub use composition::{

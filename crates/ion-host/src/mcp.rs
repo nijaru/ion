@@ -11,6 +11,7 @@ use std::{
 
 use anyhow::{Context, Result, ensure};
 use futures_util::future::join_all;
+use indexmap::IndexMap;
 use ion_ai::{BoxFuture, ToolSpec};
 use ion_core::{
     CodingToolOutput, CodingToolSource, ToolActivityKind, ToolDefinition, ToolExposure,
@@ -77,7 +78,7 @@ type Catalog = BTreeMap<String, RegisteredTools>;
 struct Server {
     name: String,
     exposure: McpExposure,
-    tool_exposure: BTreeMap<String, McpExposure>,
+    tool_exposure: IndexMap<String, McpExposure>,
     /// The initialize handshake advertised resource operations. Capabilities are
     /// fixed for the connection, so callers do not need a second discovery round.
     resources: bool,
@@ -441,6 +442,12 @@ impl CodingToolSource for McpTools {
                     .tool_exposure
                     .get(&tool.original_name)
                     .copied()
+                    .or_else(|| {
+                        server.tool_exposure.iter().find_map(|(pattern, exposure)| {
+                            ion_core::tool_name_matches(pattern, &tool.original_name)
+                                .then_some(*exposure)
+                        })
+                    })
                     .unwrap_or(server.exposure)
                 {
                     McpExposure::Direct => ToolExposure::Direct,

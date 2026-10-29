@@ -1230,8 +1230,8 @@ and `ion mcp remove NAME` manage the saved user configuration; concurrent
 mutations serialize across Ion processes.
 
 To select individual tools, edit the server entry in `~/.ion/mcp.json` (or the
-trusted project file). `tool_exposure` overrides the default for exact names
-reported by the server, not Ion's normalized aliases:
+trusted project file). `tool_exposure` overrides the default for names or `*`
+patterns against the original remote name, not Ion's normalized aliases:
 
 ```json
 {
@@ -1240,7 +1240,8 @@ reported by the server, not Ion's normalized aliases:
       "command": "docs-mcp",
       "exposure": "hidden",
       "tool_exposure": {
-        "read.document": "direct",
+        "read.internal*": "hidden",
+        "read.*": "direct",
         "search": "deferred"
       }
     }
@@ -1248,12 +1249,16 @@ reported by the server, not Ion's normalized aliases:
 }
 ```
 
-Here only `read.document` and `search` are callable; other tools stay hidden.
-Values are `direct`, `deferred` or `hidden`. Names are literal, not wildcard
-patterns. Unlisted names inherit the server default, including tools added by a
-later listing. These choices are captured at connection startup; edit and start
+Here `read.*` tools are direct except for the earlier `read.internal*` rule;
+`search` is deferred and other tools stay hidden. Values are `direct`, `deferred`
+or `hidden`. An exact name always wins over patterns; otherwise the first matching
+pattern in file order wins, not the most specific pattern. Only `*` is special:
+it matches any sequence of characters, while other punctuation stays literal.
+Unmatched tools inherit the server default, including tools added by a later
+listing. These choices are captured at connection startup; edit and start
 a new coding client to replace them, and re-trust an edited project file.
-`ion mcp list` shows the server default followed by its configured tool overrides.
+`ion mcp list` shows the server default followed by rules in their configured
+order. Unrelated MCP add/remove commands preserve that order.
 Tool overrides do not expose a hidden server's resources or widen `--tools` /
 `--exclude-tools` selection. They do not stop the server from running.
 

@@ -107,7 +107,7 @@ mod tests {
             bearer_token_env: None,
             headers: BTreeMap::new(),
             exposure: McpExposure::Direct,
-            tool_exposure: BTreeMap::new(),
+            tool_exposure: Default::default(),
         }
     }
 

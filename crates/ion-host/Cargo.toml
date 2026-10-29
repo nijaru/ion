@@ -14,6 +14,7 @@ base64 = "0.22.1"
 futures-util = "0.3.34"
 getrandom = "0.3.4"
 ignore = "0.4.33"
+indexmap = { version = "2.14.2", features = ["serde"] }
 httpdate = "1.0.3"
 html5ever = "0.39"
 image = { version = "0.25.10", default-features = false, features = ["jpeg", "png", "gif", "webp"] }
@@ -25,7 +26,7 @@ rmcp = { version = "3.4.0", default-features = false, features = ["client", "tra
 rquickjs = { version = "=0.14.0", default-features = false, features = ["std"] }
 rustix = { version = "1.1.4", features = ["event", "fs", "pipe", "process", "pty", "stdio", "termios"] }
 serde = { version = "1.0.229", features = ["derive"] }
-serde_json = "1.0.151"
+serde_json = { version = "1.0.151", features = ["raw_value"] }
 serde-saphyr = { version = "2.0.0", default-features = false, features = ["deserialize"] }
 sha2 = "0.10.9"
 similar = "3.2.0"

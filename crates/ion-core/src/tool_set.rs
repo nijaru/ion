@@ -138,30 +138,32 @@ impl ToolSelection {
         let included = self.include.as_ref().is_none_or(|patterns| {
             patterns
                 .iter()
-                .any(|pattern| pattern_matches(pattern, name))
+                .any(|pattern| tool_name_matches(pattern, name))
         });
         included
             && !self
                 .exclude
                 .iter()
-                .any(|pattern| pattern_matches(pattern, name))
+                .any(|pattern| tool_name_matches(pattern, name))
     }
 }
 
-fn pattern_matches(pattern: &str, name: &str) -> bool {
+/// Match an exact tool name or a pattern where only `*` is special.
+/// A star matches any sequence of characters; other glob/regex syntax is literal.
+pub fn tool_name_matches(pattern: &str, name: &str) -> bool {
     let pattern = pattern.as_bytes();
     let name = name.as_bytes();
     let (mut p, mut n) = (0, 0);
     let mut star = None;
     let mut retry = 0;
     while n < name.len() {
-        if p < pattern.len() && pattern[p] == name[n] {
-            p += 1;
-            n += 1;
-        } else if p < pattern.len() && pattern[p] == b'*' {
+        if p < pattern.len() && pattern[p] == b'*' {
             star = Some(p);
             p += 1;
             retry = n;
+        } else if p < pattern.len() && pattern[p] == name[n] {
+            p += 1;
+            n += 1;
         } else if let Some(at) = star {
             p = at + 1;
             retry += 1;
@@ -1141,11 +1143,12 @@ mod tests {
 
     #[test]
     fn selection_patterns_and_exclusions_narrow_the_model_loadout() {
-        assert!(pattern_matches("read", "read"));
-        assert!(pattern_matches("mcp__*", "mcp__8_demo__probe"));
-        assert!(pattern_matches("*__probe", "mcp__8_demo__probe"));
-        assert!(pattern_matches("*probe*", "mcp__8_demo__probe"));
-        assert!(!pattern_matches("read", "write"));
+        assert!(tool_name_matches("*a", "*ba"));
+        assert!(tool_name_matches("read", "read"));
+        assert!(tool_name_matches("mcp__*", "mcp__8_demo__probe"));
+        assert!(tool_name_matches("*__probe", "mcp__8_demo__probe"));
+        assert!(tool_name_matches("*probe*", "mcp__8_demo__probe"));
+        assert!(!tool_name_matches("read", "write"));
 
         let included = ToolSet::new([Arc::new(MixedForRestore) as Arc<dyn ToolSource>])
             .with_selection(ToolSelection::include(["direct".into()]))

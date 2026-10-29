@@ -1539,6 +1539,7 @@ dependencies = [
  "httpdate",
  "ignore",
  "image",
+ "indexmap",
  "ion-ai",
  "ion-core",
  "regex",
