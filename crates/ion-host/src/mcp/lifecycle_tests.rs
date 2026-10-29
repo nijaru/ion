@@ -75,6 +75,7 @@ async fn native_roots_are_reaped_after_shutdown_and_failed_startup() {
                         command: "python3".into(),
                         args: vec!["-c".into(), SERVER.into(), mode.into()],
                         exposure: McpExposure::Direct,
+                        tool_exposure: Default::default(),
                     }),
                 )
                 .unwrap();
@@ -155,6 +156,7 @@ async fn shutdown_reaps_root_while_protocol_send_is_backpressured() {
             command: "python3".into(),
             args: vec!["-c".into(), SERVER.into(), "blocked-send".into()],
             exposure: McpExposure::Direct,
+            tool_exposure: Default::default(),
         }),
         &root,
         ChangeHandler(Arc::new(AtomicU64::new(0))),
@@ -203,6 +205,7 @@ async fn stderr_is_bounded_private_and_drained_without_blocking_tool_results() {
                 command: "python3".into(),
                 args: vec!["-c".into(), SERVER.into(), "stderr-flood".into()],
                 exposure: McpExposure::Direct,
+                tool_exposure: Default::default(),
             }),
         )
         .unwrap();
@@ -261,6 +264,7 @@ async fn cancelled_shutdown_waiter_does_not_abandon_graceful_close() {
                 command: "python3".into(),
                 args: vec!["-c".into(), SERVER.into(), "delayed-exit".into()],
                 exposure: McpExposure::Direct,
+                tool_exposure: Default::default(),
             }),
         )
         .unwrap();
@@ -330,6 +334,7 @@ async fn failed_http_startup_closes_pending_request_before_runtime_teardown() {
             config.add("stalled", McpServer::Http(McpHttpServer {
                 url: format!("http://{address}/mcp"), bearer_token_env: None,
                 exposure: McpExposure::Direct,
+                tool_exposure: Default::default(),
             })).unwrap();
             let startup = McpTools::connect(&config, &root).await;
             let closed = tokio::time::timeout(Duration::from_secs(1), &mut server).await;

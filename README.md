@@ -1185,6 +1185,35 @@ is still configured and inherits the host environment if started. Exposure
 changes apply to future requests, never an already-issued request. `ion mcp list`
 and `ion mcp remove NAME` manage the saved user configuration; concurrent
 mutations serialize across Ion processes.
+
+To select individual tools, edit the server entry in `~/.ion/mcp.json` (or the
+trusted project file). `tool_exposure` overrides the default for exact names
+reported by the server, not Ion's normalized aliases:
+
+```json
+{
+  "servers": {
+    "docs": {
+      "command": "docs-mcp",
+      "exposure": "hidden",
+      "tool_exposure": {
+        "read.document": "direct",
+        "search": "deferred"
+      }
+    }
+  }
+}
+```
+
+Here only `read.document` and `search` are callable; other tools stay hidden.
+Values are `direct`, `deferred` or `hidden`. Names are literal, not wildcard
+patterns. Unlisted names inherit the server default, including tools added by a
+later listing. These choices are captured at connection startup; edit and start
+a new coding client to replace them, and re-trust an edited project file.
+`ion mcp list` shows the server default followed by its configured tool overrides.
+Tool overrides do not expose a hidden server's resources or widen `--tools` /
+`--exclude-tools` selection. They do not stop the server from running.
+
 Ion starts configured servers when a coding client starts, discovers their
 tools, and exposes each as `mcp__LENGTH_NAME__TOOL` alongside read, edit, write and
 exec. `LENGTH` is the ASCII server-name length: `demo` uses `mcp__4_demo__TOOL`.

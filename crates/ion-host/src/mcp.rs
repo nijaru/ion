@@ -74,6 +74,7 @@ type Catalog = BTreeMap<String, RegisteredTools>;
 struct Server {
     name: String,
     exposure: McpExposure,
+    tool_exposure: BTreeMap<String, McpExposure>,
     /// The initialize handshake advertised resource operations. Capabilities are
     /// fixed for the connection, so callers do not need a second discovery round.
     resources: bool,
@@ -164,6 +165,7 @@ impl McpTools {
         let changed = Arc::new(AtomicU64::new(0));
         let handler = ChangeHandler(changed.clone());
         let exposure = definition.exposure();
+        let tool_exposure = definition.tool_exposure().clone();
         let client = Connection::start(&name, definition, cwd, handler).await?;
         let peer = client.client.peer_info();
         let resources = exposure != McpExposure::Hidden
@@ -184,6 +186,7 @@ impl McpTools {
                 Server {
                     name,
                     exposure,
+                    tool_exposure,
                     resources,
                     client: Arc::new(RwLock::new(Some(client))),
                     stderr,
@@ -430,10 +433,17 @@ impl CodingToolSource for McpTools {
             let Some(tools) = catalog.get(&server.name) else {
                 continue;
             };
-            if server.exposure == McpExposure::Hidden {
-                continue;
-            }
             for tool in tools {
+                let exposure = match server
+                    .tool_exposure
+                    .get(&tool.original_name)
+                    .copied()
+                    .unwrap_or(server.exposure)
+                {
+                    McpExposure::Direct => ToolExposure::Direct,
+                    McpExposure::Deferred => ToolExposure::Deferred,
+                    McpExposure::Hidden => continue,
+                };
                 registrations.push(ToolRegistration::new(
                     ToolDefinition {
                         spec: tool.spec.clone(),
@@ -442,10 +452,7 @@ impl CodingToolSource for McpTools {
                             ToolActivityKind::External,
                             tool.original_name.clone(),
                         ),
-                        exposure: match server.exposure {
-                            McpExposure::Direct => ToolExposure::Direct,
-                            McpExposure::Deferred | McpExposure::Hidden => ToolExposure::Deferred,
-                        },
+                        exposure,
                     },
                     Arc::new(McpExecutor {
                         server: server.clone(),
@@ -550,6 +557,7 @@ for line in sys.stdin:
                     command: "python3".into(),
                     args: vec!["-c".into(), server.into()],
                     exposure: McpExposure::Direct,
+                    tool_exposure: Default::default(),
                 }),
             )
             .unwrap();
@@ -647,6 +655,7 @@ for line in sys.stdin:
                 config.add("settlement", McpServer::Stdio(McpStdioServer {
                     command: "python3".into(), args: vec!["-c".into(), server.into()],
                     exposure: McpExposure::Direct,
+                    tool_exposure: Default::default(),
                 })).unwrap();
                 let startup = McpTools::connect(&config, &root).await;
                 assert!(startup.diagnostics.is_empty(), "{:?}", startup.diagnostics);

@@ -21,7 +21,9 @@ class Provider(BaseHTTPRequestHandler):
     def do_POST(self):
         body = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
         requests.append(body)
-        if len(requests) == 1:
+        if self.path == "/exposure/chat/completions":
+            changes = self.exposure_changes(body)
+        elif len(requests) == 1:
             names = {tool["function"]["name"] for tool in body["tools"]}
             greet = next(name for name in names if name.startswith("mcp__4_demo__greet_user_"))
             assert {"read", "edit", "write", "exec", "mcp__4_demo__greet_user", "mcp__4_demo__picture"} <= names, names
@@ -197,6 +199,52 @@ class Provider(BaseHTTPRequestHandler):
         self.send_header("Content-Length", str(len(payload)))
         self.end_headers()
         self.wfile.write(payload)
+
+    def exposure_changes(self, body):
+        step = len(requests) - self.server.exposure_start
+        names = {tool["function"]["name"] for tool in body["tools"]}
+        demo = {name for name in names if name.startswith("mcp__4_demo__")}
+        greet = next(name for name in demo if name.startswith("mcp__4_demo__greet_user_"))
+        assert demo == {greet} | ({"mcp__4_demo__picture"} if step >= 3 else set()), demo
+        assert not any(name.startswith("mcp__6_remote__") for name in names), names
+        assert not any("mcp_resource" in name for name in names), names
+        if step == 1:
+            assert "mcp__8_changing__first" in names, names
+            name, arguments = "mcp__4_demo__greet_user", {}
+        elif step == 2:
+            assert "tool was not declared for this request" in body["messages"][-1]["content"], body
+            name, arguments = "tool_search", {"query": "mcp__4_demo__picture"}
+        elif step == 3:
+            name, arguments = "mcp__4_demo__picture", {}
+        elif step == 4:
+            assert body["messages"][-1]["content"][1]["image_url"]["url"].startswith("data:image/png;base64,"), body
+            name, arguments = greet, {"name": "Exposure"}
+        elif step == 5:
+            assert "Hello, Exposure!" in body["messages"][-1]["content"], body
+            name, arguments = "mcp__8_changing__first", {}
+        elif step == 6:
+            assert "mcp__8_changing__first" not in names and "mcp__8_changing__second" not in names, names
+            name, arguments = "tool_search", {"query": "mcp__8_changing__second"}
+        elif step == 7:
+            assert "mcp__8_changing__second" in names, names
+            name, arguments = "mcp__8_changing__second", {}
+        elif step == 8:
+            assert "SECOND" in body["messages"][-1]["content"], body
+            code = f"""
+const hidden = 'mcp__4_demo__greet_user';
+const found = await searchTools('greet');
+if (found.some(tool => tool.name === hidden) || tools[hidden] !== undefined)
+    throw new Error('hidden MCP tool leaked into Code Mode');
+text(await tools[{json.dumps(greet)}]({{name: 'Composed'}}));
+"""
+            name, arguments = "code_mode", {"code": code}
+        else:
+            assert step == 9 and "Hello, Composed!" in body["messages"][-1]["content"], body
+            return [{"id": "exposure", "choices": [{"index": 0, "delta": {"content": "MCP_EXPOSURE_OK"}, "finish_reason": "stop"}]}]
+        return [
+            {"id": "exposure", "choices": [{"index": 0, "delta": {"tool_calls": [{"index": 0, "id": f"exposure-{step}", "type": "function", "function": {"name": name, "arguments": json.dumps(arguments)}}]}, "finish_reason": None}]},
+            {"id": "exposure", "choices": [{"index": 0, "delta": {}, "finish_reason": "tool_calls"}]},
+        ]
 
     def log_message(self, *_args):
         pass
@@ -612,6 +660,37 @@ with tempfile.TemporaryDirectory(prefix="ion-mcp-") as temporary:
         assert read_only.stdout.strip() == "READ_ONLY_OK", read_only
         selected = subprocess.run([binary, "--cwd", workspace, "--tools", "read,write", "run", "Read and write only."], env=env, check=True, capture_output=True, text=True)
         assert selected.stdout.strip() == "TOOL_SELECTION_OK", selected
+
+        # Select individual remote names without changing server startup or
+        # resources. Newly listed tools must use the same captured overrides.
+        saved_config = config_path.read_text()
+        exposure_config = json.loads(saved_config)
+        exposure_config["servers"]["demo"].update({
+            "exposure": "hidden",
+            "tool_exposure": {"greet.user": "direct", "picture": "deferred"},
+        })
+        exposure_config["servers"]["changing"].update({
+            "exposure": "hidden",
+            "tool_exposure": {"first": "direct", "second": "deferred"},
+        })
+        exposure_config["servers"]["remote"]["tool_exposure"] = {"uppercase": "hidden", "lowercase": "hidden"}
+        config_path.write_text(json.dumps(exposure_config))
+        exposed_listing = subprocess.run([binary, "mcp", "list"], env=env, check=True, capture_output=True, text=True)
+        assert "demo\thidden\t" in exposed_listing.stdout and "  tool\tgreet.user\tdirect" in exposed_listing.stdout and "  tool\tpicture\tdeferred" in exposed_listing.stdout, exposed_listing
+        server.exposure_start = len(requests)
+        previous_remote_calls = len(remote_calls)
+        previous_changed_events = (workspace / "changing-mcp-events.txt").read_text()
+        subprocess.run([binary, "use", "smoke", "mcp-model", "--endpoint", f"http://127.0.0.1:{server.server_port}/exposure/chat/completions", "--wire", "chat-completions", "--images"], env=env, check=True, capture_output=True)
+        exposure = subprocess.run([binary, "--cwd", workspace, "--code-mode", "run", "Exercise the selected MCP tools."], env=env, check=True, capture_output=True, text=True, timeout=30)
+        assert exposure.stdout.strip() == "MCP_EXPOSURE_OK", exposure
+        assert len(requests) - server.exposure_start == 9, requests
+        assert len(remote_calls) == previous_remote_calls, remote_calls
+        events = (workspace / "mcp-events.txt").read_text()
+        assert events.count("called:Exposure") == 1 and events.count("called:Composed") == 1 and events.count("called:picture") == 1, events
+        changed_events = (workspace / "changing-mcp-events.txt").read_text()
+        for name in ("first", "second"):
+            assert changed_events.count(f"called:{name}") - previous_changed_events.count(f"called:{name}") == 1, changed_events
+        config_path.write_text(saved_config)
 
         # Project MCP configuration is inert until explicitly trusted for its
         # current contents. Editing it invalidates trust.

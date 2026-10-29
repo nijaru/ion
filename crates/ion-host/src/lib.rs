@@ -319,6 +319,7 @@ mod tests {
                     command: "unused".into(),
                     args: Vec::new(),
                     exposure: McpExposure::Direct,
+                    tool_exposure: Default::default(),
                 }),
             )
             .unwrap();

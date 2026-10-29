@@ -122,6 +122,7 @@ async fn resources_list_templates_read_and_capability_gating() {
                 command: "python3".into(),
                 args: vec!["-c".into(), resource_server()],
                 exposure: McpExposure::Direct,
+                tool_exposure: Default::default(),
             }),
         )
         .unwrap();
@@ -132,6 +133,7 @@ async fn resources_list_templates_read_and_capability_gating() {
                 command: "python3".into(),
                 args: vec!["-c".into(), broken_resource_server()],
                 exposure: McpExposure::Direct,
+                tool_exposure: Default::default(),
             }),
         )
         .unwrap();
@@ -351,6 +353,7 @@ for line in sys.stdin:
                 command: "python3".into(),
                 args: vec!["-c".into(), server.into()],
                 exposure: McpExposure::Direct,
+                tool_exposure: Default::default(),
             }),
         )
         .unwrap();
@@ -405,6 +408,7 @@ for line in sys.stdin:
                 command: "python3".into(),
                 args: vec!["-c".into(), server.into()],
                 exposure: McpExposure::Direct,
+                tool_exposure: Default::default(),
             }),
         )
         .unwrap();
@@ -473,6 +477,7 @@ for line in sys.stdin:
                 command: "python3".into(),
                 args: vec!["-c".into(), server.into()],
                 exposure: McpExposure::Direct,
+                tool_exposure: Default::default(),
             }),
         )
         .unwrap();
@@ -508,6 +513,7 @@ async fn deferred_exposure_requires_discovery_and_hidden_exposure_removes_capabi
                 command: "python3".into(),
                 args: vec!["-c".into(), resource_server()],
                 exposure: McpExposure::Deferred,
+                tool_exposure: Default::default(),
             }),
         )
         .unwrap();
@@ -543,6 +549,7 @@ async fn deferred_exposure_requires_discovery_and_hidden_exposure_removes_capabi
                 command: "python3".into(),
                 args: vec!["-c".into(), resource_server()],
                 exposure: McpExposure::Hidden,
+                tool_exposure: Default::default(),
             }),
         )
         .unwrap();

@@ -27,11 +27,19 @@ impl McpServer {
             Self::Http(server) => server.exposure,
         }
     }
+
+    pub fn tool_exposure(&self) -> &BTreeMap<String, McpExposure> {
+        match self {
+            Self::Stdio(server) => &server.tool_exposure,
+            Self::Http(server) => &server.tool_exposure,
+        }
+    }
 }
 
 /// How a configured MCP server's tools reach the model. Exposure is not
 /// authority: every registered executor remains callable by the frozen
-/// catalogue, and hidden servers are omitted from both tools and resources.
+/// catalogue. Hidden tools are omitted; a hidden server's resources stay omitted
+/// even when individual tool overrides expose some tools.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum McpExposure {
@@ -63,6 +71,9 @@ pub struct McpStdioServer {
     pub args: Vec<String>,
     #[serde(default, skip_serializing_if = "McpExposure::is_direct")]
     pub exposure: McpExposure,
+    /// Exact remote tool names, before Ion's alias normalization.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub tool_exposure: BTreeMap<String, McpExposure>,
 }
 
 #[derive(Clone, Serialize, Deserialize)]
@@ -73,6 +84,9 @@ pub struct McpHttpServer {
     pub bearer_token_env: Option<String>,
     #[serde(default, skip_serializing_if = "McpExposure::is_direct")]
     pub exposure: McpExposure,
+    /// Exact remote tool names, before Ion's alias normalization.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub tool_exposure: BTreeMap<String, McpExposure>,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -407,6 +421,10 @@ fn parse_server(name: &str, value: Value) -> Result<McpServer> {
 }
 
 pub(super) fn validate_server(server: &McpServer) -> Result<()> {
+    ensure!(
+        server.tool_exposure().keys().all(|name| !name.is_empty()),
+        "MCP tool exposure name is empty"
+    );
     match server {
         McpServer::Stdio(server) => {
             ensure!(!server.command.trim().is_empty(), "MCP command is empty")
@@ -454,6 +472,7 @@ pub(super) fn validate_name(name: &str) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serde_json::json;
     use std::{
         fs,
         sync::{Arc, Barrier},
@@ -482,9 +501,38 @@ mod tests {
             command: "python3".into(),
             args: Vec::new(),
             exposure: McpExposure::Direct,
+            tool_exposure: Default::default(),
         })
         .unwrap();
         assert!(encoded.get("exposure").is_none());
+    }
+
+    #[test]
+    fn tool_exposure_round_trips_both_transports_and_rejects_invalid_entries() {
+        for transport in [
+            json!({"command": "python3", "args": []}),
+            json!({"url": "https://example.com/mcp"}),
+        ] {
+            let mut value = transport.clone();
+            value["exposure"] = json!("hidden");
+            value["tool_exposure"] = json!({
+                "read.document": "direct",
+                "search": "deferred",
+                "remove": "hidden"
+            });
+            let server = parse_server("demo", value.clone()).unwrap();
+            assert_eq!(serde_json::to_value(server).unwrap(), value);
+            for invalid in [
+                json!({"": "direct"}),
+                json!({"read": "invalid"}),
+                json!([]),
+                json!(null),
+            ] {
+                let mut value = transport.clone();
+                value["tool_exposure"] = invalid;
+                assert!(parse_server("demo", value).is_err());
+            }
+        }
     }
 
     #[test]
@@ -497,6 +545,7 @@ mod tests {
                 url: url.into(),
                 bearer_token_env: bearer_token_env.map(str::to_owned),
                 exposure: McpExposure::Direct,
+                tool_exposure: Default::default(),
             })
         };
         assert!(
@@ -535,6 +584,7 @@ mod tests {
                 command: command.into(),
                 args: Vec::new(),
                 exposure: McpExposure::Direct,
+                tool_exposure: Default::default(),
             })
         };
 
@@ -629,6 +679,7 @@ mod tests {
                     command: "echo".into(),
                     args: Vec::new(),
                     exposure: McpExposure::Direct,
+                    tool_exposure: Default::default(),
                 }),
             )
             .unwrap();
@@ -657,6 +708,7 @@ mod tests {
                 command: "python3".into(),
                 args: Vec::new(),
                 exposure: McpExposure::Direct,
+                tool_exposure: Default::default(),
             })
         };
         for index in 0..8 {

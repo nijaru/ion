@@ -316,7 +316,7 @@ async fn run_cli(cli: Invocation) -> Result<()> {
                         ))?;
                     }
                     for (name, server) in listing.servers {
-                        match server {
+                        match &server {
                             McpServer::Stdio(server) => {
                                 print_stdout(format_args!(
                                     "{}\t{}\t{} {}",
@@ -335,6 +335,13 @@ async fn run_cli(cli: Invocation) -> Result<()> {
                                 ))?;
                             }
                         }
+                        for (tool, exposure) in server.tool_exposure() {
+                            print_stdout(format_args!(
+                                "  tool\t{}\t{}",
+                                metadata_field(tool),
+                                exposure.as_str()
+                            ))?;
+                        }
                     }
                 }
                 McpAction::Add {
@@ -348,6 +355,7 @@ async fn run_cli(cli: Invocation) -> Result<()> {
                         command,
                         args,
                         exposure: exposure.into(),
+                        tool_exposure: Default::default(),
                     });
                     if project {
                         config.add_project(&name, server)?;
@@ -371,6 +379,7 @@ async fn run_cli(cli: Invocation) -> Result<()> {
                         url,
                         bearer_token_env,
                         exposure: exposure.into(),
+                        tool_exposure: Default::default(),
                     });
                     if project {
                         config.add_project(&name, server)?;

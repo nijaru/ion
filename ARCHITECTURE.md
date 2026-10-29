@@ -683,7 +683,12 @@ capture cannot freeze a remote server's implementation.
 Callable authority and model exposure differ. Direct tools are declared; deferred
 tools are callable but omitted from the declared loadout until discovery activates
 them for a later request, never the issuing request. Hidden capabilities are not
-model-reachable and their MCP resources are omitted from resource tools. Restore
+model-reachable. MCP configuration may override the server default for exact
+remote tool names, before alias normalization; each connection captures those
+choices and applies them to refreshed listings too. Hidden tools are absent from
+discovery and composition, not merely undeclared. Tool overrides do not change
+resource exposure: a hidden server's resources remain omitted even when some
+of its tools are exposed. Restore
 activation only while its definition remains identical. Exposure changes affect
 future requests, never an issued request. Applications may narrow the
 model-visible loadout with include/exclude patterns. An absent inclusion imposes

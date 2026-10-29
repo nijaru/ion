@@ -795,6 +795,7 @@ mod tests {
                     url: format!("http://{address}/mcp"),
                     bearer_token_env: None,
                     exposure: McpExposure::Direct,
+                    tool_exposure: Default::default(),
                 }),
             )
             .unwrap();

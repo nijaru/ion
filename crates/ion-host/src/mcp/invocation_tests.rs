@@ -64,6 +64,7 @@ async fn fixture(mode: &str) -> (PathBuf, Arc<McpTools>, ion_core::ToolSet) {
                 command: "python3".into(),
                 args: vec!["-c".into(), SERVER.into(), mode.into()],
                 exposure: McpExposure::Direct,
+                tool_exposure: Default::default(),
             }),
         )
         .unwrap();
@@ -446,6 +447,7 @@ server.serve_forever()
                 url: format!("http://127.0.0.1:{}/mcp", port.trim()),
                 bearer_token_env: None,
                 exposure: McpExposure::Direct,
+                tool_exposure: Default::default(),
             }),
         )
         .unwrap();
@@ -580,6 +582,7 @@ server.serve_forever()
                 url: format!("http://127.0.0.1:{}/mcp", port.trim()),
                 bearer_token_env: None,
                 exposure: McpExposure::Direct,
+                tool_exposure: Default::default(),
             }),
         )
         .unwrap();
