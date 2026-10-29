@@ -801,16 +801,18 @@ recheck rules under the mutation lock. This is not atomic isolation from externa
 editors, other processes or commands. Explicit applications inherit no such policy
 unless they select it.
 
-The Host may capture ordered explicit skill paths and whether to discover default
-skills. Relative paths and leading-home expansion resolve once against the initial
-workspace/HOME; later binding or workspace changes reuse those paths. Default
-locations precede explicit paths, with first-valid-name precedence and physical-file
-alias deduplication. Explicit Markdown files retain validated name/description
-metadata; `SKILL.md` also requires its matching directory layout. Resource reload
-rereads selected paths. Disabling default skills changes neither standing project
-instructions nor prompt templates, and adds no execution authority. CLI, RPC,
-coding children and SDK bindings share this selection through the Host recipe;
-explicit non-coding applications still select their own resources.
+The Host may capture ordered explicit skill and prompt-template paths, with
+independent default discovery for each. Relative paths and leading-home expansion
+resolve once against the initial workspace/HOME; later binding or workspace
+changes reuse those paths. Default locations precede explicit paths, with
+first-valid-name precedence. Skills deduplicate physical files and retain validated
+name/description metadata; `SKILL.md` also requires its matching directory layout.
+Prompt directories are shallow and filenames supply validated command names;
+physical aliases deduplicate only under the same command name. Resource reload
+rereads selected paths. Disabling either kind's defaults retains explicit paths,
+the other kind and standing project instructions, without adding execution
+authority. CLI, RPC, coding children and SDK bindings share this selection through
+the Host recipe; explicit non-coding applications still select their own resources.
 
 Resources do not execute repository text or start unconfigured servers. Instructions,
 skills/templates and results are lower-trust data. Report failures/omissions with

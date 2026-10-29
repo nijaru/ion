@@ -1117,7 +1117,18 @@ Only each skill's name, description and path enter the standing model instructio
 the model can read the full file when relevant. Use `/skill:NAME [request]` to
 load it explicitly. Prompt templates are direct `.md` files in
 `~/.ion/prompts/` (under `ION_HOME` when overridden) or project `.ion/prompts/`; `/NAME [arguments]`
-expands one before submitting it. Templates support `$1`, `$@`,
+expands one before submitting it. Add files or shallow directories with repeatable
+`--prompt-template PATH`; `--no-prompt-templates` skips default templates but keeps
+explicit paths, skills and project instructions:
+
+```sh
+ion --no-prompt-templates --prompt-template ./team-prompts run '/review src/lib.rs'
+```
+
+Template names come from validated filename stems. Different filename aliases
+are separate commands; same-file/same-name aliases load once. Default precedence,
+path anchoring and invocation-local reload behavior follow the skill rules above.
+Templates support `$1`, `$@`,
 `${1:-default}` and `${@:N:L}` argument forms; quote an argument containing
 spaces. `ion resources` lists both, and the TUI has
 `/skills`, `/prompts` and `/reload`. Slash-command discovery uses this same
@@ -2534,8 +2545,9 @@ sample, not a replacement for the terminal or RPC client.
 `CodingApplication::new(host, tools).setup(session, selected, reasoning, questions, resources)`
 supplies the coding preset. Prepare `resources` once from `Application::resources`
 for the selected cwd (or `host.resources(cwd)` for the default coding recipe).
-`host.with_skills(SkillSelection::new(cwd, include_defaults, paths)?)` captures
-an explicit skill selection shared by coding bindings, reloads and coding children.
+`host.with_resource_selection(ResourceSelection { skills, prompt_templates })`
+captures independent selections shared by coding bindings, reloads and coding
+children. Build each selection with `ResourcePaths::new(cwd, include_defaults, paths)?`.
 The same snapshot serves initial-input preflight and binding; CLI preflight runs
 before Session creation and MCP startup. The recipe supplies native tools; the
 optional `tools` source adds or overrides registrations, not a complete allowlist.

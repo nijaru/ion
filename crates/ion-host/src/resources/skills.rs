@@ -7,11 +7,13 @@ use std::{
     path::{Path, PathBuf},
 };
 
-use anyhow::{Context, Result, anyhow, bail, ensure};
+use anyhow::{Context, Result, anyhow, bail};
 use ignore::WalkBuilder;
 use serde::Deserialize;
 
-use super::{ResourceDiagnostic, frontmatter, project_directories, read_resource, valid_name};
+use super::{
+    ResourceDiagnostic, ResourcePaths, frontmatter, project_directories, read_resource, valid_name,
+};
 
 #[derive(Debug, Clone)]
 pub struct Skill {
@@ -29,61 +31,11 @@ struct SkillFrontmatter {
     disable_model_invocation: bool,
 }
 
-/// Invocation-local skill selection, retained by the Host across reloads and
-/// workspace changes. Paths are anchored once; discovery still follows the cwd.
-#[derive(Debug, Clone)]
-pub struct SkillSelection {
-    include_defaults: bool,
-    paths: Vec<PathBuf>,
-}
-
-impl Default for SkillSelection {
-    fn default() -> Self {
-        Self {
-            include_defaults: true,
-            paths: Vec::new(),
-        }
-    }
-}
-
-impl SkillSelection {
-    /// Capture ordered file/directory paths relative to this working directory.
-    /// Only a leading `~` component expands; no environment templates or commands.
-    pub fn new(cwd: &Path, include_defaults: bool, paths: Vec<PathBuf>) -> Result<Self> {
-        let cwd = cwd
-            .canonicalize()
-            .with_context(|| format!("cannot resolve {}", cwd.display()))?;
-        let home = std::env::var_os("HOME").map(PathBuf::from);
-        let paths = paths
-            .into_iter()
-            .map(|path| {
-                ensure!(!path.as_os_str().is_empty(), "skill path must not be empty");
-                let path = if let Ok(suffix) = path.strip_prefix("~") {
-                    home.as_ref()
-                        .context("HOME is not set for skill path")?
-                        .join(suffix)
-                } else {
-                    path
-                };
-                Ok(if path.is_absolute() {
-                    path
-                } else {
-                    cwd.join(path)
-                })
-            })
-            .collect::<Result<_>>()?;
-        Ok(Self {
-            include_defaults,
-            paths,
-        })
-    }
-}
-
 pub(super) fn discover(
     cwd: &Path,
     config_root: &Path,
     home: Option<&Path>,
-    selection: &SkillSelection,
+    selection: &ResourcePaths,
 ) -> (BTreeMap<String, Skill>, Vec<ResourceDiagnostic>) {
     let mut loader = Loader::default();
     if selection.include_defaults {

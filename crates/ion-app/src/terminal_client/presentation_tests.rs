@@ -761,7 +761,7 @@ fn resource_completion_preserves_literal_commands_and_terminal_control_names() {
     let resources = Resources::load(
         &root,
         &root.join("config"),
-        &ion_host::SkillSelection::default(),
+        &ion_host::ResourceSelection::default(),
     )
     .unwrap();
     let mut ui = Frontend {

@@ -1,5 +1,5 @@
 use super::*;
-use crate::{Host, Resources};
+use crate::{Host, ResourceSelection, Resources};
 
 fn write_skill(path: &Path, name: &str, body: &str) {
     fs::create_dir_all(path.parent().unwrap()).unwrap();
@@ -44,7 +44,10 @@ fn explicit_files_and_directories_keep_default_precedence_and_can_isolate_skills
         PathBuf::from("bundle/only"),
     ];
     for include_defaults in [true, false] {
-        let selection = SkillSelection::new(&cwd, include_defaults, paths.clone()).unwrap();
+        let selection = ResourceSelection {
+            skills: ResourcePaths::new(&cwd, include_defaults, paths.clone()).unwrap(),
+            ..ResourceSelection::default()
+        };
         let resources = Resources::load_selected(&cwd, &config, None, &selection).unwrap();
         let names: Vec<_> = resources.skills().map(|s| s.name.as_str()).collect();
         assert_eq!(
@@ -82,7 +85,7 @@ fn aliases_are_deduplicated_but_distinct_names_and_invalid_paths_are_diagnosed()
     fs::write(root.join("not-markdown.txt"), "not a skill").unwrap();
     symlink(root.join("bundle/check/SKILL.md"), root.join("alias.md")).unwrap();
     symlink(root.join("bundle/check"), root.join("wrong-name")).unwrap();
-    let selection = SkillSelection::new(
+    let skills = ResourcePaths::new(
         &root,
         false,
         [
@@ -99,6 +102,10 @@ fn aliases_are_deduplicated_but_distinct_names_and_invalid_paths_are_diagnosed()
         .collect(),
     )
     .unwrap();
+    let selection = ResourceSelection {
+        skills,
+        ..ResourceSelection::default()
+    };
     let resources =
         Resources::load_selected(&root, &root.join("config"), None, &selection).unwrap();
     assert_eq!(resources.skills().count(), 1);
@@ -127,10 +134,24 @@ fn host_selection_keeps_anchored_paths_across_workspaces_and_refreshes_content()
     fs::create_dir_all(&second).unwrap();
     write_skill(&first.join("chosen.md"), "chosen", "CAPTURED");
     write_skill(&second.join("chosen.md"), "chosen", "WRONG_WORKSPACE");
-    let selection = SkillSelection::new(&first, false, vec![PathBuf::from("chosen.md")]).unwrap();
-    let host = Host::new(root.join("config"), root.join("state")).with_skills(selection);
+    fs::write(first.join("request.md"), "CAPTURED_TEMPLATE $1").unwrap();
+    fs::write(second.join("request.md"), "WRONG_TEMPLATE $1").unwrap();
+    let selection = ResourceSelection {
+        skills: ResourcePaths::new(&first, false, vec![PathBuf::from("chosen.md")]).unwrap(),
+        prompt_templates: ResourcePaths::new(&first, false, vec![PathBuf::from("request.md")])
+            .unwrap(),
+    };
+    let host =
+        Host::new(root.join("config"), root.join("state")).with_resource_selection(selection);
     for cwd in [&first, &second] {
         let resources = host.resources(cwd).unwrap();
+        assert_eq!(
+            resources
+                .expand_command("/request value", 4096)
+                .unwrap()
+                .unwrap(),
+            "CAPTURED_TEMPLATE value"
+        );
         assert_eq!(
             resources.skills().next().unwrap().path,
             first.canonicalize().unwrap().join("chosen.md")
@@ -144,6 +165,15 @@ fn host_selection_keeps_anchored_paths_across_workspaces_and_refreshes_content()
         );
     }
     write_skill(&first.join("chosen.md"), "chosen", "RELOADED");
+    fs::write(first.join("request.md"), "RELOADED_TEMPLATE $1").unwrap();
+    assert_eq!(
+        host.resources(&second)
+            .unwrap()
+            .expand_command("/request value", 4096)
+            .unwrap()
+            .unwrap(),
+        "RELOADED_TEMPLATE value"
+    );
     assert!(
         host.resources(&second)
             .unwrap()

@@ -78,13 +78,20 @@ async fn run_cli(cli: Invocation) -> Result<()> {
         return Ok(io::stdout().lock().write_all(notices.as_bytes())?);
     }
     let mut host = Host::from_environment()?;
-    if cli.no_skills || !cli.skills.is_empty() {
+    if cli.no_skills
+        || !cli.skills.is_empty()
+        || cli.no_prompt_templates
+        || !cli.prompt_templates.is_empty()
+    {
         let cwd = configured_cwd(cli.cwd.clone())?;
-        host = host.with_skills(ion_host::SkillSelection::new(
-            &cwd,
-            !cli.no_skills,
-            cli.skills,
-        )?);
+        host = host.with_resource_selection(ion_host::ResourceSelection {
+            skills: ion_host::ResourcePaths::new(&cwd, !cli.no_skills, cli.skills)?,
+            prompt_templates: ion_host::ResourcePaths::new(
+                &cwd,
+                !cli.no_prompt_templates,
+                cli.prompt_templates,
+            )?,
+        });
     }
     let host = Arc::new(host);
     let credentials = host.credentials();

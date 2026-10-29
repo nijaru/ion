@@ -29,6 +29,8 @@ pub(crate) struct Invocation {
     pub image: Vec<PathBuf>,
     pub skills: Vec<PathBuf>,
     pub no_skills: bool,
+    pub prompt_templates: Vec<PathBuf>,
+    pub no_prompt_templates: bool,
     pub tui_mode: TuiMode,
     pub use_theme: Option<String>,
     pub json: bool,
@@ -291,6 +293,11 @@ fn options() -> Vec<Arg> {
             .help("Add a skill Markdown file or directory (repeatable)"),
         Arg::new("no_skills").long("no-skills").action(ArgAction::SetTrue)
             .help("Skip default skill discovery; explicit --skill paths still load"),
+        Arg::new("prompt_templates").long("prompt-template").action(ArgAction::Append)
+            .value_parser(clap::value_parser!(PathBuf)).value_name("PATH")
+            .help("Add a prompt template Markdown file or directory (repeatable)"),
+        Arg::new("no_prompt_templates").long("no-prompt-templates").action(ArgAction::SetTrue)
+            .help("Skip default prompt templates; explicit --prompt-template paths still load"),
         Arg::new("use_theme").long("use-theme").value_name("NAME")
             .help("Terminal theme for this invocation; does not change the saved preference"),
         Arg::new("tui_mode").long("tui-mode").value_parser(clap::value_parser!(TuiMode))
@@ -318,7 +325,9 @@ fn applicable(command: &str, option: &str) -> bool {
         "provider" | "model" | "reasoning" => coding || command == "compact",
         "completion_delivery" | "code_mode" | "tools" | "exclude_tools" | "read_only" => coding,
         "image" => matches!(command, "run" | "chat"),
-        "skills" | "no_skills" => coding || matches!(command, "resources" | "doctor" | "compact"),
+        "skills" | "no_skills" | "prompt_templates" | "no_prompt_templates" => {
+            coding || matches!(command, "resources" | "doctor" | "compact")
+        }
         "json" => command == "run",
         "tui_mode" | "use_theme" => command == "chat",
         _ => false,
@@ -486,6 +495,8 @@ fn normalize(mut matches: ArgMatches, interactive: bool) -> Result<Invocation> {
         image: many(&mut levels, "image"),
         skills: many(&mut levels, "skills"),
         no_skills: one(&mut levels, "no_skills")?.unwrap_or(false),
+        prompt_templates: many(&mut levels, "prompt_templates"),
+        no_prompt_templates: one(&mut levels, "no_prompt_templates")?.unwrap_or(false),
         tui_mode: one(&mut levels, "tui_mode")?.unwrap_or(TuiMode::Inline),
         use_theme: one(&mut levels, "use_theme")?,
         json,

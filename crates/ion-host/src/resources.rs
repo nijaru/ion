@@ -1,7 +1,6 @@
 //! Local instructions, Agent Skills and prompt templates for every client.
 use std::{
-    collections::{BTreeMap, HashSet},
-    fs,
+    collections::BTreeMap,
     path::{Path, PathBuf},
 };
 
@@ -12,7 +11,9 @@ use crate::project_instructions;
 
 mod templates;
 pub use templates::PromptTemplate;
-use templates::load_template;
+
+mod selection;
+pub use selection::{ResourcePaths, ResourceSelection};
 
 const MAX_RESOURCE_BYTES: usize = 1024 * 1024;
 
@@ -23,7 +24,7 @@ pub struct ResourceDiagnostic {
 }
 
 mod skills;
-pub use skills::{Skill, SkillSelection};
+pub use skills::Skill;
 
 pub struct Resources {
     instructions: String,
@@ -43,7 +44,7 @@ impl Resources {
         }
     }
 
-    pub fn load(cwd: &Path, config_root: &Path, selection: &SkillSelection) -> Result<Self> {
+    pub fn load(cwd: &Path, config_root: &Path, selection: &ResourceSelection) -> Result<Self> {
         let home = std::env::var_os("HOME").map(PathBuf::from);
         Self::load_selected(cwd, config_root, home.as_deref(), selection)
     }
@@ -52,35 +53,23 @@ impl Resources {
         cwd: &Path,
         config_root: &Path,
         home: Option<&Path>,
-        selection: &SkillSelection,
+        selection: &ResourceSelection,
     ) -> Result<Self> {
         let cwd = cwd
             .canonicalize()
             .with_context(|| format!("cannot resolve {}", cwd.display()))?;
         let project = project_instructions::load(&cwd, config_root)?;
-        let (skills, diagnostics) = skills::discover(&cwd, config_root, home, selection);
+        let (skills, diagnostics) = skills::discover(&cwd, config_root, home, &selection.skills);
+        let (templates, template_diagnostics) =
+            templates::discover(&cwd, config_root, &selection.prompt_templates);
         let mut resources = Self {
             instructions: project.text,
             skills,
-            templates: BTreeMap::new(),
+            templates,
             diagnostics: project.diagnostics,
         };
         resources.diagnostics.extend(diagnostics);
-        let mut template_roots = vec![config_root.join("prompts")];
-        template_roots.extend(
-            project_directories(&cwd)
-                .into_iter()
-                .map(|directory| directory.join(".ion/prompts")),
-        );
-        let mut seen = HashSet::new();
-        for root in template_roots {
-            if let Ok(identity) = root.canonicalize()
-                && !seen.insert(identity)
-            {
-                continue;
-            }
-            resources.load_templates(&root);
-        }
+        resources.diagnostics.extend(template_diagnostics);
         if resources
             .skills
             .values()
@@ -141,54 +130,6 @@ impl Resources {
         self.templates
             .get(name.strip_prefix('/')?)
             .map(|template| template.expand(raw_args, max_output_bytes))
-    }
-
-    fn load_templates(&mut self, root: &Path) {
-        let entries = match fs::read_dir(root) {
-            Ok(entries) => entries,
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return,
-            Err(error) => {
-                self.diagnostics.push(ResourceDiagnostic {
-                    path: root.to_owned(),
-                    message: error.to_string(),
-                });
-                return;
-            }
-        };
-        for entry in entries {
-            let entry = match entry {
-                Ok(entry) => entry,
-                Err(error) => {
-                    self.diagnostics.push(ResourceDiagnostic {
-                        path: root.to_owned(),
-                        message: error.to_string(),
-                    });
-                    continue;
-                }
-            };
-            let path = entry.path();
-            if path.extension().is_none_or(|ext| ext != "md") || !path.is_file() {
-                continue;
-            }
-            match load_template(&path) {
-                Ok(template) if self.templates.contains_key(&template.name) => {
-                    self.diagnostics.push(ResourceDiagnostic {
-                        path,
-                        message: format!(
-                            "duplicate template {}; first discovered copy wins",
-                            template.name
-                        ),
-                    })
-                }
-                Ok(template) => {
-                    self.templates.insert(template.name.clone(), template);
-                }
-                Err(error) => self.diagnostics.push(ResourceDiagnostic {
-                    path,
-                    message: format!("{error:#}"),
-                }),
-            }
-        }
     }
 }
 
@@ -259,10 +200,11 @@ pub(super) fn valid_name(name: &str) -> bool {
 mod tests {
     use super::skills::load as load_skill;
     use super::*;
+    use std::fs;
 
     impl Resources {
         fn load_with_home(cwd: &Path, config_root: &Path, home: Option<&Path>) -> Result<Self> {
-            Self::load_selected(cwd, config_root, home, &SkillSelection::default())
+            Self::load_selected(cwd, config_root, home, &ResourceSelection::default())
         }
     }
 

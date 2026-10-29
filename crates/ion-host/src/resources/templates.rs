@@ -1,10 +1,16 @@
 //! Prompt template loading and one-pass argument expansion.
-use std::path::{Path, PathBuf};
+use std::{
+    collections::{BTreeMap, HashSet},
+    fs,
+    path::{Path, PathBuf},
+};
 
 use anyhow::{Result, anyhow, bail};
 use serde::Deserialize;
 
-use super::{frontmatter, read_resource, valid_name};
+use super::{
+    ResourceDiagnostic, ResourcePaths, frontmatter, project_directories, read_resource, valid_name,
+};
 use crate::command_args::parse_args;
 
 #[derive(Debug, Clone)]
@@ -21,6 +27,122 @@ struct TemplateFrontmatter {
     description: Option<String>,
     #[serde(rename = "argument-hint")]
     argument_hint: Option<String>,
+}
+
+pub(super) fn discover(
+    cwd: &Path,
+    config_root: &Path,
+    selection: &ResourcePaths,
+) -> (BTreeMap<String, PromptTemplate>, Vec<ResourceDiagnostic>) {
+    let mut loader = Loader::default();
+    if selection.include_defaults {
+        loader.path(&config_root.join("prompts"), false);
+        for directory in project_directories(cwd) {
+            loader.path(&directory.join(".ion/prompts"), false);
+        }
+    }
+    for path in &selection.paths {
+        loader.path(path, true);
+    }
+    (loader.templates, loader.diagnostics)
+}
+
+#[derive(Default)]
+struct Loader {
+    templates: BTreeMap<String, PromptTemplate>,
+    diagnostics: Vec<ResourceDiagnostic>,
+    directories: HashSet<PathBuf>,
+    files: HashSet<(PathBuf, String)>,
+}
+
+impl Loader {
+    fn diagnostic(&mut self, path: &Path, message: impl Into<String>) {
+        self.diagnostics.push(ResourceDiagnostic {
+            path: path.to_owned(),
+            message: message.into(),
+        });
+    }
+
+    fn path(&mut self, path: &Path, explicit: bool) {
+        match fs::metadata(path) {
+            Ok(metadata) if metadata.is_dir() => self.directory(path),
+            Ok(metadata)
+                if explicit
+                    && metadata.is_file()
+                    && path.extension().is_some_and(|ext| ext == "md") =>
+            {
+                self.file(path)
+            }
+            Ok(_) => self.diagnostic(
+                path,
+                if explicit {
+                    "prompt template path must be a directory or a regular Markdown (.md) file"
+                } else {
+                    "prompt template discovery root must be a directory"
+                },
+            ),
+            Err(error) if !explicit && error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => self.diagnostic(
+                path,
+                format!("cannot inspect prompt template path: {error}"),
+            ),
+        }
+    }
+
+    fn directory(&mut self, root: &Path) {
+        if let Ok(identity) = root.canonicalize()
+            && !self.directories.insert(identity)
+        {
+            return;
+        }
+        let entries = match fs::read_dir(root) {
+            Ok(entries) => entries,
+            Err(error) => {
+                self.diagnostic(root, error.to_string());
+                return;
+            }
+        };
+        for entry in entries {
+            let path = match entry {
+                Ok(entry) => entry.path(),
+                Err(error) => {
+                    self.diagnostic(root, error.to_string());
+                    continue;
+                }
+            };
+            if path.extension().is_some_and(|ext| ext == "md") && path.is_file() {
+                self.file(&path);
+            }
+        }
+    }
+
+    fn file(&mut self, path: &Path) {
+        let template = match load_template(path) {
+            Ok(template) => template,
+            Err(error) => {
+                self.diagnostic(path, format!("{error:#}"));
+                return;
+            }
+        };
+        // Filename aliases are distinct commands. Deduplicate physical aliases
+        // only when they publish the same command name.
+        if let Ok(identity) = path.canonicalize()
+            && !self.files.insert((identity, template.name.clone()))
+        {
+            return;
+        }
+        if self.templates.contains_key(&template.name) {
+            self.diagnostic(
+                path,
+                format!(
+                    "duplicate template {}; first discovered copy wins",
+                    template.name
+                ),
+            );
+        } else {
+            self.templates.insert(template.name.clone(), template);
+        }
+    }
 }
 
 pub(super) fn load_template(path: &Path) -> Result<PromptTemplate> {
@@ -177,51 +299,4 @@ fn argument<'a>(args: &'a [String], position: &str) -> Option<&'a str> {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn substitution_preserves_semantics_under_raw_argument_and_output_byte_caps() {
-        // Output may be smaller than source; budgets count bytes, not characters.
-        let cases = [
-            ("$1", "x", 1, Some("x")),
-            ("$9$9$9$9", "", 0, Some("")),
-            ("$1", "🦀", 4, Some("🦀")),
-            ("$1", "🦀", 3, None),
-            ("[$1]", "é", 4, Some("[é]")),
-            ("[$1]", "é", 3, None),
-            ("$1$1", "ab", 4, Some("abab")),
-            ("$1$1", "ab", 3, None),
-            ("$@", "one two", 7, Some("one two")),
-            ("$@", "one two", 6, None),
-            ("${@:2:1}", "a bb", 4, Some("bb")),
-            ("${@:0:0}", "a bb", 4, Some("")),
-            ("${2:-fallback}", "", 8, Some("fallback")),
-            ("${2:-fallback}", "", 7, None),
-            ("${@:-fallback}", "''", 8, Some("fallback")),
-            ("${@:-fallback}", "'' ''", 5, Some(" ")),
-            ("${ARGUMENTS:-x}", "", 1, Some("x")),
-            ("$ARGUMENTS/$@/$1", "a", 5, Some("a/a/a")),
-            ("$0:$999999999999999999999", "", 1, Some(":")),
-            ("${bad}", "", 6, Some("${bad}")),
-            ("$1", r"a\ b", 4, Some("a b")),
-            ("$1", "'$@'", 4, Some("$@")),
-            ("$1", "'unterminated", 64, None),
-            ("$1", "unfinished\\", 64, None),
-        ];
-        for (body, args, budget, expected) in cases {
-            let template = PromptTemplate {
-                name: "bounded".into(),
-                description: String::new(),
-                argument_hint: None,
-                path: PathBuf::new(),
-                body: body.into(),
-            };
-            let actual = template.expand(args, budget);
-            match expected {
-                Some(value) => assert_eq!(actual.unwrap(), value, "{body:?}, {args:?}, {budget}"),
-                None => assert!(actual.is_err(), "{body:?}, {args:?}, {budget}: {actual:?}"),
-            }
-        }
-    }
-}
+mod tests;

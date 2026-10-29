@@ -219,6 +219,37 @@ with tempfile.TemporaryDirectory(prefix="ion-resources-") as temporary:
         assert "SELECTED_BODY" in requests[-1]["messages"][-1]["content"]
         assert "User request: verify" in requests[-1]["messages"][-1]["content"]
 
+        # Template sources are independent of skill sources. Directories are
+        # shallow, and a same-name file alias must not add a duplicate command.
+        template_home = home / "template-aliases"
+        template_home.mkdir()
+        chosen_templates = workspace / "chosen-templates"
+        chosen_templates.mkdir()
+        chosen_template = chosen_templates / "request.md"
+        chosen_template.write_text("EXPLICIT_TEMPLATE $1; all $@; fallback ${2:-none}")
+        (template_home / "request.md").symlink_to(chosen_template)
+        template_set = workspace / "template-set"
+        (template_set / "nested").mkdir(parents=True)
+        (template_set / "extra-template.md").write_text("EXTRA_TEMPLATE")
+        (template_set / "nested/ignored.md").write_text("NOT_RECURSIVE")
+        template_flags = ["--no-prompt-templates", "--prompt-template", "chosen-templates/request.md", "--prompt-template", "~/template-aliases/request.md", "--prompt-template", "template-set"]
+        chosen = subprocess.run([binary, "--cwd", workspace, *template_flags, "resources"], env=env, check=True, capture_output=True, text=True)
+        assert {line.split("\t")[1] for line in chosen.stdout.splitlines() if line.startswith("prompt\t")} == {"extra-template", "request"}, chosen
+        assert "skill\taudit\t" in chosen.stdout and not chosen.stderr, chosen
+        additive = subprocess.run([binary, "--cwd", workspace, "--prompt-template", "chosen-templates/request.md", "resources"], env=env, check=True, capture_output=True, text=True)
+        assert "prompt\tcheck\t" in additive.stdout and "prompt\trequest\t" in additive.stdout, additive
+        prompt_pipe = workspace / "prompt-pipe.md"
+        os.mkfifo(prompt_pipe)
+        invalid = subprocess.run([binary, "--cwd", workspace, "resources", "--no-prompt-templates", "--prompt-template", "missing-template.md", "--prompt-template", str(prompt_pipe)], env=env, check=True, capture_output=True, text=True, timeout=10)
+        assert "missing-template.md" in invalid.stderr and "regular Markdown" in invalid.stderr, invalid
+        assert not any(line.startswith("prompt\t") for line in invalid.stdout.splitlines()), invalid
+        before_templates = len(requests)
+        templated = subprocess.run([binary, "--cwd", workspace, *selected_flags, *template_flags, "run", "/request '$@'"], env=env, check=True, capture_output=True, text=True)
+        assert templated.stdout.strip() == "RESOURCE_OK" and len(requests) == before_templates + 1, templated
+        assert requests[-1]["messages"][-1]["content"] == "EXPLICIT_TEMPLATE $@; all $@; fallback none", requests[-1]
+        assert "PROJECT_MARKER" in requests[-1]["messages"][0]["content"] and "Selected vocabulary." in requests[-1]["messages"][0]["content"], requests[-1]
+        assert "EXPLICIT_TEMPLATE" not in requests[-1]["messages"][0]["content"]
+
         # Over-expansion is refused before a provider request or a new Turn.
         # The template file stays small (~8 KiB) while a bounded argument
         # repeats into an expansion larger than the host raw-text cap. No giant
@@ -236,29 +267,33 @@ with tempfile.TemporaryDirectory(prefix="ion-resources-") as temporary:
         assert admitted_turns(work / "ion") == before_turns, "refusal admitted a Turn"
         # RPC must refuse before admission too, then remain usable in the same
         # process. Core still owns admission of the recovered ordinary prompt.
-        child = subprocess.Popen([binary, "--cwd", workspace, *selected_flags, "rpc"], env=env, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, bufsize=0)
+        default_only = prompts / "default-only.md"
+        default_only.write_text("MUST_STAY_UNSELECTED")
+        rpc_templates = [*template_flags, "--prompt-template", str(prompts / "check.md"), "--prompt-template", str(prompts / "amplify.md")]
+        child = subprocess.Popen([binary, "--cwd", workspace, *selected_flags, *rpc_templates, "rpc"], env=env, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, bufsize=0)
         try:
             assert rpc_record(child)["type"] == "ready"
             child.stdin.write(b'{"type":"list_resources","id":"selected"}\n')
             selected = rpc_record(child)
             assert selected["success"] and {s["name"] for s in selected["data"]["skills"]} == {"extra", "selected"}, selected
-            assert {p["name"] for p in selected["data"]["prompts"]} == {"amplify", "check"}, selected
+            assert {p["name"] for p in selected["data"]["prompts"]} == {"amplify", "check", "extra-template", "request"}, selected
             selected_file.write_text(selected_source.replace("Selected vocabulary.", "Reloaded vocabulary."))
+            chosen_template.write_text("RELOADED_TEMPLATE $1; scope ${2:-all}.")
             child.stdin.write(b'{"type":"reload_resources","id":"reload"}\n')
             reloaded = rpc_record(child)
-            assert reloaded["success"] and reloaded["data"]["skills"] == 2 and reloaded["data"]["prompts"] == 2, reloaded
+            assert reloaded["success"] and reloaded["data"]["skills"] == 2 and reloaded["data"]["prompts"] == 4, reloaded
             child.stdin.write((json.dumps({"type": "prompt", "id": "oversized", "message": "/amplify " + "x" * 4000}) + "\n").encode())
             denied = rpc_record(child)
             assert denied["type"] == "response" and denied["id"] == "oversized" and not denied["success"], denied
             assert "byte limit" in denied["error"], denied
             assert len(requests) == before_refusal and admitted_turns(work / "ion") == before_turns
-            child.stdin.write((json.dumps({"type": "prompt", "id": "recovery", "message": "/check RPC_recovery"}) + "\n").encode())
+            child.stdin.write((json.dumps({"type": "prompt", "id": "recovery", "message": "/request RPC_recovery"}) + "\n").encode())
             while True:
                 record = rpc_record(child)
                 if record["type"] == "turn_end":
                     assert record["status"] == "completed", record
                     break
-            assert requests[-1]["messages"][-1]["content"].strip() == "Check RPC_recovery; scope all."
+            assert requests[-1]["messages"][-1]["content"].strip() == "RELOADED_TEMPLATE RPC_recovery; scope all."
             assert "Reloaded vocabulary." in requests[-1]["messages"][0]["content"], requests[-1]
             assert "Selected vocabulary." not in requests[-1]["messages"][0]["content"], requests[-1]
             assert len(requests) == before_refusal + 1 and admitted_turns(work / "ion") == before_turns + 1
@@ -273,6 +308,7 @@ with tempfile.TemporaryDirectory(prefix="ion-resources-") as temporary:
             child.stderr.close()
             if not child.stdin.closed:
                 child.stdin.close()
+        default_only.unlink()
         before_refusal = len(requests)
         # A valid resource input still works after the refusal, with its own
         # provider request and no extra Turn replay.
@@ -282,6 +318,7 @@ with tempfile.TemporaryDirectory(prefix="ion-resources-") as temporary:
         assert requests[-1]["messages"][-1]["content"].strip() == "Check Recovery; scope all."
         (prompts / "amplify.md").unlink()
         global_rule = work / "ion/AGENTS.md"
+        (chosen_templates / "check.md").write_text("---\ndescription: Check a named concern\n---\nSelected Check $1; scope ${2:-all}.")
         for mode in ("inline", "fullscreen"):
             old_rule = f"GLOBAL_{mode}_OLD"
             new_rule = f"GLOBAL_{mode}_NEW"
@@ -295,7 +332,11 @@ with tempfile.TemporaryDirectory(prefix="ion-resources-") as temporary:
 
             terminal_env = {**env, "TERM": "xterm-256color"}
             previous_sessions = set((work / "ion").rglob("*.sqlite"))
-            child = subprocess.Popen([binary, "--cwd", workspace, "--tui-mode", mode, "chat"], env=terminal_env, stdin=slave, stdout=slave, stderr=slave, preexec_fn=attach_terminal)
+            # Inline exercises explicit sources; fullscreen retains default
+            # directory discovery. Both use the same reload/control path.
+            terminal_flags = ["--no-prompt-templates", "--prompt-template", "chosen-templates"] if mode == "inline" else []
+            live_prompts = chosen_templates if mode == "inline" else prompts
+            child = subprocess.Popen([binary, "--cwd", workspace, *terminal_flags, "--tui-mode", mode, "chat"], env=terminal_env, stdin=slave, stdout=slave, stderr=slave, preexec_fn=attach_terminal)
             os.close(slave)
             output = bytearray()
             phase = 0
@@ -334,7 +375,7 @@ with tempfile.TemporaryDirectory(prefix="ion-resources-") as temporary:
                         os.write(master, b"\tTUI\r")
                         phase = 2
                     elif phase == 2 and len(requests) == before + 1 and b"RESOURCE_OK" in current:
-                        (prompts / "late.md").write_text("A later prompt.\n")
+                        (live_prompts / "late.md").write_text("A later prompt.\n")
                         global_rule.write_text(new_rule + "\n")
                         checkpoint = len(output)
                         os.write(master, b"/reload\r")
@@ -386,7 +427,8 @@ with tempfile.TemporaryDirectory(prefix="ion-resources-") as temporary:
                 child.wait(timeout=5)
                 assert child.returncode == 0, (mode, child.returncode, output[-1000:])
                 assert len(requests) == before + 2, "completion duplicated submission"
-                assert requests[before]["messages"][-1]["content"].strip() == "Check TUI; scope all."
+                expected_check = "Selected Check TUI; scope all." if mode == "inline" else "Check TUI; scope all."
+                assert requests[before]["messages"][-1]["content"].strip() == expected_check
                 assert requests[before + 1]["messages"][-1]["content"].strip() == "A later prompt."
                 assert requests[before + 1]["reasoning_effort"] == "high", requests[before + 1]
                 original = requests[before]["messages"][0]["content"]
@@ -463,6 +505,7 @@ with tempfile.TemporaryDirectory(prefix="ion-resources-") as temporary:
                         child.kill()
                         child.wait(timeout=5)
                     os.close(master)
+        print("Ion resources: explicit prompt templates, independent defaults and retained RPC/terminal reload: OK")
         print("Ion resources: explicit skill files/directories, isolated defaults, aliases and retained RPC reload: OK")
         print("Ion resources: non-executing completion/reload and both-mode literal/cursor recovery: OK")
     finally:

@@ -5,30 +5,43 @@ fn parse(args: &[&str], interactive: bool) -> Result<Invocation> {
 }
 
 #[test]
-fn skill_selection_is_ordered_and_scoped_to_resource_consumers() {
+fn resource_selection_is_ordered_and_scoped_to_resource_consumers() {
     let defaults = parse(&["ion", "resources"], false).unwrap();
     assert!(!defaults.no_skills && defaults.skills.is_empty());
+    assert!(!defaults.no_prompt_templates && defaults.prompt_templates.is_empty());
     for verb in ["run", "chat", "rpc", "resources", "doctor", "compact"] {
         let cli = parse(
             &[
                 "ion",
                 "--skill",
                 "one.md",
+                "--prompt-template",
+                "first.md",
                 verb,
                 "--no-skills",
+                "--no-prompt-templates",
                 "--skill",
                 "two",
+                "--prompt-template",
+                "second",
             ],
             true,
         )
         .unwrap();
         assert!(cli.no_skills);
         assert_eq!(cli.skills, [PathBuf::from("one.md"), PathBuf::from("two")]);
+        assert!(cli.no_prompt_templates);
+        assert_eq!(
+            cli.prompt_templates,
+            [PathBuf::from("first.md"), PathBuf::from("second")]
+        );
     }
     for verb in ["inspect", "models", "auth"] {
         for args in [
             vec!["ion", "--no-skills", verb],
             vec!["ion", verb, "--skill", "one.md"],
+            vec!["ion", "--no-prompt-templates", verb],
+            vec!["ion", verb, "--prompt-template", "one.md"],
         ] {
             assert!(parse(&args, true).is_err(), "{args:?}");
         }
