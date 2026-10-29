@@ -342,6 +342,12 @@ async fn run_cli(cli: Invocation) -> Result<()> {
                                     server.exposure.as_str(),
                                     metadata_field(&server.url)
                                 ))?;
+                                for name in server.headers.keys() {
+                                    print_stdout(format_args!(
+                                        "  header\t{}",
+                                        metadata_field(name)
+                                    ))?;
+                                }
                             }
                         }
                         for (tool, exposure) in server.tool_exposure() {
@@ -385,12 +391,14 @@ async fn run_cli(cli: Invocation) -> Result<()> {
                     name,
                     url,
                     bearer_token_env,
+                    headers,
                     project,
                     exposure,
                 } => {
                     let server = McpServer::Http(McpHttpServer {
                         url,
                         bearer_token_env,
+                        headers: headers.into_iter().collect(),
                         exposure: exposure.into(),
                         tool_exposure: Default::default(),
                     });

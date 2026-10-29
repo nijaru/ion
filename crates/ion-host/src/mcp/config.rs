@@ -1,4 +1,5 @@
 //! MCP configuration validation and serialized atomic publication.
+use super::http_config;
 use crate::model_setup::{write_json, write_shared_json};
 use anyhow::{Context, Result, bail, ensure};
 use serde::{Deserialize, Deserializer, Serialize, de::Error as _};
@@ -75,7 +76,7 @@ pub struct McpStdioServer {
     /// Overrides inherited variables; `${NAME}` references the parent environment.
     #[serde(
         default,
-        deserialize_with = "deserialize_environment",
+        deserialize_with = "deserialize_value_map",
         skip_serializing_if = "BTreeMap::is_empty"
     )]
     pub env: BTreeMap<String, String>,
@@ -87,11 +88,11 @@ pub struct McpStdioServer {
 }
 
 // Generic string deserialization can echo malformed values (for example a
-// numeric PIN). Keep environment shape errors value-free at this boundary.
-fn deserialize_environment<'de, D: Deserializer<'de>>(
+// numeric PIN). Keep secret value-map errors value-free at this boundary.
+fn deserialize_value_map<'de, D: Deserializer<'de>>(
     deserializer: D,
 ) -> Result<BTreeMap<String, String>, D::Error> {
-    let error = || D::Error::custom("MCP environment must map names to strings");
+    let error = || D::Error::custom("MCP values must map names to strings");
     let Value::Object(entries) = Value::deserialize(deserializer)? else {
         return Err(error());
     };
@@ -110,6 +111,13 @@ pub struct McpHttpServer {
     pub url: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub bearer_token_env: Option<String>,
+    /// Header values use the same non-recursive environment templates as stdio env.
+    #[serde(
+        default,
+        deserialize_with = "deserialize_value_map",
+        skip_serializing_if = "BTreeMap::is_empty"
+    )]
+    pub headers: BTreeMap<String, String>,
     #[serde(default, skip_serializing_if = "McpExposure::is_direct")]
     pub exposure: McpExposure,
     /// Exact remote tool names, before Ion's alias normalization.
@@ -474,6 +482,7 @@ pub(super) fn validate_server(server: &McpServer) -> Result<()> {
             }
         }
         McpServer::Http(server) => {
+            http_config::validate(server)?;
             let url = Url::parse(&server.url).context("invalid MCP server URL")?;
             ensure!(
                 matches!(url.scheme(), "http" | "https"),
@@ -617,19 +626,47 @@ mod tests {
     }
 
     #[test]
-    fn malformed_environment_diagnostics_do_not_disclose_values() {
-        for env in [
-            json!({"PIN": 731982654}),
-            json!([731982654]),
-            json!(731982654),
+    fn malformed_value_map_diagnostics_do_not_disclose_values() {
+        for (field, base) in [
+            ("env", json!({"command": "python3"})),
+            ("headers", json!({"url": "https://example.test/mcp"})),
         ] {
-            let error = parse_server("demo", json!({"command": "python3", "env": env}))
-                .err()
-                .expect("non-string environments are rejected");
-            let diagnostic = format!("{error:#}");
-            assert!(diagnostic.contains("environment must map names to strings"));
-            assert!(!diagnostic.contains("731982654"));
+            for value in [
+                json!({"PIN": 731982654}),
+                json!([731982654]),
+                json!(731982654),
+            ] {
+                let mut definition = base.clone();
+                definition[field] = value;
+                let error = parse_server("demo", definition)
+                    .err()
+                    .expect("non-string maps are rejected");
+                let diagnostic = format!("{error:#}");
+                assert!(diagnostic.contains("values must map names to strings"));
+                assert!(!diagnostic.contains("731982654"));
+            }
         }
+    }
+
+    #[test]
+    fn headers_round_trip_without_resolving_credentials_and_are_http_only() {
+        let value = json!({"url": "https://example.test/mcp", "headers": {"X-Key": "${UNSET}"}});
+        let server = parse_server("remote", value.clone()).unwrap();
+        assert_eq!(serde_json::to_value(server).unwrap(), value);
+        assert!(
+            parse_server(
+                "local",
+                json!({"command": "python3", "headers": {"X-Key": "value"}})
+            )
+            .is_err()
+        );
+        assert!(
+            parse_server(
+                "remote",
+                json!({"url": "https://example.test/mcp", "headers": {"Host": "other.test"}})
+            )
+            .is_err()
+        );
     }
 
     #[test]
@@ -641,6 +678,7 @@ mod tests {
             McpServer::Http(McpHttpServer {
                 url: url.into(),
                 bearer_token_env: bearer_token_env.map(str::to_owned),
+                headers: Default::default(),
                 exposure: McpExposure::Direct,
                 tool_exposure: Default::default(),
             })

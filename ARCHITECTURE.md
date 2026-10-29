@@ -802,6 +802,13 @@ references reject that server without executing it; resolution diagnostics and
 configuration listing do not disclose values. The directory defaults to the
 Session cwd; configured `~` uses the parent's HOME, not an override. Existing
 project trust and owned process cleanup apply to this launch configuration.
+HTTP servers capture configured header values with the same non-executing
+reference rules and 1 MiB name/value budget, including bearer credentials.
+Reject invalid values, case-variant duplicate names, transport-owned HTTP/MCP
+headers and conflicting Authorization/bearer sources before network I/O.
+Configured values stay out of listing/resolution diagnostics and use sensitive
+typed headers through POST, GET and DELETE; redirects never forward them.
+Project trust and existing HTTP stop/join ownership still apply.
 MCP discovery isolates server failures and refreshes at later
 request boundaries; possibly effectful invocations are never transparently
 retried. MCP shutdown retires every peer before joining connection cleanup;

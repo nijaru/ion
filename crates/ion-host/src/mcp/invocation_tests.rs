@@ -448,6 +448,7 @@ server.serve_forever()
             McpServer::Http(McpHttpServer {
                 url: format!("http://127.0.0.1:{}/mcp", port.trim()),
                 bearer_token_env: None,
+                headers: Default::default(),
                 exposure: McpExposure::Direct,
                 tool_exposure: Default::default(),
             }),
@@ -583,6 +584,7 @@ server.serve_forever()
             McpServer::Http(McpHttpServer {
                 url: format!("http://127.0.0.1:{}/mcp", port.trim()),
                 bearer_token_env: None,
+                headers: Default::default(),
                 exposure: McpExposure::Direct,
                 tool_exposure: Default::default(),
             }),

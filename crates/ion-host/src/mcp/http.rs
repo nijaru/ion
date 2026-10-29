@@ -794,6 +794,7 @@ mod tests {
                 McpServer::Http(McpHttpServer {
                     url: format!("http://{address}/mcp"),
                     bearer_token_env: None,
+                    headers: Default::default(),
                     exposure: McpExposure::Direct,
                     tool_exposure: Default::default(),
                 }),

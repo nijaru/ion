@@ -193,7 +193,7 @@ pub(crate) enum McpAction {
         #[arg(long, value_name = "DIR")]
         server_cwd: Option<PathBuf>,
         /// Override an inherited variable (repeatable); supports ${NAME} references.
-        #[arg(long, value_name = "NAME=VALUE", value_parser = parse_mcp_env)]
+        #[arg(long, value_name = "NAME=VALUE", value_parser = parse_assignment)]
         env: Vec<(String, String)>,
         /// Arguments passed to the server; use -- to separate overlapping Ion flags.
         #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
@@ -204,6 +204,9 @@ pub(crate) enum McpAction {
         url: String,
         #[arg(long)]
         bearer_token_env: Option<String>,
+        /// HTTP header value; names are case-insensitive, repeatable, supports ${NAME}.
+        #[arg(long = "header", value_name = "NAME=VALUE", value_parser = parse_http_header)]
+        headers: Vec<(String, String)>,
         #[arg(long)]
         project: bool,
         #[arg(long, value_enum, default_value = "direct")]
@@ -216,11 +219,15 @@ pub(crate) enum McpAction {
     },
 }
 
-fn parse_mcp_env(value: &str) -> Result<(String, String), String> {
+fn parse_assignment(value: &str) -> Result<(String, String), String> {
     value
         .split_once('=')
         .map(|(name, value)| (name.to_owned(), value.to_owned()))
         .ok_or_else(|| "expected NAME=VALUE".to_owned())
+}
+
+fn parse_http_header(value: &str) -> Result<(String, String), String> {
+    parse_assignment(value).map(|(name, value)| (name.to_ascii_lowercase(), value))
 }
 
 /// Each option has one definition. Applicability owns both help and validation of

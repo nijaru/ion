@@ -32,12 +32,14 @@ mod connection;
 mod conversion;
 mod framing;
 mod http;
+mod http_config;
 mod invocation;
 mod launch;
 mod request;
 mod resource_tools;
 mod send;
 mod stderr;
+mod values;
 use connection::{Connection, combine_cleanup};
 use invocation::McpExecutor;
 

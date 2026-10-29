@@ -341,6 +341,7 @@ async fn failed_http_startup_closes_pending_request_before_runtime_teardown() {
             let config = McpConfig::new(&root);
             config.add("stalled", McpServer::Http(McpHttpServer {
                 url: format!("http://{address}/mcp"), bearer_token_env: None,
+                headers: Default::default(),
                 exposure: McpExposure::Direct,
                 tool_exposure: Default::default(),
             })).unwrap();

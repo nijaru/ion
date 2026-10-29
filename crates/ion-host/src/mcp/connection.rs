@@ -5,19 +5,17 @@ use super::{
     ChangeHandler, Client, McpServer,
     framing::{BoundedLineReader, MAX_MCP_MESSAGE_BYTES},
     http::OwnedHttpClient,
-    launch,
+    http_config, launch,
     send::Tracked,
     stderr,
 };
-use anyhow::{Context, Result, ensure};
+use anyhow::{Context, Result};
 use rmcp::{
     RoleClient,
     service::{QuitReason, RxJsonRpcMessage, ServiceExt, TxJsonRpcMessage},
     transport::{
-        StreamableHttpClientTransport, Transport,
-        async_rw::AsyncRwTransport,
-        common::client_side_sse::SseRetryPolicy,
-        streamable_http_client::{StreamableHttpClientTransportConfig, StreamableHttpError},
+        StreamableHttpClientTransport, Transport, async_rw::AsyncRwTransport,
+        common::client_side_sse::SseRetryPolicy, streamable_http_client::StreamableHttpError,
     },
 };
 use tokio::{process::Child, sync::oneshot};
@@ -76,7 +74,9 @@ impl Connection {
                 (initialized, OwnedTransport::Stdio { process, stderr })
             }
             McpServer::Http(server) => {
-                let mut config = StreamableHttpClientTransportConfig::with_uri(server.url);
+                let inherited = std::env::vars_os().collect();
+                let mut config = http_config::configuration(server, &inherited)
+                    .with_context(|| format!("cannot prepare MCP server {name} HTTP headers"))?;
                 // A 404 can mean a lost MCP session, but a tool may already have
                 // executed. Never transparently reinitialize and repeat it.
                 config.reinit_on_expired_session = false;
@@ -84,12 +84,6 @@ impl Connection {
                 // unanswered call retrying a broken stream indefinitely. One
                 // short retry then failure keeps a lost response observable.
                 config.retry_config = Arc::new(OneRetry);
-                if let Some(env_name) = server.bearer_token_env {
-                    let token = std::env::var(&env_name)
-                        .with_context(|| format!("MCP server {name} needs {env_name}"))?;
-                    ensure!(!token.is_empty(), "MCP server {name} needs {env_name}");
-                    config.auth_header = Some(token);
-                }
                 let http_client = OwnedHttpClient::new()
                     .with_context(|| format!("MCP server {name} HTTP setup failed"))?;
                 let transport =

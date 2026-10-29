@@ -1190,7 +1190,27 @@ Changes apply when a new coding client starts and require renewed project trust.
 
 Use `ion mcp add-http NAME URL` for a Streamable HTTP server; add
 `--bearer-token-env VARIABLE` when it requires a bearer token already set in
-the environment. Add `--exposure direct|deferred|hidden` to either command.
+the environment. For other credentials or metadata, use repeatable headers:
+
+```sh
+ion mcp add-http remote-docs https://example.com/mcp \
+  --header 'X-API-Key=${DOCS_KEY}' --header 'X-Tenant=${DOCS_TENANT:-default}'
+```
+
+These persist in a `headers` name-to-string map. Values use the same non-recursive
+environment references as local overrides, captured once before connecting.
+`Authorization` is supported, but cannot be combined with `--bearer-token-env`.
+Repeated flag names use the last value, ignoring case; manifest keys differing
+only in case are rejected. Empty values are allowed. Header names plus resolved
+values (including bearer credentials) share a 1 MiB limit. Invalid or missing
+values reject that server before network access. HTTP framing and MCP-owned
+session/protocol/routing headers cannot be overridden, including `Host`,
+`Content-Type`, `Accept`, `Mcp-Session-Id` and `Mcp-Protocol-Version`.
+`ion mcp list` shows header names only. Headers reach POST, GET and DELETE, and
+Ion refuses redirects rather than forwarding credentials to another destination.
+This does not add OAuth or command-backed secret providers.
+
+Add `--exposure direct|deferred|hidden` to either command.
 Project servers live in `<repository root>/.ion/mcp.json`; write them with
 `ion mcp add --project ...` and remove them with `ion mcp remove --project NAME`.
 Project configuration is inert until `ion trust` records its canonical project

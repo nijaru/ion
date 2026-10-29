@@ -266,7 +266,18 @@ text(await tools[{json.dumps(greet)}]({{name: 'Composed'}}));
 
 
 class RemoteMcp(BaseHTTPRequestHandler):
+    def check_headers(self):
+        assert self.headers.get_all("Authorization") == ["Bearer test-token"], self.headers
+        assert self.headers.get_all("X-Api-Key") == ["header-fixture-value"], self.headers
+        if self.path == "/mcp":
+            assert self.headers.get("X-Tenant") == "tenant", self.headers
+            assert self.headers.get("X-Empty") == "", self.headers
+        self.server.header_methods.append(self.command)
+
     def do_POST(self):
+        self.server.received_paths.append(self.path)
+        if self.path in ("/redirect", "/mcp"):
+            self.check_headers()
         if self.path == "/redirect":
             self.rfile.read(int(self.headers["Content-Length"]))
             self.send_response(307)
@@ -293,7 +304,6 @@ class RemoteMcp(BaseHTTPRequestHandler):
             self.close_connection = True
             return
         assert self.path == "/mcp", self.path
-        assert self.headers.get("Authorization") == "Bearer test-token"
         request = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
         method = request.get("method")
         if method == "initialize":
@@ -331,14 +341,19 @@ class RemoteMcp(BaseHTTPRequestHandler):
         self.send_response(200)
         self.send_header("Content-Type", "application/json")
         self.send_header("Content-Length", str(len(payload)))
+        if method == "initialize":
+            self.send_header("Mcp-Session-Id", "header-session")
         self.end_headers()
         self.wfile.write(payload)
 
     def do_GET(self):
+        self.check_headers()
         self.send_response(405)
         self.end_headers()
 
     def do_DELETE(self):
+        self.check_headers()
+        assert self.headers.get("Mcp-Session-Id") == "header-session", self.headers
         self.send_response(200)
         self.end_headers()
 
@@ -580,6 +595,8 @@ with tempfile.TemporaryDirectory(prefix="ion-mcp-") as temporary:
     for directory in ("home", "tmp", "cache"):
         (work / directory).mkdir()
     env = {**os.environ, "HOME": str(work / "home"), "TMPDIR": str(work / "tmp"), "XDG_CACHE_HOME": str(work / "cache"), "ION_HOME": str(work / "ion"), "XDG_CONFIG_HOME": str(work / "config"), "XDG_STATE_HOME": str(work / "state"), "REMOTE_MCP_TOKEN": "test-token"}
+    env.update(REMOTE_HEADER_KEY="header-fixture-value", REMOTE_HEADER_INJECTED="header-fixture-value\r\nInjected: yes")
+    env.pop("REMOTE_HEADER_ABSENT", None)
     server = ThreadingHTTPServer(("127.0.0.1", 0), Provider)
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
@@ -590,7 +607,9 @@ with tempfile.TemporaryDirectory(prefix="ion-mcp-") as temporary:
         endpoint = f"http://127.0.0.1:{server.server_port}/v1/chat/completions"
         subprocess.run([binary, "use", "smoke", "mcp-model", "--endpoint", endpoint, "--wire", "chat-completions", "--images"], env=env, check=True, capture_output=True)
         remote.redirect_followed = False
-        subprocess.run([binary, "mcp", "add-http", "redirected", f"http://127.0.0.1:{remote.server_port}/redirect", "--bearer-token-env", "REMOTE_MCP_TOKEN"], env=env, check=True, capture_output=True)
+        remote.header_methods = []
+        remote.received_paths = []
+        subprocess.run([binary, "mcp", "add-http", "redirected", f"http://127.0.0.1:{remote.server_port}/redirect", "--header", "Authorization=Bearer ${REMOTE_MCP_TOKEN}", "--header", "X-Api-Key=${REMOTE_HEADER_KEY}"], env=env, check=True, capture_output=True)
         redirected = subprocess.run([binary, "--cwd", workspace, "rpc"], input="", env=env, check=True, capture_output=True, text=True, timeout=15)
         assert "initialization failed" in redirected.stderr, redirected
         assert not remote.redirect_followed, "HTTP startup replayed credentials to a redirect target"
@@ -612,10 +631,13 @@ with tempfile.TemporaryDirectory(prefix="ion-mcp-") as temporary:
         subprocess.run([binary, "mcp", "add", "paired-left", sys.executable, str(paired_script), "paired-left", "paired-right"], env=env, check=True, capture_output=True)
         subprocess.run([binary, "mcp", "add", "paired-right", sys.executable, str(paired_script), "paired-right", "paired-left"], env=env, check=True, capture_output=True)
         subprocess.run([binary, "mcp", "add", "changing", sys.executable, str(changing_script)], env=env, check=True, capture_output=True)
-        subprocess.run([binary, "mcp", "add-http", "remote", f"http://127.0.0.1:{remote.server_port}/mcp", "--bearer-token-env", "REMOTE_MCP_TOKEN"], env=env, check=True, capture_output=True)
+        subprocess.run([binary, "mcp", "add-http", "remote", f"http://127.0.0.1:{remote.server_port}/mcp", "--bearer-token-env", "REMOTE_MCP_TOKEN", "--header", "X-Api-Key=obsolete", "--header", "x-api-key=${REMOTE_HEADER_KEY}", "--header", "X-Tenant=${REMOTE_HEADER_ABSENT:-tenant}", "--header", "X-Empty="], env=env, check=True, capture_output=True)
         listing = subprocess.run([binary, "mcp", "list"], env=env, check=True, capture_output=True, text=True)
         assert "demo" in listing.stdout and "demo\tdirect\t" in listing.stdout, listing.stdout
         assert str(server_script) in listing.stdout and "/mcp" in listing.stdout
+        assert "  header\tx-api-key" in listing.stdout and "header-fixture-value" not in listing.stdout + listing.stderr and "${REMOTE_HEADER_KEY}" not in listing.stdout
+        rejected = subprocess.run([binary, "mcp", "add-http", "rejected", f"http://127.0.0.1:{remote.server_port}/must-not-connect", "--header", "Host=other.test"], env=env, capture_output=True, text=True)
+        assert rejected.returncode != 0 and "reserved MCP HTTP header" in rejected.stderr, rejected
         subprocess.run([binary, "mcp", "add", "flag-probe", "--exposure", "hidden", sys.executable, "-c", "import sys"], env=env, check=True, capture_output=True)
         flagged = subprocess.run([binary, "mcp", "list"], env=env, check=True, capture_output=True, text=True)
         assert "flag-probe\thidden\t" in flagged.stdout, flagged.stdout
@@ -625,6 +647,13 @@ with tempfile.TemporaryDirectory(prefix="ion-mcp-") as temporary:
         config_path = Path(env["ION_HOME"]) / "mcp.json"
         config = json.loads(config_path.read_text())
         config["servers"]["malformed"] = {"command": 7}
+        for name, headers in {
+            "headers-missing": {"X-Key": "${REMOTE_HEADER_ABSENT}"},
+            "headers-injected": {"X-Key": "${REMOTE_HEADER_INJECTED}"},
+            "headers-malformed": {"PIN": 731982654},
+        }.items():
+            config["servers"][name] = {"url": f"http://127.0.0.1:{remote.server_port}/must-not-connect", "headers": headers}
+        assert config["servers"]["remote"]["headers"]["x-api-key"] == "${REMOTE_HEADER_KEY}"
         config_path.write_text(json.dumps(config))
         subprocess.run([binary, "mcp", "remove", "demo"], env=env, check=True, capture_output=True, text=True)
         edited = json.loads(config_path.read_text())
@@ -652,6 +681,10 @@ with tempfile.TemporaryDirectory(prefix="ion-mcp-") as temporary:
         assert "base64 image data omitted" in inspected and "iVBORw0KGgo" not in inspected
         remote_response = subprocess.run([binary, "--cwd", workspace, "run", "Uppercase ion using the remote tool."], env=env, check=True, capture_output=True, text=True)
         assert remote_response.stdout.strip() == "MCP_REMOTE_OK", remote_response
+        assert "header-fixture-value" not in remote_response.stdout + remote_response.stderr and "731982654" not in remote_response.stderr, remote_response
+        assert all(name in remote_response.stderr for name in ["headers-missing", "headers-injected", "headers-malformed"]), remote_response
+        assert "/must-not-connect" not in remote.received_paths, remote.received_paths
+        assert set(remote.header_methods) == {"POST", "GET", "DELETE"}, remote.header_methods
         assert len(remote_calls) == 1 and remote_calls[0]["params"]["name"] == "uppercase", remote_calls
         uncertain = subprocess.run([binary, "--cwd", workspace, "run", "Call the remote tool for retry-check."], env=env, check=True, capture_output=True, text=True)
         assert uncertain.stdout.strip() == "MCP_UNCERTAIN_OK", uncertain
@@ -737,7 +770,8 @@ with tempfile.TemporaryDirectory(prefix="ion-mcp-") as temporary:
         project_config.unlink()
         (workspace / ".ion/mcp.lock").unlink(missing_ok=True)
         (workspace / ".ion").rmdir()
-        config["servers"].pop("malformed")
+        for name in ("malformed", "headers-missing", "headers-injected", "headers-malformed"):
+            config["servers"].pop(name)
         config_path.write_text(json.dumps(config))
         subprocess.run([binary, "mcp", "remove", "demo"], env=env, check=True, capture_output=True)
         subprocess.run([binary, "mcp", "remove", "broken"], env=env, check=True, capture_output=True)
@@ -748,6 +782,7 @@ with tempfile.TemporaryDirectory(prefix="ion-mcp-") as temporary:
         subprocess.run([binary, "mcp", "remove", "remote"], env=env, check=True, capture_output=True)
         assert subprocess.run([binary, "mcp", "list"], env=env, check=True, capture_output=True, text=True).stdout == ""
         print("Ion MCP discovery, tool call and child shutdown: OK")
+        print("Ion MCP captured headers across POST/GET/DELETE, pre-network rejection and no credential redirects: OK")
 
         launch_directory = workspace / "server data"
         launch_directory.mkdir()
