@@ -91,7 +91,10 @@ pub(super) fn run(action: McpAction, config: &McpConfig) -> Result<()> {
                 enabled: true,
                 description,
                 cwd: server_cwd,
-                env: env.into_iter().collect(),
+                env: env
+                    .into_iter()
+                    .map(|(name, value)| (name, value.into()))
+                    .collect(),
                 command,
                 args,
                 exposure: exposure.into(),
@@ -122,7 +125,10 @@ pub(super) fn run(action: McpAction, config: &McpConfig) -> Result<()> {
                 url,
                 description,
                 bearer_token_env,
-                headers: headers.into_iter().collect(),
+                headers: headers
+                    .into_iter()
+                    .map(|(name, value)| (name, value.into()))
+                    .collect(),
                 exposure: exposure.into(),
                 tool_exposure: Default::default(),
             });

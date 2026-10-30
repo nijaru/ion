@@ -324,7 +324,11 @@ impl Control {
     }
 }
 
-pub async fn run(setup: SessionSetup, services: Arc<ion_host::Host>) -> Result<()> {
+pub async fn run(
+    setup: SessionSetup,
+    services: Arc<ion_host::Host>,
+    mut interrupt: tokio::signal::unix::Signal,
+) -> Result<()> {
     let mut control = Control::new(setup, services);
     let opened = stdio::Stdio::open(
         (std::io::stdin(), tokio::io::Interest::READABLE),
@@ -340,7 +344,15 @@ pub async fn run(setup: SessionSetup, services: Arc<ion_host::Host>) -> Result<(
     if let Err(error) = output.enqueue(json!({"type":"ready","session":control.session_id(),"cwd":control.host.session().cwd(),"publication":{"reply_slots":connection::REPLY_SLOTS,"inspection_slots":1,"overflow":"commands_not_admitted","abort":"always_stops_reply_may_gap","progress":"gap_resync_inspect"}})) {
         return connection::startup_failure(&mut control, error).await;
     }
-    connection::connection(control, CommandReader::new(BufReader::new(input)), output).await
+    connection::connection(
+        control,
+        CommandReader::new(BufReader::new(input)),
+        output,
+        async move {
+            interrupt.recv().await;
+        },
+    )
+    .await
 }
 
 fn fields(value: &Value, allowed: &[&str]) -> Result<()> {

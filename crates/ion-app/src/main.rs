@@ -644,15 +644,33 @@ async fn run_cli(cli: Invocation) -> Result<()> {
                     "saved Session identity or working directory changed during startup; reopen it explicitly"
                 );
             }
+            // Native effects need interruption custody before MCP helpers start.
+            // Hand this same stream to the client: Tokio's installed SIGINT
+            // handler outlives a dropped listener, so a temporary one is unsafe.
+            let mut interrupt =
+                tokio::signal::unix::signal(tokio::signal::unix::SignalKind::interrupt())?;
+            let stop = tokio_util::sync::CancellationToken::new();
+            let mut interrupted = false;
             let startup = if matches!(client, Client::Headless(headless::Request::Compact(_), _)) {
                 ion_host::McpStartup::default()
             } else {
-                host.external_tools(
+                let preparation = host.external_tools(
                     session
                         .cwd()
                         .context("coding requires a working directory")?,
-                )
-                .await
+                    stop.clone(),
+                );
+                tokio::pin!(preparation);
+                tokio::select! {
+                    biased;
+                    _ = interrupt.recv() => {
+                        interrupted = true;
+                        stop.cancel();
+                        // Never drop startup while it owns helpers/transports.
+                        preparation.await
+                    }
+                    startup = &mut preparation => startup,
+                }
             };
             let external_mcp = startup.tools;
             let mut preflight_session = Some(session);
@@ -675,6 +693,7 @@ async fn run_cli(cli: Invocation) -> Result<()> {
             // Every fallible setup step after MCP startup belongs to the same
             // exit scope as the client, so preflight errors still join cleanup.
             let result = async {
+                ensure!(!interrupted, "MCP startup interrupted");
                 let mut startup_diagnostics = startup
                     .diagnostics
                     .into_iter()
@@ -722,8 +741,10 @@ async fn run_cli(cli: Invocation) -> Result<()> {
                 drop(preflight_session.take());
                 let setup = setup.with_completion_delivery(cli.completion_delivery);
                 match client {
-                    Client::Headless(request, json) => headless::run(setup, request, json).await,
-                    Client::Rpc => rpc::run(setup, host).await,
+                    Client::Headless(request, json) => {
+                        headless::run(setup, request, json, interrupt).await
+                    }
+                    Client::Rpc => rpc::run(setup, host, interrupt).await,
                     Client::Terminal {
                         prompts,
                         images,
@@ -739,6 +760,7 @@ async fn run_cli(cli: Invocation) -> Result<()> {
                             tui_mode: cli.tui_mode,
                             keys,
                             themes,
+                            interrupt,
                         })
                         .await
                     }

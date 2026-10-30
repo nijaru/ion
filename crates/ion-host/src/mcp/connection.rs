@@ -44,11 +44,14 @@ impl Connection {
         definition: McpServer,
         cwd: &Path,
         handler: ChangeHandler,
+        stop: tokio_util::sync::CancellationToken,
     ) -> Result<Self> {
         let (initialized, owned) = match definition {
             McpServer::Stdio(server) => {
-                let mut command = launch::command(&server, cwd)
+                let mut command = launch::command(&server, cwd, stop.clone())
+                    .await
                     .with_context(|| format!("cannot prepare MCP server {name}"))?;
+                anyhow::ensure!(!stop.is_cancelled(), "MCP startup cancelled");
                 let diagnostics = stderr::Destination::create()
                     .with_context(|| format!("cannot create MCP server {name} stderr capture"))?;
                 command
@@ -65,6 +68,7 @@ impl Connection {
                 let stderr = diagnostics.start(process.stderr.take().expect("MCP stderr is piped"));
                 let initialized = initialize(
                     name,
+                    &stop,
                     handler.serve(Tracked(AsyncRwTransport::new_client(
                         BoundedLineReader::new(stdout, MAX_MCP_MESSAGE_BYTES),
                         stdin,
@@ -75,7 +79,8 @@ impl Connection {
             }
             McpServer::Http(server) => {
                 let inherited = std::env::vars_os().collect();
-                let mut config = http_config::configuration(server, &inherited)
+                let mut config = http_config::configuration(server, &inherited, cwd, stop.clone())
+                    .await
                     .with_context(|| format!("cannot prepare MCP server {name} HTTP headers"))?;
                 // A 404 can mean a lost MCP session, but a tool may already have
                 // executed. Never transparently reinitialize and repeat it.
@@ -84,6 +89,7 @@ impl Connection {
                 // unanswered call retrying a broken stream indefinitely. One
                 // short retry then failure keeps a lost response observable.
                 config.retry_config = Arc::new(OneRetry);
+                anyhow::ensure!(!stop.is_cancelled(), "MCP startup cancelled");
                 let http_client = OwnedHttpClient::new()
                     .with_context(|| format!("MCP server {name} HTTP setup failed"))?;
                 let transport =
@@ -91,6 +97,7 @@ impl Connection {
                 let (returned, receiver) = oneshot::channel();
                 let initialized = initialize(
                     name,
+                    &stop,
                     handler.serve(Tracked(HttpLease {
                         transport: Some(transport),
                         returned: Some(returned),
@@ -168,12 +175,16 @@ fn with_diagnostics<T>(result: Result<T>, log: Option<Arc<stderr::Log>>, name: &
 
 async fn initialize(
     name: &str,
+    stop: &tokio_util::sync::CancellationToken,
     work: impl Future<Output = std::result::Result<Client, rmcp::service::ClientInitializeError>>,
 ) -> Result<Client> {
-    tokio::time::timeout(Duration::from_secs(10), work)
-        .await
-        .with_context(|| format!("MCP server {name} initialization timed out"))?
-        .with_context(|| format!("MCP server {name} initialization failed"))
+    tokio::select! {
+        biased;
+        () = stop.cancelled() => anyhow::bail!("MCP server {name} startup cancelled"),
+        result = tokio::time::timeout(Duration::from_secs(10), work) => result
+            .with_context(|| format!("MCP server {name} initialization timed out"))?
+            .with_context(|| format!("MCP server {name} initialization failed")),
+    }
 }
 
 enum OwnedTransport {

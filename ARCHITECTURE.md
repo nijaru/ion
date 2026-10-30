@@ -823,19 +823,37 @@ connected, trusted project entries may override user entries by name, and trust 
 not sandboxing. Local server manifests may select a cwd relative to the Session
 (or an absolute/home path) and overlay a captured native environment. Resolve
 `${NAME}` and unset-only `${NAME:-fallback}` against that parent snapshot before
-launch, not against sibling overrides. Values are non-recursive data, not shell
-commands; bound override names plus expanded values to 1 MiB. Missing/invalid
+launch, not against sibling overrides. String values are non-recursive data, not
+shell commands; bound override names plus resolved values to 1 MiB. Missing/invalid
 references reject that server without executing it; resolution diagnostics and
 configuration listing do not disclose values. The directory defaults to the
 Session cwd; configured `~` uses the parent's HOME, not an override. Existing
 project trust and owned process cleanup apply to this launch configuration.
-HTTP servers capture configured header values with the same non-executing
-reference rules and 1 MiB name/value budget, including bearer credentials.
+HTTP servers capture configured header values with the same string-reference
+rules and 1 MiB name/value budget, including bearer credentials.
 Reject invalid values, case-variant duplicate names, transport-owned HTTP/MCP
 headers and conflicting Authorization/bearer sources before network I/O.
 Configured values stay out of listing/resolution diagnostics and use sensitive
 typed headers through POST, GET and DELETE; redirects never forward them.
 Project trust and existing HTTP stop/join ownership still apply.
+Environment/header values may instead explicitly select a native argv helper.
+Existing strings, including `!command`, never authorize execution. Admit helpers
+only from effective enabled user/trusted-project configuration after static and
+literal-value preflight; offline listing, diagnostics and trust validation stay
+inert. Run helpers once per selected value per connection, in the Session cwd
+with the captured parent environment, not sibling overrides or a hidden shell.
+Trim successful nonempty UTF-8 stdout without re-expanding it. Bound raw stdout
+by the remaining name/value budget and the helper phase by one shared 10-second
+observation budget. Never disclose helper argv/output/diagnostics or spool secrets.
+Retain owned native root/group cleanup through timeout, failure or a dropped
+caller, joining before value publication; this is not a hard OS deadline or an
+all-descendant-quiescence guarantee. Native executable startup owns SIGINT before
+helper admission, cancels and joins preparation, then hands the same signal stream
+to its selected client. RPC interruption joins control before closing publication,
+including an unread recovery pipe; ordinary EOF recovery still drains normally.
+Failed helpers reject their server without
+fallback or replay. Existing connections retain their captured values; changing
+configuration/trust does not live-revoke them or rerun credentials on requests.
 Both transports may carry a literal configured server description. Capture its
 nonblank trimmed purpose at connection startup and append it to each exposed
 tool's remote description in the frozen catalogue. Direct declarations, deferred

@@ -241,6 +241,7 @@ pub struct ChatInit {
     pub tui_mode: TuiMode,
     pub(crate) keys: KeyBindings,
     pub(crate) themes: crate::themes::Themes,
+    pub(crate) interrupt: tokio::signal::unix::Signal,
 }
 
 pub async fn chat(init: ChatInit) -> Result<()> {
@@ -260,6 +261,7 @@ pub async fn chat(init: ChatInit) -> Result<()> {
         files: init.files,
         ..Frontend::default()
     };
+    let mut interrupt = init.interrupt;
     let mut initial_prompts = Some(init.initial_prompts).filter(|prompts| !prompts.is_empty());
     let mut activity = Activity::default();
     let mut program = ProgramStatusState::default();
@@ -295,6 +297,11 @@ pub async fn chat(init: ChatInit) -> Result<()> {
             // CLI text is not simulated editor input. Admit the ordered batch
             // once after first draw, without interpreting terminal commands.
             // Host custody owns all subsequent Turns, rejection and Stop.
+            tokio::select! {
+                biased;
+                _ = interrupt.recv() => anyhow::bail!("terminal interrupted"),
+                () = std::future::ready(()) => {}
+            }
             if let Some(prompts) = initial_prompts.take() {
                 submit_initial_prompts(&mut runtime, &mut ui, prompts);
                 poll_control = true;
@@ -303,6 +310,7 @@ pub async fn chat(init: ChatInit) -> Result<()> {
             let retry_inline = screen.reconciliation_pending() && !terminal.is_alt_screen()?;
             let readiness = runtime.completion_changes();
             let event = tokio::select! {
+                _ = interrupt.recv() => anyhow::bail!("terminal interrupted"),
                 _ = readiness.changed(completion_revision) => {
                     completion_revision = readiness.revision();
                     if let Some(owner) = &background { tasks::refresh(&mut ui, owner); }

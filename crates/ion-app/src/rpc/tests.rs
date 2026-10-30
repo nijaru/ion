@@ -92,6 +92,71 @@ async fn started_shell(control: &mut Control, root: &std::path::Path) {
 }
 
 #[tokio::test]
+async fn interruption_joins_native_work_without_draining_an_unread_transport() {
+    for eof in [false, true] {
+        let mut fixture = Fixture::new();
+        let mut control = fixture.take();
+        started_shell(&mut control, &fixture.root).await;
+        let session = control.host.session().clone();
+        let (input, peer) = tokio::io::duplex(64);
+        let _open_peer = if eof {
+            drop(peer);
+            None
+        } else {
+            Some(peer)
+        };
+        let (writer, mut reader) = tokio::io::duplex(7);
+        let mut output = Output::new(writer);
+        output
+            .enqueue(json!({"type":"inspection","data":"x".repeat(1024)}))
+            .unwrap();
+        let stop = tokio_util::sync::CancellationToken::new();
+        let requested = stop.clone();
+        let running = tokio::spawn(connection::connection(
+            control,
+            CommandReader::new(BufReader::new(input)),
+            output,
+            async move { requested.cancelled().await },
+        ));
+        reader.read_exact(&mut [0; 7]).await.unwrap();
+        if eof {
+            // Observe EOF settlement before interrupting the blocked recovery drain.
+            tokio::time::timeout(Duration::from_secs(5), async {
+                while !session
+                    .view()
+                    .unwrap()
+                    .entries
+                    .iter()
+                    .any(|entry| matches!(entry, ion_core::SessionEntry::UserShellSettled { .. }))
+                {
+                    tokio::time::sleep(Duration::from_millis(5)).await;
+                }
+            })
+            .await
+            .unwrap();
+        }
+        stop.cancel();
+        let error = tokio::time::timeout(Duration::from_secs(5), running)
+            .await
+            .unwrap()
+            .unwrap()
+            .unwrap_err();
+        assert!(format!("{error:#}").contains("RPC interrupted"));
+        assert_eq!(
+            session
+                .view()
+                .unwrap()
+                .entries
+                .iter()
+                .filter(|entry| matches!(entry, ion_core::SessionEntry::UserShellSettled { .. }))
+                .count(),
+            1,
+            "interruption joins the admitted effect without replay"
+        );
+    }
+}
+
+#[tokio::test]
 async fn prompt_ack_is_only_the_durable_host_accepted_update() {
     let mut fixture = Fixture::new();
     let mut control = fixture.take();
@@ -294,6 +359,7 @@ async fn context_and_question_pulls_share_the_single_stalled_inspection_lane() {
             fixture.take(),
             CommandReader::new(BufReader::new(commands.as_bytes())),
             Output::new(writer),
+            std::future::pending(),
         );
         tokio::pin!(pending);
         // Process the ready commands before any consumer can release the first
@@ -346,6 +412,7 @@ async fn stalled_inspection_does_not_block_abort_or_eof_join() {
             control,
             CommandReader::new(BufReader::new(input)),
             output,
+            std::future::pending(),
         ));
         let mut bytes = vec![0; 7];
         reader.read_exact(&mut bytes).await.unwrap();
@@ -479,10 +546,14 @@ async fn actual_io_failures_join_native_work_and_preserve_healthy_recovery() {
             let mut output = Output::new(FailedOutput(calls.clone()));
             output.enqueue(json!({"type":"progress"})).unwrap();
             let (input, _open_client) = tokio::io::duplex(64);
-            let error =
-                connection::connection(control, CommandReader::new(BufReader::new(input)), output)
-                    .await
-                    .unwrap_err();
+            let error = connection::connection(
+                control,
+                CommandReader::new(BufReader::new(input)),
+                output,
+                std::future::pending(),
+            )
+            .await
+            .unwrap_err();
             assert!(format!("{error:#}").contains("injected RPC write failure"));
             assert_eq!(calls.load(Ordering::SeqCst), 1);
         } else {
@@ -491,6 +562,7 @@ async fn actual_io_failures_join_native_work_and_preserve_healthy_recovery() {
                 control,
                 CommandReader::new(BufReader::new(FailedInput)),
                 Output::new(&mut bytes),
+                std::future::pending(),
             )
             .await
             .unwrap_err();

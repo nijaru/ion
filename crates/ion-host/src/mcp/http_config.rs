@@ -1,14 +1,17 @@
 //! Validated, secret-safe header configuration captured before HTTP I/O.
+#[cfg(test)]
+use super::values::MAX_CONFIGURED_BYTES;
 use super::{
     config::McpHttpServer,
-    values::{MAX_CONFIGURED_BYTES, expand},
+    values::{self, McpValue},
 };
-use anyhow::{Context, Result, ensure};
+use anyhow::{Result, ensure};
 use reqwest::header::{AUTHORIZATION, HeaderName, HeaderValue};
 use rmcp::transport::streamable_http_client::StreamableHttpClientTransportConfig;
 use std::{
     collections::{BTreeMap, HashSet},
     ffi::{OsStr, OsString},
+    path::Path,
 };
 
 pub(super) fn validate(server: &McpHttpServer) -> Result<()> {
@@ -20,27 +23,22 @@ pub(super) fn validate(server: &McpHttpServer) -> Result<()> {
             "MCP Authorization header conflicts with bearer_token_env"
         );
         ensure!(names.insert(name), "duplicate MCP HTTP header name");
-        header_value(value)?;
+        value.validate()?;
+        if let McpValue::Text(value) = value {
+            header_value(value)?;
+        }
     }
     Ok(())
 }
 
-pub(super) fn configuration(
-    server: McpHttpServer,
+pub(super) async fn configuration(
+    mut server: McpHttpServer,
     inherited: &BTreeMap<OsString, OsString>,
+    cwd: &Path,
+    stop: tokio_util::sync::CancellationToken,
 ) -> Result<StreamableHttpClientTransportConfig> {
     validate(&server)?;
     let mut config = StreamableHttpClientTransportConfig::with_uri(server.url);
-    let mut remaining = MAX_CONFIGURED_BYTES;
-    let mut insert = |name: HeaderName, template: &str| -> Result<()> {
-        remaining = remaining
-            .checked_sub(name.as_str().len())
-            .context("MCP configured values exceed byte limit")?;
-        let value = expand(template, inherited, &mut remaining)
-            .with_context(|| format!("cannot resolve MCP HTTP header {name}"))?;
-        config.custom_headers.insert(name, header_value(&value)?);
-        Ok(())
-    };
     if let Some(name) = server.bearer_token_env {
         ensure!(
             inherited
@@ -50,10 +48,19 @@ pub(super) fn configuration(
         );
         // One typed header owner also keeps bearer credentials out of the SDK's
         // plain String auth_header Debug output. Both forms have identical I/O.
-        insert(AUTHORIZATION, &format!("Bearer ${{{name}}}"))?;
+        server.headers.insert(
+            AUTHORIZATION.to_string(),
+            format!("Bearer ${{{name}}}").into(),
+        );
     }
-    for (name, value) in server.headers {
-        insert(configured_name(&name)?, &value)?;
+    let headers = values::resolve(&server.headers, inherited, cwd, stop, |value| {
+        header_value(value).map(|_| ())
+    })
+    .await?;
+    for (name, value) in headers {
+        config
+            .custom_headers
+            .insert(configured_name(&name)?, header_value(&value)?);
     }
     Ok(config)
 }
@@ -113,14 +120,21 @@ mod tests {
         }
     }
 
-    #[test]
-    fn headers_and_bearer_share_bounded_sensitive_capture() {
+    #[tokio::test]
+    async fn headers_and_bearer_share_bounded_sensitive_capture() {
         let inherited = BTreeMap::from([("TOKEN".into(), "secret${UNSET}".into())]);
         let mut server = server();
         server.bearer_token_env = Some("TOKEN".into());
         server.headers.insert("X-Key".into(), "${TOKEN}".into());
         server.headers.insert("X-Empty".into(), "${UNSET:-}".into());
-        let config = configuration(server.clone(), &inherited).unwrap();
+        let config = configuration(
+            server.clone(),
+            &inherited,
+            Path::new("."),
+            tokio_util::sync::CancellationToken::new(),
+        )
+        .await
+        .unwrap();
         assert!(config.auth_header.is_none());
         assert_eq!(
             config.custom_headers[&AUTHORIZATION],
@@ -141,25 +155,62 @@ mod tests {
                 .all(HeaderValue::is_sensitive)
         );
         assert!(!format!("{config:?}").contains("secret"));
-        assert!(configuration(server.clone(), &BTreeMap::new()).is_err());
         assert!(
             configuration(
                 server.clone(),
-                &BTreeMap::from([("TOKEN".into(), "".into())])
+                &BTreeMap::new(),
+                Path::new("."),
+                tokio_util::sync::CancellationToken::new()
             )
+            .await
+            .is_err()
+        );
+        assert!(
+            configuration(
+                server.clone(),
+                &BTreeMap::from([("TOKEN".into(), "".into())]),
+                Path::new("."),
+                tokio_util::sync::CancellationToken::new()
+            )
+            .await
             .is_err()
         );
         let injected = BTreeMap::from([("TOKEN".into(), "secret\r\nInjected: yes".into())]);
-        let error = configuration(server.clone(), &injected).unwrap_err();
+        let error = configuration(
+            server.clone(),
+            &injected,
+            Path::new("."),
+            tokio_util::sync::CancellationToken::new(),
+        )
+        .await
+        .unwrap_err();
         assert!(!format!("{error:#}").contains("secret"));
         server.bearer_token_env = None;
         server.headers = BTreeMap::from([
-            ("A".into(), "a".repeat(MAX_CONFIGURED_BYTES / 2 - 1)),
-            ("B".into(), "b".repeat(MAX_CONFIGURED_BYTES / 2 - 1)),
+            ("A".into(), "a".repeat(MAX_CONFIGURED_BYTES / 2 - 1).into()),
+            ("B".into(), "b".repeat(MAX_CONFIGURED_BYTES / 2 - 1).into()),
         ]);
-        assert!(configuration(server.clone(), &inherited).is_ok());
+        assert!(
+            configuration(
+                server.clone(),
+                &inherited,
+                Path::new("."),
+                tokio_util::sync::CancellationToken::new()
+            )
+            .await
+            .is_ok()
+        );
         server.headers.insert("C".into(), "".into());
-        assert!(configuration(server, &inherited).is_err());
+        assert!(
+            configuration(
+                server,
+                &inherited,
+                Path::new("."),
+                tokio_util::sync::CancellationToken::new()
+            )
+            .await
+            .is_err()
+        );
     }
 
     #[test]

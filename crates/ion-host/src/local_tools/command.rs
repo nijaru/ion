@@ -10,7 +10,7 @@ use std::{
     time::Duration,
 };
 
-use rustix::process::{Pid, Signal, kill_process_group};
+use rustix::process::{Pid, Signal, WaitId, WaitIdOptions, kill_process_group, waitid};
 use serde::Deserialize;
 use serde_json::{Value, json};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -152,6 +152,29 @@ pub(super) async fn run(
         value: result,
         images: Vec::new(),
         is_error: !succeeded || cancelled || timed_out,
+    }
+}
+
+/// Observe without reaping so one-shot owners can terminate a reserved group.
+pub(crate) async fn observe_exit(
+    pid: Pid,
+    exits: &mut tokio::signal::unix::Signal,
+) -> std::io::Result<bool> {
+    loop {
+        match waitid(
+            WaitId::Pid(pid),
+            WaitIdOptions::EXITED | WaitIdOptions::NOHANG | WaitIdOptions::NOWAIT,
+        ) {
+            Ok(Some(status)) => return Ok(status.exit_status() == Some(0)),
+            Ok(None) => {
+                exits
+                    .recv()
+                    .await
+                    .ok_or_else(|| std::io::Error::other("child exit observation closed"))?;
+            }
+            Err(rustix::io::Errno::INTR) => tokio::task::yield_now().await,
+            Err(error) => return Err(error.into()),
+        }
     }
 }
 

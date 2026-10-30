@@ -802,10 +802,12 @@ mod tests {
                 }),
             )
             .unwrap();
-        let startup =
-            tokio::time::timeout(Duration::from_secs(10), McpTools::connect(&config, &root))
-                .await
-                .unwrap();
+        let startup = tokio::time::timeout(
+            Duration::from_secs(10),
+            McpTools::connect(&config, &root, tokio_util::sync::CancellationToken::new()),
+        )
+        .await
+        .unwrap();
         let closed = tokio::time::timeout(Duration::from_secs(2), server)
             .await
             .unwrap()

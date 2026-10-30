@@ -83,7 +83,8 @@ async fn native_roots_are_reaped_after_shutdown_and_failed_startup() {
                     }),
                 )
                 .unwrap();
-            let startup = McpTools::connect(&config, &root).await;
+            let startup =
+                McpTools::connect(&config, &root, tokio_util::sync::CancellationToken::new()).await;
             let diagnostics = startup.diagnostics;
             let ready = startup.tools.is_some();
             let cleanup = match startup.tools {
@@ -168,6 +169,7 @@ async fn shutdown_reaps_root_while_protocol_send_is_backpressured() {
         }),
         &root,
         ChangeHandler(Arc::new(AtomicU64::new(0))),
+        CancellationToken::new(),
     )
     .await
     .unwrap();
@@ -221,7 +223,8 @@ async fn stderr_is_bounded_private_and_drained_without_blocking_tool_results() {
             }),
         )
         .unwrap();
-    let startup = McpTools::connect(&config, &root).await;
+    let startup =
+        McpTools::connect(&config, &root, tokio_util::sync::CancellationToken::new()).await;
     let source = startup.tools.unwrap();
     let tools = ion_core::ToolSet::new([source.clone() as Arc<dyn CodingToolSource>]);
     let call = ion_ai::ToolCall {
@@ -284,7 +287,10 @@ async fn cancelled_shutdown_waiter_does_not_abandon_graceful_close() {
             }),
         )
         .unwrap();
-    let source = McpTools::connect(&config, &root).await.tools.unwrap();
+    let source = McpTools::connect(&config, &root, tokio_util::sync::CancellationToken::new())
+        .await
+        .tools
+        .unwrap();
     let mut closing = Box::pin(source.shutdown());
     let released = tokio::time::timeout(Duration::from_secs(2), async {
         loop {
@@ -355,7 +361,7 @@ async fn failed_http_startup_closes_pending_request_before_runtime_teardown() {
                 exposure: McpExposure::Direct,
                 tool_exposure: Default::default(),
             })).unwrap();
-            let startup = McpTools::connect(&config, &root).await;
+            let startup = McpTools::connect(&config, &root, tokio_util::sync::CancellationToken::new()).await;
             let closed = tokio::time::timeout(Duration::from_secs(1), &mut server).await;
             if closed.is_err() {
                 server.abort();

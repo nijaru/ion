@@ -18,10 +18,15 @@ pub(super) enum Request {
     Compact(Option<String>),
 }
 
-pub(super) async fn run(setup: SessionSetup, request: Request, json_output: bool) -> Result<()> {
+pub(super) async fn run(
+    setup: SessionSetup,
+    request: Request,
+    json_output: bool,
+    mut signal: tokio::signal::unix::Signal,
+) -> Result<()> {
     let mut control = setup.into_control::<()>();
     let application_owner = control.owner();
-    let result = foreground(&mut control, request, json_output).await;
+    let result = foreground(&mut control, request, json_output, &mut signal).await;
     if let Some(owner) = &application_owner {
         owner.request_shutdown();
     }
@@ -53,6 +58,7 @@ async fn foreground(
     control: &mut SessionControl,
     request: Request,
     json_output: bool,
+    signal: &mut tokio::signal::unix::Signal,
 ) -> Result<()> {
     // Capture both streams before changing flags: `2>&1` can alias them.
     let (stdout, stderr) = Stdio::open(
@@ -73,8 +79,12 @@ async fn foreground(
     } else {
         output.enqueue(format!("[session: {}]", control.session_id()))?;
     }
-    // Install before scheduling work; a listener error cannot strand an operation.
-    let mut signal = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::interrupt())?;
+    // A signal received during binding must not admit the launch batch.
+    tokio::select! {
+        biased;
+        _ = signal.recv() => return Err(CodingAgentError::Cancelled.into()),
+        () = std::future::ready(()) => {}
+    }
     match request {
         Request::Prompts(messages) => {
             control

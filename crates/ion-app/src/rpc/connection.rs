@@ -31,7 +31,10 @@ pub(super) async fn connection<R: AsyncBufRead + Unpin, W: AsyncWrite + Unpin>(
     mut control: Control,
     mut input: CommandReader<R>,
     mut output: Output<W>,
+    interrupt: impl std::future::Future<Output = ()>,
 ) -> Result<()> {
+    tokio::pin!(interrupt);
+    let mut interrupted = false;
     let replies = ReplyCredits::new(REPLY_SLOTS);
     let inspections = ReplyCredits::new(1);
     let controls = ReplyCredits::new(2);
@@ -45,10 +48,16 @@ pub(super) async fn connection<R: AsyncBufRead + Unpin, W: AsyncWrite + Unpin>(
         // failures still pass through the same unconditional stop/join below.
         control.question_responder = control.host.attach_question_responder()?;
         loop {
+            tokio::select! {
+                biased;
+                () = &mut interrupt => { interrupted = true; break; }
+                () = std::future::ready(()) => {}
+            }
             control.publish_gap(&mut output)?;
             control.publish_question_change(&mut output)?;
             let readiness = control.host.completion_changes();
             tokio::select! {
+                () = &mut interrupt => { interrupted = true; break; }
                 _ = readiness.changed(completion_revision) => {
                     completion_revision = readiness.revision();
                     poll_host = true;
@@ -123,6 +132,21 @@ pub(super) async fn connection<R: AsyncBufRead + Unpin, W: AsyncWrite + Unpin>(
             "application cleanup also failed",
         );
     }
+    if interrupted {
+        // SIGINT closes this transport after owned work joins. Do not require
+        // an unread peer to drain queued frames; committed facts remain the
+        // reconciliation source, not an invented successful protocol reply.
+        result = combine_errors(
+            result,
+            cleanup_result(report.cleanup_errors),
+            "Host cleanup also failed",
+        );
+        return combine_errors(
+            result,
+            Err(anyhow::anyhow!("RPC interrupted")),
+            "RPC interrupted",
+        );
+    }
     for update in report.updates {
         result = combine_errors(
             result,
@@ -136,28 +160,38 @@ pub(super) async fn connection<R: AsyncBufRead + Unpin, W: AsyncWrite + Unpin>(
         "Host cleanup also failed",
     );
     // Recovery is encoded only after started work joined. A healthy final pipe
-    // still requires a reader; there is deliberately no detached writer task.
-    if output.is_healthy() {
-        // At most one coalesced gap record is left outside the encoded queue.
-        // If the bounded queue is full, make room only after settlement joined.
-        while control.has_gap() && output.is_healthy() {
-            if let Err(error) = control.publish_gap(&mut output) {
-                result = combine_errors(result, Err(error), "RPC gap encoding also failed");
-                break;
-            }
-            if control.has_gap()
-                && output.has_pending()
-                && let Err(error) = output.advance().await
-            {
-                result = combine_errors(result, Err(error), "RPC gap output also failed");
+    // still requires a reader unless SIGINT explicitly terminates the transport.
+    // Keep observing the same interrupt even after EOF/read failure, not just
+    // during intake; no publication race can cancel the shared joins above.
+    let publication = async {
+        let mut delivery = Ok(());
+        if output.is_healthy() {
+            // At most one coalesced gap record is outside the encoded queue.
+            while control.has_gap() && output.is_healthy() {
+                if let Err(error) = control.publish_gap(&mut output) {
+                    delivery = combine_errors(delivery, Err(error), "RPC gap encoding also failed");
+                    break;
+                }
+                if control.has_gap()
+                    && output.has_pending()
+                    && let Err(error) = output.advance().await
+                {
+                    delivery = combine_errors(delivery, Err(error), "RPC gap output also failed");
+                }
             }
         }
-    }
-    combine_errors(
-        result,
-        output.finish().await,
-        "RPC recovery output also failed",
-    )
+        combine_errors(
+            delivery,
+            output.finish().await,
+            "RPC recovery drain also failed",
+        )
+    };
+    let delivery = tokio::select! {
+        biased;
+        () = &mut interrupt => Err(anyhow::anyhow!("RPC interrupted")),
+        result = publication => result,
+    };
+    combine_errors(result, delivery, "RPC recovery output also failed")
 }
 
 /// Setup errors still release any application resources captured by the recipe.

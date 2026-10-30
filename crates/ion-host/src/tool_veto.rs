@@ -4,7 +4,7 @@ use std::{path::PathBuf, process::Stdio, sync::Arc, time::Duration};
 use anyhow::{Result, ensure};
 use ion_ai::BoxFuture;
 use ion_core::{ToolDecision, ToolPolicy, ToolPolicyRequest};
-use rustix::process::{Pid, WaitId, WaitIdOptions, waitid};
+use rustix::process::Pid;
 use serde::{Deserialize, Serialize};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio_util::sync::CancellationToken;
@@ -200,7 +200,10 @@ async fn run(
                     .map_err(|_| "cannot drain tool veto diagnostics")
             };
             let ((), bytes, ()) = tokio::try_join!(write, read, discard)?;
-            if !observe_exit(pid, &mut exits).await? {
+            if !crate::local_tools::command::observe_exit(pid, &mut exits)
+                .await
+                .map_err(|_| "cannot observe tool veto program exit")?
+            {
                 return Err("tool veto program exited unsuccessfully");
             }
             let reply: Reply =
@@ -240,26 +243,4 @@ async fn run(
         return Err("tool veto cancelled before decision publication".into());
     }
     result.map_err(str::to_owned)
-}
-
-async fn observe_exit(
-    pid: Pid,
-    exits: &mut tokio::signal::unix::Signal,
-) -> Result<bool, &'static str> {
-    loop {
-        match waitid(
-            WaitId::Pid(pid),
-            WaitIdOptions::EXITED | WaitIdOptions::NOHANG | WaitIdOptions::NOWAIT,
-        ) {
-            Ok(Some(status)) => return Ok(status.exit_status() == Some(0)),
-            Ok(None) => {
-                exits
-                    .recv()
-                    .await
-                    .ok_or("tool veto exit observation closed")?;
-            }
-            Err(rustix::io::Errno::INTR) => tokio::task::yield_now().await,
-            Err(_) => return Err("cannot observe tool veto program exit"),
-        }
-    }
 }

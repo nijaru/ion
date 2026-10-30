@@ -145,7 +145,8 @@ async fn resources_list_templates_read_and_capability_gating() {
             }),
         )
         .unwrap();
-    let startup = McpTools::connect(&config, &root).await;
+    let startup =
+        McpTools::connect(&config, &root, tokio_util::sync::CancellationToken::new()).await;
     assert!(startup.diagnostics.is_empty(), "{:?}", startup.diagnostics);
     let source = startup.tools.unwrap();
     let tools = ToolSet::new([source.clone() as Arc<dyn CodingToolSource>]).snapshot();
@@ -369,7 +370,8 @@ for line in sys.stdin:
             }),
         )
         .unwrap();
-    let startup = McpTools::connect(&config, &root).await;
+    let startup =
+        McpTools::connect(&config, &root, tokio_util::sync::CancellationToken::new()).await;
     assert!(startup.diagnostics.is_empty(), "{:?}", startup.diagnostics);
     let source = startup.tools.unwrap();
     let tools = ToolSet::new([source.clone() as Arc<dyn CodingToolSource>]).snapshot();
@@ -428,7 +430,8 @@ for line in sys.stdin:
             }),
         )
         .unwrap();
-    let startup = McpTools::connect(&config, &root).await;
+    let startup =
+        McpTools::connect(&config, &root, tokio_util::sync::CancellationToken::new()).await;
     assert!(startup.diagnostics.is_empty(), "{:?}", startup.diagnostics);
     let source = startup.tools.unwrap();
     let tools = ToolSet::new([source.clone() as Arc<dyn CodingToolSource>]).snapshot();
@@ -501,7 +504,8 @@ for line in sys.stdin:
             }),
         )
         .unwrap();
-    let startup = McpTools::connect(&config, &root).await;
+    let startup =
+        McpTools::connect(&config, &root, tokio_util::sync::CancellationToken::new()).await;
     assert!(startup.diagnostics.is_empty(), "{:?}", startup.diagnostics);
     let source = startup.tools.unwrap();
     let tools = ToolSet::new([source.clone() as Arc<dyn CodingToolSource>]).snapshot();
@@ -541,7 +545,8 @@ async fn deferred_exposure_requires_discovery_and_hidden_exposure_removes_capabi
             }),
         )
         .unwrap();
-    let startup = McpTools::connect(&config, &root).await;
+    let startup =
+        McpTools::connect(&config, &root, tokio_util::sync::CancellationToken::new()).await;
     assert!(startup.diagnostics.is_empty(), "{:?}", startup.diagnostics);
     let source = startup.tools.unwrap();
     let tool_set = ToolSet::new([source.clone() as Arc<dyn CodingToolSource>]);
@@ -581,7 +586,8 @@ async fn deferred_exposure_requires_discovery_and_hidden_exposure_removes_capabi
             }),
         )
         .unwrap();
-    let startup = McpTools::connect(&config, &root).await;
+    let startup =
+        McpTools::connect(&config, &root, tokio_util::sync::CancellationToken::new()).await;
     assert!(startup.diagnostics.is_empty(), "{:?}", startup.diagnostics);
     let source = startup.tools.unwrap();
     let snapshot = ToolSet::new([source.clone() as Arc<dyn CodingToolSource>]).snapshot();

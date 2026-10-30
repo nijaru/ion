@@ -76,6 +76,7 @@ pub use delegation::{
 pub use local_tools::LocalTools;
 pub use mcp::{
     McpConfig, McpExposure, McpHttpServer, McpServer, McpStartup, McpStdioServer, McpTools,
+    McpValue,
 };
 pub use model_http::{HttpModelService, HttpWire};
 pub use model_setup::{
@@ -168,7 +169,11 @@ impl Host {
         McpConfig::with_project(&self.config_root, cwd)
     }
 
-    pub async fn external_tools(&self, cwd: &Path) -> McpStartup {
+    pub async fn external_tools(
+        &self,
+        cwd: &Path,
+        stop: tokio_util::sync::CancellationToken,
+    ) -> McpStartup {
         let config = match self.mcp_config_for(cwd) {
             Ok(config) => config,
             Err(error) => {
@@ -178,7 +183,7 @@ impl Host {
                 };
             }
         };
-        McpTools::connect(&config, cwd).await
+        McpTools::connect(&config, cwd, stop).await
     }
 
     /// Bind a selected HTTP route to a complete caller-owned tool set. This

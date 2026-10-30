@@ -94,7 +94,8 @@ for line in sys.stdin:
             }),
         )
         .unwrap();
-    let startup = McpTools::connect(&config, &root).await;
+    let startup =
+        McpTools::connect(&config, &root, tokio_util::sync::CancellationToken::new()).await;
     assert_eq!(startup.diagnostics.len(), 1, "{:?}", startup.diagnostics);
     assert!(startup.diagnostics[0].contains("unchecked"));
     assert!(!startup.diagnostics[0].contains("SCHEMA_CANARY"));

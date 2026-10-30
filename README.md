@@ -1203,7 +1203,7 @@ ion mcp add docs --description 'Project documentation' \
   --server-cwd ../docs --env 'DOCS_TOKEN=${DOCS_TOKEN}' docs-mcp
 ```
 
-These persist as `cwd` and an `env` name-to-string map in the server entry.
+These flags persist as `cwd` and string entries in the server's `env` map.
 Relative directories resolve against the Session directory, not the manifest's
 location; absolute paths and `~` / `~/...` use the parent's HOME. Without `cwd`,
 the server runs in the Session directory. Environment overrides supplement the
@@ -1212,8 +1212,8 @@ to keep your shell from expanding them before Ion saves the configuration.
 `${NAME}` reads the parent environment; `${NAME:-fallback}` supplies literal text
 only when the variable is unset (a present empty value stays empty). Overrides
 cannot reference each other, and inserted values are not expanded again.
-`$NAME` and `!command` remain literal: no shell commands are evaluated. Command
-and argument strings also remain literal. The combined override names and
+`$NAME` and `!command` remain literal: strings never authorize shell execution.
+Command and argument strings also remain literal. The combined override names and
 expanded values are limited to 1 MiB. Bad references or an unusable directory
 disable that server with a diagnostic; other servers can still start.
 `ion mcp list` shows the configured directory and environment names, never their
@@ -1229,7 +1229,7 @@ ion mcp add-http remote-docs https://example.com/mcp \
   --header 'X-API-Key=${DOCS_KEY}' --header 'X-Tenant=${DOCS_TENANT:-default}'
 ```
 
-These persist in a `headers` name-to-string map. Values use the same non-recursive
+These flags persist as string entries in `headers`. Values use the same non-recursive
 environment references as local overrides, captured once before connecting.
 `Authorization` is supported, but cannot be combined with `--bearer-token-env`.
 Repeated flag names use the last value, ignoring case; manifest keys differing
@@ -1240,7 +1240,42 @@ session/protocol/routing headers cannot be overridden, including `Host`,
 `Content-Type`, `Accept`, `Mcp-Session-Id` and `Mcp-Protocol-Version`.
 `ion mcp list` shows header names only. Headers reach POST, GET and DELETE, and
 Ion refuses redirects rather than forwarding credentials to another destination.
-This does not add OAuth or command-backed secret providers.
+This does not add OAuth or live credential reload.
+
+For command-backed credentials, edit `mcp.json` in the Ion configuration directory
+(default `~/.ion`). An `env` or `headers` value may be an explicit argv helper:
+
+```json
+{
+  "servers": {
+    "remote-docs": {
+      "url": "https://example.com/mcp",
+      "headers": {
+        "X-API-Key": {"command": "op", "args": ["read", "op://Agent/docs/api-key"]}
+      }
+    }
+  }
+}
+```
+
+Helpers execute directly, without an implicit shell. Their command/arguments are
+literal; invoke a shell explicitly if it is required. Helpers run in the Session
+directory with the captured parent environment, not server `cwd` or sibling
+overrides. Each selected value runs once when connecting, with no global cache
+or per-request refresh. Successful stdout is trimmed, must be nonempty UTF-8 and
+is never expanded again. Raw stdout must fit the remaining 1 MiB name/value budget;
+each helper's argv text is also limited to 1 MiB. All helpers for a server share
+one 10-second observation budget; owned root/group cleanup is joined even on
+failure, timeout or cancellation. These are one-shot helpers, not daemon launchers
+or a sandbox. Errors reject that server without fallback or retry; output and
+helper arguments are not logged or saved as diagnostic artifacts.
+Disabled/untrusted servers do not run helpers. Listing, `doctor` and `trust` only
+validate configuration; they do not execute helpers. Project edits require renewed
+trust. Ctrl-C during startup cancels and joins preparation before a client or
+model request is admitted. The same native SIGINT listener then belongs to the
+selected client; RPC interruption joins work before closing the stream, without
+requiring an unread peer to drain recovery. Raw terminal keybindings are unchanged.
+Already connected clients retain their captured values.
 
 Both commands accept `--description TEXT`, stored as `description` in the server
 entry. This literal server purpose appears alongside the remote tool descriptions

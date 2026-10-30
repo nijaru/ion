@@ -1,8 +1,5 @@
 //! Local server launch configuration, captured before any process is started.
-use super::{
-    config::McpStdioServer,
-    values::{MAX_CONFIGURED_BYTES, expand},
-};
+use super::{config::McpStdioServer, values};
 use anyhow::{Context, Result};
 use std::{
     collections::BTreeMap,
@@ -11,7 +8,11 @@ use std::{
 };
 use tokio::process::Command;
 
-pub(super) fn command(server: &McpStdioServer, cwd: &Path) -> Result<Command> {
+pub(super) async fn command(
+    server: &McpStdioServer,
+    cwd: &Path,
+    stop: tokio_util::sync::CancellationToken,
+) -> Result<Command> {
     let inherited: BTreeMap<OsString, OsString> = std::env::vars_os().collect();
     let mut command = Command::new(&server.command);
     command
@@ -19,15 +20,15 @@ pub(super) fn command(server: &McpStdioServer, cwd: &Path) -> Result<Command> {
         .current_dir(working_directory(server.cwd.as_deref(), cwd, &inherited)?)
         .env_clear()
         .envs(&inherited);
-    let mut remaining = MAX_CONFIGURED_BYTES;
-    for (name, value) in &server.env {
-        remaining = remaining
-            .checked_sub(name.len())
-            .context("MCP environment overrides exceed byte limit")?;
-        let value = expand(value, &inherited, &mut remaining)
-            .with_context(|| format!("cannot resolve MCP environment variable {name}"))?;
-        command.env(name, value);
-    }
+    let values = values::resolve(&server.env, &inherited, cwd, stop, |value| {
+        anyhow::ensure!(
+            !value.contains('\0'),
+            "invalid MCP environment variable value"
+        );
+        Ok(())
+    })
+    .await?;
+    command.envs(values);
     Ok(command)
 }
 

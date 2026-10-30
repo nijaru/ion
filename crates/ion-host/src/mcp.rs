@@ -7,7 +7,7 @@ use std::{
     },
 };
 
-use anyhow::{Context, Result, ensure};
+use anyhow::{Context, Result, anyhow, ensure};
 use futures_util::future::join_all;
 use indexmap::IndexMap;
 use ion_ai::BoxFuture;
@@ -45,12 +45,14 @@ mod resource_tools;
 mod schema;
 mod send;
 mod stderr;
+mod value_command;
 mod values;
 #[cfg(test)]
 use catalog::exposed_tool_name;
 use catalog::{Catalog, DiscoveredTools, fetch_tools, publish_tools, register_tools};
 use connection::{Connection, combine_cleanup};
 use invocation::McpExecutor;
+pub use values::McpValue;
 
 #[cfg(test)]
 mod invocation_tests;
@@ -111,7 +113,7 @@ pub struct McpStartup {
 }
 
 impl McpTools {
-    pub async fn connect(config: &McpConfig, cwd: &Path) -> McpStartup {
+    pub async fn connect(config: &McpConfig, cwd: &Path, stop: CancellationToken) -> McpStartup {
         let (saved, mut diagnostics) = match config.load_startup() {
             Ok(saved) => saved,
             Err(error) => {
@@ -126,9 +128,18 @@ impl McpTools {
         let attempts = saved
             .into_iter()
             .filter(|(_, definition)| definition.enabled())
-            .map(|(name, definition)| Self::connect_server(name, definition, cwd, catalog.clone()));
+            .map(|(name, definition)| {
+                Self::connect_server(name, definition, cwd, catalog.clone(), stop.clone())
+            });
         for attempt in join_all(attempts).await {
             match attempt {
+                Ok((server, _)) if stop.is_cancelled() => {
+                    let closed = combine_cleanup::<()>(
+                        Err(anyhow!("MCP startup cancelled")),
+                        server.shutdown().await,
+                    );
+                    diagnostics.push(format!("{:#}", closed.unwrap_err()));
+                }
                 Ok((server, discovered)) => {
                     let published = publish_tools(&catalog, &server.name, discovered.tools);
                     match published {
@@ -167,7 +178,9 @@ impl McpTools {
         definition: McpServer,
         cwd: &Path,
         catalog: Arc<SyncRwLock<Catalog>>,
+        stop: CancellationToken,
     ) -> Result<(Server, DiscoveredTools)> {
+        ensure!(!stop.is_cancelled(), "MCP startup cancelled");
         validate_name(&name)?;
         validate_server(&definition)?;
         let changed = Arc::new(AtomicU64::new(0));
@@ -179,7 +192,7 @@ impl McpTools {
             .map(str::to_owned);
         let exposure = definition.exposure();
         let tool_exposure = definition.tool_exposure().clone();
-        let client = Connection::start(&name, definition, cwd, handler).await?;
+        let client = Connection::start(&name, definition, cwd, handler, stop.clone()).await?;
         let peer = client.client.peer_info();
         let resources = exposure != McpExposure::Hidden
             && peer
@@ -189,7 +202,12 @@ impl McpTools {
             .as_ref()
             .is_none_or(|info| info.capabilities.tools.is_some());
         let discovered = if advertises_tools {
-            match fetch_tools(&name, &client.client).await {
+            let listed = tokio::select! {
+                biased;
+                () = stop.cancelled() => Err(anyhow!("MCP startup cancelled")),
+                result = fetch_tools(&name, &client.client) => result,
+            };
+            match listed {
                 Ok(tools) => {
                     let name = name.clone();
                     conversion::run(move || register_tools(&name, tools)).await
@@ -199,6 +217,10 @@ impl McpTools {
         } else {
             Ok(DiscoveredTools::default())
         };
+        let discovered = discovered.and_then(|tools| {
+            ensure!(!stop.is_cancelled(), "MCP startup cancelled");
+            Ok(tools)
+        });
         let stderr = client.stderr_log();
         match discovered {
             Ok(tools) => Ok((
@@ -522,7 +544,8 @@ for line in sys.stdin:
                 }),
             )
             .unwrap();
-        let startup = McpTools::connect(&config, &root).await;
+        let startup =
+            McpTools::connect(&config, &root, tokio_util::sync::CancellationToken::new()).await;
         assert!(startup.diagnostics.is_empty(), "{:?}", startup.diagnostics);
         let source = startup.tools.unwrap();
         let tools = ion_core::ToolSet::new([source.clone() as Arc<dyn CodingToolSource>]);
@@ -532,7 +555,8 @@ for line in sys.stdin:
         let project = McpConfig::with_project(&root, &root).unwrap();
         project.set_project_enabled("bound", false).unwrap();
         project.trust_project().unwrap();
-        let disabled = McpTools::connect(&project, &root).await;
+        let disabled =
+            McpTools::connect(&project, &root, tokio_util::sync::CancellationToken::new()).await;
         assert!(disabled.tools.is_none());
         assert!(
             disabled.diagnostics.is_empty(),
@@ -634,7 +658,7 @@ for line in sys.stdin:
                     exposure: McpExposure::Direct,
                     tool_exposure: Default::default(),
                 })).unwrap();
-                let startup = McpTools::connect(&config, &root).await;
+                let startup = McpTools::connect(&config, &root, tokio_util::sync::CancellationToken::new()).await;
                 assert!(startup.diagnostics.is_empty(), "{:?}", startup.diagnostics);
                 let source = startup.tools.unwrap();
                 let issued = ion_core::ToolSet::new([source.clone() as Arc<dyn CodingToolSource>]).snapshot();
@@ -732,7 +756,12 @@ for line in sys.stdin:
         let root = std::env::temp_dir().join(format!("ion-mcp-{}", uuid::Uuid::now_v7()));
         fs::create_dir(&root).unwrap();
         fs::write(root.join("mcp.json"), b"{invalid").unwrap();
-        let startup = McpTools::connect(&McpConfig::new(&root), &root).await;
+        let startup = McpTools::connect(
+            &McpConfig::new(&root),
+            &root,
+            tokio_util::sync::CancellationToken::new(),
+        )
+        .await;
         assert!(startup.tools.is_none());
         assert_eq!(startup.diagnostics.len(), 1);
         assert!(startup.diagnostics[0].contains("invalid MCP config"));

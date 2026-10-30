@@ -72,7 +72,8 @@ async fn fixture(mode: &str) -> (PathBuf, Arc<McpTools>, ion_core::ToolSet) {
             }),
         )
         .unwrap();
-    let startup = McpTools::connect(&config, &root).await;
+    let startup =
+        McpTools::connect(&config, &root, tokio_util::sync::CancellationToken::new()).await;
     assert!(startup.diagnostics.is_empty(), "{:?}", startup.diagnostics);
     let source = startup.tools.unwrap();
     let tools = ion_core::ToolSet::new([source.clone() as Arc<dyn CodingToolSource>]);
@@ -458,7 +459,8 @@ server.serve_forever()
             }),
         )
         .unwrap();
-    let startup = McpTools::connect(&config, &root).await;
+    let startup =
+        McpTools::connect(&config, &root, tokio_util::sync::CancellationToken::new()).await;
     let source = startup.tools.unwrap();
     let issued = ion_core::ToolSet::new([source.clone() as Arc<dyn CodingToolSource>]).snapshot();
     let stop = CancellationToken::new();
@@ -608,7 +610,8 @@ server.serve_forever()
     ] {
         // A framing failure retires its connection. Each operation gets a fresh
         // connection to the same real server, not a retry of the failed request.
-        let startup = McpTools::connect(&config, &root).await;
+        let startup =
+            McpTools::connect(&config, &root, tokio_util::sync::CancellationToken::new()).await;
         assert!(startup.diagnostics.is_empty(), "{:?}", startup.diagnostics);
         let source = startup.tools.unwrap();
         let issued =

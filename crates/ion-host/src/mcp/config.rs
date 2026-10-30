@@ -1,10 +1,10 @@
 //! MCP configuration validation and serialized atomic publication.
-use super::http_config;
+use super::{http_config, values::McpValue};
 use crate::model_setup::{write_json, write_shared_json};
 use anyhow::{Context, Result, bail, ensure};
 use indexmap::IndexMap;
 use serde::{Deserialize, Deserializer, Serialize, de::Error as _};
-use serde_json::{Value, value::RawValue};
+use serde_json::value::RawValue;
 use sha2::{Digest, Sha256};
 use std::{
     collections::BTreeMap,
@@ -103,7 +103,7 @@ pub struct McpStdioServer {
         deserialize_with = "deserialize_value_map",
         skip_serializing_if = "BTreeMap::is_empty"
     )]
-    pub env: BTreeMap<String, String>,
+    pub env: BTreeMap<String, McpValue>,
     #[serde(default, skip_serializing_if = "McpExposure::is_direct")]
     pub exposure: McpExposure,
     /// Exact remote names win; otherwise the first matching `*` pattern wins.
@@ -111,22 +111,14 @@ pub struct McpStdioServer {
     pub tool_exposure: IndexMap<String, McpExposure>,
 }
 
-// Generic string deserialization can echo malformed values (for example a
-// numeric PIN). Keep secret value-map errors value-free at this boundary.
+// Generic deserialization can echo malformed values (for example a numeric PIN).
+// Keep errors value-free, without erasing duplicate helper structural fields.
 fn deserialize_value_map<'de, D: Deserializer<'de>>(
     deserializer: D,
-) -> Result<BTreeMap<String, String>, D::Error> {
-    let error = || D::Error::custom("MCP values must map names to strings");
-    let Value::Object(entries) = Value::deserialize(deserializer)? else {
-        return Err(error());
-    };
-    entries
-        .into_iter()
-        .map(|(name, value)| match value {
-            Value::String(value) => Ok((name, value)),
-            _ => Err(error()),
-        })
-        .collect()
+) -> Result<BTreeMap<String, McpValue>, D::Error> {
+    BTreeMap::<String, McpValue>::deserialize(deserializer).map_err(|_| {
+        D::Error::custom("MCP values must map names to strings or command/args objects")
+    })
 }
 
 #[derive(Clone, Serialize, Deserialize)]
@@ -150,7 +142,7 @@ pub struct McpHttpServer {
         deserialize_with = "deserialize_value_map",
         skip_serializing_if = "BTreeMap::is_empty"
     )]
-    pub headers: BTreeMap<String, String>,
+    pub headers: BTreeMap<String, McpValue>,
     #[serde(default, skip_serializing_if = "McpExposure::is_direct")]
     pub exposure: McpExposure,
     /// Exact remote names win; otherwise the first matching `*` pattern wins.
@@ -644,6 +636,10 @@ pub(super) fn validate_server(server: &McpServer) -> Result<()> {
     match server {
         McpServer::Stdio(server) => {
             ensure!(!server.command.trim().is_empty(), "MCP command is empty");
+            ensure!(
+                !server.command.contains('\0') && server.args.iter().all(|arg| !arg.contains('\0')),
+                "invalid MCP server argv"
+            );
             if let Some(cwd) = &server.cwd {
                 ensure!(
                     !cwd.as_os_str().is_empty() && !cwd.as_os_str().as_encoded_bytes().contains(&0),
@@ -655,10 +651,7 @@ pub(super) fn validate_server(server: &McpServer) -> Result<()> {
                     valid_env_name(name),
                     "invalid MCP environment variable name"
                 );
-                ensure!(
-                    !value.contains('\0'),
-                    "invalid MCP environment variable value"
-                );
+                value.validate()?;
             }
         }
         McpServer::Http(server) => {
@@ -705,7 +698,7 @@ pub(super) fn validate_name(name: &str) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use serde_json::json;
+    use serde_json::{Value, json};
     use std::{
         fs,
         sync::{Arc, Barrier},
@@ -1088,6 +1081,51 @@ mod tests {
             )
             .is_err()
         );
+    }
+
+    #[test]
+    fn invalid_outer_stdio_argv_cannot_admit_value_helpers() {
+        for (command, args) in [("bad\0command", vec![]), ("python3", vec!["bad\0arg"])] {
+            assert!(
+                parse_server(
+                    "demo",
+                    json!({"command":command,"args":args,"env":{"TOKEN":{"command":"helper"}}})
+                )
+                .is_err()
+            );
+        }
+    }
+
+    #[test]
+    fn helper_values_round_trip_and_reject_malformed_descriptors_without_disclosure() {
+        for (field, base) in [
+            ("env", json!({"command":"python3", "args":[]})),
+            ("headers", json!({"url":"https://example.test/mcp"})),
+        ] {
+            let mut value = base.clone();
+            value[field] =
+                json!({"VALUE": {"command":"helper", "args":["literal ${NAME}", "!literal"]}});
+            assert_eq!(
+                serde_json::to_value(parse_server("demo", value.clone()).unwrap()).unwrap(),
+                value
+            );
+            for descriptor in [
+                json!({"command":731982654}),
+                json!({"command":"helper", "args":[731982654]}),
+                json!({"command":"helper", "args":null}),
+                json!({"command":"helper", "unknown":731982654}),
+                json!({"command":""}),
+                json!({"command":"bad\0path"}),
+                json!({"command":"helper", "args":["bad\0arg"]}),
+            ] {
+                let mut value = base.clone();
+                value[field] = json!({"TOKEN":descriptor});
+                let error = parse_server("demo", value)
+                    .err()
+                    .expect("invalid descriptor rejected");
+                assert!(!format!("{error:#}").contains("731982654"));
+            }
+        }
     }
 
     #[test]
