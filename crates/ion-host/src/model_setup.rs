@@ -11,7 +11,10 @@ use anyhow::{Context, Result, bail, ensure};
 use ion_ai::ModelRef;
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 
+mod cycling;
 mod matching;
+
+pub use cycling::ModelCycleDirection;
 
 use crate::{
     HttpModelService, HttpWire,

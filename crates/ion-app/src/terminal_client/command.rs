@@ -4,7 +4,7 @@
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
-use ion_host::SessionControl;
+use ion_host::{ModelCycleDirection, SessionControl};
 use ion_terminal::{Screen, TerminalSession};
 
 use super::{
@@ -18,11 +18,13 @@ use ion_host::image_input::ImageSource;
 pub(super) enum CommandInput {
     Editor(EditorDraft),
     Shortcut(Builtin),
+    CycleModel(ModelCycleDirection),
 }
 
 #[derive(Debug, PartialEq, Eq)]
 enum CommandKind<'a> {
     Builtin(Builtin),
+    CycleModel(ModelCycleDirection),
     UserCommand(&'a str),
     Other(&'a str),
 }
@@ -37,6 +39,10 @@ impl CommandInput {
         match self {
             Self::Shortcut(builtin) => ParsedCommand {
                 kind: CommandKind::Builtin(*builtin),
+                args: "",
+            },
+            Self::CycleModel(direction) => ParsedCommand {
+                kind: CommandKind::CycleModel(*direction),
                 args: "",
             },
             Self::Editor(source) => {
@@ -62,7 +68,7 @@ impl CommandInput {
     fn into_editor(self) -> Option<EditorDraft> {
         match self {
             Self::Editor(source) => Some(source),
-            Self::Shortcut(_) => None,
+            Self::Shortcut(_) | Self::CycleModel(_) => None,
         }
     }
 }
@@ -109,6 +115,35 @@ pub(super) async fn dispatch_command(
         return Ok(());
     }
     match kind {
+        CommandKind::CycleModel(direction) => {
+            let candidate = (|| -> Result<_> {
+                anyhow::ensure!(
+                    !runtime.is_busy(),
+                    "This action is available after the operation"
+                );
+                Ok(direction.candidate(
+                    services.models().choices(services.credentials())?,
+                    runtime.agent().model(),
+                ))
+            })();
+            let result = match candidate {
+                Ok(Some(selection)) => super::configuration::select_model(
+                    runtime, services, terminal, screen, program, selection,
+                )
+                .await?
+                .map(|()| true),
+                Ok(None) => Ok(false),
+                Err(error) => Err(error),
+            };
+            ui.status = match result {
+                Ok(true) => {
+                    let model = runtime.agent().model();
+                    format!("Selected {}/{}", model.provider, model.model)
+                }
+                Ok(false) => "No other locally ready model".into(),
+                Err(error) => format!("{error:#}"),
+            };
+        }
         CommandKind::Builtin(Builtin::Login) if !args.is_empty() => {
             match login_in_terminal(terminal, screen, services.credentials(), args, program).await?
             {

@@ -82,7 +82,8 @@ pub use mcp::{
 };
 pub use model_http::{HttpModelService, HttpWire};
 pub use model_setup::{
-    ModelChoice, ModelSelectionRequired, ModelStore, SavedSelection, Selection, Wire,
+    ModelChoice, ModelCycleDirection, ModelSelectionRequired, ModelStore, SavedSelection,
+    Selection, Wire,
 };
 pub use process::{
     AttachmentPage, AttachmentScreen, AttachmentWrite, ProcessOwner, ProcessTools,

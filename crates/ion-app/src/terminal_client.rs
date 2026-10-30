@@ -1143,6 +1143,12 @@ impl Frontend {
             Some(KeyAction::Copy) => Action::Command(CommandInput::Shortcut(Builtin::Copy)),
             Some(KeyAction::External) => Action::Command(CommandInput::Shortcut(Builtin::Editor)),
             Some(KeyAction::Model) => Action::Command(CommandInput::Shortcut(Builtin::Model)),
+            Some(KeyAction::ModelForward) => Action::Command(CommandInput::CycleModel(
+                ion_host::ModelCycleDirection::Forward,
+            )),
+            Some(KeyAction::ModelBackward) => Action::Command(CommandInput::CycleModel(
+                ion_host::ModelCycleDirection::Backward,
+            )),
             Some(KeyAction::Paste) => Action::PasteClipboard,
             Some(KeyAction::NewLine) => {
                 self.insert("\n");

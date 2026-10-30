@@ -1636,7 +1636,14 @@ come from the bound agent's adapter preflight for coding and summary, with the
 current preference preselected; the client owns no parallel wire-capability table.
 API-key provider discovery reuses known/configured model choices and labels local
 credential sources, not account authentication. Model selection marks the current
-binding; Ctrl-L opens it while retaining the draft, cursor and attachments. Missing
+binding; Ctrl-L opens it while retaining the draft, cursor and attachments.
+Next/previous model actions use Host's unscoped, ordered catalogue/configured
+choices, excluding missing required credentials but including keyless routes.
+They wrap at the ends; zero or one ready choice is a no-op. Local key presence is
+not remote authentication, and cycling performs no provider probe or model request.
+Apply the chosen candidate through the same busy/clipboard guards and shared
+binding replacement, without clearing input, saving a default, changing reasoning
+policy or skipping to another route after failed preflight. Missing
 required credentials use the existing masked reader before shared-control binding
 replacement. Reject busy or clipboard-owned admission before entering that reader.
 Cancellation preserves the old binding and saved default. A successful, explicit

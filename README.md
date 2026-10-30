@@ -219,7 +219,13 @@ The TUI model picker searches catalog and configured
 custom routes, marks the current model and preselects it. Typed `/model MODEL`
 uses the same shorthand matcher as `--model` and reports the canonical choice.
 Ctrl-L opens that picker
-without replacing the draft or its cursor/attachments. Choosing a native model
+without replacing the draft or its cursor/attachments. Ctrl-P and Ctrl-Shift-P
+cycle forward and backward through locally ready models, wrapping in catalog order
+then configured custom-route order. Required keys must be present locally; keyless
+routes are included. Cycling sends no model request or remote authentication probe,
+retains the draft/cursor/attachments and leaves the saved default unchanged. With
+fewer than two ready models it does nothing. Failed binding preflight keeps the
+old model rather than skipping to another route. Choosing a native model
 with a missing key opens the same hidden credential reader as first-use setup;
 Ctrl-C cancels key entry without changing the current model. Model selection never
 changes the saved default. Saving a key is local storage, not remote authentication;
@@ -783,7 +789,9 @@ exactly; unrelated extra modifiers do not activate a shortcut.
 Legacy terminals cannot distinguish every chord: Ctrl-I is Tab, Ctrl-J/M is
 Enter and Ctrl-H is Backspace. Use an enhanced keyboard protocol or another key
 when those distinctions matter. Configuration cannot recover information the
-terminal never sends.
+terminal never sends. If Ctrl-Shift-P is indistinguishable from Ctrl-P, rebind
+`app.model.cycleBackward`, for example to `alt+p`; the forward action is
+`app.model.cycleForward`.
 
 The file is limited to 64 KiB. Unknown/duplicate action IDs, invalid keys, bad JSON,
 unreadable files and collisions fail explicitly; invalid startup configuration is

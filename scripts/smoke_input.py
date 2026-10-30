@@ -58,7 +58,7 @@ class Handler(BaseHTTPRequestHandler):
                 delta = {"tool_calls": [{"index": 0, "id": name, "type": "function", "function": {"name": name, "arguments": json.dumps(arguments)}}]}
             else:
                 delta = {"content": "TASK_ACCEPTED" if prompt.startswith("TASK_PARENT_") else "TASK_FINAL_🦀"}
-        if prompt in ("WAIT_HISTORY", "ACCEPTED_VIEW_FAULT", "WAIT_USAGE"):
+        if prompt in ("WAIT_HISTORY", "WAIT_MODEL_CYCLE", "ACCEPTED_VIEW_FAULT", "WAIT_USAGE"):
             assert release.wait(10), "fixture did not release the waiting response"
         delta = delta or {"content": "DONE_" + prompt}
         events = [
@@ -679,9 +679,9 @@ def exercise_configuration(work, base_env, endpoint):
     home = work / "configuration-ion"
     env = dict(base_env, ION_HOME=str(home), HTTP_PROXY=endpoint, HTTPS_PROXY=endpoint, ALL_PROXY=endpoint,
                NO_PROXY="127.0.0.1,localhost")
-    for provider, extra in (("login-only", []),):
-        subprocess.run([binary, "use", provider, "model", "--endpoint", endpoint,
-                        "--wire", "chat-completions", *extra], env=env, check=True, capture_output=True)
+    for provider, model in (("cycle-first", "first-model"), ("login-only", "model")):
+        subprocess.run([binary, "use", provider, model, "--endpoint", endpoint,
+                        "--wire", "chat-completions"], env=env, check=True, capture_output=True)
     subprocess.run([binary, "use", "smoke", "smoke-model", "--endpoint", endpoint,
                     "--wire", "chat-completions"], env=env, check=True, capture_output=True)
     defaults = (home / "models.json").read_bytes()
@@ -705,6 +705,41 @@ def exercise_configuration(work, base_env, endpoint):
             release.set()
             terminal.wait(lambda: b"state=done" in terminal.output)
             before = len(requests)
+            # Give the cycle refusal its own held operation: a repeated status
+            # from the preceding /model refusal cannot establish input readiness.
+            release.clear()
+            terminal.output.clear()
+            terminal.send("WAIT_MODEL_CYCLE\r")
+            terminal.wait(lambda: len(requests) == before + 1)
+            terminal.output.clear()
+            terminal.send("\x10")
+            terminal.wait(lambda: "This action is available after the operation" in terminal.text())
+            assert len(requests) == before + 1, "busy model cycling admitted a request"
+            release.set()
+            terminal.wait(lambda: b"state=done" in terminal.output)
+            before = len(requests)
+            # All native routes lack credentials here. Cycle the three keyless
+            # loopback routes, exercising wrap, direction, and the real CSI-u key.
+            terminal.output.clear()
+            terminal.send("CYCLE_🦀\x01\x10")
+            terminal.wait(lambda: "Selected cycle-first/first-model" in terminal.text())
+            terminal.output.clear()
+            terminal.send(b"\x1b[112;6u")
+            terminal.wait(lambda: "Selected smoke/smoke-model" in terminal.text())
+            terminal.output.clear()
+            terminal.send(b"\x1b[112;6u")
+            terminal.wait(lambda: "Selected login-only/model" in terminal.text())
+            assert len(requests) == before, "model cycling issued a provider request"
+            terminal.output.clear()
+            terminal.send("PREFIX_\r")
+            terminal.wait(lambda: len(requests) == before + 1)
+            assert user_text(requests[-1]) == "PREFIX_CYCLE_🦀", requests[-1]
+            assert requests[-1]["model"] == "model", requests[-1]
+            terminal.wait(lambda: b"state=done" in terminal.output)
+            terminal.output.clear()
+            terminal.send("\x10")
+            terminal.wait(lambda: "Selected smoke/smoke-model" in terminal.text())
+            before = len(requests)
             terminal.send("/settings\r")
             terminal.wait(lambda: "Settings ·" in terminal.text() and "Space changes settings" in terminal.text())
             terminal.send(" ")
@@ -722,6 +757,27 @@ def exercise_configuration(work, base_env, endpoint):
             terminal.paint()
             terminal.send("\r")
             terminal.wait(lambda: "Generation effort: high" in terminal.text())
+            # The next ready route cannot carry the current reasoning policy.
+            # A failed preflight must not skip ahead or replace the old binding.
+            models = home / "models.json"
+            configured = models.read_bytes()
+            changed = json.loads(configured)
+            changed["custom"][0]["wire"] = "llama-cpp-no-thinking"
+            models.write_text(json.dumps(changed))
+            try:
+                terminal.output.clear()
+                terminal.send("\x10")
+                terminal.wait(lambda: "llama.cpp thinking needs reasoning replay" in terminal.text())
+                assert len(requests) == before, "failed model cycling issued a provider request"
+                terminal.output.clear()
+                terminal.send("PREFLIGHT_RETAINED\r")
+                terminal.wait(lambda: len(requests) == before + 1)
+                assert user_text(requests[-1]) == "PREFLIGHT_RETAINED", requests[-1]
+                assert requests[-1]["model"] == "smoke-model" and requests[-1]["reasoning_effort"] == "high"
+                terminal.wait(lambda: b"state=done" in terminal.output)
+                before = len(requests)
+            finally:
+                models.write_bytes(configured)
             terminal.send("/login\r")
             terminal.wait(lambda: "API-key provider" in terminal.text())
             terminal.send("login-only")
@@ -774,7 +830,7 @@ def exercise_configuration(work, base_env, endpoint):
             terminal.close()
         assert (home / "models.json").read_bytes() == defaults, "configuration changed global defaults"
         assert not unexpected_connections, "configuration dispatched a native provider request: " + repr(unexpected_connections)
-        print(f"Configuration {mode}: live settings, effort, API-key provider, model auth/cancel, secret quarantine and draft: OK", flush=True)
+        print(f"Configuration {mode}: model cycling/wrap/preflight, live settings, effort, API-key provider, model auth/cancel, secret quarantine and draft: OK", flush=True)
 
 
 def exercise_resume(work, base_env, endpoint):

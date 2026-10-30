@@ -2,6 +2,67 @@
 use super::*;
 
 #[test]
+fn model_cycle_keys_and_rebinding_retain_the_editor_and_attachments() {
+    use ion_host::ModelCycleDirection::{Backward, Forward};
+
+    for (keys, events) in [
+        (
+            KeyBindings::default(),
+            vec![
+                (
+                    KeyEvent::new(KeyCode::Char('p'), Modifiers::CONTROL),
+                    Some(Forward),
+                ),
+                (
+                    KeyEvent::new(KeyCode::Char('p'), Modifiers::CONTROL | Modifiers::SHIFT),
+                    Some(Backward),
+                ),
+            ],
+        ),
+        (
+            KeyBindings::parse(
+                br#"{"app.model.cycleForward":"alt+m","app.model.cycleBackward":[]}"#,
+            )
+            .unwrap(),
+            vec![
+                (KeyEvent::new(KeyCode::Char('p'), Modifiers::CONTROL), None),
+                (
+                    KeyEvent::new(KeyCode::Char('p'), Modifiers::CONTROL | Modifiers::SHIFT),
+                    None,
+                ),
+                (
+                    KeyEvent::new(KeyCode::Char('m'), Modifiers::ALT),
+                    Some(Forward),
+                ),
+            ],
+        ),
+    ] {
+        let mut ui = Frontend {
+            keys,
+            draft: "left 🦀 right".into(),
+            cursor: "left ".len(),
+            images: vec![ImageSource::Path(PathBuf::from("retained.png"))],
+            ..Frontend::default()
+        };
+        for (event, direction) in events {
+            let action = ui.key(event, None, None);
+            match direction {
+                Some(expected) => assert!(matches!(
+                    action,
+                    Action::Command(CommandInput::CycleModel(actual)) if actual == expected
+                )),
+                None => assert!(matches!(action, Action::None)),
+            }
+            assert_eq!(ui.draft, "left 🦀 right");
+            assert_eq!(ui.cursor, "left ".len());
+            assert!(
+                matches!(&ui.images[..], [ImageSource::Path(path)] if path == std::path::Path::new("retained.png"))
+            );
+        }
+    }
+}
+
+#[test]
 fn completion_consumed_keys_interrupt_composer_yank_affinity() {
     let mut ui = Frontend {
         keys: KeyBindings::parse(br#"{"tui.select.cancel":"alt+y"}"#).unwrap(),
