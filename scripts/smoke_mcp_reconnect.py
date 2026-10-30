@@ -1,4 +1,4 @@
-"""Offline built-RPC reconnect: shared child calls, recovery and joined EOF."""
+"""Offline built-RPC MCP inspection/reconnect: passive views and shared custody."""
 import json
 import os
 import queue
@@ -33,6 +33,7 @@ def peer():
             if "id" not in request:
                 continue
             method = request["method"]
+            record("request:" + method)
             if method == "initialize":
                 if value == "hang":
                     record("waiting")
@@ -140,6 +141,8 @@ class Remote(BaseHTTPRequestHandler):
     def do_POST(self):
         fixture = self.server.fixture
         request = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
+        if "id" in request:
+            fixture.remote_requests.append(request["method"])
         if request["method"] == "initialize":
             assert fixture.remote_active is None, "replacement opened before old session deletion"
             value = self.headers["X-Generation"]
@@ -196,7 +199,7 @@ class Fixture:
         for key in ("HOME", "ION_HOME", "TMPDIR"):
             Path(self.env[key]).mkdir()
         self.failures, self.requests = [], []
-        self.remote_active, self.remote_events = None, []
+        self.remote_active, self.remote_events, self.remote_requests = None, [], []
         self.remote = ThreadingHTTPServer(("127.0.0.1", 0), Remote) if http else None
         if self.remote:
             self.remote.fixture = self
@@ -338,6 +341,22 @@ class Rpc:
         assert not self.reader.is_alive()
 
 
+def inspect(fixture, rpc, peer_status="available", steady=True):
+    before = (fixture.events(), fixture.events("steady"), list(fixture.remote_requests),
+              fixture.facts(), len(fixture.requests), (fixture.workspace / "helpers").read_text())
+    count = int(peer_status == "available")
+    expected = [{"name": "peer", "status": peer_status,
+                 "tools": {"direct": count, "deferred": 0, "hidden": 0}, "resources": False}]
+    if steady:
+        expected.append({"name": "steady", "status": "available",
+                         "tools": {"direct": 1, "deferred": 0, "hidden": 0}, "resources": False})
+    for _ in range(3):
+        assert rpc.request("get_state")["data"]["mcp_servers"] == expected
+    after = (fixture.events(), fixture.events("steady"), list(fixture.remote_requests),
+             fixture.facts(), len(fixture.requests), (fixture.workspace / "helpers").read_text())
+    assert after == before, "inspection must not refresh, capture values, call models or change facts"
+
+
 def main():
     for case in ("shared", "unavailable", "http"):
         with tempfile.TemporaryDirectory(prefix="ion-mcp-reconnect-") as temporary:
@@ -348,11 +367,13 @@ def main():
                     fixture.value("")
                     fixture.save(steady=False)
                 rpc = Rpc(fixture)
+                inspect(fixture, rpc, "unavailable" if case == "unavailable" else "available", steady=case != "unavailable")
                 if case == "unavailable":
                     before = fixture.facts()
                     assert not fixture.events() and not fixture.requests
                     fixture.value("recovered")
                     rpc.reconnect()
+                    inspect(fixture, rpc, steady=False)
                     assert fixture.facts() == before, "maintenance must not create Core facts"
                 elif case == "http":
                     rpc.turn("PROBE-one", 1)
@@ -375,6 +396,7 @@ def main():
                     rpc.turn("PROBE-two", 2)
                     fixture.value("")
                     rpc.reconnect(success=False)
+                    inspect(fixture, rpc, "unavailable")
                     rpc.turn("PROBE-unavailable", 3)
                     fixture.value("three")
                     rpc.reconnect()
@@ -389,6 +411,7 @@ def main():
                     fixture.value("hang")
                     ack = rpc.request("reconnect_mcp", server="peer")
                     until(lambda: any(e["event"] == "waiting" and e["generation"] == "hang" for e in fixture.events()), "replacement did not enter initialization")
+                    inspect(fixture, rpc, "reconnecting")
                     rpc.close()
                     finished = rpc.wait(lambda record: record["type"] == "mcp_reconnect_finished" and record.get("id") == ack["id"])
                     assert not finished["success"] and finished["stop_requested"], finished
@@ -397,7 +420,7 @@ def main():
                 if rpc is not None:
                     rpc.cleanup()
                 fixture.close()
-    print("MCP reconnect: shared child interrupted without cancelling Turns/replay; generations, failure/retry, unchanged peer, HTTP deletion/credential recapture, startup recovery and joined EOF verified: OK")
+    print("MCP inspection/reconnect: passive state and exposure counts; shared child interrupted without cancelling Turns/replay; generations, failure/retry, unchanged peer, HTTP deletion/credential recapture, startup recovery and joined EOF verified: OK")
 
 
 if __name__ == "__main__":

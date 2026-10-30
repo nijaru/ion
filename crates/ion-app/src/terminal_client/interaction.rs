@@ -167,6 +167,12 @@ pub(super) async fn apply_picker(
         );
         return Ok(());
     }
+    if let PickerValue::Mcp(choice) = value {
+        if let Err(error) = super::mcp::apply(runtime, ui, choice) {
+            ui.status = format!("{error:#}");
+        }
+        return Ok(());
+    }
     let result = match value {
         PickerValue::Context(value) => {
             if let Err(error) = super::navigation::apply_context(runtime, ui, value) {
@@ -225,6 +231,7 @@ pub(super) async fn apply_picker(
         }
         PickerValue::Setting(_)
         | PickerValue::Task(_)
+        | PickerValue::Mcp(_)
         | PickerValue::CompletionDelivery(_)
         | PickerValue::Themes
         | PickerValue::Theme(_)

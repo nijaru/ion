@@ -78,6 +78,20 @@ async fn reconnect_ack_and_completion_share_correlation_and_reliable_reply_custo
     let (mut control, tools) = with_mcp(&mut fixture).await;
     let before = control.host.session().view().unwrap().entries;
     let credits = ReplyCredits::new(1);
+    for _ in 0..3 {
+        let (view, credit) = control
+            .command(
+                json!({"id":"inspect","type":"get_state"}),
+                credits.acquire().unwrap(),
+            )
+            .unwrap();
+        assert_eq!(
+            view["data"]["mcp_servers"][0],
+            json!({"name":"peer","status":"available","tools":{"direct":0,"deferred":0,"hidden":0},"resources":false})
+        );
+        drop(credit);
+    }
+    assert_eq!(control.host.session().view().unwrap().entries, before);
     let (ack, credit) = control
         .command(
             json!({"id":"replace", "type":"reconnect_mcp", "server":"peer"}),

@@ -10,6 +10,12 @@ pub(super) struct Reconnect<M> {
 }
 
 impl<M: Serialize + Send + 'static> SessionControl<M> {
+    /// Passive management view. None means the application supplies no MCP
+    /// management service; inspection does not widen model or child authority.
+    pub fn mcp_servers(&self) -> Option<Vec<crate::McpServerSnapshot>> {
+        self.setup.mcp_tools().map(|tools| tools.snapshot())
+    }
+
     /// Admit a reconnect without stopping any whole Turn. The eventual result
     /// has independent reliable custody; this return only acknowledges admission.
     pub fn reconnect_mcp(

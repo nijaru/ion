@@ -23,6 +23,10 @@ use super::{
     resource_tools,
 };
 
+#[path = "snapshot.rs"]
+mod snapshot;
+pub use snapshot::{McpServerSnapshot, McpServerStatus, McpToolCounts};
+
 #[cfg(test)]
 #[path = "manager_tests.rs"]
 mod tests;
@@ -37,7 +41,7 @@ pub struct McpTools {
 }
 #[derive(Default)]
 struct ManagerState {
-    servers: Vec<Arc<Server>>,
+    servers: std::collections::BTreeMap<String, Arc<Server>>,
     reconnects: std::collections::BTreeMap<String, Arc<ReconnectWork>>,
     cleanup_failures: std::collections::BTreeMap<String, String>,
 }
@@ -181,7 +185,7 @@ impl McpTools {
                             {
                                 diagnostics.push(notice);
                             }
-                            state.servers.push(Arc::new(server));
+                            state.servers.insert(server.name.clone(), Arc::new(server));
                             None
                         }
                         Err(error) => Some(
@@ -201,10 +205,10 @@ impl McpTools {
         if cancelled {
             // Cancellation may arrive while closing another failed startup.
             // Join accumulated successes before discarding their manager.
-            for server in &state.servers {
+            for server in state.servers.values() {
                 server.retire();
             }
-            for result in join_all(state.servers.iter().map(|server| server.shutdown())).await {
+            for result in join_all(state.servers.values().map(|server| server.shutdown())).await {
                 if let Err(error) = result {
                     diagnostics.push(format!("{error:#}"));
                 }
@@ -229,7 +233,9 @@ impl McpTools {
             .read()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .servers
-            .clone()
+            .values()
+            .cloned()
+            .collect()
     }
 
     /// Admit an explicit replacement of a captured enabled/trusted definition.
@@ -306,9 +312,12 @@ impl McpTools {
     ) -> Result<McpReconnectReport> {
         ensure!(!stop.is_cancelled(), "MCP reconnect cancelled");
         let old = self
-            .servers()
-            .into_iter()
-            .find(|server| server.name == name);
+            .state
+            .read()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .servers
+            .get(name)
+            .cloned();
         if let Some(old) = old {
             // Retire before waiting for refresh so its request releases the old
             // connection lease. This does not stop any Session or whole Turn.
@@ -342,12 +351,7 @@ impl McpTools {
                 Err(anyhow!("MCP reconnect cancelled"))
             } else {
                 publish_tools(&self.catalog, name, discovered.tools).map(|()| {
-                    if let Some(previous) = state.servers.iter_mut().find(|old| old.name == name) {
-                        *previous = server.clone();
-                    } else {
-                        state.servers.push(server.clone());
-                        state.servers.sort_by(|a, b| a.name.cmp(&b.name));
-                    }
+                    state.servers.insert(name.to_owned(), server.clone());
                     let mut diagnostics = discovered.diagnostics;
                     if let Some(notice) = server.stderr.as_ref().and_then(|log| log.notice(name)) {
                         diagnostics.push(notice);
@@ -425,7 +429,7 @@ impl McpTools {
             for work in state.reconnects.values() {
                 work.stop.cancel();
             }
-            for server in &state.servers {
+            for server in state.servers.values() {
                 server.retire();
             }
             state.reconnects.values().cloned().collect::<Vec<_>>()
@@ -472,7 +476,7 @@ impl CodingToolSource for McpTools {
             .catalog
             .read()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        for server in &state.servers {
+        for server in state.servers.values() {
             if server.retiring.is_cancelled() {
                 continue;
             }
@@ -480,18 +484,7 @@ impl CodingToolSource for McpTools {
                 continue;
             };
             for tool in tools {
-                let exposure = match server
-                    .tool_exposure
-                    .get(&tool.original_name)
-                    .copied()
-                    .or_else(|| {
-                        server.tool_exposure.iter().find_map(|(pattern, exposure)| {
-                            ion_core::tool_name_matches(pattern, &tool.original_name)
-                                .then_some(*exposure)
-                        })
-                    })
-                    .unwrap_or(server.exposure)
-                {
+                let exposure = match server.exposure_for(&tool.original_name) {
                     McpExposure::Direct => ToolExposure::Direct,
                     McpExposure::Deferred => ToolExposure::Deferred,
                     McpExposure::Hidden => continue,
@@ -522,7 +515,7 @@ impl CodingToolSource for McpTools {
         drop(catalog);
         let live = state
             .servers
-            .iter()
+            .values()
             .filter(|server| !server.retiring.is_cancelled())
             .cloned()
             .collect::<Vec<_>>();

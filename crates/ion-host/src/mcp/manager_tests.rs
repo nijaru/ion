@@ -59,6 +59,14 @@ async fn shutdown_preserves_unpublished_cleanup_errors_separately_from_operation
                     .reconnects
                     .insert("peer".into(), work);
             }
+            assert_eq!(
+                manager.snapshot()[0].status,
+                if cleanup_fails {
+                    McpServerStatus::CleanupFailed
+                } else {
+                    McpServerStatus::Unavailable
+                }
+            );
             let mut refused = true;
             if cleanup_fails {
                 match manager.reconnect("peer") {

@@ -89,7 +89,10 @@ struct Server {
     retirement: Mutex<Option<server::Retirement>>,
 }
 
-pub use manager::{McpReconnect, McpReconnectReport, McpStartup, McpTools};
+pub use manager::{
+    McpReconnect, McpReconnectReport, McpServerSnapshot, McpServerStatus, McpStartup,
+    McpToolCounts, McpTools,
+};
 
 fn tool_error(message: String) -> CodingToolOutput {
     CodingToolOutput {

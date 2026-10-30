@@ -76,8 +76,9 @@ pub use delegation::{
 };
 pub use local_tools::LocalTools;
 pub use mcp::{
-    McpConfig, McpExposure, McpHttpServer, McpReconnect, McpReconnectReport, McpServer, McpStartup,
-    McpStdioServer, McpTools, McpValue,
+    McpConfig, McpExposure, McpHttpServer, McpReconnect, McpReconnectReport, McpServer,
+    McpServerSnapshot, McpServerStatus, McpStartup, McpStdioServer, McpToolCounts, McpTools,
+    McpValue,
 };
 pub use model_http::{HttpModelService, HttpWire};
 pub use model_setup::{

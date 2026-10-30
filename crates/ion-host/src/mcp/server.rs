@@ -23,6 +23,18 @@ pub(super) struct Retirement {
 }
 
 impl Server {
+    pub(super) fn exposure_for(&self, name: &str) -> McpExposure {
+        self.tool_exposure
+            .get(name)
+            .copied()
+            .or_else(|| {
+                self.tool_exposure.iter().find_map(|(pattern, exposure)| {
+                    ion_core::tool_name_matches(pattern, name).then_some(*exposure)
+                })
+            })
+            .unwrap_or(self.exposure)
+    }
+
     pub(super) async fn connect(
         name: String,
         definition: McpServer,

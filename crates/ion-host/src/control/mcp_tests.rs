@@ -74,7 +74,12 @@ finally:
 async fn reconnect_preserves_core_work_and_reliable_metadata_until_transfer() {
     let model = Model::new(1);
     let mut fixture = Fixture::new(model.clone(), false);
+    assert!(fixture.control.mcp_servers().is_none());
     let tools = install(&mut fixture).await;
+    assert_eq!(
+        fixture.control.mcp_servers().unwrap()[0].status,
+        crate::McpServerStatus::Available
+    );
     fixture
         .control
         .submit(Delivery::Start, prompt("active"), meta("turn"))
@@ -101,6 +106,10 @@ async fn reconnect_preserves_core_work_and_reliable_metadata_until_transfer() {
     .await
     .unwrap();
     let snapshot = fixture.control.snapshot(|m| m.literal.clone()).unwrap();
+    assert_eq!(
+        snapshot.mcp_servers.unwrap()[0].status,
+        crate::McpServerStatus::Available
+    );
     assert!(snapshot.updates.iter().any(|update| matches!(update,
         UpdateSnapshot::McpReconnectFinished { metadata, result: Ok(_), .. }
         if metadata == "reconnect literal 雪")));

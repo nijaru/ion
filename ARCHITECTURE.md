@@ -884,6 +884,14 @@ outcome through local conversion. Run image processing, listing materialization
 and artifact writes off async workers; calling operations retain and join this
 work through cancellation, independently of connection cleanup.
 
+Expose passive management snapshots of admitted server names, local availability,
+per-exposure published tool counts and advertised resource access, without launch
+values, credentials, configuration reload, protocol requests or result transfer.
+Available means a published generation has not been retired locally, not remote
+health; counts precede application loadout selection. Reconnecting and cleanup
+failure remain distinct from unavailable. Closing means admission is closed, not
+that cleanup has joined. Disabled/unadmitted saved entries are not live targets.
+
 Enforce incoming MCP budgets before framing or decoding can allocate an unbounded
 message: at most 64 MiB per stdio JSON line or HTTP JSON/error body. SSE events
 retain their transport's stricter 16 MiB default and cannot exceed the aggregate
@@ -1245,7 +1253,10 @@ Core settlement or steering target. It can coexist with a Turn without stopping
 it. Stop/application closure cancels maintenance; controlled shutdown joins it.
 Passive snapshots and cancelled waits cannot consume its outcome or credit;
 Session/model replacement waits for result transfer. Native and RPC clients drive
-this owner rather than keeping client-owned network tasks.
+this owner rather than keeping client-owned network tasks. The management catalogue
+in a complete control snapshot is sampled independently before its custody/Session
+cut; it grants no dispatch lease or stronger atomicity. Native inspection and target
+selection use the shared picker and revalidate explicit actions through admission.
 
 Remote attachment must identify the Session/work and provide an authorized
 snapshot plus an ordered committed revision/cursor or equivalent reconciliation

@@ -42,6 +42,7 @@ mod editing;
 mod editor_recovery;
 mod file_discovery;
 mod interaction;
+mod mcp;
 mod navigation;
 mod orientation;
 mod output;
@@ -286,6 +287,7 @@ pub async fn chat(init: ChatInit) -> Result<()> {
         loop {
             terminal.check_active().context("terminal lifecycle failed")?;
             ui.sync_question(questions.as_ref());
+            mcp::refresh(&runtime, &mut ui);
             ui.refresh_completion(Some(runtime.resources()), Some(runtime.commands()), false);
             program.blocked_question = ui.question_owns_input();
             program.publish(terminal, runtime.is_busy())?;

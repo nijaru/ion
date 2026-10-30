@@ -1455,7 +1455,14 @@ closure proves that remote effects have stopped.
 When a server announces a changed tool list, Ion refreshes that server before
 the next model request. A failed refresh reports a warning and keeps its last
 known list. Remote MCP OAuth login is not yet supported.
-**Live MCP reconnect:** in chat, use `/mcp reconnect docs` to replace one server's
+**Live MCP inspection and reconnect:** `/mcp` opens a searchable list of this
+client's admitted servers, connection details and an explicit Reconnect action.
+`/mcp reconnect` opens the target chooser; it never picks a target silently.
+Published direct/deferred/hidden tool counts precede application loadout selection.
+Availability is captured local state, not a remote health check. Browsing performs
+no MCP requests, helper captures or configuration reload; saved disabled/unadmitted
+entries belong to offline `ion mcp list`, not this live view. No launch values or
+credentials are shown. Use `/mcp reconnect docs` to replace one server's
 shared connection. Ion stops and joins the old connection and its in-flight
 requests, including managed-child requests, before opening a replacement. It does
 not cancel whole Turns or replay calls. Once the old connection is retired, a
@@ -1474,7 +1481,11 @@ RPC uses `{"id":"retry-docs","type":"reconnect_mcp","server":"docs"}`. Its
 response acknowledges `disposition:"admitted"` with an operation ID, not a ready
 connection. A later `mcp_reconnect_finished` event carries the same request ID and
 operation, server, `success`, `stop_requested` and diagnostics or error. `get_state`
-exposes separate `mcp_reconnect:{id,stop_requested}` state; maintenance is not a
+exposes `mcp_servers` (names, `status`, per-exposure `tools` counts and `resources`),
+or null when the application has no management service. Status is `available`,
+`unavailable`, `reconnecting`, `cleanup_failed` or `closing`; closing is not proof
+of joined cleanup. Separate `mcp_reconnect:{id,stop_requested}` state tracks retained
+maintenance, not availability; inspection cannot consume its result. Maintenance is not a
 Core operation or a new Turn. Stop and foreground EOF/quit cancel and join it.
 Cancellation is not proof that remote effects stopped or were rolled back.
 
@@ -2793,7 +2804,11 @@ it, and control shutdown joins it without replacing an already-completed outcome
 At the lower service layer, `McpTools::reconnect` returns a retained `McpReconnect`
 stop/join handle; dropping it requests cancellation but does not discard cleanup.
 `McpStartup.tools` can be present with no available registrations after startup
-failures. Manager shutdown remains required even in that case.
+failures. Manager shutdown remains required even in that case. `McpTools::snapshot()`
+and `control.mcp_servers()` expose passive management observations; complete
+`ControlSnapshot` views include the same optional `mcp_servers` projection, sampled
+independently before their custody/Session cut. No view is a health probe or an
+execution lease, and child tool access does not inherit this application grant.
 
 A coding setup also retains an `ApplicationOwner`, available through
 `control.owner()`. Closing one Session does not close this longer-lived owner:

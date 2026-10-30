@@ -36,6 +36,7 @@ pub(super) enum PickerValue {
     ThemeAction(super::theme_selection::ThemeAction),
     CompletionDelivery(ion_core::CompletionDelivery),
     Task(super::tasks::TaskChoice),
+    Mcp(super::mcp::McpChoice),
     Fork(ForkPickerValue),
     Context(super::navigation::ContextPickerValue),
 }

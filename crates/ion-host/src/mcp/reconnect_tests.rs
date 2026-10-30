@@ -21,6 +21,7 @@ try:
         if 'id' not in request:
             continue
         method = request['method']
+        record('request:' + method)
         if method == 'initialize':
             if value == 'hang':
                 record('waiting')
@@ -39,6 +40,8 @@ try:
                 continue
             result = {'tools': [{'name': 'probe', 'inputSchema': {'type': 'object'},
                       'outputSchema': {'type': 'object', 'properties': {'generation': {'const': value}}}}]}
+            if value == 'catalog':
+                result['tools'].extend([{'name': name, 'inputSchema': {'type':'object'}} for name in ['direct', 'hidden']])
         elif method == 'tools/call':
             record('call')
             if request['params'].get('arguments', {}).get('wait'):
@@ -136,6 +139,73 @@ fn call(name: &str, arguments: Value) -> ToolCall {
         arguments,
         raw_arguments: None,
     }
+}
+
+#[tokio::test]
+async fn passive_inspection_captures_exposure_without_requests_or_launch_values() {
+    let fixture = Fixture::new();
+    fixture.value("catalog");
+    let mut definition = fixture
+        .config
+        .list()
+        .unwrap()
+        .servers
+        .remove("peer")
+        .unwrap();
+    if let McpServer::Stdio(server) = &mut definition {
+        server.tool_exposure = [
+            ("*".into(), McpExposure::Hidden),
+            ("probe".into(), McpExposure::Deferred),
+            ("direct".into(), McpExposure::Direct),
+        ]
+        .into();
+        server
+            .env
+            .insert("SECRET".into(), McpValue::Text("MCP_STATUS_SECRET".into()));
+    }
+    fixture.config.remove("peer").unwrap();
+    fixture.config.add("peer", definition).unwrap();
+    let source = fixture.connect().await.tools.unwrap();
+    let before = fixture.events();
+    let first = source.snapshot();
+    for _ in 0..20 {
+        assert_eq!(source.snapshot(), first);
+    }
+    assert_eq!(first[0].status, McpServerStatus::Available);
+    assert_eq!(
+        first[0].tools,
+        McpToolCounts {
+            direct: 1,
+            deferred: 1,
+            hidden: 1
+        }
+    );
+    assert!(first[0].resources);
+    let encoded = serde_json::to_string(&first).unwrap();
+    assert!(
+        !encoded.contains("MCP_STATUS_SECRET") && !encoded.contains(fixture.root.to_str().unwrap())
+    );
+    tokio::time::sleep(Duration::from_millis(20)).await;
+    assert_eq!(
+        fixture.events(),
+        before,
+        "inspection must not perform protocol requests"
+    );
+    fixture.value("two");
+    source.reconnect("peer").unwrap().join().await.unwrap();
+    assert_eq!(
+        source.snapshot()[0].tools,
+        McpToolCounts {
+            direct: 0,
+            deferred: 1,
+            hidden: 0
+        }
+    );
+    source.shutdown().await.unwrap();
+    let final_view = source.snapshot();
+    assert_eq!(final_view[0].status, McpServerStatus::Closing);
+    assert_eq!(final_view[0].tools, McpToolCounts::default());
+    assert!(!final_view[0].resources);
 }
 
 #[tokio::test]
@@ -263,6 +333,7 @@ async fn initial_and_replacement_failures_remain_explicitly_recoverable() {
         .expect("admitted unavailable definitions must survive");
     let tools = Fixture::tools(&source);
     assert!(tools.snapshot().specs().is_empty());
+    assert_eq!(source.snapshot()[0].status, McpServerStatus::Unavailable);
     fixture.value("one");
     source.reconnect("peer").unwrap().join().await.unwrap();
     assert!(!tools.snapshot().specs().is_empty());
@@ -294,12 +365,14 @@ async fn dropping_reconnect_retains_cleanup_and_shutdown_fences_publication() {
     fixture.value("hang");
     let reconnect = source.reconnect("peer").unwrap();
     fixture.wait("waiting").await;
+    assert_eq!(source.snapshot()[0].status, McpServerStatus::Reconnecting);
     assert!(
         source.reconnect("peer").is_err(),
         "same-server overlap must be rejected"
     );
     drop(reconnect);
     source.shutdown().await.unwrap();
+    assert_eq!(source.snapshot()[0].status, McpServerStatus::Closing);
     assert!(Fixture::tools(&source).snapshot().specs().is_empty());
     assert!(source.reconnect("peer").is_err());
     assert_eq!(
@@ -328,6 +401,14 @@ async fn reconnect_uses_captured_admission_not_current_configuration() {
         server.enabled = false;
     }
     fixture.config.add("later", changed).unwrap();
+    assert_eq!(
+        source
+            .snapshot()
+            .iter()
+            .map(|server| server.name.as_str())
+            .collect::<Vec<_>>(),
+        ["peer"]
+    );
     let denied = source.reconnect("later").is_err();
     // Current file changes do not revoke or redefine an admitted connection.
     fixture.config.remove("peer").unwrap();

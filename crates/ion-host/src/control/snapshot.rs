@@ -155,6 +155,8 @@ pub struct ControlSnapshot<T> {
     /// Shell/compaction/continuation correlation, separate from input metadata.
     pub operation_metadata: Option<(OperationId, T)>,
     pub mcp_reconnect: Option<McpReconnectSnapshot<T>>,
+    /// Independently sampled management catalogue, not a remote health check.
+    pub mcp_servers: Option<Vec<crate::McpServerSnapshot>>,
     /// Live-only question custody, not a durable Session fact or answer queue.
     pub pending_question: Option<crate::PendingQuestion>,
     pub updates: Vec<UpdateSnapshot<T>>,
@@ -182,6 +184,7 @@ impl<M: Serialize + Send + 'static> SessionControl<M> {
             .snapshot_sequence
             .checked_add(1)
             .context("snapshot sequence exhausted")?;
+        let mcp_servers = self.mcp_servers();
         let custody = lock(&self.custody);
         let state = self.state_with(&custody);
         let inputs = custody
@@ -251,6 +254,7 @@ impl<M: Serialize + Send + 'static> SessionControl<M> {
             inputs,
             operation_metadata,
             mcp_reconnect,
+            mcp_servers,
             pending_question,
             updates,
             cleanup_errors: self

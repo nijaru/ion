@@ -49,7 +49,7 @@ commands! {
     Name => (Sessions, "name", "[NAME]", "Show or change the Session name"),
     Model => (Models, "model", "[MODEL]", "Choose a known model by identity or ID/name substring"),
     Reasoning => (Models, "reasoning", "[default|off|low|medium|high|budget:TOKENS]", "Select generation effort (route support varies)"),
-    Mcp => (Work, "mcp", "reconnect SERVER", "Stop and join a shared MCP connection, then reconnect"),
+    Mcp => (Work, "mcp", "[reconnect [SERVER]]", "Inspect admitted MCP servers or explicitly reconnect a shared connection"),
     Compact => (Work, "compact", "[instructions]", "Summarize settled context"),
     Tasks => (Work, "tasks", "[status|result|cancel|acknowledge UUID]", "Choose task progress, result, stop or remove"),
     Attach => (Work, "attach", "[ID]", "Attach to a running PTY program; Ctrl-] detaches"),
