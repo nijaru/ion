@@ -13,6 +13,8 @@ use std::{
 };
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, ReadBuf};
 
+#[path = "mcp_tests.rs"]
+mod mcp;
 #[path = "request_tests.rs"]
 mod requests;
 

@@ -143,6 +143,28 @@ pub(super) async fn dispatch_command(
                 }
             }
         }
+        CommandKind::Builtin(Builtin::Mcp) => {
+            let mut parts = args.split_whitespace();
+            let server = match (parts.next(), parts.next(), parts.next()) {
+                (Some("reconnect"), Some(server), None) => Some(server.to_owned()),
+                _ => None,
+            };
+            let source = input
+                .into_editor()
+                .unwrap_or_else(|| EditorDraft::at_end("/mcp".into()));
+            if let Some(server) = server {
+                match runtime.reconnect_mcp(&server, source) {
+                    Ok(_) => ui.status = format!("Reconnecting MCP server {server}…"),
+                    Err((source, error)) => {
+                        ui.restore_editor(source);
+                        ui.status = format!("MCP reconnect was not started: {error:#}");
+                    }
+                }
+            } else {
+                ui.restore_editor(source);
+                ui.status = "Use /mcp reconnect SERVER".into();
+            }
+        }
         CommandKind::Builtin(Builtin::Compact) => {
             let instructions = (!args.is_empty()).then(|| args.to_owned());
             let source = input
@@ -430,6 +452,7 @@ pub(super) fn handle_builtin(
             services.credentials().remove(args)?;
             ui.status = format!("Removed saved {args} credential");
         }
+        Builtin::Mcp => anyhow::bail!("use /mcp reconnect SERVER"),
         Builtin::Tasks => {
             let owner = runtime
                 .background()

@@ -77,6 +77,7 @@ impl Subagent {
                 coding: CodingApplication {
                     host: parent.host.clone(),
                     external_tools: parent.external_tools.clone(),
+                    mcp_tools: parent.mcp_tools.clone(),
                     code_mode: parent.code_mode,
                     selection: parent.selection.clone(),
                     role: CodingRole::Subagent,

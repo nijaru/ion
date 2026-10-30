@@ -1,6 +1,8 @@
 use super::catalog::RegisteredTool;
+use super::catalog::publish_tools;
 use super::*;
 use ion_ai::{ToolCall, ToolSpec};
+use ion_core::ToolExposure;
 
 #[tokio::test]
 async fn cross_server_aliases_and_descriptions_keep_frozen_routes_across_refresh() {
@@ -78,7 +80,7 @@ for line in sys.stdin:
         config.remove(&name).unwrap();
         config.add(&name, server).unwrap();
     }
-    for server in &source.servers {
+    for server in &source.servers() {
         server.tool_list_version.fetch_add(1, Ordering::AcqRel);
     }
     assert!(source.refresh(CancellationToken::new()).await.is_empty());

@@ -163,6 +163,7 @@ impl Connection {
             Ok(_) => Ok(()),
         };
         with_diagnostics(combine_cleanup(service, cleanup), stderr, &self.name)
+            .map_err(mark_cleanup_failure)
     }
 }
 
@@ -254,13 +255,30 @@ impl OwnedTransport {
     }
 }
 
+#[derive(Debug)]
+pub(super) struct CleanupFailure;
+impl std::fmt::Display for CleanupFailure {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("MCP cleanup failed")
+    }
+}
+impl std::error::Error for CleanupFailure {}
+
+pub(super) fn mark_cleanup_failure(error: anyhow::Error) -> anyhow::Error {
+    if error.downcast_ref::<CleanupFailure>().is_some() {
+        error
+    } else {
+        error.context(CleanupFailure)
+    }
+}
+
 pub(super) fn combine_cleanup<T>(result: Result<T>, cleanup: Result<()>) -> Result<T> {
     match (result, cleanup) {
         (result, Ok(())) => result,
-        (Ok(_), Err(error)) => Err(error),
-        (Err(error), Err(cleanup)) => {
-            Err(error.context(format!("cleanup also failed: {cleanup:#}")))
-        }
+        (Ok(_), Err(error)) => Err(mark_cleanup_failure(error)),
+        (Err(error), Err(cleanup)) => Err(mark_cleanup_failure(
+            error.context(format!("cleanup also failed: {cleanup:#}")),
+        )),
     }
 }
 

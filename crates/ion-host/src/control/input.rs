@@ -9,6 +9,9 @@ impl<M: Serialize + Send + 'static> SessionControl<M> {
         if let Some(active) = &self.active {
             active.work.stop();
         }
+        if let Some(reconnect) = &self.mcp_reconnect {
+            reconnect.work.request_stop();
+        }
         self.stop_requested = true;
         self.completions
             .revoke(ion_core::CompletionRevocation::Stopped);

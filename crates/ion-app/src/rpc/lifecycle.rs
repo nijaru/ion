@@ -41,6 +41,23 @@ impl Control {
         output: &mut Output<W>,
     ) -> Result<()> {
         match update {
+            ControlUpdate::McpReconnectFinished(finished) => {
+                let mut record = json!({"type":"mcp_reconnect_finished","id":finished.metadata.id,
+                    "operation":finished.operation,"server":finished.server,"stop_requested":finished.stop_requested});
+                match finished.result {
+                    Ok(report) => {
+                        record["success"] = json!(true);
+                        record["diagnostics"] = json!(report.diagnostics);
+                    }
+                    Err(error) => {
+                        record["success"] = json!(false);
+                        record["error"] = json!(format!("{error:#}"));
+                    }
+                }
+                if output.is_healthy() {
+                    output.enqueue_reliable(record, finished.metadata.credit)?;
+                }
+            }
             ControlUpdate::Automated { operation, turn } => {
                 ensure!(
                     self.turn_reply.is_none(),

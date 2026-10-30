@@ -814,7 +814,11 @@ mod tests {
             .unwrap();
         fs::remove_dir_all(root).unwrap();
         assert!(closed, "client kept reading a declared oversize JSON body");
-        assert!(startup.tools.is_none());
+        let tools = startup
+            .tools
+            .expect("retain the admitted unavailable server");
+        assert!(ion_core::CodingToolSource::registrations(tools.clone()).is_empty());
+        tools.shutdown().await.unwrap();
         assert_eq!(startup.diagnostics.len(), 1, "{:?}", startup.diagnostics);
         assert!(
             startup.diagnostics[0].contains("exceeded the maximum size"),

@@ -2,6 +2,7 @@ use super::*;
 use conversion::convert_tool_result;
 use ion_ai::ToolCall;
 use rmcp::model::CallToolResult;
+use std::path::Path;
 use std::path::PathBuf;
 
 const SERVER: &str = r#"
@@ -624,7 +625,7 @@ server.serve_forever()
         };
         let mut work = issued.execute_untracked(&call, CancellationToken::new());
         assert!(futures_util::poll!(&mut work).is_pending());
-        let server = &source.servers[0];
+        let server = &source.servers()[0];
         tokio::time::timeout(Duration::from_secs(30), async {
             loop {
                 let lease = server.client.read().await;

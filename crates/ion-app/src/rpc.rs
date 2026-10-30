@@ -124,6 +124,12 @@ impl Control {
         let outcome: Result<Value> = (|| {
             match command {
                 "submit_request" => self.submit_request(&value, id.clone(), credit.clone()),
+                "reconnect_mcp" => {
+                    let server = required_string(&value, "server")?;
+                    let metadata = RpcMetadata { id: id.clone(), command: "reconnect_mcp", credit: credit.clone() };
+                    let operation = self.host.reconnect_mcp(server, metadata).map_err(|(_, error)| error)?;
+                    Ok(json!({"disposition":"admitted","operation":operation,"server":server}))
+                }
                 "get_request" => self.get_request(&value),
                 "get_question" => self.get_question(&value),
                 "answer_question" => self.answer_question(&value),
@@ -143,7 +149,7 @@ impl Control {
                     let view = self.host.session().view()?;
                     let state = self.host.state();
                     let operation = state.operation.map(|operation| match operation.kind { ion_host::OperationKind::Turn => "turn", ion_host::OperationKind::Compact => "compact", ion_host::OperationKind::Shell => "shell" });
-                    Ok(json!({"session":self.session_id(),"cwd":view.cwd,"name":view.name,"model":self.host.agent().model(),"reasoning":view.reasoning.to_string(),"busy":state.busy,"operation":operation,"preparing_input":state.preparing_input,"completion_delivery":state.completion_delivery,"entries":view.entries.len(),"follow_ups":state.pending_follow_ups}))
+                    Ok(json!({"session":self.session_id(),"cwd":view.cwd,"name":view.name,"model":self.host.agent().model(),"reasoning":view.reasoning.to_string(),"busy":state.busy,"operation":operation,"preparing_input":state.preparing_input,"mcp_reconnect":state.mcp_reconnect,"completion_delivery":state.completion_delivery,"entries":view.entries.len(),"follow_ups":state.pending_follow_ups}))
                 }
                 "set_completion_delivery" => {
                     let delivery = required_string(&value, "delivery")?.parse().map_err(anyhow::Error::msg)?;

@@ -8,7 +8,7 @@ use std::{
 
 use anyhow::{Context, Result, bail, ensure};
 use ion_ai::{Content, Message};
-use ion_core::{CodingSession, CodingToolSource, ForkPoint};
+use ion_core::{CodingSession, ForkPoint};
 use ion_host::{Application, CredentialStatus, Host, Resources, SavedSelection};
 
 mod agent_events;
@@ -674,16 +674,16 @@ async fn run_cli(cli: Invocation) -> Result<()> {
             };
             let external_mcp = startup.tools;
             let mut preflight_session = Some(session);
-            let external_tools: Option<Arc<dyn CodingToolSource>> = external_mcp
-                .as_ref()
-                .map(|tools| tools.clone() as Arc<dyn CodingToolSource>);
             // Terminal and bidirectional RPC own a live question responder.
             // One-shot headless, compaction and managed children have no answer
             // channel and therefore no declared question tool.
             let questions = matches!(&client, Client::Terminal { .. } | Client::Rpc)
                 .then(ion_host::QuestionCustody::new);
-            let mut application = ion_host::CodingApplication::new(host.clone(), external_tools)
-                .with_code_mode(cli.code_mode);
+            let mut application =
+                ion_host::CodingApplication::new(host.clone(), None).with_code_mode(cli.code_mode);
+            if let Some(tools) = &external_mcp {
+                application = application.with_mcp_tools(tools.clone());
+            }
             if cli.read_only {
                 application = application.with_read_only_tools();
             } else {

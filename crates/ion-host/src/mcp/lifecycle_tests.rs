@@ -86,7 +86,14 @@ async fn native_roots_are_reaped_after_shutdown_and_failed_startup() {
             let startup =
                 McpTools::connect(&config, &root, tokio_util::sync::CancellationToken::new()).await;
             let diagnostics = startup.diagnostics;
-            let ready = startup.tools.is_some();
+            assert!(
+                startup.tools.is_some(),
+                "admitted definition must survive startup failure"
+            );
+            let ready = startup
+                .tools
+                .as_ref()
+                .is_some_and(|tools| !tools.servers().is_empty());
             let cleanup = match startup.tools {
                 Some(tools) => tools.shutdown().await,
                 None => Ok(()),
@@ -238,7 +245,7 @@ async fn stderr_is_bounded_private_and_drained_without_blocking_tool_results() {
         .execute_untracked(&call, CancellationToken::new())
         .await;
     source.shutdown().await.unwrap();
-    let log = source.servers[0]
+    let log = source.servers()[0]
         .stderr
         .as_ref()
         .unwrap()
@@ -369,7 +376,9 @@ async fn failed_http_startup_closes_pending_request_before_runtime_teardown() {
             }
             assert!(closed.is_ok(), "HTTP startup detached a pending request (SSE: {sse})");
             closed.unwrap().unwrap();
-            assert!(startup.tools.is_none());
+            let tools = startup.tools.expect("retain the admitted unavailable server");
+            assert!(tools.clone().registrations().is_empty());
+            tools.shutdown().await.unwrap();
             assert_eq!(startup.diagnostics.len(), 1);
             assert!(startup.diagnostics[0].contains("initialization timed out"), "{:?}", startup.diagnostics);
         }

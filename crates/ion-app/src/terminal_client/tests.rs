@@ -1182,6 +1182,7 @@ fn operation_status_keeps_controls_and_stop_intent_visible() {
         (OperationKind::Coding, "Working"),
         (OperationKind::Shell, "Running shell"),
         (OperationKind::Compaction, "Summarizing context"),
+        (OperationKind::McpReconnect, "Reconnecting MCP"),
     ] {
         let status = visible_status(
             &ui,

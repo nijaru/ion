@@ -1,20 +1,11 @@
 //! Explicit MCP tool connections. Session facts remain in ion-core.
-use std::{
-    path::Path,
-    sync::{
-        Arc, RwLock as SyncRwLock,
-        atomic::{AtomicU64, Ordering},
-    },
+use std::sync::{
+    Arc, RwLock as SyncRwLock,
+    atomic::{AtomicU64, Ordering},
 };
 
-use anyhow::{Context, Result, anyhow, ensure};
-use futures_util::future::join_all;
 use indexmap::IndexMap;
-use ion_ai::BoxFuture;
-use ion_core::{
-    CodingToolOutput, CodingToolSource, ToolActivityKind, ToolDefinition, ToolExposure,
-    ToolPresentation, ToolRegistration,
-};
+use ion_core::CodingToolOutput;
 use rmcp::{
     ClientHandler, RoleClient,
     service::{NotificationContext, RunningService},
@@ -24,7 +15,8 @@ use tokio::sync::{Mutex, RwLock};
 use tokio_util::sync::CancellationToken;
 #[cfg(test)]
 use {
-    ion_core::ToolResultSchema,
+    futures_util::future::join_all,
+    ion_core::{CodingToolSource, ToolResultSchema},
     serde_json::Value,
     std::{fs, time::Duration},
 };
@@ -39,19 +31,20 @@ mod http;
 mod http_config;
 mod invocation;
 mod launch;
+mod manager;
 mod request;
 mod resource_content;
 mod resource_tools;
 mod schema;
 mod send;
+mod server;
 mod stderr;
 mod value_command;
 mod values;
+use catalog::Catalog;
 #[cfg(test)]
 use catalog::exposed_tool_name;
-use catalog::{Catalog, DiscoveredTools, fetch_tools, publish_tools, register_tools};
-use connection::{Connection, combine_cleanup};
-use invocation::McpExecutor;
+use connection::Connection;
 pub use values::McpValue;
 
 #[cfg(test)]
@@ -61,12 +54,13 @@ mod lifecycle_tests;
 #[cfg(test)]
 mod metadata_tests;
 #[cfg(test)]
+mod reconnect_tests;
+#[cfg(test)]
 mod resource_tests;
 #[cfg(test)]
 mod schema_tests;
 
 pub use config::{McpConfig, McpExposure, McpHttpServer, McpListing, McpServer, McpStdioServer};
-use config::{validate_name, validate_server};
 
 #[derive(Clone)]
 struct ChangeHandler(Arc<AtomicU64>);
@@ -92,363 +86,10 @@ struct Server {
     tool_list_version: Arc<AtomicU64>,
     refreshed_version: AtomicU64,
     retiring: CancellationToken,
-    retirement: Mutex<Option<Retirement>>,
+    retirement: Mutex<Option<server::Retirement>>,
 }
 
-struct Retirement {
-    work: tokio::task::JoinHandle<std::result::Result<(), String>>,
-    result: Option<std::result::Result<(), String>>,
-}
-
-pub struct McpTools {
-    servers: Vec<Arc<Server>>,
-    catalog: Arc<SyncRwLock<Catalog>>,
-    refresh_gate: Mutex<()>,
-}
-
-#[derive(Default)]
-pub struct McpStartup {
-    pub tools: Option<Arc<McpTools>>,
-    pub diagnostics: Vec<String>,
-}
-
-impl McpTools {
-    pub async fn connect(config: &McpConfig, cwd: &Path, stop: CancellationToken) -> McpStartup {
-        let (saved, mut diagnostics) = match config.load_startup() {
-            Ok(saved) => saved,
-            Err(error) => {
-                return McpStartup {
-                    diagnostics: vec![format!("{error:#}")],
-                    ..McpStartup::default()
-                };
-            }
-        };
-        let catalog = Arc::new(SyncRwLock::new(Catalog::new()));
-        let mut servers = Vec::new();
-        let attempts = saved
-            .into_iter()
-            .filter(|(_, definition)| definition.enabled())
-            .map(|(name, definition)| {
-                Self::connect_server(name, definition, cwd, catalog.clone(), stop.clone())
-            });
-        for attempt in join_all(attempts).await {
-            match attempt {
-                Ok((server, _)) if stop.is_cancelled() => {
-                    let closed = combine_cleanup::<()>(
-                        Err(anyhow!("MCP startup cancelled")),
-                        server.shutdown().await,
-                    );
-                    diagnostics.push(format!("{:#}", closed.unwrap_err()));
-                }
-                Ok((server, discovered)) => {
-                    let published = publish_tools(&catalog, &server.name, discovered.tools);
-                    match published {
-                        Ok(()) => {
-                            diagnostics.extend(discovered.diagnostics);
-                            if let Some(notice) = server
-                                .stderr
-                                .as_ref()
-                                .and_then(|log| log.notice(&server.name))
-                            {
-                                diagnostics.push(notice);
-                            }
-                            servers.push(Arc::new(server));
-                        }
-                        Err(error) => {
-                            let closed = combine_cleanup::<()>(Err(error), server.shutdown().await);
-                            diagnostics.push(format!("{:#}", closed.unwrap_err()));
-                        }
-                    }
-                }
-                Err(error) => diagnostics.push(format!("{error:#}")),
-            }
-        }
-        let tools = (!servers.is_empty()).then(|| {
-            Arc::new(Self {
-                servers,
-                catalog,
-                refresh_gate: Mutex::new(()),
-            })
-        });
-        McpStartup { tools, diagnostics }
-    }
-
-    async fn connect_server(
-        name: String,
-        definition: McpServer,
-        cwd: &Path,
-        catalog: Arc<SyncRwLock<Catalog>>,
-        stop: CancellationToken,
-    ) -> Result<(Server, DiscoveredTools)> {
-        ensure!(!stop.is_cancelled(), "MCP startup cancelled");
-        validate_name(&name)?;
-        validate_server(&definition)?;
-        let changed = Arc::new(AtomicU64::new(0));
-        let handler = ChangeHandler(changed.clone());
-        let description = definition
-            .description()
-            .map(str::trim)
-            .filter(|description| !description.is_empty())
-            .map(str::to_owned);
-        let exposure = definition.exposure();
-        let tool_exposure = definition.tool_exposure().clone();
-        let client = Connection::start(&name, definition, cwd, handler, stop.clone()).await?;
-        let peer = client.client.peer_info();
-        let resources = exposure != McpExposure::Hidden
-            && peer
-                .as_ref()
-                .is_some_and(|info| info.capabilities.resources.is_some());
-        let advertises_tools = peer
-            .as_ref()
-            .is_none_or(|info| info.capabilities.tools.is_some());
-        let discovered = if advertises_tools {
-            let listed = tokio::select! {
-                biased;
-                () = stop.cancelled() => Err(anyhow!("MCP startup cancelled")),
-                result = fetch_tools(&name, &client.client) => result,
-            };
-            match listed {
-                Ok(tools) => {
-                    let name = name.clone();
-                    conversion::run(move || register_tools(&name, tools)).await
-                }
-                Err(error) => Err(error),
-            }
-        } else {
-            Ok(DiscoveredTools::default())
-        };
-        let discovered = discovered.and_then(|tools| {
-            ensure!(!stop.is_cancelled(), "MCP startup cancelled");
-            Ok(tools)
-        });
-        let stderr = client.stderr_log();
-        match discovered {
-            Ok(tools) => Ok((
-                Server {
-                    name,
-                    description,
-                    exposure,
-                    tool_exposure,
-                    resources,
-                    client: Arc::new(RwLock::new(Some(client))),
-                    stderr,
-                    catalog,
-                    tool_list_version: changed,
-                    refreshed_version: AtomicU64::new(0),
-                    retiring: CancellationToken::new(),
-                    retirement: Mutex::new(None),
-                },
-                tools,
-            )),
-            Err(error) => {
-                // A listing failure can be explained only on the server's
-                // stderr. Join capture before reading it: stdout and stderr
-                // have no cross-stream ordering, so the final bounded prefix
-                // is the honest reference for this startup diagnostic.
-                let shutdown = client.shutdown().await;
-                let error = match stderr.as_ref().and_then(|log| log.notice(&name)) {
-                    Some(notice) => error.context(notice),
-                    None => error,
-                };
-                combine_cleanup(Err(error), shutdown)
-            }
-        }
-    }
-
-    async fn refresh_changed(&self, stop: CancellationToken) -> Vec<String> {
-        let mut diagnostics = Vec::new();
-        let _gate = tokio::select! {
-            () = stop.cancelled() => return diagnostics,
-            guard = self.refresh_gate.lock() => guard,
-        };
-        for server in &self.servers {
-            let version = server.tool_list_version.load(Ordering::Acquire);
-            if version == server.refreshed_version.load(Ordering::Acquire) {
-                continue;
-            }
-            let client = tokio::select! {
-                guard = server.client.read() => guard,
-                () = stop.cancelled() => break,
-            };
-            let Some(client) = client.as_ref() else {
-                diagnostics.push(format!("MCP server {} is closed", server.name));
-                server.refreshed_version.store(version, Ordering::Release);
-                continue;
-            };
-            let listed = tokio::select! {
-                () = server.retiring.cancelled() => break,
-                () = stop.cancelled() => break,
-                result = fetch_tools(&server.name, &client.client) => result,
-            };
-            let updated = match listed {
-                Ok(tools) => {
-                    let name = server.name.clone();
-                    // Once listing is observed, keep the compiler join and read
-                    // lease outside cancellation races. Shutdown joins it too.
-                    conversion::run(move || register_tools(&name, tools)).await
-                }
-                Err(error) => Err(error),
-            };
-            if stop.is_cancelled() || server.retiring.is_cancelled() {
-                break;
-            }
-            match updated {
-                Ok(updated) => match publish_tools(&self.catalog, &server.name, updated.tools) {
-                    Ok(()) => diagnostics.extend(updated.diagnostics),
-                    Err(error) => diagnostics.push(format!("{error:#}")),
-                },
-                Err(error) => diagnostics.push(format!("{error:#}")),
-            }
-            // A failed listing keeps the previous snapshot and warns once.
-            // A notification that arrived during this listing has a newer
-            // version and will still be refreshed at the next boundary.
-            server.refreshed_version.store(version, Ordering::Release);
-        }
-        diagnostics
-    }
-
-    /// Retire admission, join services and reap owned root processes.
-    /// Outstanding requests need not receive a remote response or caller stop.
-    /// Callers must await this on controlled exit, including failed setup.
-    pub async fn shutdown(&self) -> Result<()> {
-        // Signal every peer before waiting on any connection's read leases.
-        for server in &self.servers {
-            server.retire();
-        }
-        let results = join_all(self.servers.iter().map(|server| server.shutdown())).await;
-        let errors: Vec<_> = results.into_iter().filter_map(Result::err).collect();
-        ensure!(
-            errors.is_empty(),
-            "{}",
-            errors
-                .iter()
-                .map(|error| format!("{error:#}"))
-                .collect::<Vec<_>>()
-                .join("; ")
-        );
-        Ok(())
-    }
-}
-
-impl Server {
-    fn attach_stderr(&self, output: &mut CodingToolOutput) {
-        if let Some(snapshot) = self.stderr.as_ref().and_then(|log| log.snapshot()) {
-            output.value["server_stderr"][&self.name] = snapshot;
-        }
-    }
-
-    fn retire(&self) {
-        self.retiring.cancel();
-    }
-
-    async fn shutdown(&self) -> Result<()> {
-        // Direct failure/cancellation paths use the same retirement boundary.
-        // A request must release its read lease before joining this close.
-        self.retire();
-        // Retain a running close task, not a future owned only by its waiter.
-        // Cancelling shutdown cannot drop a taken connection or its reader joins.
-        let mut retirement = self.retirement.lock().await;
-        let retirement = retirement.get_or_insert_with(|| {
-            let client = self.client.clone();
-            let catalog = self.catalog.clone();
-            let name = self.name.clone();
-            Retirement {
-                work: tokio::spawn(async move {
-                    let result = match client.write().await.take() {
-                        Some(client) => client.shutdown().await,
-                        None => Ok(()),
-                    };
-                    catalog
-                        .write()
-                        .unwrap_or_else(std::sync::PoisonError::into_inner)
-                        .remove(&name);
-                    result
-                        .with_context(|| format!("MCP server {name} shutdown failed"))
-                        .map_err(|error| format!("{error:#}"))
-                }),
-                result: None,
-            }
-        });
-        if retirement.result.is_none() {
-            let result = match (&mut retirement.work).await {
-                Ok(result) => result,
-                Err(error) => Err(format!(
-                    "MCP cleanup task failed; effects may be unknown: {error}"
-                )),
-            };
-            retirement.result = Some(result);
-        }
-        retirement
-            .result
-            .as_ref()
-            .expect("joined retirement has an outcome")
-            .clone()
-            .map_err(anyhow::Error::msg)
-    }
-}
-
-impl CodingToolSource for McpTools {
-    fn registrations(self: Arc<Self>) -> Vec<ToolRegistration> {
-        let mut registrations = Vec::new();
-        // Snapshot the complete source under one guard, not independently
-        // changing server projections. The same guard protects publication.
-        let catalog = self
-            .catalog
-            .read()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        for server in &self.servers {
-            let Some(tools) = catalog.get(&server.name) else {
-                continue;
-            };
-            for tool in tools {
-                let exposure = match server
-                    .tool_exposure
-                    .get(&tool.original_name)
-                    .copied()
-                    .or_else(|| {
-                        server.tool_exposure.iter().find_map(|(pattern, exposure)| {
-                            ion_core::tool_name_matches(pattern, &tool.original_name)
-                                .then_some(*exposure)
-                        })
-                    })
-                    .unwrap_or(server.exposure)
-                {
-                    McpExposure::Direct => ToolExposure::Direct,
-                    McpExposure::Deferred => ToolExposure::Deferred,
-                    McpExposure::Hidden => continue,
-                };
-                let mut spec = tool.spec.clone();
-                if let Some(description) = &server.description {
-                    spec.description
-                        .push_str(&format!("\n\nMCP server {}: {description}", server.name));
-                }
-                registrations.push(ToolRegistration::new(
-                    ToolDefinition {
-                        spec,
-                        result_schema: tool.output_schema.as_ref().map(|schema| schema.hint()),
-                        presentation: ToolPresentation::static_target(
-                            ToolActivityKind::External,
-                            tool.original_name.clone(),
-                        ),
-                        exposure,
-                    },
-                    Arc::new(McpExecutor {
-                        server: server.clone(),
-                        original_name: tool.original_name.clone(),
-                        output_schema: tool.output_schema.clone(),
-                    }),
-                ));
-            }
-        }
-        drop(catalog);
-        registrations.extend(resource_tools::registrations(&self.servers));
-        registrations
-    }
-
-    fn refresh<'a>(&'a self, stop: CancellationToken) -> BoxFuture<'a, Vec<String>> {
-        Box::pin(self.refresh_changed(stop))
-    }
-}
+pub use manager::{McpReconnect, McpReconnectReport, McpStartup, McpTools};
 
 fn tool_error(message: String) -> CodingToolOutput {
     CodingToolOutput {
@@ -565,7 +206,7 @@ for line in sys.stdin:
         );
 
         // Another consumer refreshes the source after this request was issued.
-        source.servers[0]
+        source.servers()[0]
             .tool_list_version
             .fetch_add(1, Ordering::AcqRel);
         let diagnostics = tools.refresh(CancellationToken::new()).await;
@@ -681,7 +322,7 @@ for line in sys.stdin:
                 // its request handle. Conversion must release the connection
                 // but remain pending while the only blocking worker is held.
                 let observed = tokio::time::timeout(Duration::from_secs(2), async {
-                    while source.servers[0].tool_list_version.load(Ordering::Acquire) == 0 {
+                    while source.servers()[0].tool_list_version.load(Ordering::Acquire) == 0 {
                         tokio::time::sleep(Duration::from_millis(5)).await;
                     }
                 }).await;

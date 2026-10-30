@@ -1449,15 +1449,41 @@ results report an unsupported-result error rather than issuing hidden follow-up
 calls or task polling. Cancellation notifies the original request and joins
 local issuance. If that cannot flush within three seconds, Ion retires the
 connection, joins its local work and removes its tools from later catalogs.
-Other pending calls on that connection fail rather than being rerun; restarting
-the client reconnects configured servers. Neither cancellation nor connection
+Other pending calls on that connection fail rather than being rerun; explicitly
+reconnect the server or restart the client to connect again. Neither cancellation nor connection
 closure proves that remote effects have stopped.
 When a server announces a changed tool list, Ion refreshes that server before
 the next model request. A failed refresh reports a warning and keeps its last
 known list. Remote MCP OAuth login is not yet supported.
+**Live MCP reconnect:** in chat, use `/mcp reconnect docs` to replace one server's
+shared connection. Ion stops and joins the old connection and its in-flight
+requests, including managed-child requests, before opening a replacement. It does
+not cancel whole Turns or replay calls. Once the old connection is retired, a
+failed replacement leaves that server unavailable; repeat the command to retry.
+An unresolved cleanup error blocks further replacement rather than risking an
+overlapping connection. Other servers stay connected. Already-issued tool/resource capabilities remain
+bound to the old connection and cannot silently use the replacement.
+
+Reconnect reuses this client's admitted configuration and original setup cwd;
+it resolves fresh connection-local values, including argv helpers. It does not
+reload edited manifests, enable disabled entries or grant project trust. Start a
+new coding client to admit configuration changes. An enabled/trusted server that
+failed at startup remains an explicit reconnect target even if no server connected.
+
+RPC uses `{"id":"retry-docs","type":"reconnect_mcp","server":"docs"}`. Its
+response acknowledges `disposition:"admitted"` with an operation ID, not a ready
+connection. A later `mcp_reconnect_finished` event carries the same request ID and
+operation, server, `success`, `stop_requested` and diagnostics or error. `get_state`
+exposes separate `mcp_reconnect:{id,stop_requested}` state; maintenance is not a
+Core operation or a new Turn. Stop and foreground EOF/quit cancel and join it.
+Cancellation is not proof that remote effects stopped or were rolled back.
+
 For Rust embedders, `CodingApplication::new(host, tools)` adds an optional custom
 `CodingToolSource` to the coding tools; a same-name registration replaces that
-built-in. Restricted applications instead supply a complete `Application` recipe.
+built-in. Use `.with_mcp_tools(Arc<McpTools>)` to retain typed MCP tool access and
+explicit management authority. The optional `Application::mcp_tools()` accessor
+defaults to none; coding children share tool access without inheriting that grant.
+Restricted applications instead supply a complete `Application` recipe.
 A source publishes `ToolRegistration` values that bind a `ToolDefinition` to a
 `ToolExecutor`. Refresh publishes new registrations; an issued request retains
 its original executor, including an MCP connection and remote tool name. This
@@ -2543,7 +2569,7 @@ contracts are not all implemented:
 | Durability | SQLite conversation/effect history, conservative recovery, restart-safe direct admission through the Rust SDK and keyed RPC literal text; explicit same-Turn continuation through the Rust SDK. | Durable pending queues, wire-protocol delivery IDs and automatic restart/continuation. Coding CLI/TUI/RPC submissions do not opt in to continuation. |
 | Delegation | Main coding preset exposes fresh/fork foreground and background Sessions with inherited route/reasoning, application-owned retained results, wait/status/cancel/acknowledge, joined original answers and receiver-owned Inbox/Continue/Wake delivery with optional SDK peer targets. SDK children use the same stable identity, complete environments and conservative recovery; Code Mode nested tools remain distinct. | Live-model/service-scale delegation qualification and native-app visual acceptance remain open. Model arguments never grant execution authority. |
 | Native programs | Scoped pipe/PTY programs, stdin interaction, bounded raw capture and screen pages, terminal resize, retained wait/close/release and shared application cleanup; live human attachment lease with a Ctrl-] terminal view; child-job scope reclaimed before answer release. | Concurrent model/human input, shell environment capture, graphical terminal protocols and restart attachment. |
-| Controls and trust | Model-loadout include/exclude selection, read-only model tools, MCP direct/deferred/hidden exposure, digest-bound project MCP/command trust, explicit named user commands and host-permission execution. | Per-call approval/consent, OS sandboxing, arbitrary extension handlers/hooks/UI contributions, MCP OAuth and per-tool exposure patterns. Loadout selection and trust are not security boundaries. |
+| Controls and trust | Model-loadout include/exclude selection, read-only model tools, MCP direct/deferred/hidden exposure and explicit joined reconnect, digest-bound project MCP/command trust, explicit named user commands and host-permission execution. | Per-call approval/consent, OS sandboxing, arbitrary extension handlers/hooks/UI contributions, MCP OAuth and live configuration editing. Loadout selection and trust are not security boundaries. |
 | Remote use | Foreground stdio RPC, lossy progress and complete pull snapshots through shared control. A service embedding retains/drives the owner independently of connections. | No built-in authenticated network server, reliable activity replay or durable queue/metadata recovery. RPC EOF still stops/joins work. |
 
 Common coding workflows are implemented, but Pi-level daily-driver reliability
@@ -2755,6 +2781,19 @@ runtime, including on client errors: it closes admission, stops and joins
 preparation/Core work and returns remaining updates and cleanup errors. Cancelling
 that wait leaves it closed and joinable; Drop can request stop but cannot join.
 Drain returned inputs and settlements before replacing a Session or model.
+
+`control.reconnect_mcp(server, metadata)` admits independent MCP maintenance and
+returns an operation ID, or the original metadata with an admission error. Drive
+ordinary control to receive `ControlUpdate::McpReconnectFinished`; retain or transfer
+that result just like other reliable updates. One slot includes its unread result
+and shares bounded admission/byte capacity with input producers. Reconnect does
+not stop the active Core operation, accept input or add committed Session facts.
+Passive snapshots expose maintenance separately. Stop/application shutdown cancels
+it, and control shutdown joins it without replacing an already-completed outcome.
+At the lower service layer, `McpTools::reconnect` returns a retained `McpReconnect`
+stop/join handle; dropping it requests cancellation but does not discard cleanup.
+`McpStartup.tools` can be present with no available registrations after startup
+failures. Manager shutdown remains required even in that case.
 
 A coding setup also retains an `ApplicationOwner`, available through
 `control.owner()`. Closing one Session does not close this longer-lived owner:

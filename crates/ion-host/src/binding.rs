@@ -86,6 +86,10 @@ impl SessionSetup {
         })
     }
 
+    pub(crate) fn mcp_tools(&self) -> Option<Arc<crate::McpTools>> {
+        self.application.mcp_tools()
+    }
+
     pub fn owner(&self) -> Option<Arc<crate::ApplicationOwner>> {
         self.application.owner()
     }

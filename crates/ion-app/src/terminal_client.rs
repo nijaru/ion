@@ -289,7 +289,7 @@ pub async fn chat(init: ChatInit) -> Result<()> {
             ui.refresh_completion(Some(runtime.resources()), Some(runtime.commands()), false);
             program.blocked_question = ui.question_owns_input();
             program.publish(terminal, runtime.is_busy())?;
-            draw(terminal, screen, &mut ui, activity.live(), activity.view(&runtime), Some(runtime.agent().model())).await?;
+            draw(terminal, screen, &mut ui, activity.live(), ActiveOperation::from_state(runtime.state()), Some(runtime.agent().model())).await?;
             #[cfg(debug_assertions)]
             if std::env::var_os("ION_SMOKE_PANIC_AFTER_FIRST_DRAW").is_some() {
                 panic!("ION smoke panic after first terminal draw");
@@ -370,7 +370,7 @@ pub async fn chat(init: ChatInit) -> Result<()> {
                         continue;
                     }
                     if ui.keys.matches(KeyAction::Interrupt, key)
-                        && (runtime.is_busy() || activity.view(&runtime).is_some())
+                        && (runtime.is_busy() || ActiveOperation::from_state(runtime.state()).is_some())
                     {
                         ui.break_edit_focus();
                         runtime.request_stop();

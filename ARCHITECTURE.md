@@ -861,10 +861,22 @@ search and composed discovery share that metadata; hidden tools remain absent.
 Do not expand description templates or promote them to authority. Trusted project
 policy-only entries may replace or clear an inherited description; missing means
 inherit and null is invalid. Active connections retain their purpose across
-catalogue refresh; changing it requires a new binding and matching project trust.
+catalogue refresh and explicit reconnect. Changed configuration requires fresh
+manager admission and matching project trust, not just a model/Session binding.
 MCP discovery isolates server failures and refreshes at later
 request boundaries; possibly effectful invocations are never transparently
-retried. MCP shutdown retires every peer before joining connection cleanup;
+retried. Retain admitted enabled/trusted definitions even if initial connection
+fails, including when no peer connects. Explicit reconnect uses that captured
+definition and setup cwd, resolving fresh connection-local values; it neither
+reloads configuration/trust nor admits newly configured servers. Retire and join
+the old shared connection, including managed-child requests, before opening a
+replacement. Do not cancel whole Turns or replay interrupted requests. Once
+retirement begins, failed replacement leaves the server unavailable, without
+fallback. An unresolved cleanup failure blocks further replacement rather than
+losing the error or risking an overlapping connection. Publish a fresh connection generation and its validated catalogue
+coherently; already-issued tool/resource executors never target it. Serialize
+replacement with refresh, fence publication on shutdown, and retain replacement
+and cleanup joining through dropped callers. MCP shutdown retires every peer before joining connection cleanup;
 in-flight requests release read leases without requiring a remote response or
 caller cancellation. Concurrent closers join the same cleanup. Unanswered effects
 remain unknown. Already observed tool and resource results retain their original
@@ -1221,6 +1233,19 @@ behind output. Normal controlling intake delivers still-buffered activity before
 its operation's settlement; joining alone is not an observation gap. Actual lag
 still requires reconciliation rather than suffix-splicing. Service maintenance
 and shutdown may discard provisional activity while retaining reliable results.
+
+Explicit MCP management is optional application authority, separate from tool
+access: managed coding children share connections but do not inherit management.
+Shared control owns one reconnect slot, including its undelivered result, apart
+from Core work and input preparation. Reserve bounded metadata/result capacity
+atomically with concurrent steering before effects; serialize caller metadata
+outside custody locks. Acknowledge admission separately from retained completion.
+Maintenance has its own identity/stop intent and is never a Turn, acceptance fact,
+Core settlement or steering target. It can coexist with a Turn without stopping
+it. Stop/application closure cancels maintenance; controlled shutdown joins it.
+Passive snapshots and cancelled waits cannot consume its outcome or credit;
+Session/model replacement waits for result transfer. Native and RPC clients drive
+this owner rather than keeping client-owned network tasks.
 
 Remote attachment must identify the Session/work and provide an authorized
 snapshot plus an ordered committed revision/cursor or equivalent reconciliation

@@ -81,7 +81,9 @@ async fn run(
     // leaves descendants with closed pipes. No signal follows a reaped PID.
     crate::local_tools::command::kill_child(&mut child, Some(pid))
         .await
-        .map_err(|_| anyhow::anyhow!("cannot join MCP helper"))?;
+        .map_err(|_| {
+            super::connection::mark_cleanup_failure(anyhow::anyhow!("cannot join MCP helper"))
+        })?;
     if stop.is_cancelled() {
         bail!("MCP helper cancelled before publication");
     }

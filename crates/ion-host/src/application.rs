@@ -25,6 +25,11 @@ pub trait Application: Send + Sync {
     fn commands(&self, _cwd: Option<&Path>) -> Result<CommandCatalog> {
         Ok(CommandCatalog::default())
     }
+    /// Explicit user MCP management authority, separate from model tool access.
+    /// Restricted recipes and managed children inherit none.
+    fn mcp_tools(&self) -> Option<Arc<crate::McpTools>> {
+        None
+    }
     fn runtime(
         &self,
         cwd: Option<&Path>,
@@ -91,6 +96,7 @@ enum CodingRole {
 pub struct CodingApplication {
     host: Arc<Host>,
     external_tools: Option<Arc<dyn CodingToolSource>>,
+    mcp_tools: Option<Arc<crate::McpTools>>,
     code_mode: bool,
     selection: SelectionPolicy,
     role: CodingRole,
@@ -124,6 +130,7 @@ impl CodingApplication {
         Self {
             host,
             external_tools,
+            mcp_tools: None,
             code_mode: false,
             selection: SelectionPolicy::Explicit(ToolSelection::all()),
             role: CodingRole::Main(owner),
@@ -132,6 +139,13 @@ impl CodingApplication {
             search_settings: None,
             tool_veto: None,
         }
+    }
+
+    /// Install shared MCP access and explicit user management authority.
+    /// Managed children share access, not this management grant.
+    pub fn with_mcp_tools(mut self, tools: Arc<crate::McpTools>) -> Self {
+        self.mcp_tools = Some(tools);
+        self
     }
 
     /// Supply the complete command environment for a service/library binding.
@@ -272,6 +286,11 @@ impl CodingApplication {
         if let Some(questions) = questions {
             sources.push(Arc::new(crate::QuestionTools::new(questions)));
         }
+        sources.extend(
+            self.mcp_tools
+                .iter()
+                .map(|tools| tools.clone() as Arc<dyn CodingToolSource>),
+        );
         sources.extend(self.external_tools.iter().cloned());
         let selection = match &self.selection {
             SelectionPolicy::Explicit(selection) => selection.clone(),
@@ -313,6 +332,13 @@ impl CodingApplication {
 }
 
 impl Application for CodingApplication {
+    fn mcp_tools(&self) -> Option<Arc<crate::McpTools>> {
+        match self.role {
+            CodingRole::Main(_) => self.mcp_tools.clone(),
+            CodingRole::Subagent => None,
+        }
+    }
+
     fn owner(&self) -> Option<Arc<ApplicationOwner>> {
         match &self.role {
             CodingRole::Main(owner) => Some(owner.clone()),

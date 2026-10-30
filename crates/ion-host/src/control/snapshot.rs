@@ -110,6 +110,13 @@ pub enum UpdateSnapshot<T> {
         reason: ReturnSnapshot,
         preparation_error: Option<String>,
     },
+    McpReconnectFinished {
+        operation: OperationId,
+        server: String,
+        metadata: T,
+        result: std::result::Result<crate::McpReconnectReport, String>,
+        stop_requested: bool,
+    },
     Settled {
         automated: bool,
         operation: OperationId,
@@ -119,6 +126,15 @@ pub enum UpdateSnapshot<T> {
         accepted: Vec<(InputId, InputAcceptance, T)>,
         metadata: Option<T>,
     },
+}
+
+/// Correlation for in-flight user management, independent of Core work.
+#[derive(Debug, Serialize)]
+pub struct McpReconnectSnapshot<T> {
+    pub operation: OperationId,
+    pub server: String,
+    pub metadata: T,
+    pub stop_requested: bool,
 }
 
 /// Privileged, complete pull view; NOT a safe default network serialization.
@@ -138,6 +154,7 @@ pub struct ControlSnapshot<T> {
     pub inputs: Vec<InputSnapshot<T>>,
     /// Shell/compaction/continuation correlation, separate from input metadata.
     pub operation_metadata: Option<(OperationId, T)>,
+    pub mcp_reconnect: Option<McpReconnectSnapshot<T>>,
     /// Live-only question custody, not a durable Session fact or answer queue.
     pub pending_question: Option<crate::PendingQuestion>,
     pub updates: Vec<UpdateSnapshot<T>>,
@@ -201,6 +218,15 @@ impl<M: Serialize + Send + 'static> SessionControl<M> {
                 .as_ref()
                 .map(|(value, _)| (active.id, metadata(value)))
         });
+        let mcp_reconnect = self
+            .mcp_reconnect
+            .as_ref()
+            .map(|reconnect| McpReconnectSnapshot {
+                operation: reconnect.id,
+                server: reconnect.server.clone(),
+                metadata: metadata(&reconnect.metadata),
+                stop_requested: reconnect.work.is_stopped(),
+            });
         let pending_question = self.pending_question();
         let updates = custody
             .updates
@@ -224,6 +250,7 @@ impl<M: Serialize + Send + 'static> SessionControl<M> {
             state,
             inputs,
             operation_metadata,
+            mcp_reconnect,
             pending_question,
             updates,
             cleanup_errors: self
@@ -293,6 +320,17 @@ fn update_snapshot<M, T>(
             metadata: metadata(&input.metadata),
             reason: (&input.reason).into(),
             preparation_error: input.preparation_error.as_ref().map(ToString::to_string),
+        },
+        ControlUpdate::McpReconnectFinished(finished) => UpdateSnapshot::McpReconnectFinished {
+            operation: finished.operation,
+            server: finished.server.clone(),
+            metadata: metadata(&finished.metadata),
+            result: finished
+                .result
+                .as_ref()
+                .cloned()
+                .map_err(ToString::to_string),
+            stop_requested: finished.stop_requested,
         },
         ControlUpdate::Settled(settlement) => UpdateSnapshot::Settled {
             automated: settlement.automated,

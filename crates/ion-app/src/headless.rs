@@ -169,6 +169,18 @@ async fn foreground(
                 }
             }
             update = control.next(), if poll_control => match update {
+                ControlUpdate::McpReconnectFinished(finished) => {
+                    let record = match finished.result {
+                        Ok(report) => json!({"type":"mcp_reconnect_finished","server":finished.server,"success":true,"diagnostics":report.diagnostics}),
+                        Err(error) => json!({"type":"mcp_reconnect_finished","server":finished.server,"success":false,"error":format!("{error:#}")}),
+                    };
+                    let queued = if json_output { output.enqueue(record) } else { output.enqueue(record.to_string()) };
+                    if let Err(error) = queued {
+                        publication_error = Some(error);
+                        control.request_stop();
+                        request_shutdown();
+                    }
+                }
                 ControlUpdate::Automated { .. } => {}
                 ControlUpdate::Activity(Observation::Event { event, .. }) => {
                     // Final is delivered reliably from settlement, never twice

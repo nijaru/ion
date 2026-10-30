@@ -37,10 +37,18 @@ pub struct OperationState {
     pub turn: Option<u64>,
     pub kind: OperationKind,
 }
+/// Independent maintenance identity and stop intent, not a Core operation.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+pub struct McpReconnectState {
+    pub id: OperationId,
+    pub stop_requested: bool,
+}
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
 pub struct ControlState {
     pub completion_delivery: crate::CompletionDelivery,
     pub operation: Option<OperationState>,
+    /// Independent user management, never a steering target or a Core Turn.
+    pub mcp_reconnect: Option<McpReconnectState>,
     pub busy: bool,
     pub preparing_input: bool,
     pub pending_steering: usize,
@@ -195,6 +203,17 @@ pub struct Settlement<M> {
     pub(super) reservation: Option<InputReservation>,
 }
 
+/// Reliable result of user management, not a Core Turn settlement.
+pub struct McpReconnectFinished<M> {
+    pub operation: OperationId,
+    pub server: String,
+    pub metadata: M,
+    pub result: Result<crate::McpReconnectReport>,
+    /// Cancellation intent does not overwrite an already completed result.
+    pub stop_requested: bool,
+    pub(super) reservation: Option<InputReservation>,
+}
+
 /// Progress can have gaps. After a gap, deltas are suppressed until a complete
 /// committed boundary or explicit response restart. Reconcile against Session
 /// inspection at Gap and Settlement; never append a surviving delta to a lost prefix.
@@ -237,12 +256,17 @@ pub enum ControlUpdate<M> {
     QuestionChanged,
     Returned(ReturnedInput<M>),
     Settled(Settlement<M>),
+    McpReconnectFinished(McpReconnectFinished<M>),
     /// No work remains now; admission remains open unless shutdown was requested.
     Idle,
 }
 impl<M> ControlUpdate<M> {
     pub(super) fn release(&mut self) -> usize {
         match self {
+            Self::McpReconnectFinished(finished) => {
+                finished.reservation.take();
+                1
+            }
             Self::Returned(input) => {
                 input.reservation.take();
                 1

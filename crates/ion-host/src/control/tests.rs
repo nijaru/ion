@@ -39,6 +39,8 @@ async fn compaction_focus_is_charged_before_admission_and_returns_exact_metadata
 
 #[path = "completion_tests.rs"]
 mod completions;
+#[path = "mcp_tests.rs"]
+mod mcp;
 #[path = "preparation_tests.rs"]
 mod preparation;
 #[path = "snapshot_tests.rs"]
@@ -57,6 +59,15 @@ fn meta(text: &str) -> Metadata {
     Metadata {
         literal: text.into(),
         marker: Cell::new(7),
+    }
+}
+struct InterleavingMetadata(Option<Box<dyn Fn() + Send>>);
+impl Serialize for InterleavingMetadata {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        if let Some(interleave) = &self.0 {
+            interleave();
+        }
+        serializer.serialize_str("metadata")
     }
 }
 fn prompt(text: &str) -> UserInput {

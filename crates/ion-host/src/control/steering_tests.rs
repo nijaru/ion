@@ -1,14 +1,5 @@
 use super::*;
 
-struct InterleavingMetadata(Option<Box<dyn Fn() + Send>>);
-impl Serialize for InterleavingMetadata {
-    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
-        if let Some(interleave) = &self.0 {
-            interleave();
-        }
-        serializer.serialize_str("metadata")
-    }
-}
 fn literal(text: &str) -> Message {
     Message::user_input(text.into(), [])
 }

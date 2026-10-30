@@ -25,6 +25,7 @@ mod completion;
 mod custody;
 use custody::{Custody, Input, InputContent, InputState, PendingInput, turn_observer};
 mod input;
+mod mcp;
 mod question;
 mod snapshot;
 pub use snapshot::*;
@@ -95,6 +96,7 @@ pub struct SessionControl<M = ()> {
     preparing: Option<(InputId, crate::preparation::Preparation<ion_ai::Message>)>,
     /// An initial prompt has operation identity even while its images prepare.
     starting: Option<(InputId, OperationId)>,
+    mcp_reconnect: Option<mcp::Reconnect<M>>,
     observations: broadcast::Sender<Observation>,
     observer: ControlObserver,
     stop_requested: bool,
@@ -139,6 +141,7 @@ impl<M: Serialize + Send + 'static> SessionControl<M> {
             active: None,
             preparing: None,
             starting: None,
+            mcp_reconnect: None,
             observations,
             observer: ControlObserver {
                 receiver,
@@ -214,7 +217,15 @@ impl<M: Serialize + Send + 'static> SessionControl<M> {
                         kind: OperationKind::Turn,
                     })
                 }),
-            busy: self.active.is_some()
+            mcp_reconnect: self
+                .mcp_reconnect
+                .as_ref()
+                .map(|reconnect| McpReconnectState {
+                    id: reconnect.id,
+                    stop_requested: reconnect.work.is_stopped(),
+                }),
+            busy: self.mcp_reconnect.is_some()
+                || self.active.is_some()
                 || self.starting.is_some()
                 || self.preparing.is_some()
                 || !custody.inputs.is_empty()
@@ -249,13 +260,16 @@ impl<M: Serialize + Send + 'static> SessionControl<M> {
             self.active.is_none()
                 && self.starting.is_none()
                 && self.preparing.is_none()
+                && self.mcp_reconnect.is_none()
                 && lock(&self.custody).inputs.is_empty(),
             "session control has active work or pending inputs"
         );
         ensure!(
             !lock(&self.custody).updates.iter().any(|update| matches!(
                 update,
-                ControlUpdate::Returned(_) | ControlUpdate::Settled(_)
+                ControlUpdate::Returned(_)
+                    | ControlUpdate::Settled(_)
+                    | ControlUpdate::McpReconnectFinished(_)
             )),
             "drain returned inputs and settlements before replacing the binding or starting new work"
         );
@@ -269,11 +283,12 @@ impl<M: Serialize + Send + 'static> SessionControl<M> {
         enum Progress {
             Prepared(Result<Message>),
             Settled(OperationOutcome),
+            McpReconnected(Result<crate::McpReconnectReport>),
             Activity(Observation),
             Question,
             Input,
         }
-        if self.preparing.is_none() && self.active.is_none() {
+        if self.preparing.is_none() && self.active.is_none() && self.mcp_reconnect.is_none() {
             return None;
         }
         // Preparation and newly queued intent precede activity, so a busy stream
@@ -282,6 +297,8 @@ impl<M: Serialize + Send + 'static> SessionControl<M> {
             biased;
             result = async { self.preparing.as_mut().expect("enabled preparation").1.join().await },
                 if self.preparing.is_some() => Progress::Prepared(result),
+            result = async { self.mcp_reconnect.as_mut().expect("enabled MCP reconnect").work.join().await },
+                if self.mcp_reconnect.is_some() => Progress::McpReconnected(result),
             () = self.input_changes.notified() => Progress::Input,
             Some(observation) = self.observer.next() => Progress::Activity(observation),
             result = async { self.active.as_mut().expect("enabled operation").work.join().await },
@@ -294,6 +311,7 @@ impl<M: Serialize + Send + 'static> SessionControl<M> {
         match progress {
             Progress::Prepared(result) => self.finish_preparation(result),
             Progress::Settled(result) => self.finish_operation(result, activity),
+            Progress::McpReconnected(result) => self.finish_mcp_reconnect(result),
             Progress::Activity(observation) => return Some(observation),
             Progress::Question | Progress::Input => {}
         }
@@ -484,6 +502,9 @@ impl<M: Serialize + Send + 'static> SessionControl<M> {
 
 impl<M> Drop for SessionControl<M> {
     fn drop(&mut self) {
+        if let Some(reconnect) = &self.mcp_reconnect {
+            reconnect.work.request_stop();
+        }
         if let Some(active) = &self.active {
             active.work.stop();
         }

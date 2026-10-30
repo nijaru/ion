@@ -14,6 +14,7 @@ pub(super) enum OperationKind {
     Shell,
     Compaction,
     Preparation,
+    McpReconnect,
 }
 
 #[derive(Clone, Copy)]
@@ -24,6 +25,29 @@ pub(super) struct ActiveOperation {
 }
 
 impl ActiveOperation {
+    pub(super) fn from_state(state: ion_host::ControlState) -> Option<Self> {
+        let (kind, stop_requested) = match state.operation {
+            Some(operation) => (
+                match operation.kind {
+                    ion_host::OperationKind::Turn => OperationKind::Coding,
+                    ion_host::OperationKind::Shell => OperationKind::Shell,
+                    ion_host::OperationKind::Compact => OperationKind::Compaction,
+                },
+                state.stop_requested,
+            ),
+            None => match state.mcp_reconnect {
+                Some(reconnect) => (OperationKind::McpReconnect, reconnect.stop_requested),
+                None if state.busy => (OperationKind::Preparation, state.stop_requested),
+                None => return None,
+            },
+        };
+        Some(Self {
+            kind,
+            stop_requested,
+            pending_follow_ups: state.pending_follow_ups,
+        })
+    }
+
     pub(super) fn is_cancelled(self) -> bool {
         self.stop_requested
     }
@@ -37,7 +61,7 @@ impl ActiveOperation {
             OperationKind::Coding => {
                 format!("{submit} steers · {follow_up} queues · {cancel} cancels")
             }
-            OperationKind::Shell | OperationKind::Compaction => {
+            OperationKind::Shell | OperationKind::Compaction | OperationKind::McpReconnect => {
                 format!("{submit} queues · {cancel} cancels")
             }
             OperationKind::Preparation => format!("{follow_up} queues · {cancel} cancels"),
@@ -50,10 +74,12 @@ impl ActiveOperation {
             (OperationKind::Shell, true) => "Cancelling shell…",
             (OperationKind::Compaction, true) => "Cancelling compaction…",
             (OperationKind::Preparation, true) => "Cancelling input…",
+            (OperationKind::McpReconnect, true) => "Cancelling MCP reconnect…",
             (OperationKind::Coding, false) => "Working",
             (OperationKind::Shell, false) => "Running shell",
             (OperationKind::Compaction, false) => "Summarizing context",
             (OperationKind::Preparation, false) => "Preparing input",
+            (OperationKind::McpReconnect, false) => "Reconnecting MCP",
         }
     }
 }
@@ -64,21 +90,6 @@ pub(super) struct Activity {
 }
 
 impl Activity {
-    pub(super) fn view(&self, control: &SessionControl<EditorDraft>) -> Option<ActiveOperation> {
-        let state = control.state();
-        let kind = match state.operation.map(|operation| operation.kind) {
-            Some(ion_host::OperationKind::Turn) => OperationKind::Coding,
-            Some(ion_host::OperationKind::Shell) => OperationKind::Shell,
-            Some(ion_host::OperationKind::Compact) => OperationKind::Compaction,
-            None if state.busy => OperationKind::Preparation,
-            None => return None,
-        };
-        Some(ActiveOperation {
-            kind,
-            stop_requested: state.stop_requested,
-            pending_follow_ups: state.pending_follow_ups,
-        })
-    }
     pub(super) fn live(&self) -> Option<&LiveTranscript> {
         self.live.as_ref().map(|(_, live)| live)
     }
@@ -93,6 +104,19 @@ impl Activity {
         update: ControlUpdate<EditorDraft>,
     ) -> Result<Option<anyhow::Error>> {
         match update {
+            ControlUpdate::McpReconnectFinished(finished) => match finished.result {
+                Ok(report) => {
+                    ui.note(format!("MCP server {} reconnected", finished.server));
+                    for diagnostic in report.diagnostics {
+                        ui.note(diagnostic);
+                    }
+                    ui.status.clear();
+                }
+                Err(error) => {
+                    ui.note(format!("MCP server {} reconnect failed: {error:#}. Unknown effects were not replayed.", finished.server));
+                    ui.status = format!("MCP reconnect failed: {error:#}");
+                }
+            },
             ControlUpdate::Automated { .. } => {
                 self.live = None;
                 ui.status = "Managed-work readiness · automatic Turn".into();
@@ -354,6 +378,44 @@ mod tests {
     use std::sync::Arc;
 
     #[tokio::test]
+    async fn maintenance_is_not_input_preparation_or_stale_core_stop_intent() {
+        let mut fixture = super::super::tests::Fixture::new();
+        let id = fixture
+            .control
+            .compact(None, EditorDraft::at_end(String::new()))
+            .unwrap();
+        for stopping in [false, true] {
+            let active = ActiveOperation::from_state(ion_host::ControlState {
+                operation: None,
+                mcp_reconnect: Some(ion_host::McpReconnectState {
+                    id,
+                    stop_requested: stopping,
+                }),
+                stop_requested: !stopping,
+                busy: true,
+                ..fixture.control.state()
+            })
+            .unwrap();
+            assert!(matches!(active.kind, OperationKind::McpReconnect));
+            assert_eq!(active.is_cancelled(), stopping);
+            assert_eq!(
+                active.label(),
+                if stopping {
+                    "Cancelling MCP reconnect…"
+                } else {
+                    "Reconnecting MCP"
+                }
+            );
+            assert!(
+                !active
+                    .controls(&Frontend::default().keys)
+                    .contains("steers")
+            );
+        }
+        fixture.control.shutdown().await;
+    }
+
+    #[tokio::test]
     async fn manual_compaction_retry_is_visible_without_a_live_turn() {
         let mut fixture = super::super::tests::Fixture::new();
         let id = fixture
@@ -417,7 +479,11 @@ mod tests {
                 .unwrap()
                 .is_none()
         );
-        assert!(activity.view(&fixture.control).unwrap().is_cancelled());
+        assert!(
+            ActiveOperation::from_state(fixture.control.state())
+                .unwrap()
+                .is_cancelled()
+        );
         fixture.control.shutdown().await;
     }
 
