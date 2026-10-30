@@ -89,8 +89,17 @@ fn ordered_scope_expansion_deduplicates_and_preserves_literal_ids() {
             .iter()
             .all(|choice| choice.selected.provider == "first")
     );
-    assert!(
-        !identities(&resolve(&["first/*"]).unwrap()).contains(&"first/vendor/name:high".into())
+    // Another provider's literal "first/*" must not hide this provider's glob.
+    assert_eq!(
+        identities(&resolve(&["first/*"]).unwrap()),
+        [
+            "first/one",
+            "first/two",
+            "first/bracketed[1m]",
+            "first/stars*literal",
+            "first/stars-otherliteral",
+            "first/🦀-甲",
+        ]
     );
     assert_eq!(
         identities(&resolve(&["second/first/**"]).unwrap()),
