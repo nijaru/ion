@@ -197,7 +197,7 @@ pub(super) fn refresh(ui: &mut Frontend, owner: &BackgroundOwner) {
 
 fn refresh_selection(next: &mut Picker, previous: &Picker) {
     let selected = previous
-        .matches(false)
+        .matches(false, None)
         .get(previous.selected)
         .and_then(|index| {
             if let PickerValue::Task(choice) = previous.items[*index].value {
@@ -207,7 +207,7 @@ fn refresh_selection(next: &mut Picker, previous: &Picker) {
             }
         });
     next.query.clone_from(&previous.query);
-    let matching = next.matches(false);
+    let matching = next.matches(false, None);
     if let Some(index) = matching.iter().position(|index| {
         matches!(next.items[*index].value, PickerValue::Task(choice) if Some(choice) == selected)
     }) {

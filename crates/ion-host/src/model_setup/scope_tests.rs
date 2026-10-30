@@ -211,10 +211,36 @@ fn configured_and_invocation_scopes_keep_selection_and_default_ownership() {
         identities(&store.cycle_choices(&credentials).unwrap()),
         ["first/two", "first/one"]
     );
+    let snapshot = store.selection_choices(&credentials).unwrap();
+    assert_eq!(
+        snapshot.preferred.unwrap(),
+        [identity("first", "two"), identity("first", "one")]
+    );
+    assert!(
+        snapshot
+            .all
+            .iter()
+            .any(|choice| choice.selected.identity() == identity("second", "one"))
+    );
     let overridden = ModelStore::new(root.clone()).with_scope(vec!["first/one".into()]);
+    assert_eq!(
+        overridden
+            .selection_choices(&credentials)
+            .unwrap()
+            .preferred
+            .unwrap(),
+        [identity("first", "one")]
+    );
     assert_eq!(choose(&overridden, None, None), identity("first", "one"));
     let cleared = ModelStore::new(root.clone()).with_scope(Vec::new());
     assert_eq!(choose(&cleared, None, None), identity("second", "one"));
+    assert!(
+        cleared
+            .selection_choices(&credentials)
+            .unwrap()
+            .preferred
+            .is_none()
+    );
     assert_eq!(fs::read(&path).unwrap(), original);
     configuration.default = Some(identity("first", "one"));
     write_json(&path, &configuration).unwrap();
@@ -223,6 +249,11 @@ fn configured_and_invocation_scopes_keep_selection_and_default_ownership() {
     write_json(&path, &configuration).unwrap();
     assert!(store.choose(None, None, &credentials).is_err());
     assert!(store.cycle_choices(&credentials).is_err());
+    assert!(store.selection_choices(&credentials).is_err());
+    assert!(
+        store.choices(&credentials).is_ok(),
+        "listing all routes can diagnose an invalid scope"
+    );
     assert_eq!(
         choose(&store, None, Some(identity("second", "one"))),
         identity("second", "one")

@@ -1358,6 +1358,145 @@ async fn configuration_selectors_preserve_unsent_input_without_admission() {
     fixture.control.shutdown().await;
 }
 
+#[tokio::test]
+async fn model_picker_scope_keeps_order_query_draft_and_visible_selection_authority() {
+    let mut fixture = Fixture::new();
+    for model in ["first", "second"] {
+        fixture
+            .host
+            .models()
+            .save_default(&SavedSelection {
+                provider: "shortlist".into(),
+                model: model.into(),
+                endpoint: Some("http://127.0.0.1:1".into()),
+                wire: Some(Wire::ChatCompletions),
+                api_key_env: None,
+                context_window_tokens: None,
+                max_output_tokens: None,
+                image_input: false,
+            })
+            .unwrap();
+    }
+    let path = fixture.root.join("config/models.json");
+    let mut config: serde_json::Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+    let catalogue_first = fixture
+        .host
+        .models()
+        .choices(fixture.host.credentials())
+        .unwrap()[0]
+        .selected
+        .identity();
+    config["scope"] = serde_json::json!([
+        "shortlist/second",
+        "shortlist/first",
+        format!("{}/{}", catalogue_first.provider, catalogue_first.model),
+        "shortlist/second"
+    ]);
+    fs::write(&path, serde_json::to_vec(&config).unwrap()).unwrap();
+    let original = fs::read(&path).unwrap();
+    let mut startup = picker::Pickers::default();
+    startup
+        .open_models(&fixture.host, None, "Choose Session model")
+        .unwrap();
+    assert!(
+        matches!(startup.selected_value(), Some(PickerValue::Model(model)) if model.model == "second"),
+        "startup without a current route starts at the first preference, not catalogue index zero"
+    );
+    let current = ModelRef {
+        provider: "shortlist".into(),
+        model: "first".into(),
+    };
+    startup
+        .open_models(&fixture.host, Some(&current), "Choose model")
+        .unwrap();
+    assert!(
+        matches!(startup.selected_value(), Some(PickerValue::Model(model)) if model == &current)
+    );
+    let mut ui = Frontend {
+        draft: "unsent 🦀".into(),
+        cursor: 3,
+        images: vec![image("attached")],
+        ..Frontend::default()
+    };
+    command::handle_builtin(
+        &mut fixture.control,
+        &fixture.host,
+        &mut ui,
+        Builtin::Model,
+        "",
+    )
+    .unwrap();
+    let (rows, _) = modal_rows(&mut ui, None, None, 120, 20);
+    let text = rows
+        .iter()
+        .map(ToString::to_string)
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(
+        text.contains("Choose model · scoped · 3 match(es)"),
+        "{text}"
+    );
+    assert!(text.find("shortlist/second").unwrap() < text.find("shortlist/first").unwrap());
+    assert!(text.contains("ready"), "custom loopback routes need no key");
+    assert!(
+        !text.contains("fixture/fixture"),
+        "out-of-scope current model must not widen the list"
+    );
+    ui.key(KeyEvent::new(KeyCode::Down, Modifiers::NONE), None, None);
+    assert!(
+        matches!(ui.pickers.selected_value(), Some(PickerValue::Model(model)) if model.model == "first")
+    );
+    modal_rows(&mut ui, None, None, 120, 20);
+    ui.key(KeyEvent::new(KeyCode::Tab, Modifiers::NONE), None, None);
+    assert!(
+        matches!(ui.pickers.selected_value(), Some(PickerValue::Model(model)) if model.model == "first")
+    );
+    assert!(
+        matches!(
+            ui.key(KeyEvent::new(KeyCode::Enter, Modifiers::NONE), None, None),
+            Action::None
+        ),
+        "scope switching revokes old paint even when the same identity survives"
+    );
+    ui.pickers.insert("fixture/");
+    modal_rows(&mut ui, None, None, 120, 20);
+    assert!(
+        matches!(ui.pickers.selected_value(), Some(PickerValue::Model(model)) if model.provider == "fixture")
+    );
+    ui.key(KeyEvent::new(KeyCode::Tab, Modifiers::NONE), None, None);
+    assert_eq!(ui.pickers.active().unwrap().query, "fixture/");
+    let (rows, _) = modal_rows(&mut ui, None, None, 120, 20);
+    assert!(
+        rows.iter()
+            .any(|row| row.to_string().contains("0 match(es)"))
+    );
+    assert!(
+        matches!(
+            ui.key(KeyEvent::new(KeyCode::Enter, Modifiers::NONE), None, None),
+            Action::None
+        ),
+        "empty scoped search must not select an outside route"
+    );
+    ui.key(KeyEvent::new(KeyCode::Tab, Modifiers::NONE), None, None);
+    assert_eq!(ui.pickers.active().unwrap().query, "fixture/");
+    assert!(matches!(
+        ui.key(KeyEvent::new(KeyCode::Enter, Modifiers::NONE), None, None),
+        Action::None
+    ));
+    modal_rows(&mut ui, None, None, 120, 20);
+    assert!(
+        matches!(ui.key(KeyEvent::new(KeyCode::Enter, Modifiers::NONE), None, None),
+        Action::Pick(PickerValue::Model(model)) if model.provider == "fixture")
+    );
+    assert!(ui.pickers.active().is_none());
+    assert_eq!((ui.draft.as_str(), ui.cursor), ("unsent 🦀", 3));
+    assert_note(&ui.images[0], "attached");
+    assert_eq!(fs::read(path).unwrap(), original);
+    assert!(fixture.control.session().view().unwrap().entries.is_empty());
+    assert_eq!(fixture.control.agent().model().provider, "fixture");
+    fixture.control.shutdown().await;
+}
+
 #[test]
 fn settings_cycle_only_rendered_choices_and_keep_search_and_draft() {
     let mut ui = Frontend {
@@ -1492,7 +1631,15 @@ async fn reasoning_choices_use_adapter_support_and_preselect_current() {
         );
         assert_eq!(fixture.control.session().reasoning().unwrap(), current);
     }
-    let picker = Picker::models(&fixture.host, Some(fixture.control.agent().model())).unwrap();
+    let mut pickers = picker::Pickers::default();
+    pickers
+        .open_models(
+            &fixture.host,
+            Some(fixture.control.agent().model()),
+            "Choose model",
+        )
+        .unwrap();
+    let picker = pickers.active().unwrap();
     assert!(
         matches!(&picker.items[picker.selected].value, PickerValue::Model(value) if value == fixture.control.agent().model())
     );

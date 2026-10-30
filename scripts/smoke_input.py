@@ -383,7 +383,7 @@ def exercise_keybindings(work, base_env, endpoint):
             "tui.select.confirm": "alt+enter", "tui.select.cancel": "alt+x",
             "tui.select.down": "ctrl+n", "tui.select.up": "ctrl+p",
             "app.tools.expand": "alt+o", "app.message.copy": [],
-            "app.session.toggleScope": "ctrl+f",
+            "tui.select.toggleScope": "ctrl+f",
             "app.session.toggleNamedFilter": "alt+n",
         }
         config.write_text(json.dumps(keys))

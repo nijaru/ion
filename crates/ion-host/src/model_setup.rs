@@ -145,6 +145,13 @@ impl Selection {
     }
 }
 
+/// One locally captured catalogue and its ordered shortlist, if configured.
+/// Preferences do not exclude explicit selection of other known routes.
+pub struct ModelChoices {
+    pub all: Vec<ModelChoice>,
+    pub preferred: Option<Vec<ModelRef>>,
+}
+
 pub struct ModelChoice {
     pub selected: Selection,
     pub label: &'static str,
@@ -399,6 +406,25 @@ impl ModelStore {
 
     pub fn choices(&self, credentials: &CredentialStore) -> Result<Vec<ModelChoice>> {
         self.choices_with(&self.configuration()?, credentials)
+    }
+
+    /// Capture all routes and effective preferences from the same configuration.
+    /// Unavailable scoped routes remain visible; invalid patterns fail explicitly.
+    pub fn selection_choices(&self, credentials: &CredentialStore) -> Result<ModelChoices> {
+        let configuration = self.configuration()?;
+        let all = self.choices_with(&configuration, credentials)?;
+        let preferred = self
+            .scope(&configuration)
+            .map(|patterns| {
+                scope::indices(patterns, &all).map(|indices| {
+                    indices
+                        .into_iter()
+                        .map(|index| all[index].selected.identity())
+                        .collect()
+                })
+            })
+            .transpose()?;
+        Ok(ModelChoices { all, preferred })
     }
 
     /// Ordered scope choices for cycling. Missing keys are retained as metadata;

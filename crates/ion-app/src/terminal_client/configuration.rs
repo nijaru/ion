@@ -7,7 +7,7 @@ use ion_core::CodingAgentError;
 use ion_host::{CredentialStatus, Host, Selection, SessionControl};
 use ion_terminal::{Screen, TerminalSession};
 
-use super::picker::PickerItem;
+use super::picker::{ModelScope, PickerItem, Pickers};
 use super::{EditorDraft, Frontend, Picker, PickerValue, ProgramStatusState, login_in_terminal};
 use crate::{tool_output::OutputDetail, transcript_render::ThinkingVisibility};
 
@@ -17,11 +17,18 @@ pub(super) enum Setting {
     Thinking(ThinkingVisibility),
 }
 
-impl Picker {
-    pub fn models(services: &Host, current: Option<&ModelRef>) -> Result<Self> {
-        let items: Vec<_> = services
+impl Pickers {
+    pub fn open_models(
+        &mut self,
+        services: &Host,
+        current: Option<&ModelRef>,
+        title: &'static str,
+    ) -> Result<()> {
+        let choices = services
             .models()
-            .choices(services.credentials())?
+            .selection_choices(services.credentials())?;
+        let items: Vec<_> = choices
+            .all
             .into_iter()
             .map(|choice| {
                 let option = choice.selected;
@@ -48,20 +55,29 @@ impl Picker {
                 }
             })
             .collect();
-        let selected = items
-            .iter()
-            .position(
-                |item| matches!(&item.value, PickerValue::Model(model) if Some(model) == current),
-            )
-            .unwrap_or(0);
-        Ok(Self {
-            title: "Choose model",
+        let selected = items.iter().position(
+            |item| matches!(&item.value, PickerValue::Model(model) if Some(model) == current),
+        );
+        let mut picker = Picker {
+            title,
             query: String::new(),
-            selected,
+            selected: 0,
             items,
-        })
+        };
+        let matching = picker.matches(false, choices.preferred.as_deref());
+        picker.selected = selected
+            .and_then(|selected| matching.iter().position(|index| *index == selected))
+            .unwrap_or(0);
+        self.open(picker);
+        self.models = choices.preferred.map(|identities| ModelScope {
+            identities,
+            scoped: true,
+        });
+        Ok(())
     }
+}
 
+impl Picker {
     pub fn reasoning(runtime: &SessionControl<EditorDraft>) -> Result<Self> {
         let current = runtime.session().reasoning()?;
         runtime.agent().validate_reasoning(current)?;

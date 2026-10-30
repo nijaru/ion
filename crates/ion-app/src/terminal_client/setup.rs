@@ -6,7 +6,7 @@ use ion_terminal::{InputEvent, Screen, TerminalSession};
 use std::path::PathBuf;
 
 use super::{
-    Frontend, Picker, PickerValue, ProgramStatusState, draw, login_in_terminal, new_inline_screen,
+    Frontend, PickerValue, ProgramStatusState, draw, login_in_terminal, new_inline_screen,
 };
 
 /// Returns None on cancellation. Ready launches never acquire a terminal here.
@@ -187,13 +187,15 @@ async fn run(
             }
         }
         if ui.pickers.active().is_none() {
-            let mut picker = Picker::models(host, None)?;
-            picker.title = if choose_default {
-                "Choose default model"
-            } else {
-                "Choose Session model"
-            };
-            ui.pickers.open(picker);
+            ui.pickers.open_models(
+                host,
+                None,
+                if choose_default {
+                    "Choose default model"
+                } else {
+                    "Choose Session model"
+                },
+            )?;
         }
         program.publish(terminal, false)?;
         draw(terminal, screen, &mut ui, None, None, None).await?;

@@ -43,7 +43,7 @@ actions! {
     Detail, "app.tools.expand", COMPOSER | DETAILS, ["ctrl+o"], "Open/close transcript details";
     FollowUp, "app.message.followUp", COMPOSER, ["alt+enter"], "Queue a follow-up";
     Dequeue, "app.message.dequeue", COMPOSER, ["alt+up"], "Recover queued or returned input";
-    Scope, "app.session.toggleScope", PICKER, ["tab"], "Toggle launch Session folder scope";
+    Scope, "tui.select.toggleScope", PICKER, ["tab"], "Toggle model shortlist/all routes or launch Session folder scope";
     NamedSessions, "app.session.toggleNamedFilter", PICKER, ["ctrl+n"], "Toggle named Sessions only";
     Submit, "tui.input.submit", EDIT, ["enter"], "Submit composer or custom answer";
     NewLine, "tui.input.newLine", EDIT, ["shift+enter", "ctrl+enter", "ctrl+j"], "Insert newline";

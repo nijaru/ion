@@ -202,7 +202,7 @@ pub(super) fn refresh(control: &SessionControl<EditorDraft>, ui: &mut Frontend) 
         return;
     };
     let selected = previous
-        .matches(false)
+        .matches(false, None)
         .get(previous.selected)
         .and_then(|index| {
             if let PickerValue::Mcp(choice) = &previous.items[*index].value {
@@ -212,7 +212,7 @@ pub(super) fn refresh(control: &SessionControl<EditorDraft>, ui: &mut Frontend) 
             }
         });
     next.query.clone_from(&previous.query);
-    let matching = next.matches(false);
+    let matching = next.matches(false, None);
     next.selected = matching.iter().position(|index|
         matches!(&next.items[*index].value, PickerValue::Mcp(choice) if Some(choice) == selected)).unwrap_or(0);
     if matching.is_empty() {

@@ -256,8 +256,13 @@ may be outside it: a shortlist is not a route allowlist. Unmatched, ambiguous or
 invalid patterns fail rather than broadening to all routes; no ready scoped model
 requires setup instead of an outside fallback. `ion use` includes its explicitly
 saved default in a nonempty saved list. Cycling retains the existing reasoning and
-binding-preflight policy. The current picker still exposes all routes; interactive
-scope editing and a scoped/all picker toggle are not yet implemented.
+binding-preflight policy. Startup and live model pickers start with the ordered
+shortlist, including models that need a key. Tab switches explicitly between
+scoped and all routes, retaining the search and any still-visible selected model;
+confirmation requires a freshly painted choice. Rebind or disable
+`tui.select.toggleScope` to change this shared picker control. Browsing or
+cancelling never changes the shortlist, default or current binding. Interactive
+scope editing is not yet implemented.
 
 Run `ion doctor` to check local setup without starting a coding client. Use
 `ion doctor --cwd DIR` to inspect another workspace. It checks the default or

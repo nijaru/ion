@@ -64,10 +64,11 @@ impl Picker {
         })
     }
 
-    pub fn matches(&self, named_only: bool) -> Vec<usize> {
+    pub fn matches(&self, named_only: bool, models: Option<&[ModelRef]>) -> Vec<usize> {
         let query = self.query.to_ascii_lowercase();
         let mut sessions = None;
-        self.items
+        let matching: Vec<_> = self
+            .items
             .iter()
             .enumerate()
             .filter_map(|(index, item)| {
@@ -81,7 +82,15 @@ impl Picker {
                 };
                 matching.then_some(index)
             })
-            .collect()
+            .collect();
+        if let Some(models) = models {
+            return models.iter().filter_map(|identity| {
+                matching.iter().copied().find(|index| {
+                    matches!(&self.items[*index].value, PickerValue::Model(model) if model == identity)
+                })
+            }).collect();
+        }
+        matching
     }
 }
 
@@ -127,6 +136,11 @@ pub(super) enum PickerOutput {
     Sessions(Vec<SessionSummary>),
 }
 
+pub(super) struct ModelScope {
+    pub identities: Vec<ModelRef>,
+    pub scoped: bool,
+}
+
 #[derive(Default)]
 pub(super) struct Pickers {
     active: Option<Picker>,
@@ -144,9 +158,22 @@ pub(super) struct Pickers {
     sessions: Option<SessionRequest>,
     // Presentation-only state; never captured by discovery jobs or persisted.
     named_only: bool,
+    pub(super) models: Option<ModelScope>,
 }
 
 impl Pickers {
+    fn matching(&self) -> Vec<usize> {
+        self.active.as_ref().map_or_else(Vec::new, |picker| {
+            picker.matches(
+                self.named_only,
+                self.models
+                    .as_ref()
+                    .filter(|models| models.scoped)
+                    .map(|models| models.identities.as_slice()),
+            )
+        })
+    }
+
     pub fn active(&self) -> Option<&Picker> {
         self.active.as_ref()
     }
@@ -159,7 +186,7 @@ impl Pickers {
 
     pub fn selected_value(&self) -> Option<&PickerValue> {
         let picker = self.active.as_ref()?;
-        let index = *picker.matches(self.named_only).get(picker.selected)?;
+        let index = *self.matching().get(picker.selected)?;
         Some(&picker.items[index].value)
     }
 
@@ -192,6 +219,17 @@ impl Pickers {
                 },
             ));
         }
+        if let Some(models) = &self.models {
+            controls.push_str(&format!(
+                " · {}: {}",
+                keys.hint(KeyAction::Scope),
+                if models.scoped {
+                    "all models"
+                } else {
+                    "scoped models"
+                },
+            ));
+        }
         if let Some(request) = &self.sessions
             && matches!(request.browser, SessionBrowser::Launch)
         {
@@ -214,8 +252,18 @@ impl Pickers {
         let Some(picker) = &self.active else {
             return Vec::new();
         };
-        let matching = picker.matches(self.named_only);
-        let title = if self.named_only {
+        let matching = self.matching();
+        let title = if let Some(models) = &self.models {
+            format!(
+                "{} · {}",
+                picker.title,
+                if models.scoped {
+                    "scoped"
+                } else {
+                    "all models"
+                }
+            )
+        } else if self.named_only {
             format!("{} · named only", picker.title)
         } else {
             picker.title.to_owned()
@@ -349,6 +397,7 @@ impl Pickers {
         self.files = None;
         self.sessions = None;
         self.named_only = false;
+        self.models = None;
         if let Some(job) = &self.job {
             job.stop.cancel();
         }
@@ -515,9 +564,12 @@ impl Pickers {
                 let empty = items.is_empty();
                 if let Some(picker) = &mut self.active {
                     picker.items = items;
-                    picker.selected = picker
-                        .selected
-                        .min(picker.matches(self.named_only).len().saturating_sub(1));
+                    picker.selected = picker.selected.min(
+                        picker
+                            .matches(self.named_only, None)
+                            .len()
+                            .saturating_sub(1),
+                    );
                 }
                 self.rendered_selected = None;
                 if empty && matches!(request.browser, SessionBrowser::Active(_)) {
@@ -574,6 +626,26 @@ impl Pickers {
     ) -> Option<PickerValue> {
         use crate::keybindings::{self, KeyAction, PICKER};
         let action = keys.action(PICKER, key);
+        if action == Some(KeyAction::Scope) {
+            let selected = self.selected_value().and_then(|value| match value {
+                PickerValue::Model(model) => Some(model.clone()),
+                _ => None,
+            });
+            if let Some(models) = &mut self.models {
+                models.scoped = !models.scoped;
+                let matching = self.matching();
+                let picker = self.active.as_mut().expect("model picker is active");
+                picker.selected = matching
+                    .iter()
+                    .position(|index| {
+                        matches!(&picker.items[*index].value,
+                        PickerValue::Model(model) if Some(model) == selected.as_ref())
+                    })
+                    .unwrap_or(0);
+                self.rendered_selected = None;
+                return None;
+            }
+        }
         if action == Some(KeyAction::Scope)
             && let Some(mut request) = self.sessions.clone()
             && matches!(request.browser, SessionBrowser::Launch)
@@ -591,11 +663,11 @@ impl Pickers {
         if action == Some(KeyAction::NamedSessions) && self.sessions.is_some() {
             let picker = self.active.as_mut().expect("Session browser is active");
             let selected = picker
-                .matches(self.named_only)
+                .matches(self.named_only, None)
                 .get(picker.selected)
                 .copied();
             self.named_only = !self.named_only;
-            let matching = picker.matches(self.named_only);
+            let matching = picker.matches(self.named_only, None);
             // Keep the same Session if it survives; filtering must not silently
             // turn a selection into a different conversation.
             picker.selected = selected
@@ -605,6 +677,7 @@ impl Pickers {
             return None;
         }
         let loading = self.loading();
+        let matching = self.matching();
         let picker = self.active.as_mut().expect("picker is active");
         match action {
             Some(KeyAction::Cancel | KeyAction::Interrupt) => self.close(),
@@ -613,8 +686,7 @@ impl Pickers {
                 self.rendered_selected = None;
             }
             Some(KeyAction::SelectDown) => {
-                picker.selected = (picker.selected + 1)
-                    .min(picker.matches(self.named_only).len().saturating_sub(1));
+                picker.selected = (picker.selected + 1).min(matching.len().saturating_sub(1));
                 self.rendered_selected = None;
             }
             Some(KeyAction::Backspace) => {
@@ -631,10 +703,7 @@ impl Pickers {
                                 .iter()
                                 .any(|item| matches!(item.value, PickerValue::Setting(_))))) =>
             {
-                let index = picker
-                    .matches(self.named_only)
-                    .get(picker.selected)
-                    .copied();
+                let index = matching.get(picker.selected).copied();
                 let index = index.filter(|index| self.rendered_selected == Some(*index));
                 if let Some(index) = index {
                     let setting = match picker.items[index].value {
@@ -767,6 +836,55 @@ mod tests {
                 .collect(),
         });
         pickers
+    }
+
+    #[test]
+    fn scoped_model_matches_deduplicate_routes_and_keep_preference_order() {
+        let identity = |model: &str| ModelRef {
+            provider: "fixture".into(),
+            model: model.into(),
+        };
+        let mut picker = Picker {
+            title: "Choose model",
+            query: String::new(),
+            selected: 0,
+            items: ["first", "second", "first", "outside"]
+                .into_iter()
+                .map(|model| PickerItem {
+                    label: format!("fixture/{model}"),
+                    detail: None,
+                    value: PickerValue::Model(identity(model)),
+                })
+                .collect(),
+        };
+        let scope = [identity("second"), identity("first")];
+        assert_eq!(picker.matches(false, Some(&scope)), [1, 0]);
+        assert_eq!(picker.matches(false, None), [0, 1, 2, 3]);
+        picker.query = "first".into();
+        assert_eq!(picker.matches(false, Some(&scope)), [0]);
+        picker.query = "outside".into();
+        assert!(picker.matches(false, Some(&scope)).is_empty());
+        assert_eq!(picker.matches(false, None), [3]);
+        picker.query.clear();
+        picker.selected = 2;
+        let mut pickers = Pickers::default();
+        pickers.open(picker);
+        pickers.models = Some(ModelScope {
+            identities: scope.into(),
+            scoped: false,
+        });
+        let keys = KeyBindings::default();
+        pickers.rows(100, 10, &Theme::default());
+        pickers.key(KeyEvent::new(KeyCode::Tab, Modifiers::NONE), &keys);
+        assert!(
+            matches!(pickers.selected_value(), Some(PickerValue::Model(model)) if model == &identity("first")),
+            "deduplication must retain the selected identity, not its disappearing duplicate row index"
+        );
+        assert!(
+            pickers
+                .key(KeyEvent::new(KeyCode::Enter, Modifiers::NONE), &keys)
+                .is_none()
+        );
     }
 
     #[test]
@@ -1044,13 +1162,13 @@ mod tests {
             ("", vec![0, 1, 2]),
         ] {
             picker.query = query.into();
-            assert_eq!(picker.matches(false), expected, "{query}");
+            assert_eq!(picker.matches(false, None), expected, "{query}");
         }
         picker.query = "alpha beta".into();
-        assert_eq!(picker.matches(true), [0]);
+        assert_eq!(picker.matches(true, None), [0]);
         picker.query = "other".into();
-        assert_eq!(picker.matches(false), [1]);
-        assert!(picker.matches(true).is_empty());
+        assert_eq!(picker.matches(false, None), [1]);
+        assert!(picker.matches(true, None).is_empty());
     }
 
     #[tokio::test]

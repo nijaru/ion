@@ -7,6 +7,15 @@ use ignore::overrides::OverrideBuilder;
 use super::{ModelChoice, matching};
 
 pub(super) fn resolve(patterns: &[String], choices: Vec<ModelChoice>) -> Result<Vec<ModelChoice>> {
+    let order = indices(patterns, &choices)?;
+    let mut choices: Vec<_> = choices.into_iter().map(Some).collect();
+    Ok(order
+        .into_iter()
+        .map(|index| choices[index].take().expect("deduplicated scope indices"))
+        .collect())
+}
+
+pub(super) fn indices(patterns: &[String], choices: &[ModelChoice]) -> Result<Vec<usize>> {
     let candidates: Vec<_> = choices
         .iter()
         .map(|choice| matching::Candidate {
@@ -95,9 +104,5 @@ pub(super) fn resolve(patterns: &[String], choices: Vec<ModelChoice>) -> Result<
             }
         }
     }
-    let mut choices: Vec<_> = choices.into_iter().map(Some).collect();
-    Ok(order
-        .into_iter()
-        .map(|index| choices[index].take().expect("deduplicated scope indices"))
-        .collect())
+    Ok(order)
 }

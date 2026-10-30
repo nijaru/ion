@@ -464,7 +464,7 @@ pub(super) fn handle_builtin(
         }
         Builtin::Model if args.is_empty() => {
             ui.pickers
-                .open(Picker::models(services, Some(runtime.agent().model()))?);
+                .open_models(services, Some(runtime.agent().model()), "Choose model")?;
         }
         Builtin::Login if args.is_empty() => ui.pickers.open(Picker::providers(services)?),
         Builtin::Logout => {

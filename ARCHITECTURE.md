@@ -1654,6 +1654,15 @@ shortlist. An explicitly saved global default remains a canonical member of a
 nonempty saved list; invocation overrides are never serialized. Pattern overlaps
 deduplicate during resolution, not by rewriting user preferences.
 
+Startup and live model pickers start scoped when a shortlist exists, preserving
+its resolved order and showing missing-key metadata rather than silently widening.
+The shared picker scope action (Tab by default) explicitly toggles all/scoped while
+retaining search and a still-visible selected identity. Switching scope revokes
+paint authority; confirmation requires the currently visible choice. With no
+shortlist, the picker remains unscoped. Browse/cancel/toggle write no preferences,
+change no binding and admit no model request. Selection retains the same masked
+credential entry and shared-control preflight as an explicit model command.
+
 Next/previous model actions use the resolved ordered scope or unscoped
 catalogue/configured choices, excluding missing required credentials but including
 keyless routes.
