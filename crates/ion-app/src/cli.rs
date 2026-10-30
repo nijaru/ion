@@ -25,6 +25,7 @@ pub(crate) struct Invocation {
     pub continue_session: bool,
     pub resume_session: bool,
     pub model: Option<ModelPattern>,
+    pub model_scope: Option<Vec<String>>,
     pub reasoning: Option<Reasoning>,
     pub image: Vec<PathBuf>,
     pub skills: Vec<PathBuf>,
@@ -283,6 +284,8 @@ fn options() -> Vec<Arg> {
             .help("Constrain --model to this provider; model text may include a namespace"),
         Arg::new("model").long("model").value_name("MODEL")
             .help("Known model identity or ID/name substring; PROVIDER/MODEL scopes the match; does not change the saved default"),
+        Arg::new("models").long("models").value_name("PATTERNS")
+            .help("Ordered comma-separated model patterns for fresh selection and cycling; overrides saved scope; empty clears it for this invocation"),
         Arg::new("reasoning").long("reasoning").value_parser(clap::value_parser!(Reasoning))
             .value_name("EFFORT").help("Generation effort: default, off, low, medium, high or budget:TOKENS; route support varies"),
         Arg::new("image").long("image").action(ArgAction::Append)
@@ -323,7 +326,12 @@ fn applicable(command: &str, option: &str) -> bool {
         "session" | "continue_session" => coding || saved,
         "resume_session" => matches!(command, "chat" | "run") || saved,
         "provider" | "model" | "reasoning" => coding || command == "compact",
-        "completion_delivery" | "code_mode" | "tools" | "exclude_tools" | "read_only" => coding,
+        "models"
+        | "completion_delivery"
+        | "code_mode"
+        | "tools"
+        | "exclude_tools"
+        | "read_only" => coding,
         "image" => matches!(command, "run" | "chat"),
         "skills" | "no_skills" | "prompt_templates" | "no_prompt_templates" => {
             coding || matches!(command, "resources" | "doctor" | "compact")
@@ -484,6 +492,21 @@ fn normalize(mut matches: ArgMatches, interactive: bool) -> Result<Invocation> {
         }
         (Some(_), None) => bail!("--provider requires --model"),
     };
+    let model_scope = one::<String>(&mut levels, "models")?
+        .map(|text| {
+            let patterns: Vec<_> = text
+                .split(',')
+                .map(str::trim)
+                .filter(|pattern| !pattern.is_empty())
+                .map(str::to_owned)
+                .collect();
+            ensure!(
+                text.is_empty() || !patterns.is_empty(),
+                "model scope must contain a pattern; use --models= to clear the saved scope"
+            );
+            Ok::<_, anyhow::Error>(patterns)
+        })
+        .transpose()?;
     Ok(Invocation {
         action,
         cwd: one(&mut levels, "cwd")?,
@@ -491,6 +514,7 @@ fn normalize(mut matches: ArgMatches, interactive: bool) -> Result<Invocation> {
         continue_session,
         resume_session,
         model,
+        model_scope,
         reasoning: one(&mut levels, "reasoning")?,
         image: many(&mut levels, "image"),
         skills: many(&mut levels, "skills"),

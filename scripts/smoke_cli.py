@@ -64,6 +64,81 @@ class Handler(BaseHTTPRequestHandler):
         pass
 
 
+def exercise_model_scope(root, base_env, endpoint):
+    sandbox = root / "model-scope"
+    workspace = sandbox / "workspace"
+    workspace.mkdir(parents=True)
+    home = sandbox / "ion"
+    env = dict(base_env, HOME=str(sandbox / "home"), ION_HOME=str(home))
+
+    def call(*args, expected=0):
+        result = subprocess.run([BINARY, *map(str, args)], env=env, cwd=workspace,
+                                capture_output=True, timeout=15)
+        assert result.returncode == expected, (args, result.stdout, result.stderr)
+        return result
+
+    for provider, model in (("scope", "a"), ("scope", "b"), ("scope", "vendor/model:high"),
+                            ("outside", "a"), ("outside", "scope/shadow")):
+        call("use", provider, model, "--endpoint", endpoint, "--wire", "chat-completions")
+    store = home / "models.json"
+    configured = json.loads(store.read_bytes())
+    configured["scope"] = ["scope/b", "scope/a", "scope/b"]
+    store.write_text(json.dumps(configured))
+    saved = store.read_bytes()
+
+    def submit(name, args, expected):
+        database = sandbox / f"{name}.sqlite"
+        before = len(requests)
+        call("--cwd", workspace, "--session", database, *args, "run", name)
+        assert len(requests) == before + 1 and requests[-1]["model"] == expected
+        assert requests[-1]["messages"][-1]["content"] == name, requests[-1]
+        assert "reasoning_effort" not in requests[-1], requests[-1]
+        assert store.read_bytes() == saved, "selection persisted invocation preferences"
+        return database
+
+    restored = submit("SAVED_SCOPE_FIRST", [], "b")
+    submit("INVOCATION_SCOPE", ["--models", "scope/a,scope/b"], "a")
+    submit("UNSCOPED_OVERRIDE", ["--models="], "scope/shadow")
+    submit("EXPLICIT_OUTSIDE", ["--models", "scope/a", "--model", "outside/scope/shadow"], "scope/shadow")
+    submit("LITERAL_COLON", ["--models", "scope/vendor/model:high"], "vendor/model:high")
+    configured["default"] = {"provider": "scope", "model": "a"}
+    store.write_text(json.dumps(configured))
+    saved = store.read_bytes()
+    submit("SAVED_DEFAULT_IN_SCOPE", [], "a")
+    configured["scope"] = ["scope/a"]
+    store.write_text(json.dumps(configured))
+    saved = store.read_bytes()
+    call("--cwd", workspace, "--session", restored, "run", "RESTORED_OUTSIDE")
+    assert requests[-1]["model"] == "b" and store.read_bytes() == saved
+    # Persisting an explicit default includes it in the saved rotation, never
+    # persists the invocation override or drops the operator's existing patterns.
+    call("use", "outside", "scope/shadow")
+    assert json.loads(store.read_bytes())["scope"] == ["scope/a", "outside/scope/shadow"]
+
+    marker = sandbox / "UNEXPECTED_MCP_START"
+    (home / "mcp.json").write_text(json.dumps({"servers": {"sentinel": {
+        "command": sys.executable, "args": ["-c", f"from pathlib import Path; Path({str(marker)!r}).touch()"]}}}))
+    native = next(line.split("\t")[0] for line in call("models", "openai").stdout.decode().splitlines()
+                  if line.startswith("openai/"))
+    refusals = [(pattern, 1) for pattern in ("missing-model*", "a", "scope/[unterminated", native)]
+    refusals += [(pattern, 2) for pattern in (",", " ", " , ")]
+    for pattern, status in refusals:
+        database = sandbox / "REFUSED.sqlite"
+        before = len(requests)
+        saved = store.read_bytes()
+        call("--cwd", workspace, "--session", database, "--models", pattern, "run", "MUST_NOT_RUN", expected=status)
+        assert len(requests) == before and not database.exists() and not marker.exists()
+        assert store.read_bytes() == saved
+    # An explicit model does not excuse a malformed invocation scope.
+    call("--models", "missing-model*", "--model", "scope/a", "run", "MUST_NOT_RUN", expected=1)
+    assert len(requests) == before and not marker.exists()
+    configured["scope"] = ["missing-model*"]
+    store.write_text(json.dumps(configured))
+    call("run", "MUST_NOT_RUN", expected=1)
+    assert len(requests) == before and not marker.exists()
+    print("Model scope: saved/override/order/default, exact restoration, literal IDs, unavailable and invalid pre-admission refusal: OK", flush=True)
+
+
 def exercise_doctor(root, base_env, endpoint):
     sandbox = root / "doctor"
     workspace = sandbox / "workspace"
@@ -210,6 +285,7 @@ with tempfile.TemporaryDirectory(prefix="ion-cli-") as temporary:
     try:
         endpoint = f"http://127.0.0.1:{server.server_port}/v1/chat/completions"
         exercise_doctor(root, env, endpoint)
+        exercise_model_scope(root, env, endpoint)
         run("use", "pictures", "model", "--endpoint", endpoint, "--wire", "chat-completions", "--images")
         for provider, model in (("first", "vendor/model"), ("second", "other")):
             run("use", provider, model, "--endpoint", endpoint, "--wire", "chat-completions")

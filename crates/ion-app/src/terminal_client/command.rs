@@ -122,7 +122,7 @@ pub(super) async fn dispatch_command(
                     "This action is available after the operation"
                 );
                 Ok(direction.candidate(
-                    services.models().choices(services.credentials())?,
+                    services.models().cycle_choices(services.credentials())?,
                     runtime.agent().model(),
                 ))
             })();

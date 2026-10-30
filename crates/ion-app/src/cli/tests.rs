@@ -140,6 +140,58 @@ fn model_patterns_preserve_provider_scope_namespaces_and_literal_suffixes() {
 }
 
 #[test]
+fn model_shortlists_are_ordered_invocation_preferences_not_durable_identities() {
+    for value in [",", " ", " , "] {
+        assert!(parse(&["ion", "--models", value, "chat"], true).is_err());
+    }
+    for args in [
+        vec![
+            "ion",
+            "--models",
+            " first/one,second/*,, literal:high ",
+            "run",
+            "hello",
+        ],
+        vec![
+            "ion",
+            "run",
+            "hello",
+            "--models",
+            " first/one,second/*,, literal:high ",
+        ],
+    ] {
+        assert_eq!(
+            parse(&args, false).unwrap().model_scope.unwrap(),
+            ["first/one", "second/*", "literal:high"]
+        );
+    }
+    assert!(parse(&["ion", "chat"], true).unwrap().model_scope.is_none());
+    assert_eq!(
+        parse(&["ion", "--models=", "chat"], true)
+            .unwrap()
+            .model_scope,
+        Some(Vec::new())
+    );
+    assert!(
+        parse(
+            &["ion", "--models", "first", "chat", "--models", "second"],
+            true
+        )
+        .is_err()
+    );
+    for verb in ["auth", "models", "use", "doctor", "inspect", "compact"] {
+        assert!(
+            parse(&["ion", "--models", "first/*", verb], true).is_err(),
+            "{verb}"
+        );
+        assert!(
+            parse(&["ion", verb, "--models", "first/*"], true).is_err(),
+            "{verb}"
+        );
+    }
+}
+
+#[test]
 fn headless_modes_share_one_action_and_explicit_chat_stays_explicit() {
     for (args, interactive, expected) in [
         (vec!["ion", "-p"], true, None),

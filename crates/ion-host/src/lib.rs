@@ -147,6 +147,13 @@ impl Host {
         &self.models
     }
 
+    /// Capture invocation-local model preferences without changing saved routes
+    /// or constraining explicit model identities in this Host's applications.
+    pub fn with_model_scope(mut self, patterns: Vec<String>) -> Self {
+        self.models = self.models.with_scope(patterns);
+        self
+    }
+
     pub fn sessions(&self, cwd: Option<PathBuf>) -> SessionCatalog {
         SessionCatalog::new(self.state_root.join("sessions"), cwd)
     }

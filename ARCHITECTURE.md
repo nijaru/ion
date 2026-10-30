@@ -1637,8 +1637,26 @@ current preference preselected; the client owns no parallel wire-capability tabl
 API-key provider discovery reuses known/configured model choices and labels local
 credential sources, not account authentication. Model selection marks the current
 binding; Ctrl-L opens it while retaining the draft, cursor and attachments.
-Next/previous model actions use Host's unscoped, ordered catalogue/configured
-choices, excluding missing required credentials but including keyless routes.
+Host owns ordered model shortlist preferences separately from route authority.
+An invocation list replaces the saved list; absent or empty lists are unscoped.
+Resolve only known routes, preserving pattern order and first-occurrence identity
+deduplication. Exact literal IDs, hard recognized provider prefixes and separate
+reasoning controls retain the human-matching contract above; positive globs add
+ordered expansion, not route synthesis. Invalid, unmatched or ambiguous patterns
+fail explicitly rather than widening selection. Resolve routes and scope from one
+configuration document per query. Explicit invocation validation precedes Session
+and MCP admission, even when an explicit model chooses the initial binding.
+
+Fresh automatic selection prefers a locally ready saved default within scope,
+otherwise its first ready choice. No ready choice requires setup, not an outside
+fallback. Explicit selection and exact Session restoration may remain outside the
+shortlist. An explicitly saved global default remains a canonical member of a
+nonempty saved list; invocation overrides are never serialized. Pattern overlaps
+deduplicate during resolution, not by rewriting user preferences.
+
+Next/previous model actions use the resolved ordered scope or unscoped
+catalogue/configured choices, excluding missing required credentials but including
+keyless routes.
 They wrap at the ends; zero or one ready choice is a no-op. Local key presence is
 not remote authentication, and cycling performs no provider probe or model request.
 Apply the chosen candidate through the same busy/clipboard guards and shared

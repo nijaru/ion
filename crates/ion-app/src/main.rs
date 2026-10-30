@@ -78,6 +78,12 @@ async fn run_cli(cli: Invocation) -> Result<()> {
         return Ok(io::stdout().lock().write_all(notices.as_bytes())?);
     }
     let mut host = Host::from_environment()?;
+    if let Some(patterns) = cli.model_scope {
+        host = host.with_model_scope(patterns);
+        // Validate an explicit invocation even when --model or a saved Session
+        // chooses the initial binding. Invalid preferences must not be ignored.
+        host.models().cycle_choices(host.credentials())?;
+    }
     if cli.no_skills
         || !cli.skills.is_empty()
         || cli.no_prompt_templates

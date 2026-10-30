@@ -2,7 +2,6 @@
 use ion_ai::ModelRef;
 
 use super::{ModelChoice, Selection};
-use crate::CredentialStatus;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ModelCycleDirection {
@@ -11,20 +10,15 @@ pub enum ModelCycleDirection {
 }
 
 impl ModelCycleDirection {
-    /// Choose from the existing catalogue/configuration order without probing a
+    /// Choose from the caller's resolved order without probing a
     /// provider, saving a default or attempting another route after a failure.
     /// Local credential presence is not remote authentication.
     pub fn candidate(self, choices: Vec<ModelChoice>, current: &ModelRef) -> Option<Selection> {
-        let ready: Vec<_> = choices
-            .into_iter()
-            .filter(|choice| {
-                !choice.selected.requires_key || choice.credential != CredentialStatus::Missing
-            })
-            .collect();
+        let ready: Vec<_> = choices.into_iter().filter(ModelChoice::is_ready).collect();
         if ready.len() <= 1 {
             return None;
         }
-        // Match Pi's unscoped cycle: an absent current model starts at index 0
+        // Match Pi's model cycle: an absent current model starts at index 0
         // before taking the requested step, rather than synthesizing a route.
         let index = ready
             .iter()
@@ -45,7 +39,7 @@ impl ModelCycleDirection {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{ModelStore, SavedSelection, Wire, catalog};
+    use crate::{CredentialStatus, ModelStore, SavedSelection, Wire, catalog};
     use std::path::PathBuf;
 
     fn choices() -> Vec<ModelChoice> {

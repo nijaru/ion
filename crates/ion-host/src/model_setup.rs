@@ -13,6 +13,9 @@ use serde::{Deserialize, Serialize, de::DeserializeOwned};
 
 mod cycling;
 mod matching;
+mod scope;
+#[cfg(test)]
+mod scope_tests;
 
 pub use cycling::ModelCycleDirection;
 
@@ -76,6 +79,8 @@ pub struct SavedSelection {
 struct ModelConfiguration {
     custom: Vec<SavedSelection>,
     default: Option<ModelRef>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    scope: Option<Vec<String>>,
 }
 
 #[derive(Clone)]
@@ -146,13 +151,30 @@ pub struct ModelChoice {
     pub credential: CredentialStatus,
 }
 
+impl ModelChoice {
+    /// Credential presence is local metadata, not remote authentication.
+    pub fn is_ready(&self) -> bool {
+        !self.selected.requires_key || self.credential != CredentialStatus::Missing
+    }
+}
+
 pub struct ModelStore {
     root: PathBuf,
+    scope_override: Option<Vec<String>>,
 }
 
 impl ModelStore {
     pub fn new(root: PathBuf) -> Self {
-        Self { root }
+        Self {
+            root,
+            scope_override: None,
+        }
+    }
+
+    /// Invocation-local preferences; an empty list explicitly disables a saved scope.
+    pub fn with_scope(mut self, patterns: Vec<String>) -> Self {
+        self.scope_override = Some(patterns);
+        self
     }
 
     pub fn save_default(&self, saved: &SavedSelection) -> Result<Selection> {
@@ -188,6 +210,21 @@ impl ModelStore {
             configuration.custom.push(effective);
         }
         configuration.default = Some(selected.identity());
+        if let Some(scope) = configuration
+            .scope
+            .as_mut()
+            .filter(|scope| !scope.is_empty())
+        {
+            // An explicitly saved default must remain in the saved rotation even
+            // when aliases/catalogues change. Overlaps deduplicate on resolution.
+            let canonical = format!("{}/{}", selected.provider, selected.model);
+            if !scope
+                .iter()
+                .any(|pattern| pattern.to_lowercase() == canonical.to_lowercase())
+            {
+                scope.push(canonical);
+            }
+        }
         write_json(&self.root.join("models.json"), &configuration)?;
         Ok(selected)
     }
@@ -210,6 +247,19 @@ impl ModelStore {
             });
         }
         let configuration = self.configuration()?;
+        if self.scope(&configuration).is_some() {
+            let choices = self.cycle_choices_with(&configuration, credentials)?;
+            let mut ready = choices.into_iter().filter(ModelChoice::is_ready);
+            let first = ready.next();
+            let preferred = configuration
+                .default
+                .as_ref()
+                .and_then(|default| ready.find(|choice| choice.selected.identity() == *default));
+            return preferred
+                .or(first)
+                .map(|choice| choice.selected)
+                .ok_or_else(|| ModelSelectionRequired.into());
+        }
         if let Some(selected) = &configuration.default {
             return self.resolve_identity_with(selected, &configuration);
         }
@@ -325,23 +375,64 @@ impl ModelStore {
     }
 
     pub fn options(&self) -> Result<Vec<Selection>> {
+        self.options_with(&self.configuration()?)
+    }
+
+    fn options_with(&self, configuration: &ModelConfiguration) -> Result<Vec<Selection>> {
         let mut options = catalog::models()
             .iter()
             .map(|entry| {
-                self.resolve_identity(&ModelRef {
-                    provider: entry.provider.into(),
-                    model: entry.id.into(),
-                })
+                self.resolve_identity_with(
+                    &ModelRef {
+                        provider: entry.provider.into(),
+                        model: entry.id.into(),
+                    },
+                    configuration,
+                )
             })
             .collect::<Result<Vec<_>>>()?;
-        for route in self.configuration()?.custom {
-            options.push(self.resolve_saved(&route)?);
+        for route in &configuration.custom {
+            options.push(self.resolve_saved(route)?);
         }
         Ok(options)
     }
 
     pub fn choices(&self, credentials: &CredentialStore) -> Result<Vec<ModelChoice>> {
-        self.options()?
+        self.choices_with(&self.configuration()?, credentials)
+    }
+
+    /// Ordered scope choices for cycling. Missing keys are retained as metadata;
+    /// the cycling policy excludes them, without widening an unavailable scope.
+    pub fn cycle_choices(&self, credentials: &CredentialStore) -> Result<Vec<ModelChoice>> {
+        self.cycle_choices_with(&self.configuration()?, credentials)
+    }
+
+    fn scope<'a>(&'a self, configuration: &'a ModelConfiguration) -> Option<&'a [String]> {
+        self.scope_override
+            .as_ref()
+            .or(configuration.scope.as_ref())
+            .filter(|patterns| !patterns.is_empty())
+            .map(Vec::as_slice)
+    }
+
+    fn cycle_choices_with(
+        &self,
+        configuration: &ModelConfiguration,
+        credentials: &CredentialStore,
+    ) -> Result<Vec<ModelChoice>> {
+        let choices = self.choices_with(configuration, credentials)?;
+        match self.scope(configuration) {
+            Some(patterns) => scope::resolve(patterns, choices),
+            None => Ok(choices),
+        }
+    }
+
+    fn choices_with(
+        &self,
+        configuration: &ModelConfiguration,
+        credentials: &CredentialStore,
+    ) -> Result<Vec<ModelChoice>> {
+        self.options_with(configuration)?
             .into_iter()
             .map(|selected| {
                 let label = catalog::find(&selected.provider, &selected.model)

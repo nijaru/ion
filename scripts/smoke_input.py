@@ -778,6 +778,40 @@ def exercise_configuration(work, base_env, endpoint):
                 before = len(requests)
             finally:
                 models.write_bytes(configured)
+            # Saved ordered preferences change the rotation, not the active
+            # binding, reasoning, default or unsent editor. Missing-key and bad
+            # scopes must never broaden back to all locally ready routes.
+            scoped = json.loads(configured)
+            scoped["scope"] = ["smoke/smoke-model", "login-only/model"]
+            models.write_text(json.dumps(scoped))
+            try:
+                terminal.output.clear()
+                terminal.send("SCOPED_🦀\x01\x10")
+                terminal.wait(lambda: "Selected login-only/model" in terminal.text())
+                terminal.output.clear()
+                terminal.send(b"\x1b[112;6u")
+                terminal.wait(lambda: "Selected smoke/smoke-model" in terminal.text())
+                scoped["scope"] = ["openai/gpt-5.4-mini"]
+                models.write_text(json.dumps(scoped))
+                terminal.output.clear()
+                terminal.send("\x10")
+                terminal.wait(lambda: "No other locally ready model" in terminal.text())
+                assert "API key:" not in terminal.text(), "unavailable scope solicited a credential"
+                scoped["scope"] = ["missing-model*"]
+                models.write_text(json.dumps(scoped))
+                terminal.output.clear()
+                terminal.send("\x10")
+                terminal.wait(lambda: 'scope pattern "missing-model*"' in terminal.text())
+                assert len(requests) == before, "scope selection issued a provider request"
+                terminal.output.clear()
+                terminal.send("PREFIX_\r")
+                terminal.wait(lambda: len(requests) == before + 1)
+                assert user_text(requests[-1]) == "PREFIX_SCOPED_🦀", requests[-1]
+                assert requests[-1]["model"] == "smoke-model" and requests[-1]["reasoning_effort"] == "high"
+                terminal.wait(lambda: b"state=done" in terminal.output)
+                before = len(requests)
+            finally:
+                models.write_bytes(configured)
             terminal.send("/login\r")
             terminal.wait(lambda: "API-key provider" in terminal.text())
             terminal.send("login-only")
@@ -830,7 +864,7 @@ def exercise_configuration(work, base_env, endpoint):
             terminal.close()
         assert (home / "models.json").read_bytes() == defaults, "configuration changed global defaults"
         assert not unexpected_connections, "configuration dispatched a native provider request: " + repr(unexpected_connections)
-        print(f"Configuration {mode}: model cycling/wrap/preflight, live settings, effort, API-key provider, model auth/cancel, secret quarantine and draft: OK", flush=True)
+        print(f"Configuration {mode}: model cycling/wrap/preflight/scope, live settings, effort, API-key provider, model auth/cancel, secret quarantine and draft: OK", flush=True)
 
 
 def exercise_resume(work, base_env, endpoint):

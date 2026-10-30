@@ -220,9 +220,9 @@ custom routes, marks the current model and preselects it. Typed `/model MODEL`
 uses the same shorthand matcher as `--model` and reports the canonical choice.
 Ctrl-L opens that picker
 without replacing the draft or its cursor/attachments. Ctrl-P and Ctrl-Shift-P
-cycle forward and backward through locally ready models, wrapping in catalog order
-then configured custom-route order. Required keys must be present locally; keyless
-routes are included. Cycling sends no model request or remote authentication probe,
+cycle forward and backward through locally ready models, wrapping in the configured
+scope order or, without a scope, catalog order then configured custom-route order.
+Required keys must be present locally; keyless routes are included. Cycling sends no model request or remote authentication probe,
 retains the draft/cursor/attachments and leaves the saved default unchanged. With
 fewer than two ready models it does nothing. Failed binding preflight keeps the
 old model rather than skipping to another route. Choosing a native model
@@ -238,6 +238,26 @@ in `~/.ion/models.json`, with concurrent saves serialized. Ion keeps user
 configuration, credentials, resources and saved Sessions under `~/.ion`; set
 `ION_HOME` to choose another directory for all of them. Existing XDG data is
 not automatically imported or migrated.
+
+Use `ion --models 'anthropic/*sonnet*,openai/gpt-5.4-mini'` for an ordered model
+shortlist. The invocation overrides the saved list without writing it; `--models=`
+explicitly uses the unscoped choices. To persist a list, add a `scope` array alongside
+`custom` and `default` in `models.json`, for example
+`"scope": ["anthropic/*sonnet*", "openai/gpt-5.4-mini"]`. Missing or empty lists
+are unscoped. Patterns use the ordinary known-model matcher plus positive,
+rooted gitignore-style globs (`*`, `?`, classes and recursive `**`); expansion retains
+catalog/configured order, and overlapping patterns keep the first occurrence.
+Recognized provider prefixes stay hard scopes. Exact IDs containing wildcard
+characters or colons remain literal; reasoning is still a separate option.
+
+Fresh automatic selection prefers a locally ready saved default within the list,
+otherwise its first ready model. Explicit `--model` and restored Session identities
+may be outside it: a shortlist is not a route allowlist. Unmatched, ambiguous or
+invalid patterns fail rather than broadening to all routes; no ready scoped model
+requires setup instead of an outside fallback. `ion use` includes its explicitly
+saved default in a nonempty saved list. Cycling retains the existing reasoning and
+binding-preflight policy. The current picker still exposes all routes; interactive
+scope editing and a scoped/all picker toggle are not yet implemented.
 
 Run `ion doctor` to check local setup without starting a coding client. Use
 `ion doctor --cwd DIR` to inspect another workspace. It checks the default or
