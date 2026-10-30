@@ -877,7 +877,10 @@ paths offer suggestions automatically. Relative, absolute and `~/` spellings are
 preserved; `~/` uses HOME, not ION_HOME. An unquoted leading `/` is reserved for
 terminal commands. Complete an absolute path after prose (`Read /tmp/pa`), with
 `@/tmp/pa`, or inside quotes (`"/tmp/pa`). URLs and ordinary prose do not open
-file suggestions automatically.
+file suggestions automatically. Builtin command arguments complete files only
+for `/image` and `/export`; `/model provider/model`, names and other non-file
+arguments do not trigger file discovery, even with Tab. Prompt-template and
+`/command:NAME` arguments retain ordinary path completion.
 Choosing a file inserts a path reference for the model to read, not its contents.
 Discovery runs off the client event loop. Fuzzy `@path` search uses the project
 snapshot, honoring ignore rules without following symlinks. Ordinary paths and

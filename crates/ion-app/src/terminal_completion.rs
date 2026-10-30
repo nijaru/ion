@@ -52,6 +52,16 @@ impl Completion {
     }
 
     fn file_prefix(&self, draft: &str, cursor: usize, force: bool) -> Option<files::Prefix> {
+        // Builtin arguments have command semantics, not ordinary prompt tokens.
+        // Even explicit Tab must not replace a model identity or name with a path.
+        if draft
+            .split_whitespace()
+            .next()
+            .and_then(Builtin::parse)
+            .is_some_and(|command| !matches!(command, Builtin::Image | Builtin::Export))
+        {
+            return None;
+        }
         if let Some(token) = files::path_prefix(draft, cursor, force) {
             return Some(token);
         }

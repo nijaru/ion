@@ -797,6 +797,42 @@ async fn typed_at_signs_remain_literal_without_accepting_suggestions() {
 }
 
 #[tokio::test]
+async fn builtin_non_file_arguments_never_discover_or_replace_paths() {
+    for literal in [
+        "/model outside/c",
+        "  /model\toutside/c",
+        "/name 🦀/topic",
+        "/compact inspect @src/lib.rs",
+        "/login \"provider/path",
+        "/model provider",
+    ] {
+        let mut ui = Frontend::default();
+        ui.insert(literal);
+        assert!(
+            ui.completion
+                .file_scope(&ui.draft, ui.cursor, &ui.cwd, None, false)
+                .is_none(),
+            "non-file command argument requested filesystem I/O: {literal}"
+        );
+        ui.refresh_completion(None, None, false);
+        ui.key(KeyEvent::new(KeyCode::Tab, Modifiers::NONE), None, None);
+        assert!(!ui.pickers.has_job(), "{literal}");
+        assert!(!ui.completion.active(), "{literal}");
+        // With no completion, Tab retains its ordinary literal editor behavior.
+        let expected = format!("{literal}\t");
+        assert_eq!(ui.draft, expected);
+        assert_eq!(ui.cursor, expected.len());
+        assert!(
+            matches!(ui.key(KeyEvent::new(KeyCode::Enter, Modifiers::NONE), None, None),
+                Action::Command(CommandInput::Editor(source))
+                    if source.literal == expected && source.cursor == expected.len()),
+            "Enter must dispatch the literal command: {literal}"
+        );
+        ui.pickers.shutdown().await.unwrap();
+    }
+}
+
+#[tokio::test]
 async fn ordinary_paths_complete_in_place_without_submitting() {
     let root = std::env::temp_dir().join(format!("ion-paths-{}", uuid::Uuid::now_v7()));
     fs::create_dir_all(root.join("space dir")).unwrap();
@@ -805,6 +841,26 @@ async fn ordinary_paths_complete_in_place_without_submitting() {
     for (mut literal, expected, force) in [
         ("Read m".to_owned(), "Read main.rs ".to_owned(), true),
         ("Read ./ma".to_owned(), "Read ./main.rs ".to_owned(), false),
+        (
+            "/image ./ma".to_owned(),
+            "/image ./main.rs ".to_owned(),
+            false,
+        ),
+        (
+            "/export \"space dir/ma".to_owned(),
+            "/export \"space dir/main.rs\" ".to_owned(),
+            false,
+        ),
+        (
+            "/command:review ./ma".to_owned(),
+            "/command:review ./main.rs ".to_owned(),
+            false,
+        ),
+        (
+            "/review ./ma".to_owned(),
+            "/review ./main.rs ".to_owned(),
+            false,
+        ),
         (
             format!("Read {}/ma", root.display()),
             format!("Read {}/main.rs ", root.display()),
