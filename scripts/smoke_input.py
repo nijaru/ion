@@ -20,6 +20,8 @@ from contextlib import closing
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
+from smoke_input_files import exercise_file_input
+
 
 root = Path(__file__).resolve().parent.parent
 binary = Path(os.environ.get("ION_SMOKE_BIN", root / "target/debug/ion"))
@@ -1308,87 +1310,7 @@ with tempfile.TemporaryDirectory(prefix="ion-input-") as temporary:
             finally:
                 terminal.close()
 
-            # File suggestions never own literal input. Browse/accept/dismiss
-            # through the real editor, with the model request as prompt oracle.
-            cwd = work / (mode + "-files")
-            (cwd / "src").mkdir(parents=True)
-            (cwd / "src/main.rs").write_text("fn main() {}\n")
-            (cwd / "plain.rs").write_text("fixture\n")
-            home_paths = Path(env["HOME"]) / f"paths-{mode}"
-            home_paths.mkdir(parents=True)
-            (home_paths / "main.rs").write_text("home fixture\n")
-            (cwd / "space dir").mkdir()
-            (cwd / "space dir/café🦀.rs").write_text("fixture\n")
-            terminal = Terminal(cwd, env, mode)
-            try:
-                terminal.wait(lambda: "›" in terminal.text())
-                cases = [
-                    ("nick@example.com", None, "nick@example.com"),
-                    ("Read @m next", "dismiss", "Read @ma next"),
-                    ("Read @smrs next", "accept", "Read @src/main.rs next"),
-                    ("Read @ma", "paste", "Read @src/main.rs "),
-                    ("Read @ma next", "undo", "Read @ma next"),
-                    ("Read pl next", "bare", "Read plain.rs next"),
-                    ("Read ./src/ma next", "accept", "Read ./src/main.rs next"),
-                    (f"Read {cwd}/src/ma next", "accept", f"Read {cwd}/src/main.rs next"),
-                    (f"@{cwd}/src/ma next", "accept", f"@{cwd}/src/main.rs next"),
-                    (f'"{cwd}/src/ma next', "accept", f'"{cwd}/src/main.rs" next'),
-                    (f"Read ~/paths-{mode}/ma next", "accept", f"Read ~/paths-{mode}/main.rs next"),
-                    ('Read "space dir/ca next', "accept", 'Read "space dir/café🦀.rs" next'),
-                    ('Read @"space d next', "directory", 'Read @"space dir/café🦀.rs" next'),
-                ]
-                # This fixture's synthetic CPR cannot establish native inline
-                # reflow. Qualify inline resize with an actual emulator instead.
-                if mode == "fullscreen":
-                    cases.append(("Read @ma next", "clipped", "Read @ma next"))
-                for prompt, action, expected in cases:
-                    terminal.output.clear()
-                    before = len(requests)
-                    terminal.send(b"\x1b[200~" + prompt.encode() + b"\x1b[201~" if action == "paste" else prompt)
-                    terminal.paint()
-                    if action:
-                        if action != "paste":
-                            terminal.send(b"\x1b[D" * len(" next"))
-                        if action == "bare":
-                            terminal.send(b"\t")
-                            terminal.paint()
-                            terminal.send("a")  # Forced completion survives ordinary typing.
-                        terminal.wait(lambda: "Files ·" in terminal.text())
-                        terminal.paint()
-                        if action == "clipped":
-                            # Submit DURING resize settling, before a new frame
-                            # can publish. Old visible rows authorize nothing in
-                            # the now-clipped/reconciling viewport.
-                            terminal.resize(30, 2, settle=False)
-                            terminal.send(b"\r")
-                        elif action == "dismiss":
-                            terminal.send("a")
-                            terminal.paint()
-                            terminal.send(b"\x1b")
-                        else:
-                            terminal.send(b"\t" if action == "directory" else b"\r")
-                            terminal.paint()
-                            if action == "directory":
-                                terminal.send(b"\t")
-                                terminal.paint()
-                            if action == "undo":
-                                terminal.send(b"\x1f")
-                                terminal.paint()
-                                terminal.send(b"\x1b")
-                        terminal.paint()
-                        if action != "clipped":
-                            assert len(requests) == before, ("completion/dismissal sent a prompt", prompt, action, user_text(requests[-1]))
-                    if action != "clipped":
-                        terminal.send(b"\r")
-                    terminal.wait(lambda: len(requests) == before + 1)
-                    assert user_text(requests[-1]) == expected, user_text(requests[-1])
-                    if action == "clipped":
-                        terminal.resize(30, 100)
-                    terminal.wait(lambda: b"state=done" in terminal.output)
-                terminal.finish()
-            finally:
-                terminal.close()
-            print(f"File input {mode}: literal email, fuzzy references, bare/relative/absolute/home paths, dismiss/accept/undo and quoted directories" + ("; clipped menu during resize" if mode == "fullscreen" else "") + ": OK", flush=True)
+            exercise_file_input(binary, work, env, mode, requests, user_text)
 
             # Stopping an observed shell withdraws automatic queued dispatch;
             # a normal exit 7 does not. Neither changes the saved native outcome.
