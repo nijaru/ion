@@ -367,7 +367,10 @@ background cards; labels still carry the execution state. Long action rows
 wrap under their tree branch; compact output lines are shortened to fit. Styles survive native
 publication as well as live/fullscreen rendering. Repeated successful observation
 work can coalesce, while edits, writes, commands and exceptional outcomes remain
-explicit.
+explicit. Submitted prompts use bold literal text with a colored left rail on
+wrapped lines, blank lines and image labels; steering retains its arrow. There
+are no background cards or extra padding. Very narrow views omit the rail to keep
+content visible. Source inspection keeps its original literal layout.
 
 Assistant responses render CommonMark headings, emphasis, lists, quotes, inline
 code and code blocks. Code whitespace is retained (tabs use four spaces), with

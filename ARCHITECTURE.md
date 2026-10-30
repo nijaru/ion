@@ -1753,6 +1753,10 @@ and never infer a language, read a source path or fetch definitions. Bound synch
 grammar work without omitting code; unsupported or over-limit blocks stay literal.
 Token spans must pass through the same control-safe grapheme wrapping and physical
 publication as ordinary text. User prompts and tool observations remain literal.
+Submitted prompts use bold text and a theme-colored rail repeated on every wrapped,
+blank and attachment row, without background cards or added padding. Steering keeps
+its arrow; tiny widths prioritize content over the rail. Source inspection retains
+its literal layout rather than this presentation. Inline and fullscreen share it.
 Publish settled content once. Terminal-local command output and diagnostics share
 an ordered presentation log anchored to stable Session prefixes, not a clipped
 composer surface or synthetic Session/model facts. Inline publication acknowledges

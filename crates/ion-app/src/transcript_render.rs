@@ -239,8 +239,8 @@ pub(super) fn live_rows(
                 if omitted > 0 {
                     preview.drain(..omitted);
                     if let Some(first) = preview.first_mut() {
-                        let prefix = if user {
-                            "› … "
+                        let prefix = if user && message.steering {
+                            "↳ … "
                         } else if message
                             .parts
                             .iter()
@@ -349,9 +349,23 @@ pub(super) fn render_message(
 ) {
     if user {
         let start = rows.len();
-        render_source_message(rows, message, true, width);
+        let rail = width > 2;
+        // The rail replaces the prompt chevron, but not steering's provenance arrow.
+        render_source_message(
+            rows,
+            message,
+            message.steering,
+            if rail { width - 2 } else { width },
+        );
         for row in &mut rows[start..] {
-            row.style = detail.theme.style(Role::UserInput);
+            row.style = detail
+                .theme
+                .style(Role::Text)
+                .add_modifier(ratatui::style::Modifier::BOLD);
+            if rail {
+                row.spans
+                    .insert(0, Span::styled("┃ ", detail.theme.style(Role::UserInput)));
+            }
         }
         return;
     }
@@ -1928,7 +1942,7 @@ mod tests {
             .map(ToString::to_string)
             .collect::<Vec<_>>()
             .join("\n");
-        assert!(user.starts_with("› # Heading"));
+        assert!(user.starts_with("┃ # Heading"));
         assert!(user.contains("**bold** [site](https://example.org)"));
         assert!(matches!(&message.parts[0], TranscriptPart::Text(text) if text == source));
     }
@@ -2160,6 +2174,96 @@ mod tests {
     }
 
     #[test]
+    fn submitted_prompts_keep_literal_text_and_connected_rails_without_padding() {
+        let theme = distinct_theme();
+        let keys = crate::keybindings::KeyBindings::default();
+        let options = RenderOptions::new(
+            OutputDetail::Compact,
+            &keys,
+            &theme,
+            ThinkingVisibility::Hidden,
+        );
+        let mut message = TranscriptMessage {
+            turn: Some(1),
+            steering: false,
+            parts: vec![
+                TranscriptPart::Text("**界e\u{0301}**\n\nnext\u{1b}".into()),
+                TranscriptPart::Image {
+                    mime_type: "image/png".into(),
+                },
+            ],
+        };
+        for steering in [false, true] {
+            message.steering = steering;
+            let mut rendered = Vec::new();
+            render_message(&mut rendered, &message, true, 80, &options);
+            let first = if steering {
+                "┃ ↳ **界e\u{0301}**"
+            } else {
+                "┃ **界e\u{0301}**"
+            };
+            assert_eq!(rendered[0].to_string(), first);
+            assert!(rendered.iter().all(|row| row.to_string().starts_with("┃ ")));
+            assert!(rendered.iter().any(|row| row.to_string().trim_end() == "┃"));
+            assert!(rendered.iter().any(|row| row.to_string().contains("next�")));
+            assert!(
+                rendered
+                    .last()
+                    .unwrap()
+                    .to_string()
+                    .ends_with("[image: image/png]")
+            );
+            for row in &rendered {
+                assert_eq!(row.style.fg, theme.style(Role::Text).fg);
+                assert!(row.style.add_modifier.contains(Modifier::BOLD));
+                assert_eq!(row.spans[0].style.fg, theme.style(Role::UserInput).fg);
+                assert_eq!(row.style.bg, None);
+            }
+            for width in 1..=16 {
+                let mut narrow = Vec::new();
+                render_message(&mut narrow, &message, true, width, &options);
+                assert!(
+                    narrow.iter().all(|row| row.width() <= width),
+                    "{width}: {narrow:?}"
+                );
+                if width > 2 {
+                    assert!(narrow.iter().all(|row| row.to_string().starts_with("┃ ")));
+                }
+            }
+            let mut source = Vec::new();
+            render_source_message(&mut source, &message, true, 80);
+            assert!(
+                source[0]
+                    .to_string()
+                    .starts_with(if steering { "↳ **" } else { "› **" })
+            );
+            assert!(
+                source
+                    .iter()
+                    .all(|row| row.style == Style::default() && !row.to_string().contains('┃'))
+            );
+        }
+    }
+
+    #[test]
+    fn clipped_prompt_preview_keeps_its_rail_and_steering_provenance() {
+        for steering in [false, true] {
+            let projection = TranscriptProjection {
+                items: vec![TranscriptItem::User(TranscriptMessage {
+                    turn: Some(1),
+                    steering,
+                    parts: vec![TranscriptPart::Text("first\nsecond\nthird\nfourth".into())],
+                })],
+            };
+            let preview = plain_live_rows(&projection, 20, 3);
+            assert_eq!(preview.len(), 3);
+            assert!(preview[1].starts_with(if steering { "↳ … ┃" } else { "… ┃" }));
+            assert!(preview[2].ends_with("fourth"));
+            assert!(!preview.iter().any(|row| row.contains('›')));
+        }
+    }
+
+    #[test]
     fn user_and_assistant_are_not_rendered_as_peer_tool_protocol_rows() {
         let projection = TranscriptProjection {
             items: vec![
@@ -2177,7 +2281,7 @@ mod tests {
         };
         assert_eq!(
             plain_rows(&projection, 80),
-            vec!["› fix the parser", "", "I found the issue."]
+            vec!["┃ fix the parser", "", "I found the issue."]
         );
     }
 
