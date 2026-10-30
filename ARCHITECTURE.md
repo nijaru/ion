@@ -1752,8 +1752,10 @@ cannot promise that. Physical publication is never execution authority.
 
 Code Mode is opt-in beside direct calls/discovery. A confined Host VM gets owned
 code, limits and a bounded bridge; Core retains Session/catalogue authority. It is
-not another agent loop or a durable JavaScript runtime. Pi is the model-facing
-authoring reference: named discoverable calls, useful declarations, selected
+not another agent loop. Guest state is invocation-local: live waiting, shared
+script values and crash-resumable computation are different capabilities, none
+implied by choosing a VM. Pi is the model-facing authoring reference: named
+discoverable calls, useful declarations, selected
 structured/text/image output and actionable errors. The
 [README](README.md#optional-code-mode) states the implemented subset;
 no comparative speedup is assumed. VM execution capacity must be independent
@@ -1764,8 +1766,20 @@ completion. Cancellation does not detach either the VM or its started host work.
 Identify a parent by committed assistant-entry sequence and call ordinal, not a
 reusable provider ID. Commit nested tool intent before dispatch and observation
 before guest consumption. Parent settlement joins its tool children; recovery
-closes unknown children without rerunning code. Selected results reach model
-context; raw child facts stay inspectable, not fabricated conversation messages.
+closes unknown children without rerunning code. That evidence journal is not a
+guest restart log: it does not capture every helper reply or guest consumption
+order. Reconstructing computation would require a separate, explicit Core-owned
+recovery contract; it cannot authorize repeating an unknown external effect.
+Selected results reach model context; raw child facts stay inspectable, not
+fabricated conversation messages.
+
+Treat model exposure, discovery and callable authority separately. The current
+hybrid interface keeps direct calls available; guest search and declarations
+project the same frozen catalogue as dispatch. Moving a catalogue into a system
+prompt or tool description cannot grant authority. A future script-only exposure
+policy must not turn hidden or application-excluded tools into guest capabilities.
+A live wait handle likewise cannot become restart authority or an execution deadline;
+work outliving a caller needs explicit retained ownership, stop and joined settlement.
 
 Result-shape hints belong to the frozen tool definition, not the provider-facing
 argument schema. Code Mode discovery returns a standalone JSON Schema and a path

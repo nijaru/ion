@@ -2538,7 +2538,10 @@ normal return drains requests already transferred by the guest, even if
 unawaited. Failure or cancellation closes admission and awaits started work.
 A failed result commit blocks dependent consumption; interrupted children are
 recorded as unknown before their parent is recovered. Reopening never reruns
-the script. `Promise.all` does not roll back writes or external calls.
+the script. Saved child evidence is not a JavaScript checkpoint: guest locals,
+helper replies and result-consumption order are not retained for replay. There is
+no cross-invocation `store`/`load` or resumable `exec`/`wait` cell interface.
+`Promise.all` does not roll back writes or external calls.
 
 Each QuickJS invocation owns a separate native thread, not a slot in the host
 blocking pool its tool calls need. The operation retains the VM join through
