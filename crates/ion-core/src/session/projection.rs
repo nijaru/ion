@@ -17,14 +17,20 @@ pub(super) fn valid_model_context(context: &ModelContextSnapshot) -> bool {
         .all(|tool| !tool.name.trim().is_empty() && names.insert(tool.name.as_str()))
 }
 
-pub(super) fn shell_outcome_at(entries: &[SessionEntry], settlement_index: usize) -> &UserShellOutcome {
+pub(super) fn shell_outcome_at(
+    entries: &[SessionEntry],
+    settlement_index: usize,
+) -> &UserShellOutcome {
     match entries.get(settlement_index) {
         Some(SessionEntry::UserShellSettled { outcome, .. }) => outcome,
         _ => &UserShellOutcome::Unknown,
     }
 }
 
-pub(super) fn projected_entry_messages(entries: &[SessionEntry], display: bool) -> Vec<Option<Message>> {
+pub(super) fn projected_entry_messages(
+    entries: &[SessionEntry],
+    display: bool,
+) -> Vec<Option<Message>> {
     entries
         .iter()
         .enumerate()
