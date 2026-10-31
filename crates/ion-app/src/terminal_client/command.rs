@@ -215,8 +215,10 @@ pub(super) async fn dispatch_command(
             }
         }
         CommandKind::Builtin(Builtin::Editor) if args.is_empty() => {
-            ui.completion.clear();
-            match edit_text_in_terminal(terminal, screen, &ui.draft, super::MAX_DRAFT).await? {
+            ui.editor.completion.clear();
+            match edit_text_in_terminal(terminal, screen, &ui.editor.draft, super::MAX_DRAFT)
+                .await?
+            {
                 Ok(text) => {
                     ui.replace_draft_atomic(text);
                     ui.status = "Draft returned from editor".into();
@@ -343,13 +345,12 @@ pub(super) fn handle_builtin(
             )),
             "inline" | "regular" => {
                 ui.mode = TuiMode::Inline;
-                ui.scroll = 0;
+                ui.view.follow_end();
                 ui.status = "Inline TUI · native terminal scrollback".into();
             }
             "fullscreen" => {
                 ui.mode = TuiMode::Fullscreen;
-                ui.scroll = 0;
-                ui.fullscreen_rows = 0;
+                ui.view.follow_end();
                 ui.status = format!(
                     "Fullscreen TUI · {} / {} or mouse wheel scrolls",
                     ui.keys.label(crate::keybindings::KeyAction::PageUp),
@@ -386,7 +387,7 @@ pub(super) fn handle_builtin(
             let keys = crate::keybindings::KeyBindings::load(services.config_root())?;
             let themes = ui.themes.reloaded()?;
             runtime.reload_resources()?;
-            ui.break_edit_focus();
+            ui.editor.break_edit_focus();
             ui.keys = keys;
             ui.themes = themes;
             ui.status.clear();
@@ -503,7 +504,7 @@ pub(super) fn handle_builtin(
         Builtin::Tools => ui.list_tools(),
         Builtin::Tool => {
             let number = if args.is_empty() {
-                tools(&ui.history).count()
+                tools(ui.conversation.items()).count()
             } else {
                 args.parse::<usize>().context("use /tool [N]")?
             };

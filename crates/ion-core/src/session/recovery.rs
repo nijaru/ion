@@ -104,15 +104,4 @@ impl Session {
             interrupted,
         ))
     }
-
-    pub(crate) fn turn_replay_state(&self, turn: u64) -> Result<(bool, bool), SessionError> {
-        let store = self.store.lock().map_err(|_| SessionError::Poisoned)?;
-        if store.state.active != Some(turn) {
-            return Err(SessionError::InvalidHistory);
-        }
-        Ok((
-            store.state.assistant_seen_in_turn,
-            store.state.prefix_bound_in_turn,
-        ))
-    }
 }

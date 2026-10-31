@@ -1,5 +1,6 @@
 //! Model-authored Markdown presentation. No HTML renderer, fetches or terminal links.
 use pulldown_cmark::{Event, Options, Parser, Tag, TagEnd};
+use std::ops::Range;
 
 mod code;
 mod table;
@@ -10,7 +11,7 @@ use ratatui::{
 use unicode_width::UnicodeWidthStr;
 
 use crate::{
-    display_text::push_styled,
+    display_text::{Component, MappedLine, ParsedComponent, Wrapping, wrap_mapped},
     presentation_style::{Role, Theme},
 };
 
@@ -21,62 +22,93 @@ struct Prefix {
 }
 
 struct View<'a> {
-    rows: &'a mut Vec<Line<'static>>,
+    rows: &'a mut Vec<MappedLine>,
+    source: &'a str,
+    range: Range<usize>,
     theme: &'a Theme,
     width: usize,
-    spans: Vec<Span<'static>>,
-    separator: Option<Line<'static>>,
+    content: MappedLine,
+    separator: Option<MappedLine>,
     styles: Vec<Style>,
     prefixes: Vec<Prefix>,
     lists: Vec<Option<u64>>,
-    links: Vec<(String, usize)>,
+    links: Vec<(String, usize, usize)>,
+    wrapping: Wrapping,
 }
 
 pub(super) fn render(rows: &mut Vec<Line<'static>>, source: &str, width: usize, theme: &Theme) {
-    let start = rows.len();
-    let mut view = View::new(rows, width, theme.style(Role::Text), theme);
-    let mut events = Parser::new_ext(source, Options::ENABLE_TABLES);
-    while let Some(event) = events.next() {
+    rows.extend(
+        render_mapped(source, width, theme)
+            .into_iter()
+            .map(|row| row.line),
+    );
+}
+
+pub(super) fn render_mapped(source: &str, width: usize, theme: &Theme) -> Vec<MappedLine> {
+    let mut rows = Vec::new();
+    let mut view = View::new(&mut rows, source, width, theme.style(Role::Text), theme);
+    let mut events = Parser::new_ext(source, Options::ENABLE_TABLES).into_offset_iter();
+    while let Some((event, range)) = events.next() {
+        view.range = range.clone();
         match event {
             Event::Start(Tag::Table(alignments)) => view.table(&mut events, alignments),
             Event::Start(Tag::CodeBlock(kind)) => view.code_block(&mut events, kind),
-            event => view.event(event),
+            event => view.event(event, range),
         }
     }
     view.flush();
-    while view.rows.len() > start && view.rows.last().is_some_and(|row| row.spans.is_empty()) {
+    while view
+        .rows
+        .last()
+        .is_some_and(|row| row.line.spans.is_empty())
+    {
         view.rows.pop();
     }
+    rows
 }
 
 impl<'a> View<'a> {
-    fn new(rows: &'a mut Vec<Line<'static>>, width: usize, base: Style, theme: &'a Theme) -> Self {
+    fn new(
+        rows: &'a mut Vec<MappedLine>,
+        source: &'a str,
+        width: usize,
+        base: Style,
+        theme: &'a Theme,
+    ) -> Self {
         Self {
             rows,
+            source,
+            range: 0..0,
             theme,
             width,
-            spans: Vec::new(),
+            content: MappedLine::default(),
             separator: None,
             styles: vec![base],
             prefixes: Vec::new(),
             lists: Vec::new(),
             links: Vec::new(),
+            wrapping: Wrapping::Words,
         }
     }
 
-    fn event(&mut self, event: Event<'_>) {
+    fn event(&mut self, event: Event<'_>, range: Range<usize>) {
+        self.range = range;
         match event {
             Event::Start(tag) => self.start(tag),
             Event::End(tag) => self.end(tag),
-            Event::Text(text) | Event::Html(text) | Event::InlineHtml(text) => {
-                self.text(text.into_string());
+            Event::Text(text) => {
+                self.parsed_text(text.into_string(), self.style(), ParsedComponent::Text)
             }
-            Event::Code(text) => self.spans.push(Span::styled(
+            Event::Html(text) | Event::InlineHtml(text) => {
+                self.parsed_text(text.into_string(), self.style(), ParsedComponent::Html)
+            }
+            Event::Code(text) => self.component_text(
                 text.into_string(),
                 self.style().patch(self.theme.style(Role::Code)),
-            )),
-            Event::SoftBreak => self.text(" ".into()),
-            Event::HardBreak => self.text("\n".into()),
+                ParsedComponent::Code,
+            ),
+            Event::SoftBreak => self.parsed_text(" ".into(), self.style(), ParsedComponent::Text),
+            Event::HardBreak => self.parsed_text("\n".into(), self.style(), ParsedComponent::Text),
             Event::Rule => {
                 self.flush();
                 self.text("─".repeat(self.width.clamp(1, 12)));
@@ -94,11 +126,36 @@ impl<'a> View<'a> {
     }
 
     fn text(&mut self, text: String) {
-        self.spans.push(Span::styled(text, self.style()));
+        self.content.append(&MappedLine::generated(
+            Line::from(Span::styled(text, self.style())),
+            self.range.start,
+        ));
+    }
+
+    fn parsed_text(&mut self, text: String, style: Style, kind: ParsedComponent) {
+        if self.source[self.range.clone()] == text {
+            self.content.append(&MappedLine::raw(
+                Line::from(Span::styled(text, style)),
+                self.range.clone(),
+            ));
+        } else {
+            self.component_text(text, style, kind);
+        }
+    }
+
+    fn component_text(&mut self, text: String, style: Style, kind: ParsedComponent) {
+        self.content.append(&MappedLine::component(
+            Line::from(Span::styled(text, style)),
+            Component::Parsed {
+                node: self.range.start,
+                kind,
+            },
+            0,
+        ));
     }
 
     fn flush(&mut self) {
-        if self.spans.is_empty() {
+        if self.content.line.spans.is_empty() {
             return;
         }
         if let Some(separator) = self.separator.take() {
@@ -120,13 +177,13 @@ impl<'a> View<'a> {
             .iter()
             .map(|prefix| prefix.continuation.as_str())
             .collect::<String>();
-        push_styled(
-            self.rows,
+        self.rows.extend(wrap_mapped(
             &first,
             &continuation,
-            Line::from(std::mem::take(&mut self.spans)),
+            std::mem::take(&mut self.content),
             self.width,
-        );
+            self.wrapping,
+        ));
         for prefix in &mut self.prefixes {
             prefix.used = true;
         }
@@ -134,7 +191,7 @@ impl<'a> View<'a> {
 
     fn separate(&mut self) {
         if self.prefixes.is_empty() {
-            self.separator = Some(Line::default());
+            self.separator = Some(MappedLine::generated(Line::default(), self.range.start));
         }
     }
 
@@ -144,11 +201,14 @@ impl<'a> View<'a> {
             .iter()
             .map(|prefix| prefix.continuation.as_str())
             .collect::<String>();
-        self.separator = Some(if prefix.is_empty() {
-            Line::default()
-        } else {
-            Line::raw(prefix)
-        });
+        self.separator = Some(MappedLine::generated(
+            if prefix.is_empty() {
+                Line::default()
+            } else {
+                Line::raw(prefix)
+            },
+            self.range.start,
+        ));
     }
 
     fn push_prefix(&mut self, first: String, continuation: String) {
@@ -162,7 +222,11 @@ impl<'a> View<'a> {
     fn start(&mut self, tag: Tag<'_>) {
         let image = matches!(tag, Tag::Image { .. });
         match tag {
-            Tag::Paragraph | Tag::HtmlBlock => self.flush(),
+            Tag::Paragraph => self.flush(),
+            Tag::HtmlBlock => {
+                self.flush();
+                self.wrapping = Wrapping::Literal;
+            }
             Tag::Heading { .. } => {
                 self.flush();
                 self.styles.push(self.style().add_modifier(Modifier::BOLD));
@@ -193,7 +257,11 @@ impl<'a> View<'a> {
                 self.push_prefix(marker, continuation);
             }
             Tag::Link { dest_url, .. } | Tag::Image { dest_url, .. } => {
-                self.links.push((dest_url.into_string(), self.spans.len()));
+                self.links.push((
+                    dest_url.into_string(),
+                    self.content.line.spans.len(),
+                    self.content.map.len(),
+                ));
                 self.styles
                     .push(self.style().patch(self.theme.style(Role::Link)));
                 if image {
@@ -209,6 +277,7 @@ impl<'a> View<'a> {
             TagEnd::Paragraph | TagEnd::HtmlBlock => {
                 self.flush();
                 self.paragraph_separator();
+                self.wrapping = Wrapping::Words;
             }
             TagEnd::Heading(_) => {
                 self.flush();
@@ -240,17 +309,28 @@ impl<'a> View<'a> {
                     self.text("]".into());
                 }
                 self.styles.pop();
-                if let Some((target, start)) = self.links.pop() {
-                    let label = self.spans[start..]
+                if let Some((target, start, map_start)) = self.links.pop() {
+                    let label = self.content.line.spans[start..]
                         .iter()
                         .map(|span| span.content.as_ref())
                         .collect::<String>();
                     let destination = visible_target(&target);
                     if label == target && destination != target {
-                        self.spans.truncate(start);
+                        self.content.line.spans.truncate(start);
+                        self.content.map.truncate(map_start);
                         self.text(format!("[{destination}]"));
                     } else if label != target {
-                        self.text(format!(" ({destination})"));
+                        self.text(" (".into());
+                        if destination == target {
+                            self.component_text(
+                                destination.to_owned(),
+                                self.style(),
+                                ParsedComponent::LinkDestination,
+                            );
+                        } else {
+                            self.text(destination.to_owned());
+                        }
+                        self.text(")".into());
                     }
                 }
             }
@@ -275,11 +355,143 @@ fn visible_target(target: &str) -> &str {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::display_text::Origin;
 
     fn view(source: &str, width: usize) -> Vec<Line<'static>> {
         let mut rows = Vec::new();
         render(&mut rows, source, width, &Theme::default());
         rows
+    }
+
+    #[test]
+    fn parser_normalization_maps_original_tokens_not_fitted_text_occurrences() {
+        for source in [
+            "` alpha\nbeta `",
+            "`alpha\r\nbeta`",
+            "`alpha\rbeta`",
+            "> `alpha\n> beta`",
+            "- `alpha\n  beta`",
+            "-    `alpha\n     beta`",
+            "> 2. `alpha\n>    beta`",
+            "- > `alpha\n  > beta`",
+            "\t`literal`",
+            "| A | B |\n| --- | --- |\n| `a\\|beta` | x |",
+            "-\t`alpha\n\tbeta`",
+            "`  `",
+            "`` `alpha` ``",
+            "   - `alpha\n     beta`",
+            ">   - `alpha\n>     beta`",
+            "> `alpha\nbeta`",
+            "- `alpha\nbeta`",
+            "> - `alpha\n>\tbeta`",
+            "1.   `alpha\n     beta`",
+            "  12. `alpha\n      beta`",
+            "- - `alpha\n    beta`",
+            "-\t> `alpha\n\t> beta`",
+            "> -\t`alpha\n>   beta`",
+            "> -\t`alpha\n> \tbeta`",
+            "- -\t`alpha\n    beta`",
+            "> 1.\t`alpha\n>     beta`",
+            "intro\r\r> -\t`alpha\r>   beta`",
+        ] {
+            for width in [1, 7, 80] {
+                let mapped = render_mapped(source, width, &Theme::default());
+                assert!(
+                    mapped.iter().all(|row| row.line.width() <= width),
+                    "{source}"
+                );
+                for (event, range) in
+                    Parser::new_ext(source, Options::ENABLE_TABLES).into_offset_iter()
+                {
+                    if let Event::Code(text) = event
+                        && let Some(byte) = text.find("beta")
+                    {
+                        let expected = Component::Parsed {
+                            node: range.start,
+                            kind: ParsedComponent::Code,
+                        };
+                        assert!(mapped.iter().flat_map(|row| &row.map).any(|mapping| matches!(&mapping.origin, Origin::Component { component, bytes } if *component == expected && bytes.contains(&byte))), "{source}: {mapped:?}");
+                    }
+                }
+            }
+        }
+        let source = "**e**\u{301} &amp; \\* [label](https://example.org)\n\n```rust\nlet n = \"界\\t\";\n```";
+        let rows = render_mapped(source, 7, &Theme::default());
+        let entity = source.find("&amp;").unwrap();
+        assert!(rows.iter().any(|row| {
+            row.map.iter().any(|mapping| {
+                mapping.origin
+                    == Origin::Component {
+                        component: Component::Parsed {
+                            node: entity,
+                            kind: ParsedComponent::Text,
+                        },
+                        bytes: 0..1,
+                    }
+                    && &row.line.to_string()[mapping.display.clone()] == "&"
+            })
+        }));
+        let label = source.find("label").unwrap();
+        assert!(
+            rows.iter()
+                .flat_map(|row| &row.map)
+                .any(|mapping| matches!(&mapping.origin, Origin::Raw(raw) if raw.start == label))
+        );
+        let suppressed = render_mapped("[x](javascript:SECRET)", 8, &Theme::default());
+        assert!(
+            !suppressed
+                .iter()
+                .flat_map(|row| &row.map)
+                .any(|mapping| matches!(
+                    mapping.origin,
+                    Origin::Component {
+                        component: Component::Parsed {
+                            kind: ParsedComponent::LinkDestination,
+                            ..
+                        },
+                        ..
+                    }
+                ))
+        );
+        let code = source.find("let n").unwrap();
+        assert!(
+            rows.iter()
+                .flat_map(|row| &row.map)
+                .any(|mapping| matches!(&mapping.origin, Origin::Raw(raw) if raw.start == code))
+        );
+    }
+
+    #[test]
+    fn valid_tabbed_quote_list_code_uses_parser_text_without_a_second_normalizer() {
+        let source = ">\t*\t`\n>     a`";
+        let parsed = Parser::new(source)
+            .find_map(|event| {
+                if let Event::Code(text) = event {
+                    Some(text.into_string())
+                } else {
+                    None
+                }
+            })
+            .unwrap();
+        assert_eq!(parsed, "     a");
+        let rows = view(source, 80);
+        assert!(rows.iter().any(|row| row.to_string().contains(&parsed)));
+    }
+
+    #[test]
+    fn paragraphs_wrap_at_words_but_code_blocks_remain_literal() {
+        let rows = view("alpha beta\n\n```text\nalpha beta\n```\n\nalpha beta", 10);
+        assert!(
+            rows.windows(2).any(|pair| {
+                pair[0].to_string() == "  alpha be" && pair[1].to_string() == "  ta"
+            })
+        );
+        assert_eq!(rows.last().unwrap().to_string(), "alpha beta");
+        let prose = view("alpha beta", 8);
+        assert_eq!(
+            prose.iter().map(ToString::to_string).collect::<Vec<_>>(),
+            ["alpha ", "beta"]
+        );
     }
 
     #[test]

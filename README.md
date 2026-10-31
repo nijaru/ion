@@ -323,23 +323,27 @@ MiMo maps all three levels to enabled thinking. Every current HTTP route refuses
 exact token budgets. Effort affects future generation, not retained historical
 reasoning or signed continuation. `/settings thinking show|hide` remains display-only.
 
-Terminal chat is inline-first. Settled transcript rows are appended once to
-native terminal scrollback; Ion keeps only the active composer/progress region
-mutable. Resuming or switching to a saved Session bootstraps at most the latest
-six turns into scrollback and labels omitted earlier history as retained; the
+Terminal chat is inline-first. Sealed committed blocks append once to native
+scrollback, including earlier work during a still-running Turn. Unfinished groups,
+provisional responses and the current editor remain mutable. Resuming or switching
+to a saved Session bootstraps at most the latest six turns into scrollback and labels omitted earlier history as retained; the
 complete Session remains available through inspect/export and tool detail.
-Publication uses available terminal rows before scrolling. Ordinary redraw and
-resize do not publish live rows; terminal-native reflow remains emulator-owned.
+Publication uses available terminal rows before scrolling. Redraw and resize
+never publish provisional content or replay archived blocks; terminal-native
+reflow remains emulator-owned. Page Up/Down reads the same conversation used by
+fullscreen. Ordinary selectors stay inline and preserve the draft. Wrapped
+Up/Down retains the caret's display column and enters prompt history only at the
+editor's visual boundary.
 `/help` groups commands by purpose without dumping their argument grammars.
 Use `/help model` (or another built-in command name) for usage and `/help keys`
 for effective keyboard controls, or [configure keybindings](#keybindings).
 Type `/` for searchable command/resource discovery.
 Command responses (`/help`, `/skills`, `/tools`, `/tasks result`, etc.) and
 client diagnostics also publish their complete wrapped content, not a clipped
-composer preview. They remain in a terminal-local display log interleaved with
-Session history for fullscreen scrolling. This log lasts until Session replacement
-or client exit; it is not durable Session history or model input. Explicit repeated
-commands produce fresh responses; identical consecutive diagnostics at the same
+composer preview. They share the conversation as terminal-local notices
+interleaved with Session facts in both viewports. Notices last until Session
+replacement or client exit; they are not durable Session history or model input.
+Explicit repeated commands produce fresh responses; identical consecutive diagnostics at the same
 history boundary coalesce. Unfinished recalled or resynchronized facts stay in a
 mutable preview rather than being irreversibly published.
 A hidden inline caret, including a collapsed question, reserves one blank
@@ -417,15 +421,17 @@ completion delivery can authorize additional model work; see [Completion deliver
 Enter (or Space with an empty search) cycles the selected value immediately; the
 list stays open until Esc. `/settings compact` (the default) or `/settings expanded`
 also changes output detail without changing model behavior.
-Compact shows the first three read-content lines and the last three lines of
-both command streams (four for direct shell), with explicit omission notices.
+Compact shows the first three read-content lines and folds successful command
+stdout behind an explicit detail hint. Failed command stdout and stderr retain
+tail previews of three lines (four for direct shell), with omission notices.
+Mutations, failures and capture uncertainty remain visible.
 Expanded shows all recorded read/command output and edit capture, and separates
 successful observations instead of coalescing them. Neither mode fetches omitted
 file ranges or capture artifacts; capture truncation stays visible. Tool text is
 literal and control-safe, not Markdown. The choice lasts for this terminal only
-and applies to fullscreen and future inline publication. Existing native history
-is not rewritten or republished; the bounded inline progress view stays compact.
-Ctrl-O always retains source inspection.
+and applies to both viewports and future publication. Existing native history
+is not rewritten or republished. The current viewport uses the selected detail
+level within its available space. Ctrl-O always retains source inspection.
 
 `/settings thinking show` or `/settings thinking hide` controls provider-supplied
 human thinking separately from output detail and generation effort. Thinking is

@@ -1,6 +1,7 @@
 //! Atomic user-steering and automated-readiness intake at complete boundaries.
 use super::*;
 use crate::{CompletionInbox, CompletionNotice};
+use ion_ai::ModelExecution;
 
 /// Host-owned prepared steering. Automated readiness retains independent,
 /// receiving-owned custody, shared across this receiver's operations.
@@ -14,16 +15,25 @@ pub struct SteeringInbox<M = ()> {
 #[derive(Default)]
 pub(super) struct CommittedInputs {
     pub steering: Vec<Message>,
+    pub entries: crate::session::CommittedInputEntries,
     pub completions: Vec<CompletionNotice>,
 }
 impl CommittedInputs {
     pub(super) fn observe(self, turn: u64, observe: &mut impl FnMut(AgentEvent)) {
-        for input in self.steering {
-            observe(AgentEvent::SteeringCommitted { turn, input });
+        assert_eq!(
+            self.steering.len() as u64,
+            self.entries.steering.end - self.entries.steering.start
+        );
+        for (entry, input) in self.entries.steering.zip(self.steering) {
+            observe(AgentEvent::SteeringCommitted { turn, entry, input });
         }
         if !self.completions.is_empty() {
             observe(AgentEvent::CompletionCommitted {
                 turn,
+                entry: self
+                    .entries
+                    .completion
+                    .expect("committed completion has a coordinate"),
                 notices: self.completions,
                 new_turn: false,
             });
@@ -84,7 +94,7 @@ impl<M> SteeringInbox<M> {
         let notices = completion
             .as_ref()
             .map_or_else(Vec::new, |batch| batch.notices());
-        session.record_inputs(
+        let entries = session.record_inputs(
             turn,
             pending
                 .iter()
@@ -99,6 +109,7 @@ impl<M> SteeringInbox<M> {
         drop(pending);
         // User metadata may execute Drop code; never release it under a lock.
         Ok(CommittedInputs {
+            entries,
             steering: accepted
                 .into_iter()
                 .map(crate::AcceptedInput::into_message)
@@ -119,7 +130,7 @@ impl<M> SteeringInbox<M> {
         execution: ModelExecution,
         usage: ion_ai::Usage,
         limits: AgentLimits,
-    ) -> Result<(bool, CommittedInputs), AgentError> {
+    ) -> Result<(crate::session::CommittedAssistant, CommittedInputs), AgentError> {
         let mut pending = self
             .pending
             .lock()
@@ -133,7 +144,7 @@ impl<M> SteeringInbox<M> {
         let notices = completion
             .as_ref()
             .map_or_else(Vec::new, |batch| batch.notices());
-        let complete = session.record_assistant_with_inputs(
+        let (committed, entries) = session.record_assistant_with_inputs(
             turn,
             message,
             tool_activities,
@@ -151,8 +162,9 @@ impl<M> SteeringInbox<M> {
         let accepted = pending.drain(..).collect::<Vec<_>>();
         drop(pending);
         Ok((
-            complete,
+            committed,
             CommittedInputs {
+                entries,
                 steering: accepted
                     .into_iter()
                     .map(crate::AcceptedInput::into_message)

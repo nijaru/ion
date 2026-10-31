@@ -223,7 +223,7 @@ with tempfile.TemporaryDirectory(prefix="ion-images-") as temporary:
         )
         session_id = next(record["id"] for record in records if record["type"] == "session")
         exported = subprocess.run([binary, "--cwd", workspace, "--session", session_id, "export"], env=env, check=True, capture_output=True, text=True).stdout
-        assert "Tool result · read · ok" in exported
+        assert "Tool result · read · read-picture · ok" in exported
         assert "Image result not shared with this text-only model" in exported
         assert "[image: image/png]" in exported and "iVBORw0KGgo" not in exported
 

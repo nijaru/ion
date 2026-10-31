@@ -58,7 +58,10 @@ async fn preparation_without_an_operation_restores_the_retained_status() {
         let mut program = ProgramStatusState::default();
         program.settle(resting);
         let mut ui = Frontend {
-            images: vec![ImageSource::Path(fixture.root.join("missing.png"))],
+            editor: Editor {
+                images: vec![ImageSource::Path(fixture.root.join("missing.png"))],
+                ..Editor::default()
+            },
             ..Frontend::default()
         };
         submit_editor(
@@ -71,7 +74,6 @@ async fn preparation_without_an_operation_restores_the_retained_status() {
             program.status(fixture.control.is_busy()),
             ProgramStatus::Working
         );
-        let mut activity = Activity::default();
         tokio::time::timeout(Duration::from_secs(5), async {
             loop {
                 let update = fixture.control.next().await;
@@ -82,8 +84,7 @@ async fn preparation_without_an_operation_restores_the_retained_status() {
                 let idle = matches!(update, ControlUpdate::Idle);
                 program.observe(&update);
                 assert!(
-                    activity
-                        .update(&mut ui, &fixture.control, update)
+                    activity::apply(&mut ui, &fixture.control, update)
                         .unwrap()
                         .is_none()
                 );
@@ -100,7 +101,7 @@ async fn preparation_without_an_operation_restores_the_retained_status() {
         assert_eq!(program.status(false), ProgramStatus::BlockedAuth);
         program.blocked_auth = false;
         assert_eq!(program.status(false), resting);
-        assert_eq!(ui.draft, "prepare image");
+        assert_eq!(ui.editor.draft, "prepare image");
         assert_eq!(ui.status, "Draft returned");
     }
     fixture.control.shutdown().await;
@@ -166,9 +167,12 @@ fn command_actions_own_exact_editor_sources() {
     ] {
         let cursor = prefix.len();
         let mut ui = Frontend {
-            draft: literal.into(),
-            cursor,
-            images: vec![image("attached")],
+            editor: Editor {
+                draft: literal.into(),
+                cursor,
+                images: vec![image("attached")],
+                ..Editor::default()
+            },
             ..Frontend::default()
         };
         let Action::Command(CommandInput::Editor(source)) =
@@ -178,18 +182,21 @@ fn command_actions_own_exact_editor_sources() {
         };
         assert_eq!(source.literal, literal);
         assert_eq!(source.cursor, cursor);
-        assert!(ui.draft.is_empty());
-        assert_eq!(ui.cursor, 0);
-        assert_eq!(ui.images.len(), 1);
-        assert_note(&ui.images[0], "attached");
+        assert!(ui.editor.draft.is_empty());
+        assert_eq!(ui.editor.cursor, 0);
+        assert_eq!(ui.editor.images.len(), 1);
+        assert_note(&ui.editor.images[0], "attached");
         ui.restore_editor(source);
-        assert_eq!(ui.draft, literal);
-        assert_eq!(ui.cursor, cursor);
+        assert_eq!(ui.editor.draft, literal);
+        assert_eq!(ui.editor.cursor, cursor);
     }
     for literal in ["/quit", "  /exit  "] {
         let mut ui = Frontend {
-            draft: literal.into(),
-            cursor: literal.len(),
+            editor: Editor {
+                draft: literal.into(),
+                cursor: literal.len(),
+                ..Editor::default()
+            },
             ..Frontend::default()
         };
         assert!(matches!(
@@ -207,19 +214,22 @@ fn command_shortcuts_leave_editor_text_cursor_and_attachments_owned_by_editor() 
         ('l', Builtin::Model),
     ] {
         let mut ui = Frontend {
-            draft: "unsent 🦀 draft".into(),
-            cursor: 3,
-            images: vec![image("unsent")],
+            editor: Editor {
+                draft: "unsent 🦀 draft".into(),
+                cursor: 3,
+                images: vec![image("unsent")],
+                ..Editor::default()
+            },
             ..Frontend::default()
         };
         assert!(matches!(
             ui.key(KeyEvent::new(KeyCode::Char(key), Modifiers::CONTROL), None, None),
             Action::Command(CommandInput::Shortcut(command)) if command == builtin
         ));
-        assert_eq!(ui.draft, "unsent 🦀 draft");
-        assert_eq!(ui.cursor, 3);
-        assert_eq!(ui.images.len(), 1);
-        assert_note(&ui.images[0], "unsent");
+        assert_eq!(ui.editor.draft, "unsent 🦀 draft");
+        assert_eq!(ui.editor.cursor, 3);
+        assert_eq!(ui.editor.images.len(), 1);
+        assert_note(&ui.editor.images[0], "unsent");
     }
 }
 
@@ -235,6 +245,8 @@ async fn command_namespace_completes_and_never_becomes_a_model_prompt_or_queue()
     fixture.control.reload_resources().unwrap();
     let mut ui = Frontend::default();
     ui.insert("/command:ch");
+    ui.refresh_completion(None, Some(fixture.control.commands()), false);
+    ui.editor.completion.painted_rows(80, 5, &ui.keys);
     assert!(matches!(
         ui.key(
             KeyEvent::new(KeyCode::Tab, Modifiers::NONE),
@@ -243,7 +255,7 @@ async fn command_namespace_completes_and_never_becomes_a_model_prompt_or_queue()
         ),
         Action::None
     ));
-    assert_eq!(ui.draft, "/command:check ");
+    assert_eq!(ui.editor.draft, "/command:check ");
     ui.insert("a b");
     assert!(matches!(
         ui.key(
@@ -257,10 +269,10 @@ async fn command_namespace_completes_and_never_becomes_a_model_prompt_or_queue()
     assert!(!fixture.control.is_busy());
 
     let source = EditorDraft::at_end("/command:check a b".into());
-    ui.draft = source.literal.clone();
-    ui.cursor = source.cursor;
+    ui.editor.draft = source.literal.clone();
+    ui.editor.cursor = source.cursor;
     submit_editor(&mut fixture.control, &mut ui, Delivery::FollowUp, source);
-    assert_eq!(ui.draft, "/command:check a b");
+    assert_eq!(ui.editor.draft, "/command:check a b");
     assert!(ui.status.contains("cannot be queued"));
     assert!(!fixture.control.is_busy());
     fixture.control.shutdown().await;
@@ -281,8 +293,11 @@ fn command_overview_defers_argument_grammar_to_detailed_help() {
 async fn detailed_help_and_binding_orientation_are_presentation_not_input() {
     let mut fixture = Fixture::new();
     let mut ui = Frontend {
-        draft: "unsent 🦀".into(),
-        cursor: 3,
+        editor: Editor {
+            draft: "unsent 🦀".into(),
+            cursor: 3,
+            ..Editor::default()
+        },
         ..Frontend::default()
     };
     ui.refresh_session(fixture.control.session()).unwrap();
@@ -328,8 +343,11 @@ async fn detailed_help_and_binding_orientation_are_presentation_not_input() {
                 .windows(expected.len())
                 .any(|rows| rows == expected)
         );
-        ui.finish_history_commit();
-        assert_eq!((ui.draft.as_str(), ui.cursor), ("unsent 🦀", 3));
+        conversation::fixtures::publish(&mut ui.conversation);
+        assert_eq!(
+            (ui.editor.draft.as_str(), ui.editor.cursor),
+            ("unsent 🦀", 3)
+        );
         assert!(!fixture.control.is_busy());
         assert!(fixture.control.session().view().unwrap().entries.is_empty());
     }
@@ -366,7 +384,6 @@ async fn help_output_is_complete_publication_not_clipped_composer_chrome() {
     let mut ui = Frontend::default();
     ui.refresh_session(fixture.control.session()).unwrap();
     let expected = notice_rows(&Builtin::help(&KeyBindings::default()), 39);
-    assert!(expected.len() > LIVE_REGION_MAX_ROWS);
     for _ in 0..2 {
         command::handle_builtin(
             &mut fixture.control,
@@ -383,22 +400,18 @@ async fn help_output_is_complete_publication_not_clipped_composer_chrome() {
         );
         // Only successful physical publication acknowledges these rows.
         assert_eq!(ui.pending_history_rows(40), pending);
-        ui.finish_history_commit();
+        conversation::fixtures::publish(&mut ui.conversation);
         assert!(ui.pending_history_rows(40).is_empty());
     }
     fixture.control.shutdown().await;
 }
 
-async fn drain(
-    control: &mut SessionControl<EditorDraft>,
-    ui: &mut Frontend,
-    activity: &mut Activity,
-) {
+async fn drain(control: &mut SessionControl<EditorDraft>, ui: &mut Frontend) {
     tokio::time::timeout(Duration::from_secs(5), async {
         loop {
             let update = control.next().await;
             let idle = matches!(update, ControlUpdate::Idle);
-            assert!(activity.update(ui, control, update).unwrap().is_none());
+            assert!(activity::apply(ui, control, update).unwrap().is_none());
             if idle {
                 break;
             }
@@ -424,10 +437,13 @@ fn returned_drafts_never_merge_identical_text_or_attachment_associations() {
         text: format!("context for {name}"),
     };
     let mut ui = Frontend {
-        draft: "unsent".into(),
-        cursor: 2,
-        images: vec![image("unsent")],
-        files: vec![file("unsent")],
+        editor: Editor {
+            draft: "unsent".into(),
+            cursor: 2,
+            images: vec![image("unsent")],
+            files: vec![file("unsent")],
+            ..Editor::default()
+        },
         ..Frontend::default()
     };
     ui.return_draft(
@@ -447,7 +463,11 @@ fn returned_drafts_never_merge_identical_text_or_attachment_associations() {
         vec![file("second")],
     );
     assert_eq!(
-        (ui.draft.as_str(), ui.cursor, ui.recovered.len()),
+        (
+            ui.editor.draft.as_str(),
+            ui.editor.cursor,
+            ui.editor.recovered.len()
+        ),
         ("unsent", 2, 2)
     );
     for (text, cursor, note) in [
@@ -456,50 +476,66 @@ fn returned_drafts_never_merge_identical_text_or_attachment_associations() {
         ("unsent", 2, "unsent"),
     ] {
         ui.recover_draft();
-        assert_eq!((ui.draft.as_str(), ui.cursor), (text, cursor));
-        assert_eq!(ui.images.len(), 1);
-        assert_note(&ui.images[0], note);
-        assert_eq!(ui.files.len(), 1);
-        assert_eq!(ui.files[0].name, note);
-        assert_eq!(ui.files[0].text, file(note).text);
+        assert_eq!((ui.editor.draft.as_str(), ui.editor.cursor), (text, cursor));
+        assert_eq!(ui.editor.images.len(), 1);
+        assert_note(&ui.editor.images[0], note);
+        assert_eq!(ui.editor.files.len(), 1);
+        assert_eq!(ui.editor.files[0].name, note);
+        assert_eq!(ui.editor.files[0].text, file(note).text);
     }
-    assert_eq!(ui.recovered.len(), 2);
+    assert_eq!(ui.editor.recovered.len(), 2);
 }
 
 #[test]
 fn oversized_history_preserves_the_draft_and_can_be_traversed_without_loading_it() {
     let mut ui = Frontend {
-        draft: "unsent 🦀".into(),
-        cursor: 3,
-        prompt_history: vec!["older".into(), "x".repeat(MAX_DRAFT + 1)],
+        editor: Editor {
+            draft: "unsent 🦀".into(),
+            cursor: 3,
+            prompt_history: vec!["older".into(), "x".repeat(MAX_DRAFT + 1)],
+            ..Editor::default()
+        },
         ..Frontend::default()
     };
-    ui.history_previous();
-    assert_eq!((ui.draft.as_str(), ui.cursor), ("unsent 🦀", 3));
-    assert!(ui.status.contains("exceeds editor limit"));
-    ui.history_previous();
-    assert_eq!(ui.draft, "older");
-    ui.history_next();
-    assert_eq!(ui.draft, "older");
-    ui.history_next();
-    assert_eq!((ui.draft.as_str(), ui.cursor), ("unsent 🦀", 3));
+    ui.editor.history_previous();
+    assert_eq!(
+        (ui.editor.draft.as_str(), ui.editor.cursor),
+        ("unsent 🦀", 3)
+    );
+    assert!(
+        visible_status(&ui, None)
+            .unwrap()
+            .contains("exceeds editor limit")
+    );
+    ui.editor.history_previous();
+    assert_eq!(ui.editor.draft, "older");
+    ui.editor.history_next();
+    assert_eq!(ui.editor.draft, "older");
+    ui.editor.history_next();
+    assert_eq!(
+        (ui.editor.draft.as_str(), ui.editor.cursor),
+        ("unsent 🦀", 3)
+    );
 }
 
 #[test]
 fn returned_draft_ends_history_browsing_without_losing_unsent_input() {
     let mut ui = Frontend {
-        prompt_history: vec!["older".into()],
-        draft: "unsent".into(),
-        cursor: 2,
+        editor: Editor {
+            prompt_history: vec!["older".into()],
+            draft: "unsent".into(),
+            cursor: 2,
+            ..Editor::default()
+        },
         ..Frontend::default()
     };
-    ui.history_previous();
+    ui.editor.history_previous();
     ui.return_draft(EditorDraft::at_end("returned".into()), vec![], Vec::new());
-    ui.history_next();
-    assert_eq!((ui.draft.as_str(), ui.cursor), ("unsent", 2));
+    ui.editor.history_next();
+    assert_eq!((ui.editor.draft.as_str(), ui.editor.cursor), ("unsent", 2));
     ui.recover_draft();
-    ui.history_next();
-    assert_eq!(ui.draft, "returned");
+    ui.editor.history_next();
+    assert_eq!(ui.editor.draft, "returned");
 }
 
 #[test]
@@ -509,17 +545,18 @@ fn submit_and_queue_handoff_discard_unsent_text_history() {
         ui.insert("sent input");
         let action = ui.key(KeyEvent::new(KeyCode::Enter, modifiers), None, None);
         assert!(match modifiers {
-            Modifiers::NONE => matches!(action, Action::Submit(prompt) if prompt == "sent input"),
-            _ => matches!(action, Action::Queue(prompt) if prompt == "sent input"),
+            Modifiers::NONE =>
+                matches!(action, Action::Submit(prompt) if prompt.literal == "sent input"),
+            _ => matches!(action, Action::Queue(prompt) if prompt.literal == "sent input"),
         });
-        assert!(ui.draft.is_empty());
+        assert!(ui.editor.draft.is_empty());
         ui.key(
             KeyEvent::new(KeyCode::Char('_'), Modifiers::CONTROL),
             None,
             None,
         );
         assert!(
-            ui.draft.is_empty(),
+            ui.editor.draft.is_empty(),
             "handoff history resurrected sent input"
         );
         ui.insert("next input");
@@ -528,7 +565,7 @@ fn submit_and_queue_handoff_discard_unsent_text_history() {
             None,
             None,
         );
-        assert_eq!(ui.draft, "", "undo crossed a completed handoff");
+        assert_eq!(ui.editor.draft, "", "undo crossed a completed handoff");
     }
 }
 
@@ -552,8 +589,8 @@ fn mouse_scroll_breaks_edit_affinity_without_resetting_history_or_text() {
         ),
         Action::None
     ));
-    assert_eq!(ui.draft, "ab");
-    assert_eq!(ui.scroll, 3);
+    assert_eq!(ui.editor.draft, "ab");
+    assert!(ui.view.is_reading());
     assert!(matches!(
         ui.key(
             KeyEvent::new(KeyCode::Char('_'), Modifiers::CONTROL),
@@ -562,7 +599,10 @@ fn mouse_scroll_breaks_edit_affinity_without_resetting_history_or_text() {
         ),
         Action::None
     ));
-    assert_eq!(ui.draft, "a", "scroll must break typed-word coalescing");
+    assert_eq!(
+        ui.editor.draft, "a",
+        "scroll must break typed-word coalescing"
+    );
     assert!(matches!(
         ui.key(
             KeyEvent::new(KeyCode::Char('_'), Modifiers::CONTROL),
@@ -571,11 +611,11 @@ fn mouse_scroll_breaks_edit_affinity_without_resetting_history_or_text() {
         ),
         Action::None
     ));
-    assert_eq!(ui.draft, "", "scroll must not reset undo history");
+    assert_eq!(ui.editor.draft, "", "scroll must not reset undo history");
 
     for text in ["first", "second"] {
         ui.insert(text);
-        ui.cursor = ui.draft.len();
+        ui.editor.cursor = ui.editor.draft.len();
         assert!(matches!(
             ui.key(
                 KeyEvent::new(KeyCode::Char('w'), Modifiers::CONTROL),
@@ -593,7 +633,7 @@ fn mouse_scroll_breaks_edit_affinity_without_resetting_history_or_text() {
         ),
         Action::None
     ));
-    assert_eq!(ui.draft, "second");
+    assert_eq!(ui.editor.draft, "second");
     ui.mouse(MouseKind::ScrollDown);
     assert!(matches!(
         ui.key(
@@ -604,7 +644,7 @@ fn mouse_scroll_breaks_edit_affinity_without_resetting_history_or_text() {
         Action::None
     ));
     assert_eq!(
-        ui.draft, "second",
+        ui.editor.draft, "second",
         "scroll must invalidate direct yank-pop affinity"
     );
 }
@@ -624,19 +664,22 @@ async fn session_sync_preserves_text_recovery_but_session_replacement_resets_it(
         ),
         Action::None
     ));
-    assert_eq!(ui.draft, "", "same-Session sync discarded unsent edits");
+    assert_eq!(
+        ui.editor.draft, "",
+        "same-Session sync discarded unsent edits"
+    );
 
     ui.insert("kept across replacement");
     fixture.control.new_session().unwrap();
     ui.refresh_session(fixture.control.session()).unwrap();
-    assert_eq!(ui.draft, "kept across replacement");
+    assert_eq!(ui.editor.draft, "kept across replacement");
     ui.key(
         KeyEvent::new(KeyCode::Char('_'), Modifiers::CONTROL),
         None,
         None,
     );
     assert_eq!(
-        ui.draft, "kept across replacement",
+        ui.editor.draft, "kept across replacement",
         "Session replacement kept the old edit history"
     );
     fixture.control.shutdown().await;
@@ -646,7 +689,10 @@ async fn session_sync_preserves_text_recovery_but_session_replacement_resets_it(
 async fn host_rejection_restores_exact_editor_and_images() {
     let mut fixture = Fixture::new();
     let mut ui = Frontend {
-        images: vec![image("coordinates")],
+        editor: Editor {
+            images: vec![image("coordinates")],
+            ..Editor::default()
+        },
         ..Frontend::default()
     };
     let literal = "  !!shell stays literal\n";
@@ -664,9 +710,9 @@ async fn host_rejection_restores_exact_editor_and_images() {
             cursor: 3,
         },
     );
-    assert_eq!((ui.draft.as_str(), ui.cursor), (literal, 3));
-    assert_note(&ui.images[0], "coordinates");
-    assert!(ui.recovered.is_empty());
+    assert_eq!((ui.editor.draft.as_str(), ui.editor.cursor), (literal, 3));
+    assert_note(&ui.editor.images[0], "coordinates");
+    assert!(ui.editor.recovered.is_empty());
     assert!(ui.status.contains("not queued"));
     fixture.control.shutdown().await;
 }
@@ -679,11 +725,14 @@ async fn rejected_launch_batch_keeps_empty_attached_first_and_ordered_literal_ta
     fixture.control.reload_resources().unwrap();
     let before = fixture.control.session().view().unwrap().entries.len();
     let mut ui = Frontend {
-        images: vec![image("first image")],
-        files: vec![ion_host::prompt_files::TextFile {
-            name: "frozen.md".into(),
-            text: "/check literal 🦀".into(),
-        }],
+        editor: Editor {
+            images: vec![image("first image")],
+            files: vec![ion_host::prompt_files::TextFile {
+                name: "frozen.md".into(),
+                text: "/check literal 🦀".into(),
+            }],
+            ..Editor::default()
+        },
         ..Frontend::default()
     };
     let malformed = "/check '🦀";
@@ -692,19 +741,21 @@ async fn rejected_launch_batch_keeps_empty_attached_first_and_ordered_literal_ta
         &mut ui,
         vec![String::new(), malformed.into(), "/help".into()],
     );
-    assert_eq!((ui.draft.as_str(), ui.cursor), ("", 0));
-    assert_note(&ui.images[0], "first image");
-    assert_eq!(ui.files[0].text, "/check literal 🦀");
+    assert_eq!((ui.editor.draft.as_str(), ui.editor.cursor), ("", 0));
+    assert_note(&ui.editor.images[0], "first image");
+    assert_eq!(ui.editor.files[0].text, "/check literal 🦀");
     assert_eq!(
-        ui.recovered
+        ui.editor
+            .recovered
             .iter()
             .map(|draft| draft.source.literal.as_str())
             .collect::<Vec<_>>(),
         [malformed, "/help"]
     );
-    assert_eq!(ui.recovered[0].source.cursor, malformed.len());
+    assert_eq!(ui.editor.recovered[0].source.cursor, malformed.len());
     assert!(
-        ui.recovered
+        ui.editor
+            .recovered
             .iter()
             .all(|draft| draft.images.is_empty() && draft.files.is_empty())
     );
@@ -726,7 +777,10 @@ async fn asynchronous_preparation_return_retains_raw_source_and_other_edits() {
     fixture.control.reload_resources().unwrap();
     let literal = "  /check café 🦀\n";
     let mut ui = Frontend {
-        images: vec![ImageSource::Path(fixture.root.join("missing.png"))],
+        editor: Editor {
+            images: vec![ImageSource::Path(fixture.root.join("missing.png"))],
+            ..Editor::default()
+        },
         ..Frontend::default()
     };
     submit_editor(
@@ -738,14 +792,15 @@ async fn asynchronous_preparation_return_retains_raw_source_and_other_edits() {
             cursor: 2,
         },
     );
-    assert!(ui.images.is_empty());
+    assert!(ui.editor.images.is_empty());
     ui.insert("typed while preparing");
-    let mut activity = Activity::default();
-    drain(&mut fixture.control, &mut ui, &mut activity).await;
-    assert_eq!(ui.draft, "typed while preparing");
+    drain(&mut fixture.control, &mut ui).await;
+    assert_eq!(ui.editor.draft, "typed while preparing");
     ui.recover_draft();
-    assert_eq!((ui.draft.as_str(), ui.cursor), (literal, 2));
-    assert!(matches!(&ui.images[0], ImageSource::Path(path) if path.ends_with("missing.png")));
+    assert_eq!((ui.editor.draft.as_str(), ui.editor.cursor), (literal, 2));
+    assert!(
+        matches!(&ui.editor.images[0], ImageSource::Path(path) if path.ends_with("missing.png"))
+    );
     // A path may cross a display-row boundary (notably with /tmp on Linux).
     let notice = ui
         .pending_history_rows(120)
@@ -782,13 +837,16 @@ async fn typed_at_signs_remain_literal_without_accepting_suggestions() {
                 None,
             );
         }
-        assert_eq!((ui.draft.as_str(), ui.cursor), (literal, literal.len()));
+        assert_eq!(
+            (ui.editor.draft.as_str(), ui.editor.cursor),
+            (literal, literal.len())
+        );
         assert!(ui.pickers.active().is_none());
         // Suggestions may discover asynchronously; no unseen candidate can
         // consume this Enter or change the literal prompt.
         assert!(matches!(
             ui.key(KeyEvent::new(KeyCode::Enter, Modifiers::NONE), None, None),
-            Action::Submit(text) if text == literal
+            Action::Submit(text) if text.literal == literal
         ));
         ui.pickers.shutdown().await.unwrap();
     }
@@ -808,19 +866,20 @@ async fn builtin_non_file_arguments_never_discover_or_replace_paths() {
         let mut ui = Frontend::default();
         ui.insert(literal);
         assert!(
-            ui.completion
-                .file_scope(&ui.draft, ui.cursor, &ui.cwd, None, false)
+            ui.editor
+                .completion
+                .file_scope(&ui.editor.draft, ui.editor.cursor, &ui.cwd, None, false)
                 .is_none(),
             "non-file command argument requested filesystem I/O: {literal}"
         );
         ui.refresh_completion(None, None, false);
         ui.key(KeyEvent::new(KeyCode::Tab, Modifiers::NONE), None, None);
         assert!(!ui.pickers.has_job(), "{literal}");
-        assert!(!ui.completion.active(), "{literal}");
+        assert!(!ui.editor.completion.active(), "{literal}");
         // With no completion, Tab retains its ordinary literal editor behavior.
         let expected = format!("{literal}\t");
-        assert_eq!(ui.draft, expected);
-        assert_eq!(ui.cursor, expected.len());
+        assert_eq!(ui.editor.draft, expected);
+        assert_eq!(ui.editor.cursor, expected.len());
         assert!(
             matches!(ui.key(KeyEvent::new(KeyCode::Enter, Modifiers::NONE), None, None),
                 Action::Command(CommandInput::Editor(source))
@@ -889,7 +948,7 @@ async fn ordinary_paths_complete_in_place_without_submitting() {
         ui.refresh_completion(None, None, false);
         if force {
             assert!(
-                !ui.completion.active(),
+                !ui.editor.completion.active(),
                 "ordinary prose must not open a file menu"
             );
             ui.key(KeyEvent::new(KeyCode::Tab, Modifiers::NONE), None, None);
@@ -900,25 +959,31 @@ async fn ordinary_paths_complete_in_place_without_submitting() {
             );
             literal.push('a');
         }
-        assert!(ui.completion.wants_files(), "{literal}");
-        assert_eq!(ui.draft, literal);
+        assert!(ui.editor.completion.wants_files(), "{literal}");
+        assert_eq!(ui.editor.draft, literal);
         ui.pickers.complete().await;
         ui.refresh_completion(None, None, false);
         assert!(
-            !ui.completion.rows(200, 6, &ui.keys).is_empty(),
+            !ui.editor
+                .completion
+                .painted_rows(200, 6, &ui.keys)
+                .is_empty(),
             "{literal}"
         );
         assert!(matches!(
             ui.key(KeyEvent::new(KeyCode::Enter, Modifiers::NONE), None, None),
             Action::None
         ));
-        assert_eq!(ui.draft, expected);
+        assert_eq!(ui.editor.draft, expected);
         ui.key(
             KeyEvent::new(KeyCode::Char('_'), Modifiers::CONTROL),
             None,
             None,
         );
-        assert_eq!(ui.draft, literal, "acceptance must be one undoable edit");
+        assert_eq!(
+            ui.editor.draft, literal,
+            "acceptance must be one undoable edit"
+        );
         ui.pickers.shutdown().await.unwrap();
     }
     fs::remove_dir_all(root).unwrap();
@@ -930,8 +995,11 @@ async fn withdrawn_preparation_replaces_draft_and_invalidates_file_completion() 
         let mut fixture = Fixture::new();
         fs::write(fixture.root.join("file.rs"), "owned fixture").unwrap();
         let mut ui = Frontend {
+            editor: Editor {
+                images: vec![ImageSource::Path(fixture.root.join("absent.png"))],
+                ..Editor::default()
+            },
             cwd: fixture.root.clone(),
-            images: vec![ImageSource::Path(fixture.root.join("absent.png"))],
             ..Frontend::default()
         };
         submit_editor(
@@ -944,32 +1012,34 @@ async fn withdrawn_preparation_replaces_draft_and_invalidates_file_completion() 
         assert!(fixture.control.withdraw_last_follow_up().is_some());
         ui.insert("x @");
         ui.key(KeyEvent::new(KeyCode::Tab, Modifiers::NONE), None, None);
-        assert!(ui.completion.active());
+        assert!(ui.editor.completion.active());
         assert!(ui.pickers.active().is_none());
 
-        let mut activity = Activity::default();
-        drain(&mut fixture.control, &mut ui, &mut activity).await;
-        assert_eq!((ui.draft.as_str(), ui.cursor), (literal, literal.len()));
-        assert!(
-            matches!(&ui.images[..], [ImageSource::Path(path)] if path.ends_with("absent.png"))
+        drain(&mut fixture.control, &mut ui).await;
+        assert_eq!(
+            (ui.editor.draft.as_str(), ui.editor.cursor),
+            (literal, literal.len())
         );
         assert!(
-            !ui.completion.active(),
+            matches!(&ui.editor.images[..], [ImageSource::Path(path)] if path.ends_with("absent.png"))
+        );
+        assert!(
+            !ui.editor.completion.active(),
             "returned input must invalidate the old draft's completion range"
         );
         while ui.pickers.has_job() {
             ui.pickers.complete().await;
         }
         assert!(
-            !ui.completion.active(),
+            !ui.editor.completion.active(),
             "late discovery must not reopen the old completion"
         );
 
         ui.recover_draft();
-        assert_eq!((ui.draft.as_str(), ui.cursor), ("x @", 3));
-        assert!(ui.images.is_empty());
+        assert_eq!((ui.editor.draft.as_str(), ui.editor.cursor), ("x @", 3));
+        assert!(ui.editor.images.is_empty());
         assert!(
-            matches!(ui.key(KeyEvent::new(KeyCode::Enter, Modifiers::NONE), None, None), Action::Submit(text) if text == "x @")
+            matches!(ui.key(KeyEvent::new(KeyCode::Enter, Modifiers::NONE), None, None), Action::Submit(text) if text.literal == "x @")
         );
         fixture.control.shutdown().await;
         ui.pickers.shutdown().await.unwrap();
@@ -988,10 +1058,9 @@ async fn settled_shell_is_reconciled_and_shutdown_errors_remain_visible() {
         )
         .unwrap();
     let mut ui = Frontend::default();
-    let mut activity = Activity::default();
-    drain(&mut fixture.control, &mut ui, &mut activity).await;
+    drain(&mut fixture.control, &mut ui).await;
     assert!(
-        matches!(&ui.history.items[..], [TranscriptItem::UserShell(shell)] if shell.command == "printf terminal-control")
+        matches!(ui.conversation.items().collect::<Vec<_>>().as_slice(), [TranscriptItem::UserShell(shell)] if shell.command == "printf terminal-control")
     );
     fixture
         .control
@@ -1006,20 +1075,20 @@ async fn settled_shell_is_reconciled_and_shutdown_errors_remain_visible() {
                 ion_core::AgentError::InvalidSummary("observation commit failed"),
             ));
         }
-        activity.cleanup_update(&mut ui, &fixture.control, update, &mut outcome);
+        activity::cleanup_update(&mut ui, &fixture.control, update, &mut outcome);
     }
     let error = format!("{:#}", outcome.unwrap_err());
     assert!(error.contains("terminal output disconnected"));
     assert!(error.contains("observation commit failed"));
-    assert!(ui.recovered.is_empty());
+    assert!(ui.editor.recovered.is_empty());
     assert!(
-        ui.draft.is_empty(),
+        ui.editor.draft.is_empty(),
         "a settled command must not revive in the composer"
     );
 }
 
 #[tokio::test]
-async fn unfinished_history_anchors_are_stable_on_initial_load_and_reinspection() {
+async fn committed_roots_publish_during_work_but_unobserved_shells_remain_mutable() {
     let mut fixture = Fixture::new();
     let started = |turn, text: &str| SessionEntry::TurnStarted {
         completion: Vec::new(),
@@ -1057,21 +1126,22 @@ async fn unfinished_history_anchors_are_stable_on_initial_load_and_reinspection(
         // prefix, even before anything has been physically published.
         for _ in 0..2 {
             ui.load_history(fixture.control.session(), &view);
-            assert_eq!(ui.history.items.len(), 2);
-            assert_eq!(ui.pending_history_target, 1);
+            assert_eq!(ui.conversation.items().count(), 2);
             ui.print(Builtin::help(&KeyBindings::default()));
         }
         let pending = ui.pending_history_rows(80);
-        assert!(
-            !pending
+        assert_eq!(
+            pending
                 .iter()
-                .any(|row| row.to_string().contains("UNFINISHED_VISIBLE"))
+                .any(|row| row.to_string().contains("UNFINISHED_VISIBLE")),
+            !shell
         );
-        let fullscreen = ui.output.rows(
-            &ui.history.items,
-            0..2,
+        let fullscreen = ui.presenter.window(
+            &ui.conversation,
+            &mut block_presenter::ConversationView::default(),
+            (80, u16::MAX as usize),
             false,
-            80,
+            false,
             &crate::tool_output::RenderOptions::new(
                 ui.output_detail,
                 &ui.keys,
@@ -1084,12 +1154,11 @@ async fn unfinished_history_anchors_are_stable_on_initial_load_and_reinspection(
                 .iter()
                 .any(|row| row.to_string().contains("UNFINISHED_VISIBLE"))
         );
-        ui.finish_history_commit();
+        conversation::fixtures::publish(&mut ui.conversation);
         assert!(ui.pending_history_rows(80).is_empty());
-        // Do not rewind an unknown-effect row already in physical history.
-        ui.history_published_items = 2;
         ui.load_history(fixture.control.session(), &view);
-        assert_eq!(ui.pending_history_target, 2);
+        assert!(ui.conversation.has_published_prefix());
+        assert!(ui.pending_history_rows(80).is_empty());
     }
     fixture.control.shutdown().await;
 }
@@ -1111,7 +1180,7 @@ async fn clipboard_image_keeps_typed_coordinates_and_refuses_unsupported_routes(
     let mut ui = Frontend::default();
     apply_clipboard(&mut ui, prepared).unwrap();
     assert!(
-        matches!(&ui.images[..], [ImageSource::Normalized { content, note: Some(note) }] if content == &loaded.content && note == "clipboard coordinates")
+        matches!(&ui.editor.images[..], [ImageSource::Normalized { content, note: Some(note) }] if content == &loaded.content && note == "clipboard coordinates")
     );
     assert!(
         prepare_clipboard(
@@ -1124,7 +1193,7 @@ async fn clipboard_image_keeps_typed_coordinates_and_refuses_unsupported_routes(
         )
         .is_err()
     );
-    assert_eq!(ui.images.len(), 1);
+    assert_eq!(ui.editor.images.len(), 1);
     fixture.control.shutdown().await;
 }
 
@@ -1168,26 +1237,30 @@ async fn context_selection_restarts_publication_without_losing_an_unsent_draft()
     view.context_path = vec![1, 2, 3];
     let mut ui = Frontend::default();
     ui.load_history(fixture.control.session(), &view);
-    ui.finish_history_commit();
-    assert_eq!(ui.history_published_items, 2);
-    ui.draft = "unsent draft".into();
-    ui.cursor = 4;
-    ui.images = vec![image("unsent tree image")];
+    conversation::fixtures::publish(&mut ui.conversation);
+    assert!(ui.conversation.has_published_prefix());
+    assert!(ui.pending_history_rows(80).is_empty());
+    ui.editor.draft = "unsent draft".into();
+    ui.editor.cursor = 4;
+    ui.editor.images = vec![image("unsent tree image")];
     view.entries
         .push(SessionEntry::ContextSelected { head_entry: 0 });
     view.context_path.clear();
     ui.load_history(fixture.control.session(), &view);
-    assert_eq!(ui.history_published_items, 0);
-    assert!(ui.history.items.is_empty());
+    assert!(!ui.conversation.has_published_prefix());
+    assert_eq!(ui.conversation.items().count(), 0);
     assert!(
-        ui.pending_history_banner
-            .as_ref()
+        ui.conversation
+            .banner()
             .unwrap()
             .contains("files unchanged")
     );
     let _rows = ui.pending_history_rows(80);
-    assert_eq!((ui.draft.as_str(), ui.cursor), ("unsent draft", 4));
-    assert_note(&ui.images[0], "unsent tree image");
+    assert_eq!(
+        (ui.editor.draft.as_str(), ui.editor.cursor),
+        ("unsent draft", 4)
+    );
+    assert_note(&ui.editor.images[0], "unsent tree image");
     assert!(
         last_committed_answer(&view).is_err(),
         "copy cannot leak an unselected answer"
@@ -1197,10 +1270,10 @@ async fn context_selection_restarts_publication_without_losing_an_unsent_draft()
     view.context_path = vec![1, 2];
     ui.load_history(fixture.control.session(), &view);
     assert_eq!(
-        ui.draft, "unsent draft",
+        ui.editor.draft, "unsent draft",
         "assistant selection must not overwrite an unsent draft"
     );
-    assert_eq!(ui.history.items.len(), 2);
+    assert_eq!(ui.conversation.items().count(), 2);
     assert_eq!(
         last_committed_answer(&view).unwrap(),
         "ORIGINAL_TREE_ANSWER"
@@ -1211,20 +1284,26 @@ async fn context_selection_restarts_publication_without_losing_an_unsent_draft()
 #[test]
 fn fork_selection_preserves_unsent_literal_input_and_typed_images() {
     let mut ui = Frontend {
-        draft: "  unsent\n".into(),
-        cursor: 3,
-        images: vec![image("unsent")],
+        editor: Editor {
+            draft: "  unsent\n".into(),
+            cursor: 3,
+            images: vec![image("unsent")],
+            ..Editor::default()
+        },
         ..Frontend::default()
     };
     let mut selected = ion_ai::normalize_rgba(1, 1, vec![0, 255, 0, 255]).unwrap();
     selected.note = Some("selected".into());
     ui.restore_input(Message::user_input("selected input".into(), [selected]))
         .unwrap();
-    assert_eq!(ui.draft, "selected input");
-    assert_note(&ui.images[0], "selected");
+    assert_eq!(ui.editor.draft, "selected input");
+    assert_note(&ui.editor.images[0], "selected");
     ui.recover_draft();
-    assert_eq!((ui.draft.as_str(), ui.cursor), ("  unsent\n", 3));
-    assert_note(&ui.images[0], "unsent");
+    assert_eq!(
+        (ui.editor.draft.as_str(), ui.editor.cursor),
+        ("  unsent\n", 3)
+    );
+    assert_note(&ui.editor.images[0], "unsent");
 }
 
 #[test]
@@ -1248,8 +1327,8 @@ fn operation_status_keeps_controls_and_stop_intent_visible() {
             }),
         )
         .unwrap();
-        assert!(status.starts_with(label));
-        assert!(status.contains("Ctrl-C cancels") && status.contains("Details closed"));
+        assert!(status.starts_with("Ctrl-C cancels"));
+        assert!(status.contains(label) && status.contains("Details closed"));
     }
     let status = visible_status(
         &ui,
@@ -1267,8 +1346,11 @@ fn operation_status_keeps_controls_and_stop_intent_visible() {
 fn shell_syntax_and_output_settings_remain_editor_operations() {
     for (literal, excluded) in [("  !echo ok  ", false), ("  !!echo 🦀  ", true)] {
         let mut ui = Frontend {
-            draft: literal.into(),
-            cursor: 1,
+            editor: Editor {
+                draft: literal.into(),
+                cursor: 1,
+                ..Editor::default()
+            },
             ..Frontend::default()
         };
         assert!(
@@ -1295,9 +1377,12 @@ fn shell_syntax_and_output_settings_remain_editor_operations() {
 async fn configuration_selectors_preserve_unsent_input_without_admission() {
     let mut fixture = Fixture::new();
     let mut ui = Frontend {
-        draft: "unsent 🦀".into(),
-        cursor: 3,
-        images: vec![image("attached")],
+        editor: Editor {
+            draft: "unsent 🦀".into(),
+            cursor: 3,
+            images: vec![image("attached")],
+            ..Editor::default()
+        },
         ..Frontend::default()
     };
     for builtin in [
@@ -1316,8 +1401,11 @@ async fn configuration_selectors_preserve_unsent_input_without_admission() {
             Action::None
         ));
         assert!(ui.pickers.active().is_none());
-        assert_eq!((ui.draft.as_str(), ui.cursor), ("unsent 🦀", 3));
-        assert_note(&ui.images[0], "attached");
+        assert_eq!(
+            (ui.editor.draft.as_str(), ui.editor.cursor),
+            ("unsent 🦀", 3)
+        );
+        assert_note(&ui.editor.images[0], "attached");
         assert!(fixture.control.session().view().unwrap().entries.is_empty());
         assert!(!fixture.control.is_busy());
     }
@@ -1350,8 +1438,11 @@ async fn configuration_selectors_preserve_unsent_input_without_admission() {
                         && item.label.ends_with(policy.as_str())
                 )
         );
-        assert_eq!((ui.draft.as_str(), ui.cursor), ("unsent 🦀", 3));
-        assert_note(&ui.images[0], "attached");
+        assert_eq!(
+            (ui.editor.draft.as_str(), ui.editor.cursor),
+            ("unsent 🦀", 3)
+        );
+        assert_note(&ui.editor.images[0], "attached");
         assert!(fixture.control.session().view().unwrap().entries.is_empty());
     }
     fixture.control.shutdown().await;
@@ -1412,9 +1503,12 @@ async fn model_picker_scope_keeps_order_query_draft_and_visible_selection_author
         matches!(startup.selected_value(), Some(PickerValue::Model(model)) if model == &current)
     );
     let mut ui = Frontend {
-        draft: "unsent 🦀".into(),
-        cursor: 3,
-        images: vec![image("attached")],
+        editor: Editor {
+            draft: "unsent 🦀".into(),
+            cursor: 3,
+            images: vec![image("attached")],
+            ..Editor::default()
+        },
         ..Frontend::default()
     };
     command::handle_builtin(
@@ -1425,7 +1519,7 @@ async fn model_picker_scope_keeps_order_query_draft_and_visible_selection_author
         "",
     )
     .unwrap();
-    let (rows, _) = modal_rows(&mut ui, None, None, 120, 20);
+    let (rows, _) = painted_dock_rows(&mut ui, None, 120, 20);
     let text = rows
         .iter()
         .map(ToString::to_string)
@@ -1445,7 +1539,7 @@ async fn model_picker_scope_keeps_order_query_draft_and_visible_selection_author
     assert!(
         matches!(ui.pickers.selected_value(), Some(PickerValue::Model(model)) if model.model == "first")
     );
-    modal_rows(&mut ui, None, None, 120, 20);
+    painted_dock_rows(&mut ui, None, 120, 20);
     ui.key(KeyEvent::new(KeyCode::Tab, Modifiers::NONE), None, None);
     assert!(
         matches!(ui.pickers.selected_value(), Some(PickerValue::Model(model)) if model.model == "first")
@@ -1458,13 +1552,13 @@ async fn model_picker_scope_keeps_order_query_draft_and_visible_selection_author
         "scope switching revokes old paint even when the same identity survives"
     );
     ui.pickers.insert("fixture/");
-    modal_rows(&mut ui, None, None, 120, 20);
+    painted_dock_rows(&mut ui, None, 120, 20);
     assert!(
         matches!(ui.pickers.selected_value(), Some(PickerValue::Model(model)) if model.provider == "fixture")
     );
     ui.key(KeyEvent::new(KeyCode::Tab, Modifiers::NONE), None, None);
     assert_eq!(ui.pickers.active().unwrap().query, "fixture/");
-    let (rows, _) = modal_rows(&mut ui, None, None, 120, 20);
+    let (rows, _) = painted_dock_rows(&mut ui, None, 120, 20);
     assert!(
         rows.iter()
             .any(|row| row.to_string().contains("0 match(es)"))
@@ -1482,14 +1576,17 @@ async fn model_picker_scope_keeps_order_query_draft_and_visible_selection_author
         ui.key(KeyEvent::new(KeyCode::Enter, Modifiers::NONE), None, None),
         Action::None
     ));
-    modal_rows(&mut ui, None, None, 120, 20);
+    painted_dock_rows(&mut ui, None, 120, 20);
     assert!(
         matches!(ui.key(KeyEvent::new(KeyCode::Enter, Modifiers::NONE), None, None),
         Action::Pick(PickerValue::Model(model)) if model.provider == "fixture")
     );
     assert!(ui.pickers.active().is_none());
-    assert_eq!((ui.draft.as_str(), ui.cursor), ("unsent 🦀", 3));
-    assert_note(&ui.images[0], "attached");
+    assert_eq!(
+        (ui.editor.draft.as_str(), ui.editor.cursor),
+        ("unsent 🦀", 3)
+    );
+    assert_note(&ui.editor.images[0], "attached");
     assert_eq!(fs::read(path).unwrap(), original);
     assert!(fixture.control.session().view().unwrap().entries.is_empty());
     assert_eq!(fixture.control.agent().model().provider, "fixture");
@@ -1499,8 +1596,11 @@ async fn model_picker_scope_keeps_order_query_draft_and_visible_selection_author
 #[test]
 fn settings_cycle_only_rendered_choices_and_keep_search_and_draft() {
     let mut ui = Frontend {
-        draft: "unsent 🦀".into(),
-        cursor: 3,
+        editor: Editor {
+            draft: "unsent 🦀".into(),
+            cursor: 3,
+            ..Editor::default()
+        },
         thinking_visibility: crate::transcript_render::ThinkingVisibility::Visible,
         ..Frontend::default()
     };
@@ -1511,7 +1611,7 @@ fn settings_cycle_only_rendered_choices_and_keep_search_and_draft() {
         Action::None
     ));
     for code in [KeyCode::Char(' '), KeyCode::Enter] {
-        modal_rows(&mut ui, None, None, 100, 20);
+        painted_dock_rows(&mut ui, None, 100, 20);
         let Action::Pick(PickerValue::Setting(setting)) =
             ui.key(KeyEvent::new(code, Modifiers::NONE), None, None)
         else {
@@ -1530,7 +1630,7 @@ fn settings_cycle_only_rendered_choices_and_keep_search_and_draft() {
     }
     assert_eq!(ui.output_detail, crate::tool_output::OutputDetail::Compact);
     ui.pickers.insert("Thinking");
-    modal_rows(&mut ui, None, None, 100, 20);
+    painted_dock_rows(&mut ui, None, 100, 20);
     let Action::Pick(PickerValue::Setting(setting)) =
         ui.key(KeyEvent::new(KeyCode::Enter, Modifiers::NONE), None, None)
     else {
@@ -1546,7 +1646,7 @@ fn settings_cycle_only_rendered_choices_and_keep_search_and_draft() {
     ui.pickers.close();
     ui.open_settings(ion_core::CompletionDelivery::Inbox);
     ui.pickers.insert("Managed-work");
-    modal_rows(&mut ui, None, None, 100, 20);
+    painted_dock_rows(&mut ui, None, 100, 20);
     assert!(matches!(
         ui.key(KeyEvent::new(KeyCode::Enter, Modifiers::NONE), None, None),
         Action::Pick(PickerValue::CompletionDelivery(
@@ -1562,7 +1662,10 @@ fn settings_cycle_only_rendered_choices_and_keep_search_and_draft() {
         ),
         "a changed Host policy choice requires another paint"
     );
-    assert_eq!((ui.draft.as_str(), ui.cursor), ("unsent 🦀", 3));
+    assert_eq!(
+        (ui.editor.draft.as_str(), ui.editor.cursor),
+        ("unsent 🦀", 3)
+    );
 }
 
 #[tokio::test]
@@ -1680,9 +1783,12 @@ fn question_modal_preserves_composer_draft_images_and_defers_to_other_views() {
         ],
     }];
     let mut ui = Frontend {
-        draft: "literal draft".into(),
-        cursor: "literal draft".len(),
-        images: vec![ImageSource::Path(PathBuf::from("missing.png"))],
+        editor: Editor {
+            draft: "literal draft".into(),
+            cursor: "literal draft".len(),
+            images: vec![ImageSource::Path(PathBuf::from("missing.png"))],
+            ..Editor::default()
+        },
         question: Some(QuestionModal::new(request, questions)),
         ..Frontend::default()
     };
@@ -1692,7 +1798,7 @@ fn question_modal_preserves_composer_draft_images_and_defers_to_other_views() {
         KeyEvent::new(KeyCode::Down, Modifiers::NONE),
         &KeyBindings::default(),
     );
-    question.render(
+    question.painted_render(
         80,
         24,
         &KeyBindings::default(),
@@ -1705,9 +1811,9 @@ fn question_modal_preserves_composer_draft_images_and_defers_to_other_views() {
         ),
         QuestionAction::Answer(_, _)
     ));
-    assert_eq!(ui.draft, "literal draft");
-    assert_eq!(ui.cursor, "literal draft".len());
-    assert_eq!(ui.images.len(), 1);
+    assert_eq!(ui.editor.draft, "literal draft");
+    assert_eq!(ui.editor.cursor, "literal draft".len());
+    assert_eq!(ui.editor.images.len(), 1);
     ui.pickers.open(Picker {
         title: "Existing view",
         query: String::new(),

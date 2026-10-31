@@ -1,7 +1,8 @@
 use super::*;
+use crate::terminal_client::Editor;
 use crate::{
     presentation_style::Role,
-    terminal_client::{Action, modal_rows},
+    terminal_client::{Action, painted_dock_rows},
 };
 use ion_terminal::{KeyCode, KeyEvent, Modifiers};
 use ratatui::style::Color;
@@ -15,28 +16,34 @@ impl Root {
         Self(path)
     }
     fn ui(&self) -> Frontend {
-        Frontend {
-            themes: crate::themes::Themes::load(&self.0, None).unwrap(),
-            draft: "unsent 🦀".into(),
-            cursor: 3,
-            images: vec![
-                ion_ai::normalize_rgba(1, 1, vec![0, 255, 0, 255])
-                    .unwrap()
-                    .into(),
-            ],
-            history: ion_core::TranscriptProjection {
-                items: vec![ion_core::TranscriptItem::User(
-                    ion_core::TranscriptMessage {
-                        turn: Some(1),
-                        steering: false,
-                        parts: vec![ion_core::TranscriptPart::Text("already published".into())],
-                    },
-                )],
+        let mut ui = Frontend {
+            editor: Editor {
+                draft: "unsent 🦀".into(),
+                cursor: 3,
+                images: vec![
+                    ion_ai::normalize_rgba(1, 1, vec![0, 255, 0, 255])
+                        .unwrap()
+                        .into(),
+                ],
+                ..Editor::default()
             },
-            history_published_items: 1,
-            pending_history_target: 1,
+            themes: crate::themes::Themes::load(&self.0, None).unwrap(),
+            conversation: crate::terminal_client::conversation::fixtures::document(
+                ion_core::TranscriptProjection {
+                    items: vec![ion_core::TranscriptItem::User(
+                        ion_core::TranscriptMessage {
+                            source: Some(ion_core::TranscriptSource { entry: 1, part: 0 }),
+                            turn: Some(1),
+                            steering: false,
+                            parts: vec![ion_core::TranscriptPart::Text("already published".into())],
+                        },
+                    )],
+                },
+            ),
             ..Frontend::default()
-        }
+        };
+        crate::terminal_client::conversation::fixtures::publish(&mut ui.conversation);
+        ui
     }
 }
 impl Drop for Root {
@@ -49,7 +56,7 @@ fn key(ui: &mut Frontend, code: KeyCode) -> Action {
 }
 fn frame(ui: &mut Frontend) -> Vec<ratatui::text::Line<'static>> {
     ui.sync_theme_preview();
-    modal_rows(ui, None, None, 100, 30).0
+    painted_dock_rows(ui, None, 100, 30).0
 }
 
 #[test]
@@ -122,13 +129,14 @@ fn rendered_theme_preview_cancel_and_failed_save_preserve_input_and_publication(
     );
     assert_eq!(ui.pickers.active().unwrap().query, "Theme");
     assert_eq!(
-        (ui.draft.as_str(), ui.cursor, ui.images.len()),
+        (
+            ui.editor.draft.as_str(),
+            ui.editor.cursor,
+            ui.editor.images.len()
+        ),
         ("unsent 🦀", 3, 1)
     );
-    assert_eq!(
-        (ui.history_published_items, ui.pending_history_target),
-        (1, 1)
-    );
+    assert!(ui.conversation.has_published_prefix());
     assert!(ui.pending_history_rows(80).is_empty());
 }
 
@@ -195,7 +203,11 @@ fn automatic_theme_slots_are_unsaved_drafts_until_apply() {
         "light/dark"
     );
     assert_eq!(
-        (ui.draft.as_str(), ui.cursor, ui.images.len()),
+        (
+            ui.editor.draft.as_str(),
+            ui.editor.cursor,
+            ui.editor.images.len()
+        ),
         ("unsent 🦀", 3, 1)
     );
 }

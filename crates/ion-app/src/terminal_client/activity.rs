@@ -1,8 +1,8 @@
 //! Provisional terminal projection of shared control updates, not execution custody.
 use anyhow::{Context, Result};
-use ion_core::{AgentEvent, LiveTranscript};
+use ion_core::AgentEvent;
 use ion_host::{
-    ControlUpdate, Delivery, InputPhase, Observation, OperationId, OperationOutcome, ReturnReason,
+    ControlUpdate, Delivery, InputPhase, Observation, OperationOutcome, ReturnReason,
     SessionControl, UserInput,
 };
 
@@ -59,12 +59,12 @@ impl ActiveOperation {
         let cancel = keys.hint(KeyAction::Interrupt);
         match self.kind {
             OperationKind::Coding => {
-                format!("{submit} steers · {follow_up} queues · {cancel} cancels")
+                format!("{cancel} cancels · {submit} steers · {follow_up} queues")
             }
             OperationKind::Shell | OperationKind::Compaction | OperationKind::McpReconnect => {
-                format!("{submit} queues · {cancel} cancels")
+                format!("{cancel} cancels · {submit} queues")
             }
-            OperationKind::Preparation => format!("{follow_up} queues · {cancel} cancels"),
+            OperationKind::Preparation => format!("{cancel} cancels · {follow_up} queues"),
         }
     }
 
@@ -84,27 +84,17 @@ impl ActiveOperation {
     }
 }
 
-#[derive(Default)]
-pub(super) struct Activity {
-    live: Option<(OperationId, LiveTranscript)>,
-}
-
-impl Activity {
-    pub(super) fn live(&self) -> Option<&LiveTranscript> {
-        self.live.as_ref().map(|(_, live)| live)
-    }
-
-    /// Returned errors have already been made visible in UI status. The caller
-    /// may keep interacting after an ordinary operation failure; shutdown instead
-    /// combines those failures with its primary I/O error.
-    pub(super) fn update(
-        &mut self,
-        ui: &mut Frontend,
-        control: &SessionControl<EditorDraft>,
-        update: ControlUpdate<EditorDraft>,
-    ) -> Result<Option<anyhow::Error>> {
-        match update {
-            ControlUpdate::McpReconnectFinished(finished) => match finished.result {
+/// Returned errors have already been made visible in UI status. The caller
+/// may keep interacting after an ordinary operation failure; shutdown instead
+/// combines those failures with its primary I/O error.
+pub(super) fn apply(
+    ui: &mut Frontend,
+    control: &SessionControl<EditorDraft>,
+    update: ControlUpdate<EditorDraft>,
+) -> Result<Option<anyhow::Error>> {
+    match update {
+        ControlUpdate::McpReconnectFinished(finished) => {
+            match finished.result {
                 Ok(report) => {
                     ui.note(format!("MCP server {} reconnected", finished.server));
                     for diagnostic in report.diagnostics {
@@ -116,206 +106,173 @@ impl Activity {
                     ui.note(format!("MCP server {} reconnect failed: {error:#}. Unknown effects were not replayed.", finished.server));
                     ui.status = format!("MCP reconnect failed: {error:#}");
                 }
-            },
-            ControlUpdate::Automated { .. } => {
-                self.live = None;
-                ui.status = "Managed-work readiness · automatic Turn".into();
             }
-            ControlUpdate::Input {
-                delivery, phase, ..
-            } => {
-                ui.status = match phase {
-                    InputPhase::Preparing => "Preparing input…",
-                    InputPhase::Queued => match delivery {
-                        Delivery::Start => "Starting turn…",
-                        Delivery::Steer(_) => "Steering queued for the active turn",
-                        Delivery::FollowUp => "Follow-up queued",
-                    },
-                }
-                .into();
+        }
+        ControlUpdate::Automated { .. } => {
+            ui.conversation.clear_live();
+            ui.status = "Managed-work readiness · automatic Turn".into();
+        }
+        ControlUpdate::Input {
+            delivery, phase, ..
+        } => {
+            ui.status = match phase {
+                InputPhase::Preparing => "Preparing input…",
+                InputPhase::Queued => match delivery {
+                    Delivery::Start => "Starting turn…",
+                    Delivery::Steer(_) => "Steering queued for the active turn",
+                    Delivery::FollowUp => "Follow-up queued",
+                },
             }
-            ControlUpdate::Dispatched { .. } => {}
-            ControlUpdate::Accepted { .. } => {
-                // No editor custody remains here. In particular, a later history
-                // read failure must never reconstruct or replay accepted input.
-                ui.status.clear();
+            .into();
+        }
+        ControlUpdate::Dispatched { .. } => {}
+        ControlUpdate::Accepted { .. } => {
+            // No editor custody remains here. In particular, a later history
+            // read failure must never reconstruct or replay accepted input.
+            ui.status.clear();
+        }
+        ControlUpdate::Activity(Observation::Event { operation, event }) => {
+            if matches!(event.as_ref(), AgentEvent::ContextCompactionRetry { .. })
+                && !ui.conversation.live_for(operation)
+                && let Some(note) = crate::agent_events::diagnostic(&event)
+            {
+                ui.note(note);
             }
-            ControlUpdate::Activity(Observation::Event { operation, event }) => {
-                if matches!(event.as_ref(), AgentEvent::ContextCompactionRetry { .. })
-                    && self.live.as_ref().is_none_or(|(id, _)| *id != operation)
-                    && let Some(note) = crate::agent_events::diagnostic(&event)
-                {
-                    // Manual compaction has no live Turn transcript.
-                    ui.note(note);
-                }
-                if let AgentEvent::TurnAccepted { turn, .. }
-                | AgentEvent::CompletionCommitted {
-                    turn,
-                    new_turn: true,
-                    ..
-                } = event.as_ref()
-                {
-                    // A fresh typed Turn start is the only safe start for this strict
-                    // projection. It is not a tolerant reader for missing tool or
-                    // thinking prefixes after an observation gap.
-                    if ui
-                        .history
-                        .items
-                        .iter()
-                        .any(|item| super::transcript_item_turn(item) == Some(*turn))
-                    {
-                        // An earlier inspection can already include the next Turn.
-                        // Never layer replayed progress over those same facts.
-                        self.live = None;
-                        return Ok(None);
-                    }
-                    let mut live = LiveTranscript::default();
-                    live.observe(&event);
-                    self.live = Some((operation, live));
-                } else if let Some((id, live)) = &mut self.live
-                    && *id == operation
-                {
-                    live.observe(&event);
-                } else if matches!(
-                    event.as_ref(),
-                    AgentEvent::AssistantCommitted { .. }
-                        | AgentEvent::SteeringCommitted { .. }
-                        | AgentEvent::CompletionCommitted { .. }
-                        | AgentEvent::ToolFinished { .. }
-                        | AgentEvent::ChildToolAdmitted { .. }
-                        | AgentEvent::ChildToolFinished { .. }
-                        | AgentEvent::TurnEnded { .. }
-                ) {
-                    // After a gap, keep showing newly committed work without
-                    // rebuilding a strict live stream from a surviving suffix.
-                    return Ok(reconcile(ui, control).err());
-                }
+            if matches!(event.as_ref(), AgentEvent::ResponseRestarted) {
+                ui.view.discard_provisional();
             }
-            ControlUpdate::Activity(Observation::Gap { .. }) => {
-                // Drop the whole partial projection. Host may resume observations
-                // at a committed boundary, but LiveTranscript's tool/child indexes
-                // require an uninterrupted Turn. Stay on committed facts until the
-                // next Turn instead of inventing a second full-history snapshot.
-                self.live = None;
-                ui.note("Live updates skipped; showing committed Session facts".into());
+            if matches!(event.as_ref(), AgentEvent::AssistantCommitted { .. })
+                && ui.conversation.live_for(operation)
+                && let Some(live) = ui.conversation.live()
+            {
+                ui.view.commit_response(live, &event);
+            }
+            if ui.conversation.observe(operation, &event) {
                 return Ok(reconcile(ui, control).err());
             }
-            ControlUpdate::Returned(returned) => {
-                let UserInput::Prompt { images, files, .. } = returned.input else {
-                    unreachable!("terminal submits only raw prompts")
-                };
-                if matches!(returned.reason, ReturnReason::Cleared) {
-                    ui.show_draft(super::RecoveredDraft {
-                        source: returned.metadata,
-                        images,
-                        files,
-                    });
-                } else {
-                    ui.return_draft(returned.metadata, images, files);
-                }
-                ui.status = "Draft returned".into();
-                let fault = returned
-                    .preparation_error
-                    .map(|error| format!("; preparation also failed: {error:#}"))
-                    .unwrap_or_default();
-                let kind = match returned.delivery {
-                    Delivery::Start => "Prompt",
-                    Delivery::Steer(_) => "Steering",
-                    Delivery::FollowUp => "Follow-up",
-                };
-                let reason = match returned.reason {
-                    ReturnReason::Stopped => "stop requested".into(),
-                    ReturnReason::Cleared => "withdrawn from queue".into(),
-                    ReturnReason::TurnEnded => "turn ended before acceptance".into(),
-                    ReturnReason::NotAccepted => "not durably accepted".into(),
-                    ReturnReason::Preparation(error) => format!("preparation failed: {error:#}"),
-                };
-                ui.note(format!("{kind} returned: {reason}{fault}. Draft retained; {} additional draft(s) · {} cycles without resubmitting", ui.recovered.len(), ui.keys.hint(crate::keybindings::KeyAction::Dequeue)));
+        }
+        ControlUpdate::Activity(Observation::Gap { .. }) => {
+            // Drop the whole partial projection. Host may resume observations
+            // at a committed boundary, but LiveTranscript's tool/child indexes
+            // require an uninterrupted Turn. Stay on committed facts until the
+            // next Turn instead of inventing a second full-history snapshot.
+            ui.conversation.clear_live();
+            ui.view.discard_provisional();
+            ui.note("Live updates skipped; showing committed Session facts".into());
+            return Ok(reconcile(ui, control).err());
+        }
+        ControlUpdate::Returned(returned) => {
+            let UserInput::Prompt { images, files, .. } = returned.input else {
+                unreachable!("terminal submits only raw prompts")
+            };
+            if matches!(returned.reason, ReturnReason::Cleared) {
+                ui.show_draft(super::RecoveredDraft {
+                    source: returned.metadata,
+                    images,
+                    files,
+                });
+            } else {
+                ui.return_draft(returned.metadata, images, files);
             }
-            ControlUpdate::Settled(settlement) => {
-                self.live = None;
-                let result = match settlement.outcome {
-                    OperationOutcome::Turn(Err(ion_core::AgentError::Cancelled))
-                        if settlement.stop_requested =>
-                    {
-                        Ok("Turn stopped".into())
-                    }
-                    OperationOutcome::Compact(Err(ion_core::AgentError::Cancelled))
-                        if settlement.stop_requested =>
-                    {
-                        Ok("Compaction stopped".into())
-                    }
-                    OperationOutcome::Turn(result) => {
-                        result.map(|_| String::new()).map_err(Into::into)
-                    }
-                    OperationOutcome::Compact(result) => result
-                        .map(|changed| {
-                            if changed {
-                                "Context summarized; raw history retained".into()
-                            } else {
-                                "No settled history to summarize".into()
-                            }
-                        })
-                        .map_err(Into::into),
-                    OperationOutcome::Shell(result) => result
-                        .map(|output| {
-                            if output.is_error {
-                                "Shell finished with an error".into()
-                            } else {
-                                "Shell finished".into()
-                            }
-                        })
-                        .map_err(Into::into),
-                };
-                let error: Option<anyhow::Error> = match result {
-                    Ok(status) => {
-                        ui.status = status;
-                        None
-                    }
-                    Err(error) => {
-                        ui.status = format!(
-                            "Operation ended: {error:#}; inspect Session and effects before retrying"
-                        );
-                        Some(error)
-                    }
-                };
-                // Direct-operation metadata is correlation, not Returned input.
-                // Do not revive an uncertain command in the composer/recovery
-                // queue. Explicit command recall remains in editor history.
-                drop(settlement.metadata);
-                if let Err(refresh) = reconcile(ui, control) {
-                    let refresh = match error {
-                        Some(error) => {
-                            refresh.context(format!("Concurrent settlement failure: {error:#}"))
+            ui.status = "Draft returned".into();
+            let fault = returned
+                .preparation_error
+                .map(|error| format!("; preparation also failed: {error:#}"))
+                .unwrap_or_default();
+            let kind = match returned.delivery {
+                Delivery::Start => "Prompt",
+                Delivery::Steer(_) => "Steering",
+                Delivery::FollowUp => "Follow-up",
+            };
+            let reason = match returned.reason {
+                ReturnReason::Stopped => "stop requested".into(),
+                ReturnReason::Cleared => "withdrawn from queue".into(),
+                ReturnReason::TurnEnded => "turn ended before acceptance".into(),
+                ReturnReason::NotAccepted => "not durably accepted".into(),
+                ReturnReason::Preparation(error) => format!("preparation failed: {error:#}"),
+            };
+            ui.note(format!("{kind} returned: {reason}{fault}. Draft retained; {} additional draft(s) · {} cycles without resubmitting", ui.editor.recovered.len(), ui.keys.hint(crate::keybindings::KeyAction::Dequeue)));
+        }
+        ControlUpdate::Settled(settlement) => {
+            ui.conversation.clear_live();
+            let result = match settlement.outcome {
+                OperationOutcome::Turn(Err(ion_core::AgentError::Cancelled))
+                    if settlement.stop_requested =>
+                {
+                    Ok("Turn stopped".into())
+                }
+                OperationOutcome::Compact(Err(ion_core::AgentError::Cancelled))
+                    if settlement.stop_requested =>
+                {
+                    Ok("Compaction stopped".into())
+                }
+                OperationOutcome::Turn(result) => result.map(|_| String::new()).map_err(Into::into),
+                OperationOutcome::Compact(result) => result
+                    .map(|changed| {
+                        if changed {
+                            "Context summarized; raw history retained".into()
+                        } else {
+                            "No settled history to summarize".into()
                         }
-                        None => refresh,
-                    };
-                    // Keep the concise history-failure status visible even in
-                    // narrow/fullscreen viewports; retain concurrent details.
-                    ui.note(format!("Operation/inspection failure: {refresh:#}"));
-                    return Ok(Some(refresh));
+                    })
+                    .map_err(Into::into),
+                OperationOutcome::Shell(result) => result
+                    .map(|output| {
+                        if output.is_error {
+                            "Shell finished with an error".into()
+                        } else {
+                            "Shell finished".into()
+                        }
+                    })
+                    .map_err(Into::into),
+            };
+            let error: Option<anyhow::Error> = match result {
+                Ok(status) => {
+                    ui.status = status;
+                    None
                 }
-                return Ok(error);
+                Err(error) => {
+                    ui.status = format!(
+                        "Operation ended: {error:#}; inspect Session and effects before retrying"
+                    );
+                    Some(error)
+                }
+            };
+            // Direct-operation metadata is correlation, not Returned input.
+            // Do not revive an uncertain command in the composer/recovery
+            // queue. Explicit command recall remains in editor history.
+            drop(settlement.metadata);
+            if let Err(refresh) = reconcile(ui, control) {
+                let refresh = match error {
+                    Some(error) => {
+                        refresh.context(format!("Concurrent settlement failure: {error:#}"))
+                    }
+                    None => refresh,
+                };
+                // Keep the concise history-failure status visible even in
+                // narrow/fullscreen viewports; retain concurrent details.
+                ui.note(format!("Operation/inspection failure: {refresh:#}"));
+                return Ok(Some(refresh));
             }
-            ControlUpdate::QuestionChanged => {}
-            ControlUpdate::Idle => {
-                self.live = None;
-            }
+            return Ok(error);
         }
-        Ok(None)
+        ControlUpdate::QuestionChanged => {}
+        ControlUpdate::Idle => {
+            ui.conversation.clear_live();
+        }
     }
+    Ok(None)
+}
 
-    pub(super) fn cleanup_update(
-        &mut self,
-        ui: &mut Frontend,
-        control: &SessionControl<EditorDraft>,
-        update: ControlUpdate<EditorDraft>,
-        outcome: &mut Result<()>,
-    ) {
-        match self.update(ui, control, update) {
-            Ok(Some(error)) | Err(error) => combine_error(outcome, error),
-            Ok(None) => {}
-        }
+pub(super) fn cleanup_update(
+    ui: &mut Frontend,
+    control: &SessionControl<EditorDraft>,
+    update: ControlUpdate<EditorDraft>,
+    outcome: &mut Result<()>,
+) {
+    match apply(ui, control, update) {
+        Ok(Some(error)) | Err(error) => combine_error(outcome, error),
+        Ok(None) => {}
     }
 }
 
@@ -326,7 +283,6 @@ fn reconcile(ui: &mut Frontend, control: &SessionControl<EditorDraft>) -> Result
         .context("Session history refresh failed")
         .inspect_err(|error| ui.status = format!("{error:#}"))?;
     ui.load_history(control.session(), &view);
-    ui.scroll = 0;
     Ok(())
 }
 
@@ -389,22 +345,20 @@ mod tests {
             .control
             .compact(None, EditorDraft::at_end("compact".into()))
             .unwrap();
-        let mut activity = Activity::default();
         let mut ui = Frontend::default();
-        activity
-            .update(
-                &mut ui,
-                &fixture.control,
-                ControlUpdate::Activity(Observation::Event {
-                    operation: id,
-                    event: Arc::new(AgentEvent::ContextCompactionRetry {
-                        through_entry: 10,
-                        next_through_entry: 4,
-                    }),
+        apply(
+            &mut ui,
+            &fixture.control,
+            ControlUpdate::Activity(Observation::Event {
+                operation: id,
+                event: Arc::new(AgentEvent::ContextCompactionRetry {
+                    through_entry: 10,
+                    next_through_entry: 4,
                 }),
-            )
-            .unwrap();
-        assert!(activity.live().is_none());
+            }),
+        )
+        .unwrap();
+        assert!(ui.conversation.live().is_none());
         let rows = ui.pending_history_rows(80);
         assert!(rows.iter().any(|row| {
             row.to_string()
@@ -430,7 +384,6 @@ mod tests {
                 EditorDraft::at_end("initial".into()),
             )
             .unwrap();
-        let mut activity = Activity::default();
         fixture.control.request_stop();
         let update = fixture.control.next().await;
         assert!(matches!(
@@ -441,8 +394,7 @@ mod tests {
             }
         ));
         assert!(
-            activity
-                .update(&mut Frontend::default(), &fixture.control, update)
+            apply(&mut Frontend::default(), &fixture.control, update)
                 .unwrap()
                 .is_none()
         );
@@ -457,80 +409,86 @@ mod tests {
     #[tokio::test]
     async fn resync_discards_partial_projection_and_avoids_duplicate_ahead_history() {
         let mut fixture = super::super::tests::Fixture::new();
-        let id = fixture
-            .control
-            .compact(None, super::super::EditorDraft::at_end("compact".into()))
-            .unwrap();
-        let mut live = LiveTranscript::default();
-        live.observe(&AgentEvent::TurnAccepted {
-            turn: 1,
-            input: ion_ai::Message::user_input("request".into(), []),
-        });
-        live.observe(&AgentEvent::TextDelta("lost prefix".into()));
-        let mut activity = Activity {
-            live: Some((id, live)),
-        };
         let mut ui = Frontend::default();
-        assert!(
-            activity
-                .update(
-                    &mut ui,
-                    &fixture.control,
-                    ControlUpdate::Activity(Observation::Gap { skipped: 2 })
-                )
-                .unwrap()
-                .is_none()
+        ui.load_history(
+            fixture.control.session(),
+            &fixture.control.session().view().unwrap(),
         );
-        assert!(activity.live().is_none());
-        for event in [
+        fixture
+            .control
+            .submit(
+                Delivery::Start,
+                UserInput::Prompt {
+                    text: "request".into(),
+                    files: vec![],
+                    images: vec![],
+                },
+                EditorDraft::at_end("request".into()),
+            )
+            .unwrap();
+        let (operation, accepted) =
+            tokio::time::timeout(std::time::Duration::from_secs(5), async {
+                loop {
+                    let update = fixture.control.next().await;
+                    if let ControlUpdate::Activity(Observation::Event { operation, event }) =
+                        &update
+                        && matches!(event.as_ref(), AgentEvent::TurnAccepted { .. })
+                    {
+                        break (*operation, event.clone());
+                    }
+                    apply(&mut ui, &fixture.control, update).unwrap();
+                }
+            })
+            .await
+            .unwrap();
+        let event = |event| ControlUpdate::Activity(Observation::Event { operation, event });
+        apply(&mut ui, &fixture.control, event(accepted.clone())).unwrap();
+        apply(
+            &mut ui,
+            &fixture.control,
+            event(Arc::new(AgentEvent::TextDelta("lost prefix".into()))),
+        )
+        .unwrap();
+        assert!(ui.conversation.live().is_some());
+        super::super::conversation::fixtures::publish(&mut ui.conversation);
+
+        apply(
+            &mut ui,
+            &fixture.control,
+            ControlUpdate::Activity(Observation::Gap { skipped: 2 }),
+        )
+        .unwrap();
+        for value in [
             AgentEvent::ResponseRestarted,
             AgentEvent::TextDelta("surviving tail".into()),
         ] {
-            assert!(
-                activity
-                    .update(
-                        &mut ui,
-                        &fixture.control,
-                        ControlUpdate::Activity(Observation::Event {
-                            operation: id,
-                            event: Arc::new(event)
-                        })
-                    )
-                    .unwrap()
-                    .is_none()
-            );
+            apply(&mut ui, &fixture.control, event(Arc::new(value))).unwrap();
         }
-        assert!(activity.live().is_none());
+        assert!(ui.conversation.live().is_none());
         assert_eq!(
-            ui.history,
+            ui.conversation.items().cloned().collect::<Vec<_>>(),
             ion_core::TranscriptProjection::from_session(
                 &fixture.control.session().view().unwrap()
             )
+            .items
         );
-        ui.history.items.push(ion_core::TranscriptItem::User(
-            ion_core::TranscriptMessage {
-                turn: Some(2),
-                steering: false,
-                parts: Vec::new(),
-            },
-        ));
-        assert!(
-            activity
-                .update(
-                    &mut ui,
-                    &fixture.control,
-                    ControlUpdate::Activity(Observation::Event {
-                        operation: id,
-                        event: Arc::new(AgentEvent::TurnAccepted {
-                            turn: 2,
-                            input: ion_ai::Message::user_input("next request".into(), []),
-                        }),
-                    })
-                )
-                .unwrap()
-                .is_none()
+        assert!(ui.conversation.has_published_prefix());
+        assert!(!ui.pending_history_rows(80).iter().any(|row| {
+            let text = row.to_string();
+            text.contains("lost prefix")
+                || text.contains("surviving tail")
+                || text.contains("request")
+        }));
+        // A delayed acceptance after the canonical snapshot must not seed it twice.
+        apply(&mut ui, &fixture.control, event(accepted)).unwrap();
+        assert!(ui.conversation.live().is_none());
+        assert_eq!(
+            ui.conversation
+                .items()
+                .filter(|item| matches!(item, ion_core::TranscriptItem::User(_)))
+                .count(),
+            1
         );
-        assert!(activity.live().is_none());
         fixture.control.shutdown().await;
     }
 }

@@ -17,6 +17,8 @@ import termios
 import time
 from pathlib import Path
 
+from terminal_style import has_foreground
+
 
 class CursorReplies:
     """Track positioned CPR reference points, not a rendered screen/reflow model."""
@@ -337,6 +339,8 @@ with tempfile.TemporaryDirectory(prefix="ion-terminal-") as temporary:
         opened_active = closed_active = False
         sent_selected = closed_selected = False
         active_start = tool_start = selected_start = 0
+        control_phase = None
+        control_start = 0
         try:
             while time.monotonic() < deadline:
                 readable, _, _ = select.select([master], [], [], 0.05)
@@ -375,7 +379,7 @@ with tempfile.TemporaryDirectory(prefix="ion-terminal-") as temporary:
                     os.write(master, b"\x0f")
                     closed_active = True
                 if closed_active and b"Details closed" in output[active_start:] and not sent_steering:
-                    assert "Working · Ctrl-C cancels · Details closed".encode() in output[active_start:], "detail-close notice hid the active operation"
+                    assert "Ctrl-C cancels · Working · Details closed".encode() in output[active_start:], "detail-close notice hid the active operation"
                     os.write(master, b"Also check that the updated file has two lines.\r")
                     sent_steering = True
                 if sent_steering and not sent_second:
@@ -425,20 +429,37 @@ with tempfile.TemporaryDirectory(prefix="ion-terminal-") as temporary:
                     source_before_clone = json.loads(snapshot.stdout)["entries"]
                     os.write(master, b"/clone\r")
                     sent_clone = True
-                if sent_clone and b"Cloned conversation as" in output and not sent_controls:
-                    time.sleep(0.2)
+                if sent_clone and b"Cloned conversation as" in output and control_phase is None:
                     os.write(master, "/name Smoke repair 01234567890🦀\r".encode())
                     time.sleep(0.2)
                     os.write(master, b"/new\r")
                     time.sleep(0.2)
+                    control_start = len(output)
                     os.write(master, b"/resume\r")
-                    time.sleep(0.2)
-                    os.write(master, b"Smoke repair\r")
-                    time.sleep(0.2)
+                    control_phase = "resume_open"
+                # Confirmation is not queued while geometry/discovery is pending.
+                # Wait for the actual loaded surface and then the painted query,
+                # rather than combining typing and Enter behind a fixed sleep.
+                current_control = output[control_start:]
+                if control_phase == "resume_open" and b"Resume session" in current_control and b"match(es)" in current_control:
+                    control_start = len(output)
+                    os.write(master, b"Smoke repair")
+                    control_phase = "resume_query"
+                elif control_phase == "resume_query" and "› Smoke repair".encode() in current_control:
+                    control_start = len(output)
+                    os.write(master, b"\r")
+                    control_phase = "resumed"
+                elif control_phase == "resumed" and b"Ready" in current_control:
+                    control_start = len(output)
                     os.write(master, b"/model\r")
-                    time.sleep(0.2)
-                    os.write(master, b"smoke\r")
+                    control_phase = "model_open"
+                elif control_phase == "model_open" and b"Choose model" in current_control and b"match(es)" in current_control:
+                    control_start = len(output)
+                    os.write(master, b"\r")  # The current model is visibly preselected.
+                    control_phase = "model_selected"
+                elif control_phase == "model_selected" and b"Ready" in current_control:
                     sent_controls = True
+                    control_phase = "done"
                 if sent_controls and b"Choose model" in output and b"Resume session" in output and not sent_login:
                     time.sleep(0.2)
                     os.write(master, b"/login smoke\r")
@@ -480,9 +501,8 @@ with tempfile.TemporaryDirectory(prefix="ion-terminal-") as temporary:
             assert b"MARKDOWN_BOLD and literal_code docs (https://example.org/ion)" in plain_output, "assistant Markdown was not rendered"
             assert b"TABLE_CELL \xe2\x94\x82 TABLE_VISIBLE" in plain_output, "assistant table was not laid out"
             assert b"fn syntax_probe()" in plain_output and b'"SYNTAX_LITERAL"; // syntax comment' in plain_output, "syntax rendering changed code text"
-            # This fixture answers no palette queries. Both SGR spellings mean
-            # ANSI slot 2; system fallback need not encode it as basic SGR 32.
-            assert re.search(rb'\x1b\[(?:32|38;5;2)m"SYNTAX_LITERAL"', output), "syntax string color did not reach terminal publication"
+            # No palette queries are answered: the fallback selects ANSI slot 2.
+            assert has_foreground(bytes(output), b'"SYNTAX_LITERAL"', ("ansi", 2)), "syntax string color did not reach terminal publication"
             assert b"-sample data" in plain_output and b"+sample data updated" in plain_output, "actual edit patch was not rendered"
             assert b"+created by ion" in plain_output, "actual write patch was not rendered"
             assert "• ".encode() in output, "semantic activity group header was not rendered"

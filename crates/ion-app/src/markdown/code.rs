@@ -1,8 +1,12 @@
 //! Bundled grammars produce styles, never terminal escapes or replacement text.
-use std::sync::LazyLock;
+use std::{ops::Range, sync::LazyLock};
 
+use crate::display_text::{MappedLine, Origin, ParsedComponent};
 use pulldown_cmark::{CodeBlockKind, Event, TagEnd};
-use ratatui::{style::Style, text::Span};
+use ratatui::{
+    style::Style,
+    text::{Line, Span},
+};
 use two_face::re_exports::syntect::{
     easy::ScopeRegionIterator,
     parsing::{ParseState, Scope, ScopeStack, SyntaxSet},
@@ -39,7 +43,7 @@ static SCOPES: LazyLock<Vec<(Scope, Role)>> = LazyLock::new(|| {
 impl View<'_> {
     pub(super) fn code_block<'a>(
         &mut self,
-        events: &mut impl Iterator<Item = Event<'a>>,
+        events: &mut impl Iterator<Item = (Event<'a>, Range<usize>)>,
         kind: CodeBlockKind<'a>,
     ) {
         self.flush();
@@ -48,34 +52,63 @@ impl View<'_> {
             CodeBlockKind::Indented => String::new(),
         };
         if !info.is_empty() {
-            self.spans.push(Span::styled(
-                format!("code · {info}"),
-                self.theme.style(Role::Secondary),
-            ));
+            self.content = MappedLine::generated(
+                Line::styled(format!("code · {info}"), self.theme.style(Role::Secondary)),
+                self.range.start,
+            );
             self.flush();
         }
-        let mut source = String::new();
-        for event in events {
+        for (event, range) in events {
+            self.range = range;
             match event {
                 Event::End(TagEnd::CodeBlock) => break,
-                Event::Text(text) => source.push_str(&text),
+                Event::Text(text) => {
+                    self.parsed_text(text.into_string(), self.style(), ParsedComponent::Code)
+                }
                 _ => {}
             }
         }
+        let source = self
+            .content
+            .line
+            .spans
+            .iter()
+            .map(|span| span.content.as_ref())
+            .collect::<String>();
         if source.is_empty() {
+            self.content = MappedLine::default();
             self.separate();
             return;
         }
         // The parser's final newline terminates the block, not an extra row.
         let source = source.strip_suffix('\n').unwrap_or(&source);
+        self.content
+            .map
+            .retain(|mapping| mapping.display.start <= source.len());
+        for mapping in &mut self.content.map {
+            let end = mapping.display.end.min(source.len());
+            if mapping.linear {
+                match &mut mapping.origin {
+                    Origin::Raw(raw) | Origin::Component { bytes: raw, .. } => {
+                        raw.end -= mapping.display.end - end
+                    }
+                    Origin::Node(_) => {}
+                }
+            }
+            mapping.display.end = end;
+        }
         self.push_prefix("  ".into(), "  ".into());
-        self.spans = highlight(source, &info, self.style(), self.theme).unwrap_or_else(|| {
-            vec![Span::styled(
-                source.to_owned(),
-                self.style().patch(self.theme.style(Role::Code)),
-            )]
-        });
+        self.wrapping = crate::display_text::Wrapping::Literal;
+        self.content.line = Line::from(
+            highlight(source, &info, self.style(), self.theme).unwrap_or_else(|| {
+                vec![Span::styled(
+                    source.to_owned(),
+                    self.style().patch(self.theme.style(Role::Code)),
+                )]
+            }),
+        );
         self.flush();
+        self.wrapping = crate::display_text::Wrapping::Words;
         self.prefixes.pop();
         self.separate();
     }

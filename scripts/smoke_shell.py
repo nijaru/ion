@@ -248,9 +248,13 @@ for mode in ("inline", "fullscreen"):
                 if step == "editor_failure" and b"Editor failed" in segment and b"original draft retained" in segment and b"edited-from-editor" in segment:
                     (workspace / "editor.fail").unlink()
                     segment_start = len(output)
-                    # The complete markers below are not present in the commands:
-                    # composer echo cannot satisfy visible-output assertions.
-                    os.write(master, b"\x03!printf '%s%s\\n' VISIBLE_ OUTPUT\r")
+                    # Compact successful stdout is intentionally folded. Select
+                    # disclosure before asserting visible output, not command echo.
+                    os.write(master, b"\x03/settings expanded\r")
+                    step = "expanded"
+                if step == "expanded" and b"Tool output: expanded" in segment:
+                    segment_start = len(output)
+                    os.write(master, b"!printf '%s%s\\n' VISIBLE_ OUTPUT\r")
                     step = 2
                 if step == 2 and b"VISIBLE_OUTPUT" in segment and b"exit 0" in segment:
                     segment_start = len(output)

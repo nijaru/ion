@@ -50,7 +50,7 @@ pub(super) fn press(
     key: KeyEvent,
     keys: &KeyBindings,
 ) -> QuestionAction {
-    modal.render(80, 24, keys, &crate::presentation_style::Theme::default());
+    modal.painted_render(80, 24, keys, &crate::presentation_style::Theme::default());
     modal.key(key, keys)
 }
 
@@ -75,7 +75,7 @@ fn collapsing_keeps_hidden_input_inert_and_reopening_requires_paint() {
     let request = batch.request();
     let mut modal = QuestionModal::new(request, batch.questions.into_iter().take(1).collect());
     press(&mut modal, collapse, &keys);
-    let frame = modal.render(80, 24, &keys, &theme);
+    let frame = modal.painted_render(80, 24, &keys, &theme);
     assert!(
         !frame
             .rows
@@ -113,13 +113,13 @@ fn unseen_or_clipped_choices_do_not_answer() {
         "an unseen choice was accepted"
     );
     modal.questions[0].options[0].label = "An option that spans several rows".into();
-    modal.render(8, 1, &keys, &theme);
+    modal.painted_render(8, 1, &keys, &theme);
     modal.key(enter(), &keys);
     assert!(
         super::tests::answered(&modal).is_empty(),
         "a clipped choice was accepted"
     );
-    modal.render(80, 24, &keys, &theme);
+    modal.painted_render(80, 24, &keys, &theme);
     modal.key(enter(), &keys);
     assert_eq!(
         super::tests::answered(&modal),
@@ -222,7 +222,7 @@ fn multi_select_toggles_without_advancing_until_explicit_next() {
     assert!(super::tests::answered(&modal).is_empty());
     assert_eq!(modal.index, 0);
     let rows = modal
-        .render(
+        .painted_render(
             80,
             16,
             &KeyBindings::default(),
@@ -237,7 +237,7 @@ fn multi_select_toggles_without_advancing_until_explicit_next() {
     assert_eq!(modal.draft().selected, 3);
     press(&mut modal, space, &KeyBindings::default()); // Next is not a checkable option.
     let rows = modal
-        .render(
+        .painted_render(
             24,
             2,
             &KeyBindings::default(),
@@ -348,7 +348,7 @@ fn tiny_width_disables_submission_and_never_claims_invisible_selection() {
     for (width, multi_select) in [(1, false), (2, false), (1, true), (2, true)] {
         let mut modal = modal();
         modal.questions[0].multi_select = multi_select;
-        let frame = modal.render(
+        let frame = modal.painted_render(
             width,
             1,
             &KeyBindings::default(),
@@ -366,7 +366,7 @@ fn tiny_width_disables_submission_and_never_claims_invisible_selection() {
         assert!(super::tests::answered(&modal).is_empty());
     }
     let mut modal = modal();
-    modal.render(
+    modal.painted_render(
         20,
         1,
         &KeyBindings::default(),
@@ -386,7 +386,7 @@ fn tiny_width_disables_submission_and_never_claims_invisible_selection() {
 #[test]
 fn one_row_editor_keeps_cursor_and_text_visible_at_narrow_geometry() {
     let mut modal = modal();
-    modal.render(
+    modal.painted_render(
         20,
         1,
         &KeyBindings::default(),
@@ -400,7 +400,7 @@ fn one_row_editor_keeps_cursor_and_text_visible_at_narrow_geometry() {
         KeyEvent::new(KeyCode::Down, Modifiers::NONE),
         &KeyBindings::default(),
     );
-    modal.render(
+    modal.painted_render(
         20,
         1,
         &KeyBindings::default(),
@@ -408,7 +408,7 @@ fn one_row_editor_keeps_cursor_and_text_visible_at_narrow_geometry() {
     );
     modal.key(enter(), &KeyBindings::default());
     modal.paste("x");
-    let frame = modal.render(
+    let frame = modal.painted_render(
         8,
         1,
         &KeyBindings::default(),
@@ -423,7 +423,7 @@ fn one_row_editor_keeps_cursor_and_text_visible_at_narrow_geometry() {
 #[test]
 fn short_viewport_keeps_selected_row_and_editor_cursor_visible() {
     let mut modal = modal();
-    let frame = modal.render(
+    let frame = modal.painted_render(
         30,
         4,
         &KeyBindings::default(),
@@ -439,7 +439,7 @@ fn short_viewport_keeps_selected_row_and_editor_cursor_visible() {
         KeyEvent::new(KeyCode::Down, Modifiers::NONE),
         &KeyBindings::default(),
     );
-    let frame = modal.render(
+    let frame = modal.painted_render(
         30,
         3,
         &KeyBindings::default(),
@@ -461,7 +461,7 @@ fn short_viewport_keeps_selected_row_and_editor_cursor_visible() {
         KeyEvent::new(KeyCode::Down, Modifiers::NONE),
         &KeyBindings::default(),
     );
-    modal.render(
+    modal.painted_render(
         30,
         3,
         &KeyBindings::default(),
@@ -469,7 +469,7 @@ fn short_viewport_keeps_selected_row_and_editor_cursor_visible() {
     );
     modal.key(enter(), &KeyBindings::default());
     modal.paste("cursor");
-    let frame = modal.render(
+    let frame = modal.painted_render(
         30,
         3,
         &KeyBindings::default(),

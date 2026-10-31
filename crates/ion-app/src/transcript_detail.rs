@@ -1,6 +1,8 @@
 //! Paged inspection of canonical saved facts and the current live transcript.
 use crate::keybindings::KeyAction;
-use ion_core::{LiveTranscript, TranscriptActivity, TranscriptItem, TranscriptProjection};
+#[cfg(test)]
+use ion_core::{LiveTranscript, TranscriptProjection};
+use ion_core::{TranscriptActivity, TranscriptItem};
 use std::num::NonZeroUsize;
 
 use crate::display_text::push_wrapped;
@@ -17,7 +19,7 @@ pub struct DetailView {
 }
 
 struct Page {
-    revision: Option<u64>,
+    revision: u64,
     width: usize,
     start: usize,
     end: usize,
@@ -78,36 +80,32 @@ impl DetailView {
         }
     }
 
-    pub fn prepare(
+    pub fn prepare<'a>(
         &mut self,
-        history: &TranscriptProjection,
-        live: Option<&LiveTranscript>,
+        items: impl Iterator<Item = &'a TranscriptItem> + Clone,
+        notices: &[String],
+        revision: u64,
         width: usize,
     ) {
         let width = width.max(1);
-        let revision = live.map(LiveTranscript::revision);
         if self
             .page
             .as_ref()
             .is_none_or(|page| page.revision != revision || page.width != width)
         {
-            let count = |projection: &TranscriptProjection| {
-                projection
-                    .items
-                    .iter()
-                    .map(|item| match item {
-                        TranscriptItem::ActivityGroup(group) => group.activities.len(),
-                        _ => 1,
-                    })
-                    .sum::<usize>()
-            };
-            let total = count(history) + live.map_or(0, |live| count(live.projection()));
+            let total = items
+                .clone()
+                .map(|item| match item {
+                    TranscriptItem::ActivityGroup(group) => group.activities.len(),
+                    _ => 1,
+                })
+                .sum::<usize>();
             let end = self.page_end.unwrap_or(total).min(total);
             let start = end.saturating_sub(PAGE_ENTRIES);
             let mut rows = Vec::new();
             let mut evidence = None;
             if let Some(number) = self.tool {
-                if let Some(activity) = entries(history, live)
+                if let Some(activity) = entries(items.clone())
                     .filter_map(|entry| match entry {
                         Entry::Tool(activity) => Some(activity),
                         Entry::Item(..) => None,
@@ -130,7 +128,7 @@ impl DetailView {
                     width,
                 );
                 let mut tool_number = 0;
-                for (index, entry) in entries(history, live).enumerate().take(end) {
+                for (index, entry) in entries(items.clone()).enumerate().take(end) {
                     if matches!(entry, Entry::Tool(_)) {
                         tool_number += 1;
                     }
@@ -143,7 +141,7 @@ impl DetailView {
                             render_tool(&mut rows, tool_number, activity, width)
                         }
                         Entry::Item(item, provisional) => match item {
-                            TranscriptItem::Readiness { turn, notices } => push_wrapped(
+                            TranscriptItem::Readiness { turn, notices, .. } => push_wrapped(
                                 &mut rows,
                                 &crate::transcript_render::readiness_text(*turn, notices),
                                 width,
@@ -184,7 +182,10 @@ impl DetailView {
                                 );
                                 push_wrapped(&mut rows, &shell.command, width);
                                 match &shell.outcome {
-                                    ion_core::UserShellOutcome::Observed { output, is_error } => {
+                                    Some(ion_core::UserShellOutcome::Observed {
+                                        output,
+                                        is_error,
+                                    }) => {
                                         push_wrapped(
                                             &mut rows,
                                             if *is_error {
@@ -196,11 +197,13 @@ impl DetailView {
                                         );
                                         render_json(&mut rows, output, width);
                                     }
-                                    ion_core::UserShellOutcome::Unknown => push_wrapped(
-                                        &mut rows,
-                                        ion_core::UserShellOutcome::unknown_notice(),
-                                        width,
-                                    ),
+                                    Some(ion_core::UserShellOutcome::Unknown) | None => {
+                                        push_wrapped(
+                                            &mut rows,
+                                            ion_core::UserShellOutcome::unknown_notice(),
+                                            width,
+                                        )
+                                    }
                                 }
                             }
                             TranscriptItem::ActivityGroup(_) => {
@@ -210,11 +213,8 @@ impl DetailView {
                     }
                 }
             }
-            if self.tool.is_none()
-                && end == total
-                && let Some(live) = live
-            {
-                for notice in live.notices() {
+            if self.tool.is_none() && end == total {
+                for notice in notices {
                     push_wrapped(&mut rows, &format!("Notice: {notice}"), width);
                 }
             }
@@ -277,32 +277,23 @@ impl DetailView {
     }
 }
 
-fn entries<'a>(
-    history: &'a TranscriptProjection,
-    live: Option<&'a LiveTranscript>,
-) -> impl Iterator<Item = Entry<'a>> {
-    let provisional = live
-        .and_then(LiveTranscript::provisional_item_index)
-        .map(|index| history.items.len() + index);
-    history
-        .items
-        .iter()
-        .chain(live.into_iter().flat_map(|live| &live.projection().items))
-        .enumerate()
-        .flat_map(move |(index, item)| {
-            let activities = match item {
-                TranscriptItem::ActivityGroup(group) => group.activities.as_slice(),
-                _ => &[],
-            };
-            (!matches!(item, TranscriptItem::ActivityGroup(_)))
-                .then_some(Entry::Item(item, provisional == Some(index)))
-                .into_iter()
-                .chain(activities.iter().map(Entry::Tool))
-        })
+fn entries<'a>(items: impl Iterator<Item = &'a TranscriptItem>) -> impl Iterator<Item = Entry<'a>> {
+    items.flat_map(|item| {
+        let activities = match item {
+            TranscriptItem::ActivityGroup(group) => group.activities.as_slice(),
+            _ => &[],
+        };
+        (!matches!(item, TranscriptItem::ActivityGroup(_)))
+            .then_some(Entry::Item(item, item.source().is_none()))
+            .into_iter()
+            .chain(activities.iter().map(Entry::Tool))
+    })
 }
 
-pub fn tools(history: &TranscriptProjection) -> impl Iterator<Item = &TranscriptActivity> {
-    entries(history, None).filter_map(|entry| match entry {
+pub fn tools<'a>(
+    items: impl IntoIterator<Item = &'a TranscriptItem>,
+) -> impl Iterator<Item = &'a TranscriptActivity> {
+    entries(items.into_iter()).filter_map(|entry| match entry {
         Entry::Tool(activity) => Some(activity),
         Entry::Item(..) => None,
     })
@@ -405,16 +396,18 @@ mod tests {
     fn conversation_tracks_active_facts_and_preserves_full_results() {
         let history = TranscriptProjection {
             items: vec![TranscriptItem::UserShell(UserShellActivity {
+                source: ion_core::TranscriptSource { entry: 1, part: 0 },
                 command: "previous-check".into(),
-                outcome: ion_core::UserShellOutcome::Observed {
+                outcome: Some(ion_core::UserShellOutcome::Observed {
                     output: serde_json::json!({"stdout": "SAVED_SHELL"}),
                     is_error: false,
-                },
+                }),
                 exclude_from_context: true,
             })],
         };
         let mut live = LiveTranscript::default();
         live.observe(&AgentEvent::TurnAccepted {
+            entry: 3,
             turn: 2,
             input: Message::user_input("CURRENT_REQUEST".into(), []),
         });
@@ -423,6 +416,7 @@ mod tests {
             subject: Some("run-check".into()),
         };
         live.observe(&AgentEvent::AssistantCommitted {
+            entry: 4,
             turn: 2,
             content: vec![Content::ToolCall(ToolCall {
                 id: "call".into(),
@@ -437,7 +431,12 @@ mod tests {
             termination: ResponseTermination::Completed,
         });
         let mut view = DetailView::default();
-        view.prepare(&history, Some(&live), 120);
+        view.prepare(
+            history.items.iter().chain(live.projection().items.iter()),
+            live.notices(),
+            live.revision(),
+            120,
+        );
         let initial = view.rows().join("\n");
         assert!(initial.contains("CURRENT_REQUEST"));
         assert!(initial.contains("SAVED_SHELL"));
@@ -458,20 +457,35 @@ mod tests {
             },
         });
         live.observe(&AgentEvent::TextDelta("PROVISIONAL_TEXT".into()));
-        view.prepare(&history, Some(&live), 120);
+        view.prepare(
+            history.items.iter().chain(live.projection().items.iter()),
+            live.notices(),
+            live.revision(),
+            120,
+        );
         let running = view.rows().join("\n");
         assert!(running.contains("completed"));
         assert!(running.contains("END_MARKER"));
         assert!(running.contains("Assistant · provisional"));
         assert!(running.contains("PROVISIONAL_TEXT"));
         live.observe(&AgentEvent::ResponseRestarted);
-        view.prepare(&history, Some(&live), 120);
+        view.prepare(
+            history.items.iter().chain(live.projection().items.iter()),
+            live.notices(),
+            live.revision(),
+            120,
+        );
         let restarted = view.rows().join("\n");
         assert!(!restarted.contains("PROVISIONAL_TEXT"));
         assert!(restarted.contains("END_MARKER"));
         assert_eq!(restarted.matches("Tool 1: exec").count(), 1);
         let mut selected = DetailView::new(NonZeroUsize::new(1));
-        selected.prepare(&history, Some(&live), 120);
+        selected.prepare(
+            history.items.iter().chain(live.projection().items.iter()),
+            live.notices(),
+            live.revision(),
+            120,
+        );
         let output = selected.rows().join("\n");
         assert!(output.contains("Arguments"));
         assert!(output.contains("run-check"));
@@ -485,6 +499,10 @@ mod tests {
             items: (0..40)
                 .map(|index| {
                     TranscriptItem::Assistant(TranscriptMessage {
+                        source: Some(ion_core::TranscriptSource {
+                            entry: index + 1,
+                            part: 0,
+                        }),
                         turn: Some(index),
                         steering: false,
                         parts: vec![TranscriptPart::Text(format!("ANSWER_{index}"))],
@@ -493,17 +511,17 @@ mod tests {
                 .collect(),
         };
         let mut view = DetailView::default();
-        view.prepare(&history, None, 80);
+        view.prepare(history.items.iter(), &[], 0, 80);
         let tail = view.rows().join("\n");
         assert!(tail.contains("ANSWER_39"));
         assert!(!tail.contains("ANSWER_0\n"));
         view.navigate(KeyAction::Earlier);
-        view.prepare(&history, None, 80);
+        view.prepare(history.items.iter(), &[], 0, 80);
         let earlier = view.rows().join("\n");
         assert!(earlier.contains("ANSWER_0\n"));
         assert!(!earlier.contains("ANSWER_39"));
         view.navigate(KeyAction::Later);
-        view.prepare(&history, None, 6);
+        view.prepare(history.items.iter(), &[], 0, 6);
         assert!(
             view.rows()
                 .iter()

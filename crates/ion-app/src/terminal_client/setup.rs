@@ -6,7 +6,8 @@ use ion_terminal::{InputEvent, Screen, TerminalSession};
 use std::path::PathBuf;
 
 use super::{
-    Frontend, PickerValue, ProgramStatusState, draw, login_in_terminal, new_inline_screen,
+    Frontend, PickerValue, ProgramStatusState, draw, invalidate_resized_input, login_in_terminal,
+    new_inline_screen, release_surface,
 };
 
 /// Returns None on cancellation. Ready launches never acquire a terminal here.
@@ -26,7 +27,7 @@ pub async fn setup_model(
     let mut terminal = TerminalSession::enter().await?;
     let outcome = async {
         let mut screen = new_inline_screen(&mut terminal).await?;
-        run(
+        let outcome = run(
             host,
             selected,
             choose_default,
@@ -35,11 +36,11 @@ pub async fn setup_model(
             &mut terminal,
             &mut screen,
         )
-        .await
+        .await;
+        finish(outcome, release_surface(&mut terminal, &mut screen).await)
     }
     .await;
-    // This UI only paints transient picker rows on the alternate screen. Secret
-    // entry owns its primary-screen prompt/newline and quarantines its suffix.
+    // Secret entry owns its primary prompt/newline and quarantines its suffix.
     finish(
         outcome,
         terminal.restore().context("restore startup terminal"),
@@ -64,11 +65,13 @@ pub async fn choose_session(
         .open_sessions(catalog, super::picker::SessionBrowser::Launch);
     let outcome = async {
         let mut screen = new_inline_screen(&mut terminal).await?;
+        let outcome = async {
         let mut program = ProgramStatusState::default();
         loop {
             program.publish(&mut terminal, false)?;
-            draw(&mut terminal, &mut screen, &mut ui, None, None, None).await?;
+            let painted = draw(&mut terminal, &mut screen, &mut ui, None, None).await?;
             let event = tokio::select! {
+                _ = tokio::time::sleep(std::time::Duration::from_millis(50)), if !painted => continue,
                 notice = ui.pickers.complete(), if ui.pickers.has_job() => {
                     // Current-scope notices already render in the picker. A
                     // cancelled worker's failure must still be visible while
@@ -83,6 +86,7 @@ pub async fn choose_session(
             terminal
                 .check_active()
                 .context("Session picker terminal failed")?;
+            invalidate_resized_input(&terminal, &mut screen, &mut ui)?;
             match event.context("Session picker input ended")?? {
                 InputEvent::Key(key) if keys.matches(KeyAction::Suspend, key) => {
                     terminal.suspend_to_job_control().await?;
@@ -108,6 +112,8 @@ pub async fn choose_session(
                 InputEvent::Mouse(_) | InputEvent::ColorsChanged => {}
             }
         }
+        }.await;
+        finish(outcome, release_surface(&mut terminal, &mut screen).await)
     }
     .await;
     let outcome = finish(
@@ -198,11 +204,15 @@ async fn run(
             )?;
         }
         program.publish(terminal, false)?;
-        draw(terminal, screen, &mut ui, None, None, None).await?;
-        let event = terminal
-            .next_input()
-            .await
-            .context("model setup input ended")??;
+        let painted = draw(terminal, screen, &mut ui, None, None).await?;
+        let event = tokio::select! {
+            _ = tokio::time::sleep(std::time::Duration::from_millis(50)), if !painted => continue,
+            event = terminal.next_input() => event.context("model setup input ended")??,
+        };
+        terminal
+            .check_active()
+            .context("model setup terminal failed")?;
+        invalidate_resized_input(terminal, screen, &mut ui)?;
         match event {
             InputEvent::Key(key) if keys.matches(KeyAction::Suspend, key) => {
                 terminal.suspend_to_job_control().await?;

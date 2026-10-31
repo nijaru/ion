@@ -16,7 +16,6 @@ BINARY = Path(os.environ.get("ION_SMOKE_BIN", ROOT / "target/debug/ion"))
 SOURCE = """def add(a, b):
     return a - b
 """
-SOURCE_DIGEST = hashlib.sha256(SOURCE.encode()).hexdigest()
 TEST = """import unittest
 from calculator import add
 
@@ -69,17 +68,27 @@ class Provider(BaseHTTPRequestHandler):
             elif count == 1:
                 tool_messages = [m for m in body["messages"] if m["role"] == "tool"]
                 assert len(tool_messages) == 2, tool_messages
+                reads = {message["tool_call_id"]: json.loads(message["content"]) for message in tool_messages}
+                assert set(reads) == {"read-test", "read-source"}, reads
+                for call_id, expected in [("read-test", TEST), ("read-source", SOURCE)]:
+                    envelope = reads[call_id]
+                    assert envelope["is_error"] is False, envelope
+                    result = envelope["result"]
+                    assert result["content"] == expected, result
+                    assert result["base_digest"] == hashlib.sha256(expected.encode()).hexdigest(), result
+                    assert result["start_line"] == 1 and result["has_more"] is False, result
+                observed_source = reads["read-source"]["result"]
                 calls = [
                     tool_call(
                         "edit-source",
                         "edit",
                         {
                             "path": "calculator.py",
-                            "base_digest": SOURCE_DIGEST,
+                            "base_digest": observed_source["base_digest"],
                             "edits": [
                                 {
-                                    "old_text": "def add(a, b):\n    return a - b",
-                                    "new_text": "def add(a, b):\n    return a + b",
+                                    "old_text": observed_source["content"],
+                                    "new_text": observed_source["content"].replace("return a - b", "return a + b"),
                                 }
                             ],
                         },

@@ -41,9 +41,9 @@ pub use invocation::{ToolInvocation, ToolOccurrence, ToolOrigin};
 pub use session::{
     AuthorityScope, ContextPoint, ContextPosition, ForkPoint, ModelContextSnapshot,
     PreparedNavigation, RecoveryBinding, RecoveryPoint, RecoveryState, RequestKey, RequestReceipt,
-    Session, SessionEntry, SessionError, SessionInputPreview, SessionMetadata, SessionView,
-    StoredToolActivity, SubmissionRequest, TurnEndReason, TurnSummary, UnobservedUserShell,
-    UserShellOutcome,
+    Session, SessionEntry, SessionError, SessionInputPreview, SessionMetadata, SessionStatus,
+    SessionView, StoredToolActivity, SubmissionRequest, TurnEndReason, TurnSummary,
+    UnobservedUserShell, UserShellOutcome,
 };
 pub use session_usage::{ModelUsage, SessionUsage, TokenCount, UsageTotals};
 pub use tool_policy::{ToolDecision, ToolPolicy, ToolPolicyRequest};
@@ -61,5 +61,6 @@ pub use tool_result::{ToolOutcome, ToolOutput, ToolResultProjection, ToolSettlem
 
 pub use transcript::{
     ActivityGroup, ActivityResult, ActivityState, LiveTranscript, TranscriptActivity,
-    TranscriptItem, TranscriptMessage, TranscriptPart, TranscriptProjection, UserShellActivity,
+    TranscriptActivityIdentity, TranscriptItem, TranscriptMessage, TranscriptPart,
+    TranscriptProjection, TranscriptSource, UserShellActivity,
 };

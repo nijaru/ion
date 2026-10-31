@@ -92,27 +92,6 @@ fn word_end(text: &str, cursor: usize) -> usize {
     word_grapheme_boundary(text, destination, true)
 }
 
-pub(super) fn vertical_cursor(text: &str, cursor: usize, down: bool) -> Option<usize> {
-    let start = line_start(text, cursor);
-    let column = text[start..cursor].graphemes(true).count();
-    let (target_start, target_end) = if down {
-        let next_start = text[cursor..].find('\n').map(|at| cursor + at + 1)?;
-        (next_start, line_end(text, next_start))
-    } else {
-        if start == 0 {
-            return None;
-        }
-        let previous_end = previous_grapheme(text, start);
-        (line_start(text, previous_end), previous_end)
-    };
-    Some(
-        text[target_start..target_end]
-            .grapheme_indices(true)
-            .nth(column)
-            .map_or(target_end, |(at, _)| target_start + at),
-    )
-}
-
 /// Kill direction belongs to the semantic edit, not its physical shortcut.
 pub(super) fn kill(action: KeyAction) -> Option<Kill> {
     match action {
@@ -254,11 +233,6 @@ mod tests {
         assert_eq!(previous_grapheme(text, end), "e\u{301}".len());
         assert_eq!(word_end(text, end), end + 2);
         assert_eq!(word_start(text, end + 2), end);
-        assert_eq!(vertical_cursor(text, end, true), Some(end + 4));
-        assert_eq!(
-            vertical_cursor(text, end + 3, false),
-            Some("e\u{301}".len())
-        );
         assert!(apply("", 0, KeyAction::Exit).is_none());
     }
 }

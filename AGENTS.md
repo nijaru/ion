@@ -8,9 +8,10 @@
 - Build one reusable Rust agent engine. Coding is its first application, not
   its ceiling. Bots, services, phone integrations and coordinators reuse shared
   control, admission, recovery and delegation rather than implementing new loops.
-- Pi is the primary agent/workflow baseline. fx is the primary native/TUI
-  baseline, with Pi secondary for presentation. Codex and Claude Code are
-  secondary references.
+- Match Pi's agent/runtime and workflow design by default, idiomatically in
+  Rust. fx leads feature and native/TUI design, with Pi secondary for
+  presentation. Codex and Claude Code are secondary references. Use current
+  state-of-the-art patterns when they solve the requirement, not for novelty.
   Inspect current relevant upstream source before designing an overlapping
   capability, including its interaction and edge cases. Preserve proven
   user-facing semantics by default; implement them idiomatically in Rust.
@@ -54,9 +55,11 @@
   not Session authority; composed tool children are not managed subagents.
 - Terminal interaction starts in `crates/ion-app/src/terminal_client.rs` and its
   submodules. Keep editor/picker presentation separate from shared input custody.
-  Core's `transcript.rs` supplies semantics; App's `transcript_render.rs`,
-  `tool_output.rs` and `presentation_style.rs` render them;
-  `crates/ion-terminal/src/screen.rs` owns physical publication.
+  Core's `transcript.rs` supplies semantics; App's `conversation.rs` reconciles
+  facts, `block_presenter.rs` prepares shared layout and `editor.rs` owns literal
+  editing/recovery. These App modules live under `terminal_client/`.
+  `transcript_render.rs` and `tool_output.rs` render semantic blocks;
+  Terminal's `screen.rs` models physical state and `publication.rs` qualifies paint.
 - Extract cohesive responsibilities instead of growing central orchestration
   files. Avoid one-call-site wrappers and speculative frameworks.
 

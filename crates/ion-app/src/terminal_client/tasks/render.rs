@@ -271,6 +271,7 @@ fn returned_input(input: &ion_host::UserInput) -> String {
 mod tests {
     use super::super::item;
     use super::*;
+    use crate::terminal_client::Editor;
     use ion_core::{
         DelegationOutcome, DelegationOwnership, DelegationPartialOutput, DelegationReceipt,
         DelegationRecord, DelegationSite, DelegationSpec, DelegationTarget, ToolOccurrence,
@@ -377,8 +378,11 @@ mod tests {
             assert_eq!(offered(TaskChoice::Result(run.receipt.record.run)), joined);
             assert_eq!(offered(TaskChoice::Remove(run.receipt.record.run)), joined);
             let mut ui = Frontend {
-                draft: "保留_🦀".into(),
-                cursor: 3,
+                editor: Editor {
+                    draft: "保留_🦀".into(),
+                    cursor: 3,
+                    ..Editor::default()
+                },
                 ..Frontend::default()
             };
             ui.pickers.open(picker);
@@ -386,12 +390,12 @@ mod tests {
                 ui.key(KeyEvent::new(KeyCode::Enter, Modifiers::NONE), None, None),
                 Action::None
             ));
-            ui.pickers.rows(100, 20, ui.themes.theme());
+            ui.pickers.painted_rows(100, 20, ui.themes.theme());
             assert!(matches!(
                 ui.key(KeyEvent::new(KeyCode::Enter, Modifiers::NONE), None, None),
                 Action::Pick(PickerValue::Task(TaskChoice::Progress(_)))
             ));
-            assert_eq!((ui.draft.as_str(), ui.cursor), ("保留_🦀", 3));
+            assert_eq!((ui.editor.draft.as_str(), ui.editor.cursor), ("保留_🦀", 3));
         }
     }
 
@@ -412,7 +416,7 @@ mod tests {
         refresh_selection(&mut next, &previous);
         let mut ui = Frontend::default();
         ui.pickers.open(next);
-        ui.pickers.rows(100, 20, ui.themes.theme());
+        ui.pickers.painted_rows(100, 20, ui.themes.theme());
         assert!(matches!(
             ui.key(KeyEvent::new(KeyCode::Enter, Modifiers::NONE), None, None),
             Action::Pick(PickerValue::Task(TaskChoice::Progress(_)))

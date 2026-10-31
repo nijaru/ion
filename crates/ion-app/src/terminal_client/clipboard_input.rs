@@ -99,10 +99,10 @@ pub(super) fn prepare_clipboard(
 pub(super) fn apply_clipboard(ui: &mut Frontend, content: PreparedPaste) -> Result<()> {
     match content {
         PreparedPaste::Files(paths) => {
-            let shell = ui.draft.trim_start().starts_with('!');
+            let shell = ui.editor.draft.trim_start().starts_with('!');
             let text = clipboard_paths(&paths, shell)?;
-            let before = ui.draft[..ui.cursor].chars().next_back();
-            let after = ui.draft[ui.cursor..].chars().next();
+            let before = ui.editor.draft[..ui.editor.cursor].chars().next_back();
+            let after = ui.editor.draft[ui.editor.cursor..].chars().next();
             let prefix = before.filter(|ch| !ch.is_whitespace()).map_or("", |_| " ");
             let suffix = after.filter(|ch| !ch.is_whitespace()).map_or("", |_| " ");
             ui.insert(&format!("{prefix}{text}{suffix}"));

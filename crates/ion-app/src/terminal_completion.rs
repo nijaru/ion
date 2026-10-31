@@ -1,5 +1,6 @@
 //! Non-modal command and file suggestions over the unsent editor.
 use crate::display_text::{fit_line, fit_line_with_status};
+use crate::terminal_client::paint::{Prepared, Visibility};
 use crate::terminal_commands::{Builtin, COMMANDS};
 use ion_host::{CommandCatalog, Resources};
 use std::ops::Range;
@@ -7,6 +8,7 @@ use std::ops::Range;
 mod files;
 pub(crate) use files::FileScope;
 
+#[derive(PartialEq, Eq)]
 struct Suggestion {
     name: String,
     description: String,
@@ -25,12 +27,12 @@ struct Menu {
     range: Range<usize>,
     items: Vec<Suggestion>,
     selected: usize,
-    drawn: bool,
 }
 
 #[derive(Default)]
 pub(crate) struct Completion {
     menu: Option<Menu>,
+    visibility: Visibility<CompletionCandidate>,
     dismissed: Option<(Kind, String, Range<usize>)>,
     // Explicit Tab keeps bare-token discovery active through edits in that token.
     forced_start: Option<usize>,
@@ -39,12 +41,14 @@ pub(crate) struct Completion {
 impl Completion {
     pub(crate) fn clear(&mut self) {
         self.menu = None;
+        self.visibility.invalidate();
         self.dismissed = None;
         self.forced_start = None;
     }
 
     pub(crate) fn edited(&mut self, at: usize) {
         self.menu = None;
+        self.visibility.invalidate();
         self.dismissed = None;
         if self.forced_start.is_some_and(|start| at < start) {
             self.forced_start = None;
@@ -248,14 +252,10 @@ impl Completion {
             .menu
             .as_ref()
             .filter(|menu| menu.kind == kind && menu.prefix == prefix && menu.range == range);
-        let drawn = previous.is_some_and(|menu| {
-            menu.drawn
-                && menu
-                    .items
-                    .iter()
-                    .map(|item| &item.name)
-                    .eq(items.iter().map(|item| &item.name))
-        });
+        if previous.is_some_and(|menu| menu.loading == loading && menu.items == items) {
+            return;
+        }
+        self.visibility.invalidate();
 
         let selected_name = previous
             .and_then(|menu| menu.items.get(menu.selected))
@@ -270,7 +270,6 @@ impl Completion {
             range,
             items,
             selected,
-            drawn,
         });
     }
 
@@ -287,26 +286,24 @@ impl Completion {
     }
 
     pub(crate) fn invalidate_visibility(&mut self) {
-        if let Some(menu) = &mut self.menu {
-            menu.drawn = false;
-        }
+        self.visibility.invalidate();
     }
 
     pub(crate) fn visible(&self) -> bool {
-        self.menu.as_ref().is_some_and(|menu| menu.drawn)
-    }
-
-    pub(crate) fn unique(&self) -> bool {
-        self.menu
-            .as_ref()
-            .is_some_and(|menu| menu.kind == Kind::Commands && menu.items.len() == 1)
+        self.menu.as_ref().is_some_and(|menu| {
+            menu.items.get(menu.selected).is_some_and(|item| {
+                self.visibility
+                    .painted()
+                    .is_some_and(|painted| *painted == CompletionCandidate::of(item))
+            })
+        })
     }
 
     pub(crate) fn move_selection(&mut self, down: bool) {
         if let Some(menu) = &mut self.menu
             && !menu.items.is_empty()
         {
-            menu.drawn = false;
+            self.visibility.invalidate();
             menu.selected = if down {
                 (menu.selected + 1).min(menu.items.len() - 1)
             } else {
@@ -316,6 +313,7 @@ impl Completion {
     }
 
     pub(crate) fn dismiss(&mut self) {
+        self.visibility.invalidate();
         self.forced_start = None;
         if let Some(menu) = self.menu.take() {
             self.dismissed = Some((menu.kind, menu.prefix, menu.range));
@@ -323,6 +321,9 @@ impl Completion {
     }
 
     pub(crate) fn replacement(&self, draft: &str) -> Option<(Range<usize>, String, usize)> {
+        if !self.visible() {
+            return None;
+        }
         let menu = self.menu.as_ref()?;
         let name = &menu.items.get(menu.selected)?.name;
         if menu.kind == Kind::Files {
@@ -345,27 +346,30 @@ impl Completion {
         width: usize,
         budget: usize,
         keys: &crate::keybindings::KeyBindings,
-    ) -> Vec<String> {
+    ) -> CompletionFrame {
         use crate::keybindings::KeyAction;
+        self.visibility.invalidate();
         let Some(menu) = &mut self.menu else {
-            return Vec::new();
+            return CompletionFrame::default();
         };
-        menu.drawn = false;
         if menu.items.is_empty() {
-            return if menu.loading && budget > 0 {
-                vec![fit_line(
-                    &format!(
-                        "Files · discovering paths… · {} close",
-                        keys.hint(KeyAction::Cancel)
-                    ),
-                    width,
-                )]
-            } else {
-                Vec::new()
+            return CompletionFrame {
+                candidate: None,
+                rows: if menu.loading && budget > 0 {
+                    vec![fit_line(
+                        &format!(
+                            "Files · discovering paths… · {} close",
+                            keys.hint(KeyAction::Cancel)
+                        ),
+                        width,
+                    )]
+                } else {
+                    Vec::new()
+                },
             };
         }
         if budget < 2 {
-            return Vec::new();
+            return CompletionFrame::default();
         }
         let visible = budget.saturating_sub(1).min(4);
         let start = menu.selected.saturating_sub(visible.saturating_sub(1));
@@ -392,22 +396,72 @@ impl Completion {
             ),
             width,
         )];
+        let mut candidate = None;
         for (index, item) in menu.items.iter().enumerate().skip(start).take(visible) {
             let marker = if index == menu.selected { '›' } else { ' ' };
             if menu.kind == Kind::Files {
                 let (label, omitted) = fit_line_with_status(&item.name, width.saturating_sub(2));
-                if index == menu.selected {
-                    menu.drawn = width > 2 && !label.is_empty() && !(omitted && label == "…");
+                if index == menu.selected
+                    && width > 2
+                    && !label.is_empty()
+                    && !(omitted && label == "…")
+                {
+                    candidate = Some(self.visibility.prepare(CompletionCandidate::of(item)));
                 }
                 rows.push(fit_line(&format!("{marker} {label}"), width));
             } else {
-                menu.drawn = true;
+                let (label, omitted) = fit_line_with_status(&item.name, width.saturating_sub(3));
+                if index == menu.selected
+                    && width > 3
+                    && !label.is_empty()
+                    && !(omitted && label == "…")
+                {
+                    candidate = Some(self.visibility.prepare(CompletionCandidate::of(item)));
+                }
                 rows.push(fit_line(
                     &format!("{marker} /{} — {}", item.name, item.description),
                     width,
                 ));
             }
         }
+        CompletionFrame { rows, candidate }
+    }
+
+    pub(crate) fn observe_paint(&mut self, frame: CompletionFrame) {
+        if let Some(candidate) = frame.candidate {
+            self.visibility.observe(candidate);
+        } else {
+            self.visibility.invalidate();
+        }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn painted_rows(
+        &mut self,
+        width: usize,
+        budget: usize,
+        keys: &crate::keybindings::KeyBindings,
+    ) -> Vec<String> {
+        let frame = self.rows(width, budget, keys);
+        let rows = frame.rows.clone();
+        self.observe_paint(frame);
         rows
+    }
+}
+
+#[derive(Default)]
+pub(crate) struct CompletionFrame {
+    pub rows: Vec<String>,
+    candidate: Option<Prepared<CompletionCandidate>>,
+}
+
+/// Identity of the retained typed suggestion in its frozen menu. Compared only,
+/// never dereferenced; editing/replacement revokes the menu's visibility episode.
+#[derive(Clone, Copy, PartialEq, Eq)]
+struct CompletionCandidate(*const Suggestion);
+
+impl CompletionCandidate {
+    fn of(item: &Suggestion) -> Self {
+        Self(std::ptr::from_ref(item))
     }
 }

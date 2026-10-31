@@ -5,6 +5,7 @@ import errno
 import fcntl
 import os
 import pty
+import re
 import select
 import signal
 import sqlite3
@@ -372,7 +373,18 @@ with tempfile.TemporaryDirectory(prefix="ion-resources-") as temporary:
                         # Keep draining output while Escape resolves. Blocking
                         # the PTY consumer can stall redraw and merge queued
                         # Escape/Tab bytes into an Alt-Tab sequence.
-                        os.write(master, b"\tTUI\r")
+                        checkpoint = len(output)
+                        os.write(master, b"\t")
+                        phase = 12
+                    elif phase == 12 and b"Check a named concern" in current:
+                        # Escape revoked the previous candidate. Reopening is
+                        # not acceptance: wait for its fresh physical frame.
+                        assert len(requests) == before
+                        checkpoint = len(output)
+                        os.write(master, b"\t")
+                        phase = 13
+                    elif phase == 13 and re.search("› /check ".encode() + rb"(?=\x1b)", current):
+                        os.write(master, b"TUI\r")
                         phase = 2
                     elif phase == 2 and len(requests) == before + 1 and b"RESOURCE_OK" in current:
                         (live_prompts / "late.md").write_text("A later prompt.\n")

@@ -9,7 +9,7 @@ use tokio_util::sync::CancellationToken;
 
 use super::{Agent, AgentError, AgentEvent, contained_observer, observation_result};
 use crate::{
-    generation::{GeneratedResponse, context_length_exceeded, generate_with_retry},
+    generation::{GeneratedResponse, OutputCustody, generate_with_retry},
     session::Session,
 };
 
@@ -146,21 +146,12 @@ impl Agent {
                 continue;
             };
             request.controls.max_output_tokens = available;
-            let mut emitted_output = false;
-            let generated = generate_with_retry(&self.service, &request, stop, &mut |event| {
-                emitted_output |= matches!(
-                    event,
-                    AgentEvent::TextDelta(_)
-                        | AgentEvent::ThinkingDelta { .. }
-                        | AgentEvent::ModelOutputObserved
-                );
-            })
-            .await;
-            let overflow = context_length_exceeded(generated.as_ref());
+            let attempt = generate_with_retry(&self.service, &request, stop, &mut |_| {}).await;
+            let overflow = attempt.context_length_exceeded();
             // Estimates can miss provider capacity. Halve the remaining settled
             // cuts, never replay a partial summary or change the model/authority.
             if overflow
-                && !emitted_output
+                && attempt.output == OutputCustody::Unobserved
                 && let Some(smaller) = plan.smaller_through_entry
             {
                 observe(AgentEvent::ContextCompactionRetry {
@@ -170,7 +161,7 @@ impl Agent {
                 max_through_entry = smaller;
                 continue;
             }
-            break (plan.through_entry, plan.chunked, generated?);
+            break (plan.through_entry, plan.chunked, attempt.into_result()?);
         };
         let GeneratedResponse { response, route } = generated;
         if let ResponseTermination::Incomplete(reason) = &response.termination {

@@ -139,8 +139,10 @@ with tempfile.TemporaryDirectory(prefix="ion-scrollback-") as temporary:
 
         def check_history():
             history = tmux("capture-pane", "-p", "-t", "ion", "-S", "-")
-            for marker in ("INPUT_ONCE", "NARRATIVE_ONCE", "COMMAND_OUTPUT_ONCE", "FINAL_ONCE", "-observed data", "+UPDATED_SNAPSHOT"):
+            for marker in ("INPUT_ONCE", "NARRATIVE_ONCE", "FINAL_ONCE", "-observed data", "+UPDATED_SNAPSHOT"):
                 assert history.count(marker) == 1, f"{marker} was republished or lost:\n{history}"
+            assert history.count("stdout · 4 lines folded") == 1, f"successful output fold lost or replayed:\n{history}"
+            assert "COMMAND_OUTPUT_ONCE" not in history, "compact success output was not folded"
             assert "Working" not in history, f"mutable operation chrome leaked into history:\n{history}"
             assert "THINK_1" not in history and "THINK_2" not in history, "hidden thinking was published retroactively"
             assert "SIGNATURE_PRIVATE" not in history and "ENCRYPTED_PRIVATE" not in history, "opaque reasoning leaked"
@@ -267,6 +269,7 @@ with tempfile.TemporaryDirectory(prefix="ion-scrollback-") as temporary:
         check_history()
         tmux("resize-window", "-t", "ion", "-x", "100", "-y", "60")
         command("/tui fullscreen", "FIRST_HIDDEN")
+        assert tmux("capture-pane", "-p", "-t", "ion").count("COMMAND_OUTPUT_ONCE") == 1, "expanded source output lost or duplicated"
         assert '--- "data.txt"' in tmux("capture-pane", "-p", "-t", "ion"), "expanded diff header missing"
         command("/settings thinking show", "Thinking: Shown")
         view = tmux("capture-pane", "-p", "-t", "ion")
@@ -294,8 +297,8 @@ with tempfile.TemporaryDirectory(prefix="ion-scrollback-") as temporary:
         tmux("resize-window", "-t", "ion", "-x", "60", "-y", "20")
         time.sleep(0.15)
         check_history()
-        # Command output belongs in publication, not the 12-row composer region.
-        # At 40 columns the help response is longer than that entire region.
+        # Local responses publish completely, even when longer than the whole
+        # viewport; they do not become a clipped composer preview.
         tmux("resize-window", "-t", "ion", "-x", "40", "-y", "12")
         time.sleep(0.4)
         # Identify both ends of one help publication, not the changing command
@@ -318,7 +321,7 @@ with tempfile.TemporaryDirectory(prefix="ion-scrollback-") as temporary:
         time.sleep(0.4)
         command("/tui fullscreen", "Fullscreen TUI")
         view = "".join(tmux("capture-pane", "-p", "-t", "ion").split())
-        assert view.count(head) == view.count(tail) == 2, "fullscreen lost command output"
+        assert view.count(head) == view.count(tail) == 2, f"fullscreen lost command output ({view.count(head)} heads, {view.count(tail)} tails): {view}"
         command("/tui inline", "native terminal scrollback")
         assert help_counts() == (2, 2), "viewport change republished local output"
         check_history()

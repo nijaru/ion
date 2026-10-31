@@ -2,19 +2,32 @@ use super::picker::PickerItem;
 use super::*;
 use ion_ai::ModelRef;
 use ion_core::{
-    ActivityGroup, ActivityResult, ActivityState, ToolActivity, ToolActivityKind,
-    ToolResultProjection, TranscriptActivity, TranscriptMessage, TranscriptPart,
+    ActivityGroup, ActivityResult, ActivityState, ToolActivity, ToolActivityKind, ToolOccurrence,
+    ToolResultProjection, TranscriptActivity, TranscriptActivityIdentity, TranscriptMessage,
+    TranscriptPart, TranscriptProjection, TranscriptSource,
 };
 
-fn history_with_tools(activities: Vec<TranscriptActivity>) -> TranscriptProjection {
+fn history_with_tools(mut activities: Vec<TranscriptActivity>) -> TranscriptProjection {
+    for (ordinal, activity) in activities.iter_mut().enumerate() {
+        let parent = ToolOccurrence {
+            assistant_entry: 2,
+            ordinal,
+        };
+        activity.identity = TranscriptActivityIdentity::Tool(parent);
+        for (child, activity) in activity.children.iter_mut().enumerate() {
+            activity.identity = TranscriptActivityIdentity::Child { parent, child };
+        }
+    }
     TranscriptProjection {
         items: vec![
             TranscriptItem::Assistant(TranscriptMessage {
+                source: Some(TranscriptSource { entry: 1, part: 0 }),
                 turn: Some(1),
                 steering: false,
                 parts: vec![TranscriptPart::Text("LAST_ASSISTANT_ANSWER".into())],
             }),
             TranscriptItem::ActivityGroup(ActivityGroup {
+                source: TranscriptSource { entry: 2, part: 0 },
                 turn: 1,
                 open: false,
                 activities,
@@ -25,6 +38,10 @@ fn history_with_tools(activities: Vec<TranscriptActivity>) -> TranscriptProjecti
 
 fn tool(call_id: &str, result: Option<ActivityResult>) -> TranscriptActivity {
     TranscriptActivity {
+        identity: TranscriptActivityIdentity::Tool(ToolOccurrence {
+            assistant_entry: 2,
+            ordinal: 0,
+        }),
         call_id: call_id.into(),
         name: "edit".into(),
         activity: ToolActivity {
@@ -36,6 +53,22 @@ fn tool(call_id: &str, result: Option<ActivityResult>) -> TranscriptActivity {
         result,
         children: Vec::new(),
     }
+}
+
+fn published_ui() -> Frontend {
+    let mut ui = Frontend {
+        conversation: conversation::fixtures::document(TranscriptProjection {
+            items: vec![TranscriptItem::User(TranscriptMessage {
+                source: Some(TranscriptSource { entry: 1, part: 0 }),
+                turn: Some(1),
+                steering: false,
+                parts: vec![TranscriptPart::Text("already published".into())],
+            })],
+        }),
+        ..Frontend::default()
+    };
+    conversation::fixtures::publish(&mut ui.conversation);
+    ui
 }
 
 #[test]
@@ -56,6 +89,10 @@ fn selected_tool_copy_is_unwrapped_recorded_evidence_and_keeps_inspector_state()
         }),
     );
     activity.children.push(TranscriptActivity {
+        identity: TranscriptActivityIdentity::Tool(ToolOccurrence {
+            assistant_entry: 2,
+            ordinal: 0,
+        }),
         call_id: "child-call".into(),
         name: "read".into(),
         activity: ToolActivity {
@@ -74,23 +111,30 @@ fn selected_tool_copy_is_unwrapped_recorded_evidence_and_keeps_inspector_state()
     });
     let history = history_with_tools(vec![activity, tool("other-call", None)]);
     let mut ui = Frontend {
-        draft: "unsent 🦀 draft".into(),
-        cursor: "unsent ".len(),
-        scroll: 9,
-        images: vec![
-            ion_ai::normalize_rgba(1, 1, vec![0, 255, 0, 255])
-                .unwrap()
-                .into(),
-        ],
+        editor: Editor {
+            draft: "unsent 🦀 draft".into(),
+            cursor: "unsent ".len(),
+            images: vec![
+                ion_ai::normalize_rgba(1, 1, vec![0, 255, 0, 255])
+                    .unwrap()
+                    .into(),
+            ],
+            ..Editor::default()
+        },
         status: "inspector ready".into(),
         ..Frontend::default()
     };
-    ui.history = history;
+    ui.conversation = conversation::fixtures::document(history);
     ui.open_details(Some(1));
     let view = ui.details.as_mut().unwrap();
-    view.prepare(&ui.history, None, 13);
+    view.prepare(ui.conversation.items(), &[], ui.conversation.revision(), 13);
     let narrow = view.copy_evidence().unwrap().1.to_owned();
-    view.prepare(&ui.history, None, 200);
+    view.prepare(
+        ui.conversation.items(),
+        &[],
+        ui.conversation.revision(),
+        200,
+    );
     let wide = view.copy_evidence().unwrap().1.to_owned();
     view.scroll = 4;
 
@@ -120,11 +164,11 @@ fn selected_tool_copy_is_unwrapped_recorded_evidence_and_keeps_inspector_state()
     ));
     assert!(ui.details.is_some());
     assert_eq!(
-        (ui.draft.as_str(), ui.cursor),
+        (ui.editor.draft.as_str(), ui.editor.cursor),
         ("unsent 🦀 draft", "unsent ".len())
     );
-    assert_eq!(ui.images.len(), 1);
-    assert_eq!(ui.history.items.len(), 2);
+    assert_eq!(ui.editor.images.len(), 1);
+    assert_eq!(ui.conversation.items().count(), 2);
     assert_eq!(ui.status, "inspector ready");
     let view = ui.details.as_ref().unwrap();
     assert_eq!(view.scroll, 4);
@@ -137,9 +181,15 @@ fn conversation_ctrl_x_does_not_copy_an_assistant_answer() {
         status: "inspector ready".into(),
         ..Frontend::default()
     };
-    ui.history = history_with_tools(vec![tool("edit-call", None)]);
+    ui.conversation =
+        conversation::fixtures::document(history_with_tools(vec![tool("edit-call", None)]));
     ui.open_details(None);
-    ui.details.as_mut().unwrap().prepare(&ui.history, None, 80);
+    ui.details.as_mut().unwrap().prepare(
+        ui.conversation.items(),
+        &[],
+        ui.conversation.revision(),
+        80,
+    );
 
     assert!(matches!(
         ui.key(
@@ -157,11 +207,19 @@ fn conversation_ctrl_x_does_not_copy_an_assistant_answer() {
 #[test]
 fn selected_tool_without_a_result_copies_its_recorded_absence() {
     let mut ui = Frontend {
-        history: history_with_tools(vec![tool("pending-call", None)]),
+        conversation: conversation::fixtures::document(history_with_tools(vec![tool(
+            "pending-call",
+            None,
+        )])),
         ..Frontend::default()
     };
     ui.open_details(Some(1));
-    ui.details.as_mut().unwrap().prepare(&ui.history, None, 80);
+    ui.details.as_mut().unwrap().prepare(
+        ui.conversation.items(),
+        &[],
+        ui.conversation.revision(),
+        80,
+    );
 
     assert!(matches!(
         ui.key(
@@ -181,23 +239,27 @@ fn consecutive_notes_are_coalesced_without_hiding_distinct_messages() {
     let mut ui = Frontend::default();
     ui.note("same".into());
     ui.note("same".into());
-    let text = |ui: &Frontend| {
+    let text = |ui: &mut Frontend| {
         ui.pending_history_rows(80)
             .iter()
             .map(ToString::to_string)
             .filter(|row| !row.is_empty())
             .collect::<Vec<_>>()
     };
-    assert_eq!(text(&ui), ["same"]);
+    assert_eq!(text(&mut ui), ["same"]);
     ui.note("different".into());
     ui.note("same".into());
-    assert_eq!(text(&ui), ["same", "different", "same"]);
+    assert_eq!(text(&mut ui), ["same", "different", "same"]);
 }
 
 #[test]
 fn local_output_keeps_history_order_across_publication_and_reflow() {
     let item = |turn, text: &str| {
         TranscriptItem::User(ion_core::TranscriptMessage {
+            source: Some(TranscriptSource {
+                entry: turn * 2 - 1,
+                part: 0,
+            }),
             turn: Some(turn),
             steering: false,
             parts: vec![ion_core::TranscriptPart::Text(text.into())],
@@ -205,8 +267,7 @@ fn local_output_keeps_history_order_across_publication_and_reflow() {
     };
     let mut ui = Frontend::default();
     ui.print("before".into());
-    ui.history.items.push(item(1, "first"));
-    ui.pending_history_target = 1;
+    conversation::fixtures::append(&mut ui.conversation, item(1, "first"));
     ui.print("middle".into());
     let first = ui
         .pending_history_rows(24)
@@ -216,9 +277,8 @@ fn local_output_keeps_history_order_across_publication_and_reflow() {
         .join("\n");
     assert!(first.find("before").unwrap() < first.find("first").unwrap());
     assert!(first.find("first").unwrap() < first.find("middle").unwrap());
-    ui.finish_history_commit();
-    ui.history.items.push(item(2, "second"));
-    ui.pending_history_target = 2;
+    conversation::fixtures::publish(&mut ui.conversation);
+    conversation::fixtures::append(&mut ui.conversation, item(2, "second"));
     ui.print("after".into());
     // More than the former 16-entry chrome cap must not drop unpublished output.
     for index in 0..17 {
@@ -236,15 +296,16 @@ fn local_output_keeps_history_order_across_publication_and_reflow() {
     for text in ["second", "after", "diag 0", "diag 16"] {
         assert!(pending.contains(text));
     }
-    ui.finish_history_commit();
+    conversation::fixtures::publish(&mut ui.conversation);
     assert!(ui.pending_history_rows(24).is_empty());
     // Fullscreen uses the same source order, including already-published output.
     for width in [8, 80] {
-        let rows = ui.output.rows(
-            &ui.history.items,
-            0..2,
+        let rows = ui.presenter.window(
+            &ui.conversation,
+            &mut block_presenter::ConversationView::default(),
+            (width, u16::MAX as usize),
             false,
-            width,
+            false,
             &crate::tool_output::RenderOptions::new(
                 ui.output_detail,
                 &ui.keys,
@@ -302,8 +363,11 @@ fn editor_line_shortcuts_keep_other_lines_and_graphemes_intact() {
         ("first\nsecond", 2, 'e', "first\nsecond", 5),
     ] {
         let mut ui = Frontend {
-            draft: draft.into(),
-            cursor,
+            editor: Editor {
+                draft: draft.into(),
+                cursor,
+                ..Editor::default()
+            },
             ..Frontend::default()
         };
         assert!(matches!(
@@ -315,7 +379,7 @@ fn editor_line_shortcuts_keep_other_lines_and_graphemes_intact() {
             Action::None
         ));
         assert_eq!(
-            (ui.draft.as_str(), ui.cursor),
+            (ui.editor.draft.as_str(), ui.editor.cursor),
             (expected, expected_cursor),
             "Ctrl-{code}"
         );
@@ -327,6 +391,10 @@ fn resume_history_tail_keeps_the_last_six_turns() {
     let items = (1..=9)
         .map(|turn| {
             TranscriptItem::User(ion_core::TranscriptMessage {
+                source: Some(TranscriptSource {
+                    entry: turn * 2 - 1,
+                    part: 0,
+                }),
                 turn: Some(turn),
                 steering: false,
                 parts: vec![ion_core::TranscriptPart::Text(format!("turn-{turn}"))],
@@ -344,11 +412,15 @@ fn resume_history_tail_bounds_shell_only_history() {
     let items = (0..40)
         .map(|index| {
             TranscriptItem::UserShell(ion_core::UserShellActivity {
+                source: TranscriptSource {
+                    entry: index * 2 + 1,
+                    part: 0,
+                },
                 command: format!("echo {index}"),
-                outcome: ion_core::UserShellOutcome::Observed {
+                outcome: Some(ion_core::UserShellOutcome::Observed {
                     output: serde_json::Value::Null,
                     is_error: false,
-                },
+                }),
                 exclude_from_context: false,
             })
         })
@@ -421,30 +493,35 @@ fn alt_enter_queues_a_followup_without_discarding_the_editor() {
     ui.insert("follow up");
     assert!(matches!(
         ui.key(KeyEvent::new(KeyCode::Enter, Modifiers::ALT), None, None),
-        Action::Queue(prompt) if prompt == "follow up"
+        Action::Queue(prompt) if prompt.literal == "follow up"
     ));
-    assert!(ui.draft.is_empty());
+    assert!(ui.editor.draft.is_empty());
 }
 
 #[test]
 fn history_refresh_preserves_browsed_draft_and_cursor() {
     let mut ui = Frontend {
-        prompt_history: vec!["older".into()],
-        draft: "unsent 🦀 draft".into(),
-        cursor: "unsent ".len(),
+        editor: Editor {
+            prompt_history: vec!["older".into()],
+            draft: "unsent 🦀 draft".into(),
+            cursor: "unsent ".len(),
+            ..Editor::default()
+        },
         ..Frontend::default()
     };
-    ui.history_previous();
-    assert_eq!(ui.draft, "older");
+    ui.editor.history_previous();
+    assert_eq!(ui.editor.draft, "older");
     // Completion/model refresh updates history, not ownership of the editor.
-    ui.replace_prompt_history(vec!["older".into(), "newly committed".into()], true);
-    ui.history_next();
-    assert_eq!(ui.draft, "unsent 🦀 draft");
-    assert_eq!(ui.cursor, "unsent ".len());
-    ui.history_previous();
-    ui.replace_prompt_history(vec!["different session".into()], false);
-    assert_eq!(ui.draft, "unsent 🦀 draft");
-    assert_eq!(ui.cursor, "unsent ".len());
+    ui.editor
+        .replace_prompt_history(vec!["older".into(), "newly committed".into()], true);
+    ui.editor.history_next();
+    assert_eq!(ui.editor.draft, "unsent 🦀 draft");
+    assert_eq!(ui.editor.cursor, "unsent ".len());
+    ui.editor.history_previous();
+    ui.editor
+        .replace_prompt_history(vec!["different session".into()], false);
+    assert_eq!(ui.editor.draft, "unsent 🦀 draft");
+    assert_eq!(ui.editor.cursor, "unsent ".len());
 }
 
 #[test]
@@ -476,7 +553,10 @@ async fn clipboard_exit_joins_cancelled_work_without_applying_input() {
     let reader_stop = stop.clone();
     let (settled, mut observed) = tokio::sync::oneshot::channel();
     let mut ui = Frontend {
-        draft: "retained draft".into(),
+        editor: Editor {
+            draft: "retained draft".into(),
+            ..Editor::default()
+        },
         clipboard_job: Some(ClipboardJob {
             stop,
             task: tokio::spawn(async move {
@@ -490,7 +570,7 @@ async fn clipboard_exit_joins_cancelled_work_without_applying_input() {
     cancel_clipboard_paste(&mut ui).await.unwrap();
     assert!(observed.try_recv().is_ok());
     assert!(ui.clipboard_job.is_none());
-    assert_eq!(ui.draft, "retained draft");
+    assert_eq!(ui.editor.draft, "retained draft");
 }
 
 #[tokio::test]
@@ -508,7 +588,7 @@ async fn completed_file_paste_clears_reader_status() {
         ..Frontend::default()
     };
     finish_clipboard_paste(&mut ui).await.unwrap();
-    assert_eq!(ui.draft, "/tmp/path with spaces.txt");
+    assert_eq!(ui.editor.draft, "/tmp/path with spaces.txt");
     assert!(ui.status.is_empty());
 }
 
@@ -520,8 +600,11 @@ async fn pending_clipboard_keeps_literal_input_before_admission() {
         ("  /check ARG\n", Modifiers::ALT),
     ] {
         let mut ui = Frontend {
-            draft: literal.into(),
-            cursor: 2,
+            editor: Editor {
+                draft: literal.into(),
+                cursor: 2,
+                ..Editor::default()
+            },
             clipboard_job: Some(ClipboardJob {
                 stop: CancellationToken::new(),
                 task: tokio::spawn(std::future::pending()),
@@ -532,9 +615,9 @@ async fn pending_clipboard_keeps_literal_input_before_admission() {
             ui.key(KeyEvent::new(KeyCode::Enter, modifiers), None, None),
             Action::None
         ));
-        assert_eq!(ui.draft, literal);
-        assert_eq!(ui.cursor, 2);
-        assert!(ui.recovered.is_empty());
+        assert_eq!(ui.editor.draft, literal);
+        assert_eq!(ui.editor.cursor, 2);
+        assert!(ui.editor.recovered.is_empty());
         ui.clipboard_job.take().unwrap().task.abort();
     }
 }
@@ -548,28 +631,28 @@ fn fork_restore_refuses_lossy_shapes_without_discarding_editor() {
         Message::user_input("x".repeat(MAX_DRAFT + 1), []),
     ] {
         let mut ui = Frontend {
-            draft: "keep unsent".into(),
-            cursor: 4,
-            images: vec![
-                ion_ai::normalize_rgba(1, 1, vec![0, 255, 0, 255])
-                    .unwrap()
-                    .into(),
-            ],
+            editor: Editor {
+                draft: "keep unsent".into(),
+                cursor: 4,
+                images: vec![
+                    ion_ai::normalize_rgba(1, 1, vec![0, 255, 0, 255])
+                        .unwrap()
+                        .into(),
+                ],
+                ..Editor::default()
+            },
             ..Frontend::default()
         };
         assert!(ui.restore_input(input).is_err());
-        assert_eq!(ui.draft, "keep unsent");
-        assert_eq!(ui.cursor, 4);
-        assert_eq!(ui.images.len(), 1);
+        assert_eq!(ui.editor.draft, "keep unsent");
+        assert_eq!(ui.editor.cursor, 4);
+        assert_eq!(ui.editor.images.len(), 1);
     }
 }
 
 #[test]
 fn command_completion_edits_without_dispatch_or_argument_loss() {
-    let mut ui = Frontend {
-        history_published_items: 7,
-        ..Frontend::default()
-    };
+    let mut ui = published_ui();
     for ch in "/hel".chars() {
         assert!(matches!(
             ui.key(
@@ -580,52 +663,62 @@ fn command_completion_edits_without_dispatch_or_argument_loss() {
             Action::None
         ));
     }
-    assert!(ui.completion.active());
+    assert!(ui.editor.completion.active());
+    ui.editor.completion.painted_rows(80, 5, &ui.keys);
     assert!(matches!(
         ui.key(KeyEvent::new(KeyCode::Tab, Modifiers::NONE), None, None),
         Action::None
     ));
-    assert_eq!(ui.draft, "/help ");
-    assert!(ui.recovered.is_empty());
-    assert_eq!(ui.history_published_items, 7);
+    assert_eq!(ui.editor.draft, "/help ");
+    assert!(ui.editor.recovered.is_empty());
+    assert!(ui.conversation.has_published_prefix());
+    assert!(ui.pending_history_rows(80).is_empty());
     assert!(
         matches!(ui.key(KeyEvent::new(KeyCode::Enter, Modifiers::NONE), None, None), Action::Command(CommandInput::Editor(source)) if source.literal == "/help " && source.cursor == 6)
     );
 
     ui.insert("  /help focus 🦀");
-    ui.cursor = "  /hel".len();
+    ui.editor.cursor = "  /hel".len();
+    ui.refresh_completion(None, None, false);
+    ui.editor.completion.painted_rows(80, 5, &ui.keys);
     ui.key(KeyEvent::new(KeyCode::Tab, Modifiers::NONE), None, None);
-    assert_eq!(ui.draft, "  /help focus 🦀");
-    assert_eq!(ui.cursor, "  /help ".len());
-    ui.draft.clear();
-    ui.cursor = 0;
+    assert_eq!(ui.editor.draft, "  /help focus 🦀");
+    assert_eq!(ui.editor.cursor, "  /help ".len());
+    ui.editor.draft.clear();
+    ui.editor.cursor = 0;
     ui.insert("/re");
     // Pasted ambiguous names open discovery before accepting a proposal.
     ui.key(KeyEvent::new(KeyCode::Tab, Modifiers::NONE), None, None);
-    assert_eq!(ui.draft, "/re");
-    assert!(ui.completion.active());
+    assert_eq!(ui.editor.draft, "/re");
+    assert!(ui.editor.completion.active());
     ui.key(KeyEvent::new(KeyCode::Esc, Modifiers::NONE), None, None);
-    assert!(!ui.completion.active());
-    assert_eq!(ui.draft, "/re");
-    ui.draft.clear();
-    ui.cursor = 0;
+    assert!(!ui.editor.completion.active());
+    assert_eq!(ui.editor.draft, "/re");
+    ui.editor.draft.clear();
+    ui.editor.cursor = 0;
     ui.insert("/fork");
     ui.key(KeyEvent::new(KeyCode::Tab, Modifiers::NONE), None, None);
-    assert!(ui.completion.active());
-    ui.completion.rows(80, 5, &ui.keys);
+    assert!(ui.editor.completion.active());
+    ui.editor.completion.painted_rows(80, 5, &ui.keys);
     ui.key(KeyEvent::new(KeyCode::Down, Modifiers::NONE), None, None);
-    ui.completion.rows(80, 5, &ui.keys);
+    ui.editor.completion.painted_rows(80, 5, &ui.keys);
     assert!(matches!(
         ui.key(KeyEvent::new(KeyCode::Enter, Modifiers::NONE), None, None),
         Action::None
     ));
-    assert_eq!(ui.draft, "/fork-after ");
-    ui.draft.clear();
-    ui.cursor = 0;
+    assert_eq!(ui.editor.draft, "/fork-after ");
+    ui.editor.draft.clear();
+    ui.editor.cursor = 0;
     ui.insert("/re");
-    ui.completion
-        .refresh(&ui.draft, ui.cursor, None, None, None, false);
-    assert!(ui.completion.rows(80, 1, &ui.keys).is_empty());
+    ui.editor
+        .completion
+        .refresh(&ui.editor.draft, ui.editor.cursor, None, None, None, false);
+    assert!(
+        ui.editor
+            .completion
+            .painted_rows(80, 1, &ui.keys)
+            .is_empty()
+    );
     // A menu that cannot fit is not an invisible keyboard target.
     assert!(
         matches!(ui.key(KeyEvent::new(KeyCode::Enter, Modifiers::NONE), None, None), Action::Command(CommandInput::Editor(source)) if source.literal == "/re" && source.cursor == 3)
@@ -635,20 +728,24 @@ fn command_completion_edits_without_dispatch_or_argument_loss() {
 #[test]
 fn prompt_history_restores_unsent_draft_and_moves_between_lines() {
     let mut ui = Frontend {
-        prompt_history: vec!["first".into(), "second\nline".into()],
+        editor: Editor {
+            prompt_history: vec!["first".into(), "second\nline".into()],
+            ..Editor::default()
+        },
         ..Frontend::default()
     };
     ui.insert("unsent");
+    ui.editor.publish_editor_width(80);
     ui.key(KeyEvent::new(KeyCode::Up, Modifiers::NONE), None, None);
-    assert_eq!(ui.draft, "second\nline");
+    assert_eq!(ui.editor.draft, "second\nline");
     ui.key(KeyEvent::new(KeyCode::Up, Modifiers::NONE), None, None);
-    assert_eq!(ui.cursor, "line".len());
+    assert_eq!(ui.editor.cursor, "line".len());
     ui.key(KeyEvent::new(KeyCode::Up, Modifiers::NONE), None, None);
-    assert_eq!(ui.draft, "first");
+    assert_eq!(ui.editor.draft, "first");
     ui.key(KeyEvent::new(KeyCode::Down, Modifiers::NONE), None, None);
-    assert_eq!(ui.draft, "second\nline");
+    assert_eq!(ui.editor.draft, "second\nline");
     ui.key(KeyEvent::new(KeyCode::Down, Modifiers::NONE), None, None);
-    assert_eq!(ui.draft, "unsent");
+    assert_eq!(ui.editor.draft, "unsent");
 }
 
 #[test]
@@ -672,8 +769,10 @@ fn picker_selection_stays_visible_beside_wrapped_query_and_status() {
         });
         for width in [8, 12, 80] {
             for height in 2..12 {
-                let (rows, cursor) = modal_rows(&mut ui, None, None, width, height);
-                assert_eq!(rows.len(), height as usize);
+                let dock =
+                    dock::Dock::prepare(&mut ui, None, None, width as usize, height as usize);
+                let (rows, cursor) = (dock.rows, dock.cursor);
+                assert_eq!(dock.body_rows + rows.len(), height as usize);
                 assert!(rows.iter().all(|row| row.width() <= width as usize));
                 assert!(
                     rows.iter()
@@ -681,7 +780,7 @@ fn picker_selection_stays_visible_beside_wrapped_query_and_status() {
                     "selected item hidden at {width}x{height}"
                 );
                 let (row, column) = cursor.expect("query cursor stays visible");
-                assert!(row < height as usize && column < width);
+                assert!(row < rows.len() && column < width);
             }
         }
     }
@@ -720,8 +819,9 @@ fn session_picker_detail_never_hides_the_selected_row() {
     });
     for width in [8, 12, 80] {
         for height in 2..12 {
-            let (rows, _) = modal_rows(&mut ui, None, None, width, height);
-            assert_eq!(rows.len(), height as usize);
+            let dock = dock::Dock::prepare(&mut ui, None, None, width as usize, height as usize);
+            let rows = dock.rows;
+            assert_eq!(dock.body_rows + rows.len(), height as usize);
             assert!(rows.iter().all(|row| row.width() <= width as usize));
             assert!(
                 rows.iter().any(|row| {
@@ -764,15 +864,18 @@ fn resource_completion_preserves_literal_commands_and_terminal_control_names() {
         &ion_host::ResourceSelection::default(),
     )
     .unwrap();
-    let mut ui = Frontend {
-        history_published_items: 7,
-        ..Frontend::default()
-    };
+    let mut ui = published_ui();
     ui.insert("/zzmenu-ch");
-    ui.completion
-        .refresh(&ui.draft, ui.cursor, Some(&resources), None, None, false);
+    ui.editor.completion.refresh(
+        &ui.editor.draft,
+        ui.editor.cursor,
+        Some(&resources),
+        None,
+        None,
+        false,
+    );
     for width in [1, 8, 24, 80] {
-        let rows = ui.completion.rows(width, 5, &ui.keys);
+        let rows = ui.editor.completion.painted_rows(width, 5, &ui.keys);
         assert!(rows.len() <= 5);
         assert!(rows.iter().all(|row| !row.contains('\x1b')
             && unicode_width::UnicodeWidthStr::width(row.as_str()) <= width));
@@ -785,25 +888,35 @@ fn resource_completion_preserves_literal_commands_and_terminal_control_names() {
         ),
         Action::None
     ));
-    assert_eq!(ui.draft, "/zzmenu-check ");
+    assert_eq!(ui.editor.draft, "/zzmenu-check ");
     ui.insert("concurrency");
     assert!(
         matches!(ui.key(KeyEvent::new(KeyCode::Enter, Modifiers::NONE), Some(&resources), None), Action::Command(CommandInput::Editor(source)) if source.literal == "/zzmenu-check concurrency" && source.cursor == source.literal.len())
     );
-    assert_eq!(ui.history_published_items, 7);
+    assert!(ui.conversation.has_published_prefix());
+    assert!(ui.pending_history_rows(80).is_empty());
     ui.insert("/zzmenu-au");
+    ui.refresh_completion(Some(&resources), None, false);
+    ui.editor.completion.painted_rows(80, 5, &ui.keys);
     ui.key(
         KeyEvent::new(KeyCode::Tab, Modifiers::NONE),
         Some(&resources),
         None,
     );
-    assert_eq!(ui.draft, "/skill:zzmenu-audit ");
+    assert_eq!(ui.editor.draft, "/skill:zzmenu-audit ");
     ui.replace_draft_atomic("/ne".into());
-    ui.completion
-        .refresh(&ui.draft, ui.cursor, Some(&resources), None, None, false);
+    ui.editor.completion.refresh(
+        &ui.editor.draft,
+        ui.editor.cursor,
+        Some(&resources),
+        None,
+        None,
+        false,
+    );
     assert!(
-        ui.completion
-            .rows(100, 5, &ui.keys)
+        ui.editor
+            .completion
+            .painted_rows(100, 5, &ui.keys)
             .iter()
             .all(|row| !row.contains("[prompt]"))
     );
@@ -828,20 +941,20 @@ async fn file_completion_cannot_accept_clipped_or_unpublished_candidates() {
             assert!(ui.pickers.complete().await.is_none());
         }
         ui.refresh_completion(None, None, false);
-        ui.completion.rows(width, budget, &ui.keys);
+        ui.editor.completion.painted_rows(width, budget, &ui.keys);
         if unpublished {
-            ui.completion.invalidate_visibility();
+            ui.editor.completion.invalidate_visibility();
         }
-        assert!(!ui.completion.visible());
+        assert!(!ui.editor.completion.visible());
         // Even one unique file needs visible selection authority. A Tab may
         // reopen suggestions, but cannot blindly replace the literal token.
         assert!(matches!(
             ui.key(KeyEvent::new(KeyCode::Tab, Modifiers::NONE), None, None),
             Action::None
         ));
-        assert_eq!(ui.draft, "@ma");
+        assert_eq!(ui.editor.draft, "@ma");
         assert!(
-            matches!(ui.key(KeyEvent::new(KeyCode::Enter, Modifiers::NONE), None, None), Action::Submit(text) if text == "@ma")
+            matches!(ui.key(KeyEvent::new(KeyCode::Enter, Modifiers::NONE), None, None), Action::Submit(text) if text.literal == "@ma")
         );
         ui.pickers.shutdown().await.unwrap();
     }
@@ -860,7 +973,7 @@ async fn automatic_file_suggestions_keep_edits_in_the_draft() {
         ..Frontend::default()
     };
     ui.insert("Read\u{2003}@ next");
-    ui.cursor = "Read\u{2003}@".len();
+    ui.editor.cursor = "Read\u{2003}@".len();
     assert!(matches!(
         ui.key(
             KeyEvent::new(KeyCode::Char('m'), Modifiers::NONE),
@@ -869,7 +982,7 @@ async fn automatic_file_suggestions_keep_edits_in_the_draft() {
         ),
         Action::None
     ));
-    assert_eq!(ui.draft, "Read\u{2003}@m next");
+    assert_eq!(ui.editor.draft, "Read\u{2003}@m next");
     assert!(
         ui.pickers.active().is_none(),
         "file suggestions are not a modal input owner"
@@ -883,25 +996,26 @@ async fn automatic_file_suggestions_keep_edits_in_the_draft() {
     }
     ui.refresh_completion(None, None, false);
     assert!(
-        ui.completion
-            .rows(80, 5, &ui.keys)
+        ui.editor
+            .completion
+            .painted_rows(80, 5, &ui.keys)
             .iter()
             .any(|row| row.contains("src/main.rs"))
     );
-    assert!(ui.completion.visible());
+    assert!(ui.editor.completion.visible());
     // Search edits are actual draft edits; Escape discards no input.
     ui.key(
         KeyEvent::new(KeyCode::Char('a'), Modifiers::NONE),
         None,
         None,
     );
-    assert_eq!(ui.draft, "Read\u{2003}@ma next");
-    let original = (ui.draft.clone(), ui.cursor);
+    assert_eq!(ui.editor.draft, "Read\u{2003}@ma next");
+    let original = (ui.editor.draft.clone(), ui.editor.cursor);
     ui.key(KeyEvent::new(KeyCode::Esc, Modifiers::NONE), None, None);
-    assert_eq!((ui.draft.clone(), ui.cursor), original);
+    assert_eq!((ui.editor.draft.clone(), ui.editor.cursor), original);
     ui.refresh_completion(None, None, false);
     assert!(
-        !ui.completion.active(),
+        !ui.editor.completion.active(),
         "drawing cannot reopen a dismissed suggestion"
     );
     ui.key(KeyEvent::new(KeyCode::Tab, Modifiers::NONE), None, None);
@@ -909,20 +1023,20 @@ async fn automatic_file_suggestions_keep_edits_in_the_draft() {
         assert!(ui.pickers.complete().await.is_none());
     }
     ui.refresh_completion(None, None, false);
-    ui.completion.rows(80, 5, &ui.keys);
+    ui.editor.completion.painted_rows(80, 5, &ui.keys);
     assert!(matches!(
         ui.key(KeyEvent::new(KeyCode::Enter, Modifiers::NONE), None, None),
         Action::None
     ));
-    assert_eq!(ui.draft, "Read\u{2003}@src/main.rs next");
-    assert_eq!(ui.cursor, "Read\u{2003}@src/main.rs ".len());
+    assert_eq!(ui.editor.draft, "Read\u{2003}@src/main.rs next");
+    assert_eq!(ui.editor.cursor, "Read\u{2003}@src/main.rs ".len());
     // Accepting a suggestion is one undoable editor edit, never a submission.
     ui.key(
         KeyEvent::new(KeyCode::Char('_'), Modifiers::CONTROL),
         None,
         None,
     );
-    assert_eq!((ui.draft.clone(), ui.cursor), original);
+    assert_eq!((ui.editor.draft.clone(), ui.editor.cursor), original);
     ui.pickers.shutdown().await.unwrap();
     std::fs::remove_dir_all(root).unwrap();
 }

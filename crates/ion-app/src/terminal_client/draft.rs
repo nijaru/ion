@@ -6,13 +6,15 @@
 use ion_ai::Message;
 use ion_host::image_input::ImageSource;
 
-use super::{EditorDraft, Frontend, MAX_DRAFT, PromptBrowse, RecoveredDraft};
+use super::{
+    MAX_DRAFT,
+    editor::{Editor, EditorDraft, Limit, PromptBrowse, RecoveredDraft},
+};
 
-impl Frontend {
+impl Editor {
     /// The single publication point for a different editor draft. History may
     /// retain its browsing position, but completion ranges never cross drafts.
     fn set_editor(&mut self, source: EditorDraft) {
-        self.pickers.close();
         self.completion.clear();
         self.draft = source.literal;
         self.cursor = source.cursor;
@@ -37,13 +39,15 @@ impl Frontend {
         self.prompt_history = prompts;
     }
 
-    pub(super) fn restore_browsed_draft(&mut self) {
-        if let Some(browse) = self.browsing.take() {
-            self.set_editor_baseline(EditorDraft {
-                literal: browse.draft,
-                cursor: browse.cursor,
-            });
-        }
+    pub(super) fn restore_browsed_draft(&mut self) -> bool {
+        let Some(browse) = self.browsing.take() else {
+            return false;
+        };
+        self.set_editor_baseline(EditorDraft {
+            literal: browse.draft,
+            cursor: browse.cursor,
+        });
+        true
     }
 
     pub(super) fn history_previous(&mut self) {
@@ -77,12 +81,12 @@ impl Frontend {
     fn recall_history_entry(&mut self, index: usize) {
         let draft = &self.prompt_history[index];
         if draft.len() > MAX_DRAFT {
-            self.status = "History input exceeds editor limit; current draft retained".into();
+            self.error = Some(Limit::History);
             return;
         }
         let draft = draft.clone();
         self.set_editor_baseline(EditorDraft::at_end(draft));
-        self.status.clear();
+        self.error = None;
     }
 
     pub(super) fn return_draft(
@@ -90,18 +94,20 @@ impl Frontend {
         source: EditorDraft,
         images: Vec<ImageSource>,
         files: Vec<ion_host::prompt_files::TextFile>,
-    ) {
-        self.restore_browsed_draft();
+    ) -> bool {
+        let restored = self.restore_browsed_draft();
         if self.draft.is_empty() && self.images.is_empty() && self.files.is_empty() {
             self.restore_editor(source);
             self.images = images;
             self.files = files;
+            true
         } else {
             self.recovered.push_back(RecoveredDraft {
                 source,
                 images,
                 files,
             });
+            restored
         }
     }
 
@@ -127,15 +133,10 @@ impl Frontend {
         if let Some(recovered) = self.recovered.pop_front() {
             self.show_draft(recovered);
         }
-        self.status = format!(
-            "{} recovered draft(s) · {} cycles drafts",
-            self.recovered.len(),
-            self.keys.hint(crate::keybindings::KeyAction::Dequeue)
-        );
     }
 
     pub(super) fn restore_input(&mut self, input: Message) -> Result<(), &'static str> {
-        let (draft, images) = super::split_editor_input(input)?;
+        let (draft, images) = super::editor::split_input(input)?;
         if draft.len() > MAX_DRAFT {
             return Err("selected input exceeds editor limit");
         }

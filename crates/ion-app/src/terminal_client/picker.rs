@@ -1,5 +1,6 @@
 //! Modal choices and cooperative discovery shared with non-modal completion.
 //! One retained scan joins before its replacement can start.
+use super::paint::{Prepared, Visibility};
 use crate::presentation_style::{Role, Theme};
 use ratatui::text::Line;
 use std::path::PathBuf;
@@ -145,9 +146,7 @@ pub(super) struct ModelScope {
 pub(super) struct Pickers {
     active: Option<Picker>,
     notice: Option<String>,
-    // The item index rendered as selected in the latest frame. Confirmation accepts only
-    // that candidate, so a stale or clipped selection cannot be chosen blindly.
-    rendered_selected: Option<usize>,
+    visibility: Visibility<PickerCandidate>,
     // A dismissed worker still owns its handle. New requests replace this single
     // waiting slot, never spawn another scan before the old one is joined.
     waiting: Option<PickerRequest>,
@@ -247,10 +246,13 @@ impl Pickers {
     }
 
     /// Render against the final budget, after composer and status allocation.
-    pub fn rows(&mut self, width: usize, height: usize, theme: &Theme) -> Vec<Line<'static>> {
-        self.rendered_selected = None;
+    pub fn rows(&mut self, width: usize, height: usize, theme: &Theme) -> PickerFrame {
+        self.visibility.invalidate();
         let Some(picker) = &self.active else {
-            return Vec::new();
+            return PickerFrame {
+                rows: Vec::new(),
+                candidate: None,
+            };
         };
         let matching = self.matching();
         let title = if let Some(models) = &self.models {
@@ -359,10 +361,12 @@ impl Pickers {
                 theme.style(if selected { Role::Selected } else { Role::Text }),
             ));
         }
-        if selected_visible {
-            self.rendered_selected = matching.get(picker.selected).copied();
-        }
-        rows
+        let candidate = selected_visible.then(|| {
+            self.visibility.prepare(PickerCandidate::of(
+                &picker.items[matching[picker.selected]],
+            ))
+        });
+        PickerFrame { rows, candidate }
     }
 
     fn loading_label(&self) -> &'static str {
@@ -392,7 +396,7 @@ impl Pickers {
     pub fn close(&mut self) {
         self.active = None;
         self.notice = None;
-        self.rendered_selected = None;
+        self.visibility.invalidate();
         self.waiting = None;
         self.files = None;
         self.sessions = None;
@@ -474,7 +478,15 @@ impl Pickers {
     }
 
     pub fn invalidate_visibility(&mut self) {
-        self.rendered_selected = None;
+        self.visibility.invalidate();
+    }
+
+    pub fn observe_paint(&mut self, candidate: Option<Prepared<PickerCandidate>>) {
+        if let Some(candidate) = candidate {
+            self.visibility.observe(candidate);
+        } else {
+            self.visibility.invalidate();
+        }
     }
 
     fn admit(&mut self) {
@@ -571,7 +583,7 @@ impl Pickers {
                             .saturating_sub(1),
                     );
                 }
-                self.rendered_selected = None;
+                self.visibility.invalidate();
                 if empty && matches!(request.browser, SessionBrowser::Active(_)) {
                     self.close();
                     Some("No saved Sessions for this working directory".into())
@@ -615,8 +627,20 @@ impl Pickers {
             .query
             .extend(text.chars().filter(|ch| !ch.is_control()));
         picker.selected = 0;
-        self.rendered_selected = None;
+        self.visibility.invalidate();
         true
+    }
+
+    pub fn move_selection(&mut self, down: bool) {
+        let matching = self.matching();
+        if let Some(picker) = &mut self.active {
+            picker.selected = if down {
+                (picker.selected + 1).min(matching.len().saturating_sub(1))
+            } else {
+                picker.selected.saturating_sub(1)
+            };
+        }
+        self.visibility.invalidate();
     }
 
     pub fn key(
@@ -642,7 +666,7 @@ impl Pickers {
                         PickerValue::Model(model) if Some(model) == selected.as_ref())
                     })
                     .unwrap_or(0);
-                self.rendered_selected = None;
+                self.visibility.invalidate();
                 return None;
             }
         }
@@ -673,7 +697,7 @@ impl Pickers {
             picker.selected = selected
                 .and_then(|selected| matching.iter().position(|index| *index == selected))
                 .unwrap_or(0);
-            self.rendered_selected = None;
+            self.visibility.invalidate();
             return None;
         }
         let loading = self.loading();
@@ -681,18 +705,13 @@ impl Pickers {
         let picker = self.active.as_mut().expect("picker is active");
         match action {
             Some(KeyAction::Cancel | KeyAction::Interrupt) => self.close(),
-            Some(KeyAction::SelectUp) => {
-                picker.selected = picker.selected.saturating_sub(1);
-                self.rendered_selected = None;
-            }
-            Some(KeyAction::SelectDown) => {
-                picker.selected = (picker.selected + 1).min(matching.len().saturating_sub(1));
-                self.rendered_selected = None;
+            Some(KeyAction::SelectUp | KeyAction::SelectDown) => {
+                self.move_selection(action == Some(KeyAction::SelectDown));
             }
             Some(KeyAction::Backspace) => {
                 picker.query.pop();
                 picker.selected = 0;
-                self.rendered_selected = None;
+                self.visibility.invalidate();
             }
             Some(KeyAction::Confirm | KeyAction::Toggle)
                 if !loading
@@ -704,7 +723,11 @@ impl Pickers {
                                 .any(|item| matches!(item.value, PickerValue::Setting(_))))) =>
             {
                 let index = matching.get(picker.selected).copied();
-                let index = index.filter(|index| self.rendered_selected == Some(*index));
+                let index = index.filter(|index| {
+                    self.visibility.painted().is_some_and(|painted| {
+                        *painted == PickerCandidate::of(&picker.items[*index])
+                    })
+                });
                 if let Some(index) = index {
                     let setting = match picker.items[index].value {
                         PickerValue::Setting(setting) => Some(PickerValue::Setting(setting)),
@@ -715,7 +738,7 @@ impl Pickers {
                         _ => None,
                     };
                     if setting.is_some() {
-                        self.rendered_selected = None;
+                        self.visibility.invalidate();
                         return setting;
                     }
                 }
@@ -729,12 +752,43 @@ impl Pickers {
                 if let Some(ch) = keybindings::printable(key) {
                     picker.query.push(ch);
                     picker.selected = 0;
-                    self.rendered_selected = None;
+                    self.visibility.invalidate();
                 }
             }
             _ => {}
         }
         None
+    }
+}
+
+pub(super) struct PickerFrame {
+    pub rows: Vec<Line<'static>>,
+    pub candidate: Option<Prepared<PickerCandidate>>,
+}
+
+/// The exact retained typed choice, not a filtered display ordinal or provider
+/// name. The pointer is compared only, never dereferenced. Its vector stays
+/// frozen until replacement/removal, which revokes the visibility episode.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(super) struct PickerCandidate(*const PickerItem);
+
+impl PickerCandidate {
+    fn of(item: &PickerItem) -> Self {
+        Self(std::ptr::from_ref(item))
+    }
+}
+
+#[cfg(test)]
+impl Pickers {
+    pub(super) fn painted_rows(
+        &mut self,
+        width: usize,
+        height: usize,
+        theme: &Theme,
+    ) -> Vec<Line<'static>> {
+        let frame = self.rows(width, height, theme);
+        self.observe_paint(frame.candidate);
+        frame.rows
     }
 }
 
@@ -874,7 +928,7 @@ mod tests {
             scoped: false,
         });
         let keys = KeyBindings::default();
-        pickers.rows(100, 10, &Theme::default());
+        pickers.painted_rows(100, 10, &Theme::default());
         pickers.key(KeyEvent::new(KeyCode::Tab, Modifiers::NONE), &keys);
         assert!(
             matches!(pickers.selected_value(), Some(PickerValue::Model(model)) if model == &identity("first")),
@@ -890,7 +944,7 @@ mod tests {
     #[test]
     fn confirmation_requires_the_selected_candidate_in_the_latest_frame() {
         let mut pickers = open_labels(&["alpha", "beta"]);
-        assert!(pickers.rows(80, 0, &Theme::default()).is_empty());
+        assert!(pickers.painted_rows(80, 0, &Theme::default()).is_empty());
         assert!(
             pickers
                 .key(
@@ -901,7 +955,7 @@ mod tests {
         );
         assert!(pickers.active().is_some());
 
-        let marker_only = pickers.rows(2, 10, &Theme::default());
+        let marker_only = pickers.painted_rows(2, 10, &Theme::default());
         assert_eq!(
             marker_only[1..]
                 .iter()
@@ -919,7 +973,7 @@ mod tests {
         );
         assert!(pickers.active().is_some());
 
-        let ellipsis_only = pickers.rows(3, 10, &Theme::default());
+        let ellipsis_only = pickers.painted_rows(3, 10, &Theme::default());
         assert_eq!(
             ellipsis_only[1..]
                 .iter()
@@ -937,7 +991,7 @@ mod tests {
         );
         assert!(pickers.active().is_some());
 
-        let rows = pickers.rows(80, 10, &Theme::default());
+        let rows = pickers.painted_rows(80, 10, &Theme::default());
         assert!(rows.iter().any(|row| row.to_string() == "› alpha"));
         assert!(matches!(
             pickers.key(KeyEvent::new(KeyCode::Enter, Modifiers::NONE), &KeyBindings::default()),
@@ -946,8 +1000,8 @@ mod tests {
         assert!(pickers.active().is_none());
 
         let mut pickers = open_labels(&["alpha", "beta"]);
-        pickers.rows(80, 10, &Theme::default());
-        pickers.rows(1, 10, &Theme::default());
+        pickers.painted_rows(80, 10, &Theme::default());
+        pickers.painted_rows(1, 10, &Theme::default());
         assert!(
             pickers
                 .key(
@@ -956,7 +1010,7 @@ mod tests {
                 )
                 .is_none()
         );
-        pickers.rows(80, 10, &Theme::default());
+        pickers.painted_rows(80, 10, &Theme::default());
         pickers.key(
             KeyEvent::new(KeyCode::Char('b'), Modifiers::NONE),
             &KeyBindings::default(),
@@ -970,7 +1024,7 @@ mod tests {
                 .is_none()
         );
         assert_eq!(pickers.active().unwrap().query, "b");
-        let rows = pickers.rows(80, 10, &Theme::default());
+        let rows = pickers.painted_rows(80, 10, &Theme::default());
         assert!(rows.iter().any(|row| row.to_string() == "› beta"));
         assert!(matches!(
             pickers.key(KeyEvent::new(KeyCode::Enter, Modifiers::NONE), &KeyBindings::default()),
@@ -1211,7 +1265,7 @@ mod tests {
         release.send(()).unwrap();
         assert!(pickers.complete().await.is_none());
         assert!(
-            pickers.rows(100, 10, &Theme::default())[0]
+            pickers.painted_rows(100, 10, &Theme::default())[0]
                 .to_string()
                 .contains("1 match(es)")
         );
@@ -1220,7 +1274,7 @@ mod tests {
 
         pickers.key(toggle, &keys);
         assert!(
-            pickers.rows(100, 10, &Theme::default())[0]
+            pickers.painted_rows(100, 10, &Theme::default())[0]
                 .to_string()
                 .contains("3 match(es)")
         );
@@ -1230,13 +1284,13 @@ mod tests {
             "selected Session survives"
         );
         pickers.key(KeyEvent::new(KeyCode::Up, Modifiers::NONE), &keys);
-        pickers.rows(100, 10, &Theme::default());
+        pickers.painted_rows(100, 10, &Theme::default());
         pickers.key(toggle, &keys);
         assert!(
             pickers.key(enter, &keys).is_none(),
             "old rows authorize nothing"
         );
-        pickers.rows(100, 10, &Theme::default());
+        pickers.painted_rows(100, 10, &Theme::default());
         assert!(
             matches!(pickers.key(enter, &keys), Some(PickerValue::Session { path, .. }) if path == Path::new("/named"))
         );
@@ -1263,7 +1317,7 @@ mod tests {
         assert_eq!(pickers.active().unwrap().query, "draft query");
         assert!(pickers.sessions.as_ref().unwrap().all_workspaces);
         assert!(
-            pickers.rows(100, 10, &Theme::default())[0]
+            pickers.painted_rows(100, 10, &Theme::default())[0]
                 .to_string()
                 .contains("named only")
         );
@@ -1283,7 +1337,7 @@ mod tests {
         );
         assert_eq!(pickers.active().unwrap().query, "draft query");
         assert!(
-            pickers.rows(100, 10, &Theme::default())[0]
+            pickers.painted_rows(100, 10, &Theme::default())[0]
                 .to_string()
                 .contains("named only")
         );
@@ -1325,7 +1379,7 @@ mod tests {
         let detail = picker.items[0].detail.as_deref().unwrap();
         assert!(detail.contains("019abcdef0123456789abcdef01234567"));
         assert!(detail.contains("2 turn(s)"));
-        let rows = pickers.rows(80, 10, &Theme::default());
+        let rows = pickers.painted_rows(80, 10, &Theme::default());
         assert!(rows.iter().any(|row| row.to_string().starts_with("› ")));
         let Some(PickerValue::Session { path, .. }) = pickers.key(
             KeyEvent::new(KeyCode::Enter, Modifiers::NONE),

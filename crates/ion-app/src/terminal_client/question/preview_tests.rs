@@ -47,7 +47,7 @@ fn previews_follow_focus_page_and_geometry_without_answering() {
     let color = Color::Rgb(12, 34, 56);
     theme.set_color(Role::SyntaxString, color);
     let mut modal = comparison();
-    let frame = modal.render(120, 20, &keys, &theme);
+    let frame = modal.painted_render(120, 20, &keys, &theme);
     assert!(text(&frame).contains("Compare"));
     assert!(text(&frame).contains("CHOICE_A"));
     assert!(
@@ -70,14 +70,14 @@ fn previews_follow_focus_page_and_geometry_without_answering() {
     );
     for _ in 0..20 {
         modal.key(KeyEvent::new(KeyCode::PageDown, Modifiers::NONE), &keys);
-        modal.render(120, 20, &keys, &theme);
+        modal.painted_render(120, 20, &keys, &theme);
     }
-    let frame = modal.render(120, 20, &keys, &theme);
+    let frame = modal.painted_render(120, 20, &keys, &theme);
     assert!(text(&frame).contains("preview-line-49"));
     assert!(!text(&frame).contains("CHOICE_A"));
     assert!(super::tests::answered(&modal).is_empty());
     modal.key(KeyEvent::new(KeyCode::Down, Modifiers::NONE), &keys);
-    let frame = modal.render(60, 18, &keys, &theme);
+    let frame = modal.painted_render(60, 18, &keys, &theme);
     assert!(text(&frame).contains("CHOICE_B"));
     let selected = frame
         .rows
@@ -95,11 +95,11 @@ fn previews_follow_focus_page_and_geometry_without_answering() {
     );
     assert_eq!(modal.preview_offset, 0);
     modal.key(KeyEvent::new(KeyCode::Down, Modifiers::NONE), &keys);
-    modal.render(120, 18, &keys, &theme);
+    modal.painted_render(120, 18, &keys, &theme);
     modal.key(KeyEvent::new(KeyCode::Enter, Modifiers::NONE), &keys);
     let answer = "custom ".repeat(10);
     modal.paste(&answer);
-    let frame = modal.render(120, 18, &keys, &theme);
+    let frame = modal.painted_render(120, 18, &keys, &theme);
     assert!(!text(&frame).contains("Preview"));
     assert!(
         frame
@@ -123,8 +123,10 @@ fn preview_bounds_control_safety_and_resize_visibility_are_explicit() {
             let mut modal = comparison();
             modal.questions[0].options[0].preview =
                 Some("# Config\n\n```text\n\u{1b}]52;c;UNTRUSTED\u{7}\n界🦀 e\u{301}\n```".into());
-            let frame = modal.render(width, height, &keys, &theme);
-            assert_eq!(frame.rows.len(), usize::from(height));
+            let frame = modal.painted_render(width, height, &keys, &theme);
+            // A measured inline question consumes its content, not the whole
+            // terminal. The frame must still respect the physical bound.
+            assert!(!frame.rows.is_empty() && frame.rows.len() <= usize::from(height));
             for row in &frame.rows {
                 assert!(
                     row.width() <= usize::from(width),
@@ -142,13 +144,13 @@ fn preview_bounds_control_safety_and_resize_visibility_are_explicit() {
         }
     }
     let mut modal = comparison();
-    modal.render(120, 24, &keys, &theme);
+    modal.painted_render(120, 24, &keys, &theme);
     modal.invalidate_visibility();
     assert!(matches!(
         modal.key(KeyEvent::new(KeyCode::Enter, Modifiers::NONE), &keys),
         QuestionAction::None
     ));
-    modal.render(120, 24, &keys, &theme);
+    modal.painted_render(120, 24, &keys, &theme);
     assert!(
         matches!(modal.key(KeyEvent::new(KeyCode::Enter, Modifiers::NONE), &keys), QuestionAction::Answer(_, ref answers)
         if answers == &vec![QuestionAnswer::Option {index: 0}])
@@ -162,9 +164,9 @@ fn an_option_without_preview_remains_selectable_in_a_rich_question() {
     let mut modal = comparison();
     modal.questions[0].options[1].preview = None;
     modal.key(KeyEvent::new(KeyCode::Down, Modifiers::NONE), &keys);
-    let frame = modal.render(8, 8, &keys, &theme);
+    let frame = modal.painted_render(8, 8, &keys, &theme);
     assert!(frame.rows.iter().all(|row| row.width() <= 8));
-    modal.render(80, 24, &keys, &theme);
+    modal.painted_render(80, 24, &keys, &theme);
     assert!(
         matches!(modal.key(KeyEvent::new(KeyCode::Enter, Modifiers::NONE), &keys), QuestionAction::Answer(_, ref answers)
         if answers == &vec![QuestionAnswer::Option {index: 1}])

@@ -77,7 +77,9 @@ async fn cancellation_prevents_provider_construction_including_cache_warm() {
                 .is_none()
         } else {
             matches!(
-                generate_with_retry(&model, &request(), &stop, &mut |_| {}).await,
+                generate_with_retry(&model, &request(), &stop, &mut |_| {})
+                    .await
+                    .outcome,
                 Err(AgentError::Cancelled)
             )
         };
@@ -195,13 +197,17 @@ async fn only_generated_output_bars_retry_after_a_stream_error() {
             })
             .await;
         if retry {
-            assert_eq!(result.unwrap().route.reason, ModelRouteReason::Retry);
+            assert_eq!(result.route.reason, ModelRouteReason::Retry);
+            assert_eq!(result.output, OutputCustody::Observed);
+            assert!(result.outcome.is_ok());
             assert_eq!(retries, 1);
             assert_eq!(notices, 1, "input-transformation notices remain visible");
             assert_eq!(service.requests.load(Ordering::SeqCst), 2);
         } else {
+            assert_eq!(result.output, OutputCustody::Observed);
+            assert_eq!(result.route, request.route);
             assert!(matches!(
-                result,
+                result.outcome,
                 Err(AgentError::Provider(ProviderError {
                     kind: ProviderErrorKind::Overloaded,
                     ..
@@ -210,5 +216,63 @@ async fn only_generated_output_bars_retry_after_a_stream_error() {
             assert_eq!(retries, 0);
             assert_eq!(service.requests.load(Ordering::SeqCst), 1);
         }
+    }
+}
+
+#[tokio::test]
+async fn completion_only_attempt_evidence_does_not_depend_on_observer_events() {
+    for (content, expected) in [
+        (Vec::new(), OutputCustody::Unobserved),
+        (
+            vec![Content::Text(String::new())],
+            OutputCustody::Unobserved,
+        ),
+        (
+            vec![Content::Thinking(String::new())],
+            OutputCustody::Unobserved,
+        ),
+        (
+            vec![Content::Thinking("private output".into())],
+            OutputCustody::Observed,
+        ),
+        (
+            vec![Content::Text("partial".into())],
+            OutputCustody::Observed,
+        ),
+        (
+            vec![Content::ToolCall(ToolCall {
+                id: "call".into(),
+                name: "tool".into(),
+                arguments: serde_json::json!({}),
+                raw_arguments: None,
+            })],
+            OutputCustody::Observed,
+        ),
+    ] {
+        let service: Arc<dyn ModelService> =
+            Arc::new(ion_ai::ScriptedModelService::new([ion_ai::Script::Stream(
+                vec![ModelStreamEvent::Completed(ModelResponse {
+                    message: Message {
+                        role: Role::Assistant,
+                        content,
+                        provider_replay: None,
+                    },
+                    usage: Usage::known(100, 0),
+                    termination: ResponseTermination::Incomplete(IncompleteReason::ContextLength),
+                    returned_model: None,
+                })],
+            )]));
+        let request = request();
+        let before = tokio::time::Instant::now();
+        // Summaries deliberately suppress provisional presentation, but still
+        // must not replay any output, including completion-only thinking/calls.
+        let attempt =
+            generate_with_retry(&service, &request, &CancellationToken::new(), &mut |_| {}).await;
+        assert_eq!(attempt.output, expected);
+        assert_eq!(attempt.route, request.route);
+        assert!(attempt.context_length_exceeded());
+        assert!(before <= attempt.timing.start);
+        assert!(attempt.timing.start <= attempt.timing.end);
+        assert!(attempt.timing.end <= tokio::time::Instant::now());
     }
 }

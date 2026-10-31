@@ -10,16 +10,18 @@ use crate::{
     display_text::{diagnostic, fit_line, push_prefixed, push_wrapped},
     keybindings::{KeyAction, KeyBindings},
     presentation_style::{Role, Theme},
-    terminal_client::composer::input_window,
+    terminal_client::paint::Prepared,
+    terminal_input::input_window,
 };
 
-const MAX_EDITOR_ROWS: usize = 4;
 const PREVIEW_MIN_WIDTH: usize = 100;
 const COLUMN_GAP: usize = 2;
 
 pub(in crate::terminal_client) struct QuestionFrame {
     pub(in crate::terminal_client) rows: Vec<Line<'static>>,
     pub(in crate::terminal_client) cursor: Option<(usize, u16)>,
+    pub(in crate::terminal_client) candidate: Option<Prepared<super::QuestionTarget>>,
+    pub(in crate::terminal_client) editor_width: Option<usize>,
 }
 
 struct Choices {
@@ -39,14 +41,19 @@ impl QuestionModal {
         let width = usize::from(width.max(1));
         let height = usize::from(height.max(1));
         self.too_small = width < 8;
-        self.selection_visible = false;
+        self.visibility.invalidate();
         if self.collapsed {
             let mut rows = vec![Line::raw(""); height];
             rows[0] = Line::styled(
                 fit_line(&Self::collapsed_hint(keys), width),
                 theme.style(Role::Secondary),
             );
-            return QuestionFrame { rows, cursor: None };
+            return QuestionFrame {
+                rows,
+                cursor: None,
+                candidate: None,
+                editor_width: None,
+            };
         }
         if self.too_small {
             let mut notice = Vec::new();
@@ -55,7 +62,12 @@ impl QuestionModal {
             for (row, line) in rows.iter_mut().zip(notice) {
                 *row = Line::styled(line, theme.style(Role::Warning));
             }
-            return QuestionFrame { rows, cursor: None };
+            return QuestionFrame {
+                rows,
+                cursor: None,
+                candidate: None,
+                editor_width: None,
+            };
         }
 
         if self.page == super::Page::Review {
@@ -100,7 +112,7 @@ impl QuestionModal {
         } else {
             width
         };
-        let choices = self.choice_rows(choice_width, theme);
+        let choices = self.choice_rows(choice_width, viewport, theme);
         let selected_option = self.current_options().get(self.draft().selected);
         let requires_preview = selected_option.is_some_and(|option| option.preview.is_some());
         let mut box_rows = Vec::new();
@@ -137,7 +149,19 @@ impl QuestionModal {
             viewport
         } else {
             viewport - box_rows.len() - 1
+        }
+        .min(choices.rows.len());
+        let viewport = if side_by_side {
+            choice_budget.max(box_rows.len())
+        } else {
+            choice_budget
+                + if box_rows.is_empty() {
+                    0
+                } else {
+                    box_rows.len() + 1
+                }
         };
+        let height = viewport + footer.len();
         let focus = choices
             .cursor
             .map_or(choices.selected.end.saturating_sub(1), |(row, _)| row);
@@ -147,19 +171,19 @@ impl QuestionModal {
             .min(choices.rows.len().saturating_sub(choice_budget));
         // A wrapped label is one choice. Painting its first line is not
         // confirmation authority for a hidden remainder.
-        self.selection_visible =
+        let mut selection_visible =
             choices.selected.start >= start && choices.selected.end <= start + choice_budget;
         let mut cursor = choices.cursor.and_then(|(row, col)| {
             (row >= start && row < start + choice_budget)
                 .then_some((row - start, col.min(width - 1) as u16))
         });
         if self.editing {
-            self.selection_visible = cursor.is_some();
+            selection_visible = cursor.is_some();
         }
         let notice = if rich && box_rows.is_empty() && requires_preview {
-            self.selection_visible = false;
+            selection_visible = false;
             Some("Resize terminal to show the preview")
-        } else if !self.selection_visible {
+        } else if !selection_visible {
             Some("Resize terminal to show the selected choice")
         } else {
             None
@@ -201,10 +225,17 @@ impl QuestionModal {
         for (index, line) in footer.into_iter().enumerate() {
             rows[viewport + index] = Line::styled(line, theme.style(Role::Secondary));
         }
-        QuestionFrame { rows, cursor }
+        let candidate = selection_visible.then(|| self.visibility.prepare(self.target()));
+        let editor_width = (self.editing && cursor.is_some()).then_some(choice_width - 2);
+        QuestionFrame {
+            rows,
+            cursor,
+            candidate,
+            editor_width,
+        }
     }
 
-    fn choice_rows(&self, width: usize, theme: &Theme) -> Choices {
+    fn choice_rows(&self, width: usize, height: usize, theme: &Theme) -> Choices {
         let question = &self.questions[self.index];
         let mut content = Vec::new();
         if self.questions.len() > 1 {
@@ -296,7 +327,12 @@ impl QuestionModal {
             let editor = &self.draft().text;
             content.push(String::new());
             let base = content.len();
-            let window = input_window(&editor.text, editor.cursor, width - 2, MAX_EDITOR_ROWS);
+            let window = input_window(
+                &editor.text,
+                editor.cursor,
+                width - 2,
+                height.saturating_sub(1),
+            );
             for line in window.lines {
                 content.push(format!("  {line}"));
             }
@@ -348,10 +384,10 @@ impl QuestionModal {
             )
         };
         format!(
-            "{} hide · {controls} · {} cancel · {} stops Turn",
-            keys.hint(KeyAction::QuestionCollapse),
+            "{} stops Turn · {} cancel · {} hide · {controls}",
+            keys.hint(KeyAction::Interrupt),
             keys.hint(KeyAction::Cancel),
-            keys.hint(KeyAction::Interrupt)
+            keys.hint(KeyAction::QuestionCollapse)
         )
     }
 }

@@ -1,4 +1,4 @@
-//! Continuation enters the same retained operation and drive loop as new work.
+//! Continuation enters the same retained operation and Turn sequencer as new work.
 use super::*;
 use crate::{
     AuthorityScope, RecoveryBinding, RecoveryPoint, ToolCatalog, request::RequestSettings,
@@ -13,20 +13,16 @@ pub(super) struct TurnStart {
 
 pub(super) enum TurnOrigin {
     User {
+        entry: u64,
         input: Message,
     },
     Resumed {
         point: RecoveryPoint,
     },
     Automated {
+        entry: u64,
         notices: Vec<crate::CompletionNotice>,
     },
-}
-
-pub(super) struct TurnRun {
-    pub turn: u64,
-    pub catalog: Option<ToolCatalog>,
-    pub route_reason: ModelRouteReason,
 }
 
 impl Agent {

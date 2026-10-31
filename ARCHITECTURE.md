@@ -23,10 +23,13 @@ execution identity, parentage or settlement themselves.
 
 ### Reference-derived design
 
-[Pi](https://github.com/earendil-works/pi) is the primary agent/runtime and workflow
-baseline. [fx](https://github.com/vercel-labs/fx) is the primary native application
-and terminal-presentation reference, with Pi secondary for presentation. Codex is a secondary Rust reference; Claude Code's documented
-contracts provide secondary workflow/SDK evidence. These are living baselines,
+[Pi](https://github.com/earendil-works/pi) is the default agent/runtime and workflow
+design, implemented idiomatically in Rust.
+[fx](https://github.com/vercel-labs/fx) leads feature and native/TUI design, with Pi
+secondary for presentation. Use current state-of-the-art patterns where they
+improve the required workflow or its correctness, not as a reason to invent scope.
+Codex is a secondary Rust reference; Claude Code's documented contracts provide
+secondary workflow/SDK evidence. These are living baselines,
 not pinned parity targets. Inspect current relevant interactions and edge cases
 before designing the corresponding Ion workflow. Historical revisions identify
 evidence, not the version Ion must match. Separate shipped native workflows,
@@ -1629,7 +1632,10 @@ by resetting a cursor and replaying the transcript.
 One presenter supplies inline, fullscreen, publication and evidence views. Keep
 logical source rather than prewrapped rows as retained truth. Prepare the visible
 window and pending publication; do not flatten an expanded whole conversation on
-every redraw. Preserve a source-relative reading anchor across width changes.
+every redraw. Preserve a source-relative reading anchor across width changes:
+original byte positions for untouched text, syntax-node/component positions for
+parser-normalized text, and field positions within an original tool occurrence.
+Fitted text and cached row numbers cannot substitute for these coordinates.
 One blank row separates independent visible blocks; attached status/output, group
 children and mutation evidence have no extra inter-row padding. Hidden content
 creates no gap; literal blank lines inside retained content are not spacing policy.

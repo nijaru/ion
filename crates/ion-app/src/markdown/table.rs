@@ -1,23 +1,33 @@
 //! Width-aware assistant tables, sharing ordinary inline styles and safe wrapping.
 use pulldown_cmark::{Alignment, Event, Tag, TagEnd};
-use ratatui::{style::Modifier, text::Line};
+use ratatui::style::Modifier;
 use unicode_segmentation::UnicodeSegmentation;
 use unicode_width::UnicodeWidthStr;
 
-use super::{View, push_styled};
+use super::View;
+use crate::display_text::{MappedLine, Wrapping, wrap_mapped};
+use std::ops::Range;
 
 struct Cell {
-    lines: Vec<Line<'static>>,
+    lines: Vec<MappedLine>,
+    node: usize,
 }
 
 impl Cell {
     fn measure(&self) -> (usize, usize) {
-        let natural = self.lines.iter().map(Line::width).max().unwrap_or(0).max(1);
+        let natural = self
+            .lines
+            .iter()
+            .map(|line| line.line.width())
+            .max()
+            .unwrap_or(0)
+            .max(1);
         let widest = self
             .lines
             .iter()
             .map(|line| {
-                line.to_string()
+                line.line
+                    .to_string()
                     .graphemes(true)
                     .map(UnicodeWidthStr::width)
                     .max()
@@ -28,26 +38,26 @@ impl Cell {
         (natural, natural.min(3).max(widest))
     }
 
-    fn wrap(&self, width: usize) -> Vec<Line<'static>> {
-        let mut lines = Vec::new();
-        for line in &self.lines {
-            push_styled(&mut lines, "", "", line.clone(), width);
-        }
-        lines
+    fn wrap(&self, width: usize) -> Vec<MappedLine> {
+        self.lines
+            .iter()
+            .flat_map(|line| wrap_mapped("", "", line.clone(), width, Wrapping::Literal))
+            .collect()
     }
 }
 
 impl View<'_> {
     pub(super) fn table<'e>(
         &mut self,
-        events: &mut impl Iterator<Item = Event<'e>>,
+        events: &mut impl Iterator<Item = (Event<'e>, Range<usize>)>,
         alignments: Vec<Alignment>,
     ) {
         self.flush();
         let mut rows = Vec::new();
         let mut row = Vec::new();
         let mut header = false;
-        while let Some(event) = events.next() {
+        while let Some((event, range)) = events.next() {
+            self.range = range.clone();
             match event {
                 Event::Start(Tag::TableHead) => header = true,
                 Event::Start(Tag::TableCell) => {
@@ -57,15 +67,17 @@ impl View<'_> {
                     } else {
                         self.style()
                     };
-                    let mut cell = View::new(&mut lines, usize::MAX, base, self.theme);
-                    for event in events.by_ref() {
+                    let node = range.start;
+                    let mut cell = View::new(&mut lines, self.source, usize::MAX, base, self.theme);
+                    cell.range = range;
+                    for (event, range) in events.by_ref() {
                         if event == Event::End(TagEnd::TableCell) {
                             break;
                         }
-                        cell.event(event);
+                        cell.event(event, range);
                     }
                     cell.flush();
-                    row.push(Cell { lines });
+                    row.push(Cell { lines, node });
                 }
                 Event::End(TagEnd::TableHead | TagEnd::TableRow) => {
                     rows.push(std::mem::take(&mut row));
@@ -118,7 +130,7 @@ impl View<'_> {
                             self.text(" │ ".into());
                         }
                         let value = cell.get(line);
-                        let padding = width - value.map_or(0, Line::width);
+                        let padding = width - value.map_or(0, |value| value.line.width());
                         let before = match alignments[column] {
                             Alignment::Right => padding,
                             Alignment::Center => padding / 2,
@@ -126,7 +138,7 @@ impl View<'_> {
                         };
                         self.text(" ".repeat(before));
                         if let Some(value) = value {
-                            self.spans.extend(value.spans.iter().cloned());
+                            self.content.append(value);
                         }
                         self.text(" ".repeat(padding - before));
                     }
@@ -152,7 +164,7 @@ impl View<'_> {
         if rows.len() == 1 {
             for cell in header {
                 for line in &cell.lines {
-                    self.spans = line.spans.clone();
+                    self.content = line.clone();
                     self.flush();
                 }
             }
@@ -171,7 +183,8 @@ impl View<'_> {
                         if index > 0 {
                             self.text(" ".into());
                         }
-                        self.spans.extend(line.spans.iter().cloned());
+                        self.content
+                            .append(&MappedLine::generated(line.line.clone(), cell.node));
                     }
                 }
                 self.text(": ".into());
@@ -179,7 +192,7 @@ impl View<'_> {
                     if index > 0 {
                         self.flush();
                     }
-                    self.spans.extend(line.spans.iter().cloned());
+                    self.content.append(line);
                 }
                 self.flush();
             }

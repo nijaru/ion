@@ -1,4 +1,5 @@
 use super::*;
+use crate::terminal_client::Editor;
 use crate::terminal_client::{Action, tests::Fixture};
 use ion_host::{
     McpConfig, McpExposure, McpServer, McpStdioServer, McpToolCounts, McpTools, SessionSetup,
@@ -38,8 +39,11 @@ fn inspection_is_the_safe_default_and_actions_require_visible_confirmation() {
             )
         );
         let mut ui = Frontend {
-            draft: "保留_🦀".into(),
-            cursor: 3,
+            editor: Editor {
+                draft: "保留_🦀".into(),
+                cursor: 3,
+                ..Editor::default()
+            },
             ..Frontend::default()
         };
         ui.pickers.open(picker);
@@ -47,12 +51,12 @@ fn inspection_is_the_safe_default_and_actions_require_visible_confirmation() {
             ui.key(KeyEvent::new(KeyCode::Enter, Modifiers::NONE), None, None),
             Action::None
         ));
-        ui.pickers.rows(100, 20, ui.themes.theme());
+        ui.pickers.painted_rows(100, 20, ui.themes.theme());
         assert!(
             matches!(ui.key(KeyEvent::new(KeyCode::Enter, Modifiers::NONE), None, None),
             Action::Pick(PickerValue::Mcp(McpChoice::Details(name))) if name == "peer")
         );
-        assert_eq!((ui.draft.as_str(), ui.cursor), ("保留_🦀", 3));
+        assert_eq!((ui.editor.draft.as_str(), ui.editor.cursor), ("保留_🦀", 3));
     }
 }
 
@@ -100,8 +104,11 @@ async fn manager_inspection_is_passive_and_removed_actions_cannot_retarget() {
     .into_control();
     let before = fixture.control.session().view().unwrap().entries;
     let mut ui = Frontend {
-        draft: "preserve".into(),
-        cursor: 4,
+        editor: Editor {
+            draft: "preserve".into(),
+            cursor: 4,
+            ..Editor::default()
+        },
         ..Frontend::default()
     };
     command(
@@ -123,7 +130,7 @@ async fn manager_inspection_is_passive_and_removed_actions_cannot_retarget() {
     let mut picker = ui.pickers.take_active().unwrap();
     picker.query = "reconnect".into();
     ui.pickers.open(picker);
-    ui.pickers.rows(100, 20, ui.themes.theme());
+    ui.pickers.painted_rows(100, 20, ui.themes.theme());
     assert!(
         matches!(ui.pickers.selected_value(), Some(PickerValue::Mcp(McpChoice::Reconnect(name))) if name == "offline")
     );
@@ -133,7 +140,7 @@ async fn manager_inspection_is_passive_and_removed_actions_cannot_retarget() {
         ui.key(KeyEvent::new(KeyCode::Enter, Modifiers::NONE), None, None),
         Action::None
     ));
-    ui.pickers.rows(100, 20, ui.themes.theme());
+    ui.pickers.painted_rows(100, 20, ui.themes.theme());
     assert!(
         matches!(ui.key(KeyEvent::new(KeyCode::Enter, Modifiers::NONE), None, None),
         Action::Pick(PickerValue::Mcp(McpChoice::Details(name))) if name == "offline")
@@ -141,6 +148,9 @@ async fn manager_inspection_is_passive_and_removed_actions_cannot_retarget() {
     assert!(!fixture.control.is_busy());
     assert!(fixture.control.state().mcp_reconnect.is_none());
     assert_eq!(fixture.control.session().view().unwrap().entries, before);
-    assert_eq!((ui.draft.as_str(), ui.cursor), ("preserve", 4));
+    assert_eq!(
+        (ui.editor.draft.as_str(), ui.editor.cursor),
+        ("preserve", 4)
+    );
     fixture.control.shutdown().await;
 }

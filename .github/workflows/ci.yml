@@ -70,8 +70,10 @@ jobs:
         run: python3 scripts/smoke_web.py
       - name: Native file boundary smoke
         run: python3 scripts/smoke_file_io.py
+      - name: Image input, recovery and inspection smoke
+        run: python3 scripts/smoke_images.py
       - name: Terminal PTY smoke
-        run: python3 scripts/smoke_terminal.py
+        run: python3 scripts/test_terminal_style.py && python3 scripts/smoke_terminal.py
       - name: Keyboard surface custody smoke
         run: python3 scripts/smoke_keyboard.py
       - name: Unix shell job-control smoke

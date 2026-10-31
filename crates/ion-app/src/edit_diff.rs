@@ -1,5 +1,8 @@
 //! Presentation of a recorded edit or write observation; patch syntax never determines effect state.
-use crate::presentation_style::Role;
+use crate::{
+    display_text::{Component, Field, MappedLine, Wrapping, fit_mapped, source_lines, wrap_mapped},
+    presentation_style::Role,
+};
 use ion_core::{ActivityState, ToolActivityKind, TranscriptActivity};
 use ratatui::text::{Line, Span};
 use serde_json::{Map, Value};
@@ -30,7 +33,7 @@ pub(crate) fn recorded(activity: &TranscriptActivity) -> Option<RecordedDiff<'_>
 }
 
 pub(crate) fn render(
-    rows: &mut Vec<Line<'static>>,
+    rows: &mut Vec<MappedLine>,
     activity: &TranscriptActivity,
     prefix: &str,
     width: usize,
@@ -41,7 +44,7 @@ pub(crate) fn render(
     };
     const PREVIEW_LINES: usize = 8;
     let expanded = detail.detail == crate::tool_output::OutputDetail::Expanded;
-    let mut source = diff.text.lines().skip(if expanded { 0 } else { 2 });
+    let mut source = source_lines(diff.text).skip(if expanded { 0 } else { 2 });
     let lines = source
         .by_ref()
         .take(if expanded { usize::MAX } else { PREVIEW_LINES })
@@ -56,7 +59,7 @@ pub(crate) fn render(
     } else {
         None
     };
-    for (index, text) in lines.iter().enumerate() {
+    for (index, (byte, text)) in lines.iter().enumerate() {
         let last = index + 1 == lines.len() && footer.is_none();
         // These are syntax styles only. The Completed state above comes from Core facts.
         let style = match text.as_bytes().first() {
@@ -66,33 +69,41 @@ pub(crate) fn render(
             _ => detail.theme.style(Role::Secondary),
         };
         // Bound physical preview rows; long source lines remain in inspection.
+        let source = MappedLine::component(
+            Line::from(Span::styled((*text).to_owned(), style)),
+            Component::Field(Field::Diff),
+            *byte,
+        );
         let visible = if expanded {
-            (*text).to_owned()
+            source
         } else {
-            crate::display_text::fit_line(text, width.saturating_sub(prefix.width() + 2).max(1))
+            fit_mapped(source, width.saturating_sub(prefix.width() + 2).max(1)).0
         };
-        crate::display_text::push_styled(
-            rows,
+        rows.extend(wrap_mapped(
             &format!("{prefix}{}", if last { "└ " } else { "│ " }),
             &format!("{prefix}{}", if last { "  " } else { "│ " }),
-            Line::from(Span::styled(visible, style)),
+            visible,
             width,
-        );
+            Wrapping::Literal,
+        ));
     }
     if let Some(footer) = footer {
-        crate::display_text::push_styled(
-            rows,
+        rows.extend(wrap_mapped(
             &format!("{prefix}└ "),
             &format!("{prefix}  "),
-            Line::styled(
-                crate::display_text::fit_line(
-                    &footer,
-                    width.saturating_sub(prefix.width() + 2).max(1),
+            MappedLine::generated(
+                Line::styled(
+                    crate::display_text::fit_line(
+                        &footer,
+                        width.saturating_sub(prefix.width() + 2).max(1),
+                    ),
+                    detail.theme.style(Role::Secondary),
                 ),
-                detail.theme.style(Role::Secondary),
+                0,
             ),
             width,
-        );
+            Wrapping::Literal,
+        ));
     }
 }
 
@@ -108,6 +119,10 @@ mod tests {
     #[test]
     fn write_activity_uses_the_same_recorded_diff_presentation() {
         let mut activity = TranscriptActivity {
+            identity: ion_core::TranscriptActivityIdentity::Tool(ion_core::ToolOccurrence {
+                assistant_entry: 1,
+                ordinal: 0,
+            }),
             call_id: "write-1".into(),
             name: "write".into(),
             activity: ToolActivity {
@@ -137,7 +152,7 @@ mod tests {
                 crate::transcript_render::ThinkingVisibility::Hidden,
             ),
         );
-        assert!(rows.iter().any(|row| row.to_string().contains("+new")));
+        assert!(rows.iter().any(|row| row.line.to_string().contains("+new")));
         activity.activity.kind = ToolActivityKind::Read;
         assert!(recorded(&activity).is_none());
     }
@@ -149,6 +164,10 @@ mod tests {
             "\u{200b}".repeat(500)
         );
         let mut activity = TranscriptActivity {
+            identity: ion_core::TranscriptActivityIdentity::Tool(ion_core::ToolOccurrence {
+                assistant_entry: 1,
+                ordinal: 0,
+            }),
             call_id: "edit-1".into(),
             name: "edit".into(),
             activity: ToolActivity {
@@ -181,11 +200,12 @@ mod tests {
             );
             assert!(rows.len() <= 9, "width {width}: {} rows", rows.len());
             assert!(
-                rows.iter()
-                    .all(|row| row.width() <= width && !row.to_string().contains('\u{1b}'))
+                rows.iter().all(
+                    |row| row.line.width() <= width && !row.line.to_string().contains('\u{1b}')
+                )
             );
             assert!(rows.iter().any(|row| {
-                row.spans.iter().any(|span| {
+                row.line.spans.iter().any(|span| {
                     span.style.fg
                         == crate::presentation_style::Theme::default()
                             .style(Role::Removed)
@@ -193,7 +213,7 @@ mod tests {
                 })
             }));
             assert!(rows.iter().any(|row| {
-                row.spans.iter().any(|span| {
+                row.line.spans.iter().any(|span| {
                     span.style.fg
                         == crate::presentation_style::Theme::default()
                             .style(Role::Added)
@@ -216,20 +236,21 @@ mod tests {
         );
         let expanded = expanded
             .iter()
-            .map(ToString::to_string)
+            .map(|row| row.line.to_string())
             .collect::<Vec<_>>()
             .join("\n");
         assert!(expanded.contains("--- old") && expanded.contains("+++ new"));
         assert!(expanded.contains("diff capture truncated") && !expanded.contains('\u{1b}'));
         let history = TranscriptProjection {
             items: vec![TranscriptItem::ActivityGroup(ActivityGroup {
+                source: ion_core::TranscriptSource { entry: 1, part: 0 },
                 turn: 1,
                 open: false,
                 activities: vec![activity.clone()],
             })],
         };
         let mut detail = crate::transcript_detail::DetailView::new(std::num::NonZeroUsize::new(1));
-        detail.prepare(&history, None, 80);
+        detail.prepare(history.items.iter(), &[], 0, 80);
         let inspection = detail.rows().join("\n");
         assert!(inspection.contains("Recorded edit diff · capture truncated"));
         assert!(inspection.contains("@@ -1 +1 @@") && inspection.contains("+x�[2J"));

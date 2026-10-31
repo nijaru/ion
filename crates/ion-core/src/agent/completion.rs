@@ -36,7 +36,10 @@ impl Agent {
             self.validate_submission(&session, &input, &stop)?;
             let (binding, catalog) = self.admission_binding(&session, &instructions)?;
             let TurnAdmission::New {
-                turn, interrupted, ..
+                turn,
+                entry,
+                interrupted,
+                ..
             } = session.admit_turn_input(
                 input,
                 self.model.clone(),
@@ -61,7 +64,7 @@ impl Agent {
                             TurnStart {
                                 turn,
                                 interrupted,
-                                origin: TurnOrigin::Automated { notices },
+                                origin: TurnOrigin::Automated { entry, notices },
                                 catalog,
                             },
                             instructions,

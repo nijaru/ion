@@ -9,7 +9,11 @@ mod preview;
 mod render;
 mod review;
 
-use super::editing::{self, Edit};
+use super::{
+    editing::{self, Edit},
+    paint::{Prepared, Visibility},
+};
+use crate::terminal_input::EditorVisualMap;
 
 pub(super) struct QuestionModal {
     request: QuestionRequestId,
@@ -22,12 +26,21 @@ pub(super) struct QuestionModal {
     collapsed: bool,
     status: String,
     too_small: bool,
-    selection_visible: bool,
+    visibility: Visibility<QuestionTarget>,
     preview_offset: usize,
     preview_page: usize,
     review_choice: usize,
     review_offset: usize,
     review_page: usize,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(in crate::terminal_client) struct QuestionTarget {
+    request: QuestionRequestId,
+    question: usize,
+    page: Page,
+    selected: usize,
+    editing: bool,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -50,6 +63,8 @@ struct QuestionDraft {
 struct TextEditor {
     text: String,
     cursor: usize,
+    width: Option<usize>,
+    preferred_column: Option<usize>,
 }
 
 pub(super) enum QuestionAction {
@@ -78,7 +93,7 @@ impl QuestionModal {
             collapsed: false,
             status: String::new(),
             too_small: false,
-            selection_visible: false,
+            visibility: Visibility::default(),
             preview_offset: 0,
             preview_page: 1,
             review_choice: 0,
@@ -100,6 +115,7 @@ impl QuestionModal {
     }
 
     pub(super) fn set_status(&mut self, status: String) {
+        self.invalidate_visibility();
         self.status = status;
     }
 
@@ -124,6 +140,7 @@ impl QuestionModal {
         let action = keys.action(context, key);
         if action == Some(KeyAction::QuestionCollapse) {
             self.collapsed = !self.collapsed;
+            self.draft_mut().text.preferred_column = None;
             self.invalidate_visibility();
             return QuestionAction::None;
         }
@@ -167,7 +184,7 @@ impl QuestionModal {
                 self.invalidate_selection();
                 QuestionAction::None
             }
-            Some(KeyAction::Confirm) if self.selection_visible => self.confirm(),
+            Some(KeyAction::Confirm) if self.can_confirm() => self.confirm(),
             Some(KeyAction::PageUp | KeyAction::PageDown) if self.has_preview() => {
                 self.preview_offset = if action == Some(KeyAction::PageUp) {
                     self.preview_offset.saturating_sub(self.preview_page)
@@ -178,7 +195,7 @@ impl QuestionModal {
                 QuestionAction::None
             }
             Some(KeyAction::Toggle) if self.multi_select() => {
-                if self.selection_visible && self.draft().selected < self.current_options().len() {
+                if self.can_confirm() && self.draft().selected < self.current_options().len() {
                     self.toggle();
                 }
                 QuestionAction::None
@@ -192,7 +209,7 @@ impl QuestionModal {
             return QuestionAction::None;
         }
         if !self.editing {
-            if !self.selection_visible {
+            if !self.can_confirm() {
                 return QuestionAction::None;
             }
             if self.draft().selected == self.current_options().len() {
@@ -252,16 +269,21 @@ impl QuestionModal {
     }
 
     fn open_editor(&mut self) {
+        self.draft_mut().text.preferred_column = None;
         self.invalidate_visibility();
         self.editing = true;
         self.status = "Type a custom answer".into();
     }
 
     fn editor_key(&mut self, key: KeyEvent, action: Option<KeyAction>) -> QuestionAction {
+        if !matches!(action, Some(KeyAction::SelectUp | KeyAction::SelectDown)) {
+            self.draft_mut().text.preferred_column = None;
+        }
         match action {
             Some(KeyAction::Cancel) => return QuestionAction::Cancel(self.request),
-            Some(KeyAction::Submit) if self.selection_visible => return self.confirm_custom(),
+            Some(KeyAction::Submit) if self.can_confirm() => return self.confirm_custom(),
             Some(KeyAction::External) => {
+                self.invalidate_visibility();
                 return QuestionAction::Edit {
                     request: self.request,
                     index: self.index,
@@ -271,16 +293,21 @@ impl QuestionModal {
             Some(KeyAction::NewLine) => self.insert("\n"),
             Some(KeyAction::Tab) => self.insert("\t"),
             Some(KeyAction::SelectUp | KeyAction::SelectDown) => {
+                self.invalidate_visibility();
                 let editor = &mut self.draft_mut().text;
-                if let Some(cursor) = editing::vertical_cursor(
-                    &editor.text,
-                    editor.cursor,
-                    action == Some(KeyAction::SelectDown),
-                ) {
-                    editor.cursor = cursor;
+                if let Some(width) = editor.width {
+                    let map = EditorVisualMap::new(&editor.text, width);
+                    if let Some(cursor) = map.movement(
+                        editor.cursor,
+                        action == Some(KeyAction::SelectDown),
+                        &mut editor.preferred_column,
+                    ) {
+                        editor.cursor = cursor;
+                    }
                 }
             }
             Some(action) => {
+                self.invalidate_visibility();
                 let draft = self.draft_mut();
                 let editor = &mut draft.text;
                 if let Some(edit) = editing::apply(&editor.text, editor.cursor, action) {
@@ -321,6 +348,7 @@ impl QuestionModal {
                 draft.text = TextEditor {
                     cursor: text.len(),
                     text,
+                    ..TextEditor::default()
                 };
                 draft.confirmed = None;
                 self.status = "Draft returned from editor; Enter confirms".into();
@@ -369,7 +397,9 @@ impl QuestionModal {
             self.status = format!("A custom answer is limited to {MAX_ANSWER_BYTES} UTF-8 bytes");
             return;
         }
+        self.invalidate_visibility();
         let draft = self.draft_mut();
+        draft.text.preferred_column = None;
         draft.text.text.insert_str(draft.text.cursor, &clean);
         draft.text.cursor += clean.len();
         if !clean.is_empty() {
@@ -379,10 +409,50 @@ impl QuestionModal {
     }
 
     pub(super) fn invalidate_visibility(&mut self) {
-        self.selection_visible = false;
+        self.visibility.invalidate();
+    }
+
+    fn target(&self) -> QuestionTarget {
+        QuestionTarget {
+            request: self.request,
+            question: self.index,
+            page: self.page,
+            selected: if self.page == Page::Review {
+                self.review_choice
+            } else {
+                self.draft().selected
+            },
+            editing: self.editing,
+        }
+    }
+
+    fn can_confirm(&self) -> bool {
+        !self.collapsed && self.visibility.painted() == Some(&self.target())
+    }
+
+    pub(super) fn observe_paint(
+        &mut self,
+        candidate: Option<Prepared<QuestionTarget>>,
+        editor_width: Option<usize>,
+    ) {
+        if let Some(candidate) = candidate {
+            self.visibility.observe(candidate);
+            if self.can_confirm()
+                && let Some(width) = editor_width
+            {
+                let editor = &mut self.draft_mut().text;
+                if editor.width != Some(width) {
+                    editor.preferred_column = None;
+                }
+                editor.width = Some(width);
+            }
+        } else {
+            self.visibility.invalidate();
+        }
     }
 
     fn invalidate_selection(&mut self) {
+        self.draft_mut().text.preferred_column = None;
         self.invalidate_visibility();
         self.preview_offset = 0;
         self.status.clear();
@@ -408,6 +478,23 @@ fn clean_text(text: &str) -> String {
         .collect()
 }
 
+#[cfg(test)]
+impl QuestionModal {
+    pub(super) fn painted_render(
+        &mut self,
+        width: u16,
+        height: u16,
+        keys: &KeyBindings,
+        theme: &crate::presentation_style::Theme,
+    ) -> render::QuestionFrame {
+        let mut frame = self.render(width, height, keys, theme);
+        self.observe_paint(frame.candidate.take(), frame.editor_width);
+        frame
+    }
+}
+
+#[cfg(test)]
+mod editor_tests;
 #[cfg(test)]
 mod external_edit_tests;
 #[cfg(test)]

@@ -104,6 +104,7 @@ mod tests {
             &mut report,
             AgentEvent::AssistantCommitted {
                 turn: 1,
+                entry: 2,
                 content: vec![
                     Content::Thinking("hidden".into()),
                     Content::Text("committed".into()),
@@ -141,6 +142,7 @@ mod tests {
             &mut report,
             AgentEvent::AssistantCommitted {
                 turn: 1,
+                entry: 3,
                 content: vec![Content::Text("authoritative text".into())],
                 tool_activities: vec![],
                 termination: ion_ai::ResponseTermination::Completed,

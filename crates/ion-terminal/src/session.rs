@@ -6,12 +6,15 @@ use std::sync::{
     atomic::{AtomicU64, Ordering},
 };
 
-use crossterm::{SynchronizedUpdate, terminal};
+#[cfg(test)]
+use crossterm::SynchronizedUpdate;
+use crossterm::terminal;
 use tokio::sync::Notify;
 
 use crate::input::{InputEvent, InputStream};
+use crate::publication::PreparedPaint;
 use crate::requirements::TerminalRequirements;
-use crate::{CapabilitySupport, ProgramStatus, Screen};
+use crate::{CapabilitySupport, PaintReceipt, ProgramStatus, Screen};
 
 #[path = "modes.rs"]
 mod modes;
@@ -264,7 +267,9 @@ impl TerminalSession {
         screen.invalidate();
         loop {
             if self.prepare_inline(screen).await?.is_some()
-                && self.paint_inline(screen, |screen, out| screen.release_inline(out))?
+                && self
+                    .paint_inline(screen, |screen, out| screen.release_inline(out))?
+                    .is_some()
             {
                 return Ok(());
             }
@@ -348,27 +353,35 @@ impl TerminalSession {
         &mut self,
         screen: &mut Screen,
         paint: impl FnOnce(&mut Screen, &mut Vec<u8>) -> io::Result<()>,
-    ) -> io::Result<bool> {
-        let expected = screen.primary_size();
-        let mut staged = screen.staged();
-        let mut bytes = Vec::new();
+    ) -> io::Result<Option<PaintReceipt>> {
+        self.paint_screen(screen, false, paint)
+    }
+
+    /// Fullscreen shares the staged publication owner and geometry fence with
+    /// inline; a rejected layout emits no bytes and installs no surface state.
+    pub fn paint_fullscreen(
+        &mut self,
+        screen: &mut Screen,
+        paint: impl FnOnce(&mut Screen, &mut Vec<u8>) -> io::Result<()>,
+    ) -> io::Result<Option<PaintReceipt>> {
+        self.paint_screen(screen, true, paint)
+    }
+
+    fn paint_screen(
+        &mut self,
+        screen: &mut Screen,
+        fullscreen: bool,
+        paint: impl FnOnce(&mut Screen, &mut Vec<u8>) -> io::Result<()>,
+    ) -> io::Result<Option<PaintReceipt>> {
+        if self.is_alt_screen()? != fullscreen {
+            return Err(io::Error::other(
+                "paint surface does not own the active terminal",
+            ));
+        }
         let synchronized = self.lock().requirements.synchronized_output;
-        if synchronized {
-            bytes.sync_update(|out| paint(&mut staged, out))??;
-        } else {
-            paint(&mut staged, &mut bytes)?;
-        }
-        if self.size()? != expected {
-            screen.note_resize();
-            return Ok(false);
-        }
-        {
-            let mut output = self.output()?;
-            output.write_all(&bytes)?;
-            output.flush()?;
-        }
-        *screen = staged;
-        Ok(true)
+        let prepared = PreparedPaint::new(screen, fullscreen, synchronized, paint)?;
+        let geometry = self.size()?;
+        prepared.publish(screen, geometry, &mut self.output()?)
     }
 
     pub fn suspend(&mut self) -> io::Result<()> {

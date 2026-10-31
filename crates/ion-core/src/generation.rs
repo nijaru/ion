@@ -20,20 +20,42 @@ pub(crate) struct GeneratedResponse {
     pub route: ModelRoute,
 }
 
-pub(crate) fn context_length_exceeded(result: Result<&GeneratedResponse, &AgentError>) -> bool {
-    matches!(
-        result,
-        Err(AgentError::Provider(ProviderError {
-            kind: ProviderErrorKind::ContextLength,
-            ..
-        })) | Ok(GeneratedResponse {
-            response: ModelResponse {
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum OutputCustody {
+    Unobserved,
+    Observed,
+}
+
+/// Evidence from the service boundary, independent of observer delivery. The
+/// final attempt retains its actual route and clock even when generation fails.
+#[derive(Debug)]
+pub(crate) struct GenerationAttempt {
+    pub outcome: Result<ModelResponse, AgentError>,
+    pub route: ModelRoute,
+    pub output: OutputCustody,
+    pub timing: std::ops::Range<tokio::time::Instant>,
+}
+
+impl GenerationAttempt {
+    pub fn context_length_exceeded(&self) -> bool {
+        matches!(
+            &self.outcome,
+            Err(AgentError::Provider(ProviderError {
+                kind: ProviderErrorKind::ContextLength,
+                ..
+            })) | Ok(ModelResponse {
                 termination: ResponseTermination::Incomplete(IncompleteReason::ContextLength),
                 ..
-            },
-            ..
+            })
+        )
+    }
+
+    pub fn into_result(self) -> Result<GeneratedResponse, AgentError> {
+        self.outcome.map(|response| GeneratedResponse {
+            response,
+            route: self.route,
         })
-    )
+    }
 }
 
 pub(crate) async fn generate_with_retry<F>(
@@ -41,11 +63,19 @@ pub(crate) async fn generate_with_retry<F>(
     request: &ModelRequest,
     stop: &CancellationToken,
     observe: &mut F,
-) -> Result<GeneratedResponse, AgentError>
+) -> GenerationAttempt
 where
     F: FnMut(AgentEvent) + Send,
 {
-    model.validate_controls(&request.route.effective, &request.controls)?;
+    if let Err(error) = model.validate_controls(&request.route.effective, &request.controls) {
+        let now = tokio::time::Instant::now();
+        return GenerationAttempt {
+            outcome: Err(error.into()),
+            route: request.route.clone(),
+            output: OutputCustody::Unobserved,
+            timing: now..now,
+        };
+    }
     for attempt in 0..=2 {
         // The caller retains the frozen base; only the dispatched attempt
         // needs an owned copy. Borrowing avoids a second full-history clone.
@@ -53,18 +83,19 @@ where
         if attempt > 0 {
             attempt_request.route.reason = ModelRouteReason::Retry;
         }
-        let route = attempt_request.route.clone();
-        let (result, output_observed) = generate_once(model, attempt_request, stop, observe).await;
-        match result {
+        let mut evidence = generate_once(model, attempt_request, stop, observe).await;
+        match &evidence.outcome {
             Err(AgentError::Provider(error))
-                if !output_observed && attempt < 2 && retryable_provider_error(&error) =>
+                if evidence.output == OutputCustody::Unobserved
+                    && attempt < 2
+                    && retryable_provider_error(error) =>
             {
                 // A server's pacing takes precedence over local backoff.
                 // Leave long waits to the caller instead of holding a Turn
                 // open for an unbounded provider-requested interval.
                 let delay_ms = error.retry_after_ms.unwrap_or(500 * (1 << attempt));
                 if delay_ms > 60_000 {
-                    return Err(AgentError::Provider(error));
+                    return evidence;
                 }
                 let delay = Duration::from_millis(delay_ms);
                 observe(AgentEvent::ProviderRetry {
@@ -74,17 +105,43 @@ where
                 });
                 tokio::select! {
                     () = tokio::time::sleep(delay) => {},
-                    () = stop.cancelled() => return Err(AgentError::Cancelled),
+                    () = stop.cancelled() => {
+                        evidence.outcome = Err(AgentError::Cancelled);
+                        return evidence;
+                    },
                 }
             }
-            Ok(response) => return Ok(GeneratedResponse { response, route }),
-            Err(error) => return Err(error),
+            _ => return evidence,
         }
     }
     unreachable!("bounded retry loop returns on its final attempt")
 }
 
 async fn generate_once<F>(
+    model: &Arc<dyn ModelService>,
+    request: ModelRequest,
+    stop: &CancellationToken,
+    observe: &mut F,
+) -> GenerationAttempt
+where
+    F: FnMut(AgentEvent) + Send,
+{
+    let route = request.route.clone();
+    let started = tokio::time::Instant::now();
+    let (outcome, output_observed) = stream_response(model, request, stop, observe).await;
+    GenerationAttempt {
+        outcome,
+        route,
+        output: if output_observed {
+            OutputCustody::Observed
+        } else {
+            OutputCustody::Unobserved
+        },
+        timing: started..tokio::time::Instant::now(),
+    }
+}
+
+async fn stream_response<F>(
     model: &Arc<dyn ModelService>,
     request: ModelRequest,
     stop: &CancellationToken,

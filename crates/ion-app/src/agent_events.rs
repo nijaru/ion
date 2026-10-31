@@ -8,6 +8,7 @@ pub(super) fn event_record(event: &AgentEvent) -> Value {
             turn,
             notices,
             new_turn,
+            ..
         } => {
             json!({"type":"completion_committed","turn":turn,"notices":notices,"new_turn":new_turn,"automated":true})
         }
@@ -27,10 +28,11 @@ pub(super) fn event_record(event: &AgentEvent) -> Value {
             content,
             tool_activities,
             termination,
+            ..
         } => {
             json!({"type":"assistant_committed","turn":turn,"content":content,"tool_activities":tool_activities,"termination":termination})
         }
-        AgentEvent::SteeringCommitted { turn, input } => {
+        AgentEvent::SteeringCommitted { turn, input, .. } => {
             json!({"type":"steering_committed","turn":turn,"input":input})
         }
         AgentEvent::ProviderRetry {
@@ -215,6 +217,7 @@ mod tests {
     #[test]
     fn acceptance_receipt_does_not_disclose_normalized_input() {
         let event = AgentEvent::TurnAccepted {
+            entry: 11,
             turn: 7,
             input: ion_ai::Message::user_input("PRIVATE_NORMALIZED_FILE_CONTENT".into(), []),
         };

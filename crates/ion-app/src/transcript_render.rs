@@ -1,6 +1,6 @@
 //! Pure compact rendering for the typed coding transcript.
 use crate::{
-    display_text::fit_line,
+    display_text::{Component, Field, MappedLine, Origin, Wrapping, fit_line, wrap_mapped},
     presentation_style::{Role, Theme},
     tool_output::{OutputDetail, RenderOptions},
 };
@@ -63,36 +63,227 @@ impl ThinkingVisibility {
 
 const MAX_COALESCED_SUBJECTS: usize = 3;
 
+/// Disposable source-to-row map. Activity ranges refer to the frozen group
+/// slice being laid out; they are not action identities or a client journal.
+pub(super) struct ActivityRow {
+    pub source: std::ops::Range<usize>,
+    pub row: usize,
+    pub priority: u8,
+}
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum ContentRoot {
+    Block,
+    Part(usize),
+    Activity(ion_core::TranscriptActivityIdentity),
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum TextPoint {
+    Raw(usize),
+    Component { component: Component, byte: usize },
+    Node(usize),
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) struct ReadingPoint {
+    pub root: ContentRoot,
+    pub point: TextPoint,
+}
+
+#[derive(Default)]
+pub(super) struct BlockLayout {
+    pub rows: Vec<Line<'static>>,
+    pub provenance: Vec<Vec<(ContentRoot, Origin)>>,
+    pub activities: Vec<ActivityRow>,
+}
+
+impl BlockLayout {
+    pub fn literal(text: &str, width: usize) -> Self {
+        let mut block = Self::default();
+        block.extend(
+            ContentRoot::Block,
+            wrap_mapped(
+                "",
+                "",
+                MappedLine::raw(Line::from(Span::raw(text.to_owned())), 0..text.len()),
+                width,
+                Wrapping::Literal,
+            ),
+        );
+        block
+    }
+
+    fn extend(&mut self, root: ContentRoot, rows: Vec<MappedLine>) {
+        for row in rows {
+            assert!(!row.map.is_empty(), "rendered rows have source provenance");
+            let mut origins: Vec<(ContentRoot, Origin)> = Vec::new();
+            for mapping in row.map {
+                match (origins.last_mut(), mapping.origin) {
+                    (Some((_, Origin::Raw(previous))), Origin::Raw(next))
+                        if previous.end == next.start =>
+                    {
+                        previous.end = next.end
+                    }
+                    (
+                        Some((_, Origin::Component { component, bytes })),
+                        Origin::Component {
+                            component: next_component,
+                            bytes: next,
+                        },
+                    ) if *component == next_component && bytes.end == next.start => {
+                        bytes.end = next.end
+                    }
+                    (Some((_, previous)), next) if *previous == next => {}
+                    (_, origin) => origins.push((root, origin)),
+                }
+            }
+            self.provenance.push(origins);
+            self.rows.push(row.line);
+        }
+    }
+
+    pub fn reading_point(&self, row: usize) -> ReadingPoint {
+        let provenance = &self.provenance[row];
+        let (root, origin) = provenance
+            .iter()
+            .find(|(_, origin)| !matches!(origin, Origin::Node(_)))
+            .or_else(|| provenance.first())
+            .expect("every measured row has provenance");
+        ReadingPoint {
+            root: *root,
+            point: match origin {
+                Origin::Raw(range) => TextPoint::Raw(range.start),
+                Origin::Component { component, bytes } => TextPoint::Component {
+                    component: *component,
+                    byte: bytes.start,
+                },
+                Origin::Node(node) => TextPoint::Node(*node),
+            },
+        }
+    }
+
+    pub fn locate(&self, point: ReadingPoint) -> Option<usize> {
+        // Projection can hide a part or fold multiple activities. Prefer the
+        // actual byte's row; otherwise use the closest visible syntax boundary
+        // in that root. The retained point is not rewritten by this projection.
+        self.provenance
+            .iter()
+            .enumerate()
+            .flat_map(|(row, origins)| {
+                origins.iter().filter_map(move |(root, origin)| {
+                    if *root != point.root {
+                        return None;
+                    }
+                    let (byte, range) = match (point.point, origin) {
+                        (TextPoint::Raw(byte), Origin::Raw(range)) => (byte, range.clone()),
+                        (
+                            TextPoint::Component { component, byte },
+                            Origin::Component {
+                                component: actual,
+                                bytes,
+                            },
+                        ) if component == *actual => (byte, bytes.clone()),
+                        (TextPoint::Node(byte), Origin::Node(node)) => (byte, *node..*node),
+                        _ => return None,
+                    };
+                    let distance =
+                        if range.contains(&byte) || (range.is_empty() && range.start == byte) {
+                            0
+                        } else {
+                            byte.abs_diff(range.start)
+                                .min(byte.abs_diff(range.end.saturating_sub(1)))
+                                + 1
+                        };
+                    Some((distance, row))
+                })
+            })
+            .min()
+            .map(|(_, row)| row)
+            // A disclosure may hide an entire field while its occurrence stays
+            // visible. Project to that root's boundary, never another field's
+            // byte offset. ConversationView retains the original hidden point.
+            .or_else(|| {
+                self.provenance
+                    .iter()
+                    .position(|origins| origins.iter().any(|(root, _)| *root == point.root))
+            })
+    }
+
+    fn extend_activities(&mut self, activities: &[TranscriptActivity], rows: Vec<MappedLine>) {
+        let first = activities
+            .first()
+            .expect("display activity has source occurrences");
+        let start = self.rows.len();
+        self.extend(ContentRoot::Activity(first.identity), rows);
+        if activities.len() == 1 {
+            return;
+        }
+        for origins in &mut self.provenance[start..] {
+            let source = origins.clone();
+            for activity in &activities[1..] {
+                origins.extend(
+                    source.iter().map(|(_, origin)| {
+                        (ContentRoot::Activity(activity.identity), origin.clone())
+                    }),
+                );
+            }
+        }
+    }
+}
+pub(super) fn layout(
+    item: &TranscriptItem,
+    width: usize,
+    detail: &RenderOptions<'_>,
+) -> BlockLayout {
+    let mut block = BlockLayout::default();
+    if hidden_thinking(item, detail.thinking) {
+        return block;
+    }
+    match item {
+        TranscriptItem::Readiness { turn, notices, .. } => {
+            block.extend(
+                ContentRoot::Block,
+                render_readiness(*turn, notices, width, detail.theme),
+            );
+        }
+        TranscriptItem::User(message) => {
+            render_message_layout(&mut block, message, true, width, detail)
+        }
+        TranscriptItem::Assistant(message) => {
+            render_message_layout(&mut block, message, false, width, detail)
+        }
+        TranscriptItem::ActivityGroup(group) => render_group(&mut block, group, width, detail),
+        TranscriptItem::UserShell(shell) => {
+            block.extend(ContentRoot::Block, render_shell(shell, width, detail))
+        }
+    }
+    assert_eq!(
+        block.rows.len(),
+        block.provenance.len(),
+        "layout and provenance are one measurement"
+    );
+    while block.rows.last().is_some_and(|row| row.width() == 0) {
+        block.rows.pop();
+        block.provenance.pop();
+    }
+    block
+}
+#[cfg(test)]
 pub fn rows(
     items: &[TranscriptItem],
     width: usize,
     detail: &RenderOptions<'_>,
 ) -> Vec<Line<'static>> {
-    let width = width.max(1);
     let mut rows = Vec::new();
     for item in items {
-        if hidden_thinking(item, detail.thinking) {
+        let block = layout(item, width.max(1), detail);
+        if block.rows.is_empty() {
             continue;
         }
-        if !rows.is_empty() && rows.last().is_some_and(|row: &Line<'_>| row.width() > 0) {
+        if rows.last().is_some_and(|row: &Line<'_>| row.width() > 0) {
             rows.push(Line::default());
         }
-        match item {
-            TranscriptItem::Readiness { turn, notices } => {
-                render_readiness(&mut rows, *turn, notices, width, detail.theme);
-            }
-            TranscriptItem::User(message) => {
-                render_message(&mut rows, message, true, width, detail)
-            }
-            TranscriptItem::Assistant(message) => {
-                render_message(&mut rows, message, false, width, detail)
-            }
-            TranscriptItem::ActivityGroup(group) => render_group(&mut rows, group, width, detail),
-            TranscriptItem::UserShell(shell) => render_shell(&mut rows, shell, width, detail),
-        }
-    }
-    while rows.last().is_some_and(|row| row.width() == 0) {
-        rows.pop();
+        rows.extend(block.rows);
     }
     rows
 }
@@ -113,17 +304,23 @@ pub(super) fn readiness_text(turn: u64, notices: &[ion_core::CompletionNotice]) 
     text
 }
 fn render_readiness(
-    rows: &mut Vec<Line<'static>>,
     turn: u64,
     notices: &[ion_core::CompletionNotice],
     width: usize,
     theme: &Theme,
-) {
-    let start = rows.len();
-    push_wrapped(rows, &readiness_text(turn, notices), width);
-    for row in &mut rows[start..] {
-        row.style = theme.style(Role::Secondary);
-    }
+) -> Vec<MappedLine> {
+    wrap_mapped(
+        "",
+        "",
+        MappedLine::component(
+            Line::from(Span::raw(readiness_text(turn, notices)))
+                .style(theme.style(Role::Secondary)),
+            Component::Readiness,
+            0,
+        ),
+        width,
+        Wrapping::Literal,
+    )
 }
 
 fn hidden_thinking(item: &TranscriptItem, thinking: ThinkingVisibility) -> bool {
@@ -131,233 +328,194 @@ fn hidden_thinking(item: &TranscriptItem, thinking: ThinkingVisibility) -> bool 
         && matches!(item, TranscriptItem::Assistant(message) if message.parts.iter().all(|part| matches!(part, TranscriptPart::Thinking(_))))
 }
 
-/// Select a semantic focus before rendering its children. Never take a suffix
-/// of the flattened conversation: that can detach branches from their root.
-pub(super) fn live_rows(
+/// Attention is a semantic affordance over the same blocks, not a second
+/// operation-shaped transcript. Only a clipped source needs it.
+pub(super) struct Attention {
+    pub source: ion_core::TranscriptSource,
+    pub activity: usize,
+    pub nested: bool,
+    pub row: Line<'static>,
+}
+pub(super) fn context_summary(
+    items: &[TranscriptItem],
+    width: usize,
+    theme: &Theme,
+) -> Vec<Line<'static>> {
+    let activities = items
+        .iter()
+        .filter_map(|item| match item {
+            TranscriptItem::ActivityGroup(group) => Some(group.activities.as_slice()),
+            _ => None,
+        })
+        .flatten();
+    if activities.clone().next().is_none() {
+        return vec![];
+    }
+    let mut rows = Vec::new();
+    crate::display_text::push_styled(
+        &mut rows,
+        "",
+        "",
+        Line::styled(group_header(activities), theme.style(Role::Heading)),
+        width,
+    );
+    rows
+}
+pub(super) fn attention(
+    items: &[TranscriptItem],
+    width: usize,
+    detail: &RenderOptions<'_>,
+) -> Option<Attention> {
+    items.iter().rev().find_map(|item| {
+        let TranscriptItem::ActivityGroup(group) = item else {
+            return None;
+        };
+        group
+            .activities
+            .iter()
+            .enumerate()
+            .rev()
+            .find_map(|(index, parent)| {
+                let activity = nested_exception(parent)?;
+                let subject = activity
+                    .activity
+                    .subject
+                    .as_deref()
+                    .map(clean_inline)
+                    .unwrap_or_else(|| activity.name.clone());
+                let text = model_result_notice(activity).map_or_else(
+                    || format!("! {} · {subject}", action_label(activity)),
+                    |notice| format!("! {notice} · {subject}"),
+                );
+                Some(Attention {
+                    source: group.source,
+                    activity: index,
+                    nested: !std::ptr::eq(activity, parent),
+                    row: Line::styled(
+                        fit_line(&text, width),
+                        activity_style(
+                            activity.state,
+                            model_result_notice(activity).is_some(),
+                            false,
+                            detail.theme,
+                        ),
+                    ),
+                })
+            })
+    })
+}
+
+#[cfg(test)]
+fn window_rows(
     items: &[TranscriptItem],
     width: usize,
     budget: usize,
     detail: &RenderOptions<'_>,
 ) -> Vec<Line<'static>> {
-    if budget == 0 {
-        return Vec::new();
-    }
-    // Expanded capture is for publication/fullscreen. Inline progress stays a
-    // compact semantic preview instead of allocating a whole capture each tick.
-    let rendered = rows(items, width, detail);
-    if rendered.len() <= budget {
-        return rendered;
-    }
-    let activities = || {
-        items.iter().enumerate().flat_map(|(item_index, item)| {
-            let activities = match item {
-                TranscriptItem::ActivityGroup(group) => group.activities.as_slice(),
-                _ => &[],
-            };
-            activities
-                .iter()
-                .enumerate()
-                .map(move |(activity_index, activity)| (item_index, activity_index, activity))
-        })
-    };
-    let mut selected = Vec::new();
-    let mut pinned = None;
-    if activities().next().is_some() {
-        push_wrapped(
-            &mut selected,
-            &format!(
-                "{} · {}",
-                group_header(activities().map(|(_, _, activity)| activity)),
-                detail.details_key
-            ),
-            width.max(1),
-        );
-        for row in &mut selected {
-            row.style = detail.theme.style(Role::Heading);
-        }
-        selected.truncate(budget.saturating_sub(2).clamp(1, 3));
-        if budget > selected.len()
-            && let Some((item_index, activity_index, exception)) =
-                activities().rfind(|(_, _, activity)| nested_exception(activity).is_some())
-        {
-            pinned = Some((item_index, activity_index));
-            let exception = nested_exception(exception).expect("exception selected above");
-            // Preserve severity even when a long child subject must be fitted.
-            let subject = exception
-                .activity
-                .subject
-                .as_deref()
-                .map(clean_inline)
-                .unwrap_or_else(|| exception.name.clone());
-            let diagnostic = match model_result_notice(exception) {
-                Some(notice) => format!("! {notice} · {subject}"),
-                None => format!("! {} · {subject}", action_label(exception)),
-            };
-            selected.push(Line::styled(
-                fit_line(&diagnostic, width),
-                activity_style(
-                    exception.state,
-                    model_result_notice(exception).is_some(),
-                    false,
-                    detail.theme,
-                ),
-            ));
-        }
-    } else {
-        selected.push(Line::styled(
-            fit_line(
-                &format!("… earlier conversation · {}", detail.details_key),
-                width,
-            ),
-            detail.theme.style(Role::Secondary),
-        ));
-    }
-    let remaining = budget.saturating_sub(selected.len());
-    let focus = items.iter().enumerate().rfind(|(_, item)| {
-        matches!(item, TranscriptItem::ActivityGroup(group) if group.activities.iter().any(|a| a.state == ActivityState::Running))
-    }).or_else(|| items.iter().enumerate().rfind(|(_, item)| !hidden_thinking(item, detail.thinking)));
-    if remaining > 0
-        && let Some((item_index, focus)) = focus
-    {
-        match focus {
-            TranscriptItem::Readiness { turn, notices } => {
-                let mut preview = Vec::new();
-                render_readiness(&mut preview, *turn, notices, width, detail.theme);
-                selected.extend(preview.into_iter().take(remaining));
-            }
-            TranscriptItem::ActivityGroup(group) => {
-                let pinned_index = pinned
-                    .filter(|(index, _)| *index == item_index)
-                    .map(|(_, index)| index);
-                render_current_group(&mut selected, group, width, remaining, pinned_index, detail)
-            }
-            TranscriptItem::User(message) | TranscriptItem::Assistant(message) => {
-                let user = matches!(focus, TranscriptItem::User(_));
-                let mut preview = Vec::new();
-                render_message(&mut preview, message, user, width, detail);
-                let omitted = preview.len().saturating_sub(remaining);
-                if omitted > 0 {
-                    preview.drain(..omitted);
-                    if let Some(first) = preview.first_mut() {
-                        let prefix = if user && message.steering {
-                            "↳ … "
-                        } else if message
-                            .parts
-                            .iter()
-                            .all(|part| matches!(part, TranscriptPart::Thinking(_)))
-                        {
-                            "Thinking · … "
-                        } else {
-                            "… "
-                        };
-                        first.spans.insert(0, Span::raw(prefix));
-                        let clipped = first.width() > width;
-                        if width <= 1 {
-                            first.spans = vec![Span::raw("…")];
-                        } else {
-                            let mut wrapped = Vec::new();
-                            crate::display_text::push_styled(
-                                &mut wrapped,
-                                "",
-                                "",
-                                std::mem::take(first),
-                                if clipped { width - 1 } else { width },
-                            );
-                            // Only this leading row is clipped; later retained rows stay intact.
-                            *first = wrapped.into_iter().next().expect("wrapped omission row");
-                            if clipped {
-                                first.spans.push(Span::raw("…"));
-                            }
-                        }
-                    }
-                }
-                selected.extend(preview);
-            }
-            TranscriptItem::UserShell(shell) => {
-                let mut preview = Vec::new();
-                render_shell(&mut preview, shell, width, detail);
-                preview.truncate(remaining);
-                selected.extend(preview);
-            }
-        }
-    }
-    selected
+    crate::terminal_client::measured_window_fixture(items, width, budget, detail)
 }
 
-/// The live tree keeps a root and selects whole actions in execution priority,
-/// then restores their source order. A queued tail cannot evict running work.
-fn render_current_group(
-    rows: &mut Vec<Line<'static>>,
-    group: &ActivityGroup,
-    width: usize,
-    budget: usize,
-    pinned_index: Option<usize>,
-    detail: &RenderOptions<'_>,
-) {
-    let display = display_activities(&group.activities, OutputDetail::Compact);
-    let capacity = budget.saturating_sub(1);
-    let mut indices = (0..display.len())
-        .filter(|&index| Some(display[index].source.start) != pinned_index)
-        .collect::<Vec<_>>();
-    if indices.is_empty() {
-        return;
-    }
-    rows.push(Line::styled(
-        fit_line("• Current activity", width),
-        detail.theme.style(Role::Heading),
-    ));
-    let reserve_omission = usize::from(indices.len() > capacity && capacity > 1);
-    indices.sort_by_key(|&index| (display[index].priority(), std::cmp::Reverse(index)));
-    indices.truncate(capacity.saturating_sub(reserve_omission));
-    indices.sort_unstable();
-    let omitted = display
-        .iter()
-        .enumerate()
-        .filter(|(index, _)| {
-            !indices.contains(index) && Some(display[*index].source.start) != pinned_index
-        })
-        .map(|(_, activity)| activity.source.len())
-        .sum::<usize>();
-    for (position, &index) in indices.iter().enumerate() {
-        let last = position + 1 == indices.len() && reserve_omission == 0;
-        rows.push(Line::styled(
-            fit_line(
-                &format!(
-                    "{}{}",
-                    if last { "└ " } else { "├ " },
-                    display[index].summary
-                ),
-                width,
-            ),
-            display[index].style(detail.theme),
-        ));
-    }
-    if reserve_omission > 0 {
-        rows.push(Line::styled(
-            fit_line(&format!("└ {omitted} more · {}", detail.details_key), width),
-            detail.theme.style(Role::Secondary),
-        ));
-    }
-}
-
-pub(super) fn render_message(
+#[cfg(test)]
+fn render_message(
     rows: &mut Vec<Line<'static>>,
     message: &TranscriptMessage,
     user: bool,
     width: usize,
     detail: &RenderOptions<'_>,
 ) {
+    let mut block = BlockLayout::default();
+    render_message_layout(&mut block, message, user, width, detail);
+    rows.extend(block.rows);
+}
+
+fn render_message_layout(
+    block: &mut BlockLayout,
+    message: &TranscriptMessage,
+    user: bool,
+    width: usize,
+    detail: &RenderOptions<'_>,
+) {
+    let rail = user && width > 2;
+    let content_width = if rail { width - 2 } else { width };
+    let start = block.rows.len();
+    for (index, part) in message.parts.iter().enumerate() {
+        let root = ContentRoot::Part(index);
+        let prefix = if user && message.steering {
+            if index == 0 { "↳ " } else { "  " }
+        } else {
+            ""
+        };
+        match part {
+            TranscriptPart::Thinking(text)
+                if user || detail.thinking == ThinkingVisibility::Visible =>
+            {
+                block.extend(
+                    root,
+                    vec![MappedLine::generated(
+                        Line::styled(
+                            fit_line("Thinking", content_width),
+                            detail.theme.style(Role::Secondary),
+                        ),
+                        0,
+                    )],
+                );
+                block.extend(
+                    root,
+                    wrap_mapped(
+                        "  ",
+                        "  ",
+                        MappedLine::raw(
+                            Line::from(Span::styled(
+                                text.clone(),
+                                if user {
+                                    Style::default()
+                                } else {
+                                    detail.theme.style(Role::Secondary)
+                                },
+                            )),
+                            0..text.len(),
+                        ),
+                        content_width,
+                        if user {
+                            Wrapping::Literal
+                        } else {
+                            Wrapping::Words
+                        },
+                    ),
+                );
+            }
+            TranscriptPart::Thinking(_) => {}
+            TranscriptPart::Text(text) if user => block.extend(
+                root,
+                wrap_mapped(
+                    prefix,
+                    if prefix.is_empty() { "" } else { "  " },
+                    MappedLine::raw(Line::from(Span::raw(text.clone())), 0..text.len()),
+                    content_width,
+                    Wrapping::Words,
+                ),
+            ),
+            TranscriptPart::Text(text) => block.extend(
+                root,
+                crate::markdown::render_mapped(text, content_width, detail.theme),
+            ),
+            TranscriptPart::Image { mime_type } => block.extend(
+                root,
+                wrap_mapped(
+                    prefix,
+                    if prefix.is_empty() { "" } else { "  " },
+                    MappedLine::generated(
+                        Line::from(Span::raw(format!("[image: {mime_type}]"))),
+                        0,
+                    ),
+                    content_width,
+                    Wrapping::Literal,
+                ),
+            ),
+        }
+    }
     if user {
-        let start = rows.len();
-        let rail = width > 2;
-        // The rail replaces the prompt chevron, but not steering's provenance arrow.
-        render_source_message(
-            rows,
-            message,
-            message.steering,
-            if rail { width - 2 } else { width },
-        );
-        for row in &mut rows[start..] {
+        for row in &mut block.rows[start..] {
             row.style = detail
                 .theme
                 .style(Role::Text)
@@ -367,35 +525,7 @@ pub(super) fn render_message(
                     .insert(0, Span::styled("┃ ", detail.theme.style(Role::UserInput)));
             }
         }
-        return;
     }
-    for part in &message.parts {
-        match part {
-            TranscriptPart::Thinking(text) => {
-                if detail.thinking == ThinkingVisibility::Visible {
-                    render_thinking(rows, text, width, detail.theme);
-                }
-            }
-            TranscriptPart::Text(text) => crate::markdown::render(rows, text, width, detail.theme),
-            TranscriptPart::Image { mime_type } => {
-                push_wrapped(rows, &format!("[image: {mime_type}]"), width)
-            }
-        }
-    }
-}
-
-fn render_thinking(rows: &mut Vec<Line<'static>>, text: &str, width: usize, theme: &Theme) {
-    rows.push(Line::styled(
-        fit_line("Thinking", width),
-        theme.style(Role::Secondary),
-    ));
-    crate::display_text::push_styled(
-        rows,
-        "  ",
-        "  ",
-        Line::from(Span::styled(text, theme.style(Role::Secondary))),
-        width,
-    );
 }
 
 /// Inspection keeps the original human-visible source, not the formatted view.
@@ -443,33 +573,52 @@ pub(super) fn render_source_message(
 }
 
 fn render_shell(
-    rows: &mut Vec<Line<'static>>,
     shell: &UserShellActivity,
     width: usize,
     detail: &RenderOptions<'_>,
-) {
+) -> Vec<MappedLine> {
     let prefix = if shell.exclude_from_context {
         "› !!"
     } else {
         "› !"
     };
-    let start = rows.len();
-    push_prefixed(rows, prefix, "  ", &shell.command, width);
-    for row in &mut rows[start..] {
-        row.style = detail.theme.style(Role::UserInput);
-    }
-    let ion_core::UserShellOutcome::Observed { output, is_error } = &shell.outcome else {
+    let mut rows = wrap_mapped(
+        prefix,
+        "  ",
+        MappedLine::component(
+            Line::from(Span::raw(shell.command.clone())).style(detail.theme.style(Role::UserInput)),
+            Component::Field(Field::Command),
+            0,
+        ),
+        width,
+        Wrapping::Literal,
+    );
+    let Some(ion_core::UserShellOutcome::Observed { output, is_error }) = &shell.outcome else {
         if shell.exclude_from_context {
-            push_wrapped(rows, "  not shared with model", width);
+            rows.extend(wrap_mapped(
+                "",
+                "",
+                MappedLine::generated(Line::raw("  not shared with model"), 0),
+                width,
+                Wrapping::Literal,
+            ));
         }
-        let start = rows.len();
-        push_wrapped(rows, ion_core::UserShellOutcome::unknown_notice(), width);
-        for row in &mut rows[start..] {
-            row.style = detail.theme.style(Role::Warning);
-        }
-        return;
+        rows.extend(wrap_mapped(
+            "",
+            "",
+            MappedLine::generated(
+                Line::styled(
+                    ion_core::UserShellOutcome::unknown_notice(),
+                    detail.theme.style(Role::Warning),
+                ),
+                0,
+            ),
+            width,
+            Wrapping::Literal,
+        ));
+        return rows;
     };
-    crate::tool_output::render_command(rows, output, "  ", width, detail, 4);
+    crate::tool_output::render_command(&mut rows, output, "  ", width, detail, 4, !is_error);
     let mut state = if let Some(signal) = output["signal"].as_i64() {
         format!("signal {signal}")
     } else if let Some(code) = output["exit_code"].as_i64() {
@@ -490,16 +639,19 @@ fn render_shell(
     if shell.exclude_from_context {
         state.push_str(" · not shared with model");
     }
-    let start = rows.len();
-    push_wrapped(rows, &format!("  {state}"), width);
     let style = if *is_error {
         detail.theme.style(Role::Error)
     } else {
         detail.theme.style(Role::Secondary)
     };
-    for row in &mut rows[start..] {
-        row.style = style;
-    }
+    rows.extend(wrap_mapped(
+        "",
+        "",
+        MappedLine::generated(Line::styled(format!("  {state}"), style), 0),
+        width,
+        Wrapping::Literal,
+    ));
+    rows
 }
 
 #[derive(Debug)]
@@ -513,19 +665,9 @@ struct DisplayActivity {
 }
 
 impl DisplayActivity {
-    fn style(&self, theme: &Theme) -> Style {
-        activity_style(
-            self.state,
-            self.model_notice.is_some(),
-            self.observation,
-            theme,
-        )
-    }
-
     fn priority(&self) -> u8 {
         match self.state {
             ActivityState::Running => 0,
-            _ if self.model_notice.is_some() => 1,
             ActivityState::Failed
             | ActivityState::Cancelled
             | ActivityState::TimedOut
@@ -536,10 +678,18 @@ impl DisplayActivity {
             ActivityState::Completed => 4,
         }
     }
+    fn style(&self, theme: &Theme) -> Style {
+        activity_style(
+            self.state,
+            self.model_notice.is_some(),
+            self.observation,
+            theme,
+        )
+    }
 }
 
 fn render_group(
-    rows: &mut Vec<Line<'static>>,
+    block: &mut BlockLayout,
     group: &ActivityGroup,
     width: usize,
     detail: &RenderOptions<'_>,
@@ -552,29 +702,48 @@ fn render_group(
 
     if group.activities.len() == 1 {
         let item = &display[0];
-        push_activity(rows, "• ", "  ", item, width, theme);
+        block.activities.push(ActivityRow {
+            source: item.source.clone(),
+            row: block.rows.len(),
+            priority: item.priority(),
+        });
+        let mut rows = Vec::new();
+        push_activity(&mut rows, "• ", "  ", item, width, theme);
         if group.activities[0].children.is_empty()
             && group.activities[0].activity.kind != ToolActivityKind::Command
             && let Some(detail) = &item.detail
         {
-            push_detail(rows, "  └ ", "    ", detail, width, theme);
+            push_detail(&mut rows, "  └ ", "    ", detail, width, theme);
         }
-        crate::tool_output::render_activity(rows, &group.activities[0], "  ", width, detail);
-        crate::edit_diff::render(rows, &group.activities[0], "  ", width, detail);
-        render_children(rows, &group.activities[0].children, "  ", width, detail);
+        crate::tool_output::render_activity(&mut rows, &group.activities[0], "  ", width, detail);
+        crate::edit_diff::render(&mut rows, &group.activities[0], "  ", width, detail);
+        block.extend_activities(&group.activities[..1], rows);
+        render_children(block, &group.activities[0].children, "  ", width, detail);
         return;
     }
 
-    rows.push(Line::styled(
-        fit_line(&group_header(group.activities.iter()), width),
-        theme.style(Role::Heading),
-    ));
+    block.extend(
+        ContentRoot::Block,
+        vec![MappedLine::generated(
+            Line::styled(
+                fit_line(&group_header(group.activities.iter()), width),
+                theme.style(Role::Heading),
+            ),
+            0,
+        )],
+    );
     let total_children = display.len();
     for (index, item) in display.iter().enumerate() {
+        block.activities.push(ActivityRow {
+            source: item.source.clone(),
+            row: block.rows.len(),
+            priority: item.priority(),
+        });
+        let mut rows = Vec::new();
         let last = index + 1 == total_children;
         let branch = if last { "└ " } else { "├ " };
         push_activity(
-            rows,
+            &mut rows,
             branch,
             if last { "  " } else { "│ " },
             item,
@@ -587,7 +756,7 @@ fn render_group(
         {
             let prefix = if last { "  └ " } else { "│ └ " };
             push_detail(
-                rows,
+                &mut rows,
                 prefix,
                 if last { "    " } else { "│   " },
                 detail,
@@ -597,7 +766,7 @@ fn render_group(
         }
         if item.source.len() == 1 {
             crate::tool_output::render_activity(
-                rows,
+                &mut rows,
                 &group.activities[item.source.start],
                 if last { "  " } else { "│ " },
                 width,
@@ -605,7 +774,7 @@ fn render_group(
             );
         } else {
             crate::tool_output::render_folded_reads(
-                rows,
+                &mut rows,
                 &group.activities[item.source.clone()],
                 if last { "  " } else { "│ " },
                 width,
@@ -613,14 +782,15 @@ fn render_group(
             );
         }
         crate::edit_diff::render(
-            rows,
+            &mut rows,
             &group.activities[item.source.start],
             if last { "  " } else { "│ " },
             width,
             detail,
         );
+        block.extend_activities(&group.activities[item.source.clone()], rows);
         render_children(
-            rows,
+            block,
             &group.activities[item.source.start].children,
             if last { "  " } else { "│ " },
             width,
@@ -630,7 +800,7 @@ fn render_group(
 }
 
 fn render_children(
-    rows: &mut Vec<Line<'static>>,
+    block: &mut BlockLayout,
     children: &[TranscriptActivity],
     prefix: &str,
     width: usize,
@@ -639,10 +809,11 @@ fn render_children(
     let theme = detail.theme;
     let display = display_activities(children, detail.detail);
     for (index, item) in display.iter().enumerate() {
+        let mut rows = Vec::new();
         let last = index + 1 == display.len();
         let continuation = format!("{prefix}{}", if last { "  " } else { "│ " });
         push_activity(
-            rows,
+            &mut rows,
             &format!("{prefix}{}", if last { "└ " } else { "├ " }),
             &continuation,
             item,
@@ -650,7 +821,7 @@ fn render_children(
             theme,
         );
         crate::edit_diff::render(
-            rows,
+            &mut rows,
             &children[item.source.start],
             &continuation,
             width,
@@ -658,7 +829,7 @@ fn render_children(
         );
         if item.source.len() == 1 {
             crate::tool_output::render_activity(
-                rows,
+                &mut rows,
                 &children[item.source.start],
                 &continuation,
                 width,
@@ -666,7 +837,7 @@ fn render_children(
             );
         } else {
             crate::tool_output::render_folded_reads(
-                rows,
+                &mut rows,
                 &children[item.source.clone()],
                 &continuation,
                 width,
@@ -677,7 +848,7 @@ fn render_children(
             && let Some(detail) = &item.detail
         {
             push_detail(
-                rows,
+                &mut rows,
                 &format!("{continuation}└ "),
                 &format!("{continuation}  "),
                 detail,
@@ -685,6 +856,7 @@ fn render_children(
                 theme,
             );
         }
+        block.extend_activities(&children[item.source.clone()], rows);
     }
 }
 
@@ -1108,32 +1280,47 @@ fn push_wrapped(rows: &mut Vec<Line<'static>>, text: &str, width: usize) {
     push_prefixed(rows, "", "", text, width);
 }
 fn push_activity(
-    rows: &mut Vec<Line<'static>>,
+    rows: &mut Vec<MappedLine>,
     prefix: &str,
     continuation: &str,
     item: &DisplayActivity,
     width: usize,
     theme: &Theme,
 ) {
-    let start = rows.len();
-    push_prefixed(rows, prefix, continuation, &item.summary, width);
-    for row in &mut rows[start..] {
-        row.style = item.style(theme);
-    }
+    let line = Line::from(Span::raw(item.summary.clone())).style(item.style(theme));
+    let source = if item.source.len() == 1 {
+        MappedLine::component(line, Component::Field(Field::Summary), 0)
+    } else {
+        // A fold is not the concatenation of its members' summary components.
+        MappedLine::generated(line, 0)
+    };
+    rows.extend(wrap_mapped(
+        prefix,
+        continuation,
+        source,
+        width,
+        Wrapping::Literal,
+    ));
 }
 fn push_detail(
-    rows: &mut Vec<Line<'static>>,
+    rows: &mut Vec<MappedLine>,
     prefix: &str,
     continuation: &str,
     text: &str,
     width: usize,
     theme: &Theme,
 ) {
-    let start = rows.len();
-    push_prefixed(rows, prefix, continuation, text, width);
-    for row in &mut rows[start..] {
-        row.style = theme.style(Role::Secondary);
-    }
+    rows.extend(wrap_mapped(
+        prefix,
+        continuation,
+        MappedLine::component(
+            Line::from(Span::raw(text.to_owned())).style(theme.style(Role::Secondary)),
+            Component::Field(Field::Detail),
+            0,
+        ),
+        width,
+        Wrapping::Literal,
+    ));
 }
 
 #[cfg(test)]
@@ -1181,6 +1368,7 @@ mod tests {
             ThinkingVisibility::Visible,
         );
         let message = TranscriptMessage {
+            source: Some(ion_core::TranscriptSource { entry: 1, part: 0 }),
             turn: Some(1),
             steering: false,
             parts: vec![
@@ -1254,6 +1442,7 @@ mod tests {
             ),
         ];
         let items = [TranscriptItem::ActivityGroup(ActivityGroup {
+            source: ion_core::TranscriptSource { entry: 13, part: 0 },
             turn: 1,
             open: true,
             activities: vec![
@@ -1333,7 +1522,7 @@ mod tests {
                     );
                 }
             }
-            let live = live_rows(&items, 160, 4, &options);
+            let live = window_rows(&items, 160, 4, &options);
             assert!(
                 live.iter()
                     .any(|row| row.style.fg == Some(Color::Rgb(1, 2, 3)))
@@ -1379,6 +1568,7 @@ mod tests {
             ),
         ];
         let items = [TranscriptItem::ActivityGroup(ActivityGroup {
+            source: ion_core::TranscriptSource { entry: 14, part: 0 },
             turn: 1,
             open: false,
             activities,
@@ -1398,7 +1588,7 @@ mod tests {
             let published = rows(&items, 160, &options);
             for label in [
                 "read outputs folded",
-                "earlier stdout",
+                "stdout · 6 lines folded",
                 "stdout truncated",
                 "more diff",
             ] {
@@ -1408,7 +1598,7 @@ mod tests {
                     .unwrap();
                 assert!(notice.to_string().contains(expected), "{notice}");
             }
-            let live = live_rows(&items, 160, 4, &options);
+            let live = window_rows(&items, 160, 4, &options);
             assert!(live.iter().any(|row| row.to_string().contains(expected)));
             assert!(
                 published
@@ -1424,11 +1614,13 @@ mod tests {
         let projection = TranscriptProjection {
             items: vec![
                 TranscriptItem::Assistant(TranscriptMessage {
+                    source: Some(ion_core::TranscriptSource { entry: 2, part: 0 }),
                     turn: Some(1),
                     steering: false,
                     parts: vec![TranscriptPart::Text("answer".into())],
                 }),
                 TranscriptItem::Assistant(TranscriptMessage {
+                    source: Some(ion_core::TranscriptSource { entry: 3, part: 0 }),
                     turn: Some(1),
                     steering: false,
                     parts: vec![TranscriptPart::Thinking(
@@ -1454,7 +1646,7 @@ mod tests {
                     .any(|line| line.to_string().contains("thought"))
             );
             assert_eq!(
-                live_rows(
+                window_rows(
                     &projection.items,
                     width,
                     3,
@@ -1465,7 +1657,7 @@ mod tests {
                         ThinkingVisibility::Hidden,
                     )
                 ),
-                live_rows(
+                window_rows(
                     &projection.items[..1],
                     width,
                     3,
@@ -1518,12 +1710,13 @@ mod tests {
         );
         let long = TranscriptProjection {
             items: vec![TranscriptItem::Assistant(TranscriptMessage {
+                source: Some(ion_core::TranscriptSource { entry: 4, part: 0 }),
                 turn: Some(1),
                 steering: false,
                 parts: vec![TranscriptPart::Thinking("long thought\n".repeat(20))],
             })],
         };
-        let preview = live_rows(
+        let preview = window_rows(
             &long.items,
             80,
             3,
@@ -1567,12 +1760,12 @@ mod tests {
         .map(ToString::to_string)
         .collect()
     }
-    fn plain_live_rows(
+    fn plain_window_rows(
         projection: &TranscriptProjection,
         width: usize,
         budget: usize,
     ) -> Vec<String> {
-        super::live_rows(
+        super::window_rows(
             &projection.items,
             width,
             budget,
@@ -1622,6 +1815,7 @@ mod tests {
         );
         let single = TranscriptProjection {
             items: vec![TranscriptItem::ActivityGroup(ActivityGroup {
+                source: ion_core::TranscriptSource { entry: 15, part: 0 },
                 turn: 1,
                 open: false,
                 activities: vec![read.clone(), command.clone()],
@@ -1670,6 +1864,7 @@ mod tests {
         assert!(compact.contains("/capture/stdout") && compact.contains("stdout truncated"));
         let grouped = TranscriptProjection {
             items: vec![TranscriptItem::ActivityGroup(ActivityGroup {
+                source: ion_core::TranscriptSource { entry: 16, part: 0 },
                 turn: 1,
                 open: false,
                 activities: vec![
@@ -1743,6 +1938,7 @@ mod tests {
         let subject = "deep/project/with/a/long/path/界界/important.rs";
         let projection = TranscriptProjection {
             items: vec![TranscriptItem::ActivityGroup(ActivityGroup {
+                source: ion_core::TranscriptSource { entry: 17, part: 0 },
                 turn: 1,
                 open: true,
                 activities: vec![
@@ -1801,7 +1997,7 @@ mod tests {
             .collect::<String>();
         assert!(retained.contains(subject));
         assert!(rows.iter().all(|row| row.width() <= 24));
-        let live = super::live_rows(
+        let live = super::window_rows(
             &projection.items,
             24,
             6,
@@ -1830,6 +2026,7 @@ mod tests {
         ] {
             let projection = TranscriptProjection {
                 items: vec![TranscriptItem::Assistant(TranscriptMessage {
+                    source: Some(ion_core::TranscriptSource { entry: 5, part: 0 }),
                     turn: Some(1),
                     steering: false,
                     parts: vec![TranscriptPart::Text(source.into())],
@@ -1837,7 +2034,7 @@ mod tests {
             };
             for narrow in 1..=width {
                 assert!(
-                    super::live_rows(
+                    super::window_rows(
                         &projection.items,
                         narrow,
                         3,
@@ -1852,7 +2049,7 @@ mod tests {
                     .all(|row| row.width() <= narrow)
                 );
             }
-            let rows = super::live_rows(
+            let rows = super::window_rows(
                 &projection.items,
                 width,
                 3,
@@ -1889,6 +2086,7 @@ mod tests {
     fn markdown_is_assistant_presentation_not_user_or_inspection_source() {
         let source = "# Heading\n\n**bold** [site](https://example.org)\n\n| Key | Value |\n| --- | --- |\n| state | verified |";
         let message = TranscriptMessage {
+            source: Some(ion_core::TranscriptSource { entry: 6, part: 0 }),
             turn: Some(1),
             steering: false,
             parts: vec![TranscriptPart::Text(source.into())],
@@ -1976,6 +2174,7 @@ mod tests {
         ];
         let projection = TranscriptProjection {
             items: vec![TranscriptItem::ActivityGroup(ActivityGroup {
+                source: ion_core::TranscriptSource { entry: 18, part: 0 },
                 turn: 1,
                 open: true,
                 activities: vec![parent],
@@ -2012,8 +2211,9 @@ mod tests {
     fn shell_preview_shows_observed_output_outcome_and_context_choice() {
         let projection = TranscriptProjection {
             items: vec![TranscriptItem::UserShell(ion_core::UserShellActivity {
+                source: ion_core::TranscriptSource { entry: 28, part: 0 },
                 command: "run-check".into(),
-                outcome: ion_core::UserShellOutcome::Observed {
+                outcome: Some(ion_core::UserShellOutcome::Observed {
                     output: serde_json::json!({
                         "stdout": "first\nsecond\nthird\nfourth\nOBSERVED_OUTPUT\n",
                         "stderr": "\u{1b}[2JOBSERVED_FAILURE\n",
@@ -2022,7 +2222,7 @@ mod tests {
                         "stdout_full_path": "/tmp/capture.txt"
                     }),
                     is_error: true,
-                },
+                }),
                 exclude_from_context: true,
             })],
         };
@@ -2045,6 +2245,10 @@ mod tests {
         result: Option<serde_json::Value>,
     ) -> TranscriptActivity {
         TranscriptActivity {
+            identity: ion_core::TranscriptActivityIdentity::Tool(ion_core::ToolOccurrence {
+                assistant_entry: 1,
+                ordinal: 0,
+            }),
             call_id: id.into(),
             name: id.into(),
             activity: ToolActivity {
@@ -2067,6 +2271,7 @@ mod tests {
     fn grouped_tools_are_hierarchical_and_mutations_are_visually_distinct() {
         let projection = TranscriptProjection {
             items: vec![TranscriptItem::ActivityGroup(ActivityGroup {
+                source: ion_core::TranscriptSource { entry: 19, part: 0 },
                 turn: 1,
                 open: false,
                 activities: vec![
@@ -2118,7 +2323,23 @@ mod tests {
         assert!(rendered.contains("├ Edited src/parser.rs · 2 replacements"));
         assert!(rendered.contains("└ Ran cargo test"));
         assert!(rendered.contains("  └ stdout"));
-        assert!(rendered.contains("test result: ok. 148 passed"));
+        assert!(rendered.contains("stdout · 2 lines folded"));
+        assert!(!rendered.contains("test result: ok. 148 passed"));
+        let expanded = rows(
+            &projection.items,
+            100,
+            &RenderOptions::new(
+                OutputDetail::Expanded,
+                &crate::keybindings::KeyBindings::default(),
+                &Theme::default(),
+                ThinkingVisibility::Hidden,
+            ),
+        );
+        assert!(
+            expanded
+                .iter()
+                .any(|row| row.to_string().contains("test result: ok. 148 passed"))
+        );
         assert_eq!(rendered.matches("Read src/").count(), 1);
     }
 
@@ -2138,12 +2359,16 @@ mod tests {
             read.result.as_mut().unwrap().projection = Some(projection);
             let history = TranscriptProjection {
                 items: vec![TranscriptItem::ActivityGroup(ActivityGroup {
+                    source: ion_core::TranscriptSource { entry: 20, part: 0 },
                     turn: 1,
                     open: false,
                     activities: vec![read],
                 })],
             };
-            for rendered in [plain_rows(&history, 80), plain_live_rows(&history, 80, 16)] {
+            for rendered in [
+                plain_rows(&history, 80),
+                plain_window_rows(&history, 80, 16),
+            ] {
                 let rendered = rendered.join("\n");
                 assert!(rendered.contains("not shared with model"), "{rendered}");
                 assert!(rendered.contains("Read"), "{rendered}");
@@ -2156,6 +2381,7 @@ mod tests {
     fn failed_command_surfaces_exit_and_stderr() {
         let projection = TranscriptProjection {
             items: vec![TranscriptItem::ActivityGroup(ActivityGroup {
+                source: ion_core::TranscriptSource { entry: 21, part: 0 },
                 turn: 1,
                 open: false,
                 activities: vec![activity(
@@ -2184,6 +2410,7 @@ mod tests {
             ThinkingVisibility::Hidden,
         );
         let mut message = TranscriptMessage {
+            source: Some(ion_core::TranscriptSource { entry: 7, part: 0 }),
             turn: Some(1),
             steering: false,
             parts: vec![
@@ -2250,12 +2477,13 @@ mod tests {
         for steering in [false, true] {
             let projection = TranscriptProjection {
                 items: vec![TranscriptItem::User(TranscriptMessage {
+                    source: Some(ion_core::TranscriptSource { entry: 8, part: 0 }),
                     turn: Some(1),
                     steering,
                     parts: vec![TranscriptPart::Text("first\nsecond\nthird\nfourth".into())],
                 })],
             };
-            let preview = plain_live_rows(&projection, 20, 3);
+            let preview = plain_window_rows(&projection, 20, 3);
             assert_eq!(preview.len(), 3);
             assert!(preview[1].starts_with(if steering { "↳ … ┃" } else { "… ┃" }));
             assert!(preview[2].ends_with("fourth"));
@@ -2268,11 +2496,13 @@ mod tests {
         let projection = TranscriptProjection {
             items: vec![
                 TranscriptItem::User(TranscriptMessage {
+                    source: Some(ion_core::TranscriptSource { entry: 9, part: 0 }),
                     turn: Some(1),
                     steering: false,
                     parts: vec![TranscriptPart::Text("fix the parser".into())],
                 }),
                 TranscriptItem::Assistant(TranscriptMessage {
+                    source: Some(ion_core::TranscriptSource { entry: 10, part: 0 }),
                     turn: Some(1),
                     steering: false,
                     parts: vec![TranscriptPart::Text("I found the issue.".into())],
@@ -2306,11 +2536,13 @@ mod tests {
         let projection = TranscriptProjection {
             items: vec![
                 TranscriptItem::ActivityGroup(ActivityGroup {
+                    source: ion_core::TranscriptSource { entry: 22, part: 0 },
                     turn: 1,
                     open: false,
                     activities,
                 }),
                 TranscriptItem::Assistant(TranscriptMessage {
+                    source: Some(ion_core::TranscriptSource { entry: 11, part: 0 }),
                     turn: Some(1),
                     steering: false,
                     parts: vec![TranscriptPart::Text(
@@ -2320,6 +2552,7 @@ mod tests {
                     )],
                 }),
                 TranscriptItem::ActivityGroup(ActivityGroup {
+                    source: ion_core::TranscriptSource { entry: 23, part: 0 },
                     turn: 1,
                     open: true,
                     activities: vec![activity(
@@ -2333,7 +2566,7 @@ mod tests {
             ],
         };
         for width in [24, 100] {
-            let rendered = plain_live_rows(&projection, width, 7);
+            let rendered = plain_window_rows(&projection, width, 7);
             assert!(rendered.len() <= 7);
             let text = rendered.join("\n");
             for fact in [
@@ -2349,14 +2582,14 @@ mod tests {
                 assert!(text.contains(fact), "missing {fact}: {text}");
             }
         }
-        let tiny = plain_live_rows(&projection, 100, 2);
+        let tiny = plain_window_rows(&projection, 100, 2);
         assert_eq!(tiny.len(), 2);
         assert!(tiny.join("\n").contains("FAILURE_MARKER"));
         assert_eq!(
-            plain_live_rows(&projection, 100, 100),
+            plain_window_rows(&projection, 100, 100),
             plain_rows(&projection, 100)
         );
-        assert!(plain_live_rows(&projection, 100, 0).is_empty());
+        assert!(plain_window_rows(&projection, 100, 0).is_empty());
     }
 
     #[test]
@@ -2377,6 +2610,7 @@ mod tests {
         )];
         let projection = TranscriptProjection {
             items: vec![TranscriptItem::ActivityGroup(ActivityGroup {
+                source: ion_core::TranscriptSource { entry: 24, part: 0 },
                 turn: 1,
                 open: true,
                 activities: vec![parent],
@@ -2391,7 +2625,7 @@ mod tests {
             full.contains("└ Read failed CHILD_FAILURE_LONG_PATH"),
             "{full}"
         );
-        let tiny = plain_live_rows(&projection, 24, 2).join("\n");
+        let tiny = plain_window_rows(&projection, 24, 2).join("\n");
         assert!(
             tiny.contains("Read failed") && tiny.contains("CHILD"),
             "{tiny}"
@@ -2403,6 +2637,7 @@ mod tests {
         let projection = TranscriptProjection {
             items: vec![
                 TranscriptItem::ActivityGroup(ActivityGroup {
+                    source: ion_core::TranscriptSource { entry: 25, part: 0 },
                     turn: 1,
                     open: true,
                     activities: vec![
@@ -2444,13 +2679,14 @@ mod tests {
                     ],
                 }),
                 TranscriptItem::Assistant(TranscriptMessage {
+                    source: Some(ion_core::TranscriptSource { entry: 12, part: 0 }),
                     turn: Some(1),
                     steering: false,
                     parts: vec![TranscriptPart::Text("later narrative\n".repeat(20))],
                 }),
             ],
         };
-        let rendered = plain_live_rows(&projection, 100, 7).join("\n");
+        let rendered = plain_window_rows(&projection, 100, 7).join("\n");
         assert_eq!(rendered.matches("REUSED_FAILURE").count(), 1, "{rendered}");
         assert!(
             rendered.contains("Read FIRST_READ, SECOND_READ"),
@@ -2463,6 +2699,7 @@ mod tests {
     fn running_call_keeps_its_tree_when_later_calls_are_queued() {
         let projection = TranscriptProjection {
             items: vec![TranscriptItem::ActivityGroup(ActivityGroup {
+                source: ion_core::TranscriptSource { entry: 26, part: 0 },
                 turn: 1,
                 open: true,
                 activities: vec![
@@ -2490,7 +2727,7 @@ mod tests {
                 ],
             })],
         };
-        let rendered = plain_live_rows(&projection, 40, 3).join("\n");
+        let rendered = plain_window_rows(&projection, 40, 3).join("\n");
         for fact in [
             "1 running",
             "2 queued",
@@ -2536,6 +2773,7 @@ mod tests {
         ));
         let projection = TranscriptProjection {
             items: vec![TranscriptItem::ActivityGroup(ActivityGroup {
+                source: ion_core::TranscriptSource { entry: 27, part: 0 },
                 turn: 1,
                 open: false,
                 activities,

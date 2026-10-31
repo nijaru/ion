@@ -237,14 +237,14 @@ def exercise(mode, supported=True, panic=False, editor_fault=None):
                         os.write(master, b"retained composer")
                         drain()
                         release_question.set()
-                        until(lambda: b"Which features?" in output and terminal.alternate)
+                        until(lambda: b"Which features?" in output and terminal.alternate == (mode == "fullscreen"))
                         os.write(master, b"\x1b[B\x1b[B\x1b[B\r")  # Next confirms none.
                         until(lambda: b"Custom answer?" in output)
                         os.write(master, b"\x1b[B\x1b[B\r")
                         os.write(master, "café 🦀".encode() + b"\x1b[D")
                         checkpoint = len(output)
                         os.write(master, b"\x07")
-                        until(lambda: b"original draft retained" in output[checkpoint:] and terminal.alternate)
+                        until(lambda: b"original draft retained" in output[checkpoint:] and terminal.alternate == (mode == "fullscreen"))
                         assert len(requests) == 3, "editor failure answered the question"
                         edits = [json.loads(line) for line in question_edits.read_text().splitlines()]
                         assert [edit["seed"] for edit in edits] == ["café 🦀"]
@@ -252,7 +252,7 @@ def exercise(mode, supported=True, panic=False, editor_fault=None):
                         # editor must see the insertion before the crab.
                         checkpoint = len(output)
                         os.write(master, b"bad \x07")
-                        until(lambda: b"Draft returned from editor" in output[checkpoint:] and terminal.alternate)
+                        until(lambda: b"Draft returned from editor" in output[checkpoint:] and terminal.alternate == (mode == "fullscreen"))
                         edits = [json.loads(line) for line in question_edits.read_text().splitlines()]
                         assert [edit["seed"] for edit in edits] == ["café 🦀", "café bad 🦀"]
                         assert all(edit["flags"] == "4" for edit in edits), edits
@@ -268,7 +268,7 @@ def exercise(mode, supported=True, panic=False, editor_fault=None):
                         drain(0.25)
                         assert len(requests) == 3, "hidden input submitted the question or composer"
                         os.write(master, b"\x1d")
-                        until(lambda: terminal.alternate and b"caf" in output[checkpoint:])
+                        until(lambda: terminal.alternate == (mode == "fullscreen") and b"caf" in output[checkpoint:])
                         checkpoint = len(output)
                         os.write(master, b"x\r")
                         until(lambda: b"Review" in output[checkpoint:])

@@ -48,14 +48,18 @@ pub(super) fn rows(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::terminal_client::Editor;
 
     #[test]
     fn identity_chrome_is_control_safe_bounded_and_does_not_change_the_draft() {
         let ui = Frontend {
+            editor: Editor {
+                draft: "unsent 🦀".into(),
+                cursor: 3,
+                ..Editor::default()
+            },
             cwd: "/long/workspace/🦀\u{1b}[2J".into(),
             session_label: "named\nsession".into(),
-            draft: "unsent 🦀".into(),
-            cursor: 3,
             ..Frontend::default()
         };
         let model = ModelRef {
@@ -81,6 +85,9 @@ mod tests {
         assert_eq!(one[0].to_string(), "provider/vendor/model · /help");
         let two = rows(&ui, Some(&model), 100, 2);
         assert!(two[0].to_string().contains("named session"));
-        assert_eq!((ui.draft.as_str(), ui.cursor), ("unsent 🦀", 3));
+        assert_eq!(
+            (ui.editor.draft.as_str(), ui.editor.cursor),
+            ("unsent 🦀", 3)
+        );
     }
 }

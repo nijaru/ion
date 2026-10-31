@@ -5,6 +5,38 @@ use ion_terminal::{Screen, TerminalSession};
 
 use super::{Builtin, EditorDraft, Frontend, PickerValue, navigation::apply_fork};
 
+/// Physical editor/attachment leases run their own input pump; this target is
+/// derived only while the conversation client owns the physical terminal.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum InputTarget {
+    Details,
+    Picker,
+    Question,
+    Composer,
+}
+
+impl Frontend {
+    pub(super) fn input_target(&self) -> InputTarget {
+        if self.details.is_some() {
+            InputTarget::Details
+        } else if self.pickers.active().is_some() {
+            InputTarget::Picker
+        } else if self.question.is_some() {
+            InputTarget::Question
+        } else {
+            InputTarget::Composer
+        }
+    }
+
+    pub(super) fn invalidate_interaction_paint(&mut self) {
+        self.editor.completion.invalidate_visibility();
+        self.pickers.invalidate_visibility();
+        if let Some(question) = &mut self.question {
+            question.invalidate_visibility();
+        }
+    }
+}
+
 pub(super) fn editor_delivery(runtime: &SessionControl<EditorDraft>) -> Delivery {
     match runtime.state().operation.map(|operation| operation.kind) {
         Some(ion_host::OperationKind::Shell | ion_host::OperationKind::Compact) => {
@@ -38,14 +70,15 @@ pub(super) fn submit_editor(
             "Terminal commands cannot be queued; submit a prompt or resource command".into();
         return;
     }
+    let (images, files) = ui.editor.take_attachments();
     let input = UserInput::Prompt {
         text: source.literal.clone(),
-        images: std::mem::take(&mut ui.images),
-        files: std::mem::take(&mut ui.files),
+        images,
+        files,
     };
     match runtime.submit(delivery, input, source) {
         Ok(_) => {
-            ui.scroll = 0;
+            ui.view.follow_end();
             ui.status.clear();
         }
         Err(rejected) => {
@@ -54,8 +87,8 @@ pub(super) fn submit_editor(
                 unreachable!("terminal submits only raw prompts")
             };
             ui.restore_editor(rejected.metadata);
-            ui.images = images;
-            ui.files = files;
+            ui.editor.images = images;
+            ui.editor.files = files;
             ui.status = format!("Input was not queued: {:#}", rejected.reason);
         }
     }
@@ -69,8 +102,7 @@ pub(super) fn submit_initial_prompts(
     if prompts.is_empty() {
         return;
     }
-    let mut images = std::mem::take(&mut ui.images);
-    let mut files = std::mem::take(&mut ui.files);
+    let (mut images, mut files) = ui.editor.take_attachments();
     let inputs = prompts
         .into_iter()
         .map(|literal| {
@@ -85,7 +117,7 @@ pub(super) fn submit_initial_prompts(
         .collect();
     match runtime.submit_batch(inputs) {
         Ok(_) => {
-            ui.scroll = 0;
+            ui.view.follow_end();
             ui.status.clear();
         }
         Err(rejected) => {
@@ -103,7 +135,7 @@ pub(super) fn submit_initial_prompts(
             if let Some(first) = drafts.next() {
                 ui.show_draft(first);
             }
-            ui.recovered.extend(drafts);
+            ui.editor.recovered.extend(drafts);
             ui.status = format!("Input was not queued: {reason:#}");
         }
     }

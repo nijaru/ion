@@ -552,6 +552,7 @@ pub(crate) async fn run<F: FnMut(AgentEvent) + Send>(
     turn: u64,
     catalog: &ToolCatalog,
     parent_call: &ToolCall,
+    parent: ToolOccurrence,
     reasoning: Reasoning,
     model_messages: &[ion_ai::Message],
     operation_stop: &CancellationToken,
@@ -578,7 +579,6 @@ pub(crate) async fn run<F: FnMut(AgentEvent) + Send>(
     {
         return Ok(failure("invalid code_mode admission limits"));
     }
-    let parent = session.tool_occurrence(turn, &parent_call.id)?;
     let names = catalog
         .definitions()
         .filter(|definition| !catalog.is_intrinsic(&definition.spec.name))

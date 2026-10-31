@@ -1,10 +1,11 @@
 //! Literal observed output disclosure, independent of effect state and model delivery.
 use crate::{
+    display_text::{Component, Field, MappedLine, Wrapping, fit_mapped, source_lines, wrap_mapped},
     presentation_style::{Role, Theme},
     transcript_render::ThinkingVisibility,
 };
 use ion_core::{ActivityState, ToolActivityKind, TranscriptActivity};
-use ratatui::text::Line;
+use ratatui::text::{Line, Span};
 use serde_json::Value;
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -52,7 +53,7 @@ enum Preview {
 }
 
 pub(crate) fn render_activity(
-    rows: &mut Vec<Line<'static>>,
+    rows: &mut Vec<MappedLine>,
     activity: &TranscriptActivity,
     prefix: &str,
     width: usize,
@@ -71,7 +72,15 @@ pub(crate) fn render_activity(
         return;
     };
     match activity.activity.kind {
-        ToolActivityKind::Command => render_command(rows, &result.value, prefix, width, detail, 3),
+        ToolActivityKind::Command => render_command(
+            rows,
+            &result.value,
+            prefix,
+            width,
+            detail,
+            3,
+            activity.state == ActivityState::Completed && !result.is_error,
+        ),
         ToolActivityKind::Read => {
             if let Some(text) = result.value["content"].as_str() {
                 note(
@@ -85,7 +94,7 @@ pub(crate) fn render_activity(
                     rows,
                     text,
                     prefix,
-                    "content",
+                    Field::Content,
                     width,
                     detail,
                     Preview::Head(3),
@@ -113,7 +122,7 @@ pub(crate) fn render_activity(
                 }
             }
         }
-        _ => return,
+        _ => {}
     }
     if let Some(error) = result.value["error"].as_str() {
         note(rows, prefix, "error", width, detail.theme);
@@ -121,7 +130,7 @@ pub(crate) fn render_activity(
             rows,
             error,
             prefix,
-            "error",
+            Field::Error,
             width,
             detail,
             Preview::Head(3),
@@ -142,7 +151,7 @@ fn read_label(value: &Value) -> String {
 }
 
 pub(crate) fn render_folded_reads(
-    rows: &mut Vec<Line<'static>>,
+    rows: &mut Vec<MappedLine>,
     activities: &[TranscriptActivity],
     prefix: &str,
     width: usize,
@@ -208,25 +217,46 @@ pub(crate) fn render_folded_reads(
 }
 
 pub(crate) fn render_command(
-    rows: &mut Vec<Line<'static>>,
+    rows: &mut Vec<MappedLine>,
     output: &Value,
     prefix: &str,
     width: usize,
     detail: &RenderOptions<'_>,
     compact_lines: usize,
+    successful: bool,
 ) {
-    for stream in ["stdout", "stderr"] {
+    for field in [Field::Stdout, Field::Stderr] {
+        let stream = field.label();
         if let Some(text) = output[stream].as_str().filter(|text| !text.is_empty()) {
-            note(rows, prefix, stream, width, detail.theme);
-            render_text(
-                rows,
-                text,
-                prefix,
-                stream,
-                width,
-                detail,
-                Preview::Tail(compact_lines),
-            );
+            if successful && stream == "stdout" && detail.detail == OutputDetail::Compact {
+                note(
+                    rows,
+                    prefix,
+                    &format!(
+                        "stdout · {} {} folded · {}",
+                        text.lines().count(),
+                        if text.lines().count() == 1 {
+                            "line"
+                        } else {
+                            "lines"
+                        },
+                        detail.details_key
+                    ),
+                    width,
+                    detail.theme,
+                );
+            } else {
+                note(rows, prefix, stream, width, detail.theme);
+                render_text(
+                    rows,
+                    text,
+                    prefix,
+                    field,
+                    width,
+                    detail,
+                    Preview::Tail(compact_lines),
+                );
+            }
         }
         if output[format!("{stream}_complete")].as_bool() == Some(false) {
             note(
@@ -279,14 +309,15 @@ pub(crate) fn render_command(
 }
 
 fn render_text(
-    rows: &mut Vec<Line<'static>>,
+    rows: &mut Vec<MappedLine>,
     text: &str,
     prefix: &str,
-    label: &str,
+    field: Field,
     width: usize,
     detail: &RenderOptions<'_>,
     preview: Preview,
 ) {
+    let label = field.label();
     let (compact_lines, tail) = match preview {
         Preview::Head(limit) => (limit, false),
         Preview::Tail(limit) => (limit, true),
@@ -304,12 +335,17 @@ fn render_text(
     let limit = if expanded { usize::MAX } else { compact_lines };
     let continuation = format!("{prefix}  ");
     let mut clipped = false;
-    for text in text.lines().skip(skip).take(limit) {
+    for (byte, text) in source_lines(text).skip(skip).take(limit) {
+        let source = MappedLine::component(
+            Line::from(Span::raw(text.to_owned())),
+            Component::Field(field),
+            byte,
+        );
         let visible = if expanded {
-            text.to_owned()
+            source
         } else {
-            let (fitted, shortened) = crate::display_text::fit_line_with_status(
-                text,
+            let (fitted, shortened) = fit_mapped(
+                source,
                 width
                     .saturating_sub(unicode_width::UnicodeWidthStr::width(continuation.as_str()))
                     .max(1),
@@ -317,13 +353,13 @@ fn render_text(
             clipped |= shortened;
             fitted
         };
-        crate::display_text::push_styled(
-            rows,
+        rows.extend(wrap_mapped(
             &continuation,
             &continuation,
-            Line::raw(visible),
+            visible,
             width,
-        );
+            Wrapping::Literal,
+        ));
     }
     if !expanded && (count > compact_lines || clipped) {
         let omitted = count.saturating_sub(compact_lines);
@@ -343,14 +379,17 @@ fn render_text(
     }
 }
 
-fn note(rows: &mut Vec<Line<'static>>, prefix: &str, text: &str, width: usize, theme: &Theme) {
-    crate::display_text::push_styled(
-        rows,
+fn note(rows: &mut Vec<MappedLine>, prefix: &str, text: &str, width: usize, theme: &Theme) {
+    rows.extend(wrap_mapped(
         &format!("{prefix}└ "),
         &format!("{prefix}  "),
-        Line::styled(text.to_owned(), theme.style(Role::Secondary)),
+        MappedLine::generated(
+            Line::styled(text.to_owned(), theme.style(Role::Secondary)),
+            0,
+        ),
         width,
-    );
+        Wrapping::Literal,
+    ));
 }
 
 #[cfg(test)]
@@ -381,10 +420,11 @@ mod tests {
                     ThinkingVisibility::Hidden,
                 ),
                 3,
+                true,
             );
             let text = rows
                 .iter()
-                .map(ToString::to_string)
+                .map(|row| row.line.to_string())
                 .collect::<Vec<_>>()
                 .join("\n");
             assert!(text.contains("stdout decoding loss"), "{text}");
@@ -411,12 +451,122 @@ mod tests {
                     ThinkingVisibility::Hidden,
                 ),
                 3,
+                true,
             );
             assert!(
                 !rows
                     .iter()
-                    .any(|row| row.to_string().contains("decoding loss"))
+                    .any(|row| row.line.to_string().contains("decoding loss"))
             );
+        }
+    }
+
+    #[test]
+    fn only_successful_compact_commands_fold_stdout_and_never_stderr() {
+        let mut activity = TranscriptActivity {
+            identity: ion_core::TranscriptActivityIdentity::Tool(ion_core::ToolOccurrence {
+                assistant_entry: 2,
+                ordinal: 0,
+            }),
+            call_id: "command".into(),
+            name: "exec".into(),
+            activity: ion_core::ToolActivity {
+                kind: ToolActivityKind::Command,
+                subject: Some("probe".into()),
+            },
+            arguments: json!({"command": "probe"}),
+            state: ActivityState::Completed,
+            result: Some(ion_core::ActivityResult {
+                projection: Some(ion_core::ToolResultProjection::Observed),
+                value: json!({"stdout": "OBSERVED_STDOUT\n", "stderr": "OBSERVED_STDERR\n"}),
+                image_mime_types: vec![],
+                is_error: false,
+            }),
+            children: vec![],
+        };
+        let keys = crate::keybindings::KeyBindings::default();
+        let theme = Theme::default();
+        for (state, mode, folded) in [
+            (ActivityState::Completed, OutputDetail::Compact, true),
+            (ActivityState::Completed, OutputDetail::Expanded, false),
+            (ActivityState::Failed, OutputDetail::Compact, false),
+            (ActivityState::TimedOut, OutputDetail::Compact, false),
+        ] {
+            activity.state = state;
+            activity.result.as_mut().unwrap().is_error = state != ActivityState::Completed;
+            let mut rows = vec![];
+            render_activity(
+                &mut rows,
+                &activity,
+                "",
+                100,
+                &RenderOptions::new(mode, &keys, &theme, ThinkingVisibility::Hidden),
+            );
+            let text = rows
+                .iter()
+                .map(|row| row.line.to_string())
+                .collect::<Vec<_>>()
+                .join("\n");
+            assert_eq!(text.contains("OBSERVED_STDOUT"), !folded, "{text}");
+            assert_eq!(text.contains("stdout · 1 line folded"), folded, "{text}");
+            assert!(text.contains("OBSERVED_STDERR"), "{text}");
+        }
+    }
+
+    #[test]
+    fn failed_mutations_show_the_generic_error_and_its_full_cause() {
+        let cause = "write failed\ncaused by: permission denied (os error 13)";
+        let keys = crate::keybindings::KeyBindings::default();
+        let theme = Theme::default();
+        for kind in [ToolActivityKind::Write, ToolActivityKind::Edit] {
+            let activity = TranscriptActivity {
+                identity: ion_core::TranscriptActivityIdentity::Tool(ion_core::ToolOccurrence {
+                    assistant_entry: 1,
+                    ordinal: 0,
+                }),
+                call_id: "same".into(),
+                name: "mutation".into(),
+                activity: ion_core::ToolActivity {
+                    kind,
+                    subject: Some("file".into()),
+                },
+                arguments: Value::Null,
+                state: ActivityState::Failed,
+                result: Some(ion_core::ActivityResult {
+                    projection: Some(ion_core::ToolResultProjection::Observed),
+                    value: json!({"error":cause}),
+                    image_mime_types: vec![],
+                    is_error: true,
+                }),
+                children: vec![],
+            };
+            for mode in [OutputDetail::Compact, OutputDetail::Expanded] {
+                let mut rows = Vec::new();
+                render_activity(
+                    &mut rows,
+                    &activity,
+                    "",
+                    100,
+                    &RenderOptions::new(mode, &keys, &theme, ThinkingVisibility::Hidden),
+                );
+                let rendered = rows
+                    .iter()
+                    .map(|row| row.line.to_string())
+                    .collect::<Vec<_>>()
+                    .join("\n");
+                assert!(rendered.contains("write failed"), "{kind:?}: {rendered}");
+                assert!(
+                    rendered.contains("caused by: permission denied (os error 13)"),
+                    "{kind:?}: {rendered}"
+                );
+                assert!(rows.iter().flat_map(|row| &row.map).any(|mapping| matches!(
+                    mapping.origin,
+                    crate::display_text::Origin::Component {
+                        component: Component::Field(Field::Error),
+                        ..
+                    }
+                )));
+            }
         }
     }
 

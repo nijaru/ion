@@ -685,13 +685,13 @@ async fn tiny_calibrated_estimate_cannot_relax_the_retained_byte_limit() {
         .await
         .unwrap();
 
-    let (turn, _) = session.begin_turn("x".repeat(1_400), model()).unwrap();
+    session.begin_turn("x".repeat(1_400), model()).unwrap();
     let model = model();
     let tools = ToolSet::new([Arc::new(Echo) as Arc<dyn ToolSource>]);
     let model_service: Arc<dyn ion_ai::ModelService> = service.clone();
     let prepared = PreparedRequest::new(
         &session,
-        turn,
+        session.request_basis(&model).unwrap(),
         &model_service,
         &tools,
         ModelRouteReason::UserRequest,

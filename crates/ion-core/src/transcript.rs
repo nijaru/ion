@@ -11,6 +11,23 @@ use crate::{
     tool_set::ToolActivity,
 };
 
+/// Coordinate in durable global Session history, before presentation filtering.
+/// Facts without content parts (readiness and shell admission) use part zero.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct TranscriptSource {
+    pub entry: u64,
+    pub part: usize,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum TranscriptActivityIdentity {
+    Tool(crate::ToolOccurrence),
+    Child {
+        parent: crate::ToolOccurrence,
+        child: usize,
+    },
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum TranscriptPart {
     Text(String),
@@ -20,6 +37,8 @@ pub enum TranscriptPart {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TranscriptMessage {
+    /// None only for a removable streamed assistant response.
+    pub source: Option<TranscriptSource>,
     pub turn: Option<u64>,
     pub steering: bool,
     pub parts: Vec<TranscriptPart>,
@@ -49,6 +68,7 @@ pub struct ActivityResult {
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct TranscriptActivity {
+    pub identity: TranscriptActivityIdentity,
     pub call_id: String,
     pub name: String,
     pub activity: ToolActivity,
@@ -60,6 +80,7 @@ pub struct TranscriptActivity {
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct ActivityGroup {
+    pub source: TranscriptSource,
     pub turn: u64,
     pub activities: Vec<TranscriptActivity>,
     /// Whether subsequent silent calls can join this presentation group.
@@ -69,8 +90,10 @@ pub struct ActivityGroup {
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct UserShellActivity {
+    pub source: TranscriptSource,
     pub command: String,
-    pub outcome: crate::UserShellOutcome,
+    /// Absent observation displays as uncertain, but is not a stable settlement.
+    pub outcome: Option<crate::UserShellOutcome>,
     pub exclude_from_context: bool,
 }
 
@@ -81,6 +104,7 @@ pub enum TranscriptItem {
     ActivityGroup(ActivityGroup),
     UserShell(UserShellActivity),
     Readiness {
+        source: TranscriptSource,
         turn: u64,
         notices: Vec<crate::CompletionNotice>,
     },
@@ -91,14 +115,56 @@ pub struct TranscriptProjection {
     pub items: Vec<TranscriptItem>,
 }
 
+impl TranscriptItem {
+    pub fn source(&self) -> Option<TranscriptSource> {
+        match self {
+            Self::User(message) | Self::Assistant(message) => message.source,
+            Self::ActivityGroup(group) => Some(group.source),
+            Self::UserShell(shell) => Some(shell.source),
+            Self::Readiness { source, .. } => Some(*source),
+        }
+    }
+
+    /// Semantic finality, not physical publication. Inferred uncertainty alone
+    /// cannot settle an activity; only a recorded outcome can do that.
+    pub fn is_sealed(&self) -> bool {
+        match self {
+            Self::User(message) | Self::Assistant(message) => message.source.is_some(),
+            Self::ActivityGroup(group) => {
+                !group.open && group.activities.iter().all(activity_is_settled)
+            }
+            Self::UserShell(shell) => shell.outcome.is_some(),
+            Self::Readiness { .. } => true,
+        }
+    }
+}
+
+fn activity_is_settled(activity: &TranscriptActivity) -> bool {
+    activity.result.is_some() && activity.children.iter().all(activity_is_settled)
+}
+
 impl TranscriptProjection {
+    /// Largest contiguous prefix whose items cannot change within this source.
+    pub fn sealed_prefix(&self) -> usize {
+        self.items
+            .iter()
+            .take_while(|item| item.is_sealed())
+            .count()
+    }
+
     pub fn from_session(view: &SessionView) -> Self {
         let mut builder = TranscriptBuilder::default();
+        let mut shells = HashMap::new();
         let selected: std::collections::BTreeSet<_> = view.context_path.iter().copied().collect();
         for (entry_index, entry) in view.entries.iter().enumerate() {
             if !selected.contains(&(entry_index as u64 + 1)) {
                 continue;
             }
+            let entry_coordinate = entry_index as u64 + 1;
+            let source = TranscriptSource {
+                entry: entry_coordinate,
+                part: 0,
+            };
             match entry {
                 SessionEntry::TurnStarted {
                     turn,
@@ -107,10 +173,11 @@ impl TranscriptProjection {
                     ..
                 } => {
                     if completion.is_empty() {
-                        builder.push_user(Some(*turn), false, input);
+                        builder.push_user(entry_coordinate, Some(*turn), false, input);
                     } else {
                         builder.close_group();
                         builder.projection.items.push(TranscriptItem::Readiness {
+                            source,
                             turn: *turn,
                             notices: completion.clone(),
                         });
@@ -119,12 +186,13 @@ impl TranscriptProjection {
                 SessionEntry::Completion { turn, notices } => {
                     builder.close_group();
                     builder.projection.items.push(TranscriptItem::Readiness {
+                        source,
                         turn: *turn,
                         notices: notices.clone(),
                     });
                 }
                 SessionEntry::Steering { turn, input } => {
-                    builder.push_user(Some(*turn), true, input);
+                    builder.push_user(entry_coordinate, Some(*turn), true, input);
                 }
                 SessionEntry::Assistant {
                     turn,
@@ -134,34 +202,14 @@ impl TranscriptProjection {
                     ..
                 } => {
                     builder.push_assistant(
+                        entry_coordinate,
                         *turn,
                         &message.content,
                         tool_activities,
                         termination,
-                        false,
                     );
-                    for (ordinal, call) in message
-                        .content
-                        .iter()
-                        .filter_map(|part| match part {
-                            Content::ToolCall(call) => Some(call),
-                            _ => None,
-                        })
-                        .enumerate()
-                    {
-                        let location = builder.calls[&(*turn, call.id.clone())];
-                        builder.occurrences.insert(
-                            crate::ToolOccurrence {
-                                assistant_entry: entry_index as u64 + 1,
-                                ordinal,
-                            },
-                            location,
-                        );
-                    }
                 }
-                SessionEntry::ChildToolAdmitted { turn, intent } => {
-                    builder.push_child(*turn, None, intent)
-                }
+                SessionEntry::ChildToolAdmitted { intent, .. } => builder.push_child(intent),
                 SessionEntry::ChildToolResult {
                     parent,
                     child,
@@ -176,14 +224,27 @@ impl TranscriptProjection {
                     exclude_from_context,
                 } => {
                     builder.close_group();
+                    shells.insert(entry_coordinate, builder.projection.items.len());
                     builder
                         .projection
                         .items
                         .push(TranscriptItem::UserShell(UserShellActivity {
+                            source,
                             command: command.clone(),
-                            outcome: view.user_shell_outcome(entry_index as u64 + 1).clone(),
+                            outcome: None,
                             exclude_from_context: *exclude_from_context,
                         }));
+                }
+                SessionEntry::UserShellSettled {
+                    admission_entry,
+                    outcome,
+                } => {
+                    let index = shells[admission_entry];
+                    let TranscriptItem::UserShell(shell) = &mut builder.projection.items[index]
+                    else {
+                        unreachable!("shell admission index points to its activity");
+                    };
+                    shell.outcome = Some(outcome.clone());
                 }
                 SessionEntry::TurnEnded { .. } => builder.close_group(),
                 SessionEntry::ContextSelected { .. }
@@ -195,7 +256,6 @@ impl TranscriptProjection {
                 | SessionEntry::TurnResumed { .. }
                 | SessionEntry::CacheWarm { .. }
                 | SessionEntry::Compacted { .. }
-                | SessionEntry::UserShellSettled { .. }
                 | SessionEntry::DelegationAdmitted { .. }
                 | SessionEntry::DelegationTransferred { .. }
                 | SessionEntry::DelegationSettled { .. }
@@ -204,7 +264,6 @@ impl TranscriptProjection {
         }
         for item in &mut builder.projection.items {
             if let TranscriptItem::ActivityGroup(group) = item {
-                group.open = false;
                 for activity in &mut group.activities {
                     if activity.state == ActivityState::Queued {
                         activity.state = ActivityState::Unknown;
@@ -232,13 +291,24 @@ struct TranscriptBuilder {
 }
 
 impl TranscriptBuilder {
-    fn push_user(&mut self, turn: Option<u64>, steering: bool, input: &Message) {
+    fn push_user(&mut self, entry: u64, turn: Option<u64>, steering: bool, input: &Message) {
         self.close_group();
-        let parts = visible_parts(input);
+        let mut source = None;
+        let parts = input
+            .content
+            .iter()
+            .enumerate()
+            .filter_map(|(part, content)| {
+                let visible = visible_part(content, false)?;
+                source.get_or_insert(TranscriptSource { entry, part });
+                Some(visible)
+            })
+            .collect::<Vec<_>>();
         if !parts.is_empty() {
             self.projection
                 .items
                 .push(TranscriptItem::User(TranscriptMessage {
+                    source,
                     turn,
                     steering,
                     parts,
@@ -248,46 +318,46 @@ impl TranscriptBuilder {
 
     fn push_assistant(
         &mut self,
+        entry: u64,
         turn: u64,
         content: &[Content],
         tool_activities: &[crate::StoredToolActivity],
         termination: &ResponseTermination,
-        open: bool,
     ) {
-        for part in content {
-            let visible = match part {
-                Content::Thinking(text) if !text.is_empty() => {
-                    Some(TranscriptPart::Thinking(text.clone()))
-                }
-                Content::Text(text) if !text.trim().is_empty() => {
-                    Some(TranscriptPart::Text(text.clone()))
-                }
-                Content::Image(image) => Some(TranscriptPart::Image {
-                    mime_type: image.mime_type().as_str().to_owned(),
-                }),
-                _ => None,
+        let mut ordinal = 0;
+        for (part_index, part) in content.iter().enumerate() {
+            let source = TranscriptSource {
+                entry,
+                part: part_index,
             };
+            let visible = visible_part(part, true);
             if let Some(part) = visible {
                 self.close_group();
                 self.projection
                     .items
                     .push(TranscriptItem::Assistant(TranscriptMessage {
+                        source: Some(source),
                         turn: Some(turn),
                         steering: false,
                         parts: vec![part],
                     }));
             } else if let Content::ToolCall(call) = part {
-                let group_index = self.ensure_group(turn, open);
-                let stored = tool_activities
-                    .iter()
-                    .find(|stored| stored.call_id == call.id)
-                    .expect("Session validates activity metadata before committing an assistant");
+                let group_index = self.ensure_group(turn, source);
+                let occurrence = crate::ToolOccurrence {
+                    assistant_entry: entry,
+                    ordinal,
+                };
+                ordinal += 1;
+                let stored = tool_activities.get(occurrence.ordinal).expect(
+                    "Session validates ordered activity metadata before committing an assistant",
+                );
                 let TranscriptItem::ActivityGroup(group) = &mut self.projection.items[group_index]
                 else {
                     unreachable!("ensure_group returns an activity group");
                 };
                 let activity_index = group.activities.len();
                 group.activities.push(TranscriptActivity {
+                    identity: TranscriptActivityIdentity::Tool(occurrence),
                     call_id: call.id.clone(),
                     name: call.name.clone(),
                     activity: stored.activity.clone(),
@@ -302,6 +372,8 @@ impl TranscriptBuilder {
                 });
                 self.calls
                     .insert((turn, call.id.clone()), (group_index, activity_index));
+                self.occurrences
+                    .insert(occurrence, (group_index, activity_index));
             }
         }
     }
@@ -345,14 +417,14 @@ impl TranscriptBuilder {
         &mut group.activities[activity]
     }
 
-    fn push_child(&mut self, turn: u64, parent_call_id: Option<&str>, intent: &crate::ChildIntent) {
-        if let Some(id) = parent_call_id {
-            let location = self.calls[&(turn, id.to_owned())];
-            self.occurrences.insert(intent.parent, location);
-        }
+    fn push_child(&mut self, intent: &crate::ChildIntent) {
         let parent = self.parent_mut(intent.parent);
         assert_eq!(parent.children.len(), intent.child);
         parent.children.push(TranscriptActivity {
+            identity: TranscriptActivityIdentity::Child {
+                parent: intent.parent,
+                child: intent.child,
+            },
             call_id: intent.call.id.clone(),
             name: intent.call.name.clone(),
             activity: intent.activity.clone(),
@@ -384,13 +456,10 @@ impl TranscriptBuilder {
         ));
     }
 
-    fn ensure_group(&mut self, turn: u64, open: bool) -> usize {
+    fn ensure_group(&mut self, turn: u64, source: TranscriptSource) -> usize {
         if let Some((active_turn, index)) = self.active_group
             && active_turn == turn
         {
-            if let TranscriptItem::ActivityGroup(group) = &mut self.projection.items[index] {
-                group.open |= open;
-            }
             return index;
         }
         self.close_group();
@@ -398,9 +467,10 @@ impl TranscriptBuilder {
         self.projection
             .items
             .push(TranscriptItem::ActivityGroup(ActivityGroup {
+                source,
                 turn,
                 activities: Vec::new(),
-                open,
+                open: true,
             }));
         self.active_group = Some((turn, index));
         index
@@ -415,24 +485,17 @@ impl TranscriptBuilder {
     }
 }
 
-fn visible_parts(message: &Message) -> Vec<TranscriptPart> {
-    message
-        .content
-        .iter()
-        .filter_map(|content| match content {
-            Content::Thinking(text) if !text.is_empty() => {
-                Some(TranscriptPart::Thinking(text.clone()))
-            }
-            Content::Text(text) if !text.is_empty() => Some(TranscriptPart::Text(text.clone())),
-            Content::Image(image) => Some(TranscriptPart::Image {
-                mime_type: image.mime_type().as_str().to_owned(),
-            }),
-            Content::Thinking(_)
-            | Content::Text(_)
-            | Content::ToolCall(_)
-            | Content::ToolResult(_) => None,
-        })
-        .collect()
+fn visible_part(content: &Content, assistant: bool) -> Option<TranscriptPart> {
+    match content {
+        Content::Thinking(text) if !text.is_empty() => Some(TranscriptPart::Thinking(text.clone())),
+        Content::Text(text) if !(if assistant { text.trim() } else { text }).is_empty() => {
+            Some(TranscriptPart::Text(text.clone()))
+        }
+        Content::Image(image) => Some(TranscriptPart::Image {
+            mime_type: image.mime_type().as_str().to_owned(),
+        }),
+        _ => None,
+    }
 }
 
 fn result_state(is_error: bool, value: &Value) -> ActivityState {
@@ -482,7 +545,6 @@ pub struct LiveTranscript {
     turn: Option<u64>,
     builder: TranscriptBuilder,
     current_response: Option<usize>,
-    group_closed_for_partial_response: Option<(u64, usize)>,
     notices: Vec<String>,
 }
 
@@ -505,20 +567,70 @@ impl LiveTranscript {
         self.current_response
     }
 
+    /// Resolve an original streamed part to its committed content coordinate.
+    /// Ordered matching preserves duplicate parts and skips non-visible content;
+    /// a changed or discarded stream has no corresponding source point.
+    pub fn committed_part_source(
+        &self,
+        event: &AgentEvent,
+        part: usize,
+    ) -> Option<TranscriptSource> {
+        let AgentEvent::AssistantCommitted {
+            entry,
+            turn,
+            content,
+            ..
+        } = event
+        else {
+            return None;
+        };
+        if self.turn != Some(*turn) {
+            return None;
+        }
+        let TranscriptItem::Assistant(message) =
+            &self.builder.projection.items[self.current_response?]
+        else {
+            unreachable!("provisional response is an assistant message")
+        };
+        message.parts.get(part)?;
+        let mut committed = content
+            .iter()
+            .enumerate()
+            .filter_map(|(index, content)| visible_part(content, true).map(|part| (index, part)));
+        let mut source = None;
+        for streamed in &message.parts[..=part] {
+            let (part, _) = committed.by_ref().find(|(_, value)| value == streamed)?;
+            source = Some(TranscriptSource {
+                entry: *entry,
+                part,
+            });
+        }
+        source
+    }
+
     pub fn observe(&mut self, event: &AgentEvent) {
         self.revision += 1;
         match event {
-            AgentEvent::TurnAccepted { turn, input } => {
+            AgentEvent::TurnAccepted { turn, entry, input } => {
                 self.turn = Some(*turn);
-                self.builder.push_user(Some(*turn), false, input);
+                self.builder.push_user(*entry, Some(*turn), false, input);
             }
-            AgentEvent::CompletionCommitted { turn, notices, .. } => {
+            AgentEvent::CompletionCommitted {
+                turn,
+                entry,
+                notices,
+                ..
+            } => {
                 self.turn = Some(*turn);
                 self.builder.close_group();
                 self.builder
                     .projection
                     .items
                     .push(TranscriptItem::Readiness {
+                        source: TranscriptSource {
+                            entry: *entry,
+                            part: 0,
+                        },
                         turn: *turn,
                         notices: notices.clone(),
                     });
@@ -532,16 +644,17 @@ impl LiveTranscript {
             AgentEvent::ThinkingDelta { block, text } => self.push_thinking(*block, text),
             AgentEvent::AssistantCommitted {
                 turn,
+                entry,
                 content,
                 tool_activities,
                 termination,
             } => {
                 self.restart_partial_response();
                 self.builder
-                    .push_assistant(*turn, content, tool_activities, termination, true);
+                    .push_assistant(*entry, *turn, content, tool_activities, termination);
             }
-            AgentEvent::SteeringCommitted { turn, input } => {
-                self.builder.push_user(Some(*turn), true, input);
+            AgentEvent::SteeringCommitted { turn, entry, input } => {
+                self.builder.push_user(*entry, Some(*turn), true, input);
             }
             AgentEvent::ProviderRetry {
                 attempt,
@@ -589,16 +702,7 @@ impl LiveTranscript {
                 let turn = self.turn.expect("tool progress follows TurnAccepted");
                 self.builder.push_outcome(turn, call_id, outcome);
             }
-            AgentEvent::ChildToolAdmitted {
-                parent_call_id,
-                intent,
-            } => {
-                self.builder.push_child(
-                    self.turn.expect("child follows TurnAccepted"),
-                    Some(parent_call_id),
-                    intent,
-                );
-            }
+            AgentEvent::ChildToolAdmitted { intent, .. } => self.builder.push_child(intent),
             AgentEvent::ChildToolStarted { parent, child } => {
                 let activity = &mut self.builder.parent_mut(*parent).children[*child];
                 assert_eq!(activity.state, ActivityState::Queued);
@@ -619,13 +723,12 @@ impl LiveTranscript {
 
     fn partial_response(&mut self) -> &mut TranscriptMessage {
         if self.current_response.is_none() {
-            self.group_closed_for_partial_response = self.builder.active_group;
-            self.builder.close_group();
             let index = self.builder.projection.items.len();
             self.builder
                 .projection
                 .items
                 .push(TranscriptItem::Assistant(TranscriptMessage {
+                    source: None,
                     turn: self.turn,
                     steering: false,
                     parts: Vec::new(),
@@ -693,13 +796,6 @@ impl LiveTranscript {
                 "provisional response is always the last transcript item"
             );
             self.builder.projection.items.pop();
-        }
-        if let Some((turn, index)) = self.group_closed_for_partial_response.take() {
-            if let TranscriptItem::ActivityGroup(group) = &mut self.builder.projection.items[index]
-            {
-                group.open = true;
-            }
-            self.builder.active_group = Some((turn, index));
         }
     }
 
@@ -891,6 +987,9 @@ mod tests {
             ToolActivityKind::Edit
         );
         assert_eq!(groups[1].activities.len(), 1);
+        assert_eq!(groups[0].source, TranscriptSource { entry: 2, part: 0 });
+        assert_eq!(groups[1].source, TranscriptSource { entry: 6, part: 1 });
+        assert_eq!(projected.sealed_prefix(), projected.items.len());
         assert!(projected.items.iter().any(|item| {
             matches!(
                 item,
@@ -900,7 +999,138 @@ mod tests {
         }));
     }
 
-    fn committed(turn: u64, content: Vec<Content>) -> AgentEvent {
+    #[test]
+    fn passive_uncertainty_is_not_sealed_but_recorded_unknown_is() {
+        let root =
+            std::env::temp_dir().join(format!("ion-transcript-seal-{}", uuid::Uuid::now_v7()));
+        std::fs::create_dir(&root).unwrap();
+        let path = root.join("session.sqlite");
+        let session = crate::Session::create(&path, Some(&root)).unwrap();
+        let (turn, _) = session
+            .begin_turn(
+                "inspect".into(),
+                ModelRef {
+                    provider: "test".into(),
+                    model: "model".into(),
+                },
+            )
+            .unwrap();
+        let record = |content| {
+            let SessionEntry::Assistant { message, .. } = assistant(turn, content) else {
+                unreachable!()
+            };
+            session
+                .record_assistant(turn, message, Usage::unknown(), false)
+                .unwrap();
+        };
+        record(vec![call("same", "read", serde_json::json!({}))]);
+        session
+            .record_tool_result(
+                turn,
+                ToolResult {
+                    call_id: "same".into(),
+                    name: "read".into(),
+                    result: Value::Null,
+                    images: vec![],
+                    is_error: false,
+                },
+            )
+            .unwrap();
+        let growing = TranscriptProjection::from_session(&session.view().unwrap());
+        assert_eq!(
+            growing.sealed_prefix(),
+            1,
+            "observed calls can still acquire silent siblings"
+        );
+        assert!(matches!(
+            &growing.items[1],
+            TranscriptItem::ActivityGroup(ActivityGroup { open: true, .. })
+        ));
+
+        // Reused provider IDs cannot replace the first committed occurrence.
+        record(vec![
+            Content::Text("  ".into()),
+            call("same", "read", serde_json::json!({})),
+            Content::Text("pending work".into()),
+        ]);
+        let parent = session.tool_occurrence(turn, "same").unwrap();
+        session
+            .record_child_intent(
+                turn,
+                crate::ChildIntent {
+                    parent,
+                    child: 0,
+                    call: ToolCall {
+                        id: "child".into(),
+                        name: "read".into(),
+                        arguments: serde_json::json!({}),
+                        raw_arguments: None,
+                    },
+                    definition: ion_ai::ToolSpec {
+                        name: "read".into(),
+                        description: String::new(),
+                        input_schema: serde_json::json!({"type":"object"}),
+                    },
+                    activity: ToolActivity::external("read"),
+                },
+            )
+            .unwrap();
+        let pending = TranscriptProjection::from_session(&session.view().unwrap());
+        let TranscriptItem::ActivityGroup(group) = &pending.items[1] else {
+            panic!()
+        };
+        assert!(!group.open);
+        assert_eq!(group.source, growing.items[1].source().unwrap());
+        assert_ne!(group.activities[0].identity, group.activities[1].identity);
+        assert_eq!(
+            group.activities[1].identity,
+            TranscriptActivityIdentity::Tool(parent)
+        );
+        assert_eq!(group.activities[1].state, ActivityState::Unknown);
+        assert!(group.activities[1].result.is_none());
+        assert_eq!(
+            group.activities[1].children[0].identity,
+            TranscriptActivityIdentity::Child { parent, child: 0 }
+        );
+        assert!(group.activities[1].children[0].result.is_none());
+        assert_eq!(
+            pending.sealed_prefix(),
+            1,
+            "committed prose closes but cannot settle a group"
+        );
+        assert!(
+            pending.items[2].is_sealed(),
+            "later stable items cannot leap over an unresolved group"
+        );
+        drop(session);
+        let session = crate::Session::open(&path).unwrap();
+        assert_eq!(
+            TranscriptProjection::from_session(&session.view().unwrap()),
+            pending
+        );
+        session
+            .end_turn(turn, TurnEndReason::Cancelled, &Default::default())
+            .unwrap();
+        let settled = TranscriptProjection::from_session(&session.view().unwrap());
+        assert_eq!(settled.sealed_prefix(), settled.items.len());
+        let TranscriptItem::ActivityGroup(group) = &settled.items[1] else {
+            panic!()
+        };
+        assert_eq!(group.activities[1].state, ActivityState::Unknown);
+        assert!(group.activities[1].result.is_some());
+        assert!(group.activities[1].children[0].result.is_some());
+        assert_eq!(settled.items[1].source(), pending.items[1].source());
+        drop(session);
+        let reopened = crate::Session::open(&path).unwrap();
+        assert_eq!(
+            TranscriptProjection::from_session(&reopened.view().unwrap()),
+            settled
+        );
+        drop(reopened);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    fn committed(entry: u64, turn: u64, content: Vec<Content>) -> AgentEvent {
         let SessionEntry::Assistant {
             message,
             tool_activities,
@@ -912,6 +1142,7 @@ mod tests {
         };
         AgentEvent::AssistantCommitted {
             turn,
+            entry,
             content: message.content,
             tool_activities,
             termination,
@@ -923,9 +1154,11 @@ mod tests {
         let mut live = LiveTranscript::default();
         live.observe(&AgentEvent::TurnAccepted {
             turn: 1,
+            entry: 1,
             input: Message::user_input("request".into(), []),
         });
         live.observe(&committed(
+            2,
             1,
             vec![
                 call("first", "read", serde_json::json!({"path":"a"})),
@@ -966,13 +1199,15 @@ mod tests {
     }
 
     #[test]
-    fn live_projection_reopens_a_group_when_partial_text_is_restarted() {
+    fn provisional_prose_never_seals_a_growing_group_even_before_restart() {
         let mut live = LiveTranscript::default();
         live.observe(&AgentEvent::TurnAccepted {
+            entry: 20,
             turn: 7,
             input: Message::user_input("request".into(), []),
         });
         live.observe(&committed(
+            21,
             7,
             vec![call(
                 "read-1",
@@ -996,9 +1231,18 @@ mod tests {
                 },
             },
         });
+        let source = live.projection().items[1].source();
+        assert_eq!(source, Some(TranscriptSource { entry: 21, part: 0 }));
+        assert_eq!(live.projection().sealed_prefix(), 1);
         live.observe(&AgentEvent::TextDelta("discard me".into()));
+        assert!(!live.projection().items[1].is_sealed());
+        assert!(!live.projection().items[2].is_sealed());
+        assert_eq!(live.projection().items[2].source(), None);
+        assert_eq!(live.projection().sealed_prefix(), 1);
         live.observe(&AgentEvent::ResponseRestarted);
+        assert_eq!(live.projection().sealed_prefix(), 1);
         live.observe(&committed(
+            23,
             7,
             vec![call(
                 "read-2",
@@ -1023,6 +1267,54 @@ mod tests {
         assert!(group.open);
         assert_eq!(group.activities.len(), 2);
         assert_eq!(group.activities[0].state, ActivityState::Completed);
+        assert_eq!(Some(group.source), source);
+        assert_ne!(group.activities[0].identity, group.activities[1].identity);
+        assert!(!live.projection().items[1].is_sealed());
+    }
+
+    #[test]
+    fn streamed_parts_resolve_ordered_duplicates_to_actual_committed_coordinates() {
+        let mut live = LiveTranscript::default();
+        live.observe(&AgentEvent::TurnAccepted {
+            turn: 1,
+            entry: 1,
+            input: Message::user_input("request".into(), []),
+        });
+        for block in 0..2 {
+            live.observe(&AgentEvent::ThinkingDelta {
+                block,
+                text: "same".into(),
+            });
+        }
+        live.observe(&AgentEvent::TextDelta("same".into()));
+        let event = committed(
+            4,
+            1,
+            vec![
+                Content::Text(" ".into()),
+                Content::Thinking("same".into()),
+                call("read", "read", serde_json::json!({})),
+                Content::Thinking("same".into()),
+                Content::Text("same".into()),
+            ],
+        );
+        for (streamed, part) in [1, 3, 4].into_iter().enumerate() {
+            assert_eq!(
+                live.committed_part_source(&event, streamed),
+                Some(TranscriptSource { entry: 4, part })
+            );
+        }
+        assert_eq!(live.committed_part_source(&event, 3), None);
+        assert_eq!(
+            live.committed_part_source(&committed(4, 2, vec![Content::Text("same".into())]), 0),
+            None
+        );
+        assert_eq!(
+            live.committed_part_source(&committed(4, 1, vec![Content::Text("changed".into())]), 0),
+            None
+        );
+        live.observe(&AgentEvent::ResponseRestarted);
+        assert_eq!(live.committed_part_source(&event, 0), None);
     }
 
     #[test]
@@ -1030,9 +1322,10 @@ mod tests {
         let mut live = LiveTranscript::default();
         live.observe(&AgentEvent::TurnAccepted {
             turn: 1,
+            entry: 1,
             input: Message::user_input("request".into(), []),
         });
-        live.observe(&committed(1, vec![Content::Text("kept".into())]));
+        live.observe(&committed(2, 1, vec![Content::Text("kept".into())]));
         for (block, text) in [(0, "first "), (0, "thought"), (1, "summary")] {
             live.observe(&AgentEvent::ThinkingDelta {
                 block,
@@ -1060,6 +1353,7 @@ mod tests {
             text: "new thought".into(),
         });
         live.observe(&committed(
+            3,
             1,
             vec![
                 Content::Thinking("recorded thought".into()),
@@ -1081,10 +1375,12 @@ mod tests {
     fn live_committed_text_splits_the_next_tool_group() {
         let mut live = LiveTranscript::default();
         live.observe(&AgentEvent::TurnAccepted {
+            entry: 10,
             turn: 3,
             input: Message::user_input("request".into(), []),
         });
         live.observe(&committed(
+            11,
             3,
             vec![call("one", "read", serde_json::json!({"path":"one.rs"}))],
         ));
@@ -1106,6 +1402,7 @@ mod tests {
         });
         live.observe(&AgentEvent::TextDelta("provisional".into()));
         live.observe(&committed(
+            13,
             3,
             vec![
                 Content::Text("Now editing.".into()),

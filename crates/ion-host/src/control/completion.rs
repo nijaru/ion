@@ -34,7 +34,7 @@ impl<M: Serialize + Send + 'static> SessionControl<M> {
         if let Some(owner) = self.background() {
             owner.ensure_open()?;
         }
-        let position = self.session().view()?.context_position();
+        let position = self.session().context_position()?;
         let turn = self
             .active
             .as_ref()

@@ -12,7 +12,11 @@ use ion_terminal::KeyEvent;
 #[cfg(test)]
 use ion_terminal::{KeyCode, Modifiers};
 
-use super::{Frontend, MAX_DRAFT, editing::Kill};
+use super::{
+    MAX_DRAFT,
+    editing::Kill,
+    editor::{Editor, Limit},
+};
 
 const MAX_HISTORY_ENTRIES: usize = 100;
 const MAX_HISTORY_BYTES: usize = 1024 * 1024;
@@ -193,25 +197,32 @@ fn sanitize(text: &str) -> String {
         .collect()
 }
 
-impl Frontend {
+impl Editor {
     /// Keyboard/tool focus changed: later typing and kills start new groups.
     pub(super) fn break_edit_focus(&mut self) {
+        self.error = None;
         self.recovery.interrupt();
+        self.preferred_column = None;
     }
 
     /// A different draft or attachment baseline owns the next edits.
     pub(super) fn reset_edit_baseline(&mut self) {
-        self.recovery.reset();
-    }
-
-    /// Take the current literal text out of recovery before Host handoff.
-    pub(super) fn begin_draft_handoff(&mut self) {
+        self.error = None;
+        self.preferred_column = None;
         self.recovery.reset();
     }
 
     /// Consume the key-level grouping rules before a normal composer action.
-    pub(super) fn prepare_edit_key(&mut self, key: KeyEvent) {
-        let action = self.keys.action(COMPOSER, key);
+    pub(super) fn prepare_edit_key(
+        &mut self,
+        key: KeyEvent,
+        keys: &crate::keybindings::KeyBindings,
+    ) {
+        self.error = None;
+        let action = keys.action(COMPOSER, key);
+        if !matches!(action, Some(KeyAction::CursorUp | KeyAction::CursorDown)) {
+            self.preferred_column = None;
+        }
         if action != Some(KeyAction::YankPop) {
             self.recovery.clear_yank();
         }
@@ -221,8 +232,12 @@ impl Frontend {
         }
     }
 
-    pub(super) fn undo_key(&mut self, key: KeyEvent) -> bool {
-        let redo = match self.keys.action(COMPOSER, key) {
+    pub(super) fn undo_key(
+        &mut self,
+        key: KeyEvent,
+        keys: &crate::keybindings::KeyBindings,
+    ) -> bool {
+        let redo = match keys.action(COMPOSER, key) {
             Some(KeyAction::Undo) => false,
             Some(KeyAction::Redo) => true,
             _ => return false,
@@ -237,11 +252,15 @@ impl Frontend {
         true
     }
 
-    pub(super) fn yank_keys(&mut self, key: KeyEvent) -> bool {
-        if self.keys.matches(KeyAction::YankPop, key) {
+    pub(super) fn yank_keys(
+        &mut self,
+        key: KeyEvent,
+        keys: &crate::keybindings::KeyBindings,
+    ) -> bool {
+        if keys.matches(KeyAction::YankPop, key) {
             self.yank_pop();
             true
-        } else if self.keys.matches(KeyAction::Yank, key) {
+        } else if keys.matches(KeyAction::Yank, key) {
             self.yank();
             true
         } else {
@@ -250,6 +269,8 @@ impl Frontend {
     }
 
     fn insert_clean(&mut self, text: &str, group: Group, typed: bool) {
+        self.error = None;
+        self.preferred_column = None;
         self.completion.edited(self.cursor);
         let clean = sanitize(text);
         if clean.is_empty() {
@@ -257,7 +278,7 @@ impl Frontend {
             return;
         }
         if self.draft.len().saturating_add(clean.len()) > MAX_DRAFT {
-            self.status = format!("Prompt is limited to {MAX_DRAFT} bytes");
+            self.error = Some(Limit::Prompt);
             return;
         }
         let start = self.cursor;
@@ -293,21 +314,19 @@ impl Frontend {
     /// Paste, newline, completion opener and other programmatic insertion are
     /// one atomic edit even when they contain several characters.
     pub(super) fn insert(&mut self, text: &str) {
-        if self.pickers.insert(text) {
-            self.completion.clear();
-            return;
-        }
         self.insert_clean(text, Group::Other, false);
     }
 
     /// Replace one already-owned composer range, such as completion or a path.
     pub(super) fn replace_text(&mut self, range: Range<usize>, text: &str, cursor: usize) -> bool {
+        self.error = None;
+        self.preferred_column = None;
         // Completion and editor callers derive this range from the current
         // draft. An invalid internal range is a writer bug, not malformed input.
         let removed = self.draft[range.clone()].to_owned();
         let next_len = self.draft.len() - removed.len() + text.len();
         if next_len > MAX_DRAFT {
-            self.status = format!("Prompt is limited to {MAX_DRAFT} bytes");
+            self.error = Some(Limit::Prompt);
             return false;
         }
         let cursor_before = self.cursor;
@@ -336,12 +355,12 @@ impl Frontend {
 
     /// The whole draft from the external editor is one undoable replacement.
     pub(super) fn replace_draft_atomic(&mut self, text: String) {
-        self.pickers.close();
         let end = self.draft.len();
         self.replace_text(0..end, &text, text.len());
     }
 
     pub(super) fn delete_text(&mut self, range: Range<usize>, kill: Option<Kill>) {
+        self.preferred_column = None;
         // Empty ranges are expected at line and draft boundaries; an inverted
         // range is an internal writer bug and fails at the direct index below.
         if range.start == range.end {
@@ -382,6 +401,7 @@ impl Frontend {
     }
 
     fn apply_history(&mut self, entry: &Delta, undo: bool) {
+        self.preferred_column = None;
         let (expected, replacement, cursor_after) = if undo {
             (&entry.inserted, &entry.removed, entry.cursor_before)
         } else {
@@ -423,12 +443,14 @@ impl Frontend {
     }
 
     fn yank(&mut self) {
+        self.error = None;
+        self.preferred_column = None;
         self.recovery.interrupt();
         let Some(text) = self.recovery.kills.newest().map(str::to_owned) else {
             return;
         };
         if self.draft.len().saturating_add(text.len()) > MAX_DRAFT {
-            self.status = format!("Prompt is limited to {MAX_DRAFT} bytes");
+            self.error = Some(Limit::Prompt);
             return;
         }
         let start = self.cursor;
@@ -454,6 +476,8 @@ impl Frontend {
     }
 
     fn yank_pop(&mut self) {
+        self.error = None;
+        self.preferred_column = None;
         let Some(yank) = self.recovery.yank.clone() else {
             return;
         };
@@ -474,7 +498,7 @@ impl Frontend {
         };
         let next_len = self.draft.len() - yank.range.len() + next.len();
         if next_len > MAX_DRAFT {
-            self.status = format!("Prompt is limited to {MAX_DRAFT} bytes");
+            self.error = Some(Limit::Prompt);
             return;
         }
         let cursor_before = self.cursor;
@@ -507,7 +531,7 @@ impl Frontend {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::terminal_client::{Action, EditorDraft};
+    use crate::terminal_client::{Action, EditorDraft, Frontend};
 
     fn key(code: KeyCode, modifiers: Modifiers) -> KeyEvent {
         KeyEvent::new(code, modifiers)
@@ -518,69 +542,113 @@ mod tests {
     }
 
     #[test]
+    fn submission_hands_off_the_literal_cursor_without_undo_or_attachment_loss() {
+        let literal = "literal 🦀\nsecond";
+        let cursor = "literal 🦀".len();
+        for modifiers in [Modifiers::NONE, Modifiers::ALT] {
+            let mut ui = Frontend::default();
+            ui.insert(literal);
+            ui.editor.cursor = cursor;
+            ui.attach_image(ion_host::image_input::ImageSource::Path("kept.png".into()));
+            let source = match ui.key(key(KeyCode::Enter, modifiers), None, None) {
+                Action::Submit(source) if modifiers == Modifiers::NONE => source,
+                Action::Queue(source) if modifiers == Modifiers::ALT => source,
+                _ => panic!("expected a typed editor handoff"),
+            };
+            assert_eq!((source.literal.as_str(), source.cursor), (literal, cursor));
+            assert!(ui.editor.draft.is_empty());
+            assert_eq!(ui.editor.cursor, 0);
+            assert_eq!(ui.editor.images.len(), 1);
+            assert!(ui.editor.recovery.undo.is_empty());
+            ui.restore_editor(source);
+            assert!(composer_key(
+                &mut ui,
+                key(KeyCode::Char('\x1f'), Modifiers::NONE)
+            ));
+            assert_eq!(
+                (ui.editor.draft.as_str(), ui.editor.cursor),
+                (literal, cursor)
+            );
+            assert_eq!(ui.editor.images.len(), 1);
+        }
+    }
+
+    #[test]
     fn paste_completion_and_editor_replacement_are_atomic_undo_edits() {
         let mut ui = Frontend::default();
         ui.insert("alpha\nβeta");
-        ui.prepare_edit_key(key(KeyCode::Char('\x1f'), Modifiers::NONE));
-        assert!(ui.undo_key(key(KeyCode::Char('\x1f'), Modifiers::NONE)));
-        assert_eq!(ui.draft, "");
+        ui.editor
+            .prepare_edit_key(key(KeyCode::Char('\x1f'), Modifiers::NONE), &ui.keys);
+        assert!(
+            ui.editor
+                .undo_key(key(KeyCode::Char('\x1f'), Modifiers::NONE), &ui.keys)
+        );
+        assert_eq!(ui.editor.draft, "");
 
         ui.insert("/he");
-        ui.prepare_edit_key(key(KeyCode::Tab, Modifiers::NONE));
+        ui.refresh_completion(None, None, false);
+        ui.editor.completion.painted_rows(80, 6, &ui.keys);
+        ui.editor
+            .prepare_edit_key(key(KeyCode::Tab, Modifiers::NONE), &ui.keys);
         assert!(matches!(
             ui.key(key(KeyCode::Tab, Modifiers::NONE), None, None),
             super::super::Action::None
         ));
-        assert_eq!(ui.draft, "/help ");
+        assert_eq!(ui.editor.draft, "/help ");
         assert!(composer_key(
             &mut ui,
             key(KeyCode::Char('_'), Modifiers::CONTROL | Modifiers::SHIFT)
         ));
-        assert_eq!(ui.draft, "/he");
+        assert_eq!(ui.editor.draft, "/he");
 
         ui.replace_draft_atomic("edited 🦀".into());
         assert_eq!(
-            (ui.draft.as_str(), ui.cursor),
+            (ui.editor.draft.as_str(), ui.editor.cursor),
             ("edited 🦀", "edited 🦀".len())
         );
         assert!(composer_key(
             &mut ui,
             key(KeyCode::Char('-'), Modifiers::CONTROL)
         ));
-        assert_eq!(ui.draft, "/he");
+        assert_eq!(ui.editor.draft, "/he");
     }
 
     #[test]
     fn actual_new_edit_invalidates_redo_and_groups_at_word_boundaries() {
         let mut ui = Frontend::default();
         for ch in "one two".chars() {
-            ui.prepare_edit_key(key(KeyCode::Char(ch), Modifiers::NONE));
-            ui.insert_typed(ch.encode_utf8(&mut [0; 4]));
+            ui.editor
+                .prepare_edit_key(key(KeyCode::Char(ch), Modifiers::NONE), &ui.keys);
+            ui.editor.insert_typed(ch.encode_utf8(&mut [0; 4]));
         }
-        assert_eq!(ui.draft, "one two");
+        assert_eq!(ui.editor.draft, "one two");
         assert!(composer_key(
             &mut ui,
             key(KeyCode::Char('_'), Modifiers::CONTROL)
         ));
-        assert_eq!(ui.draft, "one");
+        assert_eq!(ui.editor.draft, "one");
         assert!(composer_key(
             &mut ui,
             key(KeyCode::Char('_'), Modifiers::CONTROL)
         ));
-        assert_eq!(ui.draft, "");
+        assert_eq!(ui.editor.draft, "");
         assert!(composer_key(
             &mut ui,
             key(KeyCode::Char('_'), Modifiers::ALT | Modifiers::CONTROL)
         ));
-        assert_eq!(ui.draft, "one");
-        ui.prepare_edit_key(key(KeyCode::Char('x'), Modifiers::NONE));
-        ui.insert_typed("x");
-        assert_eq!(ui.draft, "onex");
+        assert_eq!(ui.editor.draft, "one");
+        ui.editor
+            .prepare_edit_key(key(KeyCode::Char('x'), Modifiers::NONE), &ui.keys);
+        ui.editor.insert_typed("x");
+        assert_eq!(ui.editor.draft, "onex");
         assert!(composer_key(
             &mut ui,
             key(KeyCode::Char('_'), Modifiers::ALT | Modifiers::CONTROL)
         ));
-        assert_eq!(ui.draft, "onex", "a fresh edit must discard the redo path");
+        assert_eq!(
+            ui.editor.draft, "onex",
+            "a fresh edit must discard the redo path"
+        );
     }
 
     #[test]
@@ -592,22 +660,22 @@ mod tests {
                 &mut ui,
                 key(KeyCode::Char('_'), Modifiers::CONTROL)
             ));
-            assert_eq!((ui.draft.as_str(), ui.cursor), ("", 0));
+            assert_eq!((ui.editor.draft.as_str(), ui.editor.cursor), ("", 0));
             let history = (
-                ui.recovery.undo.len(),
-                ui.recovery.redo.len(),
-                ui.recovery.retained,
+                ui.editor.recovery.undo.len(),
+                ui.editor.recovery.redo.len(),
+                ui.editor.recovery.retained,
             );
             assert!(matches!(
                 ui.key(key(KeyCode::Enter, modifiers), None, None),
                 Action::None
             ));
-            assert_eq!((ui.draft.as_str(), ui.cursor), ("", 0));
+            assert_eq!((ui.editor.draft.as_str(), ui.editor.cursor), ("", 0));
             assert_eq!(
                 (
-                    ui.recovery.undo.len(),
-                    ui.recovery.redo.len(),
-                    ui.recovery.retained
+                    ui.editor.recovery.undo.len(),
+                    ui.editor.recovery.redo.len(),
+                    ui.editor.recovery.retained
                 ),
                 history,
                 "an empty Enter is not a submission handoff"
@@ -616,7 +684,7 @@ mod tests {
                 &mut ui,
                 key(KeyCode::Char('_'), Modifiers::CONTROL | Modifiers::ALT)
             ));
-            assert_eq!(ui.draft, "hello");
+            assert_eq!(ui.editor.draft, "hello");
         }
     }
 
@@ -630,23 +698,26 @@ mod tests {
         ] {
             let mut ui = Frontend::default();
             ui.insert(literal);
-            ui.cursor = literal.len() / 2;
+            ui.editor.cursor = literal.len() / 2;
             let history = (
-                ui.recovery.undo.len(),
-                ui.recovery.redo.len(),
-                ui.recovery.retained,
+                ui.editor.recovery.undo.len(),
+                ui.editor.recovery.redo.len(),
+                ui.editor.recovery.retained,
             );
             assert!(matches!(
                 ui.key(key(KeyCode::Enter, Modifiers::NONE), None, None),
                 Action::None
             ));
-            assert_eq!((ui.draft.as_str(), ui.cursor), (literal, literal.len() / 2));
+            assert_eq!(
+                (ui.editor.draft.as_str(), ui.editor.cursor),
+                (literal, literal.len() / 2)
+            );
             assert_eq!(ui.status, expected);
             assert_eq!(
                 (
-                    ui.recovery.undo.len(),
-                    ui.recovery.redo.len(),
-                    ui.recovery.retained
+                    ui.editor.recovery.undo.len(),
+                    ui.editor.recovery.redo.len(),
+                    ui.editor.recovery.retained
                 ),
                 history
             );
@@ -654,7 +725,7 @@ mod tests {
                 &mut ui,
                 key(KeyCode::Char('_'), Modifiers::CONTROL)
             ));
-            assert_eq!(ui.draft, "");
+            assert_eq!(ui.editor.draft, "");
         }
     }
 
@@ -663,7 +734,7 @@ mod tests {
         let mut ui = Frontend::default();
         for text in ["first", "second"] {
             ui.insert(text);
-            ui.cursor = ui.draft.len();
+            ui.editor.cursor = ui.editor.draft.len();
             assert!(composer_key(
                 &mut ui,
                 key(KeyCode::Char('w'), Modifiers::CONTROL)
@@ -674,17 +745,17 @@ mod tests {
             key(KeyCode::Char('y'), Modifiers::CONTROL)
         ));
         let history = (
-            ui.recovery.undo.len(),
-            ui.recovery.redo.len(),
-            ui.recovery.retained,
+            ui.editor.recovery.undo.len(),
+            ui.editor.recovery.redo.len(),
+            ui.editor.recovery.retained,
         );
         ui.insert("\u{7}");
-        assert_eq!(ui.draft, "second");
+        assert_eq!(ui.editor.draft, "second");
         assert_eq!(
             (
-                ui.recovery.undo.len(),
-                ui.recovery.redo.len(),
-                ui.recovery.retained
+                ui.editor.recovery.undo.len(),
+                ui.editor.recovery.redo.len(),
+                ui.editor.recovery.retained
             ),
             history
         );
@@ -692,14 +763,14 @@ mod tests {
             &mut ui,
             key(KeyCode::Char('y'), Modifiers::ALT)
         ));
-        assert_eq!(ui.draft, "second");
+        assert_eq!(ui.editor.draft, "second");
     }
 
     #[test]
     fn unicode_kills_accumulate_and_yank_pop_rotates_only_after_success() {
         let mut ui = Frontend::default();
         ui.insert("alpha βeta");
-        ui.cursor = ui.draft.len();
+        ui.editor.cursor = ui.editor.draft.len();
         assert!(composer_key(
             &mut ui,
             key(KeyCode::Char('w'), Modifiers::CONTROL)
@@ -708,29 +779,29 @@ mod tests {
             &mut ui,
             key(KeyCode::Char('u'), Modifiers::CONTROL)
         ));
-        assert_eq!(ui.draft, "");
-        assert_eq!(ui.recovery.kills.newest(), Some("alpha βeta"));
+        assert_eq!(ui.editor.draft, "");
+        assert_eq!(ui.editor.recovery.kills.newest(), Some("alpha βeta"));
 
         ui.insert("Ω");
-        ui.cursor = 0;
+        ui.editor.cursor = 0;
         assert!(composer_key(
             &mut ui,
             key(KeyCode::Char('k'), Modifiers::CONTROL)
         ));
-        assert_eq!(ui.draft, "");
-        assert_eq!(ui.recovery.kills.newest(), Some("Ω"));
+        assert_eq!(ui.editor.draft, "");
+        assert_eq!(ui.editor.recovery.kills.newest(), Some("Ω"));
 
         assert!(composer_key(
             &mut ui,
             key(KeyCode::Char('y'), Modifiers::CONTROL)
         ));
-        assert_eq!(ui.draft, "Ω");
+        assert_eq!(ui.editor.draft, "Ω");
         assert!(composer_key(
             &mut ui,
             key(KeyCode::Char('y'), Modifiers::ALT)
         ));
-        assert_eq!(ui.draft, "alpha βeta");
-        assert_eq!(ui.recovery.kills.newest(), Some("alpha βeta"));
+        assert_eq!(ui.editor.draft, "alpha βeta");
+        assert_eq!(ui.editor.recovery.kills.newest(), Some("alpha βeta"));
     }
 
     #[test]
@@ -738,7 +809,7 @@ mod tests {
         let mut ui = Frontend::default();
         for text in ["first", "second"] {
             ui.insert(text);
-            ui.cursor = ui.draft.len();
+            ui.editor.cursor = ui.editor.draft.len();
             assert!(composer_key(
                 &mut ui,
                 key(KeyCode::Char('w'), Modifiers::CONTROL)
@@ -748,12 +819,12 @@ mod tests {
             ui.key(key(KeyCode::Char('y'), Modifiers::CONTROL), None, None),
             Action::None
         ));
-        assert_eq!(ui.draft, "second");
+        assert_eq!(ui.editor.draft, "second");
         assert!(matches!(
             ui.key(key(KeyCode::Char('y'), Modifiers::ALT), None, None),
             Action::None
         ));
-        assert_eq!(ui.draft, "first", "Alt-Y must pop the previous kill");
+        assert_eq!(ui.editor.draft, "first", "Alt-Y must pop the previous kill");
         assert!(matches!(
             ui.key(
                 key(KeyCode::Char('y'), Modifiers::CONTROL | Modifiers::ALT),
@@ -763,7 +834,7 @@ mod tests {
             Action::None
         ));
         assert_eq!(
-            ui.draft, "first",
+            ui.editor.draft, "first",
             "the former Ctrl-Alt-Y chord is not an alias"
         );
     }
@@ -772,73 +843,76 @@ mod tests {
     fn rejected_yank_and_pop_preserve_text_history_and_ring_rotation() {
         let mut ui = Frontend::default();
         ui.insert(&"κ".repeat(100));
-        ui.cursor = 0;
+        ui.editor.cursor = 0;
         assert!(composer_key(
             &mut ui,
             key(KeyCode::Char('k'), Modifiers::CONTROL)
         ));
         ui.insert("x");
-        ui.cursor = ui.draft.len();
+        ui.editor.cursor = ui.editor.draft.len();
         assert!(composer_key(
             &mut ui,
             key(KeyCode::Char('u'), Modifiers::CONTROL)
         ));
 
         ui.replace_draft_atomic("a".repeat(MAX_DRAFT));
-        let before_draft = ui.draft.clone();
+        let before_draft = ui.editor.draft.clone();
         let before_history = (
-            ui.recovery.undo.len(),
-            ui.recovery.redo.len(),
-            ui.recovery.retained,
+            ui.editor.recovery.undo.len(),
+            ui.editor.recovery.redo.len(),
+            ui.editor.recovery.retained,
         );
-        let before_ring = ui.recovery.kills.entries.clone();
+        let before_ring = ui.editor.recovery.kills.entries.clone();
         assert!(composer_key(
             &mut ui,
             key(KeyCode::Char('y'), Modifiers::CONTROL)
         ));
-        assert_eq!(ui.draft, before_draft, "over-limit yank changed the draft");
+        assert_eq!(
+            ui.editor.draft, before_draft,
+            "over-limit yank changed the draft"
+        );
         assert_eq!(
             (
-                ui.recovery.undo.len(),
-                ui.recovery.redo.len(),
-                ui.recovery.retained
+                ui.editor.recovery.undo.len(),
+                ui.editor.recovery.redo.len(),
+                ui.editor.recovery.retained
             ),
             before_history
         );
-        assert_eq!(ui.recovery.kills.entries, before_ring);
+        assert_eq!(ui.editor.recovery.kills.entries, before_ring);
 
         ui.replace_draft_atomic("b".repeat(MAX_DRAFT - 1));
-        ui.cursor = ui.draft.len();
+        ui.editor.cursor = ui.editor.draft.len();
         assert!(composer_key(
             &mut ui,
             key(KeyCode::Char('y'), Modifiers::CONTROL)
         ));
-        assert_eq!(ui.draft.len(), MAX_DRAFT);
-        let before_draft = ui.draft.clone();
+        assert_eq!(ui.editor.draft.len(), MAX_DRAFT);
+        let before_draft = ui.editor.draft.clone();
         let before_history = (
-            ui.recovery.undo.len(),
-            ui.recovery.redo.len(),
-            ui.recovery.retained,
+            ui.editor.recovery.undo.len(),
+            ui.editor.recovery.redo.len(),
+            ui.editor.recovery.retained,
         );
-        let before_ring = ui.recovery.kills.entries.clone();
+        let before_ring = ui.editor.recovery.kills.entries.clone();
         assert!(composer_key(
             &mut ui,
             key(KeyCode::Char('y'), Modifiers::ALT)
         ));
         assert_eq!(
-            ui.draft, before_draft,
+            ui.editor.draft, before_draft,
             "over-limit yank-pop changed the draft"
         );
         assert_eq!(
             (
-                ui.recovery.undo.len(),
-                ui.recovery.redo.len(),
-                ui.recovery.retained
+                ui.editor.recovery.undo.len(),
+                ui.editor.recovery.redo.len(),
+                ui.editor.recovery.retained
             ),
             before_history
         );
         assert_eq!(
-            ui.recovery.kills.entries, before_ring,
+            ui.editor.recovery.kills.entries, before_ring,
             "rejected yank-pop rotated the ring"
         );
     }
@@ -847,69 +921,73 @@ mod tests {
     fn attachment_and_returned_baselines_discard_history_but_keep_ring_and_images() {
         let mut ui = Frontend::default();
         ui.insert("typed");
-        ui.cursor = ui.draft.len();
+        ui.editor.cursor = ui.editor.draft.len();
         composer_key(&mut ui, key(KeyCode::Char('w'), Modifiers::CONTROL));
-        assert!(ui.recovery.kills.newest() == Some("typed"));
+        assert!(ui.editor.recovery.kills.newest() == Some("typed"));
         ui.attach_image(super::super::ImageSource::Path("/tmp/not-read.png".into()));
-        assert!(ui.recovery.undo.is_empty());
+        assert!(ui.editor.recovery.undo.is_empty());
         assert!(composer_key(
             &mut ui,
             key(KeyCode::Char('_'), Modifiers::CONTROL)
         ));
-        assert_eq!(ui.draft, "");
+        assert_eq!(ui.editor.draft, "");
 
         ui.insert("returned");
         ui.restore_editor(EditorDraft::at_end("host returned".into()));
-        assert!(ui.recovery.undo.is_empty());
-        assert_eq!(ui.draft, "host returned");
-        assert_eq!(ui.images.len(), 1);
-        ui.cursor = ui.draft.len();
+        assert!(ui.editor.recovery.undo.is_empty());
+        assert_eq!(ui.editor.draft, "host returned");
+        assert_eq!(ui.editor.images.len(), 1);
+        ui.editor.cursor = ui.editor.draft.len();
         composer_key(&mut ui, key(KeyCode::Char('y'), Modifiers::CONTROL));
-        assert_eq!(ui.draft, "host returnedtyped");
+        assert_eq!(ui.editor.draft, "host returnedtyped");
     }
 
     #[test]
     fn history_and_kill_ring_evict_oldest_entries_at_their_bounds() {
         let mut ui = Frontend::default();
         for _ in 0..=MAX_HISTORY_ENTRIES {
-            ui.insert_typed(" ");
+            ui.editor.insert_typed(" ");
         }
-        assert_eq!(ui.recovery.undo.len(), MAX_HISTORY_ENTRIES);
+        assert_eq!(ui.editor.recovery.undo.len(), MAX_HISTORY_ENTRIES);
         for _ in 0..MAX_HISTORY_ENTRIES {
             composer_key(&mut ui, key(KeyCode::Char('_'), Modifiers::CONTROL));
         }
-        assert_eq!(ui.draft, " ", "eviction must preserve retained edits");
+        assert_eq!(
+            ui.editor.draft, " ",
+            "eviction must preserve retained edits"
+        );
 
         let mut ui = Frontend::default();
         for index in 0..10 {
             let text = format!("{index:02}{}", "x".repeat(MAX_DRAFT - 2));
             ui.replace_draft_atomic(text);
         }
-        assert!(ui.recovery.undo.len() < MAX_HISTORY_ENTRIES);
+        assert!(ui.editor.recovery.undo.len() < MAX_HISTORY_ENTRIES);
         let retained = ui
+            .editor
             .recovery
             .undo
             .iter()
-            .chain(&ui.recovery.redo)
+            .chain(&ui.editor.recovery.redo)
             .map(|delta| delta.removed.len() + delta.inserted.len())
             .sum::<usize>();
         assert!(retained <= MAX_HISTORY_BYTES);
-        assert_eq!(retained, ui.recovery.retained);
-        let final_text = ui.draft.clone();
-        while !ui.recovery.undo.is_empty() {
+        assert_eq!(retained, ui.editor.recovery.retained);
+        let final_text = ui.editor.draft.clone();
+        while !ui.editor.recovery.undo.is_empty() {
             assert!(composer_key(
                 &mut ui,
                 key(KeyCode::Char('_'), Modifiers::CONTROL)
             ));
         }
-        while !ui.recovery.redo.is_empty() {
+        while !ui.editor.recovery.redo.is_empty() {
             assert!(composer_key(
                 &mut ui,
                 key(KeyCode::Char('_'), Modifiers::CONTROL | Modifiers::ALT)
             ));
         }
         assert_eq!(
-            (ui.draft.as_str(), ui.cursor),
+            (ui.editor.draft.as_str(), ui.editor.cursor),
             (final_text.as_str(), final_text.len()),
             "byte-budget eviction must leave a valid undo/redo chain"
         );
@@ -936,13 +1014,13 @@ mod tests {
             ui.key(key(KeyCode::Char('c'), Modifiers::CONTROL), None, None),
             super::super::Action::None
         ));
-        assert_eq!(ui.draft, "");
-        assert!(ui.recovery.kills.entries.is_empty());
+        assert_eq!(ui.editor.draft, "");
+        assert!(ui.editor.recovery.kills.entries.is_empty());
         assert!(composer_key(
             &mut ui,
             key(KeyCode::Char('_'), Modifiers::CONTROL)
         ));
-        assert_eq!(ui.draft, "unsent 🦀");
+        assert_eq!(ui.editor.draft, "unsent 🦀");
     }
 
     #[test]
@@ -950,9 +1028,9 @@ mod tests {
         let mut ui = Frontend::default();
         ui.insert("ab");
         composer_key(&mut ui, key(KeyCode::Backspace, Modifiers::NONE));
-        assert_eq!(ui.draft, "a");
-        assert!(ui.recovery.kills.entries.is_empty());
+        assert_eq!(ui.editor.draft, "a");
+        assert!(ui.editor.recovery.kills.entries.is_empty());
         composer_key(&mut ui, key(KeyCode::Char('_'), Modifiers::CONTROL));
-        assert_eq!(ui.draft, "ab");
+        assert_eq!(ui.editor.draft, "ab");
     }
 }

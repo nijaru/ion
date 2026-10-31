@@ -183,7 +183,7 @@ impl Frontend {
             items: vec![
                 PickerItem {
                     label: format!("Tool output: {}", self.output_detail.label()),
-                    detail: Some("Terminal-local: fullscreen and future publication; native history unchanged".into()),
+                    detail: Some("Terminal-local: current view and future publication; native history unchanged".into()),
                     value: PickerValue::Setting(Setting::Output(next_output)),
                 },
                 PickerItem {
@@ -210,7 +210,7 @@ impl Frontend {
             Setting::Output(value) => {
                 self.output_detail = value;
                 self.status = format!(
-                    "Tool output: {} · fullscreen and future publication; native history unchanged",
+                    "Tool output: {} · current view and future publication; native history unchanged",
                     value.label()
                 );
             }
@@ -222,8 +222,7 @@ impl Frontend {
                 );
             }
         }
-        self.scroll = 0;
-        self.fullscreen_rows = 0;
+        self.view.follow_end();
     }
 
     pub(super) fn output_settings(

@@ -40,6 +40,35 @@ fn select(session: &Session, head: u64) -> ContextPosition {
 }
 
 #[test]
+fn status_tracks_renaming_reasoning_selection_and_reopen() {
+    let (root, path, session) = fixture();
+    assert_eq!(session.status().unwrap().entries, 0);
+    session.set_name(Some("  retained name  ")).unwrap();
+    {
+        let idle = session.operations.try_lock().unwrap();
+        session
+            .record_selection(&idle, model("one"), Some(Reasoning::High))
+            .unwrap();
+    }
+    finish(&session, "original", "answer");
+    let current = session.status().unwrap();
+    assert_eq!(current.cwd, Some(fs::canonicalize(&root).unwrap()));
+    assert_eq!(current.name.as_deref(), Some("retained name"));
+    assert_eq!(current.reasoning, Reasoning::High);
+    assert_eq!(current.entries, session.entry_count().unwrap());
+    select(&session, 0);
+    let selected = session.status().unwrap();
+    assert_eq!(selected.entries, current.entries + 1);
+    assert_eq!(selected.reasoning, Reasoning::ProviderDefault);
+    assert_eq!(selected.name, current.name);
+    drop(session);
+    let reopened = Session::open(&path).unwrap();
+    assert_eq!(reopened.status().unwrap(), selected);
+    drop(reopened);
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
 fn alternatives_survive_selection_reopen_copies_and_new_global_turn_ids() {
     let (root, path, session) = fixture();
     let key = RequestKey::new("navigation".into(), "original".into()).unwrap();
@@ -140,6 +169,31 @@ fn alternatives_survive_selection_reopen_copies_and_new_global_turn_ids() {
     drop(fork);
     select(&session, alternate_head);
     assert_eq!(finish(&session, "continue alternate", "third"), 3);
+    let alternate = session.view().unwrap();
+    let projected = crate::TranscriptProjection::from_session(&alternate);
+    let expected_sources = alternate
+        .entries
+        .iter()
+        .enumerate()
+        .filter_map(|(index, fact)| {
+            let entry = index as u64 + 1;
+            (alternate.context_path.contains(&entry)
+                && matches!(
+                    fact,
+                    SessionEntry::TurnStarted { .. } | SessionEntry::Assistant { .. }
+                ))
+            .then_some(crate::TranscriptSource { entry, part: 0 })
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        projected
+            .items
+            .iter()
+            .map(|item| item.source().unwrap())
+            .collect::<Vec<_>>(),
+        expected_sources,
+        "selected context never renumbers global source coordinates"
+    );
     select(&session, original_answer.head_entry);
     let before = session.view().unwrap();
     assert_eq!(before.messages.len(), 2);

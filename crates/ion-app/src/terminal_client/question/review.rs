@@ -64,7 +64,7 @@ impl QuestionModal {
                 };
                 self.invalidate_visibility();
             }
-            Some(KeyAction::Confirm) if self.selection_visible => {
+            Some(KeyAction::Confirm) if self.can_confirm() => {
                 return if self.review_choice == 0 {
                     self.submit()
                 } else {
@@ -135,6 +135,8 @@ impl QuestionModal {
                     })
                     .collect(),
                 cursor: None,
+                candidate: None,
+                editor_width: None,
             };
         }
         let mut content = Vec::new();
@@ -171,6 +173,7 @@ impl QuestionModal {
             }
             content.push(String::new());
         }
+        let height = height.min((content.len() + 6).max(7));
         let budget = height - 6;
         self.review_page = budget;
         self.review_offset = self.review_offset.min(content.len().saturating_sub(budget));
@@ -233,7 +236,11 @@ impl QuestionModal {
             ),
             theme.style(Role::Secondary),
         );
-        self.selection_visible = true;
-        QuestionFrame { rows, cursor: None }
+        QuestionFrame {
+            rows,
+            cursor: None,
+            candidate: Some(self.visibility.prepare(self.target())),
+            editor_width: None,
+        }
     }
 }

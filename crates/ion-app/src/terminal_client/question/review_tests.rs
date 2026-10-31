@@ -77,9 +77,9 @@ fn collapse_preserves_confirmed_none_custom_cursor_and_review() {
         modal.key(key(KeyCode::PageUp), &keys),
         QuestionAction::Scroll { up: true }
     ));
-    modal.render(1, 1, &keys, &theme);
+    modal.painted_render(1, 1, &keys, &theme);
     modal.key(collapse, &keys); // Reopen even when the underlying viewport is tiny.
-    modal.render(80, 24, &keys, &theme);
+    modal.painted_render(80, 24, &keys, &theme);
     modal.paste("!"); // Same grapheme cursor, not the end of the retained text.
     press(&mut modal, enter(), &keys);
     press(&mut modal, collapse, &keys); // Review is collapsible too.
@@ -107,7 +107,7 @@ fn collapsed_cancel_remains_available_without_visible_choices() {
         KeyEvent::new(KeyCode::Char(']'), Modifiers::CONTROL),
         &keys,
     );
-    modal.render(1, 1, &keys, &Theme::default());
+    modal.painted_render(1, 1, &keys, &Theme::default());
     assert!(
         matches!(modal.key(key(KeyCode::Esc), &keys), QuestionAction::Cancel(id) if id == request)
     );
@@ -167,7 +167,7 @@ fn review_paint_resize_navigation_and_remapped_keys_keep_authority_scoped() {
     // Returning to review revoked its previous paint.
     assert!(matches!(modal.key(enter(), &keys), QuestionAction::None));
     for (width, height) in [(1, 1), (8, 2), (15, 20), (80, 4)] {
-        let frame = modal.render(width, height, &keys, &theme);
+        let frame = modal.painted_render(width, height, &keys, &theme);
         assert!(
             frame
                 .rows
@@ -176,7 +176,7 @@ fn review_paint_resize_navigation_and_remapped_keys_keep_authority_scoped() {
         );
         assert!(matches!(modal.key(enter(), &keys), QuestionAction::None));
     }
-    modal.render(80, 24, &keys, &theme);
+    modal.painted_render(80, 24, &keys, &theme);
     modal.invalidate_visibility(); // Rejected publication/resize before the next key.
     assert!(matches!(modal.key(enter(), &keys), QuestionAction::None));
     press(&mut modal, key(KeyCode::Tab), &keys); // Remapped default must be inactive.
@@ -210,7 +210,7 @@ fn review_safely_pages_long_answers_and_cancel_is_not_a_partial_answer() {
     let mut modal = modal();
     modal.questions[0].options[0].label = "line\n".repeat(12) + "\u{1b}]52;c;untrusted\u{7}tail";
     // Long choice must be confirmed in a viewport showing the whole label.
-    modal.render(80, 80, &keys, &theme);
+    modal.painted_render(80, 80, &keys, &theme);
     modal.key(enter(), &keys);
     for _ in 0..2 {
         press(&mut modal, key(KeyCode::Down), &keys);
@@ -218,7 +218,7 @@ fn review_safely_pages_long_answers_and_cancel_is_not_a_partial_answer() {
     press(&mut modal, enter(), &keys);
     modal.paste(&"Custom detail\n".repeat(40));
     press(&mut modal, enter(), &keys);
-    let first = modal.render(40, 10, &keys, &theme);
+    let first = modal.painted_render(40, 10, &keys, &theme);
     assert!(
         first
             .rows
@@ -228,7 +228,7 @@ fn review_safely_pages_long_answers_and_cancel_is_not_a_partial_answer() {
     for _ in 0..10 {
         press(&mut modal, key(KeyCode::PageDown), &keys);
     }
-    let frame = modal.render(40, 10, &keys, &theme);
+    let frame = modal.painted_render(40, 10, &keys, &theme);
     assert!(
         frame
             .rows

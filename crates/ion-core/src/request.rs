@@ -9,8 +9,10 @@ use tokio_util::sync::CancellationToken;
 
 use crate::{
     agent::{AgentError, AgentEvent, AgentLimits},
-    generation::{GeneratedResponse, generate_with_retry},
-    session::{AuthorityScope, ModelContextSnapshot, RecoveryBinding, Session, SessionError},
+    generation::{GeneratedResponse, GenerationAttempt, generate_with_retry},
+    session::{
+        AuthorityScope, ModelContextSnapshot, RecoveryBinding, RequestBasis, Session, SessionError,
+    },
     tool_set::{ToolCatalog, ToolSet},
 };
 
@@ -25,6 +27,11 @@ pub(crate) struct PreparedRequest {
     catalog: ToolCatalog,
     measurement: RequestMeasurement,
     scope: RequestScope,
+}
+
+pub(crate) struct IssuedRequest {
+    pub attempt: GenerationAttempt,
+    pub prepared: PreparedRequest,
 }
 
 pub(crate) struct RequestStep {
@@ -69,7 +76,7 @@ impl RequestSettings<'_> {
 impl PreparedRequest {
     pub fn new(
         session: &Session,
-        turn: u64,
+        basis: RequestBasis,
         service: &Arc<dyn ModelService>,
         tools: &ToolSet,
         reason: ModelRouteReason,
@@ -82,8 +89,9 @@ impl PreparedRequest {
             limits,
             ..
         } = settings;
-        let previous = session.model_context()?;
-        let previous: &[ToolSpec] = previous
+        let turn = basis.turn.ok_or(SessionError::InvalidHistory)?;
+        let previous: &[ToolSpec] = basis
+            .previous
             .as_ref()
             .map_or(&[], |context| context.tools.as_slice());
         let catalog = catalog.map_or_else(
@@ -95,15 +103,16 @@ impl PreparedRequest {
             tools: catalog.declared_specs(),
         };
         let route = ModelRoute::direct(model.clone(), reason);
+        let context_timeline = basis.timeline(&context);
         let mut request = ModelRequest {
-            messages: session.context_messages_for(&route.effective)?,
-            context_timeline: session.context_timeline_for(&route.effective, &context)?,
+            messages: basis.messages,
+            context_timeline,
             route,
             provider_session_id: Some(session.provider_session_id().to_string()),
             instructions: Some(context.instructions),
             tools: context.tools,
             prompt_cache: ion_ai::PromptCacheIntent::Reusable,
-            controls: limits.controls(session.reasoning()?, true),
+            controls: limits.controls(basis.reasoning, true),
         };
         if !limits.image_input
             && request
@@ -181,7 +190,7 @@ impl PreparedRequest {
         model: &Arc<dyn ModelService>,
         stop: &CancellationToken,
         observe: &mut F,
-    ) -> Result<RequestStep, AgentError>
+    ) -> Result<IssuedRequest, AgentError>
     where
         F: FnMut(AgentEvent) + Send,
     {
@@ -199,14 +208,12 @@ impl PreparedRequest {
             },
         )?;
         session.activate_request_calibration(&self.measurement, &self.scope)?;
-        let started = tokio::time::Instant::now();
-        let generated = generate_with_retry(model, &self.request, stop, observe).await?;
+        let attempt = generate_with_retry(model, &self.request, stop, observe).await;
         // Retain the route actually used by pre-output retry for cache warming.
-        self.request.route = generated.route.clone();
-        Ok(RequestStep {
-            generated,
+        self.request.route = attempt.route.clone();
+        Ok(IssuedRequest {
+            attempt,
             prepared: self,
-            started,
         })
     }
 }

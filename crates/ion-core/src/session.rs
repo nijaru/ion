@@ -254,6 +254,15 @@ pub struct UnobservedUserShell {
     pub admission_entry: u64,
 }
 
+/// Coherent operational status without reading or cloning conversation history.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct SessionStatus {
+    pub cwd: Option<PathBuf>,
+    pub name: Option<String>,
+    pub reasoning: Reasoning,
+    pub entries: u64,
+}
+
 #[derive(Debug, Clone, Serialize)]
 pub struct SessionView {
     pub id: uuid::Uuid,
@@ -282,6 +291,54 @@ pub struct TurnSummary {
     pub input: Message,
     pub model: ModelRef,
     pub end: Option<TurnEndReason>,
+}
+
+#[derive(Debug, Default)]
+pub(crate) struct CommittedInputEntries {
+    pub steering: std::ops::Range<u64>,
+    pub completion: Option<u64>,
+}
+
+/// A single committed projection; catalogue and service preparation must happen
+/// after releasing the store lock.
+pub(crate) struct RequestBasis {
+    pub turn: Option<u64>,
+    pub messages: Vec<Message>,
+    pub previous: Option<ModelContextSnapshot>,
+    pub reasoning: Reasoning,
+    pub assistant_seen: bool,
+    pub prefix_bound: bool,
+    context_changes: Option<Vec<ModelContextChange>>,
+}
+
+impl RequestBasis {
+    pub fn timeline(&self, current: &ModelContextSnapshot) -> Option<ModelContextTimeline> {
+        let changes = self.context_changes.as_ref()?;
+        let current = model_context_state(current);
+        let Some((first, rest)) = changes.split_first() else {
+            return Some(ModelContextTimeline {
+                initial: current,
+                changes: Vec::new(),
+            });
+        };
+        let mut changes = rest.to_vec();
+        if changes.last().unwrap_or(first).context != current {
+            changes.push(ModelContextChange {
+                after_message: self.messages.len(),
+                context: current,
+            });
+        }
+        Some(ModelContextTimeline {
+            initial: first.context.clone(),
+            changes,
+        })
+    }
+}
+
+#[derive(Debug)]
+pub(crate) struct CommittedAssistant {
+    pub entry: u64,
+    pub complete: bool,
 }
 
 impl SessionView {
@@ -1145,8 +1202,8 @@ impl Session {
     /// Provider-neutral context projection when no effective target is supplied.
     /// Opaque provider replay is retained only for the direct-model case where
     /// the logical selection and last effective physical model are identical.
-    /// Routed callers must use `context_messages_for` with the resolved
-    /// effective model before dispatch.
+    /// Request preparation uses `request_basis` with the resolved effective
+    /// model to capture context, reasoning and replay state together.
     pub fn context_messages(&self) -> Result<Vec<Message>, SessionError> {
         let store = self.store.lock().map_err(|_| SessionError::Poisoned)?;
         let direct = match (
@@ -1169,46 +1226,38 @@ impl Session {
             .clone())
     }
 
+    pub(crate) fn request_basis(&self, model: &ModelRef) -> Result<RequestBasis, SessionError> {
+        let store = self.store.lock().map_err(|_| SessionError::Poisoned)?;
+        Ok(RequestBasis {
+            turn: store.state.active,
+            messages: context_projection(&store, Some(model)),
+            previous: store.state.last_context.clone(),
+            reasoning: store.state.reasoning,
+            assistant_seen: store.state.assistant_seen_in_turn,
+            prefix_bound: store.state.prefix_bound_in_turn,
+            context_changes: (store.state.compaction.is_none()
+                && store.state.replay_epoch_start == 0
+                && store.state.last_effective_model.as_ref() == Some(model))
+            .then(|| store.context_changes.clone()),
+        })
+    }
+
     /// Return a full provider-neutral context timeline only while the raw
     /// message projection is still byte-for-byte comparable to Session history.
     /// Compaction or a replay epoch change deliberately falls back to the
     /// latest leading context instead of guessing at provider prefix semantics.
+    #[cfg(test)]
     pub(crate) fn context_timeline_for(
         &self,
         model: &ModelRef,
         current: &ModelContextSnapshot,
     ) -> Result<Option<ModelContextTimeline>, SessionError> {
-        let store = self.store.lock().map_err(|_| SessionError::Poisoned)?;
-        if store.state.compaction.is_some()
-            || store.state.replay_epoch_start != 0
-            || store.state.last_effective_model.as_ref() != Some(model)
-        {
-            return Ok(None);
-        }
-
-        let current = model_context_state(current);
-        let Some((first, rest)) = store.context_changes.split_first() else {
-            return Ok(Some(ModelContextTimeline {
-                initial: current,
-                changes: Vec::new(),
-            }));
-        };
-        let mut changes = rest.to_vec();
-        let last = changes.last().unwrap_or(first);
-        if last.context != current {
-            changes.push(ModelContextChange {
-                after_message: store.messages.len(),
-                context: current,
-            });
-        }
-        Ok(Some(ModelContextTimeline {
-            initial: first.context.clone(),
-            changes,
-        }))
+        Ok(self.request_basis(model)?.timeline(current))
     }
 
     /// Project a request for one model without reviving opaque replay from a
     /// previous model epoch. The raw Session keeps every original message.
+    #[cfg(test)]
     pub(crate) fn context_messages_for(
         &self,
         model: &ModelRef,
@@ -1331,6 +1380,17 @@ impl Session {
             }],
         )
     }
+    pub fn status(&self) -> Result<SessionStatus, SessionError> {
+        let store = self.store.lock().map_err(|_| SessionError::Poisoned)?;
+        let header = read_header(&store.connection)?;
+        Ok(SessionStatus {
+            cwd: header.cwd,
+            name: header.name,
+            reasoning: store.state.reasoning,
+            entries: store.state.sequence,
+        })
+    }
+
     pub fn view(&self) -> Result<SessionView, SessionError> {
         let store = self.store.lock().map_err(|_| SessionError::Poisoned)?;
         let entries = read_entries(&store.connection)?;
@@ -1518,6 +1578,7 @@ impl Session {
         };
         Ok(TurnAdmission::New {
             turn,
+            entry: store.state.sequence,
             interrupted,
             input,
         })
@@ -1573,6 +1634,7 @@ impl Session {
             usage,
             continue_turn,
         )
+        .map(|committed| committed.complete)
     }
 
     pub(crate) fn record_assistant_with_activities(
@@ -1583,7 +1645,7 @@ impl Session {
         execution: ModelExecution,
         usage: Usage,
         continue_turn: bool,
-    ) -> Result<bool, SessionError> {
+    ) -> Result<CommittedAssistant, SessionError> {
         self.record_assistant_entries(
             turn,
             message,
@@ -1594,6 +1656,7 @@ impl Session {
             Vec::new(),
             Vec::new(),
         )
+        .map(|(assistant, _)| assistant)
     }
 
     /// Publish the completed assistant and queued steering in one batch; a
@@ -1611,7 +1674,7 @@ impl Session {
         usage: Usage,
         steering: Vec<Message>,
         completion: Vec<crate::CompletionNotice>,
-    ) -> Result<bool, SessionError> {
+    ) -> Result<(CommittedAssistant, CommittedInputEntries), SessionError> {
         let continue_turn = !steering.is_empty() || !completion.is_empty();
         self.record_assistant_entries(
             turn,
@@ -1639,7 +1702,7 @@ impl Session {
         continue_turn: bool,
         steering: Vec<Message>,
         completion: Vec<crate::CompletionNotice>,
-    ) -> Result<bool, SessionError> {
+    ) -> Result<(CommittedAssistant, CommittedInputEntries), SessionError> {
         let has_calls = message
             .content
             .iter()
@@ -1671,8 +1734,29 @@ impl Session {
             });
         }
         let mut store = self.store.lock().map_err(|_| SessionError::Poisoned)?;
+        let entry = store.state.sequence + 1;
         append(&mut store, &entries)?;
-        Ok(!has_calls && !continue_turn)
+        let mut inputs = CommittedInputEntries::default();
+        for (offset, fact) in entries.iter().enumerate() {
+            let coordinate = entry + offset as u64;
+            match fact {
+                SessionEntry::Steering { .. } => {
+                    if inputs.steering.is_empty() {
+                        inputs.steering.start = coordinate;
+                    }
+                    inputs.steering.end = coordinate + 1;
+                }
+                SessionEntry::Completion { .. } => inputs.completion = Some(coordinate),
+                _ => {}
+            }
+        }
+        Ok((
+            CommittedAssistant {
+                entry,
+                complete: !has_calls && !continue_turn,
+            },
+            inputs,
+        ))
     }
 
     /// Publish a truncated assistant attempt and every unexecuted call's
@@ -1685,7 +1769,7 @@ impl Session {
         tool_activities: Vec<StoredToolActivity>,
         execution: ModelExecution,
         usage: Usage,
-    ) -> Result<Vec<crate::ToolSettlement>, SessionError> {
+    ) -> Result<(u64, Vec<crate::ToolSettlement>), SessionError> {
         let results = message
             .content
             .iter()
@@ -1719,8 +1803,9 @@ impl Session {
                 .map(|result| SessionEntry::ToolResult { turn, result }),
         );
         let mut store = self.store.lock().map_err(|_| SessionError::Poisoned)?;
+        let entry = store.state.sequence + 1;
         append(&mut store, &entries)?;
-        Ok(results)
+        Ok((entry, results))
     }
 
     #[cfg(test)]
@@ -1729,7 +1814,7 @@ impl Session {
         turn: u64,
         inputs: Vec<Message>,
     ) -> Result<(), SessionError> {
-        self.record_inputs(turn, inputs, Vec::new())
+        self.record_inputs(turn, inputs, Vec::new()).map(|_| ())
     }
 
     pub(crate) fn record_inputs(
@@ -1737,7 +1822,9 @@ impl Session {
         turn: u64,
         inputs: Vec<Message>,
         completion: Vec<crate::CompletionNotice>,
-    ) -> Result<(), SessionError> {
+    ) -> Result<CommittedInputEntries, SessionError> {
+        let steering_count = inputs.len() as u64;
+        let has_completion = !completion.is_empty();
         let mut entries = inputs
             .into_iter()
             .map(|input| SessionEntry::Steering { turn, input })
@@ -1749,10 +1836,15 @@ impl Session {
             });
         }
         if entries.is_empty() {
-            return Ok(());
+            return Ok(CommittedInputEntries::default());
         }
         let mut store = self.store.lock().map_err(|_| SessionError::Poisoned)?;
-        append(&mut store, &entries)
+        let first = store.state.sequence + 1;
+        append(&mut store, &entries)?;
+        Ok(CommittedInputEntries {
+            steering: first..first + steering_count,
+            completion: has_completion.then_some(first + steering_count),
+        })
     }
 
     #[cfg(test)]
@@ -1798,6 +1890,7 @@ impl Session {
         append(&mut store, &entries)
     }
 
+    #[cfg(test)]
     pub(crate) fn tool_occurrence(
         &self,
         turn: u64,
@@ -2889,9 +2982,14 @@ mod tests {
             assert_eq!(before.display_messages().len(), 1);
             assert_eq!(before.messages.len(), usize::from(!excluded));
             let transcript = crate::TranscriptProjection::from_session(&before);
+            assert_eq!(transcript.sealed_prefix(), 0);
+            assert_eq!(
+                transcript.items[0].source(),
+                Some(crate::TranscriptSource { entry: 1, part: 0 })
+            );
             assert!(
                 matches!(&transcript.items[..], [crate::TranscriptItem::UserShell(shell)]
-                if shell.command == "interrupted-command" && shell.outcome == UserShellOutcome::Unknown && shell.exclude_from_context == excluded)
+                if shell.command == "interrupted-command" && shell.outcome.is_none() && shell.exclude_from_context == excluded)
             );
             let clone = session.clone_to(root.join("clone.sqlite")).unwrap();
             assert_eq!(clone.view().unwrap().entries, before.entries);
@@ -2938,6 +3036,15 @@ mod tests {
             }
             let recovered = session.view().unwrap();
             assert_eq!(recovered.unfinished_user_shell, None);
+            let transcript = crate::TranscriptProjection::from_session(&recovered);
+            assert!(transcript.items[0].is_sealed());
+            assert!(
+                matches!(&transcript.items[0], crate::TranscriptItem::UserShell(shell) if shell.outcome == Some(UserShellOutcome::Unknown))
+            );
+            assert_eq!(
+                transcript.items[0].source(),
+                Some(crate::TranscriptSource { entry: 1, part: 0 })
+            );
             assert!(matches!(
                 &recovered.entries[1],
                 SessionEntry::UserShellSettled {
@@ -5397,6 +5504,71 @@ mod tests {
         let reopened = Session::open(&path).unwrap();
         assert_eq!(reopened.view().unwrap().last_context, Some(changed));
         drop(reopened);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn request_basis_keeps_context_and_replay_at_one_committed_boundary() {
+        let (root, path) = fixture();
+        let session = Session::create(&path, Some(&root)).unwrap();
+        let model = ModelRef {
+            provider: "test".into(),
+            model: "test".into(),
+        };
+        let context = |instructions: &str| ModelContextSnapshot {
+            instructions: instructions.into(),
+            tools: Vec::new(),
+        };
+        let (turn, _) = session.begin_turn("first".into(), model.clone()).unwrap();
+        session
+            .admit_request(turn, model.clone(), context("A"))
+            .unwrap();
+        let captured = session.request_basis(&model).unwrap();
+        session
+            .record_assistant(
+                turn,
+                Message {
+                    role: Role::Assistant,
+                    content: vec![Content::Text("continue".into())],
+                    provider_replay: None,
+                },
+                Usage::unknown(),
+                true,
+            )
+            .unwrap();
+        session
+            .record_steerings(
+                turn,
+                vec![Message {
+                    role: Role::User,
+                    content: vec![Content::Text("later".into())],
+                    provider_replay: None,
+                }],
+            )
+            .unwrap();
+        session
+            .admit_request(turn, model.clone(), context("B"))
+            .unwrap();
+        let current = session.request_basis(&model).unwrap();
+        assert_eq!(captured.turn, Some(turn));
+        assert_eq!(captured.messages.len(), 1);
+        assert_eq!(captured.previous, Some(context("A")));
+        assert_eq!(captured.reasoning, Reasoning::ProviderDefault);
+        assert!(!captured.assistant_seen);
+        assert!(!captured.prefix_bound);
+        assert_eq!(captured.timeline(&context("C")), None);
+        assert_eq!(current.messages.len(), 3);
+        assert_eq!(current.previous, Some(context("B")));
+        assert!(current.assistant_seen);
+        assert!(!current.prefix_bound);
+        assert_eq!(
+            current.timeline(&context("B")).unwrap().changes,
+            vec![ModelContextChange {
+                after_message: 3,
+                context: model_context_state(&context("B"))
+            },]
+        );
+        drop(session);
         fs::remove_dir_all(root).unwrap();
     }
 

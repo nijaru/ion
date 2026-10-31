@@ -32,6 +32,7 @@ mod stdio;
 mod terminal_client;
 mod terminal_commands;
 mod terminal_completion;
+mod terminal_input;
 mod themes;
 mod tool_output;
 mod transcript;

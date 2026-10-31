@@ -1,27 +1,24 @@
-//! One coding loop for library, headless and terminal clients.
+//! Bound agent configuration and admission into the shared Turn engine.
 #[cfg(test)]
 use crate::generation::generate_with_retry;
 use ion_ai::{
-    Content, IncompleteReason, Message, ModelExecution, ModelRef, ModelRequest, ModelResponse,
-    ModelRouteReason, ModelService, ProviderError, Reasoning, ResponseTermination, Role,
+    Content, Message, ModelRef, ModelService, ProviderError, Reasoning, ResponseTermination, Role,
 };
 #[cfg(test)]
-use ion_ai::{GenerationControls, ModelRoute, ProviderErrorKind, ToolChoice};
+use ion_ai::{
+    GenerationControls, IncompleteReason, ModelExecution, ModelRequest, ModelResponse, ModelRoute,
+    ModelRouteReason, ProviderErrorKind, ToolChoice,
+};
 use serde_json::Value;
-use std::collections::{BTreeSet, VecDeque};
+use std::collections::VecDeque;
 use std::sync::{Arc, Mutex};
 use thiserror::Error;
 use tokio_util::sync::CancellationToken;
 
 use crate::{
     RequestReceipt, SubmissionRequest,
-    generation::{GeneratedResponse, context_length_exceeded, refresh_prompt_cache},
-    request::{PreparedRequest, RequestStep},
-    session::{
-        ModelContextSnapshot, Session, SessionError, StoredToolActivity, TurnAdmission,
-        TurnEndReason,
-    },
-    tool_set::{ToolActivity, ToolDispatch, ToolExecution, ToolSet, ToolSource},
+    session::{Session, SessionError, StoredToolActivity, TurnAdmission, TurnEndReason},
+    tool_set::{ToolActivity, ToolSet, ToolSource},
 };
 
 /// A durable receipt, with a new retained operation only for the first admission.
@@ -76,7 +73,6 @@ fn user_text(prompt: String) -> Message {
 mod completion;
 pub use completion::CompletionSubmission;
 mod inbox;
-use inbox::CommittedInputs;
 pub use inbox::SteeringInbox;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
@@ -134,56 +130,6 @@ impl PromptCacheWarmingPolicy {
     }
 }
 
-const ACTIVE_CACHE_WARMING_LIMIT: std::time::Duration = std::time::Duration::from_secs(60 * 60);
-
-struct PromptCacheWarmer {
-    request: ModelRequest,
-    policy: PromptCacheWarmingPolicy,
-    refresh_after: std::time::Duration,
-    next_refresh: tokio::time::Instant,
-    expires_at: tokio::time::Instant,
-    stop_at: tokio::time::Instant,
-}
-
-impl PromptCacheWarmer {
-    fn new(
-        policy: PromptCacheWarmingPolicy,
-        request: &ModelRequest,
-        usage: ion_ai::Usage,
-        request_started: tokio::time::Instant,
-    ) -> Option<Self> {
-        if !policy.should_warm(usage) {
-            return None;
-        }
-        let refresh_after = policy.refresh_after()?;
-        // Discard ineligible delays before constructing their deadlines.
-        if refresh_after >= ACTIVE_CACHE_WARMING_LIMIT {
-            return None;
-        }
-        let next_refresh = request_started + refresh_after;
-        let expires_at = request_started + std::time::Duration::from_secs(policy.lifetime_seconds);
-        let stop_at = request_started + ACTIVE_CACHE_WARMING_LIMIT;
-        Some(Self {
-            request: request.clone(),
-            policy,
-            refresh_after,
-            next_refresh,
-            expires_at,
-            stop_at,
-        })
-    }
-
-    fn reschedule(&mut self, usage: ion_ai::Usage, refresh_started: tokio::time::Instant) -> bool {
-        if !self.policy.should_warm(usage) {
-            return false;
-        }
-        self.next_refresh = refresh_started + self.refresh_after;
-        self.expires_at =
-            refresh_started + std::time::Duration::from_secs(self.policy.lifetime_seconds);
-        self.next_refresh < self.stop_at
-    }
-}
-
 #[derive(Debug, Clone, Copy, serde::Serialize)]
 pub struct AgentLimits {
     pub max_request_bytes: usize,
@@ -211,7 +157,10 @@ mod recovery;
 mod recovery_tests;
 #[cfg(test)]
 mod summary_recovery_tests;
-use recovery::{TurnOrigin, TurnRun, TurnStart};
+use recovery::{TurnOrigin, TurnStart};
+mod effects;
+mod request_cycle;
+mod turn;
 
 /// One agent loop bound to a logical model and its immutable host contract.
 #[derive(Clone)]
@@ -290,63 +239,6 @@ impl Agent {
 
     pub fn tool_catalog(&self) -> crate::tool_set::ToolCatalog {
         self.tools.snapshot()
-    }
-
-    async fn execute_tool_with_cache_warming(
-        &self,
-        session: &Session,
-        turn: u64,
-        tool: ion_ai::BoxFuture<'_, Result<ToolExecution, AgentError>>,
-        stop: &CancellationToken,
-        warmer: &mut Option<PromptCacheWarmer>,
-    ) -> Result<ToolExecution, AgentError> {
-        tokio::pin!(tool);
-        loop {
-            let Some(state) = warmer.as_ref() else {
-                return tool.await;
-            };
-            let deadline = state.next_refresh;
-            let valid_until = state.expires_at.min(state.stop_at);
-            let request = state.request.clone();
-            let refresh = async {
-                tokio::time::sleep_until(deadline).await;
-                let started = tokio::time::Instant::now();
-                // Check at dispatch, not before sleeping: a slow response,
-                // refresh, or delayed timer must not restart an expired window.
-                if started >= valid_until {
-                    return (started, None);
-                }
-                let refreshed = refresh_prompt_cache(&self.service, request, stop).await;
-                (started, refreshed)
-            };
-            tokio::pin!(refresh);
-            tokio::select! {
-                output = &mut tool => return output,
-                refreshed = &mut refresh => {
-                    let (started, Some((execution, usage))) = refreshed else {
-                        *warmer = None;
-                        continue;
-                    };
-                    // Cache warming is an optimization. A failure to publish
-                    // its accounting fact must not interrupt an in-flight
-                    // workspace effect; the next correctness-critical Session
-                    // write will still surface storage failure.
-                    let _ = session.record_cache_warm(turn, execution, usage);
-                    let keep_warming = warmer
-                        .as_mut()
-                        .is_some_and(|state| state.reschedule(usage, started));
-                    if !keep_warming {
-                        *warmer = None;
-                    }
-                }
-                () = stop.cancelled() => {
-                    *warmer = None;
-                    // The host owns cancellation and effect settlement. Dropping
-                    // this future would interrupt its process/capture cleanup.
-                    return tool.await;
-                }
-            }
-        }
     }
 
     pub fn submit<F>(
@@ -455,13 +347,14 @@ impl Agent {
                 Some(key.clone()),
                 binding,
             )?;
-            let (turn, interrupted, input) = match admission {
+            let (turn, entry, interrupted, input) = match admission {
                 TurnAdmission::Existing(receipt) => return Ok((receipt, None)),
                 TurnAdmission::New {
                     turn,
+                    entry,
                     interrupted,
                     input,
-                } => (turn, interrupted, input),
+                } => (turn, entry, interrupted, input),
             };
             let receipt = RequestReceipt {
                 session: session.id(),
@@ -481,7 +374,7 @@ impl Agent {
                             TurnStart {
                                 turn,
                                 interrupted,
-                                origin: TurnOrigin::User { input },
+                                origin: TurnOrigin::User { entry, input },
                                 catalog,
                             },
                             instructions,
@@ -560,6 +453,7 @@ impl Agent {
         let (binding, catalog) = self.admission_binding(session, &instructions)?;
         let TurnAdmission::New {
             turn,
+            entry,
             interrupted,
             input,
         } = session.admit_turn(input, self.model.clone(), None, binding)?
@@ -571,7 +465,7 @@ impl Agent {
             TurnStart {
                 turn,
                 interrupted,
-                origin: TurnOrigin::User { input },
+                origin: TurnOrigin::User { entry, input },
                 catalog,
             },
             instructions,
@@ -626,467 +520,15 @@ impl Agent {
     where
         F: FnMut(AgentEvent) + Send,
     {
-        let route_reason = match start.origin {
-            TurnOrigin::User { input } => {
-                observe(AgentEvent::TurnAccepted {
-                    turn: start.turn,
-                    input,
-                });
-                ModelRouteReason::UserRequest
-            }
-            TurnOrigin::Resumed { point } => {
-                observe(AgentEvent::TurnResumed { point });
-                ModelRouteReason::Recovery
-            }
-            TurnOrigin::Automated { notices } => {
-                observe(AgentEvent::CompletionCommitted {
-                    turn: start.turn,
-                    notices,
-                    new_turn: true,
-                });
-                ModelRouteReason::DelegationCompletion
-            }
-        };
-        if start.interrupted > 0 {
-            observe(AgentEvent::InterruptedCalls(start.interrupted));
+        turn::Turn {
+            agent: self,
+            session,
+            start,
+            instructions,
+            stop: &stop,
         }
-        let run = TurnRun {
-            turn: start.turn,
-            catalog: start.catalog,
-            route_reason,
-        };
-        self.drive(session, run, instructions, &stop, steering, observe)
-            .await
-    }
-
-    async fn drive<F, M: Send>(
-        &self,
-        session: &Arc<Session>,
-        start: TurnRun,
-        instructions: String,
-        stop: &CancellationToken,
-        steering: Option<&SteeringInbox<M>>,
-        observe: &mut F,
-    ) -> Result<String, AgentError>
-    where
-        F: FnMut(AgentEvent) + Send,
-    {
-        // Only this running operation knows which reserved calls never received
-        // execution authority. Process-loss recovery remains conservatively Unknown.
-        let turn = start.turn;
-        let (mut assistant_seen_in_turn, mut prefix_bound_continuation) =
-            session.turn_replay_state(turn)?;
-        let mut unstarted = BTreeSet::new();
-        let outcome = async {
-            let mut length_recovery_attempted = false;
-            let mut replay_rebased = false;
-            let mut route_reason = start.route_reason;
-            loop {
-                // Keep a fast in-process model from starving terminal input and
-                // cancellation during a long tool sequence.
-                tokio::task::yield_now().await;
-                if stop.is_cancelled() {
-                    return Err(AgentError::Cancelled);
-                }
-                let mut recovered_overflow = false;
-                let step = loop {
-                    // Opted-in continuation pins executable routes for the Turn.
-                    // Discovery can change exposure, not replace this authority.
-                    if start.catalog.is_none() {
-                        for diagnostic in self.tools.refresh(stop.clone()).await {
-                            observe(AgentEvent::ToolCatalogWarning(diagnostic));
-                        }
-                    }
-                    if stop.is_cancelled() {
-                        return Err(AgentError::Cancelled);
-                    }
-                    // Catalog refresh and compaction can await new guidance.
-                    // Recheck on every rebuild, before freezing the next request.
-                    if let Some(inbox) = steering {
-                        inbox
-                            .record_pending(session, turn, self.limits)?
-                            .observe(turn, observe);
-                    }
-                    if stop.is_cancelled() {
-                        return Err(AgentError::Cancelled);
-                    }
-                    let prepared = match PreparedRequest::new(
-                        session,
-                        turn,
-                        &self.service,
-                        &self.tools,
-                        route_reason,
-                        self.request_settings(&instructions),
-                        start.catalog.as_ref(),
-                    ) {
-                        Ok(prepared) => prepared,
-                        Err(AgentError::ContextTooLarge) if !prefix_bound_continuation => {
-                            if self
-                                .compact_inner(None, session, stop, self.keep_bytes(), observe)
-                                .await?
-                                .is_some()
-                            {
-                                continue;
-                            }
-                            return Err(AgentError::ContextTooLarge);
-                        }
-                        Err(error) => return Err(error),
-                    };
-                    let output_budget = prepared.output_budget();
-                    let mut emitted_output = false;
-                    let issued = prepared
-                        .issue(session, &self.service, stop, &mut |event| {
-                            if matches!(
-                                event,
-                                AgentEvent::TextDelta(_)
-                                    | AgentEvent::ThinkingDelta { .. }
-                                    | AgentEvent::ModelOutputObserved
-                            ) {
-                                emitted_output = true;
-                            }
-                            observe(event);
-                        })
-                        .await;
-                    let generated = issued.as_ref().map(|step| &step.generated);
-                    if !assistant_seen_in_turn
-                        && !replay_rebased
-                        && matches!(&generated, Err(AgentError::ReplayContextChanged))
-                    {
-                        session.rebase_provider_replay(turn)?;
-                        observe(AgentEvent::ProviderReplayRebased);
-                        replay_rebased = true;
-                        continue;
-                    }
-                    let overflow = context_length_exceeded(generated);
-                    let recoverable_length = !length_recovery_attempted
-                        && matches!(
-                            &generated,
-                            Ok(GeneratedResponse {
-                                response: ModelResponse {
-                                    termination: ResponseTermination::Incomplete(
-                                        IncompleteReason::MaxOutputTokens
-                                    ),
-                                    usage: ion_ai::Usage {
-                                        output_tokens: Some(output),
-                                        ..
-                                    },
-                                    ..
-                                },
-                                ..
-                            }) if *output < u64::from(output_budget)
-                        );
-                    if ((overflow && !emitted_output) || recoverable_length)
-                        && !prefix_bound_continuation
-                        && !recovered_overflow
-                        && self
-                            .compact_inner(None, session, stop, self.keep_bytes(), observe)
-                            .await?
-                            .is_some()
-                    {
-                        recovered_overflow = true;
-                        if recoverable_length {
-                            length_recovery_attempted = true;
-                            observe(AgentEvent::ResponseRestarted);
-                        }
-                        continue;
-                    }
-                    break issued?;
-                };
-                let RequestStep {
-                    generated: GeneratedResponse { response, route },
-                    prepared,
-                    started,
-                } = step;
-                let tool_catalog = prepared.catalog();
-                let execution = ModelExecution {
-                    route,
-                    returned_model: response.returned_model.clone(),
-                };
-                let truncated_calls = matches!(
-                    response.termination,
-                    ResponseTermination::Incomplete(IncompleteReason::MaxOutputTokens)
-                ) && response
-                    .message
-                    .content
-                    .iter()
-                    .any(|part| matches!(part, Content::ToolCall(_)));
-                if response.message.role != Role::Assistant
-                    || (!matches!(response.termination, ResponseTermination::Completed)
-                        && !truncated_calls)
-                {
-                    return Err(AgentError::IncompleteModelResponse);
-                }
-                if response
-                    .message
-                    .provider_replay
-                    .as_ref()
-                    .is_some_and(|replay| {
-                        !replay.is_compatible_with(&execution.route.effective.provider)
-                    })
-                {
-                    return Err(AgentError::InvalidProviderReplay);
-                }
-                let mut ids = std::collections::HashSet::new();
-                let mut calls = Vec::new();
-                for content in &response.message.content {
-                    if let Content::ToolCall(call) = content {
-                        if call.id.is_empty() || call.name.is_empty() || !ids.insert(&call.id) {
-                            return Err(AgentError::InvalidToolCall);
-                        }
-                        calls.push(call.clone());
-                    }
-                }
-                let tool_activities = calls
-                    .iter()
-                    .map(|call| StoredToolActivity {
-                        call_id: call.id.clone(),
-                        activity: tool_catalog.activity(call),
-                    })
-                    .collect::<Vec<_>>();
-                prefix_bound_continuation |= response
-                    .message
-                    .provider_replay
-                    .as_ref()
-                    .is_some_and(|replay| replay.prefix_bound);
-                let committed_content = response.message.content.clone();
-                if truncated_calls {
-                    assistant_seen_in_turn = true;
-                    let results = session.record_truncated_assistant(
-                        turn,
-                        response.message,
-                        tool_activities.clone(),
-                        execution.clone(),
-                        response.usage,
-                    )?;
-                    prepared.record_observed_input(session, &execution, response.usage)?;
-                    observe(AgentEvent::AssistantCommitted {
-                        turn,
-                        content: committed_content,
-                        tool_activities,
-                        termination: response.termination,
-                    });
-                    for result in results {
-                        let activity = calls
-                            .iter()
-                            .find(|call| call.id == result.call_id)
-                            .map_or_else(
-                                || ToolActivity::external(&result.name),
-                                |call| tool_catalog.activity(call),
-                            );
-                        observe(AgentEvent::ToolFinished {
-                            call_id: result.call_id,
-                            name: result.name,
-                            activity,
-                            outcome: result.outcome,
-                        });
-                    }
-                    continue;
-                }
-                let final_text = response
-                    .message
-                    .content
-                    .iter()
-                    .filter_map(|content| {
-                        if let Content::Text(text) = content {
-                            Some(text.as_str())
-                        } else {
-                            None
-                        }
-                    })
-                    .collect::<Vec<_>>()
-                    .join("\n");
-                if calls.is_empty() && final_text.trim().is_empty() {
-                    return Err(AgentError::IncompleteModelResponse);
-                }
-                // Steering arriving during a tool stays in the host inbox until
-                // the tool result is durable. A final answer and its queued
-                // steering enter the Session together or neither does.
-                let (complete, committed_steering) = if calls.is_empty()
-                    && let Some(inbox) = steering
-                {
-                    inbox.record_assistant(
-                        session,
-                        turn,
-                        response.message,
-                        tool_activities.clone(),
-                        execution.clone(),
-                        response.usage,
-                        self.limits,
-                    )?
-                } else {
-                    (
-                        session.record_assistant_with_activities(
-                            turn,
-                            response.message,
-                            tool_activities.clone(),
-                            execution.clone(),
-                            response.usage,
-                            false,
-                        )?,
-                        CommittedInputs::default(),
-                    )
-                };
-                observe(AgentEvent::AssistantCommitted {
-                    turn,
-                    content: committed_content,
-                    tool_activities,
-                    termination: response.termination,
-                });
-                let human_continuation = !committed_steering.steering.is_empty();
-                committed_steering.observe(turn, observe);
-                // Persistence acknowledgements precede fallible calibration.
-                prepared.record_observed_input(session, &execution, response.usage)?;
-                assistant_seen_in_turn = true;
-                if complete {
-                    observe(AgentEvent::TurnEnded {
-                        turn,
-                        reason: TurnEndReason::Completed,
-                    });
-                    observe(AgentEvent::Final(final_text.clone()));
-                    return Ok(final_text);
-                }
-                route_reason = if calls.is_empty() && human_continuation {
-                    ModelRouteReason::Steering
-                } else if calls.is_empty() {
-                    ModelRouteReason::DelegationCompletion
-                } else {
-                    ModelRouteReason::ToolContinuation
-                };
-                unstarted.extend(calls.iter().map(|call| call.id.clone()));
-                let call_count = calls.len();
-                let mut cache_warmer = if call_count == 0 {
-                    None
-                } else {
-                    self.limits.prompt_cache_warming.and_then(|policy| {
-                        PromptCacheWarmer::new(policy, prepared.request(), response.usage, started)
-                    })
-                };
-                let mut activate_tools = BTreeSet::new();
-                for (index, call) in calls.into_iter().enumerate() {
-                    if stop.is_cancelled() {
-                        return Err(AgentError::Cancelled);
-                    }
-                    let activity = tool_catalog.activity(&call);
-                    let occurrence = session.tool_occurrence(turn, &call.id)?;
-                    let (invocation, gateway) = crate::ToolInvocation::admitted(
-                        &call,
-                        stop.clone(),
-                        session.id(),
-                        turn,
-                        occurrence,
-                        None,
-                        prepared.reasoning(),
-                    );
-                    let invocation = invocation.with_model_messages(&prepared.request().messages);
-                    let tool = Box::pin(async {
-                        if stop.is_cancelled() {
-                            return Err(AgentError::Cancelled);
-                        }
-                        let dispatch = tool_catalog.execute_model_call(invocation).await;
-                        if !matches!(dispatch, ToolDispatch::Rejected(_)) {
-                            unstarted.remove(&call.id);
-                            observe(AgentEvent::ToolStarted {
-                                call_id: call.id.clone(),
-                                name: call.name.clone(),
-                                arguments: call.arguments.clone(),
-                                activity: activity.clone(),
-                            });
-                        }
-                        match dispatch {
-                            ToolDispatch::History => Ok(ToolExecution::output(
-                                crate::session::history::execute(session, &call, stop.clone())
-                                    .await,
-                            )),
-                            ToolDispatch::Composition(runtime, limits) => crate::code_gateway::run(
-                                runtime,
-                                limits,
-                                session,
-                                turn,
-                                tool_catalog,
-                                &call,
-                                prepared.reasoning(),
-                                &prepared.request().messages,
-                                stop,
-                                observe,
-                            )
-                            .await
-                            .map(ToolExecution::output),
-                            ToolDispatch::Execution(execution) => Ok(execution.await),
-                            ToolDispatch::Rejected(reason) => {
-                                Ok(ToolExecution::NotDispatched { reason })
-                            }
-                        }
-                    });
-                    let tool = Box::pin(async { gateway.run(session, stop, tool).await? });
-                    let execution = self
-                        .execute_tool_with_cache_warming(
-                            session,
-                            turn,
-                            tool,
-                            stop,
-                            &mut cache_warmer,
-                        )
-                        .await?;
-                    let (outcome, activated) = match execution {
-                        ToolExecution::NotDispatched { reason } => {
-                            (crate::ToolOutcome::NotDispatched { reason }, Vec::new())
-                        }
-                        ToolExecution::Observed { output, activate } => {
-                            let projection = output.model_projection(
-                                self.limits.image_input,
-                                self.limits.max_request_bytes,
-                            )?;
-                            (
-                                crate::ToolOutcome::Observed { output, projection },
-                                activate,
-                            )
-                        }
-                    };
-                    activate_tools.extend(activated);
-                    let next_context = (index + 1 == call_count && !activate_tools.is_empty())
-                        .then(|| ModelContextSnapshot {
-                            instructions: instructions.clone(),
-                            tools: tool_catalog.declared_specs_with(&activate_tools),
-                        });
-                    session.record_tool_settlement_with_context(
-                        turn,
-                        crate::ToolSettlement {
-                            call_id: call.id.clone(),
-                            name: call.name.clone(),
-                            outcome: outcome.clone(),
-                        },
-                        next_context,
-                    )?;
-                    unstarted.remove(&call.id);
-                    observe(AgentEvent::ToolFinished {
-                        call_id: call.id,
-                        name: call.name,
-                        activity,
-                        outcome,
-                    });
-                }
-            }
-        }
-        .await;
-        match outcome {
-            Ok(answer) => Ok(answer),
-            Err(error) => {
-                // Never disguise failed storage with a second write.
-                if !matches!(error, AgentError::Session(_)) {
-                    let reason = error.end_reason();
-                    for (result, activity) in session.end_turn(turn, reason.clone(), &unstarted)? {
-                        observe(AgentEvent::ToolFinished {
-                            call_id: result.call_id,
-                            name: result.name,
-                            activity,
-                            outcome: result.outcome,
-                        });
-                    }
-                    observe(AgentEvent::TurnEnded { turn, reason });
-                }
-                Err(error)
-            }
-        }
+        .run(steering, observe)
+        .await
     }
 }
 
@@ -1099,11 +541,15 @@ pub enum AgentEvent {
     /// Exact normalized human input, published only after admission commits.
     TurnAccepted {
         turn: u64,
+        /// Durable global Session entry coordinate.
+        entry: u64,
         input: Message,
     },
     /// A durable automated context offer, never a human input acceptance.
     CompletionCommitted {
         turn: u64,
+        /// TurnStarted for a new automated Turn; Completion otherwise.
+        entry: u64,
         notices: Vec<crate::CompletionNotice>,
         new_turn: bool,
     },
@@ -1123,6 +569,8 @@ pub enum AgentEvent {
     /// Published after the assistant's complete content and call metadata commit.
     AssistantCommitted {
         turn: u64,
+        /// Durable global Session entry coordinate.
+        entry: u64,
         content: Vec<Content>,
         tool_activities: Vec<StoredToolActivity>,
         termination: ResponseTermination,
@@ -1130,6 +578,8 @@ pub enum AgentEvent {
     /// Published after steering enters the Session, in durable order.
     SteeringCommitted {
         turn: u64,
+        /// Durable global Session entry coordinate.
+        entry: u64,
         input: Message,
     },
     ProviderRetry {
@@ -2040,6 +1490,7 @@ mod tests {
             },
         )
         .await
+        .into_result()
         .unwrap();
         assert_eq!(retry_delay, Some(10));
         assert_eq!(generated.route.reason, ModelRouteReason::Retry);
@@ -2065,6 +1516,7 @@ mod tests {
             },
         )
         .await
+        .outcome
         .unwrap_err();
         assert!(matches!(error, AgentError::IncompleteModelResponse));
         assert_eq!(visible, "partial");
@@ -2086,6 +1538,7 @@ mod tests {
             &mut |_| {},
         )
         .await
+        .outcome
         .unwrap_err();
         assert!(matches!(error, AgentError::Provider(_)));
         assert_eq!(service.requests().len(), 1);
@@ -3286,6 +2739,22 @@ mod tests {
         let view = session.view().unwrap();
         assert!(view.entries.iter().any(|entry| matches!(entry, SessionEntry::Assistant { turn: 2, execution, .. } if execution.route.reason == ModelRouteReason::DelegationCompletion)));
         let automated = view.entries.iter().position(|entry| matches!(entry, SessionEntry::TurnStarted { completion, .. } if !completion.is_empty())).unwrap() as u64 + 1;
+        assert!(events.iter().any(|event| matches!(event, AgentEvent::CompletionCommitted { entry, new_turn: true, .. } if *entry == automated)));
+        let mut live = crate::LiveTranscript::default();
+        for event in events.iter() {
+            live.observe(event);
+        }
+        let canonical = crate::TranscriptProjection::from_session(&view);
+        let automated_items = canonical
+            .items
+            .into_iter()
+            .filter(|item| item.source().unwrap().entry >= automated)
+            .collect::<Vec<_>>();
+        assert_eq!(live.projection().items, automated_items);
+        assert_eq!(
+            live.projection().sealed_prefix(),
+            live.projection().items.len()
+        );
         assert!(
             !view
                 .context_points()
@@ -3444,6 +2913,61 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn transient_retry_keeps_its_request_frozen_while_steering_waits() {
+        let root = std::env::temp_dir().join(format!("ion-retry-intake-{}", uuid::Uuid::now_v7()));
+        std::fs::create_dir(&root).unwrap();
+        let session = Arc::new(Session::create(root.join("session.sqlite"), Some(&root)).unwrap());
+        let scripts = Arc::new(ScriptedModelService::new([
+            Script::OpenError(ProviderError {
+                kind: ProviderErrorKind::Overloaded,
+                message: "busy".into(),
+                retry_after_ms: Some(0),
+            }),
+            response(vec![Content::Text("first".into())]),
+            response(vec![Content::Text("second".into())]),
+        ]));
+        let agent = Agent::new(scripts.clone(), Arc::new(TestTools::new(&root)), model());
+        let steering = Arc::new(SteeringInbox::new(
+            agent.limits(),
+            crate::InputBudget::default(),
+        ));
+        let intake = steering.clone();
+        let answer = agent
+            .submit_with_steering(
+                session.clone(),
+                "start".into(),
+                "test".into(),
+                CancellationToken::new(),
+                steering.clone(),
+                move |event| {
+                    if matches!(event, AgentEvent::ProviderRetry { .. }) {
+                        intake.push("later guidance".into()).unwrap();
+                    }
+                },
+            )
+            .await
+            .unwrap();
+        assert_eq!(answer, "second");
+        let requests = scripts.requests();
+        assert_eq!(requests.len(), 3);
+        let mut retry = requests[0].clone();
+        retry.route.reason = ModelRouteReason::Retry;
+        assert_eq!(requests[1], retry);
+        assert_eq!(requests[2].route.reason, ModelRouteReason::Steering);
+        assert!(
+            matches!(requests[2].messages.last(), Some(Message { role: Role::User, content, .. })
+            if content == &[Content::Text("later guidance".into())])
+        );
+        assert!(steering.take_uncommitted().is_empty());
+        assert_eq!(
+            session.view().unwrap().last_end,
+            Some((1, TurnEndReason::Completed))
+        );
+        drop(session);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[tokio::test]
     async fn final_text_and_queued_steering_continue_the_same_turn() {
         let root =
             std::env::temp_dir().join(format!("ion-steering-final-{}", uuid::Uuid::now_v7()));
@@ -3519,6 +3043,187 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn committed_sources_cover_reused_calls_and_atomic_steering_readiness() {
+        use crate::{
+            CompletionDelivery, CompletionInbox, CompletionNotice, LiveTranscript, SessionEntry,
+            TranscriptActivityIdentity, TranscriptItem, TranscriptProjection, TranscriptSource,
+        };
+        let root = std::env::temp_dir().join(format!(
+            "ion-transcript-coordinates-{}",
+            uuid::Uuid::now_v7()
+        ));
+        std::fs::create_dir(&root).unwrap();
+        std::fs::write(root.join("input"), "observed").unwrap();
+        let path = root.join("session.sqlite");
+        let session = Arc::new(Session::create(&path, Some(&root)).unwrap());
+        let call = || {
+            Content::ToolCall(ToolCall {
+                id: "reused".into(),
+                name: "read".into(),
+                arguments: serde_json::json!({"path":"input"}),
+                raw_arguments: None,
+            })
+        };
+        let scripts = Arc::new(ScriptedModelService::new([
+            response(vec![
+                Content::Thinking(String::new()),
+                Content::Text("  ".into()),
+                call(),
+            ]),
+            response(vec![call()]),
+            Script::Stream(vec![
+                ModelStreamEvent::TextDelta("first answer".into()),
+                ModelStreamEvent::Completed(ModelResponse {
+                    message: Message {
+                        role: Role::Assistant,
+                        content: vec![Content::Text("first answer".into())],
+                        provider_replay: None,
+                    },
+                    usage: Usage::unknown(),
+                    termination: ResponseTermination::Completed,
+                    returned_model: None,
+                }),
+            ]),
+            response(vec![Content::Text("done".into())]),
+        ]));
+        let agent = Agent::new(scripts, Arc::new(TestTools::new(&root)), model());
+        let completions = CompletionInbox::new(session.id());
+        let permit = completions
+            .reserve(0, Some(1), CompletionDelivery::Continue)
+            .unwrap();
+        let notice = CompletionNotice {
+            source_session: uuid::Uuid::now_v7(),
+            run: uuid::Uuid::now_v7(),
+            child_session: uuid::Uuid::now_v7(),
+        };
+        let inbox = Arc::new(
+            SteeringInbox::new(agent.limits(), crate::InputBudget::default())
+                .with_completions(completions),
+        );
+        let intake = inbox.clone();
+        let live = Arc::new(Mutex::new(LiveTranscript::default()));
+        let observed = live.clone();
+        let events = Arc::new(Mutex::new(Vec::new()));
+        let published = events.clone();
+        agent
+            .submit_message_with_steering(
+                session.clone(),
+                Message {
+                    role: Role::User,
+                    content: vec![
+                        Content::Text(String::new()),
+                        Content::Text("inspect".into()),
+                    ],
+                    provider_replay: None,
+                },
+                "test".into(),
+                CancellationToken::new(),
+                inbox,
+                move |event| {
+                    if matches!(&event, AgentEvent::TextDelta(text) if text == "first answer") {
+                        intake.push("first steering".into()).unwrap();
+                        intake.push("second steering".into()).unwrap();
+                        permit.offer(notice.clone());
+                    }
+                    observed.lock().unwrap().observe(&event);
+                    published.lock().unwrap().push(event);
+                },
+            )
+            .await
+            .unwrap();
+        let view = session.view().unwrap();
+        for event in events.lock().unwrap().iter() {
+            match event {
+                AgentEvent::TurnAccepted { entry, input, .. } => assert!(
+                    matches!(&view.entries[*entry as usize - 1], SessionEntry::TurnStarted { input: stored, .. } if stored == input)
+                ),
+                AgentEvent::AssistantCommitted { entry, content, .. } => assert!(
+                    matches!(&view.entries[*entry as usize - 1], SessionEntry::Assistant { message, .. } if message.content == *content)
+                ),
+                AgentEvent::SteeringCommitted { entry, input, .. } => assert!(
+                    matches!(&view.entries[*entry as usize - 1], SessionEntry::Steering { input: stored, .. } if stored == input)
+                ),
+                AgentEvent::CompletionCommitted {
+                    entry,
+                    notices,
+                    new_turn,
+                    ..
+                } => {
+                    assert!(!new_turn);
+                    assert!(
+                        matches!(&view.entries[*entry as usize - 1], SessionEntry::Completion { notices: stored, .. } if stored == notices)
+                    );
+                }
+                _ => {}
+            }
+        }
+        let projection = TranscriptProjection::from_session(&view);
+        assert_eq!(live.lock().unwrap().projection(), &projection);
+        assert_eq!(projection.sealed_prefix(), projection.items.len());
+        assert_eq!(
+            projection.items[0].source(),
+            Some(TranscriptSource { entry: 1, part: 1 })
+        );
+        let TranscriptItem::ActivityGroup(group) = &projection.items[1] else {
+            panic!()
+        };
+        let assistant_entries = view
+            .entries
+            .iter()
+            .enumerate()
+            .filter_map(|(index, fact)| {
+                matches!(fact, SessionEntry::Assistant { .. }).then_some(index as u64 + 1)
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(
+            group.source,
+            TranscriptSource {
+                entry: assistant_entries[0],
+                part: 2
+            }
+        );
+        assert_eq!(group.activities.len(), 2);
+        for (activity, entry) in group.activities.iter().zip(&assistant_entries) {
+            assert_eq!(
+                activity.identity,
+                TranscriptActivityIdentity::Tool(crate::ToolOccurrence {
+                    assistant_entry: *entry,
+                    ordinal: 0
+                })
+            );
+        }
+        let answer_entry = assistant_entries[2];
+        assert_eq!(
+            projection.items[2].source(),
+            Some(TranscriptSource {
+                entry: answer_entry,
+                part: 0
+            })
+        );
+        for (offset, item) in projection.items[3..6].iter().enumerate() {
+            assert_eq!(
+                item.source(),
+                Some(TranscriptSource {
+                    entry: answer_entry + offset as u64 + 1,
+                    part: 0
+                })
+            );
+        }
+        assert!(matches!(
+            &projection.items[5],
+            TranscriptItem::Readiness { .. }
+        ));
+        drop(session);
+        let reopened = Session::open(&path).unwrap();
+        assert_eq!(
+            TranscriptProjection::from_session(&reopened.view().unwrap()),
+            projection
+        );
+        drop(reopened);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[tokio::test]
     async fn committed_acceptance_establishes_the_typed_live_root() {
         let root = std::env::temp_dir().join(format!("ion-live-root-{}", uuid::Uuid::now_v7()));
         std::fs::create_dir(&root).unwrap();
@@ -3548,7 +3253,7 @@ mod tests {
             "test".into(),
             CancellationToken::new(),
             move |event| {
-                if let AgentEvent::TurnAccepted { turn, input } = &event {
+                if let AgentEvent::TurnAccepted { turn, input, .. } = &event {
                     let view = committed.view().unwrap();
                     assert!(matches!(
                         &view.entries[0],

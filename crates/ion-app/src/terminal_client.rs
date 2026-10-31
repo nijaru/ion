@@ -1,27 +1,20 @@
-//! Terminal view over the same coding loop used by headless and library hosts.
+//! Native coding application over shared Host control and the reusable agent runtime.
 #[cfg(test)]
-use ion_ai::Role;
+use ion_ai::{Message, Role};
 #[cfg(test)]
 use ion_terminal::{KeyCode, Modifiers};
 #[cfg(test)]
 use std::fs;
-use std::{
-    collections::{HashSet, VecDeque},
-    path::PathBuf,
-};
+use std::{collections::HashSet, path::PathBuf};
 
 use crate::display_text::{fit_line, push_wrapped};
 use crate::keybindings::{self, COMPLETION, COMPOSER, DETAILS, KeyAction, KeyBindings};
 use crate::terminal_commands::Builtin;
-use crate::terminal_completion::Completion;
 use crate::transcript_detail::{DetailView, tools};
 use crate::transcript_render::kind_label;
 use anyhow::{Context, Result};
-use ion_ai::{Content, Message, ModelRef};
-use ion_core::{
-    LiveTranscript, Session, SessionEntry, SessionView, TranscriptItem, TranscriptProjection,
-    TurnEndReason,
-};
+use ion_ai::{Content, ModelRef};
+use ion_core::{LiveTranscript, Session, SessionEntry, SessionView, TranscriptItem, TurnEndReason};
 use ion_host::image_input::{ImageSource, LoadedImage};
 use ion_host::{CredentialStore, Delivery, QuestionResponder, Resources};
 use ion_terminal::{
@@ -33,19 +26,23 @@ use tokio::time::Duration;
 use tokio_util::sync::CancellationToken;
 mod activity;
 mod attach;
+mod block_presenter;
 mod clipboard_input;
 mod command;
-mod composer;
 mod configuration;
+mod conversation;
+mod dock;
 mod draft;
 mod editing;
+mod editor;
+mod editor_control;
 mod editor_recovery;
 mod file_discovery;
 mod interaction;
 mod mcp;
 mod navigation;
 mod orientation;
-mod output;
+pub(crate) mod paint;
 mod picker;
 mod question;
 mod session_search;
@@ -54,16 +51,13 @@ mod tasks;
 mod theme_selection;
 use clipboard_input::*;
 use command::{CommandInput, dispatch_command};
-use composer::input_window;
-use editing::{Edit, vertical_cursor};
-use editor_recovery::EditorRecovery;
+use editor::{Editor, EditorDraft, RecoveredDraft};
 use interaction::{apply_picker, submit_editor, submit_initial_prompts};
 use picker::{Picker, PickerValue, Pickers};
 use question::{QuestionAction, QuestionModal};
 pub use setup::{choose_session, setup_model};
 
 pub(crate) const MAX_DRAFT: usize = 64 * 1024;
-const LIVE_REGION_MAX_ROWS: usize = 12;
 const RESUME_TURN_LIMIT: usize = 6;
 const RESUME_ENTRY_LIMIT_WITHOUT_TURNS: usize = 32;
 
@@ -129,7 +123,7 @@ impl TuiMode {
     }
 }
 
-use activity::{ActiveOperation, Activity};
+use activity::ActiveOperation;
 
 #[derive(Default)]
 struct Frontend {
@@ -140,96 +134,17 @@ struct Frontend {
     mode: TuiMode,
     output_detail: crate::tool_output::OutputDetail,
     thinking_visibility: crate::transcript_render::ThinkingVisibility,
-    history: TranscriptProjection,
-    fullscreen_rows: usize,
-    fullscreen_width: usize,
-    draft: String,
-    images: Vec<ImageSource>,
-    files: Vec<ion_host::prompt_files::TextFile>,
-    cursor: usize,
-    recovery: EditorRecovery,
-    history_session: Option<PathBuf>,
-    history_selection: u64,
-    history_published_items: usize,
-    pending_history_target: usize,
-    pending_history_banner: Option<String>,
-    scroll: usize,
+    conversation: conversation::Conversation,
+    presenter: block_presenter::BlockPresenter,
+    view: block_presenter::ConversationView,
+    editor: Editor,
     status: String,
-    output: output::Output,
     pickers: Pickers,
-    completion: Completion,
-    recovered: VecDeque<RecoveredDraft>,
-    prompt_history: Vec<String>,
-    browsing: Option<PromptBrowse>,
     details: Option<DetailView>,
     clipboard_job: Option<ClipboardJob>,
     question: Option<QuestionModal>,
     cwd: PathBuf,
     session_label: String,
-}
-
-struct PromptBrowse {
-    index: usize,
-    end: usize,
-    draft: String,
-    cursor: usize,
-}
-
-#[derive(Debug, serde::Serialize)]
-struct EditorDraft {
-    literal: String,
-    cursor: usize,
-}
-
-impl EditorDraft {
-    fn at_end(literal: String) -> Self {
-        Self {
-            cursor: literal.len(),
-            literal,
-        }
-    }
-}
-
-// Returned inputs are UI recovery only, never an execution queue. Each item
-// retains its own literal editor text, cursor and attachment associations.
-struct RecoveredDraft {
-    source: EditorDraft,
-    images: Vec<ImageSource>,
-    files: Vec<ion_host::prompt_files::TextFile>,
-}
-
-// Inverse of Message::user_input, not a lossy flattening of arbitrary multipart
-// messages from embedded clients. Notes belong to the immediately following image.
-fn split_editor_input(input: Message) -> Result<(String, Vec<LoadedImage>), &'static str> {
-    if input.role != ion_ai::Role::User || input.provider_replay.is_some() {
-        return Err("selected input cannot be represented in the editor");
-    }
-    let mut parts = input.content.into_iter();
-    let Some(Content::Text(prompt)) = parts.next() else {
-        return Err("selected input cannot be represented in the editor");
-    };
-    let mut images = Vec::new();
-    while let Some(part) = parts.next() {
-        match part {
-            Content::Image(content) => images.push(LoadedImage {
-                content,
-                note: None,
-            }),
-            Content::Text(note) => {
-                let Some(Content::Image(content)) = parts.next() else {
-                    return Err("selected input cannot be represented in the editor");
-                };
-                images.push(LoadedImage {
-                    content,
-                    note: Some(note),
-                });
-            }
-            Content::Thinking(_) | Content::ToolCall(_) | Content::ToolResult(_) => {
-                return Err("selected input cannot be represented in the editor");
-            }
-        }
-    }
-    Ok((prompt, images))
 }
 
 pub struct ChatInit {
@@ -255,16 +170,18 @@ pub async fn chat(init: ChatInit) -> Result<()> {
     let mut background_revision = 0;
     let mut completion_revision = 0;
     let mut ui = Frontend {
+        editor: Editor {
+            images: init.images.into_iter().map(Into::into).collect(),
+            files: init.files,
+            ..Editor::default()
+        },
         mode: init.tui_mode,
         keys: init.keys,
         themes: init.themes,
-        images: init.images.into_iter().map(Into::into).collect(),
-        files: init.files,
         ..Frontend::default()
     };
     let mut interrupt = init.interrupt;
     let mut initial_prompts = Some(init.initial_prompts).filter(|prompts| !prompts.is_empty());
-    let mut activity = Activity::default();
     let mut program = ProgramStatusState::default();
     let mut terminal_owner = None;
     let mut screen_owner = None;
@@ -291,7 +208,7 @@ pub async fn chat(init: ChatInit) -> Result<()> {
             ui.refresh_completion(Some(runtime.resources()), Some(runtime.commands()), false);
             program.blocked_question = ui.question_owns_input();
             program.publish(terminal, runtime.is_busy())?;
-            draw(terminal, screen, &mut ui, activity.live(), ActiveOperation::from_state(runtime.state()), Some(runtime.agent().model())).await?;
+            let painted = draw(terminal, screen, &mut ui, ActiveOperation::from_state(runtime.state()), Some(runtime.agent().model())).await?;
             #[cfg(debug_assertions)]
             if std::env::var_os("ION_SMOKE_PANIC_AFTER_FIRST_DRAW").is_some() {
                 panic!("ION smoke panic after first terminal draw");
@@ -309,7 +226,7 @@ pub async fn chat(init: ChatInit) -> Result<()> {
                 poll_control = true;
                 continue;
             }
-            let retry_inline = screen.reconciliation_pending() && !terminal.is_alt_screen()?;
+            let retry_paint = !painted;
             let readiness = runtime.completion_changes();
             let event = tokio::select! {
                 _ = interrupt.recv() => anyhow::bail!("terminal interrupted"),
@@ -324,7 +241,7 @@ pub async fn chat(init: ChatInit) -> Result<()> {
                 update = runtime.next(), if poll_control => {
                     poll_control = !matches!(update, ion_host::ControlUpdate::Idle);
                     program.observe(&update);
-                    let _visible_settlement_error = activity.update(&mut ui, &runtime, update)?;
+                    let _visible_settlement_error = activity::apply(&mut ui, &runtime, update)?;
                     continue;
                 },
                 revision = async { background.as_ref().expect("guarded owner").changed(background_revision).await }, if background.is_some() => {
@@ -336,7 +253,7 @@ pub async fn chat(init: ChatInit) -> Result<()> {
                     ui.status = format!("Background: {} running · {} retained results · /tasks", summary.running, summary.joined);
                     continue;
                 },
-                _ = tokio::time::sleep(Duration::from_millis(50)), if retry_inline => continue,
+                _ = tokio::time::sleep(Duration::from_millis(50)), if retry_paint => continue,
                 notice = async {
                     loop {
                         theme_poll.tick().await;
@@ -360,10 +277,11 @@ pub async fn chat(init: ChatInit) -> Result<()> {
             };
             terminal.check_active().context("terminal lifecycle failed while awaiting input")?;
             let event = event.context("terminal input ended unexpectedly")?;
+            invalidate_resized_input(terminal, screen, &mut ui)?;
             match event? {
                 InputEvent::Key(key) => {
                     if ui.keys.matches(KeyAction::Suspend, key) {
-                        ui.break_edit_focus();
+                        ui.editor.break_edit_focus();
                         terminal.release_inline(screen).await?;
                         terminal.suspend_to_job_control().await.context("suspend terminal job")?;
                         program.published = None;
@@ -374,25 +292,10 @@ pub async fn chat(init: ChatInit) -> Result<()> {
                     if ui.keys.matches(KeyAction::Interrupt, key)
                         && (runtime.is_busy() || ActiveOperation::from_state(runtime.state()).is_some())
                     {
-                        ui.break_edit_focus();
+                        ui.editor.break_edit_focus();
                         runtime.request_stop();
                         poll_control = true;
                         continue;
-                    }
-                    // A key can beat SIGWINCH delivery. A menu published in the
-                    // old geometry must lose authority before handling that key.
-                    let published_size = if terminal.is_alt_screen()? {
-                        screen.fullscreen_size()
-                    } else {
-                        screen.primary_size()
-                    };
-                    if terminal.size()? != published_size {
-                        ui.completion.invalidate_visibility();
-                        ui.pickers.invalidate_visibility();
-                        if let Some(question) = &mut ui.question {
-                            question.invalidate_visibility();
-                        }
-                        screen.note_resize();
                     }
                     if ui.question_owns_input() {
                         let action = ui
@@ -404,7 +307,6 @@ pub async fn chat(init: ChatInit) -> Result<()> {
                         poll_control = true;
                         continue;
                     }
-                    let cursor = ui.cursor;
                     match ui.key(
                         key,
                         Some(runtime.resources()),
@@ -412,12 +314,12 @@ pub async fn chat(init: ChatInit) -> Result<()> {
                     ) {
                         Action::None => {},
                         Action::Quit => break,
-                        Action::Submit(prompt) => {
+                        Action::Submit(source) => {
                             let delivery = interaction::editor_delivery(&runtime);
-                            submit_editor(&mut runtime, &mut ui, delivery, EditorDraft { literal: prompt, cursor });
+                            submit_editor(&mut runtime, &mut ui, delivery, source);
                         },
-                        Action::Queue(prompt) => {
-                            submit_editor(&mut runtime, &mut ui, Delivery::FollowUp, EditorDraft { literal: prompt, cursor });
+                        Action::Queue(source) => {
+                            submit_editor(&mut runtime, &mut ui, Delivery::FollowUp, source);
                         },
                         Action::Recover => {
                             if runtime.withdraw_last_follow_up().is_none() {
@@ -465,16 +367,16 @@ pub async fn chat(init: ChatInit) -> Result<()> {
                             .paste(&text);
                         apply_question_action(&mut ui, questions.as_ref(), action, terminal, screen).await?;
                         poll_control = true;
-                    } else {
+                    } else if ui.input_target() != interaction::InputTarget::Details {
                         ui.insert(&text);
                     }
                 },
                 InputEvent::Rejected(error) => {
-                    ui.break_edit_focus();
+                    ui.editor.break_edit_focus();
                     ui.status = error.to_string();
                 },
                 InputEvent::Resize(_) => {
-                    ui.completion.invalidate_visibility();
+                    ui.editor.completion.invalidate_visibility();
                     ui.pickers.invalidate_visibility();
                     if let Some(question) = &mut ui.question {
                         question.invalidate_visibility();
@@ -501,7 +403,7 @@ pub async fn chat(init: ChatInit) -> Result<()> {
         activity::combine_error(&mut outcome, error);
     }
     for update in report.updates {
-        activity.cleanup_update(&mut ui, &runtime, update, &mut outcome);
+        activity::cleanup_update(&mut ui, &runtime, update, &mut outcome);
     }
     for error in report.cleanup_errors {
         activity::combine_error(&mut outcome, error.into());
@@ -521,14 +423,8 @@ pub async fn chat(init: ChatInit) -> Result<()> {
             {
                 // Publish pending output, but do not retain identity chrome
                 // after the interactive client relinquishes its surface.
-                draw(terminal, screen, &mut ui, None, None, None).await?;
-                if terminal.is_alt_screen()? {
-                    terminal.leave_alt_screen()?;
-                    screen.invalidate();
-                }
-                if terminal.prepare_inline(screen).await?.is_some() {
-                    terminal.paint_inline(screen, |screen, out| screen.release_inline(out))?;
-                }
+                draw(terminal, screen, &mut ui, None, None).await?;
+                release_surface(terminal, screen).await?;
             }
             Ok(())
         }
@@ -550,6 +446,49 @@ fn short_session_id(id: &str) -> &str {
         .nth(12)
         .map_or(id.len(), |(index, _)| index);
     &id[..end]
+}
+
+fn invalidate_resized_input(
+    terminal: &TerminalSession,
+    screen: &mut Screen,
+    ui: &mut Frontend,
+) -> Result<()> {
+    // A key or paste can beat SIGWINCH in chat and before Session admission.
+    let published = if terminal.is_alt_screen()? {
+        screen.fullscreen_size()
+    } else {
+        screen.primary_size()
+    };
+    if terminal.size()? != published {
+        ui.invalidate_interaction_paint();
+        ui.editor.invalidate_geometry();
+        screen.note_resize();
+    }
+    Ok(())
+}
+
+async fn release_surface(terminal: &mut TerminalSession, screen: &mut Screen) -> Result<()> {
+    if terminal.is_alt_screen()? {
+        terminal.leave_alt_screen()?;
+        screen.invalidate();
+    }
+    // Closing must not archive picker chrome or erase an unqualified surface.
+    // Allow the existing resize/query recovery to settle, but never hold exit
+    // indefinitely when the terminal stops answering geometry queries.
+    tokio::time::timeout(Duration::from_secs(1), async {
+        loop {
+            if terminal.prepare_inline(screen).await?.is_some()
+                && terminal
+                    .paint_inline(screen, |screen, out| screen.release_inline(out))?
+                    .is_some()
+            {
+                return Ok::<_, anyhow::Error>(());
+            }
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+    })
+    .await
+    .context("terminal surface could not be qualified for cleanup")?
 }
 
 async fn new_inline_screen(terminal: &mut TerminalSession) -> Result<Screen> {
@@ -751,13 +690,13 @@ fn resume_history_tail(items: &[TranscriptItem]) -> ResumeHistoryTail {
 
 enum Action {
     None,
-    Submit(String),
+    Submit(EditorDraft),
     Shell {
         command: String,
         exclude_from_context: bool,
         source: EditorDraft,
     },
-    Queue(String),
+    Queue(EditorDraft),
     Recover,
     PasteClipboard,
     CopyDetail,
@@ -779,14 +718,14 @@ impl Frontend {
                     .is_none_or(|question| question.request() != pending.request)
                 {
                     self.question = Some(QuestionModal::new(pending.request, pending.questions));
-                    self.completion.clear();
-                    self.break_edit_focus();
+                    self.editor.completion.clear();
+                    self.editor.break_edit_focus();
                 }
             }
             Ok(None) => {
                 if self.question.take().is_some() {
                     self.status = "Question closed".into();
-                    self.break_edit_focus();
+                    self.editor.break_edit_focus();
                 }
             }
             Err(_) => {
@@ -796,7 +735,7 @@ impl Frontend {
     }
 
     fn question_owns_input(&self) -> bool {
-        self.question.is_some() && self.details.is_none() && self.pickers.active().is_none()
+        self.input_target() == interaction::InputTarget::Question
     }
 
     fn question_visible(&self) -> bool {
@@ -808,13 +747,15 @@ impl Frontend {
     }
 
     fn attach_image(&mut self, image: ImageSource) {
-        self.reset_edit_baseline();
-        self.images.push(image);
-        self.status = format!("{} image(s) attached to the next prompt", self.images.len());
+        self.editor.attach_image(image);
+        self.status = format!(
+            "{} image(s) attached to the next prompt",
+            self.editor.images.len()
+        );
     }
 
     fn refresh_session(&mut self, session: &Session) -> Result<()> {
-        self.completion.clear();
+        self.editor.completion.clear();
         self.pickers.close();
         let view = session.view()?;
         self.load_history(session, &view);
@@ -823,7 +764,7 @@ impl Frontend {
             .filter(|name| !name.is_empty())
             .unwrap_or_else(|| format!("Session {}", &view.id.to_string()[..8]));
         self.details = None;
-        self.scroll = 0;
+        self.view.follow_end();
         self.cwd = session
             .cwd()
             .context("terminal coding requires a working directory")?
@@ -835,60 +776,11 @@ impl Frontend {
     }
 
     fn load_history(&mut self, session: &Session, view: &SessionView) {
-        let history = TranscriptProjection::from_session(view);
-        let session_path = session.path().to_path_buf();
-        let same_session = self.history_session.as_ref() == Some(&session_path);
-        let selection = view
-            .entries
-            .iter()
-            .rposition(|entry| matches!(entry, SessionEntry::ContextSelected { .. }))
-            .map_or(0, |offset| offset as u64 + 1);
-        let same_history = same_session && self.history_selection == selection;
-        if !same_history {
-            // Text recovery belongs to the unsent draft baseline, not the
-            // Session's durable facts. Same-Session resync must preserve it.
-            if !same_session {
-                self.reset_edit_baseline();
-            }
-            self.output = output::Output::default();
-            let had_previous_session = self.history_session.is_some();
-            let label = session.id().to_string();
-            let tail = resume_history_tail(&history.items);
-            self.history_published_items = tail.start;
-            self.pending_history_banner = if same_session {
-                Some(format!(
-                    "— selected context at entry {} · alternatives retained · files unchanged —",
-                    view.context_position().head_entry
-                ))
-            } else if !history.items.is_empty() {
-                Some(if tail.omitted_turns > 0 {
-                    format!(
-                        "— resumed session {label} · {} earlier turn(s) retained —",
-                        tail.omitted_turns
-                    )
-                } else if tail.omitted_entries > 0 {
-                    format!(
-                        "— resumed session {label} · {} earlier entr{} retained —",
-                        tail.omitted_entries,
-                        if tail.omitted_entries == 1 {
-                            "y"
-                        } else {
-                            "ies"
-                        }
-                    )
-                } else {
-                    format!("— resumed session {label} —")
-                })
-            } else if had_previous_session {
-                Some(format!("— session {label} —"))
-            } else {
-                None
-            };
+        let change = self.conversation.reconcile(session, view);
+        let same_session = change != conversation::Change::Session;
+        if !same_session {
+            self.editor.reset_edit_baseline();
         }
-        self.pending_history_target = history.items.len();
-        self.history_session = Some(session_path);
-        self.history_selection = selection;
-        self.history = history;
         if let Some(details) = &mut self.details {
             details.invalidate();
         }
@@ -911,47 +803,19 @@ impl Frontend {
                 _ => None,
             })
             .collect();
-        self.replace_prompt_history(prompt_history, same_session);
-        self.defer_unsettled_publication(view);
+        self.editor
+            .replace_prompt_history(prompt_history, same_session);
     }
 
-    // Inspection may include a running next operation or interrupted work.
-    // Recovery can still change those rows: keep them as mutable previews on
-    // initial load as well as resync, never as anchors for local output.
-    fn defer_unsettled_publication(&mut self, view: &SessionView) {
-        let unfinished = view
-            .unfinished_turn
-            .and_then(|turn| {
-                self.history
-                    .items
-                    .iter()
-                    .position(|item| transcript_item_turn(item) == Some(turn))
-            })
-            .or_else(|| {
-                view.unfinished_user_shell.as_ref().and_then(|_| {
-                    self.history
-                        .items
-                        .iter()
-                        .rposition(|item| matches!(item, TranscriptItem::UserShell(_)))
-                })
-            });
-        if let Some(end) = unfinished {
-            let end = end.max(self.history_published_items);
-            self.pending_history_target = end;
-        }
-    }
-
-    fn pending_history_rows(&self, width: usize) -> Vec<Line<'static>> {
+    fn pending_history_rows(&mut self, width: usize) -> Vec<Line<'static>> {
         let mut rows = Vec::new();
-        if let Some(banner) = &self.pending_history_banner {
+        if let Some(banner) = self.conversation.banner() {
             rows.push(Line::default());
             rows.extend(notice_rows(banner, width));
             rows.push(Line::default());
         }
-        let content = self.output.rows(
-            &self.history.items,
-            self.history_published_items..self.pending_history_target,
-            true,
+        let content = self.presenter.publication(
+            &self.conversation,
             width.saturating_sub(1).max(1),
             &crate::tool_output::RenderOptions::new(
                 self.output_detail,
@@ -960,31 +824,18 @@ impl Frontend {
                 self.thinking_visibility,
             ),
         );
-        if self.pending_history_banner.is_none()
-            && self.history_published_items > 0
-            && !content.is_empty()
-        {
-            rows.push(Line::default());
-        }
         rows.extend(content);
         rows
     }
 
-    fn finish_history_commit(&mut self) {
-        self.history_published_items = self.pending_history_target;
-        self.output.finish_commit(self.pending_history_target);
-        self.pending_history_banner = None;
-    }
-
     fn print(&mut self, message: String) {
-        self.output
-            .push(message, self.pending_history_target, false);
-        self.scroll = 0;
+        self.conversation.note(message, false);
+        self.view.follow_end();
     }
 
     fn note(&mut self, message: String) {
-        self.output.push(message, self.pending_history_target, true);
-        self.scroll = 0;
+        self.conversation.note(message, true);
+        self.view.follow_end();
     }
 
     fn refresh_completion(
@@ -994,23 +845,27 @@ impl Frontend {
         force: bool,
     ) {
         if self.details.is_some() || self.pickers.active().is_some() || self.question_owns_input() {
-            self.completion.clear();
+            self.editor.completion.clear();
             self.pickers.cancel_files();
             return;
         }
         let home = std::env::var_os("HOME").map(PathBuf::from);
-        let scope =
-            self.completion
-                .file_scope(&self.draft, self.cursor, &self.cwd, home.as_deref(), force);
-        self.completion.refresh(
-            &self.draft,
-            self.cursor,
+        let scope = self.editor.completion.file_scope(
+            &self.editor.draft,
+            self.editor.cursor,
+            &self.cwd,
+            home.as_deref(),
+            force,
+        );
+        self.editor.completion.refresh(
+            &self.editor.draft,
+            self.editor.cursor,
             resources,
             commands,
             scope.as_ref().and_then(|scope| self.pickers.files(scope)),
             force,
         );
-        if self.completion.wants_files()
+        if self.editor.completion.wants_files()
             && let Some(scope) = scope
         {
             self.pickers.request_files(&scope);
@@ -1025,10 +880,16 @@ impl Frontend {
         resources: Option<&Resources>,
         commands: Option<&ion_host::CommandCatalog>,
     ) -> Action {
-        if self.details.is_some() {
-            self.break_edit_focus();
-            self.completion.clear();
+        if self.input_target() == interaction::InputTarget::Details {
+            self.invalidate_interaction_paint();
+            self.editor.break_edit_focus();
+            self.editor.completion.clear();
             return self.detail_key(key);
+        }
+        // The real input pump dispatches question actions to Host. Direct
+        // frontend callers must never fall through into composer editing.
+        if self.input_target() == interaction::InputTarget::Question {
+            return Action::None;
         }
         if self.theme_picker.is_some()
             && matches!(
@@ -1040,8 +901,8 @@ impl Frontend {
             return Action::None;
         }
         if self.pickers.active().is_some() {
-            self.break_edit_focus();
-            self.completion.clear();
+            self.editor.break_edit_focus();
+            self.editor.completion.clear();
             return self
                 .pickers
                 .key(key, &self.keys)
@@ -1049,48 +910,47 @@ impl Frontend {
         }
         let input = self.keys.action(COMPOSER, key);
         let completion_key = self.keys.action(COMPLETION, key);
-        let menu_was_visible = self.completion.visible();
         self.refresh_completion(resources, commands, input == Some(KeyAction::Tab));
-        if (self.completion.active() || self.completion.wants_files())
+        if (self.editor.completion.active() || self.editor.completion.wants_files())
             && completion_key == Some(KeyAction::Cancel)
         {
-            self.break_edit_focus();
-            self.completion.dismiss();
+            self.editor.break_edit_focus();
+            self.editor.completion.dismiss();
             self.pickers.cancel_files();
             return Action::None;
         }
-        if self.completion.visible()
-            || (self.completion.active() && completion_key == Some(KeyAction::Tab))
+        if self.editor.completion.visible()
+            || (self.editor.completion.active() && completion_key == Some(KeyAction::Tab))
         {
             match completion_key {
                 Some(KeyAction::SelectUp | KeyAction::SelectDown) => {
-                    self.break_edit_focus();
-                    self.completion
+                    self.editor.break_edit_focus();
+                    self.editor
+                        .completion
                         .move_selection(completion_key == Some(KeyAction::SelectDown));
                     return Action::None;
                 }
                 Some(KeyAction::Tab | KeyAction::Confirm) => {
-                    self.break_edit_focus();
-                    if completion_key == Some(KeyAction::Tab)
-                        && !menu_was_visible
-                        && !self.completion.unique()
-                    {
+                    self.editor.break_edit_focus();
+                    if !self.editor.completion.visible() {
                         return Action::None;
                     }
-                    if let Some((range, text, cursor)) = self.completion.replacement(&self.draft) {
-                        self.replace_text(range, &text, cursor);
+                    if let Some((range, text, cursor)) =
+                        self.editor.completion.replacement(&self.editor.draft)
+                    {
+                        self.editor.replace_text(range, &text, cursor);
                     }
-                    self.completion.clear();
+                    self.editor.completion.clear();
                     return Action::None;
                 }
                 _ => {}
             }
         }
-        self.prepare_edit_key(key);
+        self.editor.prepare_edit_key(key, &self.keys);
         // Preparing clipboard attachments never acknowledges a future prompt.
         if self.clipboard_job.is_some()
             && matches!(input, Some(KeyAction::Submit | KeyAction::FollowUp))
-            && Builtin::parse(self.draft.split_whitespace().next().unwrap_or("")).is_none()
+            && Builtin::parse(self.editor.draft.split_whitespace().next().unwrap_or("")).is_none()
         {
             self.status = "Wait for clipboard paste, then send the prompt".into();
             return Action::None;
@@ -1103,35 +963,26 @@ impl Frontend {
             self.status = "Cancelling input preparation…".into();
             return Action::None;
         }
-        if self.undo_key(key) || self.yank_keys(key) {
+        if self.editor.undo_key(key, &self.keys) || self.editor.yank_keys(key, &self.keys) {
             self.refresh_completion(resources, commands, false);
             return Action::None;
         }
-        if let Some(edit) =
-            input.and_then(|action| editing::apply(&self.draft, self.cursor, action))
-        {
-            match edit {
-                Edit::Move(cursor) => {
-                    self.break_edit_focus();
-                    self.cursor = cursor;
-                }
-                Edit::Delete { range, kill } => self.delete_text(range, kill),
-            }
+        if input.is_some_and(|action| self.editor.apply(action)) {
             self.refresh_completion(resources, commands, false);
             return Action::None;
         }
         let action = match input {
             Some(KeyAction::Interrupt) => {
-                if self.draft.is_empty() {
+                if self.editor.draft.is_empty() {
                     Action::Quit
                 } else {
-                    self.clear_draft_text();
+                    self.editor.clear_draft_text();
                     Action::None
                 }
             }
-            Some(KeyAction::Exit) if self.draft.is_empty() => Action::Quit,
+            Some(KeyAction::Exit) if self.editor.draft.is_empty() => Action::Quit,
             Some(KeyAction::Tab) => {
-                if !self.completion.wants_files() {
+                if !self.editor.completion.wants_files() {
                     self.insert("\t");
                 }
                 Action::None
@@ -1155,18 +1006,17 @@ impl Frontend {
                 Action::None
             }
             Some(KeyAction::FollowUp) => {
-                if self.draft.trim().is_empty() && self.images.is_empty() && self.files.is_empty() {
+                if self.editor.draft.trim().is_empty()
+                    && self.editor.images.is_empty()
+                    && self.editor.files.is_empty()
+                {
                     Action::None
                 } else {
-                    self.begin_draft_handoff();
-                    self.browsing = None;
-                    let prompt = std::mem::take(&mut self.draft);
-                    self.cursor = 0;
-                    Action::Queue(prompt)
+                    Action::Queue(self.editor.take_literal())
                 }
             }
             Some(KeyAction::Submit) => {
-                let syntax = self.draft.trim();
+                let syntax = self.editor.draft.trim();
                 let invalid_shell = if let Some(command) = syntax.strip_prefix("!!") {
                     command
                         .trim()
@@ -1180,17 +1030,19 @@ impl Frontend {
                 } else {
                     None
                 };
-                if syntax.is_empty() && self.images.is_empty() && self.files.is_empty() {
+                if syntax.is_empty()
+                    && self.editor.images.is_empty()
+                    && self.editor.files.is_empty()
+                {
                     Action::None
                 } else if let Some(status) = invalid_shell {
                     self.status = status.into();
                     Action::None
                 } else {
-                    self.begin_draft_handoff();
-                    self.browsing = None;
-                    let cursor = self.cursor;
-                    let prompt = std::mem::take(&mut self.draft);
-                    self.cursor = 0;
+                    let EditorDraft {
+                        literal: prompt,
+                        cursor,
+                    } = self.editor.take_literal();
                     let syntax = prompt.trim();
                     if Builtin::parse(syntax) == Some(Builtin::Quit) {
                         Action::Quit
@@ -1218,39 +1070,31 @@ impl Frontend {
                             },
                         }
                     } else {
-                        Action::Submit(prompt)
+                        Action::Submit(EditorDraft {
+                            literal: prompt,
+                            cursor,
+                        })
                     }
                 }
             }
             Some(KeyAction::Dequeue) => Action::Recover,
-            Some(KeyAction::CursorUp) => {
-                if let Some(cursor) = vertical_cursor(&self.draft, self.cursor, false) {
-                    self.cursor = cursor;
-                } else {
-                    self.history_previous();
-                }
-                Action::None
-            }
-            Some(KeyAction::CursorDown) => {
-                if let Some(cursor) = vertical_cursor(&self.draft, self.cursor, true) {
-                    self.cursor = cursor;
-                } else {
-                    self.history_next();
-                }
+            Some(KeyAction::CursorUp | KeyAction::CursorDown) => {
+                self.editor
+                    .move_vertical(input == Some(KeyAction::CursorDown));
                 Action::None
             }
             Some(KeyAction::PageUp) => {
-                self.scroll = self.scroll.saturating_add(10);
+                self.view.scroll(-10);
                 Action::None
             }
             Some(KeyAction::PageDown) => {
-                self.scroll = self.scroll.saturating_sub(10);
+                self.view.scroll(10);
                 Action::None
             }
             None => {
                 if let Some(ch) = keybindings::printable(key) {
                     let mut bytes = [0; 4];
-                    self.insert_typed(ch.encode_utf8(&mut bytes));
+                    self.editor.insert_typed(ch.encode_utf8(&mut bytes));
                 }
                 Action::None
             }
@@ -1261,15 +1105,27 @@ impl Frontend {
     }
 
     fn mouse(&mut self, kind: MouseKind) {
-        // Scrolling is a user viewport action: it ends direct yank-pop and
-        // typed-word affinity while retaining draft text and undo history.
-        if matches!(kind, MouseKind::ScrollUp | MouseKind::ScrollDown) {
-            self.break_edit_focus();
-        }
-        match kind {
-            MouseKind::ScrollUp => self.scroll = self.scroll.saturating_add(3),
-            MouseKind::ScrollDown => self.scroll = self.scroll.saturating_sub(3),
-            _ => {}
+        let down = match kind {
+            MouseKind::ScrollUp => false,
+            MouseKind::ScrollDown => true,
+            _ => return,
+        };
+        self.invalidate_interaction_paint();
+        match self.input_target() {
+            interaction::InputTarget::Details => {
+                let view = self.details.as_mut().expect("derived inspector focus");
+                view.scroll = if down {
+                    view.scroll.saturating_sub(3)
+                } else {
+                    view.scroll.saturating_add(3)
+                };
+            }
+            interaction::InputTarget::Picker => self.pickers.move_selection(down),
+            interaction::InputTarget::Question => self.view.scroll(if down { 3 } else { -3 }),
+            interaction::InputTarget::Composer => {
+                self.editor.break_edit_focus();
+                self.view.scroll(if down { 3 } else { -3 });
+            }
         }
     }
 
@@ -1301,7 +1157,7 @@ impl Frontend {
     }
 
     fn list_tools(&mut self) {
-        let names = tools(&self.history)
+        let names = tools(self.conversation.items())
             .enumerate()
             .map(|(index, activity)| {
                 format!(
@@ -1327,7 +1183,7 @@ impl Frontend {
                     self.status = "Tool result not found; use /tools to list tools".into();
                     return;
                 };
-                if tools(&self.history).nth(index - 1).is_none() {
+                if tools(self.conversation.items()).nth(index - 1).is_none() {
                     self.status = "Tool result not found; use /tools to list tools".into();
                     return;
                 }
@@ -1343,11 +1199,7 @@ async fn prepare_draw(
     screen: &mut Screen,
     ui: &Frontend,
 ) -> Result<Option<(u16, u16, bool)>> {
-    if ui.question_visible()
-        || ui.details.is_some()
-        || ui.pickers.active().is_some()
-        || ui.mode == TuiMode::Fullscreen
-    {
+    if ui.input_target() == interaction::InputTarget::Details || ui.mode == TuiMode::Fullscreen {
         terminal.enter_alt_screen(screen).await?;
         let (width, height) = terminal.size()?;
         screen.resize_fullscreen(width, height);
@@ -1370,10 +1222,9 @@ async fn draw(
     terminal: &mut TerminalSession,
     screen: &mut Screen,
     ui: &mut Frontend,
-    progress: Option<&LiveTranscript>,
     operation: Option<ActiveOperation>,
     model: Option<&ModelRef>,
-) -> Result<()> {
+) -> Result<bool> {
     if terminal.colors_need_refresh() {
         terminal.refresh_colors().await?;
     }
@@ -1381,145 +1232,50 @@ async fn draw(
     ui.sync_theme_preview();
     // Layout is not publication: a deferred geometry reconciliation cannot
     // leave an old menu authorized as a keyboard target.
-    ui.completion.invalidate_visibility();
-    ui.pickers.invalidate_visibility();
+    ui.invalidate_interaction_paint();
     let Some(geometry) = prepare_draw(terminal, screen, ui).await? else {
-        return Ok(());
+        return Ok(false);
     };
-    draw_prepared(terminal, screen, ui, progress, operation, model, geometry)
+    draw_prepared(terminal, screen, ui, operation, model, geometry)
 }
 
 fn draw_prepared(
     terminal: &mut TerminalSession,
     screen: &mut Screen,
     ui: &mut Frontend,
-    progress: Option<&LiveTranscript>,
     operation: Option<ActiveOperation>,
     model: Option<&ModelRef>,
     (width, height, surface_reset): (u16, u16, bool),
-) -> Result<()> {
-    if ui.details.is_some() || ui.pickers.active().is_some() {
-        return draw_modal_fullscreen(terminal, screen, ui, progress, operation, width, height);
-    }
-    if ui.question_visible() {
-        return draw_question_fullscreen(terminal, screen, ui, width, height);
+) -> Result<bool> {
+    if ui.input_target() == interaction::InputTarget::Details {
+        return draw_modal_fullscreen(terminal, screen, ui, operation, width, height);
     }
     if ui.mode == TuiMode::Fullscreen {
-        return draw_chat_fullscreen(
-            terminal,
-            screen,
-            ui,
-            progress,
-            operation,
-            model,
-            (width, height),
-        );
+        return draw_chat_fullscreen(terminal, screen, ui, operation, model, (width, height));
     }
 
+    let publication = ui.conversation.prepare_publication();
     let commit_rows = ui.pending_history_rows(width.max(1) as usize);
     let history_committed = !commit_rows.is_empty();
     let width = width.max(1) as usize;
-    let physical_budget = LIVE_REGION_MAX_ROWS.min(height.max(1) as usize);
-    // Screen keeps a blank parking row when question custody hides the caret.
-    // A one-row terminal renders only that anchor; the retained draft is inert.
-    let row_budget = physical_budget
-        .saturating_sub(usize::from(ui.question_owns_input()))
-        .max(1);
-    let mut chrome = Vec::new();
-    let notices = progress.map_or(&[][..], LiveTranscript::notices);
-    if let Some(notice) = notices.last() {
-        let count = notices.len();
-        let label = if count == 1 {
-            "Notice".into()
-        } else {
-            format!("{count} notices")
-        };
-        chrome.push(fit_line(&format!("{label} · {notice}"), width));
-    }
-    let status = visible_status(ui, operation);
-    if let Some(status) = &status {
-        if operation.is_some() {
-            chrome.push(fit_line(status, width));
-        } else {
-            push_wrapped(&mut chrome, status, width);
-        }
-    }
-
-    // Keep an editable cursor line first, then a status/control row when space
-    // allows. Select the composer window only after reserving that real budget.
-    let status_height = usize::from(status.is_some()).min(row_budget - 1);
-    let composer = input_window(
-        &ui.draft,
-        ui.cursor,
-        width,
-        (row_budget - status_height).min(4),
-    );
-    let composer_height = composer.lines.len();
-    let progress_height =
-        (usize::from(operation.is_some()) * 2).min(row_budget - composer_height - status_height);
-    let completions = ui.completion.rows(
-        width,
-        row_budget.saturating_sub(composer_height + progress_height + status_height),
-        &ui.keys,
-    );
-    // Identity is lower priority than the editor, stop controls and discovery.
-    let footer = orientation::rows(
-        ui,
-        model,
-        width,
-        row_budget
-            .saturating_sub(composer_height + progress_height + completions.len() + chrome.len()),
-    );
-    let chrome_budget = row_budget
-        .saturating_sub(composer_height + progress_height + completions.len() + footer.len());
-    // Discovery is temporary composer chrome. Older notices must not hide a
-    // keyboard-active menu or displace the operation's stop/status controls.
-    if chrome.len() > chrome_budget {
-        chrome.drain(..chrome.len() - chrome_budget);
-    }
-    chrome.extend(completions);
-    let content_budget = row_budget.saturating_sub(composer_height + chrome.len() + footer.len());
-    // Reopened or resynchronized unfinished facts stay visible as mutable
-    // previews. They are not stable output anchors or irreversible scrollback.
-    let live_items = progress.map_or_else(
-        || &ui.history.items[ui.pending_history_target..],
-        |progress| progress.projection().items.as_slice(),
-    );
-    let mut live_rows = crate::transcript_render::live_rows(
-        live_items,
-        width,
-        content_budget,
+    let physical_budget = height.max(1) as usize;
+    let dock = dock::Dock::prepare(ui, operation, model, width, physical_budget);
+    let mut live_rows = ui.presenter.window(
+        &ui.conversation,
+        &mut ui.view,
+        (width, dock.body_rows),
+        true,
+        operation.is_some(),
         &crate::tool_output::RenderOptions::new(
-            crate::tool_output::OutputDetail::Compact,
+            ui.output_detail,
             &ui.keys,
             ui.themes.theme(),
             ui.thinking_visibility,
         ),
     );
-    live_rows.extend(chrome.into_iter().map(|row| {
-        Line::styled(
-            row,
-            ui.themes
-                .theme()
-                .style(crate::presentation_style::Role::Secondary),
-        )
-    }));
-    let composer_offset = live_rows.len();
-    for line in &composer.lines {
-        live_rows.push(Line::styled(
-            line.as_str(),
-            ui.themes
-                .theme()
-                .style(crate::presentation_style::Role::UserInput),
-        ));
-    }
-    let cursor_row = composer_offset + composer.cursor_row;
-    live_rows.extend(footer);
-
-    let cursor = (!ui.question_owns_input()).then_some((
-        cursor_row,
-        composer.cursor_col.min(width.saturating_sub(1)) as u16,
-    ));
+    let body_height = live_rows.len();
+    let cursor = dock.cursor.map(|(row, col)| (body_height + row, col));
+    live_rows.extend(dock.rows);
     let frame = Frame {
         live: &live_rows,
         cursor,
@@ -1537,12 +1293,15 @@ fn draw_prepared(
         }
         screen.draw(out, &frame)
     })?;
-    if painted {
-        ui.finish_history_commit();
-    } else {
-        ui.completion.invalidate_visibility();
-    }
-    Ok(())
+    let Some(receipt) = painted else {
+        return Ok(false);
+    };
+    dock.paint.observe(ui, receipt);
+    assert!(
+        ui.conversation.acknowledge(publication),
+        "paint acknowledges its prepared source prefix"
+    );
+    Ok(true)
 }
 
 fn settlement_program_status(outcome: &ion_host::OperationOutcome) -> ProgramStatus {
@@ -1562,21 +1321,28 @@ fn settlement_program_status(outcome: &ion_host::OperationOutcome) -> ProgramSta
 }
 
 fn visible_status(ui: &Frontend, operation: Option<ActiveOperation>) -> Option<String> {
-    let idle = ui.status.is_empty();
-    let mut attachment = if ui.images.is_empty() {
+    let editor_error = (ui.input_target() == interaction::InputTarget::Composer)
+        .then(|| ui.editor.error.map(|error| error.to_string()))
+        .flatten();
+    let notice = editor_error.as_deref().unwrap_or(&ui.status);
+    let idle = notice.is_empty();
+    let mut attachment = if ui.editor.images.is_empty() {
         String::new()
     } else {
-        format!(" · {} image(s) attached", ui.images.len())
+        format!(" · {} image(s) attached", ui.editor.images.len())
     };
-    if !ui.files.is_empty() {
-        attachment.push_str(&format!(" · {} text file(s) attached", ui.files.len()));
+    if !ui.editor.files.is_empty() {
+        attachment.push_str(&format!(
+            " · {} text file(s) attached",
+            ui.editor.files.len()
+        ));
     }
-    let recovery = if ui.recovered.is_empty() {
+    let recovery = if ui.editor.recovered.is_empty() {
         String::new()
     } else {
         format!(
             " · {} recovered draft(s) · {} cycles",
-            ui.recovered.len(),
+            ui.editor.recovered.len(),
             ui.keys.hint(KeyAction::Dequeue)
         )
     };
@@ -1590,7 +1356,7 @@ fn visible_status(ui: &Frontend, operation: Option<ActiveOperation>) -> Option<S
             .trim_start_matches(" · ")
             .to_owned()
     } else {
-        format!("{}{attachment}{recovery}{queued}", ui.status)
+        format!("{notice}{attachment}{recovery}{queued}")
     };
     if ui.question_owns_input() && !ui.question_visible() {
         let hint = QuestionModal::collapsed_hint(&ui.keys);
@@ -1611,10 +1377,10 @@ fn visible_status(ui: &Frontend, operation: Option<ActiveOperation>) -> Option<S
             }
         } else if status.is_empty() {
             let controls = operation.controls(&ui.keys);
-            format!("{label} · {controls}")
+            format!("{controls} · {label}")
         } else {
             format!(
-                "{label} · {} cancels · {status}",
+                "{} cancels · {label} · {status}",
                 ui.keys.hint(KeyAction::Interrupt)
             )
         });
@@ -1626,18 +1392,19 @@ fn draw_chat_fullscreen(
     terminal: &mut TerminalSession,
     screen: &mut Screen,
     ui: &mut Frontend,
-    progress: Option<&LiveTranscript>,
     operation: Option<ActiveOperation>,
     model: Option<&ModelRef>,
     (width, height): (u16, u16),
-) -> Result<()> {
+) -> Result<bool> {
     let width = width.max(1) as usize;
     let height = height.max(1) as usize;
-    let mut content = ui.output.rows(
-        &ui.history.items,
-        0..ui.history.items.len(),
+    let dock = dock::Dock::prepare(ui, operation, model, width, height);
+    let content = ui.presenter.window(
+        &ui.conversation,
+        &mut ui.view,
+        (width, dock.body_rows),
         false,
-        width,
+        operation.is_some(),
         &crate::tool_output::RenderOptions::new(
             ui.output_detail,
             &ui.keys,
@@ -1645,130 +1412,25 @@ fn draw_chat_fullscreen(
             ui.thinking_visibility,
         ),
     );
-    if let Some(progress) = progress {
-        let live = crate::transcript_render::rows(
-            &progress.projection().items,
-            width,
-            &crate::tool_output::RenderOptions::new(
-                ui.output_detail,
-                &ui.keys,
-                ui.themes.theme(),
-                ui.thinking_visibility,
-            ),
-        );
-        if !live.is_empty()
-            && !content.is_empty()
-            && content.last().is_some_and(|row| row.width() > 0)
-        {
-            content.push(Line::default());
-        }
-        content.extend(live);
-        for notice in progress.notices() {
-            content.extend(notice_rows(notice, width));
-        }
+    let mut rows = vec![Line::default(); height];
+    let padding = dock.body_rows.saturating_sub(content.len());
+    for (index, row) in content.into_iter().enumerate() {
+        rows[padding + index] = row;
+    }
+    let cursor = dock.cursor.map(|(row, col)| (dock.body_rows + row, col));
+    for (index, row) in dock.rows.into_iter().enumerate() {
+        rows[dock.body_rows + index] = row;
     }
 
-    // Keep a scrolled-up viewport visually stable while new streaming rows arrive.
-    // Width changes can reflow the whole transcript, so start a new row-count
-    // baseline rather than guessing how the old offset maps to the new wrapping.
-    if ui.fullscreen_width == width && ui.scroll > 0 && content.len() > ui.fullscreen_rows {
-        ui.scroll = ui
-            .scroll
-            .saturating_add(content.len().saturating_sub(ui.fullscreen_rows));
-    }
-    ui.fullscreen_width = width;
-    ui.fullscreen_rows = content.len();
-    ui.scroll = ui.scroll.min(content.len());
-
-    let status = visible_status(ui, operation);
-    let status_height = usize::from(status.is_some()).min(height - 1);
-    let composer = input_window(&ui.draft, ui.cursor, width, (height - status_height).min(4));
-    let composer_height = composer.lines.len();
-    let completions = ui.completion.rows(
-        width,
-        height.saturating_sub(composer_height + status_height),
-        &ui.keys,
-    );
-    let footer = orientation::rows(
-        ui,
-        model,
-        width,
-        height.saturating_sub(composer_height + status_height + completions.len()),
-    );
-    let viewport =
-        height.saturating_sub(composer_height + status_height + completions.len() + footer.len());
-
-    let end = content.len().saturating_sub(ui.scroll);
-    let start = end.saturating_sub(viewport);
-    let mut rows = vec![Line::raw(""); height];
-    let padding = viewport.saturating_sub(end.saturating_sub(start));
-    for (index, row) in content[start..end].iter().enumerate() {
-        rows[padding + index] = row.clone();
-    }
-
-    let mut next_row = viewport;
-    if let Some(status) = status
-        && status_height > 0
-    {
-        rows[next_row] = Line::styled(
-            fit_line(&status, width),
-            ui.themes
-                .theme()
-                .style(crate::presentation_style::Role::Secondary),
-        );
-        next_row += 1;
-    }
-    for row in completions {
-        if next_row < height {
-            rows[next_row] = Line::styled(
-                row,
-                ui.themes
-                    .theme()
-                    .style(crate::presentation_style::Role::Text),
-            );
-            next_row += 1;
-        }
-    }
-    for (index, line) in composer.lines.iter().enumerate() {
-        if next_row + index < height {
-            rows[next_row + index] = Line::styled(
-                line.as_str(),
-                ui.themes
-                    .theme()
-                    .style(crate::presentation_style::Role::UserInput),
-            );
-        }
-    }
-    for (index, line) in footer.into_iter().enumerate() {
-        rows[next_row + composer_height + index] = line;
-    }
-    let cursor_row = next_row + composer.cursor_row;
-    let cursor = (cursor_row < height && !ui.question_owns_input()).then_some((
-        cursor_row,
-        composer.cursor_col.min(width.saturating_sub(1)) as u16,
-    ));
-
-    screen.draw_fullscreen(&mut terminal.output()?, &rows, cursor)?;
-    Ok(())
+    let Some(receipt) = terminal.paint_fullscreen(screen, |screen, out| {
+        screen.draw_fullscreen(out, &rows, cursor)
+    })?
+    else {
+        return Ok(false);
+    };
+    dock.paint.observe(ui, receipt);
+    Ok(true)
 }
-
-fn draw_question_fullscreen(
-    terminal: &mut TerminalSession,
-    screen: &mut Screen,
-    ui: &mut Frontend,
-    width: u16,
-    height: u16,
-) -> Result<()> {
-    let frame = ui.question.as_mut().expect("question owns input").render(
-        width,
-        height,
-        &ui.keys,
-        ui.themes.theme(),
-    );
-    screen.draw_fullscreen(&mut terminal.output()?, &frame.rows, frame.cursor)?;
-    Ok(())
-}
-
 async fn apply_question_action(
     ui: &mut Frontend,
     responder: Option<&QuestionResponder>,
@@ -1779,7 +1441,7 @@ async fn apply_question_action(
     match action {
         QuestionAction::None => {}
         QuestionAction::Scroll { up } => {
-            ui.scroll = ui.scroll.saturating_add_signed(if up { 10 } else { -10 });
+            ui.view.scroll(if up { -10 } else { 10 });
         }
         QuestionAction::Edit {
             request,
@@ -1845,33 +1507,37 @@ fn draw_modal_fullscreen(
     terminal: &mut TerminalSession,
     screen: &mut Screen,
     ui: &mut Frontend,
-    progress: Option<&LiveTranscript>,
     operation: Option<ActiveOperation>,
     width: u16,
     height: u16,
-) -> Result<()> {
-    let (rows, cursor) = modal_rows(ui, progress, operation, width, height);
-    screen.draw_fullscreen(&mut terminal.output()?, &rows, cursor)?;
-    Ok(())
+) -> Result<bool> {
+    let (rows, cursor) = modal_rows(ui, operation, width, height);
+    Ok(terminal
+        .paint_fullscreen(screen, |screen, out| {
+            screen.draw_fullscreen(out, &rows, cursor)
+        })?
+        .is_some())
 }
 
 fn modal_rows(
     ui: &mut Frontend,
-    progress: Option<&LiveTranscript>,
     operation: Option<ActiveOperation>,
     width: u16,
     height: u16,
 ) -> (Vec<Line<'static>>, Option<(usize, u16)>) {
+    ui.invalidate_interaction_paint();
     let width = width.max(1) as usize;
     let height = height.max(1) as usize;
-    if let Some(view) = &mut ui.details {
-        view.prepare(&ui.history, progress, width);
-    }
-    let controls = ui
-        .details
-        .as_ref()
-        .map(|view| view.controls(&ui.keys))
-        .or_else(|| ui.pickers.controls(&ui.keys));
+    ui.details
+        .as_mut()
+        .expect("inspector owns viewport")
+        .prepare(
+            ui.conversation.items(),
+            ui.conversation.live().map_or(&[], LiveTranscript::notices),
+            ui.conversation.revision(),
+            width,
+        );
+    let controls = ui.details.as_ref().map(|view| view.controls(&ui.keys));
     let status = visible_status(ui, operation);
     let status = if ui.question.is_some() {
         Some(status.map_or_else(
@@ -1881,37 +1547,17 @@ fn modal_rows(
     } else {
         status
     };
-    let picker = ui.pickers.active();
-    // Leave a selected result visible alongside the query when at least two
-    // physical rows exist. Status is less important than choosing visibly.
-    let reserve_content = usize::from(picker.is_some() && height > 1);
-    let status_height = (usize::from(controls.is_some()) + usize::from(status.is_some()))
-        .min(height - usize::from(picker.is_some()) - reserve_content);
-    let composer = picker.map(|picker| {
-        input_window(
-            &picker.query,
-            picker.query.len(),
-            width,
-            (height - status_height - reserve_content).min(3),
-        )
-    });
-    let composer_height = composer.as_ref().map_or(0, |input| input.lines.len());
-    let viewport = height.saturating_sub(composer_height + status_height);
-    // Picker rows are only physical when the details view is not covering them.
-    let picker_rows = if ui.details.is_none() {
-        ui.pickers.rows(width, viewport, ui.themes.theme())
-    } else {
-        Vec::new()
-    };
-    let content = ui.details.as_ref().map_or_else(
-        || picker_rows,
-        |view| {
-            view.rows()
-                .iter()
-                .map(|row| Line::raw(fit_line(row, width)))
-                .collect()
-        },
-    );
+    let status_height =
+        (usize::from(controls.is_some()) + usize::from(status.is_some())).min(height);
+    let viewport = height.saturating_sub(status_height);
+    let content: Vec<_> = ui
+        .details
+        .as_ref()
+        .expect("inspector owns viewport")
+        .rows()
+        .iter()
+        .map(|row| Line::raw(fit_line(row, width)))
+        .collect();
     let scroll = ui.details.as_ref().map_or(0, |view| view.scroll);
     let end = content.len().saturating_sub(scroll.min(content.len()));
     let start = end.saturating_sub(viewport);
@@ -1921,7 +1567,6 @@ fn modal_rows(
         rows[padding + index] = row.clone();
     }
 
-    let mut cursor = None;
     let mut next_row = viewport;
     for label in controls.iter().chain(status.iter()).take(status_height) {
         if next_row < height {
@@ -1934,29 +1579,55 @@ fn modal_rows(
             next_row += 1;
         }
     }
-    if let Some(composer) = composer {
-        for (index, line) in composer.lines.into_iter().enumerate() {
-            if next_row + index < height {
-                rows[next_row + index] = Line::styled(
-                    line,
-                    ui.themes
-                        .theme()
-                        .style(crate::presentation_style::Role::UserInput),
-                );
-            }
-        }
-        let row = next_row + composer.cursor_row;
-        if row < height {
-            cursor = Some((row, composer.cursor_col.min(width.saturating_sub(1)) as u16));
-        }
-    }
-
-    (rows, cursor)
+    (rows, None)
 }
 
+#[cfg(test)]
+fn painted_dock_rows(
+    ui: &mut Frontend,
+    operation: Option<ActiveOperation>,
+    width: u16,
+    height: u16,
+) -> (Vec<Line<'static>>, Option<(usize, u16)>) {
+    let dock = dock::Dock::prepare(
+        ui,
+        operation,
+        None,
+        usize::from(width.max(1)),
+        usize::from(height.max(1)),
+    );
+    dock.paint.observe_simulated(
+        ui,
+        (width.max(1), height.max(1)),
+        ui.mode == TuiMode::Fullscreen,
+    );
+    (dock.rows, dock.cursor)
+}
+#[cfg(test)]
+mod interaction_tests;
 #[cfg(test)]
 mod keybinding_tests;
 #[cfg(test)]
 mod presentation_tests;
+
+#[cfg(test)]
+pub(crate) fn measured_window_fixture(
+    items: &[TranscriptItem],
+    width: usize,
+    budget: usize,
+    options: &crate::tool_output::RenderOptions<'_>,
+) -> Vec<Line<'static>> {
+    let conversation = conversation::fixtures::document(ion_core::TranscriptProjection {
+        items: items.to_vec(),
+    });
+    block_presenter::BlockPresenter::default().window(
+        &conversation,
+        &mut block_presenter::ConversationView::default(),
+        (width, budget),
+        false,
+        true,
+        options,
+    )
+}
 #[cfg(test)]
 mod tests;

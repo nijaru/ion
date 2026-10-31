@@ -2,6 +2,9 @@
 /target/
 **/*.rs.bk
 
+# Python smoke tools
+__pycache__/
+
 # Editor / OS
 .DS_Store
 .idea/
