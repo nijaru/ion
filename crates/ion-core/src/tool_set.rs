@@ -11,6 +11,8 @@ use tokio_util::sync::CancellationToken;
 
 use crate::tool_result::ToolOutput;
 
+mod discovery;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ToolActivityKind {
@@ -634,6 +636,21 @@ impl ToolCatalog {
             .collect()
     }
 
+    /// Search callable definitions with the same ranking as the model's
+    /// deferred discovery tool. Intrinsic dispatch routes are not guest tools.
+    pub(crate) fn discover_callable(&self, query: &str, limit: usize) -> Vec<&ToolDefinition> {
+        discovery::rank(
+            query,
+            self.entries
+                .iter()
+                .filter(|entry| {
+                    !matches!(entry.route, ToolRoute::Search | ToolRoute::Composition(..))
+                })
+                .map(|entry| &entry.definition),
+            limit,
+        )
+    }
+
     pub(crate) fn is_intrinsic(&self, name: &str) -> bool {
         self.positions
             .get(name)
@@ -810,56 +827,28 @@ impl ToolCatalog {
             });
         }
 
-        let tokens = query.split_whitespace().collect::<Vec<_>>();
-        let mut matches = self
-            .entries
-            .iter()
-            .filter(|entry| {
-                entry.definition.exposure == ToolExposure::Deferred
-                    && !self.declared.contains(&entry.definition.spec.name)
-            })
-            .filter_map(|entry| {
-                let name = entry.definition.spec.name.to_ascii_lowercase();
-                let description = entry.definition.spec.description.to_ascii_lowercase();
-                let mut score = 0usize;
-                if name == query {
-                    score += 10_000;
-                } else if name.contains(&query) {
-                    score += 2_000;
-                }
-                if description.contains(&query) {
-                    score += 500;
-                }
-                for token in &tokens {
-                    if name == *token {
-                        score += 1_000;
-                    } else if name.contains(token) {
-                        score += 250;
-                    }
-                    if description.contains(token) {
-                        score += 50;
-                    }
-                }
-                (score > 0).then_some((score, entry))
-            })
-            .collect::<Vec<_>>();
-        matches.sort_by(|(left_score, left), (right_score, right)| {
-            right_score
-                .cmp(left_score)
-                .then_with(|| left.definition.spec.name.cmp(&right.definition.spec.name))
-        });
-        matches.truncate(limit);
+        let matches = discovery::rank(
+            &query,
+            self.entries
+                .iter()
+                .filter(|entry| {
+                    entry.definition.exposure == ToolExposure::Deferred
+                        && !self.declared.contains(&entry.definition.spec.name)
+                })
+                .map(|entry| &entry.definition),
+            limit,
+        );
 
         let activate = matches
             .iter()
-            .map(|(_, entry)| entry.definition.spec.name.clone())
+            .map(|definition| definition.spec.name.clone())
             .collect::<Vec<_>>();
         let tools = matches
             .iter()
-            .map(|(_, entry)| {
+            .map(|definition| {
                 serde_json::json!({
-                    "name": entry.definition.spec.name,
-                    "description": entry.definition.spec.description,
+                    "name": definition.spec.name,
+                    "description": definition.spec.description,
                 })
             })
             .collect::<Vec<_>>();

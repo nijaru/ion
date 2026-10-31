@@ -48,8 +48,8 @@ struct Admitted {
     reply: oneshot::Sender<CodeReply>,
 }
 
-// Validate even requests from runtimes other than Host's JS bridge. Two
-// disjoint ranks preserve frozen order and need no sorting or duplicate set.
+// Validate even requests from runtimes other than Host's JS bridge. Model and
+// Code Mode discovery use one frozen-catalog ranking, never mutable registries.
 fn search_tools(
     catalog: &ToolCatalog,
     query: &str,
@@ -58,27 +58,9 @@ fn search_tools(
     if !(1..=10).contains(&limit) {
         return Err("searchTools limit must be an integer 1..10");
     }
-    let query = query.to_ascii_lowercase();
-    let query = query.as_str();
-    Ok([true, false]
+    Ok(catalog
+        .discover_callable(query, limit)
         .into_iter()
-        .flat_map(|exact| {
-            catalog.definitions().filter(move |definition| {
-                let spec = &definition.spec;
-                if catalog.is_intrinsic(&spec.name) {
-                    return false;
-                }
-                let matches_name = spec.name.eq_ignore_ascii_case(query);
-                if exact {
-                    matches_name
-                } else {
-                    !matches_name
-                        && (spec.name.to_ascii_lowercase().contains(query)
-                            || spec.description.to_ascii_lowercase().contains(query))
-                }
-            })
-        })
-        .take(limit)
         .map(|definition| {
             json!({"name": definition.spec.name, "description": definition.spec.description})
         })
