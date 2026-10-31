@@ -413,7 +413,7 @@ impl<M: Serialize + Send + 'static> SessionControl<M> {
         }
         if outcome.failed() {
             for pending in custody.inputs.values_mut().filter_map(Input::pending_mut) {
-                pending.withdrawn = Some(ReturnReason::Stopped);
+                pending.withdraw(ReturnReason::PredecessorFailed);
             }
             if let Some((_, preparation)) = &self.preparing {
                 preparation.request_stop();

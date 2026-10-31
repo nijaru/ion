@@ -211,6 +211,7 @@ async fn foreground(
                     let error = match input.reason {
                         ReturnReason::Preparation(error) => error,
                         ReturnReason::Stopped => AgentError::Cancelled.into(),
+                        ReturnReason::PredecessorFailed => anyhow!("input was not attempted because preceding work failed"),
                         reason => anyhow!("input was not accepted: {reason:?}"),
                     };
                     rejected = Some(match rejected.take() {

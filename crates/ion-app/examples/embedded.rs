@@ -135,6 +135,7 @@ async fn prompt(control: &mut SessionControl, text: String) -> Result<String> {
                 ControlUpdate::Returned(input) => rejection = Some(match input.reason {
                     ReturnReason::Preparation(error) => error,
                     ReturnReason::Stopped => ion_core::AgentError::Cancelled.into(),
+                    ReturnReason::PredecessorFailed => anyhow::anyhow!("input was not attempted because preceding work failed"),
                     reason => anyhow::anyhow!("input not accepted: {reason:?}"),
                 }),
                 ControlUpdate::Idle => break Err(rejection.unwrap_or_else(|| anyhow::anyhow!("operation ended without settlement"))),

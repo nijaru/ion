@@ -24,7 +24,7 @@ impl<M: Serialize + Send + 'static> SessionControl<M> {
         }
         let mut custody = lock(&self.custody);
         for pending in custody.inputs.values_mut().filter_map(Input::pending_mut) {
-            pending.withdrawn = Some(ReturnReason::Stopped);
+            pending.withdraw(ReturnReason::Stopped);
         }
         drop(custody);
         self.withdraw_inbox(ReturnReason::Stopped);
@@ -40,7 +40,7 @@ impl<M: Serialize + Send + 'static> SessionControl<M> {
                 && active_root != Some(id)
                 && let Some(pending) = input.pending_mut()
             {
-                pending.withdrawn = Some(ReturnReason::Cleared);
+                pending.withdraw(ReturnReason::Cleared);
             }
         }
         if let Some((id, preparation)) = &self.preparing
@@ -72,7 +72,7 @@ impl<M: Serialize + Send + 'static> SessionControl<M> {
             input
                 .pending_mut()
                 .expect("selected pending follow-up")
-                .withdrawn = Some(ReturnReason::Cleared);
+                .withdraw(ReturnReason::Cleared);
             id
         };
         if let Some((preparing, preparation)) = &self.preparing
@@ -376,7 +376,12 @@ impl<M: Serialize + Send + 'static> SessionControl<M> {
         if failed_start {
             // Queued work was admitted behind this attempted start, not as an
             // independent replacement for an input that never entered Session.
-            self.request_stop();
+            self.completions
+                .revoke(ion_core::CompletionRevocation::OperationFailed);
+            let mut custody = lock(&self.custody);
+            for pending in custody.inputs.values_mut().filter_map(Input::pending_mut) {
+                pending.withdraw(ReturnReason::PredecessorFailed);
+            }
         }
     }
 }

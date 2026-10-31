@@ -201,6 +201,7 @@ pub(super) fn result(run: &BackgroundRunSnapshot) -> Result<String> {
                         ion_host::ReturnSnapshot::TurnEnded => "Turn ended",
                         ion_host::ReturnSnapshot::Preparation(error) => error,
                         ion_host::ReturnSnapshot::NotAccepted => "not accepted",
+                        ion_host::ReturnSnapshot::PredecessorFailed => "preceding work failed",
                     }
                 ));
                 text.push_str(&returned_input(input));

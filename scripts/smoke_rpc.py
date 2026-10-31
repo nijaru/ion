@@ -24,6 +24,7 @@ root = Path(__file__).resolve().parent.parent
 binary = Path(os.environ.get("ION_SMOKE_BIN", root / "target/debug/ion"))
 requests = []
 summary_requests = []
+queue_failure_release = threading.Event()
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -57,6 +58,13 @@ class Handler(BaseHTTPRequestHandler):
             self.wfile.flush()
 
         try:
+            if users and "FAIL_QUEUED" in str(users[-1].get("content")):
+                event({"content": "PROVISIONAL"})
+                assert queue_failure_release.wait(8), "queued-input fixture was not released"
+                event({}, "content_filter")
+                self.wfile.write(b"data: [DONE]\n\n")
+                self.wfile.flush()
+                return
             if users and "IO_SETTLEMENT" in str(users[-1].get("content")):
                 arguments = {"command": "printf '%s\\n' $$ > io.pid; printf 'OBSERVED_BEFORE_DISCONNECT\\n'; touch io.ready; exec sleep 30", "timeout_ms": 120000}
                 event({"tool_calls": [
@@ -400,6 +408,34 @@ with tempfile.TemporaryDirectory(prefix="ion-rpc-") as temporary:
         assert follow_records[-1]["status"] == "completed"
         latest = [message for message in requests[-1]["messages"] if message["role"] == "user"][-1]["content"]
         assert latest[0] == {"type": "text", "text": "AFTER"} and latest[1]["type"] == "image_url", latest
+
+        # Failure returns unattempted follow-ups, not fictitious stop requests.
+        before_failure = len(requests)
+        send(child, {"id": "failed-parent", "type": "prompt", "message": "FAIL_QUEUED"})
+        until(child, lambda r: r.get("id") == "failed-parent")
+        send(child, {"id": "after-failure", "type": "follow_up", "message": "  NEVER_ATTEMPTED 雪\n"})
+        assert until(child, lambda r: r.get("id") == "after-failure")[-1]["success"]
+        queue_failure_release.set()
+        records = until_all(child, lambda r: r["type"] == "turn_end", lambda r: r["type"] == "uncommitted_follow_up")
+        ended = next(r for r in records if r["type"] == "turn_end")
+        assert ended["status"] == "failed" and not ended["stop_requested"], ended
+        returned = next(r for r in records if r["type"] == "uncommitted_follow_up")
+        assert returned["id"] == "after-failure" and returned["reason"] == "predecessor_failed", returned
+        returned_prompt(returned, "  NEVER_ATTEMPTED 雪\n")
+        assert len(requests) == before_failure + 1, "failure dispatched queued input"
+        send(child, {"id": "failure-history", "type": "inspect"})
+        inspected = read_response(child)
+        assert "NEVER_ATTEMPTED" not in str(inspected["data"]), inspected
+
+        failed_workspace = work / "headless-failed-queue"
+        failed_workspace.mkdir()
+        before_failure = len(requests)
+        failed = subprocess.run([binary, "--cwd", failed_workspace, "run", "FAIL_QUEUED", "NEVER_ATTEMPTED"], env=env, capture_output=True, timeout=8)
+        assert failed.returncode != 0, failed
+        assert b"preceding work failed" in failed.stderr and b"turn was cancelled" not in failed.stderr, failed.stderr
+        assert len(requests) == before_failure + 1, "headless failure dispatched queued input"
+        retained = json.loads(subprocess.run([binary, "--cwd", failed_workspace, "--continue", "inspect"], env=env, check=True, capture_output=True).stdout)
+        assert "NEVER_ATTEMPTED" not in str(retained), retained
 
         before_parent = len(requests)
         send(child, {"id": "cancel-parent", "type": "prompt", "message": "SLOW"})

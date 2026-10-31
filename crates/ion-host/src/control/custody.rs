@@ -93,6 +93,11 @@ impl<M> Input<M> {
 }
 
 impl PendingInput {
+    pub(super) fn withdraw(&mut self, reason: ReturnReason) {
+        // Joining preparation or shutdown must preserve the first withdrawal cause.
+        self.withdrawn.get_or_insert(reason);
+    }
+
     pub(super) fn take_ready(&mut self) -> Option<AcceptedInput<InputId>> {
         if !matches!(self.content, InputContent::Ready(_)) {
             return None;

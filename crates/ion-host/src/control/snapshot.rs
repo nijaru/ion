@@ -46,6 +46,7 @@ pub enum ReturnSnapshot {
     TurnEnded,
     Preparation(String),
     NotAccepted,
+    PredecessorFailed,
 }
 impl From<&ReturnReason> for ReturnSnapshot {
     fn from(reason: &ReturnReason) -> Self {
@@ -55,6 +56,7 @@ impl From<&ReturnReason> for ReturnSnapshot {
             ReturnReason::TurnEnded => Self::TurnEnded,
             ReturnReason::Preparation(error) => Self::Preparation(error.to_string()),
             ReturnReason::NotAccepted => Self::NotAccepted,
+            ReturnReason::PredecessorFailed => Self::PredecessorFailed,
         }
     }
 }

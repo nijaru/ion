@@ -293,6 +293,7 @@ impl Control {
             ReturnReason::Cleared => ("cleared", None),
             ReturnReason::TurnEnded => ("turn_ended", None),
             ReturnReason::NotAccepted => ("not_accepted", None),
+            ReturnReason::PredecessorFailed => ("predecessor_failed", None),
             ReturnReason::Preparation(error) => ("preparation_failed", Some(format!("{error:#}"))),
         };
         if !output.is_healthy() {

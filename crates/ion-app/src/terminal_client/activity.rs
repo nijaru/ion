@@ -189,6 +189,9 @@ pub(super) fn apply(
                 ReturnReason::Cleared => "withdrawn from queue".into(),
                 ReturnReason::TurnEnded => "turn ended before acceptance".into(),
                 ReturnReason::NotAccepted => "not durably accepted".into(),
+                ReturnReason::PredecessorFailed => {
+                    "preceding work failed; input not attempted".into()
+                }
                 ReturnReason::Preparation(error) => format!("preparation failed: {error:#}"),
             };
             ui.note(format!("{kind} returned: {reason}{fault}. Draft retained; {} additional draft(s) · {} cycles without resubmitting", ui.editor.recovered.len(), ui.keys.hint(crate::keybindings::KeyAction::Dequeue)));

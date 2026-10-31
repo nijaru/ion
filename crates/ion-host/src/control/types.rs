@@ -152,6 +152,8 @@ pub enum ReturnReason {
     TurnEnded,
     Preparation(anyhow::Error),
     NotAccepted,
+    /// This queued input was never attempted because preceding work failed.
+    PredecessorFailed,
 }
 
 pub struct ReturnedInput<M> {

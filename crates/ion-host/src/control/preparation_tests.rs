@@ -125,7 +125,7 @@ async fn failed_initial_preparation_returns_queued_work_without_starting_it() {
     tokio::time::timeout(Duration::from_secs(5), async {
         loop {
             match fixture.control.next().await {
-                ControlUpdate::Returned(input) => returned.push(input.id),
+                ControlUpdate::Returned(input) => returned.push(input),
                 ControlUpdate::Accepted { .. } => {
                     admitted += 1;
                     fixture.control.request_stop();
@@ -141,7 +141,16 @@ async fn failed_initial_preparation_returns_queued_work_without_starting_it() {
         admitted, 0,
         "failed root preparation cannot start another Turn"
     );
-    assert_eq!(returned, [root, queued]);
+    assert_eq!(
+        returned.iter().map(|input| input.id).collect::<Vec<_>>(),
+        [root, queued]
+    );
+    assert!(matches!(returned[0].reason, ReturnReason::Preparation(_)));
+    assert!(matches!(
+        returned[1].reason,
+        ReturnReason::PredecessorFailed
+    ));
+    assert!(!fixture.control.state().stop_requested);
     assert!(fixture.control.session().view().unwrap().turns().is_empty());
     assert_eq!(model.calls.load(Ordering::SeqCst), 0);
     fixture.control.shutdown().await;
@@ -338,6 +347,86 @@ fn clear_preserves_initial_preparation_and_abandoned_shutdown_joins_it() {
         );
         assert_eq!(model.calls.load(Ordering::SeqCst), 0);
         assert!(report.cleanup_errors.is_empty());
+    });
+}
+
+#[test]
+fn joining_preparation_preserves_the_first_withdrawal_cause() {
+    runtime().block_on(async {
+        for cause in ["failure", "clear", "stop"] {
+            let (release, blocker) = block_decoder().await;
+            let model = Model::new(1);
+            let mut fixture = Fixture::new(model.clone(), true);
+            fixture.fault("json_extract(NEW.body, '$.kind') = 'assistant'");
+            fixture
+                .control
+                .submit(Delivery::Start, prompt("root"), meta("root"))
+                .unwrap();
+            model.wait_calls(1).await;
+            let queued = fixture
+                .control
+                .submit(Delivery::FollowUp, image_prompt(), meta("original draft"))
+                .unwrap();
+            // Let the preparation enqueue its blocking decoder behind the held worker.
+            tokio::task::yield_now().await;
+            match cause {
+                "clear" => fixture.control.clear_queue(),
+                "stop" => fixture.control.request_stop(),
+                _ => {}
+            }
+            model.release();
+            let (returned, settlement) = settle(&mut fixture.control).await;
+            assert!(
+                returned.is_empty(),
+                "preparation must join before returning the image"
+            );
+            assert!(matches!(settlement.outcome, OperationOutcome::Turn(Err(_))));
+            assert_eq!(settlement.stop_requested, cause == "stop");
+            let snapshot = fixture.control.snapshot(|_| ()).unwrap();
+            let withdrawal = &snapshot
+                .inputs
+                .iter()
+                .find(|input| input.id == queued)
+                .unwrap()
+                .withdrawal;
+            assert!(matches!(
+                (cause, withdrawal),
+                ("failure", Some(ReturnSnapshot::PredecessorFailed))
+                    | ("clear", Some(ReturnSnapshot::Cleared))
+                    | ("stop", Some(ReturnSnapshot::Stopped))
+            ));
+            // Later cleanup and queue controls may stop the worker, not rewrite
+            // the cause already published in the pull snapshot.
+            fixture.control.request_stop();
+            fixture.control.clear_queue();
+            release.send(()).unwrap();
+            blocker.await.unwrap();
+            let report = fixture.control.shutdown().await;
+            let returned = report
+                .updates
+                .into_iter()
+                .filter_map(|update| match update {
+                    ControlUpdate::Returned(input) => Some(input),
+                    _ => None,
+                })
+                .collect::<Vec<_>>();
+            assert_eq!(returned.len(), 1);
+            let input = &returned[0];
+            assert_eq!(input.id, queued);
+            assert_eq!(input.metadata.literal, "original draft");
+            assert!(
+                matches!(&input.input, UserInput::Prompt { text, images, .. }
+                if text == "  original image\n" && images.len() == 1)
+            );
+            assert!(matches!(
+                (cause, &input.reason),
+                ("failure", ReturnReason::PredecessorFailed)
+                    | ("clear", ReturnReason::Cleared)
+                    | ("stop", ReturnReason::Stopped)
+            ));
+            assert_eq!(model.calls.load(Ordering::SeqCst), 1);
+            assert_eq!(fixture.control.session().view().unwrap().turns().len(), 1);
+        }
     });
 }
 

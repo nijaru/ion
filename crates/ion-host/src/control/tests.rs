@@ -37,6 +37,46 @@ async fn compaction_focus_is_charged_before_admission_and_returns_exact_metadata
     assert!(!fixture.control.is_busy());
 }
 
+#[tokio::test]
+async fn failed_operation_returns_follow_ups_without_fabricating_stop() {
+    let model = Model::new(1);
+    let mut fixture = Fixture::new(model.clone(), false);
+    fixture.fault("json_extract(NEW.body, '$.kind') = 'assistant'");
+    fixture
+        .control
+        .submit(Delivery::Start, prompt("root"), meta("root"))
+        .unwrap();
+    model.wait_calls(1).await;
+    let queued = fixture
+        .control
+        .submit(
+            Delivery::FollowUp,
+            prompt("  untouched 雪\n"),
+            meta("exact metadata"),
+        )
+        .unwrap();
+    model.release();
+    let (mut returned, settlement) = settle(&mut fixture.control).await;
+    assert!(matches!(settlement.outcome, OperationOutcome::Turn(Err(_))));
+    assert!(!settlement.stop_requested);
+    loop {
+        match fixture.control.next().await {
+            ControlUpdate::Returned(input) => returned.push(input),
+            ControlUpdate::Idle => break,
+            _ => {}
+        }
+    }
+    assert_eq!(returned.len(), 1);
+    let input = &returned[0];
+    assert_eq!(input.id, queued);
+    assert_eq!(input.metadata.literal, "exact metadata");
+    assert!(matches!(&input.input, UserInput::Prompt { text, .. } if text == "  untouched 雪\n"));
+    assert!(matches!(input.reason, ReturnReason::PredecessorFailed));
+    assert_eq!(model.calls.load(Ordering::SeqCst), 1);
+    assert_eq!(fixture.control.session().view().unwrap().turns().len(), 1);
+    fixture.control.shutdown().await;
+}
+
 #[path = "completion_tests.rs"]
 mod completions;
 #[path = "mcp_tests.rs"]
