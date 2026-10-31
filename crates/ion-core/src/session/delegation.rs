@@ -257,9 +257,8 @@ impl Session {
             return Err(SessionError::InvalidForkPoint);
         }
         store.append(&[SessionEntry::DelegationAdmitted {
-                record: record.clone(),
-            }],
-        )?;
+            record: record.clone(),
+        }])?;
         Ok((
             record,
             match resumed {
@@ -279,10 +278,9 @@ impl Session {
         };
         let mut store = self.store.lock().map_err(|_| SessionError::Poisoned)?;
         store.append(&[SessionEntry::DelegationTransferred {
-                run: record.run,
-                owner,
-            }],
-        )?;
+            run: record.run,
+            owner,
+        }])?;
         store
             .live_backgrounds
             .insert(record.run, Arc::downgrade(lease));
@@ -296,10 +294,9 @@ impl Session {
     ) -> Result<(), SessionError> {
         let mut store = self.store.lock().map_err(|_| SessionError::Poisoned)?;
         store.append(&[SessionEntry::DelegationSettled {
-                run: record.run,
-                outcome,
-            }],
-        )
+            run: record.run,
+            outcome,
+        }])
     }
 
     /// Only the retained writer can materialize a resume. A new relationship

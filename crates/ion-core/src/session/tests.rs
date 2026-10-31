@@ -1207,33 +1207,32 @@ fn rejected_batch_does_not_publish_projection_or_settled_cut() {
         let before = store.settled.clone();
         assert!(matches!(
             store.append(&[
-                    SessionEntry::Assistant {
-                        turn,
-                        message: answer.clone(),
-                        tool_activities: Vec::new(),
-                        execution: ModelExecution {
-                            route: ion_ai::ModelRoute::direct(
-                                ModelRef {
-                                    provider: "test".into(),
-                                    model: "test".into(),
-                                },
-                                ion_ai::ModelRouteReason::UserRequest,
-                            ),
-                            returned_model: None,
-                        },
-                        usage: Usage::unknown(),
-                        termination: ResponseTermination::Completed,
+                SessionEntry::Assistant {
+                    turn,
+                    message: answer.clone(),
+                    tool_activities: Vec::new(),
+                    execution: ModelExecution {
+                        route: ion_ai::ModelRoute::direct(
+                            ModelRef {
+                                provider: "test".into(),
+                                model: "test".into(),
+                            },
+                            ion_ai::ModelRouteReason::UserRequest,
+                        ),
+                        returned_model: None,
                     },
-                    SessionEntry::Steering {
-                        turn,
-                        input: Message {
-                            role: Role::User,
-                            content: vec![Content::Text(String::new())],
-                            provider_replay: None,
-                        },
+                    usage: Usage::unknown(),
+                    termination: ResponseTermination::Completed,
+                },
+                SessionEntry::Steering {
+                    turn,
+                    input: Message {
+                        role: Role::User,
+                        content: vec![Content::Text(String::new())],
+                        provider_replay: None,
                     },
-                ],
-            ),
+                },
+            ],),
             Err(SessionError::InvalidHistory)
         ));
         assert_eq!(store.settled, before);

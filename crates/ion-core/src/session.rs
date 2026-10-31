@@ -67,9 +67,8 @@ pub use records::{
 pub use recovery::{AuthorityScope, RecoveryBinding, RecoveryPoint, RecoveryState};
 pub(crate) use store::MAX_ENTRY_BYTES;
 use store::{
-    FORMAT_VERSION, Header, SessionLock, Store, configure_connection, database_path,
-    encode_entry, initialize_new, lock, prepare_writer, project_connection, read_entries,
-    read_header,
+    FORMAT_VERSION, Header, SessionLock, Store, configure_connection, database_path, encode_entry,
+    initialize_new, lock, prepare_writer, project_connection, read_entries, read_header,
 };
 pub(crate) use submission::TurnAdmission;
 pub use submission::{RequestKey, RequestReceipt, SubmissionRequest};
@@ -877,10 +876,9 @@ impl Session {
     ) -> Result<(), SessionError> {
         let mut store = self.store.lock().map_err(|_| SessionError::Poisoned)?;
         store.append(&[SessionEntry::UserShellSettled {
-                admission_entry,
-                outcome: UserShellOutcome::Observed { output, is_error },
-            }],
-        )
+            admission_entry,
+            outcome: UserShellOutcome::Observed { output, is_error },
+        }])
     }
 
     /// Check current idleness without reserving it for a later action.
@@ -1065,11 +1063,10 @@ impl Session {
     ) -> Result<(), SessionError> {
         let mut store = self.store.lock().map_err(|_| SessionError::Poisoned)?;
         store.append(&[SessionEntry::CacheWarm {
-                turn,
-                execution,
-                usage,
-            }],
-        )
+            turn,
+            execution,
+            usage,
+        }])
     }
 
     pub(crate) fn record_compaction(
@@ -1081,12 +1078,11 @@ impl Session {
     ) -> Result<(), SessionError> {
         let mut store = self.store.lock().map_err(|_| SessionError::Poisoned)?;
         store.append(&[SessionEntry::Compacted {
-                through_entry,
-                summary,
-                execution,
-                usage,
-            }],
-        )
+            through_entry,
+            summary,
+            execution,
+            usage,
+        }])
     }
     pub fn status(&self) -> Result<SessionStatus, SessionError> {
         let store = self.store.lock().map_err(|_| SessionError::Poisoned)?;
@@ -1319,10 +1315,9 @@ impl Session {
                 .is_some_and(|previous| previous != &effective)
             {
                 store.append(&[SessionEntry::EffectiveModelChanged {
-                        turn,
-                        model: effective.clone(),
-                    }],
-                )?;
+                    turn,
+                    model: effective.clone(),
+                }])?;
             }
         }
         self.record_assistant_with_activities(
@@ -1621,8 +1616,7 @@ impl Session {
         intent: crate::ChildIntent,
     ) -> Result<(), SessionError> {
         let mut store = self.store.lock().map_err(|_| SessionError::Poisoned)?;
-        store.append(&[SessionEntry::ChildToolAdmitted { turn, intent }],
-        )
+        store.append(&[SessionEntry::ChildToolAdmitted { turn, intent }])
     }
 
     pub(crate) fn record_child_outcome(
