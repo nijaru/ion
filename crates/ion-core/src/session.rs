@@ -52,12 +52,12 @@ mod submission_tests;
 use crate::request::{RequestCalibration, RequestMeasurement, RequestScope};
 use code_inspection::ChildRecordIndex;
 use context::{ProjectedMessage, context_projection};
-pub use recovery::{AuthorityScope, RecoveryBinding, RecoveryPoint, RecoveryState};
-pub(crate) use submission::TurnAdmission;
 pub use records::{
     ForkPoint, ModelContextSnapshot, SessionEntry, SessionStatus, SessionView, StoredToolActivity,
     TurnEndReason, TurnSummary, UnobservedUserShell, UserShellOutcome,
 };
+pub use recovery::{AuthorityScope, RecoveryBinding, RecoveryPoint, RecoveryState};
+pub(crate) use submission::TurnAdmission;
 pub use submission::{RequestKey, RequestReceipt, SubmissionRequest};
 
 const FORMAT_VERSION: u32 = 18;
