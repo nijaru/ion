@@ -1,71 +1,24 @@
-# Working on Ion
+# Ion development
 
-## Design and scope
+Follow the shared `nijaru/dotfiles/instructions/AGENTS.md` rules. Source is the implementation authority. This is unreleased v0: replace obsolete APIs and modules with their callers; do not add compatibility shims or preserve weak abstractions solely because they exist.
 
-- `ARCHITECTURE.md` owns accepted contracts and explicit design boundaries.
-  `README.md` describes implemented usage and qualification limits. Source
-  establishes implementation, not old plans, reviews or passing tests.
-- Build one reusable Rust agent engine. Coding is its first application, not
-  its ceiling. Bots, services, phone integrations and coordinators reuse shared
-  control, admission, recovery and delegation rather than implementing new loops.
-- Match Pi's agent/runtime and workflow design by default, idiomatically in
-  Rust. fx leads feature and native/TUI design, with Pi secondary for
-  presentation. Codex and Claude Code are secondary references. Use current
-  state-of-the-art patterns when they solve the requirement, not for novelty.
-  Inspect current relevant upstream source before designing an overlapping
-  capability, including its interaction and edge cases. Preserve proven
-  user-facing semantics by default; implement them idiomatically in Rust.
-  Depart only for a concrete usability, correctness or ownership benefit,
-  accounting for relearning costs—not novelty, language differences or existing
-  implementation convenience. Preserve Ion's authority/durability contracts.
-  Do not freeze parity against a release or old checkout. Revisions identify
-  historical evidence only; distinguish delivered behavior from examples,
-  experiments and claims.
-- Inline native scrollback is primary. Fullscreen is another viewport over the
-  same semantics, not a separate runtime or polish workstream.
-- Ion is unreleased v0 without compatibility guarantees. Replace obsolete
-  owners, APIs and development formats with their callers; keep no deprecated
-  facades or parallel runtimes.
+## Authoritative private project work
 
-## Work selection and delivery
+Read `nijaru/knowledge/projects/ion/design.md` for target behavior and `implementation-plan.md` for the only active milestone sequence. The `research/reference-guide.md` points to current Pi, fx and Pi Durable source; consult current upstream code for each affected workflow. The private knowledge repository owns design/rationale/forward work. Do not add a competing public ARCHITECTURE, design, roadmap, session report or handoff to this repository.
 
-- Choose work from the current private target design and migration plan, not
-  historical delivery lists or reviews. Finish a coherent user workflow or
-  ownership migration through its real caller, not just the enabling backend
-  change. Feature presence and passing fixtures do not establish parity.
-- Resolve consequential product choices explicitly. Delivery staging must not
-  invent defaults, feature gates, permanent SDK-only limits or silent exclusions.
-  An unresolved capability is neither a promised feature nor a rejected one.
-- Update affected contracts and usage when behavior changes; reconcile the
-  private target/plan when decisions or remaining work change. Keep one owner
-  per concern, not a new delivery diary. Historical checks and failures belong
-  in evidence records, not the forward plan or public architecture.
-- Do not require a new whole-product audit or live-model campaign for each slice.
-  Tests and ordinary use verify the design; they do not replace specifying it.
+Agent semantics: Pi primary; native/inline UX: fx primary; Pi Durable for restart-safe Code Mode/effect semantics. Preserve real observed workflows, not upstream language-specific class structures. Simplify source owners aggressively when warranted; remove superseded implementations once real callers migrate. No autonomous pull requests.
 
-## Source owners
+## Source navigation
 
-- Core owns committed Session/Turn facts, execution, context, recovery and durable
-  delegation relationships. Start at `crates/ion-core/src/{agent,session,request}.rs`;
-  `tool_set.rs` freezes capabilities and `code_gateway.rs` retains composed effects.
-- Host owns application recipes, authority, shared control and live supervision.
-  Start at `crates/ion-host/src/control/`, `application.rs` and `binding.rs`.
-  Do not duplicate input custody or operation lifecycle in clients. Restricted
-  applications must not inherit coding authority. `code_mode.rs` owns the VM,
-  not Session authority; composed tool children are not managed subagents.
-- Terminal interaction starts in `crates/ion-app/src/terminal_client.rs` and its
-  submodules. Keep editor/picker presentation separate from shared input custody.
-  Core's `transcript.rs` supplies semantics; App's `conversation.rs` reconciles
-  facts, `block_presenter.rs` prepares shared layout and `editor.rs` owns literal
-  editing/recovery. These App modules live under `terminal_client/`.
-  `transcript_render.rs` and `tool_output.rs` render semantic blocks;
-  Terminal's `screen.rs` models physical state and `publication.rs` qualifies paint.
-- Extract cohesive responsibilities instead of growing central orchestration
-  files. Avoid one-call-site wrappers and speculative frameworks.
+- `ion-core/src/agent/turn.rs` and `agent/request_cycle.rs`: Turn/request sequencing; `agent.rs` still contains substantial orchestration and tests.
+- `ion-core/src/session.rs`, `session/history/`: durable Session facts, branch/context and recovery.
+- `ion-core/src/tool_set.rs`, `code_gateway.rs`, `ion-host/src/code_mode.rs`: captured tool dispatch and bounded Code Mode.
+- `ion-host/src/control/`, `application.rs`, `local_tools/`: client control, coding recipe and effect executors.
+- `ion-app/src/headless.rs`, `rpc.rs`, `terminal_client/`; `ion-terminal/src/`: public callers and native interaction.
+
+Keep one owner for each durable fact, effect, execution outcome and terminal publication. Verify source in context and follow a task end-to-end. Do not use UI green tests to claim human usability.
 
 ## Verification
-
-Use the stable toolchain selected by `rust-toolchain.toml`:
 
 ```sh
 cargo fmt --all -- --check
@@ -74,38 +27,8 @@ cargo test --locked --workspace
 cargo build --locked -p ion
 ```
 
-Exercise changed built entry points. `scripts/smoke.sh` covers offline headless
-submit/reopen; `scripts/smoke_headless.py` covers streaming, pressure and
-cancellation; `scripts/smoke_coding.py` has an independent workspace/test oracle.
-`.github/workflows/ci.yml` owns the required feature-smoke set. Add focused faults
-for changed storage, provider, framing or cancellation contracts; preserve
-meaningful effect/recovery/concurrency protection while pruning obsolete tests.
-Prefer real-client integration tests for lifecycle changes and unit tests for
-pure policy. Isolate HOME/XDG/TMPDIR and credentials; verify owned cleanup.
-Reuse valid evidence for unchanged inputs. Measure before performance claims.
+Use `scripts/smoke.sh` for an offline built headless/reopen path; relevant `scripts/smoke_*.py` for streaming, coding effects, recovery and cancellation. Exercise the real entry point plus independent tool/filesystem/Session outcomes. Keep focused protection for crash, concurrency, recovery and effect invariants. For native UI, run real terminal workflows; PTY/tmux checks alone are insufficient.
 
-Terminal changes require real-terminal evidence as well as cheap checks. Use
-owned processes/windows, preserve user preferences and inspect emulator outcomes.
-Pause unrelated GUI tests after an unexplained crash/timeout and investigate.
-PTY/tmux, native rendering, live coding and human acceptance are distinct evidence.
+Before **live Ion model tests** read private `projects/ion/preferred-models.md`: it governs approved routes, cost/privacy and isolation. Synthetic model fixtures suffice for routine mechanical checks. Never silently spend on unapproved routes.
 
-Before live Ion model tests, read knowledge `preferred-models.md`; it governs
-models invoked by Ion, not development agents. Use bounded isolated tests and
-approved routes; paid tests require authorization and cost disclosure. Inspect
-requests, committed facts and independent effects, not model recaps. Do not hide
-failures with fixture-specific suppression or larger retry budgets. Provider
-availability must not block independent implementation work.
-
-Documentation-only changes need link, authority and consistency checks, not
-runtime-validation claims.
-
-## Repository hygiene
-
-Multiple sessions may share this worktree. Inspect status, stage only owned
-changes and never reset, stash, clean or rewrite another session's work. Review
-`Cargo.toml`/`Cargo.lock` changes, licenses and dependency lifecycle behavior;
-prefer locked existing dependencies. Keep credentials and personal routes out of
-tracked files. Do not commit handoffs or session scratch files.
-
-Keep this the only repository agent-instruction file. Private preferences,
-research and planning belong in knowledge; public docs must stand alone.
+Multiple sessions may share a worktree. Inspect status, stage only owned changes, preserve unrelated files and secrets. The local untracked `handoff.md` is protected user content: do not read or modify it.
