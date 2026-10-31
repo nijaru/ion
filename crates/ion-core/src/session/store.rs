@@ -46,10 +46,7 @@ impl Drop for SessionLock {
 }
 
 impl Store {
-    pub(super) fn from_projection(
-        connection: Connection,
-        projection: HistoryProjection,
-    ) -> Self {
+    pub(super) fn from_projection(connection: Connection, projection: HistoryProjection) -> Self {
         Self {
             connection,
             state: projection.state,
