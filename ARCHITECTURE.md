@@ -23,9 +23,9 @@ execution identity, parentage or settlement themselves.
 
 ### Reference-derived design
 
-[Pi](https://github.com/earendil-works/pi) is the primary harness/workflow baseline;
-[fx](https://github.com/vercel-labs/fx) informs alternatives and restrained native
-presentation. Codex is a secondary Rust reference; Claude Code's documented
+[Pi](https://github.com/earendil-works/pi) is the primary agent/runtime and workflow
+baseline. [fx](https://github.com/vercel-labs/fx) is the primary native application
+and terminal-presentation reference, with Pi secondary for presentation. Codex is a secondary Rust reference; Claude Code's documented
 contracts provide secondary workflow/SDK evidence. These are living baselines,
 not pinned parity targets. Inspect current relevant interactions and edge cases
 before designing the corresponding Ion workflow. Historical revisions identify
@@ -205,6 +205,45 @@ The principal lifecycle is:
    Turn end. Join owned work before reporting operation settlement.
 5. Project facts and live previews to observers; presentation failure cannot
    retroactively change admission or observed effects.
+
+### Runtime boundaries
+
+The implementation follows responsibility and lifetime boundaries, not client
+modes. One admitted Turn has one sequencer; its request cycle and effect batches
+are subordinate phases, never independently scheduled runtimes.
+
+| Boundary | Owns | Does not own |
+| --- | --- | --- |
+| Bound Agent | Model service, executable sources, limits, captured recovery authority | Conversation copies, input queues, live task state |
+| Turn runner | Admitted origin, phase ordering, next-request reason, final/error closure | Provider framing, Host metadata, terminal state |
+| Request cycle | Refresh and boundary intake, coherent request basis, immutable preparation, permitted rebuild/recovery | Effect execution, follow-up scheduling, another transcript |
+| Generation attempt | Outcome, actual route, whether output was observed, timing | Retry policy inferred from display events |
+| Ordered effect batch | Committed occurrences, frozen dispatch, local non-dispatch evidence, ordered observation commits, joined cleanup/cache warming | Provider retry, new Turn admission |
+| Invocation runner | Captured policy, intrinsic/executor routing and delegation-gateway lifetime shared by direct/composed calls | Choosing top-level versus composed-child persistence |
+| Session | Validated atomic facts and derived context/recovery projections | Live executors, provider service or presentation |
+| Operation owner | Retained task, stop intent, actual join, outcome and panic fence | Durable execution truth |
+
+Fresh human admission, explicit resume and receiver-authorized readiness are
+mutually exclusive start origins. Commit fresh normalized input before publishing
+its complete acceptance event. Core's live transcript reducer establishes that
+root directly; clients must not reconstruct it from an editor draft or read all
+history just to discover accepted input. Key reconciliation emits no new acceptance.
+Resume is not a new human root; automated readiness retains its own provenance.
+
+Every request rebuild returns through cancellation and boundary intake, including
+rebuilds after refresh or compaction. Pre-output transient retries retain the same
+frozen request. Generation owns evidence of output custody; coding and summary
+recovery consume that evidence instead of reconstructing it from observer events.
+Request basis includes coherent committed context, reasoning and replay eligibility;
+service/catalogue-dependent preparation happens outside Session locking.
+
+Assistant commitment produces a typed final/continue/effects outcome and the
+committed call identities needed for dispatch. The effect batch never resolves
+execution authority from a later catalogue or reconstructs occurrence identity
+from display order. Direct and composed calls share invocation routing/policy,
+while retaining their distinct durable parent/child facts. Never-dispatched proof
+belongs to the live batch; it is absent after process loss. Storage failure prevents
+dependent consumption and is not hidden by a second closure write.
 
 Direct batches execute and commit in call order by default. Allowing a provider
 to return several calls is not permission to overlap their effects. Opted-in
@@ -1258,6 +1297,12 @@ in a complete control snapshot is sampled independently before its custody/Sessi
 cut; it grants no dispatch lease or stronger atomicity. Native inspection and target
 selection use the shared picker and revalidate explicit actions through admission.
 
+Live status and complete inspection are separate reads. Status exposes the small
+committed revision/context/operation facts needed by controls, not raw transcript,
+images or metadata. Combine it with Host custody using custody-before-Session
+ordering. Full history remains an explicit inspection/reconciliation facility;
+ordinary state queries and fresh acceptance do not materialize it.
+
 Remote attachment must identify the Session/work and provide an authorized
 snapshot plus an ordered committed revision/cursor or equivalent reconciliation
 contract. Include relevant lifecycle/queue/settlement state, not just model deltas.
@@ -1550,8 +1595,75 @@ contents as client commands or template selectors.
 
 ## Terminal experience
 
+### Conversation, layout and publication
+
 Inline native scrollback is primary; fullscreen is another viewport over the same
-semantics. Normal composer chrome identifies the workspace, named or short-ID
+retained conversation and block presenter. The application has explicit owners:
+
+| Owner | Retains | Produces |
+| --- | --- | --- |
+| Conversation | Core's canonical projection, strict live overlay, source identity/selection epoch and ordered local notices | One semantic document, not a second execution ledger |
+| Conversation view | Disclosure/thinking choices and source-anchored reading position | Follow-end or a source-relative reading window |
+| Block presenter | Disposable layout keyed by source revision, width, theme and disclosure | Measured rows with source provenance and one block-gap policy |
+| Editor | Unsent literal bytes/cursor, attachments, history and edit recovery | Draft edits and a width-dependent visual map |
+| Interaction | Retained question/picker/inspector state and derived focus | Typed actions eligible for a particular published frame |
+| Dock layout | Current editor, discovery, operation controls and orientation | One measured allocation, shared across viewports |
+| Publication | Acknowledged sealed source boundary in the current epoch | Prepared append batch, acknowledged only after physical success |
+| Terminal | Input/mode leases, geometry, physical paint and restoration | Bytes and publication result, never semantic finality |
+
+Committed, display-sealed and physically published are distinct states. Publish a
+sealed prefix incrementally during a Turn rather than withholding all history
+until operation settlement. A committed message may be sealed; an unresolved or
+growing activity group is not sealed merely because its current group is closed.
+Uncommitted text, restartable responses and incomplete recovery facts remain mutable.
+Only Core commitment and semantic finality can release content to native history.
+
+Use existing Session-entry/content-part/tool-occurrence identity, not rendered
+text, display ordinal or a new client sequence, for document boundaries and reading
+anchors. Reconciliation replaces the covered overlay instead of appending a second
+rendition. Local notices remain presentation data anchored to stable source facts.
+A prepared publication batch carries its own acknowledgement boundary; rejected
+or deferred paint cannot advance it. Physical append failure is fatal, not retryable
+by resetting a cursor and replaying the transcript.
+
+One presenter supplies inline, fullscreen, publication and evidence views. Keep
+logical source rather than prewrapped rows as retained truth. Prepare the visible
+window and pending publication; do not flatten an expanded whole conversation on
+every redraw. Preserve a source-relative reading anchor across width changes.
+One blank row separates independent visible blocks; attached status/output, group
+children and mutation evidence have no extra inter-row padding. Hidden content
+creates no gap; literal blank lines inside retained content are not spacing policy.
+
+The live band grows naturally within available terminal height, with the focused
+caret/selection and necessary controls reserved first. Editor growth is measured
+within that same budget, not an independent fixed four-row limit. Ordinary model,
+settings and Session selectors use the inline dock and retain the conversation;
+long evidence inspection may use the alternate viewport. Avoid a fixed small
+operation-summary band followed by a whole-Turn settlement dump.
+
+Compact tool presentation follows grouped summaries: successful command output is
+folded, with explicit expanded/source inspection. Failures, uncertainty, running
+state and mutation diffs remain directly visible. Coalesce benign observations,
+not mutations or exceptional outcomes. Display omission is not model omission or
+loss of recorded evidence. Assistant prose and ordinary prompts prefer word breaks;
+overlong tokens use safe grapheme boundaries. Literal technical/code/source views
+retain whitespace and hard lines, with display-only wrapping. Copy/export always
+use source rather than fitted rows.
+
+Use one derived input target for keys, paste and mouse: physical terminal lease,
+foreground overlay, pending question (even when collapsed), then composer with
+completion interception. Hidden question custody never makes the composer editable.
+A successful paint installs candidate authority for its geometry, focus/content
+revision and exact identity; preparation alone authorizes nothing. Resize, query,
+selection, replacement and focus changes revoke it. Completion edits a draft,
+picker confirmation selects a typed choice, and submission transfers Host custody;
+they are not interchangeable generic Enter actions. Stop/suspend retain priority.
+Editor visual navigation uses its measured byte-to-row map and preferred display
+column, including the boundary where vertical movement enters prompt history.
+
+### Interaction and physical ownership
+
+Normal composer chrome identifies the workspace, named or short-ID
 Session, current bound model and help entry point. Derive model identity from the
 live binding, not the last Turn; presentation neither owns selection nor creates
 Session facts. Budget orientation behind the editable cursor, discovery and
