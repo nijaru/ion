@@ -53,15 +53,16 @@ mod submission_tests;
 use crate::request::{RequestCalibration, RequestMeasurement, RequestScope};
 use code_inspection::ChildRecordIndex;
 use context::{ProjectedMessage, context_projection};
-pub(crate) use projection::valid_user_message;
 use projection::{
     ProjectionMode, input_preview, message_from_entry, model_context_state, model_message, project,
     project_connection, projected_entry_messages, shell_message, shell_outcome_at,
     valid_model_context,
 };
+pub(crate) use records::valid_user_message;
 pub use records::{
-    ForkPoint, ModelContextSnapshot, SessionEntry, SessionStatus, SessionView, StoredToolActivity,
-    TurnEndReason, TurnSummary, UnobservedUserShell, UserShellOutcome,
+    ForkPoint, ModelContextSnapshot, SessionEntry, SessionInputPreview, SessionMetadata,
+    SessionStatus, SessionView, StoredToolActivity, TurnEndReason, TurnSummary,
+    UnobservedUserShell, UserShellOutcome,
 };
 pub use recovery::{AuthorityScope, RecoveryBinding, RecoveryPoint, RecoveryState};
 pub(crate) use submission::TurnAdmission;
@@ -587,22 +588,6 @@ impl State {
 }
 
 /// Passive, bounded input labels and preferences, not a raw-history export.
-#[derive(Debug, PartialEq, Eq)]
-pub struct SessionMetadata {
-    pub id: uuid::Uuid,
-    pub cwd: Option<PathBuf>,
-    pub name: Option<String>,
-    pub last_model: Option<ModelRef>,
-    pub turns: usize,
-    pub first_input: Option<SessionInputPreview>,
-}
-
-#[derive(Debug, PartialEq, Eq)]
-pub enum SessionInputPreview {
-    Prompt { text: Option<String> },
-    Shell { command: String, excluded: bool },
-}
-
 struct HistoryProjection {
     turns: usize,
     first_input: Option<SessionInputPreview>,

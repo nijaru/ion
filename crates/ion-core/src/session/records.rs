@@ -220,3 +220,35 @@ pub struct TurnSummary {
     pub model: ModelRef,
     pub end: Option<TurnEndReason>,
 }
+
+#[derive(Debug, PartialEq, Eq)]
+pub struct SessionMetadata {
+    pub id: uuid::Uuid,
+    pub cwd: Option<PathBuf>,
+    pub name: Option<String>,
+    pub last_model: Option<ModelRef>,
+    pub turns: usize,
+    pub first_input: Option<SessionInputPreview>,
+}
+
+#[derive(Debug, PartialEq, Eq)]
+pub enum SessionInputPreview {
+    Prompt { text: Option<String> },
+    Shell { command: String, excluded: bool },
+}
+
+pub(crate) fn valid_user_message(message: &Message) -> bool {
+    message.role == Role::User
+        && message.provider_replay.is_none()
+        && !message.content.is_empty()
+        && message.content.iter().all(|part| match part {
+            Content::Text(_) => true,
+            Content::Image(image) => image.validate().is_ok(),
+            Content::Thinking(_) | Content::ToolCall(_) | Content::ToolResult(_) => false,
+        })
+        && message.content.iter().any(|part| match part {
+            Content::Text(text) => !text.trim().is_empty(),
+            Content::Image(_) => true,
+            Content::Thinking(_) | Content::ToolCall(_) | Content::ToolResult(_) => false,
+        })
+}
