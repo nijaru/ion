@@ -176,6 +176,8 @@ impl<M: Serialize + Send + 'static> SessionControl<M> {
 
     /// Read without accepting/consuming any lifecycle result. `metadata` borrows
     /// the originals; neither Clone, Sync nor Deserialize is required on M.
+    /// Projection runs after the custody/Session cut, without the lifecycle lock.
+    /// It may submit steering; that new input belongs to a later snapshot.
     /// The synchronous projection must not perform blocking I/O.
     /// Bound concurrent full-view requests in the application/transport. History
     /// and snapshot materialization have no aggregate memory quota.
@@ -210,9 +212,32 @@ impl<M: Serialize + Send + 'static> SessionControl<M> {
                     delivery: input.delivery,
                     phase,
                     original,
-                    metadata: metadata(&input.metadata),
+                    metadata: input.metadata.clone(),
                     withdrawal,
                 }
+            })
+            .collect::<Vec<_>>();
+        let updates: Vec<_> = custody.updates.iter().cloned().collect();
+        let pending_question = self.pending_question();
+        let mcp_reconnect = self
+            .mcp_reconnect
+            .as_ref()
+            .map(|reconnect| (reconnect, reconnect.work.is_stopped()));
+        // Capture facts while acknowledgements are excluded. Retained value
+        // handles let projection borrow the originals after releasing custody;
+        // a callback's submissions cannot change this already captured cut.
+        let session = self.setup.session.view()?;
+        let committed = u64::try_from(session.entries.len())?;
+        drop(custody);
+        let inputs = inputs
+            .into_iter()
+            .map(|input| InputSnapshot {
+                id: input.id,
+                delivery: input.delivery,
+                phase: input.phase,
+                original: input.original,
+                metadata: input.metadata.with(&mut metadata),
+                withdrawal: input.withdrawal,
             })
             .collect();
         let operation_metadata = self.active.as_ref().and_then(|active| {
@@ -221,26 +246,16 @@ impl<M: Serialize + Send + 'static> SessionControl<M> {
                 .as_ref()
                 .map(|(value, _)| (active.id, metadata(value)))
         });
-        let mcp_reconnect = self
-            .mcp_reconnect
-            .as_ref()
-            .map(|reconnect| McpReconnectSnapshot {
-                operation: reconnect.id,
-                server: reconnect.server.clone(),
-                metadata: metadata(&reconnect.metadata),
-                stop_requested: reconnect.work.is_stopped(),
-            });
-        let pending_question = self.pending_question();
-        let updates = custody
-            .updates
-            .iter()
-            .filter_map(|update| update_snapshot(update, &mut metadata))
+        let mcp_reconnect = mcp_reconnect.map(|(reconnect, stop_requested)| McpReconnectSnapshot {
+            operation: reconnect.id,
+            server: reconnect.server.clone(),
+            metadata: metadata(&reconnect.metadata),
+            stop_requested,
+        });
+        let updates = updates
+            .into_iter()
+            .filter_map(|update| update.with(|update| update_snapshot(update, &mut metadata)))
             .collect();
-        // Keep custody locked through the Core read: Host accepted facts cannot
-        // race ahead of the returned committed cut. Core never calls us with its
-        // Store locked; no synchronous idle guard or lock crosses await.
-        let session = self.setup.session.view()?;
-        let committed = u64::try_from(session.entries.len())?;
         self.snapshot_sequence = read;
         Ok(ControlSnapshot {
             cursor: SnapshotCursor {

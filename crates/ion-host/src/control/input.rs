@@ -282,7 +282,7 @@ impl<M: Serialize + Send + 'static> SessionControl<M> {
                 let inbox = self.turn_inbox();
                 let state = self.custody.clone();
                 let observations = self.observations.clone();
-                custody.updates.push_back(ControlUpdate::Dispatched {
+                custody.push_update(ControlUpdate::Dispatched {
                     id: root,
                     operation,
                 });
@@ -344,7 +344,9 @@ impl<M: Serialize + Send + 'static> SessionControl<M> {
         });
         if let Some(reason) = reason {
             custody.return_input(id, reason);
-            if let Some(ControlUpdate::Returned(input)) = custody.updates.back_mut() {
+            if let Some(ControlUpdate::Returned(input)) =
+                custody.updates.back_mut().map(SnapshotValue::get_mut)
+            {
                 input.preparation_error = result.err();
             }
         } else {
@@ -355,7 +357,7 @@ impl<M: Serialize + Send + 'static> SessionControl<M> {
             }) {
                 Ok(prepared) => {
                     pending.content = InputContent::Ready(prepared);
-                    custody.updates.push_back(ControlUpdate::Input {
+                    custody.push_update(ControlUpdate::Input {
                         id,
                         delivery,
                         phase: InputPhase::Queued,

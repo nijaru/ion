@@ -23,7 +23,9 @@ mod admission;
 pub use admission::preflight_messages;
 mod completion;
 mod custody;
-use custody::{Custody, Input, InputContent, InputState, PendingInput, turn_observer};
+use custody::{
+    Custody, Input, InputContent, InputState, PendingInput, SnapshotValue, turn_observer,
+};
 mod input;
 mod mcp;
 mod question;
@@ -265,12 +267,15 @@ impl<M: Serialize + Send + 'static> SessionControl<M> {
             "session control has active work or pending inputs"
         );
         ensure!(
-            !lock(&self.custody).updates.iter().any(|update| matches!(
-                update,
-                ControlUpdate::Returned(_)
-                    | ControlUpdate::Settled(_)
-                    | ControlUpdate::McpReconnectFinished(_)
-            )),
+            !lock(&self.custody)
+                .updates
+                .iter()
+                .any(|update| update.with(|update| matches!(
+                    update,
+                    ControlUpdate::Returned(_)
+                        | ControlUpdate::Settled(_)
+                        | ControlUpdate::McpReconnectFinished(_)
+                ))),
             "drain returned inputs and settlements before replacing the binding or starting new work"
         );
         // Surface Core's closed/panic/unknown-effect state before acknowledging
@@ -334,9 +339,7 @@ impl<M: Serialize + Send + 'static> SessionControl<M> {
         if matches!(activity, ActivityRetention::Retain) {
             let mut custody = lock(&self.custody);
             while let Some(observation) = self.observer.try_next() {
-                custody
-                    .updates
-                    .push_back(ControlUpdate::Activity(observation));
+                custody.push_update(ControlUpdate::Activity(observation));
             }
         }
         // Never leak a previous operation's unread stream into the next Turn.
@@ -347,11 +350,9 @@ impl<M: Serialize + Send + 'static> SessionControl<M> {
             initial: false,
         };
         if skipped > 0 {
-            lock(&self.custody)
-                .updates
-                .push_back(ControlUpdate::Activity(Observation::Gap {
-                    skipped: u64::try_from(skipped).expect("observation capacity fits u64"),
-                }));
+            lock(&self.custody).push_update(ControlUpdate::Activity(Observation::Gap {
+                skipped: u64::try_from(skipped).expect("observation capacity fits u64"),
+            }));
         }
         let returned = active.inbox.take_uncommitted();
         let mut custody = lock(&self.custody);
@@ -393,7 +394,7 @@ impl<M: Serialize + Send + 'static> SessionControl<M> {
                 .expect("accepted metadata retains its Turn");
             accepted.push(AcceptedMetadata {
                 id,
-                metadata: input.metadata,
+                metadata: input.metadata.into_inner(),
                 acceptance,
                 reservation: Some(input.reservation),
             });
@@ -422,18 +423,16 @@ impl<M: Serialize + Send + 'static> SessionControl<M> {
             Some((metadata, reservation)) => (Some(metadata), Some(reservation)),
             None => (None, None),
         };
-        custody
-            .updates
-            .push_back(ControlUpdate::Settled(Settlement {
-                operation: active.id,
-                turn,
-                automated: active.automated,
-                outcome,
-                stop_requested: self.stop_requested,
-                accepted,
-                metadata,
-                reservation,
-            }));
+        custody.push_update(ControlUpdate::Settled(Settlement {
+            operation: active.id,
+            turn,
+            automated: active.automated,
+            outcome,
+            stop_requested: self.stop_requested,
+            accepted,
+            metadata,
+            reservation,
+        }));
     }
 
     /// Return custody updates before polling live activity, retaining an operation's

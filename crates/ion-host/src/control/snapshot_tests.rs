@@ -1,6 +1,122 @@
 use super::*;
 
 #[tokio::test]
+async fn metadata_projection_can_submit_steering_without_changing_the_captured_cut() {
+    let model = Model::new(1);
+    let mut fixture = Fixture::new(model.clone(), false);
+    let control = &mut fixture.control;
+    let root = control
+        .submit(Delivery::Start, prompt("root"), meta("root"))
+        .unwrap();
+    control
+        .submit(Delivery::FollowUp, prompt("withdrawn"), meta("returned"))
+        .unwrap();
+    control.clear_queue();
+    model.wait_calls(1).await;
+    let steering = control.steering().unwrap();
+    let committed = control.session().view().unwrap().entries.len();
+    let mut workers = Vec::new();
+    let mut submissions = Vec::new();
+    let snapshot = control
+        .snapshot(|metadata| {
+            let steering = steering.clone();
+            let literal = metadata.literal.clone();
+            let (sent, received) = std::sync::mpsc::channel();
+            workers.push(std::thread::spawn(move || {
+                let result = steering
+                    .submit(Message::user_input(literal.clone(), []), meta(&literal))
+                    .map(|receipt| receipt.id);
+                // The bounded receiver may already have exposed the defect.
+                let _ = sent.send(result);
+            }));
+            // A failure must release the snapshot lock before joining workers,
+            // rather than hanging the test runner on the original defect.
+            submissions.push(received.recv_timeout(Duration::from_secs(2)));
+            metadata.marker.set(8);
+            metadata.literal.clone()
+        })
+        .unwrap();
+    for worker in workers {
+        worker.join().unwrap();
+    }
+    let next = control
+        .snapshot(|metadata| metadata.literal.clone())
+        .unwrap();
+    let report = control.shutdown().await;
+    assert!(
+        submissions.iter().all(|result| result.is_ok()),
+        "{submissions:?}"
+    );
+    let ids: Vec<_> = submissions
+        .into_iter()
+        .map(|submission| submission.unwrap().unwrap())
+        .collect();
+    assert_eq!(ids.len(), 2);
+    assert_eq!(snapshot.cursor.committed as usize, committed);
+    assert_eq!(snapshot.inputs.len(), 1);
+    assert_eq!(snapshot.inputs[0].id, root);
+    assert!(snapshot.updates.iter().any(|update| matches!(
+        update, UpdateSnapshot::Returned { metadata, .. } if metadata == "returned"
+    )));
+    for id in ids {
+        assert!(next.inputs.iter().any(|input| input.id == id));
+        assert!(!snapshot.updates.iter().any(|update| matches!(
+            update, UpdateSnapshot::Input { id: captured, .. } if *captured == id
+        )));
+    }
+    assert!(report.updates.iter().any(|update| matches!(
+        update, ControlUpdate::Returned(input)
+            if input.metadata.literal == "returned" && input.metadata.marker.get() == 8
+    )));
+    assert!(report.updates.iter().any(|update| matches!(
+        update, ControlUpdate::Settled(settlement)
+            if settlement.accepted.iter().any(|input|
+                input.id == root && input.metadata.marker.get() == 8)
+    )));
+}
+
+#[tokio::test]
+async fn panicking_projection_releases_captures_without_consuming_metadata() {
+    let model = Model::new(1);
+    let mut fixture = Fixture::new(model.clone(), false);
+    let control = &mut fixture.control;
+    control
+        .submit(Delivery::Start, prompt("root"), meta("root"))
+        .unwrap();
+    control
+        .submit(Delivery::FollowUp, prompt("withdrawn"), meta("returned"))
+        .unwrap();
+    control.clear_queue();
+    model.wait_calls(1).await;
+    for target in ["root", "returned"] {
+        let panicked = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            control.snapshot(|metadata| {
+                if metadata.literal == target {
+                    metadata.marker.set(8);
+                    panic!("application projection failed");
+                }
+            })
+        }));
+        assert!(panicked.is_err());
+        let snapshot = control
+            .snapshot(|metadata| metadata.literal.clone())
+            .unwrap();
+        assert_eq!(snapshot.inputs[0].metadata, "root");
+        assert!(snapshot.updates.iter().any(|update| matches!(
+            update, UpdateSnapshot::Returned { metadata, .. } if metadata == "returned"
+        )));
+    }
+    let report = control.shutdown().await;
+    assert!(report.updates.iter().any(|update| matches!(
+        update, ControlUpdate::Returned(input) if input.metadata.marker.get() == 8
+    )));
+    assert!(report.updates.iter().any(|update| matches!(
+        update, ControlUpdate::Settled(settlement)
+            if settlement.accepted[0].metadata.marker.get() == 8
+    )));
+}
+
+#[tokio::test]
 async fn snapshots_retain_bounded_recovery_without_consuming_owner_results() {
     let model = Model::new(300);
     let mut fixture = Fixture::new(model.clone(), false);

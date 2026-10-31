@@ -98,7 +98,7 @@ impl<M: Serialize + Send + 'static> SessionControl<M> {
             })) => {
                 custody.occupied += 1;
                 custody.steering_target = Some(SteeringTarget { operation, stop });
-                custody.updates.push_back(ControlUpdate::Automated {
+                custody.push_update(ControlUpdate::Automated {
                     operation,
                     turn: Some(turn),
                 });
@@ -124,22 +124,20 @@ impl<M: Serialize + Send + 'static> SessionControl<M> {
                 self.request_stop();
                 let mut custody = lock(&self.custody);
                 custody.occupied += 1;
-                custody.updates.push_back(ControlUpdate::Automated {
+                custody.push_update(ControlUpdate::Automated {
                     operation,
                     turn: None,
                 });
-                custody
-                    .updates
-                    .push_back(ControlUpdate::Settled(Settlement {
-                        automated: true,
-                        operation,
-                        turn: None,
-                        outcome: OperationOutcome::Turn(Err(error)),
-                        stop_requested: true,
-                        accepted: Vec::new(),
-                        metadata: None,
-                        reservation: None,
-                    }));
+                custody.push_update(ControlUpdate::Settled(Settlement {
+                    automated: true,
+                    operation,
+                    turn: None,
+                    outcome: OperationOutcome::Turn(Err(error)),
+                    stop_requested: true,
+                    accepted: Vec::new(),
+                    metadata: None,
+                    reservation: None,
+                }));
             }
         }
     }

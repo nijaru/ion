@@ -118,9 +118,11 @@ async fn joined_inbox_reconciliation_preserves_consumed_guidance_after_acknowled
             .unwrap()
             .publish(SteeringStatus::Queued);
         custody.steering_order.push_back(receipt.id);
-        custody.updates.retain(
-            |update| !matches!(update, ControlUpdate::Accepted { id, .. } if *id == receipt.id),
-        );
+        custody.updates.retain(|update| {
+            update.with(
+                |update| !matches!(update, ControlUpdate::Accepted { id, .. } if *id == receipt.id),
+            )
+        });
     }
     model.release();
     let (returned, settled) = settle(&mut f.control).await;

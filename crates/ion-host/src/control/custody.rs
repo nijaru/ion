@@ -1,9 +1,47 @@
 //! Pending input payloads and atomic acknowledgement, separate from execution.
 use super::*;
 
+// Snapshot captures retain values across release of the lifecycle mutex. M only
+// needs Send: its own mutex permits a borrowed projection without requiring Sync.
+// Only the controlling owner's exclusive methods extract or mutate these values;
+// Core acknowledgement and steering producers change custody, never their contents.
+pub(super) struct SnapshotValue<T>(Arc<Mutex<T>>);
+impl<T> Clone for SnapshotValue<T> {
+    fn clone(&self) -> Self {
+        Self(self.0.clone())
+    }
+}
+impl<T> SnapshotValue<T> {
+    pub(super) fn new(value: T) -> Self {
+        Self(Arc::new(Mutex::new(value)))
+    }
+
+    pub(super) fn with<R>(&self, project: impl FnOnce(&T) -> R) -> R {
+        let value = self
+            .0
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        project(&value)
+    }
+
+    pub(super) fn get_mut(&mut self) -> &mut T {
+        Arc::get_mut(&mut self.0)
+            .expect("exclusive control cannot overlap a snapshot capture")
+            .get_mut()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
+
+    pub(super) fn into_inner(self) -> T {
+        Arc::into_inner(self.0)
+            .expect("exclusive control cannot overlap a snapshot capture")
+            .into_inner()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
+}
+
 pub(super) struct Input<M> {
     pub(super) delivery: Delivery,
-    pub(super) metadata: M,
+    pub(super) metadata: SnapshotValue<M>,
     pub(super) reservation: InputReservation,
     pub(super) state: InputState,
     pub(super) steering_status: Option<SteeringMonitor>,
@@ -73,7 +111,7 @@ impl PendingInput {
 
 pub(super) struct Custody<M> {
     pub(super) inputs: BTreeMap<InputId, Input<M>>,
-    pub(super) updates: VecDeque<ControlUpdate<M>>,
+    pub(super) updates: VecDeque<SnapshotValue<ControlUpdate<M>>>,
     pub(super) steering_order: VecDeque<InputId>,
     pub(super) occupied: usize,
     pub(super) steering_target: Option<SteeringTarget>,
@@ -90,6 +128,10 @@ impl<M> Default for Custody<M> {
     }
 }
 impl<M> Custody<M> {
+    pub(super) fn push_update(&mut self, update: ControlUpdate<M>) {
+        self.updates.push_back(SnapshotValue::new(update));
+    }
+
     pub(super) fn accept(&mut self, id: InputId, operation: OperationId, turn: u64) {
         let input = self
             .inputs
@@ -109,7 +151,7 @@ impl<M> Custody<M> {
         if let Some(status) = &input.steering_status {
             status.publish(SteeringStatus::Committed { acceptance });
         }
-        self.updates.push_back(ControlUpdate::Accepted {
+        self.push_update(ControlUpdate::Accepted {
             id,
             operation,
             turn,
@@ -130,20 +172,19 @@ impl<M> Custody<M> {
                 reason: ReturnSnapshot::from(&reason),
             });
         }
-        self.updates
-            .push_back(ControlUpdate::Returned(ReturnedInput {
-                id,
-                delivery: input.delivery,
-                input: pending.original,
-                metadata: input.metadata,
-                reason,
-                preparation_error: None,
-                reservation: Some(input.reservation),
-            }));
+        self.push_update(ControlUpdate::Returned(ReturnedInput {
+            id,
+            delivery: input.delivery,
+            input: pending.original,
+            metadata: input.metadata.into_inner(),
+            reason,
+            preparation_error: None,
+            reservation: Some(input.reservation),
+        }));
     }
 
     pub(super) fn pop(&mut self) -> Option<ControlUpdate<M>> {
-        let mut update = self.updates.pop_front()?;
+        let mut update = self.updates.pop_front()?.into_inner();
         self.occupied -= update.release();
         Some(update)
     }

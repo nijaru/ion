@@ -144,7 +144,7 @@ impl<M: Serialize + Send + 'static> TurnSteering<M> {
             id,
             Input {
                 delivery,
-                metadata,
+                metadata: SnapshotValue::new(metadata),
                 reservation,
                 state: InputState::Pending(Box::new(PendingInput {
                     original: input,
@@ -158,7 +158,7 @@ impl<M: Serialize + Send + 'static> TurnSteering<M> {
                 }),
             },
         );
-        custody.updates.push_back(ControlUpdate::Input {
+        custody.push_update(ControlUpdate::Input {
             id,
             delivery,
             phase: InputPhase::Queued,

@@ -2890,8 +2890,11 @@ After authorizing inspection, call `attach(project_metadata)` for a complete
 `ControlSnapshot` and a passive observer, registered before the read. `snapshot()`
 refreshes the view without consuming results. It includes committed Session facts,
 retained operation/preparation/queue state, pending withdrawal/acknowledgement,
-reliable returns/settlements and cleanup failures. Projection borrows metadata;
-`M` needs neither Clone, Sync nor Deserialize. These privileged views include raw
+reliable returns/settlements and cleanup failures. Projection borrows metadata
+outside the lifecycle lock, after capturing the custody/Session cut; `M` needs
+neither Clone, Sync nor Deserialize. A projection may submit steering through an
+existing grant, but cannot change its already captured view. Keep projection
+synchronous and free of blocking I/O. These privileged views include raw
 images, opaque replay and private shell context: **do not serialize them blindly
 to a network**. Authorize the full Session/queue scope and select disclosure.
 
@@ -2913,8 +2916,9 @@ cleanup or remote quiescence. Cancelling its wait retains custody. `shutdown()`
 also transfers the remaining updates/errors to its caller.
 
 The credential-free [service example](crates/ion-app/examples/service.rs) exercises
-late join, permission denial, slow/dropped readers, gaps, reconnect, explicit result
-retention, stop and joined shutdown through bounded in-process transport requests:
+reentrant metadata projection, late join, permission denial, slow/dropped readers,
+gaps, reconnect, explicit result retention, stop and joined shutdown through bounded
+in-process transport requests:
 
 ```sh
 cargo run --locked -p ion --example service -- "$(mktemp -d)"

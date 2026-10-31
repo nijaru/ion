@@ -326,6 +326,70 @@ async fn qualify(
     Ok(())
 }
 
+async fn qualify_projection(root: PathBuf) -> Result<()> {
+    let model = Arc::new(Model {
+        calls: AtomicUsize::new(0),
+        permits: Semaphore::new(0),
+    });
+    let catalog = SessionCatalog::new(root, None);
+    let session = Arc::new(CodingSession::create(catalog.new_path()?, None)?);
+    let mut control = SessionSetup::new(
+        session,
+        catalog,
+        Arc::new(App(model.clone())),
+        None,
+        None,
+        None,
+    )?
+    .into_control();
+    control
+        .submit(Delivery::Start, input("root"), metadata("root"))
+        .map_err(|error| error.reason)?;
+    let result = async {
+        until(|| model.calls.load(Ordering::SeqCst) == 1).await?;
+        let steering = control.steering().context("live steering grant")?;
+        let mut submitted = None;
+        let captured = control.snapshot(|original| {
+            // Application projection can reenter shared input custody. It still
+            // borrows the original non-Clone/non-Sync value, not a reconstruction.
+            original.marker.set(8);
+            submitted = Some(steering.submit(
+                Message::user_input("from projection".into(), []),
+                metadata("guidance"),
+            ));
+            original.correlation.clone()
+        })?;
+        let receipt = submitted
+            .context("root metadata projected")?
+            .map_err(|error| error.reason)?;
+        ensure!(
+            captured.inputs.len() == 1,
+            "projection changed its captured cut"
+        );
+        let next = control.snapshot(|original| original.correlation.clone())?;
+        ensure!(
+            next.inputs.iter().any(|input| input.id == receipt.id),
+            "steering missing from next cut"
+        );
+        Ok::<_, anyhow::Error>(())
+    }
+    .await;
+    let report = control.shutdown().await;
+    result?;
+    ensure!(
+        report.cleanup_errors.is_empty(),
+        "projection cleanup failed"
+    );
+    ensure!(
+        report.updates.iter().any(|update| matches!(
+            update, ControlUpdate::Settled(settlement) if settlement.accepted.iter().any(|input|
+                input.metadata.correlation == "root" && input.metadata.marker.get() == 8)
+        )),
+        "projection did not borrow original metadata"
+    );
+    Ok(())
+}
+
 #[tokio::main]
 async fn main() -> Result<()> {
     let root = PathBuf::from(
@@ -333,6 +397,7 @@ async fn main() -> Result<()> {
             .nth(1)
             .context("usage: service STATE_DIRECTORY")?,
     );
+    qualify_projection(root.join("projection")).await?;
     let model = Arc::new(Model {
         calls: AtomicUsize::new(0),
         permits: Semaphore::new(0),

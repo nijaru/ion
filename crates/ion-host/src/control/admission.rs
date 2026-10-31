@@ -152,7 +152,7 @@ impl<M: Serialize + Send + 'static> SessionControl<M> {
                 id,
                 Input {
                     delivery: input_delivery,
-                    metadata,
+                    metadata: SnapshotValue::new(metadata),
                     reservation,
                     state: InputState::Pending(Box::new(PendingInput {
                         original: input,
@@ -163,7 +163,7 @@ impl<M: Serialize + Send + 'static> SessionControl<M> {
                     steering_status: None,
                 },
             );
-            custody.updates.push_back(ControlUpdate::Input {
+            custody.push_update(ControlUpdate::Input {
                 id,
                 delivery: input_delivery,
                 phase,
@@ -251,7 +251,7 @@ impl<M: Serialize + Send + 'static> SessionControl<M> {
             id,
             Input {
                 delivery: Delivery::Start,
-                metadata,
+                metadata: SnapshotValue::new(metadata),
                 reservation: admission.reservation,
                 state: InputState::Pending(Box::new(PendingInput {
                     original,
@@ -289,9 +289,7 @@ impl<M: Serialize + Send + 'static> SessionControl<M> {
                 operation: Some(work),
             }) => {
                 custody.occupied += 1;
-                custody
-                    .updates
-                    .push_back(ControlUpdate::Dispatched { id, operation });
+                custody.push_update(ControlUpdate::Dispatched { id, operation });
                 custody.steering_target = Some(SteeringTarget {
                     operation,
                     stop: stop.clone(),
@@ -319,7 +317,7 @@ impl<M: Serialize + Send + 'static> SessionControl<M> {
                     Ok(ion_core::RequestSubmission { receipt, .. }) => {
                         Ok(RequestAdmission::Existing {
                             receipt,
-                            metadata: input.metadata,
+                            metadata: input.metadata.into_inner(),
                         })
                     }
                     Err(reason) => Err(Box::new(RejectedInput {
@@ -330,7 +328,7 @@ impl<M: Serialize + Send + 'static> SessionControl<M> {
                                 unreachable!("rejected request was not accepted")
                             }
                         },
-                        metadata: input.metadata,
+                        metadata: input.metadata.into_inner(),
                         reason: reason.into(),
                     })),
                 }

@@ -1263,6 +1263,11 @@ snapshot plus an ordered committed revision/cursor or equivalent reconciliation
 contract. Include relevant lifecycle/queue/settlement state, not just model deltas.
 Live progress may be lossy; gaps require resync, never suffix-splicing. Attachment,
 transport acknowledgement and snapshot access do not grant execution authority.
+Capture custody and committed facts before application metadata projection, excluding
+acknowledgements until that cut is complete. Project borrowed original metadata
+outside lifecycle locking without requiring Clone, Sync or Deserialize. A callback's
+ordinary steering admission cannot change the already captured view; passive reads
+still neither transfer recovery results nor release their capacity reservations.
 Applications may implement authenticated network transports over these shared
 operations; neither a required daemon nor a second client loop is implied.
 

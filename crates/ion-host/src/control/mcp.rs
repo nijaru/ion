@@ -40,10 +40,8 @@ impl<M: Serialize + Send + 'static> SessionControl<M> {
             let mut custody = lock(&self.custody);
             ensure!(
                 self.mcp_reconnect.is_none()
-                    && !custody
-                        .updates
-                        .iter()
-                        .any(|update| matches!(update, ControlUpdate::McpReconnectFinished(_))),
+                    && !custody.updates.iter().any(|update| update
+                        .with(|update| matches!(update, ControlUpdate::McpReconnectFinished(_)))),
                 "drain the previous MCP reconnect result before starting another"
             );
             ensure!(
@@ -81,15 +79,15 @@ impl<M: Serialize + Send + 'static> SessionControl<M> {
     pub(super) fn finish_mcp_reconnect(&mut self, result: Result<crate::McpReconnectReport>) {
         let reconnect = self.mcp_reconnect.take().expect("retained MCP reconnect");
         let stop_requested = reconnect.work.is_stopped();
-        lock(&self.custody)
-            .updates
-            .push_back(ControlUpdate::McpReconnectFinished(McpReconnectFinished {
+        lock(&self.custody).push_update(ControlUpdate::McpReconnectFinished(
+            McpReconnectFinished {
                 operation: reconnect.id,
                 server: reconnect.server,
                 metadata: reconnect.metadata,
                 result,
                 stop_requested,
                 reservation: Some(reconnect.reservation),
-            }));
+            },
+        ));
     }
 }
