@@ -138,21 +138,6 @@ pub(super) enum ProjectionMode {
     Metadata,
 }
 
-pub(super) fn project_connection(
-    connection: &Connection,
-    mode: ProjectionMode,
-) -> Result<HistoryProjection, SessionError> {
-    // Validate one fact at a time without an owned raw-history export. The
-    // projection mode determines which derived values must remain resident.
-    let mut statement = connection.prepare("SELECT body FROM entries ORDER BY seq")?;
-    let rows = statement.query_map([], |row| row.get::<_, Vec<u8>>(0))?;
-    project(
-        rows.map(|body| Ok(serde_json::from_slice::<SessionEntry>(&body?)?)),
-        mode,
-        &|entry| navigation::read_entry(connection, entry),
-    )
-}
-
 pub(super) fn project<E: Borrow<SessionEntry>>(
     entries: impl IntoIterator<Item = Result<E, SessionError>>,
     mode: ProjectionMode,

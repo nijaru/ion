@@ -48,6 +48,7 @@ mod recovery;
 #[cfg(test)]
 mod recovery_tests;
 mod submission;
+mod store;
 #[cfg(test)]
 mod submission_tests;
 use crate::request::{RequestCalibration, RequestMeasurement, RequestScope};
@@ -55,7 +56,7 @@ use code_inspection::ChildRecordIndex;
 use context::{ProjectedMessage, context_projection};
 use projection::{
     ProjectionMode, message_from_entry, model_context_state, model_message, project,
-    project_connection, projected_entry_messages, shell_message, shell_outcome_at,
+    projected_entry_messages, shell_message, shell_outcome_at,
     valid_model_context,
 };
 pub(crate) use records::valid_user_message;
@@ -67,24 +68,13 @@ pub use records::{
 pub use recovery::{AuthorityScope, RecoveryBinding, RecoveryPoint, RecoveryState};
 pub(crate) use submission::TurnAdmission;
 pub use submission::{RequestKey, RequestReceipt, SubmissionRequest};
-
-const FORMAT_VERSION: u32 = 18;
-// An 8 MiB raw prompt or streamed response can grow up to sixfold when JSON
-// escapes control characters. Keep the storage bound above that encoded size.
-const MAX_ENTRY_BYTES: usize = 64 * 1024 * 1024;
+use store::{
+    Header, SessionLock, Store, FORMAT_VERSION, append, configure_connection, database_path,
+    encode_entry, initialize_new, lock, prepare_writer, project_connection, read_entries, read_header,
+};
 
 fn completed_termination() -> ResponseTermination {
     ResponseTermination::Completed
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-struct Header {
-    version: u32,
-    id: uuid::Uuid,
-    provider_session_id: uuid::Uuid,
-    cwd: Option<PathBuf>,
-    #[serde(default)]
-    name: Option<String>,
 }
 
 #[derive(Debug, Default)]
@@ -599,23 +589,6 @@ struct HistoryProjection {
     context_index: ContextIndex,
 }
 
-struct Store {
-    connection: Connection,
-    state: State,
-    settled: BTreeSet<u64>,
-    messages: Vec<ProjectedMessage>,
-    // Sparse, rebuildable projection of committed context boundaries. It does
-    // not retain or reproject historical tool payloads on each model request.
-    context_changes: Vec<ModelContextChange>,
-    child_records: ChildRecordIndex,
-    context_index: ContextIndex,
-    // Process-local capacity evidence. Reopen, fork and clone start cold; this
-    // is never serialized into Session history.
-    calibration: Option<RequestCalibration>,
-    // Process-local task custody only; absent after reopen. Not replay grants.
-    live_backgrounds: BTreeMap<uuid::Uuid, std::sync::Weak<()>>,
-}
-
 /// A writable Session holds a cross-process lock and retains its exclusive
 /// operation through started effects, observed-result commit and task joining.
 pub struct Session {
@@ -625,16 +598,6 @@ pub struct Session {
     header: Header,
     path: PathBuf,
     pub(crate) operations: Arc<OperationOwner>,
-}
-
-struct SessionLock(File);
-
-impl Drop for SessionLock {
-    fn drop(&mut self) {
-        // A child may briefly inherit a duplicate file description. Release
-        // this writer's lease explicitly before closing our descriptor.
-        let _ = flock(&self.0, FlockOperation::Unlock);
-    }
 }
 
 impl Session {
@@ -1757,26 +1720,6 @@ impl Session {
     }
 }
 
-impl Store {
-    fn orphaned_backgrounds(&self, session: uuid::Uuid) -> Vec<SessionEntry> {
-        self.state
-            .backgrounds
-            .iter()
-            .filter(|(run, link)| {
-                link.site.session == session
-                    && self
-                        .live_backgrounds
-                        .get(run)
-                        .is_none_or(|lease| lease.strong_count() == 0)
-            })
-            .map(|(run, _)| SessionEntry::DelegationSettled {
-                run: *run,
-                outcome: crate::DelegationOutcome::Unknown,
-            })
-            .collect()
-    }
-}
-
 fn interrupted_operation_entries(store: &Store, session: uuid::Uuid) -> Vec<SessionEntry> {
     let state = &store.state;
     let mut entries = store.orphaned_backgrounds(session);
@@ -1875,111 +1818,6 @@ fn pending_settlement(
     }
 }
 
-fn append(store: &mut Store, entries: &[SessionEntry]) -> Result<(), SessionError> {
-    let mut replacement = None;
-    let mut candidate = store.state.clone();
-    // A shared pending shell owns the final context message. Seed only that
-    // slot so candidate settlement can replace it without rebuilding history.
-    let pending_message = store
-        .state
-        .pending_shell
-        .as_ref()
-        .filter(|shell| !shell.exclude_from_context)
-        .map(|shell| {
-            ProjectedMessage::new(
-                shell.admission_entry,
-                shell_message(&shell.command, &UserShellOutcome::Unknown, false),
-            )
-        });
-    let replace_pending_message = pending_message.is_some();
-    let mut new_messages: Vec<_> = pending_message.into_iter().collect();
-    let message_start = store.messages.len() - usize::from(replace_pending_message);
-    let mut new_context_changes = Vec::new();
-    let mut new_settled = Vec::new();
-    let encoded = entries
-        .iter()
-        .enumerate()
-        .map(|(offset, entry)| {
-            candidate.apply(entry, &mut new_messages, &store.settled, &mut new_settled)?;
-            if let SessionEntry::ContextSelected { head_entry } = entry {
-                if replacement.is_some() || offset + 1 != entries.len() {
-                    return Err(SessionError::InvalidHistory);
-                }
-                let navigation::RestoredContext {
-                    state,
-                    messages,
-                    settled,
-                    changes,
-                } = restore_context(
-                    &store.context_index,
-                    *head_entry,
-                    ProjectionMode::Full,
-                    &|entry| navigation::read_entry(&store.connection, entry),
-                )?;
-                candidate.restore_context(state);
-                replacement = Some((messages, settled, changes));
-            }
-            if let SessionEntry::ModelContextChanged { context, .. } = entry {
-                new_context_changes.push(ModelContextChange {
-                    after_message: message_start + new_messages.len(),
-                    context: model_context_state(context),
-                });
-            }
-            encode_entry(entry)
-        })
-        .collect::<Result<Vec<_>, SessionError>>()?;
-    let tx = store.connection.transaction()?;
-    for body in encoded {
-        tx.execute("INSERT INTO entries(body) VALUES (?1)", params![body])?;
-    }
-    tx.commit()?;
-    let mut sequence = store.state.sequence;
-    for entry in entries {
-        sequence += 1;
-        store.child_records.observe(sequence, entry);
-        store.context_index.observe(entry);
-        if let SessionEntry::DelegationSettled { run, .. } = entry {
-            store.live_backgrounds.remove(run);
-        }
-    }
-    if entries.iter().any(|entry| {
-        matches!(
-            entry,
-            SessionEntry::ContextSelected { .. }
-                | SessionEntry::Compacted { .. }
-                | SessionEntry::ProviderReplayRebased { .. }
-                | SessionEntry::EffectiveModelChanged { .. }
-                | SessionEntry::ModelSelected { .. }
-                | SessionEntry::ReasoningSelected { .. }
-                | SessionEntry::ModelContextChanged { .. }
-        )
-    }) {
-        store.calibration = None;
-    }
-    store.state = candidate;
-    if let Some((messages, settled, changes)) = replacement {
-        store.messages = messages;
-        store.settled = settled;
-        store.context_changes = changes;
-    } else {
-        store.settled.extend(new_settled);
-        if replace_pending_message {
-            store.messages.pop();
-        }
-        store.messages.extend(new_messages);
-        store.context_changes.extend(new_context_changes);
-    }
-    Ok(())
-}
-
-fn encode_entry(entry: &SessionEntry) -> Result<Vec<u8>, SessionError> {
-    let bytes = serde_json::to_vec(entry)?;
-    if bytes.len() > MAX_ENTRY_BYTES {
-        return Err(SessionError::EntryTooLarge);
-    }
-    Ok(bytes)
-}
-
 fn summary_message(through_entry: u64, summary: &str) -> Message {
     Message {
         role: Role::User,
@@ -2026,99 +1864,6 @@ fn validate_tool_activities(
         return Err(SessionError::InvalidHistory);
     }
     Ok(())
-}
-
-fn read_entries(connection: &Connection) -> Result<Vec<SessionEntry>, SessionError> {
-    let mut statement = connection.prepare("SELECT body FROM entries ORDER BY seq")?;
-    let rows = statement.query_map([], |row| row.get::<_, Vec<u8>>(0))?;
-    let mut entries = Vec::new();
-    for body in rows {
-        entries.push(serde_json::from_slice(&body?)?);
-    }
-    Ok(entries)
-}
-
-fn read_header(connection: &Connection) -> Result<Header, SessionError> {
-    let encoded: Vec<u8> = connection
-        .query_row("SELECT header FROM session WHERE id=1", [], |row| {
-            row.get(0)
-        })
-        .optional()?
-        .ok_or(SessionError::InvalidDatabase)?;
-    // Reject obsolete formats before interpreting the current header payload.
-    // In particular, never invent an affinity identity when opening old data.
-    #[derive(Deserialize)]
-    struct Format {
-        version: u32,
-    }
-    let format: Format = serde_json::from_slice(&encoded)?;
-    if format.version != FORMAT_VERSION {
-        return Err(SessionError::UnsupportedFormat(format.version));
-    }
-    Ok(serde_json::from_slice(&encoded)?)
-}
-
-fn configure_connection(connection: &Connection) -> Result<(), SessionError> {
-    connection.busy_timeout(Duration::from_secs(5))?;
-    Ok(())
-}
-
-fn prepare_writer(connection: &Connection) -> Result<(), SessionError> {
-    connection.pragma_update(None, "journal_mode", "WAL")?;
-    connection.pragma_update(None, "synchronous", "FULL")?;
-    Ok(())
-}
-
-fn initialize_new(connection: &Connection) -> Result<(), SessionError> {
-    configure_connection(connection)?;
-    prepare_writer(connection)?;
-    connection.execute_batch("CREATE TABLE session (id INTEGER PRIMARY KEY CHECK(id=1), header BLOB NOT NULL); CREATE TABLE entries (seq INTEGER PRIMARY KEY, body BLOB NOT NULL);
-CREATE UNIQUE INDEX request_keys ON entries(json_extract(body, '$.data.request.scope'), json_extract(body, '$.data.request.id')) WHERE json_extract(body, '$.kind') = 'turn_started' AND json_extract(body, '$.data.request') IS NOT NULL;
-CREATE UNIQUE INDEX delegation_runs ON entries(json_extract(body, '$.data.record.run')) WHERE json_extract(body, '$.kind') = 'delegation_admitted';
-CREATE UNIQUE INDEX delegation_created_children ON entries(json_extract(body, '$.data.record.child')) WHERE json_extract(body, '$.kind') = 'delegation_admitted' AND json_extract(body, '$.data.record.spec.target.type') IN ('fresh', 'fork');
-CREATE UNIQUE INDEX child_bindings ON entries(json_extract(body, '$.data.record.run')) WHERE json_extract(body, '$.kind') = 'child_session_of';
-CREATE INDEX turn_ends ON entries(json_extract(body, '$.data.turn')) WHERE json_extract(body, '$.kind') = 'turn_ended';")?;
-    Ok(())
-}
-
-fn database_path(path: &Path) -> Result<PathBuf, SessionError> {
-    let path = path.canonicalize().map_err(|error| {
-        if error.kind() == std::io::ErrorKind::NotFound {
-            SessionError::NotFound
-        } else {
-            SessionError::Io(error)
-        }
-    })?;
-    let metadata = fs::metadata(&path)?;
-    if !metadata.is_file() {
-        return Err(SessionError::NotFound);
-    }
-    // SQLite resolves symlinks, but cannot unify hard-linked journal/WAL names.
-    // Reject those aliases rather than claiming lock normalization makes them safe.
-    // https://www.sqlite.org/howtocorrupt.html#multiple_links_to_the_same_file
-    if metadata.nlink() != 1 {
-        return Err(SessionError::HardLinkedDatabase);
-    }
-    Ok(path)
-}
-
-fn lock(path: &Path) -> Result<SessionLock, SessionError> {
-    let mut sidecar = path.as_os_str().to_os_string();
-    sidecar.push(".lock");
-    let file = OpenOptions::new()
-        .write(true)
-        .create(true)
-        .truncate(false)
-        .mode(0o600)
-        .open(PathBuf::from(sidecar))?;
-    flock(&file, FlockOperation::NonBlockingLockExclusive).map_err(|error| {
-        if error == rustix::io::Errno::WOULDBLOCK {
-            SessionError::AlreadyOpen
-        } else {
-            SessionError::Io(error.into())
-        }
-    })?;
-    Ok(SessionLock(file))
 }
 
 #[derive(Debug, Error)]
