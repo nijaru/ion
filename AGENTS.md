@@ -2,19 +2,29 @@
 
 Follow the shared `nijaru/dotfiles/instructions/AGENTS.md` rules. Source is the implementation authority. This is unreleased v0: replace obsolete APIs and modules with their callers; do not add compatibility shims or preserve weak abstractions solely because they exist.
 
-## Authoritative private project work
+## Design and reference policy
 
-Read `nijaru/knowledge/projects/ion/design.md` for target behavior and `implementation-plan.md` for the only active milestone sequence. The `research/reference-guide.md` points to current Pi, fx and Pi Durable source; consult current upstream code for each affected workflow. The private knowledge repository owns design/rationale/forward work. Do not add a competing public ARCHITECTURE, design, roadmap, session report or handoff to this repository.
+Ion is one reusable Rust agent engine with a complete coding application, not
+a coding-only kernel or multiple loops. Pi is the primary agent/workflow
+reference, fx the native/TUI reference, and Pi Durable a source for effect and
+programmatic-tool recovery patterns. Inspect current upstream source for the
+affected workflow, then implement idiomatically in Rust. Reuse working code;
+remove obsolete abstractions through all real callers. The current TUI is
+not accepted for daily use. No autonomous pull requests.
 
-Agent semantics: Pi primary; native/inline UX: fx primary; Pi Durable for restart-safe Code Mode/effect semantics. Preserve real observed workflows, not upstream language-specific class structures. Simplify source owners aggressively when warranted; remove superseded implementations once real callers migrate. No autonomous pull requests.
+Maintainer-private design, execution plan and source evidence may be available
+through the owner's knowledge repository. Consult them when accessible under
+the shared working agreements, but public usage and implementation contracts
+must remain understandable from this repository alone. Do not recreate public
+design/roadmap copies or treat old research snapshots as current instructions.
 
 ## Source navigation
 
-- `ion-core/src/agent/turn.rs` and `agent/request_cycle.rs`: Turn/request sequencing; `agent.rs` still contains substantial orchestration and tests.
-- `ion-core/src/session.rs`, `session/history/`: durable Session facts, branch/context and recovery.
-- `ion-core/src/tool_set.rs`, `code_gateway.rs`, `ion-host/src/code_mode.rs`: captured tool dispatch and bounded Code Mode.
-- `ion-host/src/control/`, `application.rs`, `local_tools/`: client control, coding recipe and effect executors.
-- `ion-app/src/headless.rs`, `rpc.rs`, `terminal_client/`; `ion-terminal/src/`: public callers and native interaction.
+- `crates/ion-core/src/agent/turn.rs` and `crates/ion-core/src/agent/request_cycle.rs`: Turn/request sequencing; `agent.rs` still contains substantial orchestration and tests.
+- `crates/ion-core/src/session.rs`, `crates/ion-core/src/session/history/`: durable Session facts, branch/context and recovery.
+- `crates/ion-core/src/tool_set.rs`, `crates/ion-core/src/code_gateway.rs`, `crates/ion-host/src/code_mode.rs`: captured tool dispatch and bounded Code Mode.
+- `crates/ion-host/src/control/`, `crates/ion-host/src/application.rs`, `crates/ion-host/src/local_tools/`: client control, coding recipe and effect executors.
+- `crates/ion-app/src/headless.rs`, `crates/ion-app/src/rpc.rs`, `crates/ion-app/src/terminal_client/`; `crates/ion-terminal/src/`: public callers and native interaction.
 
 Keep one owner for each durable fact, effect, execution outcome and terminal publication. Verify source in context and follow a task end-to-end. Do not use UI green tests to claim human usability.
 
