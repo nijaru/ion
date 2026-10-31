@@ -54,7 +54,7 @@ use crate::request::{RequestCalibration, RequestMeasurement, RequestScope};
 use code_inspection::ChildRecordIndex;
 use context::{ProjectedMessage, context_projection};
 use projection::{
-    ProjectionMode, input_preview, message_from_entry, model_context_state, model_message, project,
+    ProjectionMode, message_from_entry, model_context_state, model_message, project,
     project_connection, projected_entry_messages, shell_message, shell_outcome_at,
     valid_model_context,
 };
