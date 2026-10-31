@@ -11,6 +11,10 @@ const MAX_SCHEMA_DEPTH: usize = 8;
 const K1: f64 = 1.2;
 const B: f64 = 0.75;
 const NAME_WEIGHT: f64 = 3.0;
+const STOP_WORDS: &[&str] = &[
+    "a", "an", "and", "are", "as", "at", "be", "by", "for", "from", "in", "is", "it", "of",
+    "on", "or", "that", "the", "this", "to", "with",
+];
 
 struct Document<'a> {
     definition: &'a ToolDefinition,
@@ -73,7 +77,10 @@ pub(super) fn rank<'a>(
     if terms.is_empty() || limit == 0 {
         return Vec::new();
     }
-    let documents = definitions.into_iter().map(Document::new).collect::<Vec<_>>();
+    let documents = definitions
+        .into_iter()
+        .map(Document::new)
+        .collect::<Vec<_>>();
     if documents.is_empty() {
         return Vec::new();
     }
@@ -216,14 +223,11 @@ fn push_word(word: &mut String, result: &mut Vec<String>) {
         return;
     }
     let normalized = std::mem::take(word);
-    if matches!(
-        normalized.as_str(),
-        "a" | "an" | "and" | "are" | "as" | "at" | "be" | "by" | "for" | "from" | "in"
-            | "is" | "it" | "of" | "on" | "or" | "that" | "the" | "this" | "to" | "with"
-    ) {
+    if STOP_WORDS.contains(&normalized.as_str()) {
         return;
     }
-    let normalized = if normalized.is_ascii() && normalized.len() > 4 && normalized.ends_with("ies") {
+    let normalized = if normalized.is_ascii() && normalized.len() > 4 && normalized.ends_with("ies")
+    {
         format!("{}y", &normalized[..normalized.len() - 3])
     } else if normalized.is_ascii()
         && normalized.len() > 4
@@ -276,7 +280,11 @@ mod tests {
     fn multi_term_coverage_beats_a_single_name_match() {
         let tools = [
             tool("window", "Focus a window", json!({})),
-            tool("mcp__desktop__capture", "Take a screenshot of a window", json!({})),
+            tool(
+                "mcp__desktop__capture",
+                "Take a screenshot of a window",
+                json!({}),
+            ),
         ];
         assert_eq!(
             rank("screenshot window", tools.iter(), 2)
@@ -290,14 +298,24 @@ mod tests {
     #[test]
     fn names_schema_and_word_forms_are_searchable_without_stop_word_noise() {
         let tools = [
-            tool("mcp__tracker__fetch", "Retrieve an item", json!({
-                "properties": {"issue_number": {"description": "Repository issue identifier"}}
-            })),
+            tool(
+                "mcp__tracker__fetch",
+                "Retrieve an item",
+                json!({
+                    "properties": {"issue_number": {"description": "Repository issue identifier"}}
+                }),
+            ),
             tool("mcp__tracker__list_users", "List users", json!({})),
         ];
         assert_eq!(rank("a the to", tools.iter(), 5).len(), 0);
-        assert_eq!(rank("issues", tools.iter(), 5)[0].spec.name, "mcp__tracker__fetch");
-        assert_eq!(rank("issue number", tools.iter(), 5)[0].spec.name, "mcp__tracker__fetch");
+        assert_eq!(
+            rank("issues", tools.iter(), 5)[0].spec.name,
+            "mcp__tracker__fetch"
+        );
+        assert_eq!(
+            rank("issue number", tools.iter(), 5)[0].spec.name,
+            "mcp__tracker__fetch"
+        );
     }
 
     #[test]
