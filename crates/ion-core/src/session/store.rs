@@ -46,6 +46,23 @@ impl Drop for SessionLock {
 }
 
 impl Store {
+    pub(super) fn from_projection(
+        connection: Connection,
+        projection: HistoryProjection,
+    ) -> Self {
+        Self {
+            connection,
+            state: projection.state,
+            settled: projection.settled,
+            messages: projection.messages,
+            context_changes: projection.context_changes,
+            child_records: projection.child_records,
+            context_index: projection.context_index,
+            calibration: None,
+            live_backgrounds: BTreeMap::new(),
+        }
+    }
+
     pub(super) fn orphaned_backgrounds(&self, session: uuid::Uuid) -> Vec<SessionEntry> {
         self.state
             .backgrounds

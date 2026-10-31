@@ -651,17 +651,7 @@ impl Session {
         }
         tx.commit()?;
         Ok(Self {
-            store: Mutex::new(Store {
-                connection,
-                state: projection.state,
-                settled: projection.settled,
-                messages: projection.messages,
-                context_changes: projection.context_changes,
-                child_records: projection.child_records,
-                context_index: projection.context_index,
-                calibration: None,
-                live_backgrounds: BTreeMap::new(),
-            }),
+            store: Mutex::new(Store::from_projection(connection, projection)),
             _lock: lock,
             header,
             path,
@@ -680,28 +670,10 @@ impl Session {
         )?;
         configure_connection(&connection)?;
         let header = read_header(&connection)?;
-        let HistoryProjection {
-            state,
-            settled,
-            messages,
-            context_changes,
-            child_records,
-            context_index,
-            ..
-        } = project_connection(&connection, ProjectionMode::Full)?;
+        let projection = project_connection(&connection, ProjectionMode::Full)?;
         prepare_writer(&connection)?;
         Ok(Self {
-            store: Mutex::new(Store {
-                connection,
-                state,
-                settled,
-                messages,
-                context_changes,
-                child_records,
-                context_index,
-                calibration: None,
-                live_backgrounds: BTreeMap::new(),
-            }),
+            store: Mutex::new(Store::from_projection(connection, projection)),
             _lock: lock,
             header,
             path,
