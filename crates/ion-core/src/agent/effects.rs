@@ -1,65 +1,17 @@
 //! One committed, ordered batch. Its non-dispatch proof is live custody, never
 //! reconstructed from a missing observation after process loss.
-use super::{Agent, AgentError, AgentEvent, PromptCacheWarmingPolicy};
+use super::{
+    Agent, AgentError, AgentEvent, PromptCacheWarmingPolicy,
+    cache_warming::{PromptCacheWarmer, execute_with_cache_warming},
+};
 use crate::{
-    generation::refresh_prompt_cache,
     request::PreparedRequest,
     session::{ModelContextSnapshot, Session},
     tool_set::{ToolDispatch, ToolExecution},
 };
-use ion_ai::{ModelRequest, ModelService, ToolCall};
+use ion_ai::ToolCall;
 use std::{collections::BTreeSet, sync::Arc};
 use tokio_util::sync::CancellationToken;
-
-const ACTIVE_CACHE_WARMING_LIMIT: std::time::Duration = std::time::Duration::from_secs(60 * 60);
-
-struct PromptCacheWarmer {
-    request: ModelRequest,
-    policy: PromptCacheWarmingPolicy,
-    refresh_after: std::time::Duration,
-    next_refresh: tokio::time::Instant,
-    expires_at: tokio::time::Instant,
-    stop_at: tokio::time::Instant,
-}
-
-impl PromptCacheWarmer {
-    fn new(
-        policy: PromptCacheWarmingPolicy,
-        request: &ModelRequest,
-        usage: ion_ai::Usage,
-        request_started: tokio::time::Instant,
-    ) -> Option<Self> {
-        if !policy.should_warm(usage) {
-            return None;
-        }
-        let refresh_after = policy.refresh_after()?;
-        // Discard ineligible delays before constructing their deadlines.
-        if refresh_after >= ACTIVE_CACHE_WARMING_LIMIT {
-            return None;
-        }
-        let next_refresh = request_started + refresh_after;
-        let expires_at = request_started + std::time::Duration::from_secs(policy.lifetime_seconds);
-        let stop_at = request_started + ACTIVE_CACHE_WARMING_LIMIT;
-        Some(Self {
-            request: request.clone(),
-            policy,
-            refresh_after,
-            next_refresh,
-            expires_at,
-            stop_at,
-        })
-    }
-
-    fn reschedule(&mut self, usage: ion_ai::Usage, refresh_started: tokio::time::Instant) -> bool {
-        if !self.policy.should_warm(usage) {
-            return false;
-        }
-        self.next_refresh = refresh_started + self.refresh_after;
-        self.expires_at =
-            refresh_started + std::time::Duration::from_secs(self.policy.lifetime_seconds);
-        self.next_refresh < self.stop_at
-    }
-}
 
 pub(super) struct OrderedBatch {
     calls: Vec<ToolCall>,
@@ -217,50 +169,3 @@ impl OrderedBatch {
     }
 }
 
-async fn execute_with_cache_warming(
-    service: &Arc<dyn ModelService>,
-    session: &Session,
-    turn: u64,
-    tool: ion_ai::BoxFuture<'_, Result<ToolExecution, AgentError>>,
-    stop: &CancellationToken,
-    warmer: &mut Option<PromptCacheWarmer>,
-) -> Result<ToolExecution, AgentError> {
-    tokio::pin!(tool);
-    loop {
-        let Some(state) = warmer.as_ref() else {
-            return tool.await;
-        };
-        let deadline = state.next_refresh;
-        let valid_until = state.expires_at.min(state.stop_at);
-        let request = state.request.clone();
-        let refresh = async {
-            tokio::time::sleep_until(deadline).await;
-            let started = tokio::time::Instant::now();
-            if started >= valid_until {
-                return (started, None);
-            }
-            (started, refresh_prompt_cache(service, request, stop).await)
-        };
-        tokio::pin!(refresh);
-        tokio::select! {
-            output = &mut tool => return output,
-            refreshed = &mut refresh => {
-                let (started, Some((execution, usage))) = refreshed else {
-                    *warmer = None;
-                    continue;
-                };
-                // Optimization accounting cannot interrupt owned effects. The
-                // next correctness-critical write still surfaces storage faults.
-                let _ = session.record_cache_warm(turn, execution, usage);
-                if !warmer.as_mut().is_some_and(|state| state.reschedule(usage, started)) {
-                    *warmer = None;
-                }
-            }
-            () = stop.cancelled() => {
-                *warmer = None;
-                // Stop joins the executor and delegation cleanup; never drop it.
-                return tool.await;
-            }
-        }
-    }
-}

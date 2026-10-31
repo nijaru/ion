@@ -70,65 +70,12 @@ fn user_text(prompt: String) -> Message {
     }
 }
 
+mod cache_warming;
+pub use cache_warming::PromptCacheWarmingPolicy;
 mod completion;
 pub use completion::CompletionSubmission;
 mod inbox;
 pub use inbox::SteeringInbox;
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
-pub struct PromptCacheWarmingPolicy {
-    /// Cache lifetime. Warming is disabled when the ten-second safety margin
-    /// leaves no positive refresh point within the one-hour active horizon.
-    pub lifetime_seconds: u64,
-    /// Micro-US-dollars per million tokens.
-    pub cache_write_microusd_per_million: u64,
-    pub cache_read_microusd_per_million: u64,
-    pub output_microusd_per_million: u64,
-    pub minimum_savings_microusd: u64,
-}
-
-impl PromptCacheWarmingPolicy {
-    fn cached_prefix_tokens(self, usage: ion_ai::Usage) -> Option<u64> {
-        if usage.cache_read_input_tokens.is_none() && usage.cache_write_input_tokens.is_none() {
-            return None;
-        }
-        let tokens = usage
-            .cache_read_input_tokens
-            .unwrap_or(0)
-            .checked_add(usage.cache_write_input_tokens.unwrap_or(0))?;
-        (tokens > 0).then_some(tokens)
-    }
-
-    fn token_cost_microusd(tokens: u64, rate_microusd_per_million: u64) -> u128 {
-        u128::from(tokens).saturating_mul(u128::from(rate_microusd_per_million)) / 1_000_000
-    }
-
-    fn net_refresh_savings_microusd(self, prefix_tokens: u64) -> Option<u64> {
-        let miss = Self::token_cost_microusd(prefix_tokens, self.cache_write_microusd_per_million);
-        let hit = Self::token_cost_microusd(prefix_tokens, self.cache_read_microusd_per_million);
-        let refresh = hit.saturating_add(Self::token_cost_microusd(
-            1,
-            self.output_microusd_per_million,
-        ));
-        let net = miss.checked_sub(hit)?.checked_sub(refresh)?;
-        u64::try_from(net).ok()
-    }
-
-    fn should_warm(self, usage: ion_ai::Usage) -> bool {
-        self.cached_prefix_tokens(usage)
-            .and_then(|tokens| self.net_refresh_savings_microusd(tokens))
-            .is_some_and(|net| net >= self.minimum_savings_microusd)
-    }
-
-    /// No immediate refresh: a lifetime within the safety margin cannot be
-    /// extended economically and must not create a zero-delay request loop.
-    fn refresh_after(self) -> Option<std::time::Duration> {
-        let ninety_percent = self.lifetime_seconds.saturating_mul(9) / 10;
-        let ten_second_margin = self.lifetime_seconds.checked_sub(10)?;
-        (ten_second_margin > 0)
-            .then(|| std::time::Duration::from_secs(ninety_percent.min(ten_second_margin)))
-    }
-}
 
 #[derive(Debug, Clone, Copy, serde::Serialize)]
 pub struct AgentLimits {
