@@ -65,6 +65,7 @@ pub use records::{
     UnobservedUserShell, UserShellOutcome,
 };
 pub use recovery::{AuthorityScope, RecoveryBinding, RecoveryPoint, RecoveryState};
+pub(crate) use store::MAX_ENTRY_BYTES;
 use store::{
     FORMAT_VERSION, Header, SessionLock, Store, append, configure_connection, database_path,
     encode_entry, initialize_new, lock, prepare_writer, project_connection, read_entries,

@@ -6,7 +6,7 @@ use super::*;
 pub(super) const FORMAT_VERSION: u32 = 18;
 // An 8 MiB raw prompt or streamed response can grow up to sixfold when JSON
 // escapes control characters. Keep the storage bound above that encoded size.
-const MAX_ENTRY_BYTES: usize = 64 * 1024 * 1024;
+pub(crate) const MAX_ENTRY_BYTES: usize = 64 * 1024 * 1024;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub(super) struct Header {
@@ -35,7 +35,7 @@ pub(super) struct Store {
     pub(super) live_backgrounds: BTreeMap<uuid::Uuid, std::sync::Weak<()>>,
 }
 
-pub(super) struct SessionLock(File);
+pub(super) struct SessionLock(pub(super) File);
 
 impl Drop for SessionLock {
     fn drop(&mut self) {
