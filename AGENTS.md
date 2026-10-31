@@ -8,8 +8,9 @@
 - Build one reusable Rust agent engine. Coding is its first application, not
   its ceiling. Bots, services, phone integrations and coordinators reuse shared
   control, admission, recovery and delegation rather than implementing new loops.
-- Pi is the primary architecture/workflow baseline; fx informs alternatives
-  and native presentation. Codex and Claude Code are secondary references.
+- Pi is the primary agent/workflow baseline. fx is the primary native/TUI
+  baseline, with Pi secondary for presentation. Codex and Claude Code are
+  secondary references.
   Inspect current relevant upstream source before designing an overlapping
   capability, including its interaction and edge cases. Preserve proven
   user-facing semantics by default; implement them idiomatically in Rust.
@@ -27,15 +28,17 @@
 
 ## Work selection and delivery
 
-- Use the current private roadmap and capability gap map when choosing work.
-  They account for missing workflows; broad category coverage is not parity.
-  Finish one bounded unit through its real caller before starting another.
+- Choose work from the current private target design and migration plan, not
+  historical delivery lists or reviews. Finish a coherent user workflow or
+  ownership migration through its real caller, not just the enabling backend
+  change. Feature presence and passing fixtures do not establish parity.
 - Resolve consequential product choices explicitly. Delivery staging must not
   invent defaults, feature gates, permanent SDK-only limits or silent exclusions.
   An unresolved capability is neither a promised feature nor a rejected one.
-- Update the owning contract, affected usage guide and private plan/rationale in
-  the same slice. Keep one owner for each concern. Historical checks and failures
-  belong in evidence records, not the forward plan or public architecture.
+- Update affected contracts and usage when behavior changes; reconcile the
+  private target/plan when decisions or remaining work change. Keep one owner
+  per concern, not a new delivery diary. Historical checks and failures belong
+  in evidence records, not the forward plan or public architecture.
 - Do not require a new whole-product audit or live-model campaign for each slice.
   Tests and ordinary use verify the design; they do not replace specifying it.
 
