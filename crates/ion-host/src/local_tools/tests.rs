@@ -8,14 +8,12 @@ use std::{
 
 #[tokio::test]
 async fn optional_native_inputs_reject_null_before_effects() {
-    let root =
-        std::env::temp_dir().join(format!("ion-input-boundary-{}", uuid::Uuid::now_v7()));
+    let root = std::env::temp_dir().join(format!("ion-input-boundary-{}", uuid::Uuid::now_v7()));
     fs::create_dir(&root).unwrap();
     fs::write(root.join("file.txt"), "old").unwrap();
-    let catalog = ion_core::ToolSet::new([
-        Arc::new(LocalTools::new(&root).unwrap()) as Arc<dyn ToolSource>
-    ])
-    .snapshot();
+    let catalog =
+        ion_core::ToolSet::new([Arc::new(LocalTools::new(&root).unwrap()) as Arc<dyn ToolSource>])
+            .snapshot();
     let mut failures = Vec::new();
     for (name, field, mut arguments) in [
         ("read", "offset", json!({"path":"file.txt"})),
@@ -77,11 +75,10 @@ fn native_schema_keeps_exec_timeout_optional_and_uncapped() {
     // The frozen provider schema is where the optional-and-uncapped
     // timeout contract is declared. Runtime long-timeout behavior belongs
     // to the command owner; assert only the declaration here.
-    let catalog =
-        ion_core::ToolSet::new([
-            Arc::new(LocalTools::new(std::env::temp_dir()).unwrap()) as Arc<dyn ToolSource>
-        ])
-        .snapshot();
+    let catalog = ion_core::ToolSet::new([
+        Arc::new(LocalTools::new(std::env::temp_dir()).unwrap()) as Arc<dyn ToolSource>,
+    ])
+    .snapshot();
     let specs = catalog.specs();
     let exec = specs
         .iter()
@@ -104,11 +101,10 @@ fn native_schema_keeps_exec_timeout_optional_and_uncapped() {
 
 #[test]
 fn native_schema_requires_edit_digest_and_exposes_write_opt_out() {
-    let catalog =
-        ion_core::ToolSet::new([
-            Arc::new(LocalTools::new(std::env::temp_dir()).unwrap()) as Arc<dyn ToolSource>
-        ])
-        .snapshot();
+    let catalog = ion_core::ToolSet::new([
+        Arc::new(LocalTools::new(std::env::temp_dir()).unwrap()) as Arc<dyn ToolSource>,
+    ])
+    .snapshot();
     let specs = catalog.specs();
     let edit = specs.iter().find(|spec| spec.name == "edit").unwrap();
     assert!(
@@ -136,11 +132,10 @@ fn native_schema_requires_edit_digest_and_exposes_write_opt_out() {
 
 #[test]
 fn native_discovery_schema_and_presentation_are_registered() {
-    let catalog =
-        ion_core::ToolSet::new([
-            Arc::new(LocalTools::new(std::env::temp_dir()).unwrap()) as Arc<dyn ToolSource>
-        ])
-        .snapshot();
+    let catalog = ion_core::ToolSet::new([
+        Arc::new(LocalTools::new(std::env::temp_dir()).unwrap()) as Arc<dyn ToolSource>,
+    ])
+    .snapshot();
     let specs = catalog.specs();
     assert_eq!(specs.len(), 7);
     for (name, kind, key) in [
@@ -180,10 +175,8 @@ async fn concurrent_guarded_writes_admit_one_current_digest() {
     fs::write(root.join("file"), "seed").unwrap();
     std::os::unix::fs::symlink("file", root.join("alias")).unwrap();
     let catalogs = [0, 1].map(|_| {
-        ion_core::ToolSet::new([
-            Arc::new(LocalTools::new(&root).unwrap()) as Arc<dyn ToolSource>
-        ])
-        .snapshot()
+        ion_core::ToolSet::new([Arc::new(LocalTools::new(&root).unwrap()) as Arc<dyn ToolSource>])
+            .snapshot()
     });
     let calls = [("file", "first"), ("alias", "second")].map(|(path, content)| ToolCall {
         id: content.into(),
@@ -226,10 +219,8 @@ async fn concurrent_native_edits_preserve_guards_and_disjoint_changes() {
     std::os::unix::fs::symlink("../file", root.join("aliases/link")).unwrap();
     let source = format!("LEFT:\n{}RIGHT:\n", "payload0123456789\n".repeat(200_000));
     let catalogs = [0, 1].map(|_| {
-        ion_core::ToolSet::new([
-            Arc::new(LocalTools::new(&root).unwrap()) as Arc<dyn ToolSource>
-        ])
-        .snapshot()
+        ion_core::ToolSet::new([Arc::new(LocalTools::new(&root).unwrap()) as Arc<dyn ToolSource>])
+            .snapshot()
     });
     let mut failures = Vec::new();
     for guarded in [true, false] {
@@ -287,10 +278,9 @@ async fn stopped_native_mutations_leave_an_externally_locked_target_unchanged() 
     fs::write(root.join("file"), "old").unwrap();
     let holder = File::open(&root).unwrap();
     holder.lock().unwrap();
-    let catalog = ion_core::ToolSet::new([
-        Arc::new(LocalTools::new(&root).unwrap()) as Arc<dyn ToolSource>
-    ])
-    .snapshot();
+    let catalog =
+        ion_core::ToolSet::new([Arc::new(LocalTools::new(&root).unwrap()) as Arc<dyn ToolSource>])
+            .snapshot();
     for (name, arguments) in [
         (
             "edit",
@@ -415,8 +405,7 @@ async fn turn_cancellation_waits_for_native_tool_settlement_with_or_without_warm
     };
 
     for warming in [false, true] {
-        let root =
-            std::env::temp_dir().join(format!("ion-turn-cancel-{}", uuid::Uuid::now_v7()));
+        let root = std::env::temp_dir().join(format!("ion-turn-cancel-{}", uuid::Uuid::now_v7()));
         fs::create_dir(&root).unwrap();
         let path = root.join("session.sqlite");
         let session = Arc::new(Session::create(&path, Some(&root)).unwrap());

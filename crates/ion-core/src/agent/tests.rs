@@ -11,10 +11,9 @@ use ion_ai::{
 
 fn tiny_image() -> ImageContent {
     ImageContent::from_bytes(&[
-        137, 80, 78, 71, 13, 10, 26, 10, 0, 0, 0, 13, 73, 72, 68, 82, 0, 0, 0, 1, 0, 0, 0, 1,
-        8, 6, 0, 0, 0, 31, 21, 196, 137, 0, 0, 0, 13, 73, 68, 65, 84, 120, 156, 99, 248, 207,
-        192, 240, 31, 0, 5, 0, 1, 255, 137, 153, 61, 29, 0, 0, 0, 0, 73, 69, 78, 68, 174, 66,
-        96, 130,
+        137, 80, 78, 71, 13, 10, 26, 10, 0, 0, 0, 13, 73, 72, 68, 82, 0, 0, 0, 1, 0, 0, 0, 1, 8, 6,
+        0, 0, 0, 31, 21, 196, 137, 0, 0, 0, 13, 73, 68, 65, 84, 120, 156, 99, 248, 207, 192, 240,
+        31, 0, 5, 0, 1, 255, 137, 153, 61, 29, 0, 0, 0, 0, 73, 69, 78, 68, 174, 66, 96, 130,
     ])
     .unwrap()
 }
@@ -60,10 +59,7 @@ impl ToolSource for TestTools {
 }
 
 impl ToolExecutor for TestTools {
-    fn execute<'a>(
-        &'a self,
-        invocation: crate::ToolInvocation<'a>,
-    ) -> BoxFuture<'a, ToolOutput> {
+    fn execute<'a>(&'a self, invocation: crate::ToolInvocation<'a>) -> BoxFuture<'a, ToolOutput> {
         let call = invocation.call();
         let stop = invocation.stop().clone();
         Box::pin(async move {
@@ -188,12 +184,13 @@ async fn coding_requests_send_the_context_clamped_model_ceiling() {
         response(vec![Content::Text("first".into())]),
         response(vec![Content::Text("second".into())]),
     ]));
-    let agent = Agent::new(scripts.clone(), Arc::new(TestTools::new(&root)), model())
-        .with_limits(AgentLimits {
+    let agent = Agent::new(scripts.clone(), Arc::new(TestTools::new(&root)), model()).with_limits(
+        AgentLimits {
             max_output_tokens: 128_000,
             context_window_tokens: Some(200_000),
             ..AgentLimits::default()
-        });
+        },
+    );
     agent
         .submit(
             session.clone(),
@@ -498,10 +495,7 @@ impl ToolSource for SlowRead {
 }
 
 impl ToolExecutor for SlowRead {
-    fn execute<'a>(
-        &'a self,
-        _invocation: crate::ToolInvocation<'a>,
-    ) -> BoxFuture<'a, ToolOutput> {
+    fn execute<'a>(&'a self, _invocation: crate::ToolInvocation<'a>) -> BoxFuture<'a, ToolOutput> {
         Box::pin(async {
             tokio::time::sleep(std::time::Duration::from_secs(30)).await;
             ToolOutput {
@@ -548,19 +542,18 @@ async fn streaming_cache_warm_replays_request_without_entering_model_context() {
         warm,
         response(vec![Content::Text("done".into())]),
     ]));
-    let agent =
-        Agent::new(service.clone(), Arc::new(SlowRead), model()).with_limits(AgentLimits {
-            prompt_cache_warming: Some(PromptCacheWarmingPolicy {
-                // The shortest lifetime with a usable refresh point; the
-                // warm entry lands one second into the tool call.
-                lifetime_seconds: 11,
-                cache_write_microusd_per_million: 5_000_000,
-                cache_read_microusd_per_million: 200_000,
-                output_microusd_per_million: 20_000_000,
-                minimum_savings_microusd: 0,
-            }),
-            ..AgentLimits::default()
-        });
+    let agent = Agent::new(service.clone(), Arc::new(SlowRead), model()).with_limits(AgentLimits {
+        prompt_cache_warming: Some(PromptCacheWarmingPolicy {
+            // The shortest lifetime with a usable refresh point; the
+            // warm entry lands one second into the tool call.
+            lifetime_seconds: 11,
+            cache_write_microusd_per_million: 5_000_000,
+            cache_read_microusd_per_million: 200_000,
+            output_microusd_per_million: 20_000_000,
+            minimum_savings_microusd: 0,
+        }),
+        ..AgentLimits::default()
+    });
 
     assert_eq!(
         agent
@@ -579,9 +572,11 @@ async fn streaming_cache_warm_replays_request_without_entering_model_context() {
     let requests = service.requests();
     assert_eq!(requests.len(), 3);
     let provider_id = session.provider_session_id().to_string();
-    assert!(requests.iter().all(|request| {
-        request.provider_session_id.as_deref() == Some(provider_id.as_str())
-    }));
+    assert!(
+        requests.iter().all(|request| {
+            request.provider_session_id.as_deref() == Some(provider_id.as_str())
+        })
+    );
     assert_eq!(requests[0].route.reason, ModelRouteReason::UserRequest);
     assert_eq!(requests[1].route.reason, ModelRouteReason::Auxiliary);
     assert_eq!(requests[1].controls.max_output_tokens, 1);
@@ -646,8 +641,7 @@ async fn cache_warming_requires_a_usable_refresh_point() {
             uuid::Uuid::now_v7()
         ));
         std::fs::create_dir(&root).unwrap();
-        let session =
-            Arc::new(Session::create(root.join("session.sqlite"), Some(&root)).unwrap());
+        let session = Arc::new(Session::create(root.join("session.sqlite"), Some(&root)).unwrap());
         let service = Arc::new(ScriptedModelService::new([
             Script::Stream(vec![ModelStreamEvent::Completed(ModelResponse {
                 message: Message {
@@ -715,10 +709,7 @@ async fn cache_warming_requires_a_usable_refresh_point() {
         assert_eq!(
             entries
                 .iter()
-                .filter(|entry| matches!(
-                    entry,
-                    crate::session::SessionEntry::ToolResult { .. }
-                ))
+                .filter(|entry| matches!(entry, crate::session::SessionEntry::ToolResult { .. }))
                 .count(),
             1
         );
@@ -922,13 +913,14 @@ async fn signed_tool_continuation_counts_neutral_content_once() {
         })]),
         response(vec![Content::Text("done".into())]),
     ]));
-    let agent = Agent::new(service.clone(), Arc::new(TestTools::new(&root)), model())
-        .with_limits(AgentLimits {
+    let agent = Agent::new(service.clone(), Arc::new(TestTools::new(&root)), model()).with_limits(
+        AgentLimits {
             // Keep 3608 usable tokens: neutral content fits, duplicated replay does not.
             context_window_tokens: Some(7216),
             max_output_tokens: 256,
             ..AgentLimits::default()
-        });
+        },
+    );
     let result = agent
         .submit(
             session.clone(),
@@ -951,8 +943,7 @@ async fn signed_tool_continuation_counts_neutral_content_once() {
     );
     assert!(!view.entries.iter().any(|entry| matches!(
         entry,
-        crate::SessionEntry::Compacted { .. }
-            | crate::SessionEntry::ProviderReplayRebased { .. }
+        crate::SessionEntry::Compacted { .. } | crate::SessionEntry::ProviderReplayRebased { .. }
     )));
 }
 
@@ -1123,8 +1114,7 @@ async fn deferred_tool_search_activates_next_request_and_survives_reopen_and_for
     }
 
     for scoped in [false, true] {
-        let root =
-            std::env::temp_dir().join(format!("ion-deferred-tool-{}", uuid::Uuid::now_v7()));
+        let root = std::env::temp_dir().join(format!("ion-deferred-tool-{}", uuid::Uuid::now_v7()));
         std::fs::create_dir(&root).unwrap();
         let path = root.join("session.sqlite");
         let session = Arc::new(Session::create(&path, Some(&root)).unwrap());
@@ -1145,9 +1135,7 @@ async fn deferred_tool_search_activates_next_request_and_survives_reopen_and_for
         ]));
         let agent = Agent::new(scripts.clone(), Arc::new(DeferredTool), model());
         let agent = if scoped {
-            agent.with_recovery_scope(
-                crate::AuthorityScope::new("deferred-app/grants-v1").unwrap(),
-            )
+            agent.with_recovery_scope(crate::AuthorityScope::new("deferred-app/grants-v1").unwrap())
         } else {
             agent
         };
@@ -1237,12 +1225,10 @@ async fn deferred_tool_search_activates_next_request_and_survives_reopen_and_for
                 .unwrap(),
         );
 
-        let resumed_scripts =
-            Arc::new(ScriptedModelService::new([response(vec![Content::Text(
-                "resumed".into(),
-            )])]));
-        let resumed_agent =
-            Agent::new(resumed_scripts.clone(), Arc::new(DeferredTool), model());
+        let resumed_scripts = Arc::new(ScriptedModelService::new([response(vec![Content::Text(
+            "resumed".into(),
+        )])]));
+        let resumed_agent = Agent::new(resumed_scripts.clone(), Arc::new(DeferredTool), model());
         assert_eq!(
             resumed_agent
                 .submit(
@@ -1265,10 +1251,9 @@ async fn deferred_tool_search_activates_next_request_and_survives_reopen_and_for
             ["special_lookup"]
         );
 
-        let fork_scripts =
-            Arc::new(ScriptedModelService::new([response(vec![Content::Text(
-                "forked".into(),
-            )])]));
+        let fork_scripts = Arc::new(ScriptedModelService::new([response(vec![Content::Text(
+            "forked".into(),
+        )])]));
         let fork_agent = Agent::new(fork_scripts.clone(), Arc::new(DeferredTool), model());
         assert_eq!(
             fork_agent
@@ -1359,8 +1344,7 @@ async fn model_result_limits_preserve_observed_effects_and_inspection() {
             output.model_projection(true, bytes - 1).unwrap(),
             crate::ToolResultProjection::RequestLimitExceeded,
         );
-        let root =
-            std::env::temp_dir().join(format!("ion-result-views-{}", uuid::Uuid::now_v7()));
+        let root = std::env::temp_dir().join(format!("ion-result-views-{}", uuid::Uuid::now_v7()));
         std::fs::create_dir(&root).unwrap();
         let path = root.join("session.sqlite");
         let session = Arc::new(Session::create(&path, Some(&root)).unwrap());
@@ -1420,9 +1404,7 @@ async fn model_result_limits_preserve_observed_effects_and_inspection() {
             .iter()
             .enumerate()
             .find_map(|(index, entry)| match entry {
-                crate::SessionEntry::ToolResult { result, .. } => {
-                    Some((index as u64 + 1, result))
-                }
+                crate::SessionEntry::ToolResult { result, .. } => Some((index as u64 + 1, result)),
                 _ => None,
             })
             .unwrap();
@@ -1723,8 +1705,7 @@ async fn fast_model_steps_leave_room_for_cancellation() {
 
 #[tokio::test]
 async fn empty_completed_responses_fail_without_poisoning_resume() {
-    let root =
-        std::env::temp_dir().join(format!("ion-empty-response-{}", uuid::Uuid::now_v7()));
+    let root = std::env::temp_dir().join(format!("ion-empty-response-{}", uuid::Uuid::now_v7()));
     std::fs::create_dir(&root).unwrap();
     let path = root.join("session.sqlite");
     let session = Arc::new(Session::create(&path, Some(&root)).unwrap());
@@ -1775,8 +1756,7 @@ async fn empty_completed_responses_fail_without_poisoning_resume() {
 
 #[tokio::test]
 async fn truncated_tool_call_is_rejected_and_reissued_without_effect() {
-    let root =
-        std::env::temp_dir().join(format!("ion-truncated-call-{}", uuid::Uuid::now_v7()));
+    let root = std::env::temp_dir().join(format!("ion-truncated-call-{}", uuid::Uuid::now_v7()));
     std::fs::create_dir(&root).unwrap();
     let path = root.join("session.sqlite");
     let session = Arc::new(Session::create(&path, Some(&root)).unwrap());
@@ -1879,8 +1859,7 @@ async fn completion_modes_preserve_natural_requests_and_typed_idle_turns() {
     for mode in [Mode::Inbox, Mode::Continue, Mode::Wake] {
         let root = std::env::temp_dir().join(format!("ion-notice-{}", uuid::Uuid::now_v7()));
         std::fs::create_dir(&root).unwrap();
-        let session =
-            Arc::new(Session::create(root.join("session.sqlite"), Some(&root)).unwrap());
+        let session = Arc::new(Session::create(root.join("session.sqlite"), Some(&root)).unwrap());
         let first = ModelResponse {
             message: Message {
                 role: Role::Assistant,
@@ -1954,8 +1933,10 @@ async fn completion_modes_preserve_natural_requests_and_typed_idle_turns() {
         }
         assert_eq!(scripts.requests().len(), 2);
         let requests = scripts.requests();
-        assert!(requests[1].messages.iter().any(|message| *message
-            == crate::completion::notice_message(std::slice::from_ref(&notice))));
+        assert!(
+            requests[1].messages.iter().any(|message| *message
+                == crate::completion::notice_message(std::slice::from_ref(&notice)))
+        );
         let view = session.view().unwrap();
         assert!(view.entries.iter().any(|entry| matches!(entry, SessionEntry::Completion { notices, .. } if notices == &vec![notice.clone()])));
         drop(session);
@@ -2058,20 +2039,18 @@ async fn completion_modes_preserve_natural_requests_and_typed_idle_turns() {
 
 #[tokio::test]
 async fn rejected_steering_stays_available_to_the_host() {
-    let root =
-        std::env::temp_dir().join(format!("ion-steering-fault-{}", uuid::Uuid::now_v7()));
+    let root = std::env::temp_dir().join(format!("ion-steering-fault-{}", uuid::Uuid::now_v7()));
     std::fs::create_dir(&root).unwrap();
     let path = root.join("session.sqlite");
     let session = Arc::new(Session::create(&path, Some(&root)).unwrap());
     let scripts = Arc::new(ScriptedModelService::new([response(vec![Content::Text(
         "done".into(),
     )])]));
-    let agent = Agent::new(scripts, Arc::new(TestTools::new(&root)), model()).with_limits(
-        AgentLimits {
+    let agent =
+        Agent::new(scripts, Arc::new(TestTools::new(&root)), model()).with_limits(AgentLimits {
             max_request_bytes: 80 * 1024 * 1024,
             ..AgentLimits::default()
-        },
-    );
+        });
     let steering = Arc::new(SteeringInbox::new(
         agent.limits(),
         crate::InputBudget::new(128 * 1024 * 1024),
@@ -2103,8 +2082,7 @@ async fn rejected_steering_stays_available_to_the_host() {
 
 #[tokio::test]
 async fn assistant_and_steering_commit_together_or_remain_unpublished() {
-    let root =
-        std::env::temp_dir().join(format!("ion-steering-batch-{}", uuid::Uuid::now_v7()));
+    let root = std::env::temp_dir().join(format!("ion-steering-batch-{}", uuid::Uuid::now_v7()));
     std::fs::create_dir(&root).unwrap();
     let path = root.join("session.sqlite");
     let session = Arc::new(Session::create(&path, Some(&root)).unwrap());
@@ -2121,12 +2099,11 @@ async fn assistant_and_steering_commit_together_or_remain_unpublished() {
             returned_model: Some("test".into()),
         }),
     ])]));
-    let agent = Agent::new(scripts, Arc::new(TestTools::new(&root)), model()).with_limits(
-        AgentLimits {
+    let agent =
+        Agent::new(scripts, Arc::new(TestTools::new(&root)), model()).with_limits(AgentLimits {
             max_request_bytes: 80 * 1024 * 1024,
             ..AgentLimits::default()
-        },
-    );
+        });
     let steering = Arc::new(SteeringInbox::new(
         agent.limits(),
         crate::InputBudget::new(128 * 1024 * 1024),
@@ -2146,8 +2123,7 @@ async fn assistant_and_steering_commit_together_or_remain_unpublished() {
             move |event| {
                 if matches!(
                     &event,
-                    AgentEvent::AssistantCommitted { .. }
-                        | AgentEvent::SteeringCommitted { .. }
+                    AgentEvent::AssistantCommitted { .. } | AgentEvent::SteeringCommitted { .. }
                 ) {
                     *observed_published.lock().unwrap() += 1;
                 }
@@ -2249,8 +2225,7 @@ async fn transient_retry_keeps_its_request_frozen_while_steering_waits() {
 
 #[tokio::test]
 async fn final_text_and_queued_steering_continue_the_same_turn() {
-    let root =
-        std::env::temp_dir().join(format!("ion-steering-final-{}", uuid::Uuid::now_v7()));
+    let root = std::env::temp_dir().join(format!("ion-steering-final-{}", uuid::Uuid::now_v7()));
     std::fs::create_dir(&root).unwrap();
     let path = root.join("session.sqlite");
     let session = Arc::new(Session::create(&path, Some(&root)).unwrap());
@@ -2511,40 +2486,42 @@ async fn committed_acceptance_establishes_the_typed_live_root() {
     let scripts = Arc::new(ScriptedModelService::new([response(vec![Content::Text(
         "seen".into(),
     )])]));
-    let agent = Agent::new(scripts, Arc::new(TestTools::new(&root)), model()).with_limits(
-        AgentLimits {
+    let agent =
+        Agent::new(scripts, Arc::new(TestTools::new(&root)), model()).with_limits(AgentLimits {
             image_input: true,
             ..AgentLimits::default()
-        },
-    );
+        });
     let live = Arc::new(Mutex::new(crate::LiveTranscript::default()));
     let observed = live.clone();
     let committed = session.clone();
-    agent.submit_message(
-        session.clone(),
-        Message {
-            role: Role::User,
-            content: vec![
-                Content::Text("literal\n\t\"quoted path\"".into()),
-                Content::Image(tiny_image()),
-            ],
-            provider_replay: None,
-        },
-        "test".into(),
-        CancellationToken::new(),
-        move |event| {
-            if let AgentEvent::TurnAccepted { turn, input, .. } = &event {
-                let view = committed.view().unwrap();
-                assert!(matches!(
-                    &view.entries[0],
-                    crate::SessionEntry::TurnStarted { turn: stored_turn, input: stored, .. }
-                        if stored_turn == turn && stored == input
-                ));
-                assert!(matches!(&input.content[1], Content::Image(_)));
-            }
-            observed.lock().unwrap().observe(&event);
-        },
-    ).await.unwrap();
+    agent
+        .submit_message(
+            session.clone(),
+            Message {
+                role: Role::User,
+                content: vec![
+                    Content::Text("literal\n\t\"quoted path\"".into()),
+                    Content::Image(tiny_image()),
+                ],
+                provider_replay: None,
+            },
+            "test".into(),
+            CancellationToken::new(),
+            move |event| {
+                if let AgentEvent::TurnAccepted { turn, input, .. } = &event {
+                    let view = committed.view().unwrap();
+                    assert!(matches!(
+                        &view.entries[0],
+                        crate::SessionEntry::TurnStarted { turn: stored_turn, input: stored, .. }
+                            if stored_turn == turn && stored == input
+                    ));
+                    assert!(matches!(&input.content[1], Content::Image(_)));
+                }
+                observed.lock().unwrap().observe(&event);
+            },
+        )
+        .await
+        .unwrap();
     assert_eq!(
         live.lock().unwrap().projection(),
         &crate::TranscriptProjection::from_session(&session.view().unwrap()),
@@ -2643,8 +2620,9 @@ async fn committed_transcript_survives_steering_and_response_restart() {
                         .items
                         .into_iter()
                         .filter(|item| match item {
-                            TranscriptItem::User(message)
-                            | TranscriptItem::Assistant(message) => message.turn == Some(turn),
+                            TranscriptItem::User(message) | TranscriptItem::Assistant(message) => {
+                                message.turn == Some(turn)
+                            }
                             TranscriptItem::ActivityGroup(group) => group.turn == turn,
                             TranscriptItem::UserShell(_) => false,
                             TranscriptItem::Readiness {
@@ -2730,8 +2708,7 @@ async fn committed_transcript_survives_steering_and_response_restart() {
 
 #[tokio::test]
 async fn image_steering_is_durable_and_replayed_in_the_next_model_step() {
-    let root =
-        std::env::temp_dir().join(format!("ion-image-steering-{}", uuid::Uuid::now_v7()));
+    let root = std::env::temp_dir().join(format!("ion-image-steering-{}", uuid::Uuid::now_v7()));
     std::fs::create_dir(&root).unwrap();
     let path = root.join("session.sqlite");
     let session = Arc::new(Session::create(&path, Some(&root)).unwrap());
@@ -2753,11 +2730,12 @@ async fn image_steering_is_durable_and_replayed_in_the_next_model_step() {
         ]),
         response(vec![Content::Text("second".into())]),
     ]));
-    let agent = Agent::new(scripts.clone(), Arc::new(TestTools::new(&root)), model())
-        .with_limits(AgentLimits {
+    let agent = Agent::new(scripts.clone(), Arc::new(TestTools::new(&root)), model()).with_limits(
+        AgentLimits {
             image_input: true,
             ..AgentLimits::default()
-        });
+        },
+    );
     let steering = Arc::new(SteeringInbox::new(
         agent.limits(),
         crate::InputBudget::default(),
@@ -2838,8 +2816,7 @@ fn steering_commit_releases_host_metadata_outside_inbox_lock() {
             self.dropped.fetch_add(1, Ordering::SeqCst);
         }
     }
-    let root =
-        std::env::temp_dir().join(format!("ion-steering-metadata-{}", uuid::Uuid::now_v7()));
+    let root = std::env::temp_dir().join(format!("ion-steering-metadata-{}", uuid::Uuid::now_v7()));
     std::fs::create_dir(&root).unwrap();
     for assistant in [false, true] {
         let session =
@@ -3045,8 +3022,7 @@ impl ModelService for ReasoningScripts {
 
 #[tokio::test]
 async fn idle_preferences_survive_unfinished_shell_without_recovering_it() {
-    let root =
-        std::env::temp_dir().join(format!("ion-idle-preferences-{}", uuid::Uuid::now_v7()));
+    let root = std::env::temp_dir().join(format!("ion-idle-preferences-{}", uuid::Uuid::now_v7()));
     std::fs::create_dir(&root).unwrap();
     let path = root.join("session.sqlite");
     let session = Arc::new(Session::create(&path, Some(&root)).unwrap());
@@ -3113,10 +3089,10 @@ async fn idle_preferences_survive_unfinished_shell_without_recovering_it() {
     assert_eq!(selected.reasoning, Reasoning::High);
     assert_eq!(selected.unfinished_user_shell, before.unfinished_user_shell);
     assert!(
-        !selected.entries.iter().any(|entry| matches!(
-            entry,
-            crate::session::SessionEntry::UserShellSettled { .. }
-        ))
+        !selected
+            .entries
+            .iter()
+            .any(|entry| matches!(entry, crate::session::SessionEntry::UserShellSettled { .. }))
     );
     assert!(scripts.requests().is_empty());
     drop(session);
@@ -3225,9 +3201,11 @@ async fn manual_compaction_uses_no_tools_and_keeps_raw_history() {
         .await
         .unwrap();
     let requests = scripts.requests();
-    assert!(requests.iter().all(|request| {
-        request.provider_session_id.as_deref() == Some(provider_id.as_str())
-    }));
+    assert!(
+        requests.iter().all(|request| {
+            request.provider_session_id.as_deref() == Some(provider_id.as_str())
+        })
+    );
     assert_eq!(requests[2].messages.len(), 2);
     assert!(
         !serde_json::to_string(&requests[2]).unwrap().contains(focus),
@@ -3327,11 +3305,12 @@ async fn completed_context_capacity_outcome_compacts_before_retry() {
         response(vec![Content::Text("Earlier result is complete.".into())]),
         response(vec![Content::Text("continued".into())]),
     ]));
-    let agent = Agent::new(scripts.clone(), Arc::new(TestTools::new(&root)), model())
-        .with_limits(AgentLimits {
+    let agent = Agent::new(scripts.clone(), Arc::new(TestTools::new(&root)), model()).with_limits(
+        AgentLimits {
             context_window_tokens: Some(50_000),
             ..AgentLimits::default()
-        });
+        },
+    );
     for prompt in ["first", "second"] {
         agent
             .submit(
@@ -3387,8 +3366,7 @@ async fn context_recovery_does_not_reuse_observed_output() {
         let root =
             std::env::temp_dir().join(format!("ion-output-overflow-{}", uuid::Uuid::now_v7()));
         std::fs::create_dir(&root).unwrap();
-        let session =
-            Arc::new(Session::create(root.join("session.sqlite"), Some(&root)).unwrap());
+        let session = Arc::new(Session::create(root.join("session.sqlite"), Some(&root)).unwrap());
         let scripts = Arc::new(ScriptedModelService::new([
             response(vec![Content::Text("earlier result".into())]),
             Script::Stream(
@@ -3571,19 +3549,16 @@ async fn full_dispatched_output_budget_does_not_trigger_context_recovery() {
                     termination,
                     returned_model: None,
                 });
-                let stream: ion_ai::ModelStream =
-                    Box::pin(futures_util::stream::iter([Ok(event)]));
+                let stream: ion_ai::ModelStream = Box::pin(futures_util::stream::iter([Ok(event)]));
                 Ok(stream)
             })
         }
     }
 
     for (ceiling, window) in [(128, None), (16_384, Some(20_000))] {
-        let root =
-            std::env::temp_dir().join(format!("ion-full-length-{}", uuid::Uuid::now_v7()));
+        let root = std::env::temp_dir().join(format!("ion-full-length-{}", uuid::Uuid::now_v7()));
         std::fs::create_dir(&root).unwrap();
-        let session =
-            Arc::new(Session::create(root.join("session.sqlite"), Some(&root)).unwrap());
+        let session = Arc::new(Session::create(root.join("session.sqlite"), Some(&root)).unwrap());
         let model_service = Arc::new(FillBudget {
             requests: Mutex::new(Vec::new()),
         });
@@ -3923,8 +3898,7 @@ async fn malformed_tool_arguments_return_error_without_dispatch() {
             })
         }
     }
-    let root =
-        std::env::temp_dir().join(format!("ion-malformed-call-{}", uuid::Uuid::now_v7()));
+    let root = std::env::temp_dir().join(format!("ion-malformed-call-{}", uuid::Uuid::now_v7()));
     std::fs::create_dir(&root).unwrap();
     let session = Arc::new(Session::create(root.join("session.sqlite"), Some(&root)).unwrap());
     let calls = [
@@ -4008,11 +3982,10 @@ async fn malformed_tool_arguments_return_error_without_dispatch() {
 #[tokio::test]
 async fn compaction_projects_images_and_excludes_opaque_replay_from_its_budget() {
     for (vision, opaque) in [(true, false), (true, true), (false, true)] {
-        let root = std::env::temp_dir()
-            .join(format!("ion-summary-input-probe-{}", uuid::Uuid::now_v7()));
+        let root =
+            std::env::temp_dir().join(format!("ion-summary-input-probe-{}", uuid::Uuid::now_v7()));
         std::fs::create_dir(&root).unwrap();
-        let session =
-            Arc::new(Session::create(root.join("session.sqlite"), Some(&root)).unwrap());
+        let session = Arc::new(Session::create(root.join("session.sqlite"), Some(&root)).unwrap());
         let image = tiny_image();
         let (turn, _) = session
             .begin_turn_message(
@@ -4196,8 +4169,7 @@ async fn invalid_summary_reports_cause_without_changing_committed_context() {
         let root =
             std::env::temp_dir().join(format!("ion-summary-invalid-{}", uuid::Uuid::now_v7()));
         std::fs::create_dir(&root).unwrap();
-        let session =
-            Arc::new(Session::create(root.join("session.sqlite"), Some(&root)).unwrap());
+        let session = Arc::new(Session::create(root.join("session.sqlite"), Some(&root)).unwrap());
         let (turn, _) = session.begin_turn("task".into(), model()).unwrap();
         session
             .record_assistant(
@@ -4276,8 +4248,7 @@ async fn cancelled_summary_does_not_change_the_context_projection() {
         }
     }
 
-    let root =
-        std::env::temp_dir().join(format!("ion-summary-cancel-{}", uuid::Uuid::now_v7()));
+    let root = std::env::temp_dir().join(format!("ion-summary-cancel-{}", uuid::Uuid::now_v7()));
     std::fs::create_dir(&root).unwrap();
     let session = Arc::new(Session::create(root.join("session.sqlite"), Some(&root)).unwrap());
     let (turn, _) = session.begin_turn("task".into(), model()).unwrap();
@@ -4337,13 +4308,14 @@ async fn request_pressure_rebuild_includes_steering_queued_during_compaction() {
         response(vec![Content::Text("Earlier task completed.".into())]),
         response(vec![Content::Text("continued".into())]),
     ]));
-    let agent = Agent::new(scripts.clone(), Arc::new(TestTools::new(&root)), model())
-        .with_limits(AgentLimits {
+    let agent = Agent::new(scripts.clone(), Arc::new(TestTools::new(&root)), model()).with_limits(
+        AgentLimits {
             // Explicit retained-answer pressure, not verbose native-tool
             // descriptions in this minimal protocol fixture.
             max_request_bytes: 3_200,
             ..AgentLimits::default()
-        });
+        },
+    );
     let steering = Arc::new(SteeringInbox::new(
         agent.limits(),
         crate::InputBudget::default(),
@@ -4502,11 +4474,12 @@ async fn long_saved_history_compacts_in_bounded_steps() {
             "Summary through chunk {index}"
         ))])
     })));
-    let agent = Agent::new(scripts.clone(), Arc::new(TestTools::new(&root)), model())
-        .with_limits(AgentLimits {
+    let agent = Agent::new(scripts.clone(), Arc::new(TestTools::new(&root)), model()).with_limits(
+        AgentLimits {
             max_request_bytes: 2_000,
             ..AgentLimits::default()
-        });
+        },
+    );
     let cuts = Arc::new(Mutex::new(Vec::new()));
     let observed_cuts = cuts.clone();
     assert!(
@@ -4571,11 +4544,12 @@ async fn oversized_input_is_rejected_before_turn_admission() {
     let scripts = Arc::new(ScriptedModelService::new([response(vec![Content::Text(
         "small input accepted".into(),
     )])]));
-    let agent = Agent::new(scripts.clone(), Arc::new(TestTools::new(&root)), model())
-        .with_limits(AgentLimits {
+    let agent = Agent::new(scripts.clone(), Arc::new(TestTools::new(&root)), model()).with_limits(
+        AgentLimits {
             max_request_bytes: 2_048,
             ..AgentLimits::default()
-        });
+        },
+    );
     for prompt in ["x".repeat(2_049), "\0".repeat(400)] {
         let accepted = Arc::new(Mutex::new(false));
         let observed_accepted = accepted.clone();
@@ -4621,8 +4595,7 @@ async fn oversized_input_is_rejected_before_turn_admission() {
 
 #[tokio::test]
 async fn oversized_atomic_turn_reports_capacity_without_changing_history() {
-    let root =
-        std::env::temp_dir().join(format!("ion-atomic-context-{}", uuid::Uuid::now_v7()));
+    let root = std::env::temp_dir().join(format!("ion-atomic-context-{}", uuid::Uuid::now_v7()));
     std::fs::create_dir(&root).unwrap();
     let session = Arc::new(Session::create(root.join("session.sqlite"), Some(&root)).unwrap());
     let (turn, _) = session.begin_turn("x".repeat(4_000), model()).unwrap();
@@ -4640,11 +4613,12 @@ async fn oversized_atomic_turn_reports_capacity_without_changing_history() {
         .unwrap();
     let before = session.view().unwrap().entries;
     let scripts = Arc::new(ScriptedModelService::new([]));
-    let agent = Agent::new(scripts.clone(), Arc::new(TestTools::new(&root)), model())
-        .with_limits(AgentLimits {
+    let agent = Agent::new(scripts.clone(), Arc::new(TestTools::new(&root)), model()).with_limits(
+        AgentLimits {
             max_request_bytes: 2_000,
             ..AgentLimits::default()
-        });
+        },
+    );
     assert!(matches!(
         agent
             .compact(None, session.clone(), CancellationToken::new(), |_| {})
@@ -4709,8 +4683,7 @@ async fn visible_partial_output_is_not_silently_replayed_after_overflow() {
 
 #[tokio::test]
 async fn incomplete_tool_call_is_reported_without_reexecution() {
-    let root =
-        std::env::temp_dir().join(format!("ion-agent-interrupt-{}", uuid::Uuid::now_v7()));
+    let root = std::env::temp_dir().join(format!("ion-agent-interrupt-{}", uuid::Uuid::now_v7()));
     std::fs::create_dir(&root).unwrap();
     let path = root.join("session.sqlite");
     let session = Arc::new(Session::create(&path, Some(&root)).unwrap());

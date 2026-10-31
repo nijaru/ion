@@ -141,9 +141,8 @@ fn openrouter_conversation_affinity_is_explicit_and_wire_scoped() {
 
 #[tokio::test]
 async fn catalog_openrouter_route_keeps_affinity_controls_and_structured_replay() {
-    let store = crate::model_setup::ModelStore::new(
-        std::env::temp_dir().join("ion-unused-catalog-config"),
-    );
+    let store =
+        crate::model_setup::ModelStore::new(std::env::temp_dir().join("ion-unused-catalog-config"));
     let identity = ModelRef {
         provider: "openrouter".into(),
         model: "openai/gpt-5.4".into(),
@@ -530,9 +529,7 @@ fn user_images_keep_order_and_encode_for_each_supported_wire() {
 
 #[test]
 fn explicit_http_endpoint_accepts_non_loopback_host() {
-    assert!(
-        HttpModelService::validate_endpoint("http://desktop:8080/v1/chat/completions").is_ok()
-    );
+    assert!(HttpModelService::validate_endpoint("http://desktop:8080/v1/chat/completions").is_ok());
     assert!(HttpModelService::validate_endpoint("file:///tmp/model").is_err());
 }
 
@@ -657,8 +654,7 @@ fn context_rejection_kind_survives_wrapping_and_display_truncation() {
         ),
         (
             Value::Null,
-            "input length and max_tokens exceed context limit: 199000 + 8192 > 200000"
-                .to_owned(),
+            "input length and max_tokens exceed context limit: 199000 + 8192 > 200000".to_owned(),
             "",
         ),
         (
@@ -903,8 +899,7 @@ fn chat_preserves_tool_status_independently_of_arbitrary_payload() {
                 });
                 let body = chat_body(&request, wire).unwrap();
                 let content: Value =
-                    serde_json::from_str(body["messages"][3]["content"].as_str().unwrap())
-                        .unwrap();
+                    serde_json::from_str(body["messages"][3]["content"].as_str().unwrap()).unwrap();
                 assert_eq!(content, json!({"is_error":is_error,"result":payload}));
             }
         }
@@ -966,8 +961,8 @@ fn replay_preserves_call_ids_and_rejects_orphans() {
         raw_arguments: Some("{\"path\":".into()),
     })];
     assert_eq!(
-        chat_body(&request, HttpWire::ChatCompletions).unwrap()["messages"][2]["tool_calls"][0]
-            ["function"]["arguments"],
+        chat_body(&request, HttpWire::ChatCompletions).unwrap()["messages"][2]["tool_calls"][0]["function"]
+            ["arguments"],
         "{}"
     );
     let mut duplicate = request.clone();
@@ -1042,10 +1037,9 @@ fn replay_cannot_cross_wire_or_provider_boundaries() {
 #[test]
 fn tool_images_keep_all_tool_replies_adjacent_on_chat_and_stay_inside_anthropic_results() {
     let image = ion_ai::ImageContent::from_bytes(&[
-        137, 80, 78, 71, 13, 10, 26, 10, 0, 0, 0, 13, 73, 72, 68, 82, 0, 0, 0, 1, 0, 0, 0, 1,
-        8, 6, 0, 0, 0, 31, 21, 196, 137, 0, 0, 0, 13, 73, 68, 65, 84, 120, 156, 99, 248, 207,
-        192, 240, 31, 0, 5, 0, 1, 255, 137, 153, 61, 29, 0, 0, 0, 0, 73, 69, 78, 68, 174, 66,
-        96, 130,
+        137, 80, 78, 71, 13, 10, 26, 10, 0, 0, 0, 13, 73, 72, 68, 82, 0, 0, 0, 1, 0, 0, 0, 1, 8, 6,
+        0, 0, 0, 31, 21, 196, 137, 0, 0, 0, 13, 73, 68, 65, 84, 120, 156, 99, 248, 207, 192, 240,
+        31, 0, 5, 0, 1, 255, 137, 153, 61, 29, 0, 0, 0, 0, 73, 69, 78, 68, 174, 66, 96, 130,
     ])
     .unwrap();
     let mut request = request();
@@ -1170,7 +1164,15 @@ fn direct_flash_profiles_keep_default_thinking_with_replay() {
         false
     );
     let mut state = ChatState::default();
-    assert_eq!(state.accept(&json!({"choices":[{"delta":{"reasoning_content":"hidden"},"finish_reason":null}]})).unwrap_err().kind, ProviderErrorKind::Unsupported);
+    assert_eq!(
+        state
+            .accept(
+                &json!({"choices":[{"delta":{"reasoning_content":"hidden"},"finish_reason":null}]})
+            )
+            .unwrap_err()
+            .kind,
+        ProviderErrorKind::Unsupported
+    );
 }
 
 #[test]
@@ -1185,7 +1187,11 @@ fn direct_reasoning_survives_streaming_and_later_tool_requests() {
         .into();
         let mut state = ChatState::new(wire);
         for part in ["first ", "second"] {
-            let events = state.accept(&json!({"choices":[{"delta":{"reasoning_content":part},"finish_reason":null}]})).unwrap();
+            let events = state
+                .accept(
+                    &json!({"choices":[{"delta":{"reasoning_content":part},"finish_reason":null}]}),
+                )
+                .unwrap();
             assert_eq!(
                 events,
                 vec![ModelStreamEvent::ThinkingDelta {
@@ -1301,9 +1307,7 @@ fn openrouter_replays_fragmented_plain_details() {
 fn late_structured_thinking_keeps_summaries_without_duplicate_streams() {
     let mut state = ChatState::new(HttpWire::OpenRouterChat);
     let events = state
-        .accept(
-            &json!({"choices":[{"delta":{"reasoning":"plain thought"},"finish_reason":null}]}),
-        )
+        .accept(&json!({"choices":[{"delta":{"reasoning":"plain thought"},"finish_reason":null}]}))
         .unwrap();
     assert_eq!(
         events,
@@ -1336,9 +1340,7 @@ fn openrouter_replays_plain_reasoning_without_details() {
     request.route.effective.provider = "openrouter".into();
     let mut state = ChatState::new(HttpWire::OpenRouterChat);
     state
-        .accept(
-            &json!({"choices":[{"delta":{"reasoning":"inspect file"},"finish_reason":null}]}),
-        )
+        .accept(&json!({"choices":[{"delta":{"reasoning":"inspect file"},"finish_reason":null}]}))
         .unwrap();
     state.accept(&json!({"choices":[{"delta":{"tool_calls":[{"index":0,"id":"remote","function":{"name":"read","arguments":"{}"}}]},"finish_reason":"tool_calls"}]})).unwrap();
     let assistant = state.complete(&request).unwrap().message;
@@ -1444,7 +1446,8 @@ fn openrouter_keeps_signature_only_text_detail() {
     let mut request = request();
     request.route.effective.provider = "openrouter".into();
     let mut state = ChatState::new(HttpWire::OpenRouterChat);
-    let detail = json!({"type":"reasoning.text","format":"google-gemini-v1","index":0,"signature":"opaque"});
+    let detail =
+        json!({"type":"reasoning.text","format":"google-gemini-v1","index":0,"signature":"opaque"});
     state
         .accept(&json!({"choices":[{"delta":{"reasoning_details":[detail],"content":"Done"},"finish_reason":"stop"}]}))
         .unwrap();
@@ -1630,9 +1633,7 @@ fn chat_accepts_empty_openrouter_usage_chunk_after_finish() {
 
     let mut state = ChatState::default();
     state
-        .accept(
-            &json!({"choices":[{"index":0,"delta":{"content":"ok"},"finish_reason":"stop"}]}),
-        )
+        .accept(&json!({"choices":[{"index":0,"delta":{"content":"ok"},"finish_reason":"stop"}]}))
         .unwrap();
     state
         .accept(&json!({"usage":{"prompt_tokens":2,"completion_tokens":1}}))
@@ -1655,7 +1656,13 @@ fn chat_accepts_empty_openrouter_usage_chunk_after_finish() {
     state
         .accept(&json!({"choices":[{"index":0,"delta":{},"finish_reason":"stop"}]}))
         .unwrap();
-    assert!(state.accept(&json!({"choices":[{"index":0,"delta":{"content":"late"},"finish_reason":"stop"}]})).is_err());
+    assert!(
+        state
+            .accept(
+                &json!({"choices":[{"index":0,"delta":{"content":"late"},"finish_reason":"stop"}]})
+            )
+            .is_err()
+    );
 }
 
 #[test]
@@ -1675,9 +1682,7 @@ fn chat_partial_usage_retains_previous_counts() {
         .accept(&json!({"usage":{"prompt_tokens":12}}))
         .unwrap();
     state
-        .accept(
-            &json!({"choices":[{"index":0,"delta":{"content":"ok"},"finish_reason":"stop"}]}),
-        )
+        .accept(&json!({"choices":[{"index":0,"delta":{"content":"ok"},"finish_reason":"stop"}]}))
         .unwrap();
     assert_eq!(
         state.complete(&request).unwrap().usage,
@@ -1817,8 +1822,7 @@ fn capacity_normalization_requires_the_mimo_wire_and_known_window() {
             termination: ResponseTermination::Incomplete(IncompleteReason::MaxOutputTokens),
             returned_model: None,
         });
-        let ModelStreamEvent::Completed(response) = normalize_capacity(event, wire, window)
-        else {
+        let ModelStreamEvent::Completed(response) = normalize_capacity(event, wire, window) else {
             unreachable!();
         };
         assert_eq!(
@@ -1929,7 +1933,12 @@ async fn chat_stream_accepts_eof_after_finish_and_reports_usage() {
     }
     assert!(completed);
 
-    let endpoint = serve("data: {\"choices\":[{\"delta\":{\"content\":\"partial\"},\"finish_reason\":null}]}\n\n".into(), "200 OK").await;
+    let endpoint = serve(
+        "data: {\"choices\":[{\"delta\":{\"content\":\"partial\"},\"finish_reason\":null}]}\n\n"
+            .into(),
+        "200 OK",
+    )
+    .await;
     let model =
         HttpModelService::new(&endpoint, HttpWire::ChatCompletions, Arc::new(|| None)).unwrap();
     let mut stream = model.stream(request()).await.unwrap();
@@ -1972,8 +1981,7 @@ async fn initial_sse_bom_preserves_the_first_delta_across_chunks() {
     for chunk_size in [1, 2, usize::MAX] {
         let endpoint = serve_split(body.into(), "200 OK", chunk_size).await;
         let model =
-            HttpModelService::new(&endpoint, HttpWire::ChatCompletions, Arc::new(|| None))
-                .unwrap();
+            HttpModelService::new(&endpoint, HttpWire::ChatCompletions, Arc::new(|| None)).unwrap();
         let mut stream = model.stream(request()).await.unwrap();
         let mut deltas = String::new();
         let mut completed = None;
@@ -2022,8 +2030,7 @@ async fn padded_http_quota_body_keeps_the_bounded_prefix_across_chunks() {
     for chunk_size in [1024, usize::MAX] {
         let endpoint = serve_split(body.clone(), "429 Too Many Requests", chunk_size).await;
         let model =
-            HttpModelService::new(&endpoint, HttpWire::ChatCompletions, Arc::new(|| None))
-                .unwrap();
+            HttpModelService::new(&endpoint, HttpWire::ChatCompletions, Arc::new(|| None)).unwrap();
         let failure = match model.stream(request()).await {
             Ok(_) => panic!("HTTP quota error opened a model stream"),
             Err(error) => error,
@@ -2057,7 +2064,8 @@ async fn chat_stream_error_preserves_bounded_reason_and_never_completes() {
     );
     assert!(!error.message.contains('\n'));
 
-    let rate_limit = json!({"error":{"code":429,"message":"slow down"},"choices":[{"finish_reason":"error"}]});
+    let rate_limit =
+        json!({"error":{"code":429,"message":"slow down"},"choices":[{"finish_reason":"error"}]});
     let mut state = ChatState::default();
     let error = state.accept(&rate_limit).unwrap_err();
     assert_eq!(error.kind, ProviderErrorKind::RateLimited);
@@ -2080,8 +2088,7 @@ async fn anthropic_stream_closes_tool_block_before_completion() {
     );
     let endpoint = serve(body.into(), "200 OK").await;
     let model =
-        HttpModelService::new(&endpoint, HttpWire::AnthropicMessages, Arc::new(|| None))
-            .unwrap();
+        HttpModelService::new(&endpoint, HttpWire::AnthropicMessages, Arc::new(|| None)).unwrap();
     let mut stream = model.stream(request()).await.unwrap();
     let mut completed = None;
     while let Some(event) = stream.next().await {
@@ -2103,8 +2110,7 @@ async fn anthropic_stream_closes_tool_block_before_completion() {
 
     let endpoint = serve_split(body.replace('\n', "\r"), "200 OK", 1).await;
     let model =
-        HttpModelService::new(&endpoint, HttpWire::AnthropicMessages, Arc::new(|| None))
-            .unwrap();
+        HttpModelService::new(&endpoint, HttpWire::AnthropicMessages, Arc::new(|| None)).unwrap();
     let mut stream = model.stream(request()).await.unwrap();
     let mut completed = None;
     while let Some(event) = stream.next().await {
@@ -2139,9 +2145,7 @@ fn anthropic_projects_only_human_initial_and_streamed_thinking() {
     ] {
         for event in state.accept(&event, &request).unwrap() {
             match event {
-                ModelStreamEvent::ThinkingDelta { block, text } => {
-                    projected.push((block, text))
-                }
+                ModelStreamEvent::ThinkingDelta { block, text } => projected.push((block, text)),
                 ModelStreamEvent::Completed(value) => response = Some(value),
                 _ => {}
             }
@@ -2201,8 +2205,7 @@ fn anthropic_plain_replay_checks_projection_without_binding_the_prefix() {
         ProviderErrorKind::InvalidRequest
     );
     request.messages[1].content[0] = Content::Text("answer".into());
-    request.messages[1].provider_replay.as_mut().unwrap().data["prefix_sha256"] =
-        json!("invalid");
+    request.messages[1].provider_replay.as_mut().unwrap().data["prefix_sha256"] = json!("invalid");
     assert_eq!(
         anthropic_body(&request, true).unwrap_err().kind,
         ProviderErrorKind::InvalidRequest
@@ -2434,8 +2437,7 @@ async fn anthropic_stream_accepts_multiple_message_deltas() {
     );
     let endpoint = serve_split(body.into(), "200 OK", 1).await;
     let model =
-        HttpModelService::new(&endpoint, HttpWire::AnthropicMessages, Arc::new(|| None))
-            .unwrap();
+        HttpModelService::new(&endpoint, HttpWire::AnthropicMessages, Arc::new(|| None)).unwrap();
     let mut stream = model.stream(request()).await.unwrap();
     let mut completed = None;
     while let Some(event) = stream.next().await {

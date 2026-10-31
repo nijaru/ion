@@ -200,8 +200,10 @@ fn custom_theme_styles_activity_and_diff_semantics_but_not_observations() {
             live.iter()
                 .any(|row| row.style.fg == Some(Color::Rgb(1, 2, 3)))
         );
-        assert!(live.iter().any(|row| row.to_string().contains("Exited 7")
-            && row.style.fg == Some(Color::Rgb(7, 8, 9))));
+        assert!(
+            live.iter().any(|row| row.to_string().contains("Exited 7")
+                && row.style.fg == Some(Color::Rgb(7, 8, 9)))
+        );
     }
 }
 
@@ -530,9 +532,7 @@ fn output_modes_disclose_ranges_streams_and_uncoalesced_observations() {
             && compact.contains("diagnostic�[2J")
             && !compact.contains('\u{1b}')
     );
-    assert!(
-        compact.contains("1 earlier stdout lines") && compact.contains("1 more content lines")
-    );
+    assert!(compact.contains("1 earlier stdout lines") && compact.contains("1 more content lines"));
     assert!(compact.contains("not shared with model") && compact.contains("Exited 7"));
     assert!(compact.contains("/capture/stdout") && compact.contains("stdout truncated"));
     let grouped = TranscriptProjection {

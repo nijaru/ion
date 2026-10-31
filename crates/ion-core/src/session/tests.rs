@@ -138,8 +138,7 @@ fn shell_admission_recovers_before_authority_and_rejects_failed_recovery() {
         })
         .unwrap();
     assert_eq!(activity.state, crate::ActivityState::Unknown);
-    let encoded =
-        serde_json::to_value(&recovered.entries[recovered.entries.len() - 3]).unwrap();
+    let encoded = serde_json::to_value(&recovered.entries[recovered.entries.len() - 3]).unwrap();
     assert_eq!(encoded["data"]["result"]["outcome"]["state"], "unknown");
     assert!(encoded["data"]["result"]["outcome"].get("output").is_none());
     session
@@ -564,8 +563,7 @@ fn opening_invalid_database_does_not_initialize_session_schema() {
 
     assert!(Session::open(&path).is_err());
 
-    let connection =
-        Connection::open_with_flags(&path, OpenFlags::SQLITE_OPEN_READ_ONLY).unwrap();
+    let connection = Connection::open_with_flags(&path, OpenFlags::SQLITE_OPEN_READ_ONLY).unwrap();
     let table_exists = |name: &str| {
         connection
             .query_row(
@@ -1544,7 +1542,9 @@ fn human_thinking_stays_in_facts_not_model_context_across_history_operations() {
         .unwrap();
     assert_eq!(session.view().unwrap().display_messages()[1], message);
     let facts = session.view().unwrap().entries;
-    assert!(facts.iter().any(|entry| matches!(entry, SessionEntry::Assistant { message: saved, .. } if saved == &message)));
+    assert!(facts.iter().any(
+        |entry| matches!(entry, SessionEntry::Assistant { message: saved, .. } if saved == &message)
+    ));
     assert_eq!(
         session.messages().unwrap()[1].content,
         vec![Content::Text("answer".into())]
@@ -2285,9 +2285,7 @@ fn code_inspection_preserves_states_exact_values_and_bounded_metadata() {
     assert_eq!(small["json"], "1");
     assert!(small.to_string().len() < 1024);
     let second = session
-        .inspect_code(
-            &serde_json::json!({"kind":"children","parent":parent,"after":9}).to_string(),
-        )
+        .inspect_code(&serde_json::json!({"kind":"children","parent":parent,"after":9}).to_string())
         .unwrap();
     assert_eq!(second["children"].as_array().unwrap().len(), 2);
     assert_eq!(second["next_after"], serde_json::Value::Null);
