@@ -5,96 +5,18 @@ use std::{
 };
 
 use ion_ai::{BoxFuture, ToolCall, ToolSpec};
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
 use serde_json::Value;
 use tokio_util::sync::CancellationToken;
 
 use crate::tool_result::ToolOutput;
 
 mod discovery;
+mod presentation;
+mod selection;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum ToolActivityKind {
-    Read,
-    List,
-    Search,
-    Edit,
-    Write,
-    Command,
-    Ask,
-    Subagent,
-    External,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum ToolPresentationTarget {
-    None,
-    ToolName,
-    Argument(String),
-    Static(String),
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ToolPresentation {
-    pub kind: ToolActivityKind,
-    pub target: ToolPresentationTarget,
-}
-
-impl ToolPresentation {
-    pub fn argument(kind: ToolActivityKind, key: impl Into<String>) -> Self {
-        Self {
-            kind,
-            target: ToolPresentationTarget::Argument(key.into()),
-        }
-    }
-
-    pub fn static_target(kind: ToolActivityKind, target: impl Into<String>) -> Self {
-        Self {
-            kind,
-            target: ToolPresentationTarget::Static(target.into()),
-        }
-    }
-
-    pub fn external() -> Self {
-        Self {
-            kind: ToolActivityKind::External,
-            target: ToolPresentationTarget::ToolName,
-        }
-    }
-
-    fn resolve(&self, call: &ToolCall) -> ToolActivity {
-        let subject = match &self.target {
-            ToolPresentationTarget::None => None,
-            ToolPresentationTarget::ToolName => Some(call.name.clone()),
-            ToolPresentationTarget::Argument(key) => call
-                .arguments
-                .get(key)
-                .and_then(Value::as_str)
-                .map(str::to_owned),
-            ToolPresentationTarget::Static(value) => Some(value.clone()),
-        };
-        ToolActivity {
-            kind: self.kind,
-            subject,
-        }
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct ToolActivity {
-    pub kind: ToolActivityKind,
-    pub subject: Option<String>,
-}
-
-impl ToolActivity {
-    pub fn external(name: impl Into<String>) -> Self {
-        Self {
-            kind: ToolActivityKind::External,
-            subject: Some(name.into()),
-        }
-    }
-}
+pub use presentation::{ToolActivity, ToolActivityKind, ToolPresentation, ToolPresentationTarget};
+pub use selection::{ToolSelection, tool_name_matches};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ToolExposure {
@@ -102,82 +24,6 @@ pub enum ToolExposure {
     Direct,
     /// Callable by the harness but omitted from the default model loadout.
     Deferred,
-}
-
-/// Application-selected model-visible tool loadout. Patterns use `*` as a
-/// wildcard; exclusions win over inclusions. Selection narrows what the model can
-/// call for this application; it is not an OS sandbox or authority grant.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
-pub struct ToolSelection {
-    include: Option<Vec<String>>,
-    exclude: Vec<String>,
-}
-
-impl ToolSelection {
-    pub fn all() -> Self {
-        Self::default()
-    }
-
-    /// Allow only matching tools. An empty inclusion allows no tools; use
-    /// `all()` to leave inclusion unrestricted.
-    pub fn include(patterns: impl IntoIterator<Item = String>) -> Self {
-        Self {
-            include: Some(patterns.into_iter().collect()),
-            exclude: Vec::new(),
-        }
-    }
-
-    pub fn with_exclude(mut self, patterns: impl IntoIterator<Item = String>) -> Self {
-        self.exclude = patterns.into_iter().collect();
-        self
-    }
-
-    pub fn is_filtered(&self) -> bool {
-        self.include.is_some() || !self.exclude.is_empty()
-    }
-
-    pub fn allows(&self, name: &str) -> bool {
-        let included = self.include.as_ref().is_none_or(|patterns| {
-            patterns
-                .iter()
-                .any(|pattern| tool_name_matches(pattern, name))
-        });
-        included
-            && !self
-                .exclude
-                .iter()
-                .any(|pattern| tool_name_matches(pattern, name))
-    }
-}
-
-/// Match an exact tool name or a pattern where only `*` is special.
-/// A star matches any sequence of characters; other glob/regex syntax is literal.
-pub fn tool_name_matches(pattern: &str, name: &str) -> bool {
-    let pattern = pattern.as_bytes();
-    let name = name.as_bytes();
-    let (mut p, mut n) = (0, 0);
-    let mut star = None;
-    let mut retry = 0;
-    while n < name.len() {
-        if p < pattern.len() && pattern[p] == b'*' {
-            star = Some(p);
-            p += 1;
-            retry = n;
-        } else if p < pattern.len() && pattern[p] == name[n] {
-            p += 1;
-            n += 1;
-        } else if let Some(at) = star {
-            p = at + 1;
-            retry += 1;
-            n = retry;
-        } else {
-            return false;
-        }
-    }
-    while p < pattern.len() && pattern[p] == b'*' {
-        p += 1;
-    }
-    p == pattern.len()
 }
 
 /// A standalone JSON Schema describing expected successful data at an object-key
