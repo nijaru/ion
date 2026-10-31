@@ -20,8 +20,8 @@ design/roadmap copies or treat old research snapshots as current instructions.
 
 ## Source navigation
 
-- `crates/ion-core/src/agent/turn.rs` and `crates/ion-core/src/agent/request_cycle.rs`: Turn/request sequencing; `agent.rs` still contains substantial orchestration and tests.
-- `crates/ion-core/src/session.rs`, `crates/ion-core/src/session/history/`: durable Session facts, branch/context and recovery.
+- `crates/ion-core/src/agent/turn.rs` and `crates/ion-core/src/agent/request_cycle.rs`: Turn/request sequencing; `agent.rs` owns the public Agent facade and event/error types; focused tests live in `agent/tests.rs`.
+- `crates/ion-core/src/session/records.rs`: durable entry and view types; `session.rs` owns the SQLite Session and projection, with history/recovery in `session/` submodules.
 - `crates/ion-core/src/tool_set.rs`, `crates/ion-core/src/code_gateway.rs`, `crates/ion-host/src/code_mode.rs`: captured tool dispatch and bounded Code Mode.
 - `crates/ion-host/src/control/`, `crates/ion-host/src/application.rs`, `crates/ion-host/src/local_tools/`: client control, coding recipe and effect executors.
 - `crates/ion-app/src/headless.rs`, `crates/ion-app/src/rpc.rs`, `crates/ion-app/src/terminal_client/`; `crates/ion-terminal/src/`: public callers and native interaction.
