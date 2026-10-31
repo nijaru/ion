@@ -168,4 +168,3 @@ impl OrderedBatch {
         Ok(())
     }
 }
-

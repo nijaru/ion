@@ -6,11 +6,7 @@ use ion_ai::{ModelRequest, ModelService};
 use tokio_util::sync::CancellationToken;
 
 use super::AgentError;
-use crate::{
-    generation::refresh_prompt_cache,
-    session::Session,
-    tool_set::ToolExecution,
-};
+use crate::{generation::refresh_prompt_cache, session::Session, tool_set::ToolExecution};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
 pub struct PromptCacheWarmingPolicy {
