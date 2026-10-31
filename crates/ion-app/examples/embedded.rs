@@ -8,7 +8,7 @@ use std::{
 
 use anyhow::{Context, Result, ensure};
 use clap::Parser;
-use ion_core::CodingSession;
+use ion_core::Session;
 use ion_host::{
     ControlUpdate, Delivery, Host, OperationOutcome, ReturnReason, SessionControl, UserInput,
 };
@@ -35,9 +35,9 @@ async fn main() -> Result<()> {
         .canonicalize()
         .context("resolve working directory")?;
     let session = Arc::new(if args.session.try_exists()? {
-        CodingSession::open(&args.session)?
+        Session::open(&args.session)?
     } else {
-        CodingSession::create(&args.session, Some(&cwd))?
+        Session::create(&args.session, Some(&cwd))?
     });
 
     // Keep every fallible step after opening the Session inside this outcome.
@@ -54,7 +54,7 @@ async fn main() -> Result<()> {
     }
 }
 
-async fn submit(args: Args, cwd: &Path, session: Arc<CodingSession>) -> Result<()> {
+async fn submit(args: Args, cwd: &Path, session: Arc<Session>) -> Result<()> {
     ensure!(
         session.cwd() == Some(cwd),
         "Session belongs to a different working directory"
@@ -134,7 +134,7 @@ async fn prompt(control: &mut SessionControl, text: String) -> Result<String> {
                 },
                 ControlUpdate::Returned(input) => rejection = Some(match input.reason {
                     ReturnReason::Preparation(error) => error,
-                    ReturnReason::Stopped => ion_core::CodingAgentError::Cancelled.into(),
+                    ReturnReason::Stopped => ion_core::AgentError::Cancelled.into(),
                     reason => anyhow::anyhow!("input not accepted: {reason:?}"),
                 }),
                 ControlUpdate::Idle => break Err(rejection.unwrap_or_else(|| anyhow::anyhow!("operation ended without settlement"))),
@@ -149,7 +149,7 @@ async fn prompt(control: &mut SessionControl, text: String) -> Result<String> {
             _ = signal.recv(), if listening => {
                 owner.request_shutdown();
                 owner.join_shutdown().await?;
-                return Err(ion_core::CodingAgentError::Cancelled.into());
+                return Err(ion_core::AgentError::Cancelled.into());
             }
             result = owner.background().drain() => result?,
         }

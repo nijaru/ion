@@ -6,7 +6,7 @@ use std::{
 };
 
 use ion_ai::{ImageMime, MAX_SOURCE_BYTES, normalize_image};
-use ion_core::CodingToolOutput as ToolOutput;
+use ion_core::ToolOutput;
 use serde::Deserialize;
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};

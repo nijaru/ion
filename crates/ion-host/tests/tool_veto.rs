@@ -3,9 +3,8 @@ use ion_ai::{
     ScriptedModelService, ToolCall, ToolSpec, Usage,
 };
 use ion_core::{
-    ChildOutcome, CodeLimits, CodingAgent, CodingSession, CodingToolOutput, CodingToolSource,
-    SessionEntry, ToolDefinition, ToolExecutor, ToolInvocation, ToolOutcome, ToolRegistration,
-    ToolSet,
+    Agent, ChildOutcome, CodeLimits, Session, SessionEntry, ToolDefinition, ToolExecutor,
+    ToolInvocation, ToolOutcome, ToolOutput, ToolRegistration, ToolSet, ToolSource,
 };
 use ion_host::{CommandEnvironment, LocalTools, ToolVeto, ToolVetoSettings, code_mode::QuickJs};
 use serde_json::{Value, json};
@@ -40,8 +39,8 @@ impl Workspace {
             .unwrap(),
         )
     }
-    fn session(&self) -> Arc<CodingSession> {
-        Arc::new(CodingSession::create(self.0.join("session.sqlite"), Some(&self.0)).unwrap())
+    fn session(&self) -> Arc<Session> {
+        Arc::new(Session::create(self.0.join("session.sqlite"), Some(&self.0)).unwrap())
     }
 }
 impl Drop for Workspace {
@@ -73,12 +72,12 @@ fn agent(
     root: &Workspace,
     policy: Arc<ToolVeto>,
     calls: Vec<Content>,
-) -> (CodingAgent, Arc<ScriptedModelService>) {
+) -> (Agent, Arc<ScriptedModelService>) {
     let model = Arc::new(ScriptedModelService::new([
         response(calls),
         response(vec![Content::Text("finished".into())]),
     ]));
-    let sources: Vec<Arc<dyn CodingToolSource>> = vec![
+    let sources: Vec<Arc<dyn ToolSource>> = vec![
         Arc::new(LocalTools::new(&root.0).unwrap()),
         Arc::new(Deferred),
     ];
@@ -87,7 +86,7 @@ fn agent(
         .with_code_mode(Arc::new(QuickJs), CodeLimits::default())
         .with_policy(policy);
     (
-        CodingAgent::with_tool_set(
+        Agent::with_tool_set(
             model.clone(),
             Arc::new(tools),
             ModelRef {
@@ -99,7 +98,7 @@ fn agent(
     )
 }
 struct Deferred;
-impl CodingToolSource for Deferred {
+impl ToolSource for Deferred {
     fn registrations(self: Arc<Self>) -> Vec<ToolRegistration> {
         vec![ToolRegistration::new(
             ToolDefinition::external(ToolSpec {
@@ -113,7 +112,7 @@ impl CodingToolSource for Deferred {
     }
 }
 impl ToolExecutor for Deferred {
-    fn execute<'a>(&'a self, _: ToolInvocation<'a>) -> ion_ai::BoxFuture<'a, CodingToolOutput> {
+    fn execute<'a>(&'a self, _: ToolInvocation<'a>) -> ion_ai::BoxFuture<'a, ToolOutput> {
         panic!("ineligible or stopped executor constructor must never run");
     }
 }
@@ -302,11 +301,9 @@ async fn stop_after_policy_allow_never_constructs_the_selected_executor() {
         )]),
         response(vec![call("stopped", "deferred", json!({}))]),
     ]));
-    let agent = CodingAgent::with_tool_set(
+    let agent = Agent::with_tool_set(
         model,
-        Arc::new(
-            ToolSet::new([Arc::new(Deferred) as Arc<dyn CodingToolSource>]).with_policy(policy),
-        ),
+        Arc::new(ToolSet::new([Arc::new(Deferred) as Arc<dyn ToolSource>]).with_policy(policy)),
         ModelRef {
             provider: "test".into(),
             model: "test".into(),
@@ -322,7 +319,7 @@ async fn stop_after_policy_allow_never_constructs_the_selected_executor() {
             String::new(),
             stop,
             move |event| {
-                if let ion_core::CodingAgentEvent::ToolStarted { name, .. } = event
+                if let ion_core::AgentEvent::ToolStarted { name, .. } = event
                     && name == "deferred"
                 {
                     trigger.cancel();
@@ -331,7 +328,7 @@ async fn stop_after_policy_allow_never_constructs_the_selected_executor() {
         )
         .await;
     assert!(
-        matches!(result, Err(ion_core::CodingAgentError::Cancelled)),
+        matches!(result, Err(ion_core::AgentError::Cancelled)),
         "{result:?}"
     );
     let view = session.view().unwrap();

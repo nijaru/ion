@@ -457,11 +457,11 @@ impl OutputCapture {
 mod tests {
     use super::*;
     use ion_ai::ToolCall;
-    use ion_core::{CodingToolSource, ToolCatalog, ToolSet};
+    use ion_core::{ToolCatalog, ToolSet, ToolSource};
     use std::{os::unix::fs::PermissionsExt, sync::Arc};
 
     fn tools(cwd: &Path) -> ToolCatalog {
-        ToolSet::new([Arc::new(crate::LocalTools::new(cwd).unwrap()) as Arc<dyn CodingToolSource>])
+        ToolSet::new([Arc::new(crate::LocalTools::new(cwd).unwrap()) as Arc<dyn ToolSource>])
             .snapshot()
     }
 

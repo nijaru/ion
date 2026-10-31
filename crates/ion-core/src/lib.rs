@@ -27,8 +27,8 @@ pub use completion::{
 pub use operation::{IdleSession, Operation, OperationError};
 
 pub use agent::{
-    Agent as CodingAgent, AgentError as CodingAgentError, AgentEvent as CodingAgentEvent,
-    AgentLimits, CompletionSubmission, PromptCacheWarmingPolicy, RequestSubmission, SteeringInbox,
+    Agent, AgentError, AgentEvent, AgentLimits, CompletionSubmission, PromptCacheWarmingPolicy,
+    RequestSubmission, SteeringInbox,
 };
 pub use delegation::{
     BackgroundJob, BackgroundSlot, BackgroundStartError, DelegationCompletion, DelegationFailure,
@@ -41,25 +41,23 @@ pub use invocation::{ToolInvocation, ToolOccurrence, ToolOrigin};
 pub use session::{
     AuthorityScope, ContextPoint, ContextPosition, ForkPoint, ModelContextSnapshot,
     PreparedNavigation, RecoveryBinding, RecoveryPoint, RecoveryState, RequestKey, RequestReceipt,
-    Session as CodingSession, SessionEntry, SessionError as CodingSessionError,
-    SessionInputPreview, SessionMetadata, SessionView, StoredToolActivity, SubmissionRequest,
-    TurnEndReason, TurnSummary, UnobservedUserShell, UserShellOutcome,
+    Session, SessionEntry, SessionError, SessionInputPreview, SessionMetadata, SessionView,
+    StoredToolActivity, SubmissionRequest, TurnEndReason, TurnSummary, UnobservedUserShell,
+    UserShellOutcome,
 };
 pub use session_usage::{ModelUsage, SessionUsage, TokenCount, UsageTotals};
 pub use tool_policy::{ToolDecision, ToolPolicy, ToolPolicyRequest};
 pub use tool_set::{
     ToolActivity, ToolActivityKind, ToolCatalog, ToolDefinition, ToolExecutor, ToolExposure,
     ToolPresentation, ToolPresentationTarget, ToolRegistration, ToolResultSchema, ToolSelection,
-    ToolSet, ToolSource as CodingToolSource, tool_name_matches,
+    ToolSet, ToolSource, tool_name_matches,
 };
 
 pub use composition::{
     ChildIntent, ChildOutcome, CodeLimits, CodeOutput, CodeReply, CodeRequest, CodeRequestKind,
     CodeResult, CodeRuntime, CodeTask,
 };
-pub use tool_result::{
-    ToolOutcome, ToolOutput as CodingToolOutput, ToolResultProjection, ToolSettlement,
-};
+pub use tool_result::{ToolOutcome, ToolOutput, ToolResultProjection, ToolSettlement};
 
 pub use transcript::{
     ActivityGroup, ActivityResult, ActivityState, LiveTranscript, TranscriptActivity,

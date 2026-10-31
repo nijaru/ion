@@ -231,7 +231,7 @@ async fn foreground_sdk_grant_reconciles_inputs_and_never_reopens_a_settled_chil
         panic!("joined child")
     };
     assert_eq!(answer.as_deref(), Some("guided answer"));
-    let child = CodingSession::inspect(&link.record.path).unwrap();
+    let child = Session::inspect(&link.record.path).unwrap();
     assert_eq!(child.last_end, Some((1, TurnEndReason::Completed)));
     assert_eq!(
         child

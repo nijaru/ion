@@ -10,9 +10,9 @@ use ion_ai::{BoxFuture, Message, ModelRef, ToolSpec};
 
 mod start;
 use ion_core::{
-    AuthorityScope, CodingToolOutput, CodingToolSource, DelegationOutcome, DelegationReceipt,
-    RequestReceipt, ToolActivityKind, ToolDefinition, ToolExecutor, ToolInvocation,
-    ToolPresentation, ToolRegistration, TurnEndReason,
+    AuthorityScope, DelegationOutcome, DelegationReceipt, RequestReceipt, ToolActivityKind,
+    ToolDefinition, ToolExecutor, ToolInvocation, ToolOutput, ToolPresentation, ToolRegistration,
+    ToolSource, TurnEndReason,
 };
 use serde::Deserialize;
 use serde_json::{Value, json};
@@ -103,7 +103,7 @@ impl Subagent {
         }
     }
 }
-impl CodingToolSource for Subagent {
+impl ToolSource for Subagent {
     fn registrations(self: Arc<Self>) -> Vec<ToolRegistration> {
         let point = json!({"oneOf":[
             {"type":"object","additionalProperties":false,"required":["before_turn"],"properties":{"before_turn":{"type":"integer","minimum":1}}},
@@ -176,21 +176,17 @@ enum Input {
 fn default_wait_ms() -> u64 {
     DEFAULT_WAIT_MS
 }
-fn output(value: Value, is_error: bool) -> CodingToolOutput {
-    CodingToolOutput {
+fn output(value: Value, is_error: bool) -> ToolOutput {
+    ToolOutput {
         value,
         images: Vec::new(),
         is_error,
     }
 }
-fn failure(error: impl std::fmt::Display) -> CodingToolOutput {
+fn failure(error: impl std::fmt::Display) -> ToolOutput {
     output(json!({"error":error.to_string()}), true)
 }
-fn receipt_output(
-    receipt: DelegationReceipt,
-    joined: bool,
-    error: Option<String>,
-) -> CodingToolOutput {
+fn receipt_output(receipt: DelegationReceipt, joined: bool, error: Option<String>) -> ToolOutput {
     let completed = matches!(
         &receipt.outcome,
         Some(DelegationOutcome::Joined {
@@ -213,14 +209,14 @@ fn receipt_output(
         is_error,
     )
 }
-fn child_output(child: BackgroundRunSnapshot) -> CodingToolOutput {
+fn child_output(child: BackgroundRunSnapshot) -> ToolOutput {
     let mut output = receipt_output(child.receipt, child.joined, child.error);
     output.value["steering"] = json!(child.steering);
     output.value["progress"] = json!(child.progress);
     output
 }
 impl ToolExecutor for Subagent {
-    fn execute<'a>(&'a self, invocation: ToolInvocation<'a>) -> BoxFuture<'a, CodingToolOutput> {
+    fn execute<'a>(&'a self, invocation: ToolInvocation<'a>) -> BoxFuture<'a, ToolOutput> {
         Box::pin(async move {
             let (Some(reasoning), Some(origin)) = (invocation.reasoning(), invocation.origin())
             else {

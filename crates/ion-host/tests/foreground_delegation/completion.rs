@@ -7,12 +7,11 @@ use ion_host::BackgroundOwner;
 async fn joined_child_can_wake_a_peer_without_parent_input_or_coding_authority() {
     let owner = Arc::new(BackgroundOwner::new(1).unwrap());
     let mut source = Fixture::with_owner(Wait::Join, true, false, None, Some(owner.clone()), None);
-    let peer_session =
-        Arc::new(CodingSession::create(source.root.join("peer.sqlite"), None).unwrap());
+    let peer_session = Arc::new(Session::create(source.root.join("peer.sqlite"), None).unwrap());
     let service = Arc::new(ScriptedModelService::new([response(vec![Content::Text(
         "peer ready".into(),
     )])]));
-    let agent = Arc::new(CodingAgent::with_tool_set(
+    let agent = Arc::new(Agent::with_tool_set(
         service.clone(),
         Arc::new(ToolSet::new(std::iter::empty())),
         model("peer"),

@@ -10,9 +10,8 @@ use ion_ai::{
     ScriptedModelService, ToolCall, Usage,
 };
 use ion_core::{
-    ChildOutcome, CodeLimits, CodingAgent, CodingAgentError, CodingSession, CodingToolSource,
-    ForkPoint, LiveTranscript, SessionEntry, ToolSelection, ToolSet, TranscriptItem,
-    TranscriptProjection,
+    Agent, AgentError, ChildOutcome, CodeLimits, ForkPoint, LiveTranscript, Session, SessionEntry,
+    ToolSelection, ToolSet, ToolSource, TranscriptItem, TranscriptProjection,
 };
 use ion_host::{LocalTools, code_mode::QuickJs};
 use serde_json::json;
@@ -25,8 +24,8 @@ impl Workspace {
         fs::create_dir(&path).unwrap();
         Self(path)
     }
-    fn session(&self) -> Arc<CodingSession> {
-        Arc::new(CodingSession::create(self.0.join("session.sqlite"), Some(&self.0)).unwrap())
+    fn session(&self) -> Arc<Session> {
+        Arc::new(Session::create(self.0.join("session.sqlite"), Some(&self.0)).unwrap())
     }
 }
 impl Drop for Workspace {
@@ -64,12 +63,12 @@ fn make_agent(
     root: &Path,
     scripts: impl IntoIterator<Item = Script>,
     limits: CodeLimits,
-) -> (CodingAgent, Arc<ScriptedModelService>) {
+) -> (Agent, Arc<ScriptedModelService>) {
     let model = Arc::new(ScriptedModelService::new(scripts));
-    let source: Arc<dyn CodingToolSource> = Arc::new(LocalTools::new(root).unwrap());
+    let source: Arc<dyn ToolSource> = Arc::new(LocalTools::new(root).unwrap());
     let tools = ToolSet::new([source]).with_code_mode(Arc::new(QuickJs), limits);
     (
-        CodingAgent::with_tool_set(model.clone(), Arc::new(tools), identity()),
+        Agent::with_tool_set(model.clone(), Arc::new(tools), identity()),
         model,
     )
 }
@@ -221,7 +220,7 @@ async fn read_only_discovery_is_callable_from_code_mode_without_mutation_authori
         )]),
         response(vec![Content::Text("discovery complete".into())]),
     ]));
-    let source: Arc<dyn CodingToolSource> = Arc::new(LocalTools::new(&root.0).unwrap());
+    let source: Arc<dyn ToolSource> = Arc::new(LocalTools::new(&root.0).unwrap());
     let tools = ToolSet::new([source])
         .with_selection(ToolSelection::include(
             ["read", "ls", "find", "grep", "code_mode"]
@@ -229,7 +228,7 @@ async fn read_only_discovery_is_callable_from_code_mode_without_mutation_authori
                 .map(str::to_owned),
         ))
         .with_code_mode(Arc::new(QuickJs), CodeLimits::default());
-    let agent = CodingAgent::with_tool_set(model, Arc::new(tools), identity());
+    let agent = Agent::with_tool_set(model, Arc::new(tools), identity());
     agent
         .submit(
             session.clone(),
@@ -293,7 +292,7 @@ async fn history_retrieves_compacted_evidence_through_direct_and_code_mode_route
     let root = Workspace::new();
     let session = root.session();
     let source = Arc::new(LocalTools::new(&root.0).unwrap());
-    let tools = ToolSet::new([source as Arc<dyn CodingToolSource>])
+    let tools = ToolSet::new([source as Arc<dyn ToolSource>])
         .with_history()
         .with_code_mode(Arc::new(QuickJs), CodeLimits::default());
     let model = Arc::new(ScriptedModelService::new([
@@ -326,7 +325,7 @@ async fn history_retrieves_compacted_evidence_through_direct_and_code_mode_route
         )]),
         response(vec![Content::Text("code history complete".into())]),
     ]));
-    let agent = CodingAgent::with_tool_set(model.clone(), Arc::new(tools), identity());
+    let agent = Agent::with_tool_set(model.clone(), Arc::new(tools), identity());
     agent
         .submit(
             session.clone(),
@@ -451,7 +450,7 @@ struct DiscoverySource {
     pending: std::sync::atomic::AtomicBool,
     published: std::sync::atomic::AtomicBool,
 }
-impl CodingToolSource for DiscoverySource {
+impl ToolSource for DiscoverySource {
     fn registrations(self: Arc<Self>) -> Vec<ion_core::ToolRegistration> {
         let refreshed = self.published.load(std::sync::atomic::Ordering::SeqCst);
         (0..13)
@@ -497,13 +496,13 @@ impl ion_core::ToolExecutor for DiscoverySource {
     fn execute<'a>(
         &'a self,
         _invocation: ion_core::ToolInvocation<'a>,
-    ) -> ion_ai::BoxFuture<'a, ion_core::CodingToolOutput> {
+    ) -> ion_ai::BoxFuture<'a, ion_core::ToolOutput> {
         Box::pin(async move {
             // Publish a changed source while the issued guest retains its catalogue.
             self.pending
                 .store(true, std::sync::atomic::Ordering::SeqCst);
             self.refresh(CancellationToken::new()).await;
-            ion_core::CodingToolOutput {
+            ion_core::ToolOutput {
                 value: json!("executed"),
                 images: Vec::new(),
                 is_error: false,
@@ -545,9 +544,9 @@ async fn discovery_is_exact_read_only_deferred_and_request_frozen() {
         response(vec![Content::Text("DONE".into())]),
     ]));
     let source = Arc::new(DiscoverySource::default());
-    let tools = ToolSet::new([source as Arc<dyn CodingToolSource>])
+    let tools = ToolSet::new([source as Arc<dyn ToolSource>])
         .with_code_mode(Arc::new(QuickJs), CodeLimits::default());
-    let agent = CodingAgent::with_tool_set(model.clone(), Arc::new(tools), identity());
+    let agent = Agent::with_tool_set(model.clone(), Arc::new(tools), identity());
     agent
         .submit(
             session.clone(),
@@ -668,7 +667,7 @@ async fn observer_panic_stops_and_joins_other_started_vm_children() {
     let observed = Arc::new(std::sync::atomic::AtomicBool::new(false));
     let flag = observed.clone();
     let result=tokio::time::timeout(Duration::from_secs(5),agent.submit(session.clone(),"run".into(),String::new(),CancellationToken::new(),move |event| {
-        if matches!(event,ion_core::CodingAgentEvent::ChildToolFinished { outcome:ChildOutcome::Observed { output },.. } if output.value["stdout"]=="FAST_DONE") {
+        if matches!(event,ion_core::AgentEvent::ChildToolFinished { outcome:ChildOutcome::Observed { output },.. } if output.value["stdout"]=="FAST_DONE") {
             flag.store(true,std::sync::atomic::Ordering::SeqCst);
             panic!("controlled observer failure while another child is running");
         }
@@ -682,7 +681,7 @@ async fn observer_panic_stops_and_joins_other_started_vm_children() {
         .status
         .success();
     assert!(
-        matches!(result, Err(CodingAgentError::ObserverPanicked)),
+        matches!(result, Err(AgentError::ObserverPanicked)),
         "{result:?}"
     );
     assert!(observed.load(std::sync::atomic::Ordering::SeqCst));
@@ -727,10 +726,7 @@ async fn native_fanout_selects_context_and_preserves_occurrences_inspection_and_
         ],
         CodeLimits::default(),
     );
-    let observed = Arc::new(std::sync::Mutex::new((
-        LiveTranscript::with_user_input(&Message::user_input("run".into(), [])),
-        false,
-    )));
+    let observed = Arc::new(std::sync::Mutex::new((LiveTranscript::default(), false)));
     let observer = observed.clone();
     let result = agent
         .submit(
@@ -739,7 +735,7 @@ async fn native_fanout_selects_context_and_preserves_occurrences_inspection_and_
             String::new(),
             CancellationToken::new(),
             move |event| {
-                let started = matches!(&event, ion_core::CodingAgentEvent::ChildToolStarted { .. });
+                let started = matches!(&event, ion_core::AgentEvent::ChildToolStarted { .. });
                 let mut state = observer.lock().unwrap();
                 let (live, saw_running_child) = &mut *state;
                 live.observe(&event);
@@ -839,7 +835,7 @@ async fn native_fanout_selects_context_and_preserves_occurrences_inspection_and_
         );
     }
     drop(session);
-    let reopened = Arc::new(CodingSession::open(root.0.join("session.sqlite")).unwrap());
+    let reopened = Arc::new(Session::open(root.0.join("session.sqlite")).unwrap());
     assert_eq!(
         TranscriptProjection::from_session(&reopened.view().unwrap()),
         saved
@@ -929,10 +925,7 @@ async fn cancellation_settles_native_children_before_return() {
         .await
         .unwrap()
         .unwrap();
-    assert!(
-        matches!(result, Err(CodingAgentError::Cancelled)),
-        "{result:?}"
-    );
+    assert!(matches!(result, Err(AgentError::Cancelled)), "{result:?}");
     let view = session.view().unwrap();
     let outputs = view
         .entries
@@ -983,10 +976,7 @@ async fn child_commit_failure_blocks_consumption_drains_started_work_and_reopens
     )
     .await
     .unwrap();
-    assert!(
-        matches!(result, Err(CodingAgentError::Session(_))),
-        "{result:?}"
-    );
+    assert!(matches!(result, Err(AgentError::Session(_))), "{result:?}");
     assert_eq!(fs::read_to_string(root.0.join("first")).unwrap(), "first");
     assert_eq!(fs::read_to_string(root.0.join("second")).unwrap(), "second");
     assert!(!root.0.join("dependent").exists());
@@ -998,7 +988,7 @@ async fn child_commit_failure_blocks_consumption_drains_started_work_and_reopens
         .unwrap();
     drop(connection);
     drop(session);
-    let reopened = Arc::new(CodingSession::open(root.0.join("session.sqlite")).unwrap());
+    let reopened = Arc::new(Session::open(root.0.join("session.sqlite")).unwrap());
     let (next, next_model) = make_agent(
         &root.0,
         [response(vec![Content::Text("RECOVERED".into())])],
@@ -1062,10 +1052,7 @@ async fn child_intent_fault_prevents_native_dispatch() {
             |_| {},
         )
         .await;
-    assert!(
-        matches!(result, Err(CodingAgentError::Session(_))),
-        "{result:?}"
-    );
+    assert!(matches!(result, Err(AgentError::Session(_))), "{result:?}");
     assert!(!root.0.join("effect").exists());
     assert_eq!(model.requests().len(), 1);
     assert!(
@@ -1081,7 +1068,7 @@ async fn child_intent_fault_prevents_native_dispatch() {
         .unwrap();
     drop(connection);
     drop(session);
-    let reopened = Arc::new(CodingSession::open(root.0.join("session.sqlite")).unwrap());
+    let reopened = Arc::new(Session::open(root.0.join("session.sqlite")).unwrap());
     let (next, _) = make_agent(
         &root.0,
         [response(vec![Content::Text("RECOVERED".into())])],
@@ -1163,7 +1150,7 @@ async fn failed_guest_evidence_is_rediscovered_after_cut_and_reopen_without_reex
     );
     fs::remove_file(root.0.join("report")).unwrap();
     drop(session);
-    let reopened = Arc::new(CodingSession::open(root.0.join("session.sqlite")).unwrap());
+    let reopened = Arc::new(Session::open(root.0.join("session.sqlite")).unwrap());
     let script = "const parents=await inspectSaved({kind:'parents'});
         const parent=parents.parents[0].parent;
         const meta=await inspectSaved({kind:'children',parent});

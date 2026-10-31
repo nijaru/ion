@@ -10,7 +10,7 @@ use std::{
 
 use anyhow::{Context, Result, bail};
 use ion_ai::ModelRef;
-use ion_core::{CodingSession, SessionInputPreview};
+use ion_core::{Session, SessionInputPreview};
 use sha2::{Digest, Sha256};
 use tokio_util::sync::CancellationToken;
 
@@ -189,8 +189,7 @@ impl SessionCatalog {
             .paths()?
             .into_iter()
             .filter(|path| {
-                CodingSession::inspect_id(path)
-                    .is_ok_and(|identity| identity.to_string().starts_with(id))
+                Session::inspect_id(path).is_ok_and(|identity| identity.to_string().starts_with(id))
             })
             .filter_map(|path| self.summary(path, false));
         let first = matches.next().context("session ID was not found")?;
@@ -247,7 +246,7 @@ fn summary(path: PathBuf) -> Option<SessionSummary> {
     // Discovery must remain usable if one file is damaged or only
     // partially initialized. Opening that path explicitly still reports
     // its real error.
-    let view = CodingSession::inspect_metadata(&path).ok()?;
+    let view = Session::inspect_metadata(&path).ok()?;
     let updated = modified(&path).ok()?;
     let preview = view.first_input.map(|input| {
         let label = match input {
@@ -294,7 +293,7 @@ mod tests {
         Content, Message, ModelResponse, ModelStreamEvent, ResponseTermination, Role, Script,
         ScriptedModelService, Usage,
     };
-    use ion_core::{AgentLimits, CodingAgent};
+    use ion_core::{Agent, AgentLimits};
 
     use crate::LocalTools;
     use tokio_util::sync::CancellationToken;
@@ -308,8 +307,8 @@ mod tests {
         (root, catalog)
     }
 
-    fn agent(catalog: &SessionCatalog, responses: usize) -> CodingAgent {
-        CodingAgent::new(
+    fn agent(catalog: &SessionCatalog, responses: usize) -> Agent {
+        Agent::new(
             Arc::new(ScriptedModelService::new((0..responses).map(|_| {
                 Script::Stream(vec![ModelStreamEvent::Completed(ModelResponse {
                     message: Message {
@@ -335,14 +334,14 @@ mod tests {
     }
 
     fn assert_passive_preview(catalog: &SessionCatalog, path: &Path, preview: &str, turns: usize) {
-        let before = CodingSession::inspect(path).unwrap().entries;
+        let before = Session::inspect(path).unwrap().entries;
         for reopen in [false, true] {
-            let reopened = reopen.then(|| CodingSession::open(path).unwrap());
+            let reopened = reopen.then(|| Session::open(path).unwrap());
             let listed = catalog.list().unwrap();
             let summary = listed.iter().find(|summary| summary.path == path).unwrap();
             assert_eq!(summary.preview.as_deref(), Some(preview));
             assert_eq!(summary.turns, turns);
-            assert_eq!(CodingSession::inspect(path).unwrap().entries, before);
+            assert_eq!(Session::inspect(path).unwrap().entries, before);
             drop(reopened);
         }
     }
@@ -354,7 +353,7 @@ mod tests {
         let first = catalog.new_path().unwrap();
         let second = catalog.new_path().unwrap();
         assert_ne!(first, second);
-        let session = Arc::new(CodingSession::create(&first, catalog.cwd.as_deref()).unwrap());
+        let session = Arc::new(Session::create(&first, catalog.cwd.as_deref()).unwrap());
         session.set_name(Some("First task")).unwrap();
         agent(&catalog, 1)
             .submit(
@@ -367,7 +366,7 @@ mod tests {
             .await
             .unwrap();
         drop(session);
-        let session = CodingSession::create(&second, catalog.cwd.as_deref()).unwrap();
+        let session = Session::create(&second, catalog.cwd.as_deref()).unwrap();
         session.set_name(Some("Second task")).unwrap();
         drop(session);
         let listed = catalog.list().unwrap();
@@ -403,7 +402,7 @@ mod tests {
             (vec![Content::Text(text)], expected),
         ] {
             let path = catalog.new_path().unwrap();
-            let session = Arc::new(CodingSession::create(&path, catalog.cwd.as_deref()).unwrap());
+            let session = Arc::new(Session::create(&path, catalog.cwd.as_deref()).unwrap());
             let agent = agent(&catalog, 2);
             agent
                 .submit_message(
@@ -450,7 +449,7 @@ mod tests {
         );
         for excluded in [false, true] {
             let path = catalog.new_path().unwrap();
-            let session = Arc::new(CodingSession::create(&path, catalog.cwd.as_deref()).unwrap());
+            let session = Arc::new(Session::create(&path, catalog.cwd.as_deref()).unwrap());
             let tools = LocalTools::new(catalog.cwd.as_deref().unwrap()).unwrap();
             let output = session
                 .run_user_shell(
@@ -507,7 +506,7 @@ mod tests {
             (workspace_free.new_path().unwrap(), None),
             (child, catalog.cwd.as_deref()),
         ] {
-            let session = Arc::new(CodingSession::create(&path, cwd).unwrap());
+            let session = Arc::new(Session::create(&path, cwd).unwrap());
             agent(&catalog, 1)
                 .submit(
                     session.clone(),
@@ -531,7 +530,7 @@ mod tests {
         assert!(all.iter().any(|item| item.cwd == catalog.cwd));
         assert!(all.iter().any(|item| item.cwd == other.cwd));
         for (path, before) in saved {
-            assert_eq!(CodingSession::inspect(&path).unwrap().entries, before);
+            assert_eq!(Session::inspect(&path).unwrap().entries, before);
         }
         let stop = CancellationToken::new();
         stop.cancel();
@@ -561,7 +560,7 @@ mod tests {
     async fn scan_distinguishes_completion_cancellation_and_directory_errors() {
         let (root, catalog) = fixture();
         let path = catalog.new_path().unwrap();
-        let session = Arc::new(CodingSession::create(&path, catalog.cwd.as_deref()).unwrap());
+        let session = Arc::new(Session::create(&path, catalog.cwd.as_deref()).unwrap());
         agent(&catalog, 1)
             .submit(
                 session.clone(),

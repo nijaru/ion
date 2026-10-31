@@ -5,8 +5,8 @@ use ion_ai::{
     Role, Script, ScriptedModelService, ToolCall, ToolSpec, Usage,
 };
 use ion_core::{
-    CodeLimits, CodingAgent, CodingSession, CodingToolOutput, CodingToolSource, SessionEntry,
-    ToolDefinition, ToolExecutor, ToolInvocation, ToolOrigin, ToolRegistration, ToolSet,
+    Agent, CodeLimits, Session, SessionEntry, ToolDefinition, ToolExecutor, ToolInvocation,
+    ToolOrigin, ToolOutput, ToolRegistration, ToolSet, ToolSource,
 };
 use ion_host::code_mode::QuickJs;
 use serde_json::{Value, json};
@@ -14,12 +14,12 @@ use tokio::sync::Notify;
 use tokio_util::sync::CancellationToken;
 
 struct Recorder {
-    session: Arc<CodingSession>,
+    session: Arc<Session>,
     entered: Mutex<Vec<Option<ToolOrigin>>>,
     completed: Mutex<Vec<ToolOrigin>>,
     release: Notify,
 }
-impl CodingToolSource for Recorder {
+impl ToolSource for Recorder {
     fn registrations(self: Arc<Self>) -> Vec<ToolRegistration> {
         vec![ToolRegistration::new(
             ToolDefinition::external(ToolSpec {
@@ -32,7 +32,7 @@ impl CodingToolSource for Recorder {
     }
 }
 impl ToolExecutor for Recorder {
-    fn execute<'a>(&'a self, invocation: ToolInvocation<'a>) -> BoxFuture<'a, CodingToolOutput> {
+    fn execute<'a>(&'a self, invocation: ToolInvocation<'a>) -> BoxFuture<'a, ToolOutput> {
         let call = invocation.call();
         let origin = invocation.origin();
         let stop = invocation.stop().clone();
@@ -78,7 +78,7 @@ impl ToolExecutor for Recorder {
             if call.arguments["order"] == 0 {
                 tokio::select! {
                     () = self.release.notified() => {},
-                    () = stop.cancelled() => return CodingToolOutput {
+                    () = stop.cancelled() => return ToolOutput {
                         value: json!("stopped"), images: Vec::new(), is_error: true,
                     },
                 }
@@ -89,7 +89,7 @@ impl ToolExecutor for Recorder {
             if call.arguments["order"] == 1 {
                 self.release.notify_one();
             }
-            CodingToolOutput {
+            ToolOutput {
                 value: Value::Bool(true),
                 images: Vec::new(),
                 is_error: false,
@@ -122,7 +122,7 @@ fn call(id: &str, name: &str, arguments: Value) -> Content {
 async fn provenance_comes_from_committed_occurrences_not_provider_ids_or_arguments() {
     let root = std::env::temp_dir().join(format!("ion-tool-origin-{}", uuid::Uuid::now_v7()));
     std::fs::create_dir(&root).unwrap();
-    let session = Arc::new(CodingSession::create(root.join("session.sqlite"), None).unwrap());
+    let session = Arc::new(Session::create(root.join("session.sqlite"), None).unwrap());
     let recorder = Arc::new(Recorder {
         session: session.clone(),
         entered: Mutex::new(Vec::new()),
@@ -130,7 +130,7 @@ async fn provenance_comes_from_committed_occurrences_not_provider_ids_or_argumen
         release: Notify::new(),
     });
     let tools = Arc::new(
-        ToolSet::new([recorder.clone() as Arc<dyn CodingToolSource>])
+        ToolSet::new([recorder.clone() as Arc<dyn ToolSource>])
             .with_code_mode(Arc::new(QuickJs), CodeLimits::default()),
     );
     let spoof = json!({"session":"not-the-session","turn":999,"assistant_entry":999,"ordinal":999,"composed_child":999});
@@ -174,7 +174,7 @@ async fn provenance_comes_from_committed_occurrences_not_provider_ids_or_argumen
         response(vec![call("same", "observe", spoof)]),
         response(vec![Content::Text("second done".into())]),
     ]));
-    let agent = CodingAgent::with_tool_set(
+    let agent = Agent::with_tool_set(
         model,
         tools,
         ModelRef {
@@ -194,7 +194,7 @@ async fn provenance_comes_from_committed_occurrences_not_provider_ids_or_argumen
                 )
                 .await?;
         }
-        Ok::<_, ion_core::CodingAgentError>(())
+        Ok::<_, ion_core::AgentError>(())
     })
     .await;
     // Join cleanup even if qualification times out; do not abandon retained work.

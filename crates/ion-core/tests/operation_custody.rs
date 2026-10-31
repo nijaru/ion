@@ -4,9 +4,9 @@ use ion_ai::{
     ScriptedModelService, ToolCall, ToolSpec, Usage,
 };
 use ion_core::{
-    CodingAgent, CodingAgentError, CodingSession, CodingSessionError, CodingToolOutput,
-    CodingToolSource, OperationError, SessionEntry, ToolActivityKind, ToolDefinition, ToolExecutor,
-    ToolExposure, ToolOutcome, ToolPresentation, ToolRegistration, TurnEndReason,
+    Agent, AgentError, OperationError, Session, SessionEntry, SessionError, ToolActivityKind,
+    ToolDefinition, ToolExecutor, ToolExposure, ToolOutcome, ToolOutput, ToolPresentation,
+    ToolRegistration, ToolSource, TurnEndReason,
 };
 use std::{
     fs,
@@ -40,7 +40,7 @@ impl Drop for ReleaseOnDrop {
         self.0.release();
     }
 }
-impl CodingToolSource for BlockingWrite {
+impl ToolSource for BlockingWrite {
     fn registrations(self: Arc<Self>) -> Vec<ToolRegistration> {
         vec![ToolRegistration::new(
             ToolDefinition {
@@ -61,7 +61,7 @@ impl ToolExecutor for BlockingWrite {
     fn execute<'a>(
         &'a self,
         invocation: ion_core::ToolInvocation<'a>,
-    ) -> BoxFuture<'a, CodingToolOutput> {
+    ) -> BoxFuture<'a, ToolOutput> {
         let stop = invocation.stop().clone();
         Box::pin(async move {
             let release = self.release.clone();
@@ -79,7 +79,7 @@ impl ToolExecutor for BlockingWrite {
                 finished.store(true, Ordering::SeqCst);
             });
             tokio::select! { result=&mut worker => { result.unwrap(); }, ()=stop.cancelled() => { worker.await.unwrap(); } }
-            CodingToolOutput {
+            ToolOutput {
                 value: serde_json::json!({"written":true}),
                 images: Vec::new(),
                 is_error: false,
@@ -128,9 +128,8 @@ async fn dropped_timed_out_and_aborted_callers_cannot_release_started_work() {
             })]),
             response(vec![Content::Text("fresh".into())]),
         ]));
-        let agent = Arc::new(CodingAgent::new(service.clone(), tools.clone(), model()));
-        let session =
-            Arc::new(CodingSession::create(root.join("session.sqlite"), Some(&root)).unwrap());
+        let agent = Arc::new(Agent::new(service.clone(), tools.clone(), model()));
+        let session = Arc::new(Session::create(root.join("session.sqlite"), Some(&root)).unwrap());
         let stop = CancellationToken::new();
         let operation = agent.submit(
             session.clone(),
@@ -180,10 +179,7 @@ async fn dropped_timed_out_and_aborted_callers_cannot_release_started_work() {
         let absent_before_release = !tools.path.exists();
         tools.release();
         tokio::time::timeout(Duration::from_secs(4), async {
-            while matches!(
-                session.ensure_idle(),
-                Err(CodingSessionError::OperationActive)
-            ) {
+            while matches!(session.ensure_idle(), Err(SessionError::OperationActive)) {
                 tokio::time::sleep(Duration::from_millis(1)).await;
             }
         })
@@ -207,18 +203,14 @@ async fn dropped_timed_out_and_aborted_callers_cannot_release_started_work() {
         assert!(
             matches!(
                 premature,
-                Err(CodingAgentError::Session(
-                    CodingSessionError::OperationActive
-                ))
+                Err(AgentError::Session(SessionError::OperationActive))
             ),
             "{mode}: {premature:?}"
         );
         assert!(
             matches!(
                 preference,
-                Err(CodingAgentError::Session(
-                    CodingSessionError::OperationActive
-                ))
+                Err(AgentError::Session(SessionError::OperationActive))
             ),
             "{mode}"
         );
@@ -236,8 +228,7 @@ async fn dropped_timed_out_and_aborted_callers_cannot_release_started_work() {
 async fn stop_before_admission_is_inert_and_genuine_task_panic_closes_live_execution() {
     let root = std::env::temp_dir().join(format!("ion-owned-fault-{}", uuid::Uuid::now_v7()));
     fs::create_dir(&root).unwrap();
-    let session =
-        Arc::new(CodingSession::create(root.join("session.sqlite"), Some(&root)).unwrap());
+    let session = Arc::new(Session::create(root.join("session.sqlite"), Some(&root)).unwrap());
     let stop = CancellationToken::new();
     stop.cancel();
     let cancelled = session
@@ -245,10 +236,7 @@ async fn stop_before_admission_is_inert_and_genuine_task_panic_closes_live_execu
             panic!("pre-stopped work executed")
         })
         .await;
-    assert!(matches!(
-        cancelled,
-        Err(CodingSessionError::UserShellCancelled)
-    ));
+    assert!(matches!(cancelled, Err(SessionError::UserShellCancelled)));
     assert_eq!(session.entry_count().unwrap(), 0);
     let stop = CancellationToken::new();
     let failed = session
@@ -273,16 +261,16 @@ async fn stop_before_admission_is_inert_and_genuine_task_panic_closes_live_execu
     for result in [failed, denied] {
         assert!(matches!(
             result,
-            Err(CodingSessionError::Operation(OperationError::TaskFailed(_)))
+            Err(SessionError::Operation(OperationError::TaskFailed(_)))
         ));
     }
     assert!(matches!(
         preference,
-        Err(CodingSessionError::Operation(OperationError::TaskFailed(_)))
+        Err(SessionError::Operation(OperationError::TaskFailed(_)))
     ));
     assert!(matches!(
         shutdown,
-        Err(CodingSessionError::Operation(OperationError::TaskFailed(_)))
+        Err(SessionError::Operation(OperationError::TaskFailed(_)))
     ));
     assert_eq!(view.entries.len(), 1);
     assert!(matches!(
@@ -297,7 +285,7 @@ async fn unread_settlement_failure_survives_shutdown_and_blocks_silent_replaceme
         let root = std::env::temp_dir().join(format!("ion-owned-storage-{}", uuid::Uuid::now_v7()));
         fs::create_dir(&root).unwrap();
         let path = root.join("session.sqlite");
-        let session = Arc::new(CodingSession::create(&path, Some(&root)).unwrap());
+        let session = Arc::new(Session::create(&path, Some(&root)).unwrap());
         let fault = rusqlite::Connection::open(&path).unwrap();
         fault.execute_batch("CREATE TRIGGER refuse_settlement BEFORE INSERT ON entries WHEN json_extract(CAST(NEW.body AS TEXT),'$.kind')='user_shell_settled' BEGIN SELECT RAISE(ABORT,'result unavailable'); END;").unwrap();
         let effect = root.join("effect");
@@ -347,33 +335,30 @@ async fn unread_settlement_failure_survives_shutdown_and_blocks_silent_replaceme
         drop(session);
         fs::remove_dir_all(root).unwrap();
         assert!(
-            matches!(failure,Err(CodingSessionError::Operation(OperationError::UnreportedFailure(error))) if error.contains("result unavailable"))
+            matches!(failure,Err(SessionError::Operation(OperationError::UnreportedFailure(error))) if error.contains("result unavailable"))
         );
         if abandoned {
             assert!(matches!(
                 preference,
-                Err(CodingSessionError::Operation(
-                    OperationError::UnreportedFailure(_)
-                ))
+                Err(SessionError::Operation(OperationError::UnreportedFailure(
+                    _
+                )))
             ));
             assert!(matches!(
                 denied,
-                Err(CodingSessionError::Operation(
-                    OperationError::UnreportedFailure(_)
-                ))
+                Err(SessionError::Operation(OperationError::UnreportedFailure(
+                    _
+                )))
             ));
         } else {
-            assert!(matches!(
-                delivered,
-                Some(Err(CodingSessionError::Sqlite(_)))
-            ));
+            assert!(matches!(delivered, Some(Err(SessionError::Sqlite(_)))));
             assert!(matches!(
                 preference,
-                Err(CodingSessionError::Operation(OperationError::Closed))
+                Err(SessionError::Operation(OperationError::Closed))
             ));
             assert!(matches!(
                 denied,
-                Err(CodingSessionError::Operation(OperationError::Closed))
+                Err(SessionError::Operation(OperationError::Closed))
             ));
         }
         assert!(unchanged);
@@ -391,8 +376,7 @@ async fn idle_reservation_excludes_concurrent_admission_and_releases_on_preparat
     use futures_util::FutureExt;
     let root = std::env::temp_dir().join(format!("ion-owned-reservation-{}", uuid::Uuid::now_v7()));
     fs::create_dir(&root).unwrap();
-    let session =
-        Arc::new(CodingSession::create(root.join("session.sqlite"), Some(&root)).unwrap());
+    let session = Arc::new(Session::create(root.join("session.sqlite"), Some(&root)).unwrap());
     let idle = session.reserve_idle().unwrap();
     let contender = session.clone();
     let runtime = tokio::runtime::Handle::current();
@@ -422,13 +406,13 @@ async fn idle_reservation_excludes_concurrent_admission_and_releases_on_preparat
         .await;
     drop(session);
     fs::remove_dir_all(root).unwrap();
-    assert!(matches!(denied, Err(CodingSessionError::OperationActive)));
+    assert!(matches!(denied, Err(SessionError::OperationActive)));
     assert!(unchanged);
     assert_eq!(resumed.unwrap().value["stdout"], "settled");
 }
 
-fn shell_output() -> CodingToolOutput {
-    CodingToolOutput {
+fn shell_output() -> ToolOutput {
+    ToolOutput {
         value: serde_json::json!({"stdout":"settled","cancelled":true}),
         images: Vec::new(),
         is_error: false,
@@ -439,8 +423,7 @@ fn shell_output() -> CodingToolOutput {
 async fn shutdown_and_operation_waiters_share_actual_completion() {
     let root = std::env::temp_dir().join(format!("ion-owned-join-{}", uuid::Uuid::now_v7()));
     fs::create_dir(&root).unwrap();
-    let session =
-        Arc::new(CodingSession::create(root.join("session.sqlite"), Some(&root)).unwrap());
+    let session = Arc::new(Session::create(root.join("session.sqlite"), Some(&root)).unwrap());
     let (release, held) = tokio::sync::oneshot::channel();
     let stop = CancellationToken::new();
     let operation = session.run_user_shell(
@@ -467,7 +450,7 @@ async fn shutdown_and_operation_waiters_share_actual_completion() {
     closed.unwrap().unwrap();
     assert!(matches!(
         session.select_model(model()),
-        Err(CodingSessionError::Operation(OperationError::Closed))
+        Err(SessionError::Operation(OperationError::Closed))
     ));
     drop(session);
     fs::remove_dir_all(root).unwrap();
@@ -478,7 +461,7 @@ async fn abandoned_shutdown_keeps_admission_closed_and_started_work_holds_writer
     let root = std::env::temp_dir().join(format!("ion-owned-lease-{}", uuid::Uuid::now_v7()));
     fs::create_dir(&root).unwrap();
     let path = root.join("session.sqlite");
-    let session = Arc::new(CodingSession::create(&path, Some(&root)).unwrap());
+    let session = Arc::new(Session::create(&path, Some(&root)).unwrap());
     let (release, held) = tokio::sync::oneshot::channel();
     let started = Arc::new(tokio::sync::Semaphore::new(0));
     let ready = started.clone();
@@ -506,16 +489,13 @@ async fn abandoned_shutdown_keeps_admission_closed_and_started_work_holds_writer
         .await;
     let unchanged = session.entry_count().unwrap() == before;
     drop(session);
-    let held_lease = matches!(
-        CodingSession::open(&path),
-        Err(CodingSessionError::AlreadyOpen)
-    );
+    let held_lease = matches!(Session::open(&path), Err(SessionError::AlreadyOpen));
     release.send(()).unwrap();
     let reopened = tokio::time::timeout(Duration::from_secs(4), async {
         loop {
-            match CodingSession::open(&path) {
+            match Session::open(&path) {
                 Ok(session) => break session,
-                Err(CodingSessionError::AlreadyOpen) => {
+                Err(SessionError::AlreadyOpen) => {
                     tokio::time::sleep(Duration::from_millis(1)).await
                 }
                 Err(error) => panic!("{error}"),
@@ -530,7 +510,7 @@ async fn abandoned_shutdown_keeps_admission_closed_and_started_work_holds_writer
     assert!(incomplete.is_err());
     assert!(matches!(
         denied,
-        Err(CodingSessionError::Operation(OperationError::Closed))
+        Err(SessionError::Operation(OperationError::Closed))
     ));
     assert!(unchanged && held_lease);
     assert!(

@@ -4,7 +4,7 @@ use std::sync::Arc;
 use futures_util::future::join_all;
 use ion_ai::{BoxFuture, ImageContent, ToolCall};
 use ion_core::{
-    CodingToolOutput, ToolDefinition, ToolExecutor, ToolExposure, ToolInvocation, ToolPresentation,
+    ToolDefinition, ToolExecutor, ToolExposure, ToolInvocation, ToolOutput, ToolPresentation,
     ToolRegistration,
 };
 use rmcp::model::{
@@ -171,7 +171,7 @@ pub(super) fn registrations(servers: &[Arc<Server>]) -> Vec<ToolRegistration> {
 }
 
 impl ToolExecutor for ResourceExecutor {
-    fn execute<'a>(&'a self, invocation: ToolInvocation<'a>) -> BoxFuture<'a, CodingToolOutput> {
+    fn execute<'a>(&'a self, invocation: ToolInvocation<'a>) -> BoxFuture<'a, ToolOutput> {
         let call = invocation.call();
         let stop = invocation.stop().clone();
         Box::pin(async move {
@@ -200,7 +200,7 @@ async fn list(
     servers: &[Arc<Server>],
     stop: &CancellationToken,
     kind: Kind,
-) -> CodingToolOutput {
+) -> ToolOutput {
     let arguments: ListArguments = match serde_json::from_value(call.arguments.clone()) {
         Ok(arguments) => arguments,
         Err(error) => {
@@ -386,11 +386,7 @@ async fn list_all(
     ))
 }
 
-async fn read(
-    call: &ToolCall,
-    servers: &[Arc<Server>],
-    stop: &CancellationToken,
-) -> CodingToolOutput {
+async fn read(call: &ToolCall, servers: &[Arc<Server>], stop: &CancellationToken) -> ToolOutput {
     let arguments: ReadArguments = match serde_json::from_value(call.arguments.clone()) {
         Ok(arguments) => arguments,
         Err(error) => {
@@ -431,7 +427,7 @@ fn read_result(
     uri: &str,
     contents: Vec<ResourceContents>,
     cleanup_error: Option<String>,
-) -> CodingToolOutput {
+) -> ToolOutput {
     let conversion = match convert_read_contents(contents) {
         Ok(conversion) => conversion,
         Err(error) => return tool_error(format!("MCP server {server} {error}")),
@@ -602,7 +598,7 @@ fn preview(text: &str) -> String {
     text[..end].to_owned()
 }
 
-fn bound_read_result(value: Value, images: Vec<ImageContent>, failed: bool) -> CodingToolOutput {
+fn bound_read_result(value: Value, images: Vec<ImageContent>, failed: bool) -> ToolOutput {
     let encoded = match serde_json::to_vec(&value) {
         Ok(encoded) => encoded,
         Err(error) => {
@@ -610,7 +606,7 @@ fn bound_read_result(value: Value, images: Vec<ImageContent>, failed: bool) -> C
         }
     };
     if encoded.len() <= MAX_INLINE_RESULT_BYTES {
-        return CodingToolOutput {
+        return ToolOutput {
             value,
             images,
             is_error: failed,
@@ -632,7 +628,7 @@ fn bound_read_result(value: Value, images: Vec<ImageContent>, failed: bool) -> C
             ),
         ),
     };
-    CodingToolOutput {
+    ToolOutput {
         value: json!({
             "truncated": true,
             "original_bytes": encoded.len(),

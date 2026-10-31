@@ -1,7 +1,7 @@
 //! Bounded recursive content search with line-oriented snippets.
 use std::{io::Read, path::Path};
 
-use ion_core::CodingToolOutput as ToolOutput;
+use ion_core::ToolOutput;
 use regex::{Regex, RegexBuilder};
 use serde_json::{Value, json};
 use tokio_util::sync::CancellationToken;

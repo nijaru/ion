@@ -5,7 +5,7 @@ use std::{
 };
 
 use anyhow::{Context, Result, anyhow, ensure};
-use ion_core::CodingToolOutput;
+use ion_core::ToolOutput;
 use tokio::sync::{Mutex, RwLock};
 use tokio_util::sync::CancellationToken;
 
@@ -117,7 +117,7 @@ impl Server {
         }
     }
 
-    pub(super) fn attach_stderr(&self, output: &mut CodingToolOutput) {
+    pub(super) fn attach_stderr(&self, output: &mut ToolOutput) {
         if let Some(snapshot) = self.stderr.as_ref().and_then(|log| log.snapshot()) {
             output.value["server_stderr"][&self.name] = snapshot;
         }

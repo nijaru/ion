@@ -50,7 +50,7 @@ use std::{
 };
 
 use anyhow::{Context, Result, ensure};
-use ion_core::{AgentLimits, CodingAgent, PromptCacheWarmingPolicy, ToolSet};
+use ion_core::{Agent, AgentLimits, PromptCacheWarmingPolicy, ToolSet};
 
 pub use application::{
     Application, ApplicationOwner, ApplicationRuntime, CodingApplication, PreparedShell, UserShell,
@@ -198,7 +198,7 @@ impl Host {
 
     /// Bind a selected HTTP route to a complete caller-owned tool set. This
     /// adds no native tools, instructions, filesystem input or composition VM.
-    pub fn agent(&self, selected: &Selection, tools: Arc<ToolSet>) -> Result<Arc<CodingAgent>> {
+    pub fn agent(&self, selected: &Selection, tools: Arc<ToolSet>) -> Result<Arc<Agent>> {
         selected.require_access(&self.credentials)?;
         let resolver = self
             .credentials
@@ -211,15 +211,13 @@ impl Host {
             selected.context_window_tokens,
         )?);
         Ok(Arc::new(
-            CodingAgent::with_tool_set(service, tools, selected.identity()).with_limits(
-                AgentLimits {
-                    max_output_tokens: selected.max_output_tokens,
-                    context_window_tokens: selected.context_window_tokens,
-                    image_input: selected.image_input,
-                    prompt_cache_warming: prompt_cache_warming(selected),
-                    ..AgentLimits::default()
-                },
-            ),
+            Agent::with_tool_set(service, tools, selected.identity()).with_limits(AgentLimits {
+                max_output_tokens: selected.max_output_tokens,
+                context_window_tokens: selected.context_window_tokens,
+                image_input: selected.image_input,
+                prompt_cache_warming: prompt_cache_warming(selected),
+                ..AgentLimits::default()
+            }),
         ))
     }
 }
@@ -276,7 +274,7 @@ pub(crate) fn same_directory(left: &Path, right: &Path) -> bool {
 mod tests {
     use super::*;
     use ion_ai::ModelRef;
-    use ion_core::CodingSession;
+    use ion_core::Session;
     use tokio::{
         io::{AsyncReadExt, AsyncWriteExt},
         net::TcpListener,
@@ -423,8 +421,7 @@ mod tests {
                 ..route
             })
             .unwrap();
-        let session =
-            Arc::new(CodingSession::create(root.join("session.sqlite"), Some(&root)).unwrap());
+        let session = Arc::new(Session::create(root.join("session.sqlite"), Some(&root)).unwrap());
         session
             .select_model(ModelRef {
                 provider: "previous".into(),

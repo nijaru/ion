@@ -211,7 +211,7 @@ mod recovery;
 mod recovery_tests;
 #[cfg(test)]
 mod summary_recovery_tests;
-use recovery::TurnStart;
+use recovery::{TurnOrigin, TurnRun, TurnStart};
 
 /// One agent loop bound to a logical model and its immutable host contract.
 #[derive(Clone)]
@@ -455,9 +455,13 @@ impl Agent {
                 Some(key.clone()),
                 binding,
             )?;
-            let (turn, interrupted) = match admission {
+            let (turn, interrupted, input) = match admission {
                 TurnAdmission::Existing(receipt) => return Ok((receipt, None)),
-                TurnAdmission::New { turn, interrupted } => (turn, interrupted),
+                TurnAdmission::New {
+                    turn,
+                    interrupted,
+                    input,
+                } => (turn, interrupted, input),
             };
             let receipt = RequestReceipt {
                 session: session.id(),
@@ -477,8 +481,7 @@ impl Agent {
                             TurnStart {
                                 turn,
                                 interrupted,
-                                resumed: None,
-                                completion: Vec::new(),
+                                origin: TurnOrigin::User { input },
                                 catalog,
                             },
                             instructions,
@@ -555,8 +558,11 @@ impl Agent {
     {
         self.validate_submission(session, &input, &stop)?;
         let (binding, catalog) = self.admission_binding(session, &instructions)?;
-        let TurnAdmission::New { turn, interrupted } =
-            session.admit_turn(input, self.model.clone(), None, binding)?
+        let TurnAdmission::New {
+            turn,
+            interrupted,
+            input,
+        } = session.admit_turn(input, self.model.clone(), None, binding)?
         else {
             unreachable!("anonymous input cannot reconcile");
         };
@@ -565,8 +571,7 @@ impl Agent {
             TurnStart {
                 turn,
                 interrupted,
-                resumed: None,
-                completion: Vec::new(),
+                origin: TurnOrigin::User { input },
                 catalog,
             },
             instructions,
@@ -621,28 +626,43 @@ impl Agent {
     where
         F: FnMut(AgentEvent) + Send,
     {
-        if let Some(point) = start.resumed {
-            observe(AgentEvent::TurnResumed { point });
-        } else if !start.completion.is_empty() {
-            observe(AgentEvent::CompletionCommitted {
-                turn: start.turn,
-                notices: start.completion.clone(),
-                new_turn: true,
-            });
-        } else {
-            observe(AgentEvent::TurnAccepted { turn: start.turn });
-        }
+        let route_reason = match start.origin {
+            TurnOrigin::User { input } => {
+                observe(AgentEvent::TurnAccepted {
+                    turn: start.turn,
+                    input,
+                });
+                ModelRouteReason::UserRequest
+            }
+            TurnOrigin::Resumed { point } => {
+                observe(AgentEvent::TurnResumed { point });
+                ModelRouteReason::Recovery
+            }
+            TurnOrigin::Automated { notices } => {
+                observe(AgentEvent::CompletionCommitted {
+                    turn: start.turn,
+                    notices,
+                    new_turn: true,
+                });
+                ModelRouteReason::DelegationCompletion
+            }
+        };
         if start.interrupted > 0 {
             observe(AgentEvent::InterruptedCalls(start.interrupted));
         }
-        self.drive(session, start, instructions, &stop, steering, observe)
+        let run = TurnRun {
+            turn: start.turn,
+            catalog: start.catalog,
+            route_reason,
+        };
+        self.drive(session, run, instructions, &stop, steering, observe)
             .await
     }
 
     async fn drive<F, M: Send>(
         &self,
         session: &Arc<Session>,
-        start: TurnStart,
+        start: TurnRun,
         instructions: String,
         stop: &CancellationToken,
         steering: Option<&SteeringInbox<M>>,
@@ -660,13 +680,7 @@ impl Agent {
         let outcome = async {
             let mut length_recovery_attempted = false;
             let mut replay_rebased = false;
-            let mut route_reason = if start.resumed.is_some() {
-                ModelRouteReason::Recovery
-            } else if !start.completion.is_empty() {
-                ModelRouteReason::DelegationCompletion
-            } else {
-                ModelRouteReason::UserRequest
-            };
+            let mut route_reason = start.route_reason;
             loop {
                 // Keep a fast in-process model from starving terminal input and
                 // cancellation during a long tool sequence.
@@ -1082,8 +1096,10 @@ pub enum AgentEvent {
     TurnResumed {
         point: crate::RecoveryPoint,
     },
+    /// Exact normalized human input, published only after admission commits.
     TurnAccepted {
         turn: u64,
+        input: Message,
     },
     /// A durable automated context offer, never a human input acceptance.
     CompletionCommitted {
@@ -1255,7 +1271,7 @@ mod tests {
     use super::*;
     use crate::tool_result::ToolOutput;
     use crate::{
-        CodingSession, ForkPoint, ToolActivityKind, ToolDefinition, ToolExecutor, ToolExposure,
+        ForkPoint, Session, ToolActivityKind, ToolDefinition, ToolExecutor, ToolExposure,
         ToolPresentation, ToolRegistration,
     };
     use ion_ai::{
@@ -1437,8 +1453,7 @@ mod tests {
     async fn coding_requests_send_the_context_clamped_model_ceiling() {
         let root = std::env::temp_dir().join(format!("ion-budget-run-{}", uuid::Uuid::now_v7()));
         std::fs::create_dir(&root).unwrap();
-        let session =
-            Arc::new(CodingSession::create(root.join("session.sqlite"), Some(&root)).unwrap());
+        let session = Arc::new(Session::create(root.join("session.sqlite"), Some(&root)).unwrap());
         let scripts = Arc::new(ScriptedModelService::new([
             response(vec![Content::Text("first".into())]),
             response(vec![Content::Text("second".into())]),
@@ -1560,7 +1575,7 @@ mod tests {
         let root = std::env::temp_dir().join(format!("ion-admission-{}", uuid::Uuid::now_v7()));
         std::fs::create_dir(&root).unwrap();
         let path = root.join("session.sqlite");
-        let session = Arc::new(CodingSession::create(&path, Some(&root)).unwrap());
+        let session = Arc::new(Session::create(&path, Some(&root)).unwrap());
         let scripts = Arc::new(ScriptedModelService::new([
             response(vec![Content::Text("first answer".into())]),
             response(vec![Content::Text("must not issue".into())]),
@@ -1614,7 +1629,7 @@ mod tests {
                 .any(|entry| matches!(entry, crate::SessionEntry::EffectiveModelChanged { .. }))
         );
         drop(session);
-        let reopened = Arc::new(CodingSession::open(&path).unwrap());
+        let reopened = Arc::new(Session::open(&path).unwrap());
         assert_eq!(
             reopened.view().unwrap().last_effective_model,
             before.last_effective_model
@@ -1667,8 +1682,7 @@ mod tests {
         }
         let root = std::env::temp_dir().join(format!("ion-issued-{}", uuid::Uuid::now_v7()));
         std::fs::create_dir(&root).unwrap();
-        let session =
-            Arc::new(CodingSession::create(root.join("session.sqlite"), Some(&root)).unwrap());
+        let session = Arc::new(Session::create(root.join("session.sqlite"), Some(&root)).unwrap());
         let call = |id: &str| {
             Content::ToolCall(ToolCall {
                 id: id.into(),
@@ -1773,8 +1787,7 @@ mod tests {
     async fn streaming_cache_warm_replays_request_without_entering_model_context() {
         let root = std::env::temp_dir().join(format!("ion-cache-warm-{}", uuid::Uuid::now_v7()));
         std::fs::create_dir(&root).unwrap();
-        let session =
-            Arc::new(CodingSession::create(root.join("session.sqlite"), Some(&root)).unwrap());
+        let session = Arc::new(Session::create(root.join("session.sqlite"), Some(&root)).unwrap());
         let first = Script::Stream(vec![ModelStreamEvent::Completed(ModelResponse {
             message: Message {
                 role: Role::Assistant,
@@ -1904,7 +1917,7 @@ mod tests {
             ));
             std::fs::create_dir(&root).unwrap();
             let session =
-                Arc::new(CodingSession::create(root.join("session.sqlite"), Some(&root)).unwrap());
+                Arc::new(Session::create(root.join("session.sqlite"), Some(&root)).unwrap());
             let service = Arc::new(ScriptedModelService::new([
                 Script::Stream(vec![ModelStreamEvent::Completed(ModelResponse {
                     message: Message {
@@ -2083,8 +2096,7 @@ mod tests {
     async fn changed_signed_context_rebases_once_before_dispatch() {
         let root = std::env::temp_dir().join(format!("ion-rebase-{}", uuid::Uuid::now_v7()));
         std::fs::create_dir(&root).unwrap();
-        let session =
-            Arc::new(CodingSession::create(root.join("session.sqlite"), Some(&root)).unwrap());
+        let session = Arc::new(Session::create(root.join("session.sqlite"), Some(&root)).unwrap());
         let (prior, _) = session.begin_turn("first".into(), model()).unwrap();
         session
             .record_assistant(
@@ -2148,8 +2160,7 @@ mod tests {
         let root = std::env::temp_dir().join(format!("ion-replay-budget-{}", uuid::Uuid::now_v7()));
         std::fs::create_dir(&root).unwrap();
         std::fs::write(root.join("file.txt"), "content").unwrap();
-        let session =
-            Arc::new(CodingSession::create(root.join("session.sqlite"), Some(&root)).unwrap());
+        let session = Arc::new(Session::create(root.join("session.sqlite"), Some(&root)).unwrap());
         let content = vec![
             Content::Text("x".repeat(5_000)),
             Content::ToolCall(ToolCall {
@@ -2217,8 +2228,7 @@ mod tests {
         let root = std::env::temp_dir().join(format!("ion-tool-prefix-{}", uuid::Uuid::now_v7()));
         std::fs::create_dir(&root).unwrap();
         std::fs::write(root.join("file.txt"), "content").unwrap();
-        let session =
-            Arc::new(CodingSession::create(root.join("session.sqlite"), Some(&root)).unwrap());
+        let session = Arc::new(Session::create(root.join("session.sqlite"), Some(&root)).unwrap());
         let service = Arc::new(ScriptedModelService::new([
             Script::Stream(vec![ModelStreamEvent::Completed(ModelResponse {
                 message: Message {
@@ -2278,7 +2288,7 @@ mod tests {
         let root = std::env::temp_dir().join(format!("ion-agent-{}", uuid::Uuid::now_v7()));
         std::fs::create_dir(&root).unwrap();
         let path = root.join("session.sqlite");
-        let session = Arc::new(CodingSession::create(&path, Some(&root)).unwrap());
+        let session = Arc::new(Session::create(&path, Some(&root)).unwrap());
         let scripts = Arc::new(ScriptedModelService::new([
             response(vec![
                 Content::ToolCall(ToolCall {
@@ -2315,7 +2325,7 @@ mod tests {
         );
         assert_eq!(session.messages().unwrap().len(), 5);
         drop(session);
-        let reopened = Arc::new(CodingSession::open(&path).unwrap());
+        let reopened = Arc::new(Session::open(&path).unwrap());
         let scripts = Arc::new(ScriptedModelService::new([response(vec![Content::Text(
             "still here".into(),
         )])]));
@@ -2384,7 +2394,7 @@ mod tests {
                 std::env::temp_dir().join(format!("ion-deferred-tool-{}", uuid::Uuid::now_v7()));
             std::fs::create_dir(&root).unwrap();
             let path = root.join("session.sqlite");
-            let session = Arc::new(CodingSession::create(&path, Some(&root)).unwrap());
+            let session = Arc::new(Session::create(&path, Some(&root)).unwrap());
             let scripts = Arc::new(ScriptedModelService::new([
                 response(vec![Content::ToolCall(ToolCall {
                     id: "search".into(),
@@ -2475,7 +2485,7 @@ mod tests {
             )));
             drop(session);
 
-            let reopened = Arc::new(CodingSession::open(&path).unwrap());
+            let reopened = Arc::new(Session::open(&path).unwrap());
             assert_eq!(
                 reopened
                     .model_context()
@@ -2620,7 +2630,7 @@ mod tests {
                 std::env::temp_dir().join(format!("ion-result-views-{}", uuid::Uuid::now_v7()));
             std::fs::create_dir(&root).unwrap();
             let path = root.join("session.sqlite");
-            let session = Arc::new(CodingSession::create(&path, Some(&root)).unwrap());
+            let session = Arc::new(Session::create(&path, Some(&root)).unwrap());
             let scripts = Arc::new(ScriptedModelService::new([
                 response(vec![Content::ToolCall(ToolCall {
                     id: "report-call".into(),
@@ -2643,13 +2653,7 @@ mod tests {
                 max_request_bytes: 4_096,
                 ..AgentLimits::default()
             });
-            let live = Arc::new(Mutex::new(crate::LiveTranscript::with_user_input(
-                &Message {
-                    role: Role::User,
-                    content: vec![Content::Text("report".into())],
-                    provider_replay: None,
-                },
-            )));
+            let live = Arc::new(Mutex::new(crate::LiveTranscript::default()));
             let observed_live = live.clone();
             agent
                 .submit(
@@ -2741,7 +2745,7 @@ mod tests {
                 matches!(&view.display_messages()[2].content[0], Content::ToolResult(raw) if raw.result == output.value && raw.images == output.images)
             );
             drop(session);
-            let reopened = Arc::new(CodingSession::open(&path).unwrap());
+            let reopened = Arc::new(Session::open(&path).unwrap());
             assert_eq!(
                 crate::TranscriptProjection::from_session(&reopened.view().unwrap()),
                 saved
@@ -2853,7 +2857,7 @@ mod tests {
         let root = std::env::temp_dir().join(format!("ion-tool-image-{}", uuid::Uuid::now_v7()));
         std::fs::create_dir(&root).unwrap();
         let path = root.join("session.sqlite");
-        let session = Arc::new(CodingSession::create(&path, Some(&root)).unwrap());
+        let session = Arc::new(Session::create(&path, Some(&root)).unwrap());
         let call = || {
             response(vec![Content::ToolCall(ToolCall {
                 id: "picture-call".into(),
@@ -2885,7 +2889,7 @@ mod tests {
             matches!(&scripts.requests()[1].messages[2].content[0], Content::ToolResult(result) if result.images.len() == 1)
         );
         drop(session);
-        let reopened = Arc::new(CodingSession::open(&path).unwrap());
+        let reopened = Arc::new(Session::open(&path).unwrap());
         assert!(
             matches!(&reopened.messages().unwrap()[2].content[0], Content::ToolResult(result) if result.images.len() == 1)
         );
@@ -2912,8 +2916,7 @@ mod tests {
         let root = std::env::temp_dir().join(format!("ion-long-turn-{}", uuid::Uuid::now_v7()));
         std::fs::create_dir(&root).unwrap();
         std::fs::write(root.join("file.txt"), "content").unwrap();
-        let session =
-            Arc::new(CodingSession::create(root.join("session.sqlite"), Some(&root)).unwrap());
+        let session = Arc::new(Session::create(root.join("session.sqlite"), Some(&root)).unwrap());
         let mut scripts = (0..81)
             .map(|index| {
                 response(vec![Content::ToolCall(ToolCall {
@@ -2949,8 +2952,7 @@ mod tests {
         let root = std::env::temp_dir().join(format!("ion-fast-turn-{}", uuid::Uuid::now_v7()));
         std::fs::create_dir(&root).unwrap();
         std::fs::write(root.join("file.txt"), "content").unwrap();
-        let session =
-            Arc::new(CodingSession::create(root.join("session.sqlite"), Some(&root)).unwrap());
+        let session = Arc::new(Session::create(root.join("session.sqlite"), Some(&root)).unwrap());
         let scripts = (0..100)
             .map(|index| {
                 response(vec![Content::ToolCall(ToolCall {
@@ -2992,7 +2994,7 @@ mod tests {
             std::env::temp_dir().join(format!("ion-empty-response-{}", uuid::Uuid::now_v7()));
         std::fs::create_dir(&root).unwrap();
         let path = root.join("session.sqlite");
-        let session = Arc::new(CodingSession::create(&path, Some(&root)).unwrap());
+        let session = Arc::new(Session::create(&path, Some(&root)).unwrap());
         let service = Arc::new(ScriptedModelService::new([
             response(Vec::new()),
             response(vec![Content::Text(" \n".into())]),
@@ -3020,7 +3022,7 @@ mod tests {
                 .any(|message| message.role == Role::Assistant)
         );
         drop(session);
-        let reopened = Arc::new(CodingSession::open(&path).unwrap());
+        let reopened = Arc::new(Session::open(&path).unwrap());
         assert_eq!(
             agent
                 .submit(
@@ -3044,7 +3046,7 @@ mod tests {
             std::env::temp_dir().join(format!("ion-truncated-call-{}", uuid::Uuid::now_v7()));
         std::fs::create_dir(&root).unwrap();
         let path = root.join("session.sqlite");
-        let session = Arc::new(CodingSession::create(&path, Some(&root)).unwrap());
+        let session = Arc::new(Session::create(&path, Some(&root)).unwrap());
         let scripts = Arc::new(ScriptedModelService::new([
             Script::Stream(vec![ModelStreamEvent::Completed(ModelResponse {
                 message: Message {
@@ -3129,7 +3131,7 @@ mod tests {
             }
         )));
         drop(session);
-        let reopened = Arc::new(CodingSession::open(&path).unwrap());
+        let reopened = Arc::new(Session::open(&path).unwrap());
         assert!(reopened.view().unwrap().unfinished_turn.is_none());
         drop(reopened);
         std::fs::remove_dir_all(root).unwrap();
@@ -3145,7 +3147,7 @@ mod tests {
             let root = std::env::temp_dir().join(format!("ion-notice-{}", uuid::Uuid::now_v7()));
             std::fs::create_dir(&root).unwrap();
             let session =
-                Arc::new(CodingSession::create(root.join("session.sqlite"), Some(&root)).unwrap());
+                Arc::new(Session::create(root.join("session.sqlite"), Some(&root)).unwrap());
             let first = ModelResponse {
                 message: Message {
                     role: Role::Assistant,
@@ -3230,7 +3232,7 @@ mod tests {
         let root = std::env::temp_dir().join(format!("ion-idle-notice-{}", uuid::Uuid::now_v7()));
         std::fs::create_dir(&root).unwrap();
         let path = root.join("session.sqlite");
-        let session = Arc::new(CodingSession::create(&path, Some(&root)).unwrap());
+        let session = Arc::new(Session::create(&path, Some(&root)).unwrap());
         let scripts = Arc::new(ScriptedModelService::new([
             response(vec![Content::Text("root done".into())]),
             response(vec![Content::Text("wake done".into())]),
@@ -3299,7 +3301,7 @@ mod tests {
                 .any(|item| matches!(item, crate::TranscriptItem::Readiness { turn: 2, .. }))
         );
         drop(session);
-        let reopened = CodingSession::open(&path).unwrap();
+        let reopened = Session::open(&path).unwrap();
         assert!(reopened.view().unwrap().unfinished_turn.is_none());
         drop(reopened);
         std::fs::remove_dir_all(root).unwrap();
@@ -3311,7 +3313,7 @@ mod tests {
             std::env::temp_dir().join(format!("ion-steering-fault-{}", uuid::Uuid::now_v7()));
         std::fs::create_dir(&root).unwrap();
         let path = root.join("session.sqlite");
-        let session = Arc::new(CodingSession::create(&path, Some(&root)).unwrap());
+        let session = Arc::new(Session::create(&path, Some(&root)).unwrap());
         let scripts = Arc::new(ScriptedModelService::new([response(vec![Content::Text(
             "done".into(),
         )])]));
@@ -3356,7 +3358,7 @@ mod tests {
             std::env::temp_dir().join(format!("ion-steering-batch-{}", uuid::Uuid::now_v7()));
         std::fs::create_dir(&root).unwrap();
         let path = root.join("session.sqlite");
-        let session = Arc::new(CodingSession::create(&path, Some(&root)).unwrap());
+        let session = Arc::new(Session::create(&path, Some(&root)).unwrap());
         let scripts = Arc::new(ScriptedModelService::new([Script::Stream(vec![
             ModelStreamEvent::TextDelta("done".into()),
             ModelStreamEvent::Completed(ModelResponse {
@@ -3447,7 +3449,7 @@ mod tests {
             std::env::temp_dir().join(format!("ion-steering-final-{}", uuid::Uuid::now_v7()));
         std::fs::create_dir(&root).unwrap();
         let path = root.join("session.sqlite");
-        let session = Arc::new(CodingSession::create(&path, Some(&root)).unwrap());
+        let session = Arc::new(Session::create(&path, Some(&root)).unwrap());
         let first = ModelResponse {
             message: Message {
                 role: Role::Assistant,
@@ -3517,6 +3519,56 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn committed_acceptance_establishes_the_typed_live_root() {
+        let root = std::env::temp_dir().join(format!("ion-live-root-{}", uuid::Uuid::now_v7()));
+        std::fs::create_dir(&root).unwrap();
+        let session = Arc::new(Session::create(root.join("session.sqlite"), Some(&root)).unwrap());
+        let scripts = Arc::new(ScriptedModelService::new([response(vec![Content::Text(
+            "seen".into(),
+        )])]));
+        let agent = Agent::new(scripts, Arc::new(TestTools::new(&root)), model()).with_limits(
+            AgentLimits {
+                image_input: true,
+                ..AgentLimits::default()
+            },
+        );
+        let live = Arc::new(Mutex::new(crate::LiveTranscript::default()));
+        let observed = live.clone();
+        let committed = session.clone();
+        agent.submit_message(
+            session.clone(),
+            Message {
+                role: Role::User,
+                content: vec![
+                    Content::Text("literal\n\t\"quoted path\"".into()),
+                    Content::Image(tiny_image()),
+                ],
+                provider_replay: None,
+            },
+            "test".into(),
+            CancellationToken::new(),
+            move |event| {
+                if let AgentEvent::TurnAccepted { turn, input } = &event {
+                    let view = committed.view().unwrap();
+                    assert!(matches!(
+                        &view.entries[0],
+                        crate::SessionEntry::TurnStarted { turn: stored_turn, input: stored, .. }
+                            if stored_turn == turn && stored == input
+                    ));
+                    assert!(matches!(&input.content[1], Content::Image(_)));
+                }
+                observed.lock().unwrap().observe(&event);
+            },
+        ).await.unwrap();
+        assert_eq!(
+            live.lock().unwrap().projection(),
+            &crate::TranscriptProjection::from_session(&session.view().unwrap()),
+        );
+        drop(session);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[tokio::test]
     async fn committed_transcript_survives_steering_and_response_restart() {
         use crate::{LiveTranscript, SessionEntry, TranscriptItem, TranscriptProjection};
 
@@ -3524,7 +3576,7 @@ mod tests {
             std::env::temp_dir().join(format!("ion-transcript-restart-{}", uuid::Uuid::now_v7()));
         std::fs::create_dir(&root).unwrap();
         let path = root.join("session.sqlite");
-        let session = Arc::new(CodingSession::create(&path, Some(&root)).unwrap());
+        let session = Arc::new(Session::create(&path, Some(&root)).unwrap());
         let scripts = Arc::new(ScriptedModelService::new([
             response(vec![Content::Text("earlier work".into())]),
             Script::Stream(vec![
@@ -3568,8 +3620,7 @@ mod tests {
             .await
             .unwrap();
 
-        let input = user_text("start".into());
-        let live = Arc::new(Mutex::new(LiveTranscript::with_user_input(&input)));
+        let live = Arc::new(Mutex::new(LiveTranscript::default()));
         let steering = Arc::new(SteeringInbox::new(
             agent.limits(),
             crate::InputBudget::default(),
@@ -3645,7 +3696,7 @@ mod tests {
             })
             .unwrap();
         drop(session);
-        let reopened = Arc::new(CodingSession::open(&path).unwrap());
+        let reopened = Arc::new(Session::open(&path).unwrap());
         let durable = TranscriptProjection::from_session(&reopened.view().unwrap());
         let items = durable
             .items
@@ -3698,7 +3749,7 @@ mod tests {
             std::env::temp_dir().join(format!("ion-image-steering-{}", uuid::Uuid::now_v7()));
         std::fs::create_dir(&root).unwrap();
         let path = root.join("session.sqlite");
-        let session = Arc::new(CodingSession::create(&path, Some(&root)).unwrap());
+        let session = Arc::new(Session::create(&path, Some(&root)).unwrap());
         let image = tiny_image();
         let first = ModelResponse {
             message: Message {
@@ -3767,7 +3818,7 @@ mod tests {
         let view = session.view().unwrap();
         assert!(view.entries.iter().any(|entry| matches!(entry, crate::session::SessionEntry::Steering { input, .. } if input.content.iter().any(|part| matches!(part, Content::Image(_))))));
         drop(session);
-        let reopened = Arc::new(CodingSession::open(&path).unwrap());
+        let reopened = Arc::new(Session::open(&path).unwrap());
         assert!(reopened.context_messages().unwrap().iter().any(|message| {
             message
                 .content
@@ -3807,8 +3858,7 @@ mod tests {
         std::fs::create_dir(&root).unwrap();
         for assistant in [false, true] {
             let session =
-                CodingSession::create(root.join(format!("{assistant}.sqlite")), Some(&root))
-                    .unwrap();
+                Session::create(root.join(format!("{assistant}.sqlite")), Some(&root)).unwrap();
             let (turn, _) = session
                 .begin_turn_message(user_text("start".into()), model())
                 .unwrap();
@@ -3870,7 +3920,7 @@ mod tests {
         let root =
             std::env::temp_dir().join(format!("ion-image-steering-route-{}", uuid::Uuid::now_v7()));
         std::fs::create_dir(&root).unwrap();
-        let session = CodingSession::create(root.join("session.sqlite"), Some(&root)).unwrap();
+        let session = Session::create(root.join("session.sqlite"), Some(&root)).unwrap();
         let (turn, _) = session
             .begin_turn_message(user_text("start".into()), model())
             .unwrap();
@@ -3911,7 +3961,7 @@ mod tests {
         let root = std::env::temp_dir().join(format!("ion-steering-{}", uuid::Uuid::now_v7()));
         std::fs::create_dir(&root).unwrap();
         let path = root.join("session.sqlite");
-        let session = Arc::new(CodingSession::create(&path, Some(&root)).unwrap());
+        let session = Arc::new(Session::create(&path, Some(&root)).unwrap());
         let scripts = Arc::new(ScriptedModelService::new([
             response(vec![
                 Content::Text("Before the call".into()),
@@ -3931,9 +3981,7 @@ mod tests {
             agent.limits(),
             crate::InputBudget::default(),
         ));
-        let live = Arc::new(Mutex::new(LiveTranscript::with_user_input(&user_text(
-            "read file".into(),
-        ))));
+        let live = Arc::new(Mutex::new(LiveTranscript::default()));
         let observed_live = live.clone();
         let observed_steering = steering.clone();
         agent
@@ -4016,7 +4064,7 @@ mod tests {
             std::env::temp_dir().join(format!("ion-idle-preferences-{}", uuid::Uuid::now_v7()));
         std::fs::create_dir(&root).unwrap();
         let path = root.join("session.sqlite");
-        let session = Arc::new(CodingSession::create(&path, Some(&root)).unwrap());
+        let session = Arc::new(Session::create(&path, Some(&root)).unwrap());
         let scripts = Arc::new(ScriptedModelService::new([response(vec![Content::Text(
             "continued".into(),
         )])]));
@@ -4061,7 +4109,7 @@ mod tests {
         ));
         drop(session);
 
-        let session = Arc::new(CodingSession::open(&path).unwrap());
+        let session = Arc::new(Session::open(&path).unwrap());
         let before = session.view().unwrap();
         assert!(before.unfinished_user_shell.is_some());
         replacement.select_model(&session).unwrap();
@@ -4088,7 +4136,7 @@ mod tests {
         assert!(scripts.requests().is_empty());
         drop(session);
 
-        let session = Arc::new(CodingSession::open(&path).unwrap());
+        let session = Arc::new(Session::open(&path).unwrap());
         assert_eq!(
             session.view().unwrap().last_model,
             Some(replacement_model.clone())
@@ -4130,7 +4178,7 @@ mod tests {
         let root = std::env::temp_dir().join(format!("ion-compact-{}", uuid::Uuid::now_v7()));
         std::fs::create_dir(&root).unwrap();
         let path = root.join("session.sqlite");
-        let session = Arc::new(CodingSession::create(&path, Some(&root)).unwrap());
+        let session = Arc::new(Session::create(&path, Some(&root)).unwrap());
         let scripts = Arc::new(ScriptedModelService::new([
             response(vec![Content::Text("first result".into())]),
             response(vec![Content::Text("First task is complete.".into())]),
@@ -4177,7 +4225,7 @@ mod tests {
         );
         let provider_id = session.provider_session_id().to_string();
         drop(session);
-        let session = Arc::new(CodingSession::open(&path).unwrap());
+        let session = Arc::new(Session::open(&path).unwrap());
         assert_eq!(session.provider_session_id().to_string(), provider_id);
         assert_eq!(session.messages().unwrap().len(), 2);
         assert_eq!(session.context_messages().unwrap().len(), 1);
@@ -4215,8 +4263,7 @@ mod tests {
     async fn provider_overflow_rebuild_includes_steering_queued_during_compaction() {
         let root = std::env::temp_dir().join(format!("ion-overflow-{}", uuid::Uuid::now_v7()));
         std::fs::create_dir(&root).unwrap();
-        let session =
-            Arc::new(CodingSession::create(root.join("session.sqlite"), Some(&root)).unwrap());
+        let session = Arc::new(Session::create(root.join("session.sqlite"), Some(&root)).unwrap());
         let scripts = Arc::new(ScriptedModelService::new([
             response(vec![Content::Text("first result".into())]),
             Script::OpenError(ProviderError {
@@ -4279,8 +4326,7 @@ mod tests {
         let root =
             std::env::temp_dir().join(format!("ion-completed-overflow-{}", uuid::Uuid::now_v7()));
         std::fs::create_dir(&root).unwrap();
-        let session =
-            Arc::new(CodingSession::create(root.join("session.sqlite"), Some(&root)).unwrap());
+        let session = Arc::new(Session::create(root.join("session.sqlite"), Some(&root)).unwrap());
         let scripts = Arc::new(ScriptedModelService::new([
             response(vec![Content::Text("earlier result".into())]),
             Script::Stream(vec![ModelStreamEvent::Completed(ModelResponse {
@@ -4357,7 +4403,7 @@ mod tests {
                 std::env::temp_dir().join(format!("ion-output-overflow-{}", uuid::Uuid::now_v7()));
             std::fs::create_dir(&root).unwrap();
             let session =
-                Arc::new(CodingSession::create(root.join("session.sqlite"), Some(&root)).unwrap());
+                Arc::new(Session::create(root.join("session.sqlite"), Some(&root)).unwrap());
             let scripts = Arc::new(ScriptedModelService::new([
                 response(vec![Content::Text("earlier result".into())]),
                 Script::Stream(
@@ -4430,8 +4476,7 @@ mod tests {
     async fn short_length_stop_compacts_and_retries_without_dispatching_partial_call() {
         let root = std::env::temp_dir().join(format!("ion-short-length-{}", uuid::Uuid::now_v7()));
         std::fs::create_dir(&root).unwrap();
-        let session =
-            Arc::new(CodingSession::create(root.join("session.sqlite"), Some(&root)).unwrap());
+        let session = Arc::new(Session::create(root.join("session.sqlite"), Some(&root)).unwrap());
         let scripts = Arc::new(ScriptedModelService::new([
             response(vec![Content::Text("earlier work".into())]),
             Script::Stream(vec![
@@ -4553,7 +4598,7 @@ mod tests {
                 std::env::temp_dir().join(format!("ion-full-length-{}", uuid::Uuid::now_v7()));
             std::fs::create_dir(&root).unwrap();
             let session =
-                Arc::new(CodingSession::create(root.join("session.sqlite"), Some(&root)).unwrap());
+                Arc::new(Session::create(root.join("session.sqlite"), Some(&root)).unwrap());
             let model_service = Arc::new(FillBudget {
                 requests: Mutex::new(Vec::new()),
             });
@@ -4616,8 +4661,7 @@ mod tests {
     async fn invented_tool_returns_error_and_model_can_correct_it() {
         let root = std::env::temp_dir().join(format!("ion-invented-tool-{}", uuid::Uuid::now_v7()));
         std::fs::create_dir(&root).unwrap();
-        let session =
-            Arc::new(CodingSession::create(root.join("session.sqlite"), Some(&root)).unwrap());
+        let session = Arc::new(Session::create(root.join("session.sqlite"), Some(&root)).unwrap());
         let scripts = Arc::new(ScriptedModelService::new([
             response(vec![Content::ToolCall(ToolCall {
                 id: "invented".into(),
@@ -4685,7 +4729,7 @@ mod tests {
             let root = std::env::temp_dir().join(format!("ion-unstarted-{}", uuid::Uuid::now_v7()));
             std::fs::create_dir(&root).unwrap();
             let path = root.join("session.sqlite");
-            let session = Arc::new(CodingSession::create(&path, Some(&root)).unwrap());
+            let session = Arc::new(Session::create(&path, Some(&root)).unwrap());
             if closure_fault {
                 rusqlite::Connection::open(&path).unwrap().execute_batch("CREATE TRIGGER reject_close BEFORE INSERT ON entries WHEN json_extract(NEW.body,'$.kind')='turn_ended' BEGIN SELECT RAISE(ABORT,'closure unavailable'); END;").unwrap();
             }
@@ -4708,10 +4752,7 @@ mod tests {
             ]));
             let agent = Agent::new(scripts.clone(), tools.clone(), model());
             let stop = CancellationToken::new();
-            let live = crate::LiveTranscript::with_user_input(&Message::user_input(
-                "cancel".into(),
-                std::iter::empty(),
-            ));
+            let live = crate::LiveTranscript::default();
             let observations = Arc::new(Mutex::new((live, 0, 0)));
             let observed = observations.clone();
             let result = agent
@@ -4845,7 +4886,7 @@ mod tests {
                 );
             }
             drop(session);
-            let reopened = Arc::new(CodingSession::open(&path).unwrap());
+            let reopened = Arc::new(Session::open(&path).unwrap());
             assert_eq!(
                 crate::TranscriptProjection::from_session(&reopened.view().unwrap()),
                 saved
@@ -4900,8 +4941,7 @@ mod tests {
         let root =
             std::env::temp_dir().join(format!("ion-malformed-call-{}", uuid::Uuid::now_v7()));
         std::fs::create_dir(&root).unwrap();
-        let session =
-            Arc::new(CodingSession::create(root.join("session.sqlite"), Some(&root)).unwrap());
+        let session = Arc::new(Session::create(root.join("session.sqlite"), Some(&root)).unwrap());
         let calls = [
             ToolCall {
                 id: "raw".into(),
@@ -4987,7 +5027,7 @@ mod tests {
                 .join(format!("ion-summary-input-probe-{}", uuid::Uuid::now_v7()));
             std::fs::create_dir(&root).unwrap();
             let session =
-                Arc::new(CodingSession::create(root.join("session.sqlite"), Some(&root)).unwrap());
+                Arc::new(Session::create(root.join("session.sqlite"), Some(&root)).unwrap());
             let image = tiny_image();
             let (turn, _) = session
                 .begin_turn_message(
@@ -5065,7 +5105,7 @@ mod tests {
             let context_before_reopen = session.context_messages().unwrap();
             let path = session.path().to_path_buf();
             drop(session);
-            let reopened = Arc::new(CodingSession::open(&path).unwrap());
+            let reopened = Arc::new(Session::open(&path).unwrap());
             assert_eq!(reopened.context_messages().unwrap(), context_before_reopen);
             drop(reopened);
             std::fs::remove_dir_all(root).unwrap();
@@ -5076,8 +5116,7 @@ mod tests {
     async fn failed_summary_does_not_change_the_context_projection() {
         let root = std::env::temp_dir().join(format!("ion-summary-fail-{}", uuid::Uuid::now_v7()));
         std::fs::create_dir(&root).unwrap();
-        let session =
-            Arc::new(CodingSession::create(root.join("session.sqlite"), Some(&root)).unwrap());
+        let session = Arc::new(Session::create(root.join("session.sqlite"), Some(&root)).unwrap());
         let (turn, _) = session.begin_turn("task".into(), model()).unwrap();
         session
             .record_assistant(
@@ -5173,7 +5212,7 @@ mod tests {
                 std::env::temp_dir().join(format!("ion-summary-invalid-{}", uuid::Uuid::now_v7()));
             std::fs::create_dir(&root).unwrap();
             let session =
-                Arc::new(CodingSession::create(root.join("session.sqlite"), Some(&root)).unwrap());
+                Arc::new(Session::create(root.join("session.sqlite"), Some(&root)).unwrap());
             let (turn, _) = session.begin_turn("task".into(), model()).unwrap();
             session
                 .record_assistant(
@@ -5255,8 +5294,7 @@ mod tests {
         let root =
             std::env::temp_dir().join(format!("ion-summary-cancel-{}", uuid::Uuid::now_v7()));
         std::fs::create_dir(&root).unwrap();
-        let session =
-            Arc::new(CodingSession::create(root.join("session.sqlite"), Some(&root)).unwrap());
+        let session = Arc::new(Session::create(root.join("session.sqlite"), Some(&root)).unwrap());
         let (turn, _) = session.begin_turn("task".into(), model()).unwrap();
         session
             .record_assistant(
@@ -5292,8 +5330,7 @@ mod tests {
     async fn request_pressure_rebuild_includes_steering_queued_during_compaction() {
         let root = std::env::temp_dir().join(format!("ion-pressure-{}", uuid::Uuid::now_v7()));
         std::fs::create_dir(&root).unwrap();
-        let session =
-            Arc::new(CodingSession::create(root.join("session.sqlite"), Some(&root)).unwrap());
+        let session = Arc::new(Session::create(root.join("session.sqlite"), Some(&root)).unwrap());
         // Two settled exchanges leave a smaller valid summary cut. A single
         // oversized exchange need not fit once historical framing is charged.
         for task in ["first", "second"] {
@@ -5363,7 +5400,7 @@ mod tests {
                 std::env::temp_dir().join(format!("ion-summary-capacity-{}", uuid::Uuid::now_v7()));
             std::fs::create_dir(&root).unwrap();
             let path = root.join("session.sqlite");
-            let session = Arc::new(CodingSession::create(&path, Some(&root)).unwrap());
+            let session = Arc::new(Session::create(&path, Some(&root)).unwrap());
             let seed_service =
                 Arc::new(ScriptedModelService::new(lengths.iter().map(|&length| {
                     response(vec![Content::Text("b".repeat(length))])
@@ -5412,7 +5449,7 @@ mod tests {
             let cuts = cuts.lock().unwrap();
             let after = session.view().unwrap().entries;
             drop(session);
-            let reopened = Arc::new(CodingSession::open(&path).unwrap());
+            let reopened = Arc::new(Session::open(&path).unwrap());
             let reopened_entries = reopened.view().unwrap().entries;
             drop(reopened);
             std::fs::remove_dir_all(root).unwrap();
@@ -5452,7 +5489,7 @@ mod tests {
         let root = std::env::temp_dir().join(format!("ion-long-context-{}", uuid::Uuid::now_v7()));
         std::fs::create_dir(&root).unwrap();
         let path = root.join("session.sqlite");
-        let session = Arc::new(CodingSession::create(&path, Some(&root)).unwrap());
+        let session = Arc::new(Session::create(&path, Some(&root)).unwrap());
         for index in 0..30 {
             let (turn, _) = session
                 .begin_turn(format!("task {index}: {}", "a".repeat(240)), model())
@@ -5528,7 +5565,7 @@ mod tests {
                     .any(|part| matches!(part, Content::Text(text) if text.contains(focus)))
         }));
         drop(session);
-        let reopened = Arc::new(CodingSession::open(&path).unwrap());
+        let reopened = Arc::new(Session::open(&path).unwrap());
         assert_eq!(
             reopened.view().unwrap().compacted_through,
             cuts.last().copied()
@@ -5545,8 +5582,7 @@ mod tests {
     async fn oversized_input_is_rejected_before_turn_admission() {
         let root = std::env::temp_dir().join(format!("ion-input-bound-{}", uuid::Uuid::now_v7()));
         std::fs::create_dir(&root).unwrap();
-        let session =
-            Arc::new(CodingSession::create(root.join("session.sqlite"), Some(&root)).unwrap());
+        let session = Arc::new(Session::create(root.join("session.sqlite"), Some(&root)).unwrap());
         let scripts = Arc::new(ScriptedModelService::new([response(vec![Content::Text(
             "small input accepted".into(),
         )])]));
@@ -5603,8 +5639,7 @@ mod tests {
         let root =
             std::env::temp_dir().join(format!("ion-atomic-context-{}", uuid::Uuid::now_v7()));
         std::fs::create_dir(&root).unwrap();
-        let session =
-            Arc::new(CodingSession::create(root.join("session.sqlite"), Some(&root)).unwrap());
+        let session = Arc::new(Session::create(root.join("session.sqlite"), Some(&root)).unwrap());
         let (turn, _) = session.begin_turn("x".repeat(4_000), model()).unwrap();
         session
             .record_assistant(
@@ -5641,8 +5676,7 @@ mod tests {
     async fn visible_partial_output_is_not_silently_replayed_after_overflow() {
         let root = std::env::temp_dir().join(format!("ion-partial-{}", uuid::Uuid::now_v7()));
         std::fs::create_dir(&root).unwrap();
-        let session =
-            Arc::new(CodingSession::create(root.join("session.sqlite"), Some(&root)).unwrap());
+        let session = Arc::new(Session::create(root.join("session.sqlite"), Some(&root)).unwrap());
         let scripts = Arc::new(ScriptedModelService::new([
             response(vec![Content::Text("first result".into())]),
             Script::Stream(vec![
@@ -5694,7 +5728,7 @@ mod tests {
             std::env::temp_dir().join(format!("ion-agent-interrupt-{}", uuid::Uuid::now_v7()));
         std::fs::create_dir(&root).unwrap();
         let path = root.join("session.sqlite");
-        let session = Arc::new(CodingSession::create(&path, Some(&root)).unwrap());
+        let session = Arc::new(Session::create(&path, Some(&root)).unwrap());
         let (turn, _) = session.begin_turn("first".into(), model()).unwrap();
         session
             .record_assistant(
@@ -5714,7 +5748,7 @@ mod tests {
             )
             .unwrap();
         drop(session);
-        let reopened = Arc::new(CodingSession::open(&path).unwrap());
+        let reopened = Arc::new(Session::open(&path).unwrap());
         let scripts = Arc::new(ScriptedModelService::new([response(vec![Content::Text(
             "inspected".into(),
         )])]));

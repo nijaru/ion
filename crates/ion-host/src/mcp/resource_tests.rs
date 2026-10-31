@@ -1,7 +1,7 @@
 use std::{fs, os::unix::fs::PermissionsExt, sync::Arc};
 
 use ion_ai::ToolCall;
-use ion_core::{CodingToolSource, ToolSet};
+use ion_core::{ToolSet, ToolSource};
 use serde_json::{Value, json};
 use tokio_util::sync::CancellationToken;
 
@@ -22,7 +22,7 @@ async fn execute(
     tools: &ion_core::ToolCatalog,
     name: &str,
     arguments: Value,
-) -> ion_core::CodingToolOutput {
+) -> ion_core::ToolOutput {
     tools
         .execute_untracked(&call(name, arguments), CancellationToken::new())
         .await
@@ -149,7 +149,7 @@ async fn resources_list_templates_read_and_capability_gating() {
         McpTools::connect(&config, &root, tokio_util::sync::CancellationToken::new()).await;
     assert!(startup.diagnostics.is_empty(), "{:?}", startup.diagnostics);
     let source = startup.tools.unwrap();
-    let tools = ToolSet::new([source.clone() as Arc<dyn CodingToolSource>]).snapshot();
+    let tools = ToolSet::new([source.clone() as Arc<dyn ToolSource>]).snapshot();
     let names = tools
         .specs()
         .into_iter()
@@ -374,7 +374,7 @@ for line in sys.stdin:
         McpTools::connect(&config, &root, tokio_util::sync::CancellationToken::new()).await;
     assert!(startup.diagnostics.is_empty(), "{:?}", startup.diagnostics);
     let source = startup.tools.unwrap();
-    let tools = ToolSet::new([source.clone() as Arc<dyn CodingToolSource>]).snapshot();
+    let tools = ToolSet::new([source.clone() as Arc<dyn ToolSource>]).snapshot();
     let names = tools
         .specs()
         .into_iter()
@@ -434,7 +434,7 @@ for line in sys.stdin:
         McpTools::connect(&config, &root, tokio_util::sync::CancellationToken::new()).await;
     assert!(startup.diagnostics.is_empty(), "{:?}", startup.diagnostics);
     let source = startup.tools.unwrap();
-    let tools = ToolSet::new([source.clone() as Arc<dyn CodingToolSource>]).snapshot();
+    let tools = ToolSet::new([source.clone() as Arc<dyn ToolSource>]).snapshot();
     let stop = CancellationToken::new();
     let call = call(
         "read_mcp_resource",
@@ -508,7 +508,7 @@ for line in sys.stdin:
         McpTools::connect(&config, &root, tokio_util::sync::CancellationToken::new()).await;
     assert!(startup.diagnostics.is_empty(), "{:?}", startup.diagnostics);
     let source = startup.tools.unwrap();
-    let tools = ToolSet::new([source.clone() as Arc<dyn CodingToolSource>]).snapshot();
+    let tools = ToolSet::new([source.clone() as Arc<dyn ToolSource>]).snapshot();
     let listed = execute(&tools, "list_mcp_resources", json!({})).await;
     assert!(!listed.is_error, "{}", listed.value);
     assert_eq!(listed.value["resources"][0]["server"], "resources-only");
@@ -549,7 +549,7 @@ async fn deferred_exposure_requires_discovery_and_hidden_exposure_removes_capabi
         McpTools::connect(&config, &root, tokio_util::sync::CancellationToken::new()).await;
     assert!(startup.diagnostics.is_empty(), "{:?}", startup.diagnostics);
     let source = startup.tools.unwrap();
-    let tool_set = ToolSet::new([source.clone() as Arc<dyn CodingToolSource>]);
+    let tool_set = ToolSet::new([source.clone() as Arc<dyn ToolSource>]);
     let snapshot = tool_set.snapshot();
     let deferred_name = snapshot
         .specs()
@@ -590,7 +590,7 @@ async fn deferred_exposure_requires_discovery_and_hidden_exposure_removes_capabi
         McpTools::connect(&config, &root, tokio_util::sync::CancellationToken::new()).await;
     assert!(startup.diagnostics.is_empty(), "{:?}", startup.diagnostics);
     let source = startup.tools.unwrap();
-    let snapshot = ToolSet::new([source.clone() as Arc<dyn CodingToolSource>]).snapshot();
+    let snapshot = ToolSet::new([source.clone() as Arc<dyn ToolSource>]).snapshot();
     let names = snapshot
         .specs()
         .into_iter()

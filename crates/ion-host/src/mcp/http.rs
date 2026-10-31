@@ -817,7 +817,7 @@ mod tests {
         let tools = startup
             .tools
             .expect("retain the admitted unavailable server");
-        assert!(ion_core::CodingToolSource::registrations(tools.clone()).is_empty());
+        assert!(ion_core::ToolSource::registrations(tools.clone()).is_empty());
         tools.shutdown().await.unwrap();
         assert_eq!(startup.diagnostics.len(), 1, "{:?}", startup.diagnostics);
         assert!(

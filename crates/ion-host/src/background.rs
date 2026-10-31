@@ -17,8 +17,8 @@ use crate::{
 };
 use anyhow::{Result, ensure};
 use ion_core::{
-    BackgroundJob, BackgroundSlot, BackgroundStartError, CodingSession, CodingSessionError,
-    DelegationReceipt, Operation,
+    BackgroundJob, BackgroundSlot, BackgroundStartError, DelegationReceipt, Operation, Session,
+    SessionError,
 };
 use serde::Serialize;
 use tokio::sync::Notify;
@@ -78,9 +78,9 @@ struct State {
 struct Run {
     // Latest confirmed transfer or settlement; joining errors cannot erase it.
     receipt: DelegationReceipt,
-    parent: Weak<CodingSession>,
-    operation: Option<Operation<DelegationReceipt, CodingSessionError>>,
-    result: Option<Result<(), CodingSessionError>>,
+    parent: Weak<Session>,
+    operation: Option<Operation<DelegationReceipt, SessionError>>,
+    result: Option<Result<(), SessionError>>,
     steering: Option<ChildSteering>,
     progress: Option<ChildProgress>,
     completion: Option<Arc<ion_core::CompletionPermit>>,
@@ -137,7 +137,7 @@ pub struct BackgroundRunSnapshot {
 /// original typed cause; releasing custody must not discard returned guidance.
 pub struct BackgroundRunFailure {
     pub run: BackgroundRunSnapshot,
-    pub error: CodingSessionError,
+    pub error: SessionError,
 }
 impl std::fmt::Debug for BackgroundRunFailure {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -239,7 +239,7 @@ impl BackgroundOwner {
     }
     /// Sticky after acknowledgement. Joining enriches an early task-loss signal
     /// with original operation errors; neither a reader nor a tool can clear it.
-    pub fn check(&self) -> Result<(), CodingSessionError> {
+    pub fn check(&self) -> Result<(), SessionError> {
         if !self.shared.failed.load(Ordering::SeqCst) {
             return Ok(());
         }
@@ -249,7 +249,7 @@ impl BackgroundOwner {
         } else {
             state.failures.join("; ")
         };
-        Err(CodingSessionError::DelegationInfrastructure(message))
+        Err(SessionError::DelegationInfrastructure(message))
     }
     /// Privileged whole custody view; applications authorize/project disclosure.
     pub fn snapshot(&self) -> BackgroundSnapshot {
@@ -323,7 +323,7 @@ impl BackgroundOwner {
     }
     /// Reuse an actual retained parent while a transferred task holds its writer.
     /// Weak handles do not let unread results pin a writer after settlement.
-    pub(crate) fn parent(&self, path: &Path) -> Option<Arc<CodingSession>> {
+    pub(crate) fn parent(&self, path: &Path) -> Option<Arc<Session>> {
         self.shared
             .lock()
             .runs
@@ -380,10 +380,7 @@ impl BackgroundOwner {
                                     run.receipt = receipt;
                                     Ok(())
                                 }
-                                Err(CodingSessionError::DelegationSettledFailure {
-                                    receipt,
-                                    error,
-                                }) => {
+                                Err(SessionError::DelegationSettledFailure { receipt, error }) => {
                                     run.receipt = *receipt;
                                     Err(*error)
                                 }
@@ -538,7 +535,7 @@ impl BackgroundOwner {
     }
     /// Natural completion without stopping runs. Interrupted waits retain all
     /// operations/results; the application must still explicitly close and join.
-    pub async fn drain(&self) -> Result<(), CodingSessionError> {
+    pub async fn drain(&self) -> Result<(), SessionError> {
         loop {
             let revision = self.revision();
             if !self.has_work() {
@@ -547,7 +544,7 @@ impl BackgroundOwner {
             self.changed(revision).await;
         }
     }
-    pub async fn join_shutdown(&self) -> Result<(), CodingSessionError> {
+    pub async fn join_shutdown(&self) -> Result<(), SessionError> {
         self.request_shutdown();
         self.drain().await
     }
@@ -685,7 +682,7 @@ impl BackgroundSlot for BackgroundDestination {
         let mut state = self.shared.lock();
         if !self.reserved {
             return Err(BackgroundStartError::Infrastructure(
-                CodingSessionError::InvalidHistory,
+                SessionError::InvalidHistory,
             ));
         }
         if self.shared.closed.load(Ordering::SeqCst) {

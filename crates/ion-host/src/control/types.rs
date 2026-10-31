@@ -2,10 +2,7 @@
 use crate::image_input::ImageSource;
 use anyhow::Result;
 use ion_ai::Message;
-use ion_core::{
-    CodingAgentError, CodingAgentEvent as AgentEvent, CodingSessionError, CodingToolOutput,
-    InputReservation,
-};
+use ion_core::{AgentError, AgentEvent, InputReservation, SessionError, ToolOutput};
 use serde::Serialize;
 use std::sync::Arc;
 use tokio::sync::broadcast;
@@ -175,9 +172,9 @@ pub struct AcceptedMetadata<M> {
 }
 
 pub enum OperationOutcome {
-    Turn(Result<String, CodingAgentError>),
-    Compact(Result<bool, CodingAgentError>),
-    Shell(Result<CodingToolOutput, CodingSessionError>),
+    Turn(Result<String, AgentError>),
+    Compact(Result<bool, AgentError>),
+    Shell(Result<ToolOutput, SessionError>),
 }
 impl OperationOutcome {
     pub(super) fn failed(&self) -> bool {
@@ -361,5 +358,5 @@ impl ControlObserver {
 pub struct ShutdownReport<M> {
     pub updates: Vec<ControlUpdate<M>>,
     /// Independent cleanup failures never replace primary operation failures.
-    pub cleanup_errors: Vec<CodingSessionError>,
+    pub cleanup_errors: Vec<SessionError>,
 }

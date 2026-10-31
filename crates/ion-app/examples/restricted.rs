@@ -15,8 +15,8 @@ use ion_ai::{
     Role, Script, ScriptedModelService, ToolCall, ToolSpec, Usage,
 };
 use ion_core::{
-    AuthorityScope, CodingAgent, CodingSession, CodingToolOutput, CodingToolSource, RequestKey,
-    SessionEntry, ToolDefinition, ToolExecutor, ToolOutcome, ToolRegistration, TurnEndReason,
+    Agent, AuthorityScope, RequestKey, Session, SessionEntry, ToolDefinition, ToolExecutor,
+    ToolOutcome, ToolOutput, ToolRegistration, ToolSource, TurnEndReason,
 };
 use ion_host::{
     Application, ApplicationRuntime, ControlUpdate, OperationOutcome, RequestAdmission, Resources,
@@ -33,7 +33,7 @@ struct CharacterCounter {
     pause_after_effect: bool,
     origins: Mutex<Vec<ion_core::ToolOrigin>>,
 }
-impl CodingToolSource for CharacterCounter {
+impl ToolSource for CharacterCounter {
     fn registrations(self: Arc<Self>) -> Vec<ToolRegistration> {
         vec![ToolRegistration::new(
             ToolDefinition::external(ToolSpec {
@@ -49,7 +49,7 @@ impl ToolExecutor for CharacterCounter {
     fn execute<'a>(
         &'a self,
         invocation: ion_core::ToolInvocation<'a>,
-    ) -> BoxFuture<'a, CodingToolOutput> {
+    ) -> BoxFuture<'a, ToolOutput> {
         let call = invocation.call();
         let stop = invocation.stop().clone();
         let origin = invocation
@@ -66,13 +66,13 @@ impl ToolExecutor for CharacterCounter {
                             .expect("qualification marker");
                         stop.cancelled().await;
                     }
-                    CodingToolOutput {
+                    ToolOutput {
                         value: json!(text.chars().count()),
                         images: Vec::new(),
                         is_error: false,
                     }
                 }
-                None => CodingToolOutput {
+                None => ToolOutput {
                     value: json!("text must be a string"),
                     images: Vec::new(),
                     is_error: true,
@@ -106,10 +106,9 @@ impl Application for CounterApplication {
             "unknown model"
         );
         Ok(ApplicationRuntime::new(Arc::new(
-            CodingAgent::new(self.service.clone(), self.counter.clone(), identity)
-                .with_recovery_scope(AuthorityScope::new(
-                    "counter-app/principal/environment/routes-v1",
-                )?),
+            Agent::new(self.service.clone(), self.counter.clone(), identity).with_recovery_scope(
+                AuthorityScope::new("counter-app/principal/environment/routes-v1")?,
+            ),
         )))
     }
 }
@@ -161,9 +160,9 @@ async fn main() -> Result<()> {
     });
     let catalog = SessionCatalog::new(root.clone(), None);
     let session = Arc::new(if resume {
-        CodingSession::open(catalog.latest()?)?
+        Session::open(catalog.latest()?)?
     } else {
-        CodingSession::create(catalog.new_path()?, None)?
+        Session::create(catalog.new_path()?, None)?
     });
     let path = session.path().to_owned();
     let session_id = session.id();
@@ -255,7 +254,7 @@ async fn main() -> Result<()> {
     }
     result?;
     drop(control);
-    let reopened = Arc::new(CodingSession::open(path)?);
+    let reopened = Arc::new(Session::open(path)?);
     ensure!(reopened.id() == session_id, "logical identity changed");
     let mut control = SessionSetup::new(
         reopened,

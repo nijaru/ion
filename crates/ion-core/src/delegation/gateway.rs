@@ -6,7 +6,7 @@ use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 
 use super::*;
-use crate::{CodingSession, CodingSessionError as SessionError};
+use crate::{Session, SessionError};
 
 pub(crate) struct Gateway {
     site: DelegationSite,
@@ -33,7 +33,7 @@ impl Gateway {
 
     pub(crate) async fn run<T: Send>(
         mut self,
-        parent: &Arc<CodingSession>,
+        parent: &Arc<Session>,
         stop: &CancellationToken,
         tool: impl Future<Output = T> + Send,
     ) -> Result<T, SessionError> {

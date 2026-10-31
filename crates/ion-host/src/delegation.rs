@@ -4,8 +4,8 @@ use std::{path::PathBuf, sync::Arc, time::Duration};
 use anyhow::{Result, ensure};
 use ion_ai::{Message, ModelRef, Reasoning};
 use ion_core::{
-    AuthorityScope, CodingAgentError, CodingSessionError, DelegationCompletion, DelegationFailure,
-    DelegationSpec, DelegationTask,
+    AgentError, AuthorityScope, DelegationCompletion, DelegationFailure, DelegationSpec,
+    DelegationTask, SessionError,
 };
 
 use crate::{Application, ControlUpdate, SessionCatalog, SessionSetup};
@@ -237,12 +237,12 @@ impl SessionDelegation {
     }
 }
 
-fn infrastructure(error: &CodingAgentError) -> bool {
+fn infrastructure(error: &AgentError) -> bool {
     matches!(
         error,
-        CodingAgentError::Session(_)
-            | CodingAgentError::ObserverPanicked
-            | CodingAgentError::ObserverSettlementFailed(_)
+        AgentError::Session(_)
+            | AgentError::ObserverPanicked
+            | AgentError::ObserverSettlementFailed(_)
     )
 }
 
@@ -251,9 +251,9 @@ fn admission_failure(error: anyhow::Error) -> DelegationFailure {
     // put the Session fault deeper in the causal chain. Neither form may turn
     // an infrastructure failure into a catchable tool refusal.
     if error.chain().any(|cause| {
-        cause.is::<CodingSessionError>()
+        cause.is::<SessionError>()
             || cause
-                .downcast_ref::<CodingAgentError>()
+                .downcast_ref::<AgentError>()
                 .is_some_and(infrastructure)
     }) {
         DelegationFailure::Infrastructure(error.to_string())
@@ -287,12 +287,10 @@ mod tests {
     #[test]
     fn session_faults_in_causal_chains_remain_infrastructure_failures() {
         for error in [
-            anyhow::Error::new(CodingSessionError::InvalidHistory).context("receipt lookup"),
-            anyhow::Error::new(CodingAgentError::Session(
-                CodingSessionError::InvalidHistory,
-            )),
+            anyhow::Error::new(SessionError::InvalidHistory).context("receipt lookup"),
+            anyhow::Error::new(AgentError::Session(SessionError::InvalidHistory)),
             anyhow::Error::new(ion_core::BackgroundStartError::Infrastructure(
-                CodingSessionError::InvalidHistory,
+                SessionError::InvalidHistory,
             ))
             .context("install child"),
         ] {
@@ -301,12 +299,12 @@ mod tests {
                 DelegationFailure::Infrastructure(_)
             ));
         }
-        let message = CodingSessionError::InvalidHistory.to_string();
+        let message = SessionError::InvalidHistory.to_string();
         for error in [
             anyhow::Error::msg(message.clone()),
             anyhow::Error::new(ion_core::BackgroundStartError::Refused(message))
                 .context("install child"),
-            anyhow::Error::new(CodingAgentError::IncompleteModelResponse).context("child request"),
+            anyhow::Error::new(AgentError::IncompleteModelResponse).context("child request"),
         ] {
             assert!(matches!(
                 admission_failure(error),

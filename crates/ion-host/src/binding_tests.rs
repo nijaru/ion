@@ -15,7 +15,7 @@ fn route(model: &str) -> SavedSelection {
         image_input: false,
     }
 }
-fn control(host: Arc<Host>, session: Arc<CodingSession>, selected: Selection) -> SessionControl {
+fn control(host: Arc<Host>, session: Arc<Session>, selected: Selection) -> SessionControl {
     let resources = host.resources(session.cwd().unwrap()).unwrap();
     crate::CodingApplication::new(host, None)
         .setup(session, selected, None, None, resources)
@@ -46,7 +46,7 @@ async fn explicit_service_environment_skips_user_settings_and_serves_named_comma
         .unwrap(),
     );
     let session = Arc::new(
-        CodingSession::create(
+        Session::create(
             host.sessions(Some(cwd.clone())).new_path().unwrap(),
             Some(&cwd),
         )
@@ -90,7 +90,7 @@ async fn navigation_preflights_and_commits_before_publishing_resources_or_prefer
     let host = Arc::new(Host::new(root.join("config"), root.join("state")));
     let selected = host.models().save_default(&route("one")).unwrap();
     let path = host.sessions(Some(cwd.clone())).new_path().unwrap();
-    let session = Arc::new(CodingSession::create(&path, Some(&cwd)).unwrap());
+    let session = Arc::new(Session::create(&path, Some(&cwd)).unwrap());
     let mut binding = control(host, session.clone(), selected);
     binding.select_reasoning(ion_ai::Reasoning::High).unwrap();
     let before = session.context_position().unwrap();
@@ -133,7 +133,7 @@ async fn direct_shell_preflights_before_recovery_or_admission() {
     let host = Arc::new(Host::new(root.join("config"), root.join("state")));
     let selected = host.models().save_default(&route("one")).unwrap();
     let path = host.sessions(Some(cwd.clone())).new_path().unwrap();
-    let session = Arc::new(CodingSession::create(&path, Some(&cwd)).unwrap());
+    let session = Arc::new(Session::create(&path, Some(&cwd)).unwrap());
     let interrupted = session
         .run_user_shell(
             "old command".into(),
@@ -144,12 +144,12 @@ async fn direct_shell_preflights_before_recovery_or_admission() {
         .await;
     assert!(matches!(
         interrupted,
-        Err(ion_core::CodingSessionError::Operation(
+        Err(ion_core::SessionError::Operation(
             ion_core::OperationError::TaskFailed(_)
         ))
     ));
     drop(session);
-    let session = Arc::new(CodingSession::open(&path).unwrap());
+    let session = Arc::new(Session::open(&path).unwrap());
     let mut control = control(host, session.clone(), selected);
     let before = session.view().unwrap();
     fs::rename(&cwd, root.join("moved-work")).unwrap();
@@ -197,7 +197,7 @@ fn clone_preserves_resolved_route_without_a_store_entry() {
     let selected = host.models().save_default(&route("resolved-only")).unwrap();
     fs::remove_file(root.join("config/models.json")).unwrap();
     let session = Arc::new(
-        CodingSession::create(
+        Session::create(
             host.sessions(Some(cwd.clone())).new_path().unwrap(),
             Some(&cwd),
         )
@@ -229,13 +229,13 @@ fn idle_override_and_effort_restore_as_one_selection() {
     let limited = host.models().save_default(&limited).unwrap();
     let selected = host.models().save_default(&route("override")).unwrap();
     let path = host.sessions(Some(cwd.clone())).new_path().unwrap();
-    let session = Arc::new(CodingSession::create(&path, Some(&cwd)).unwrap());
+    let session = Arc::new(Session::create(&path, Some(&cwd)).unwrap());
     session.select_model(limited.identity()).unwrap();
     let binding = control(host.clone(), session.clone(), selected);
     binding.select_reasoning(ion_ai::Reasoning::High).unwrap();
     drop(binding);
     drop(session);
-    let session = Arc::new(CodingSession::open(path).unwrap());
+    let session = Arc::new(Session::open(path).unwrap());
     let selected = host
         .models()
         .choose(None, session.view().unwrap().last_model, host.credentials())
@@ -259,7 +259,7 @@ fn replacement_restores_model_and_keeps_old_binding_on_preflight_failure() {
     let host = Arc::new(Host::new(root.join("config"), root.join("state")));
     let first_model = host.models().save_default(&route("one")).unwrap();
     let first_path = host.sessions(Some(cwd.clone())).new_path().unwrap();
-    let first = Arc::new(CodingSession::create(&first_path, Some(&cwd)).unwrap());
+    let first = Arc::new(Session::create(&first_path, Some(&cwd)).unwrap());
     first.select_model(first_model.identity()).unwrap();
     let mut binding = control(host.clone(), first, first_model);
     binding.select_reasoning(ion_ai::Reasoning::High).unwrap();

@@ -10,8 +10,8 @@ use std::{
 use anyhow::{Context, Result, ensure};
 use ion_ai::Message;
 use ion_core::{
-    AcceptedInput, CodingAgentError, CodingAgentEvent as AgentEvent, CodingSessionError,
-    CodingToolOutput, InputBudget, InputReservation, Operation, SteeringInbox,
+    AcceptedInput, AgentError, AgentEvent, InputBudget, InputReservation, Operation, SessionError,
+    SteeringInbox, ToolOutput,
 };
 use serde::Serialize;
 use tokio::sync::{broadcast, watch};
@@ -65,9 +65,9 @@ enum ActivityRetention {
 }
 
 enum Work {
-    Turn(Operation<String, CodingAgentError>),
-    Compact(Operation<bool, CodingAgentError>),
-    Shell(Operation<CodingToolOutput, CodingSessionError>),
+    Turn(Operation<String, AgentError>),
+    Compact(Operation<bool, AgentError>),
+    Shell(Operation<ToolOutput, SessionError>),
 }
 impl Work {
     fn stop(&self) {
@@ -103,7 +103,7 @@ pub struct SessionControl<M = ()> {
     observer: ControlObserver,
     stop_requested: bool,
     closed: bool,
-    cleanup_errors: Vec<CodingSessionError>,
+    cleanup_errors: Vec<SessionError>,
     pub(crate) owner: uuid::Uuid,
     question_changes: Option<watch::Receiver<u64>>,
     question_seen: u64,

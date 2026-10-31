@@ -10,7 +10,7 @@ use ion_ai::{
     Content, Message, ModelRef, ModelResponse, ModelStreamEvent, ResponseTermination, Role, Script,
     ScriptedModelService, ToolCall, Usage,
 };
-use ion_core::{AgentLimits, CodingAgent, CodingSession, ForkPoint, ToolSet};
+use ion_core::{Agent, AgentLimits, ForkPoint, Session, ToolSet};
 use serde_json::json;
 
 use crate::{
@@ -72,7 +72,7 @@ impl Application for Restricted {
             selected
         };
         Ok(ApplicationRuntime::new(Arc::new(
-            CodingAgent::with_tool_set(self.service.clone(), Arc::new(ToolSet::new([])), selected)
+            Agent::with_tool_set(self.service.clone(), Arc::new(ToolSet::new([])), selected)
                 .with_limits(AgentLimits {
                     image_input: true,
                     ..AgentLimits::default()
@@ -85,7 +85,7 @@ impl Application for Restricted {
 fn identified_admission_requires_execution_custody_before_commit() {
     let root = std::env::temp_dir().join(format!("ion-request-runtime-{}", uuid::Uuid::now_v7()));
     let catalog = SessionCatalog::new(root.clone(), None);
-    let session = Arc::new(CodingSession::create(catalog.new_path().unwrap(), None).unwrap());
+    let session = Arc::new(Session::create(catalog.new_path().unwrap(), None).unwrap());
     let application = Arc::new(Restricted {
         service: Arc::new(ScriptedModelService::new([])),
         instructions: RwLock::new(Some("Explicit instructions".into())),
@@ -131,7 +131,7 @@ async fn workspace_free_application_keeps_its_authority_across_shared_lifecycle(
         instructions: RwLock::new(Some("Only this application's instructions.".into())),
         commands: None,
     });
-    let session = Arc::new(CodingSession::create(&path, None).unwrap());
+    let session = Arc::new(Session::create(&path, None).unwrap());
     let mismatched = SessionSetup::new(
         session.clone(),
         SessionCatalog::new(root.join("wrong-scope"), Some(root.clone())),
@@ -247,9 +247,9 @@ async fn workspace_free_application_keeps_its_authority_across_shared_lifecycle(
     assert!(report.cleanup_errors.is_empty());
     let path = control.session().path().to_owned();
     drop(control);
-    let reopened = Arc::new(CodingSession::open(&path).unwrap());
+    let reopened = Arc::new(Session::open(&path).unwrap());
     assert_eq!(reopened.cwd(), None);
-    assert_eq!(CodingSession::inspect_metadata(&path).unwrap().cwd, None);
+    assert_eq!(Session::inspect_metadata(&path).unwrap().cwd, None);
     *application.instructions.write().unwrap() = Some("Reloaded application instructions.".into());
     let reopened = SessionSetup::new(
         reopened,
@@ -276,7 +276,7 @@ fn configured_command_is_rejected_when_the_application_has_no_user_shell_authori
     )
     .unwrap();
     let commands = CommandCatalog::load(&root, &config).unwrap();
-    let session = Arc::new(CodingSession::create(root.join("session.sqlite"), None).unwrap());
+    let session = Arc::new(Session::create(root.join("session.sqlite"), None).unwrap());
     let application = Arc::new(Restricted {
         service: Arc::new(ScriptedModelService::new([])),
         instructions: RwLock::new(Some("Explicit instructions".into())),
@@ -327,7 +327,7 @@ async fn coding_application_selection_and_read_only_narrow_the_model_loadout() {
 
     for names in [vec!["read", "write"], Vec::new()] {
         let session = Arc::new(
-            CodingSession::create(
+            Session::create(
                 host.sessions(Some(cwd.clone())).new_path().unwrap(),
                 Some(&cwd),
             )
@@ -364,7 +364,7 @@ async fn coding_application_selection_and_read_only_narrow_the_model_loadout() {
     )
     .unwrap();
     let session = Arc::new(
-        CodingSession::create(
+        Session::create(
             host.sessions(Some(cwd.clone())).new_path().unwrap(),
             Some(&cwd),
         )
@@ -395,7 +395,7 @@ async fn coding_application_selection_and_read_only_narrow_the_model_loadout() {
     drop(session);
 
     let session = Arc::new(
-        CodingSession::create(
+        Session::create(
             host.sessions(Some(cwd.clone())).new_path().unwrap(),
             Some(&cwd),
         )
@@ -446,7 +446,7 @@ fn last_selection_builder_wins_for_restricted_roles() {
         })
         .unwrap();
     let catalog = host.sessions(Some(cwd.clone()));
-    let session = Arc::new(CodingSession::create(catalog.new_path().unwrap(), Some(&cwd)).unwrap());
+    let session = Arc::new(Session::create(catalog.new_path().unwrap(), Some(&cwd)).unwrap());
     let explicit = ion_core::ToolSelection::include(["write".into()]);
     let control = crate::CodingApplication::new(host.clone(), None)
         .with_read_only_tools()
@@ -466,7 +466,7 @@ fn last_selection_builder_wins_for_restricted_roles() {
     assert!(!tools.is_declared("read"));
     drop(control);
 
-    let session = Arc::new(CodingSession::create(catalog.new_path().unwrap(), Some(&cwd)).unwrap());
+    let session = Arc::new(Session::create(catalog.new_path().unwrap(), Some(&cwd)).unwrap());
     let control = crate::CodingApplication::new(host.clone(), None)
         .with_tool_selection(explicit)
         .with_read_only_tools()
@@ -501,7 +501,7 @@ fn question_capability_obeys_explicit_selection_and_read_only_policy() {
         })
         .unwrap();
     let catalog = host.sessions(Some(cwd.clone()));
-    let session = Arc::new(CodingSession::create(catalog.new_path().unwrap(), Some(&cwd)).unwrap());
+    let session = Arc::new(Session::create(catalog.new_path().unwrap(), Some(&cwd)).unwrap());
     let control = crate::CodingApplication::new(host.clone(), None)
         .with_code_mode(true)
         .with_tool_selection(ion_core::ToolSelection::include([
@@ -523,7 +523,7 @@ fn question_capability_obeys_explicit_selection_and_read_only_policy() {
     assert!(!tools.is_declared("ask_user_question"));
     drop(control);
 
-    let session = Arc::new(CodingSession::create(catalog.new_path().unwrap(), Some(&cwd)).unwrap());
+    let session = Arc::new(Session::create(catalog.new_path().unwrap(), Some(&cwd)).unwrap());
     let control = crate::CodingApplication::new(host.clone(), None)
         .with_read_only_tools()
         .setup(
@@ -540,7 +540,7 @@ fn question_capability_obeys_explicit_selection_and_read_only_policy() {
     assert!(tools.is_declared("ask_user_question"));
     drop(control);
 
-    let session = Arc::new(CodingSession::create(catalog.new_path().unwrap(), Some(&cwd)).unwrap());
+    let session = Arc::new(Session::create(catalog.new_path().unwrap(), Some(&cwd)).unwrap());
     let control = crate::CodingApplication::new(host.clone(), None)
         .with_read_only_tools()
         .setup(session, selected, None, None, host.resources(&cwd).unwrap())

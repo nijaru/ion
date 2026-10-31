@@ -395,7 +395,7 @@ fn push_field(text: &mut String, field: &str) {
 mod tests {
     use super::*;
     use ion_ai::{Content, Message, ResponseTermination, ToolCall};
-    use ion_core::{CodingAgentEvent as AgentEvent, CodingToolOutput as ToolOutput};
+    use ion_core::{AgentEvent, ToolOutput};
     use ion_core::{
         StoredToolActivity, ToolActivity, ToolActivityKind, TranscriptMessage, TranscriptPart,
         UserShellActivity,
@@ -413,9 +413,11 @@ mod tests {
                 exclude_from_context: true,
             })],
         };
-        let mut live =
-            LiveTranscript::with_user_input(&Message::user_input("CURRENT_REQUEST".into(), []));
-        live.observe(&AgentEvent::TurnAccepted { turn: 2 });
+        let mut live = LiveTranscript::default();
+        live.observe(&AgentEvent::TurnAccepted {
+            turn: 2,
+            input: Message::user_input("CURRENT_REQUEST".into(), []),
+        });
         let activity = ToolActivity {
             kind: ToolActivityKind::Command,
             subject: Some("run-check".into()),

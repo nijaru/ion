@@ -217,7 +217,7 @@ pub(super) async fn startup_failure(control: &mut Control, error: anyhow::Error)
     }
 }
 
-pub(super) fn cleanup_result(errors: Vec<ion_core::CodingSessionError>) -> Result<()> {
+pub(super) fn cleanup_result(errors: Vec<ion_core::SessionError>) -> Result<()> {
     let mut result = Ok(());
     for error in errors {
         result = combine_errors(result, Err(error.into()), "additional cleanup failure");

@@ -7,9 +7,26 @@ use crate::{
 pub(super) struct TurnStart {
     pub turn: u64,
     pub interrupted: usize,
-    pub resumed: Option<RecoveryPoint>,
+    pub origin: TurnOrigin,
     pub catalog: Option<ToolCatalog>,
-    pub completion: Vec<crate::CompletionNotice>,
+}
+
+pub(super) enum TurnOrigin {
+    User {
+        input: Message,
+    },
+    Resumed {
+        point: RecoveryPoint,
+    },
+    Automated {
+        notices: Vec<crate::CompletionNotice>,
+    },
+}
+
+pub(super) struct TurnRun {
+    pub turn: u64,
+    pub catalog: Option<ToolCatalog>,
+    pub route_reason: ModelRouteReason,
 }
 
 impl Agent {
@@ -91,8 +108,7 @@ impl Agent {
                             TurnStart {
                                 turn: point.turn,
                                 interrupted,
-                                resumed: Some(point),
-                                completion: Vec::new(),
+                                origin: TurnOrigin::Resumed { point },
                                 catalog,
                             },
                             instructions,

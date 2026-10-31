@@ -11,7 +11,7 @@ use tokio_util::sync::CancellationToken;
 use super::{Limits, find::run as find, grep::run as grep, ls::run as ls};
 use crate::local_tools::discovery::output::MAX_OUTPUT_BYTES;
 
-type Operation = fn(&Path, &Value, &CancellationToken, &Limits) -> ion_core::CodingToolOutput;
+type Operation = fn(&Path, &Value, &CancellationToken, &Limits) -> ion_core::ToolOutput;
 
 fn root(name: &str) -> PathBuf {
     let path = std::env::temp_dir().join(format!("ion-discovery-{name}-{}", uuid::Uuid::now_v7()));
@@ -20,7 +20,7 @@ fn root(name: &str) -> PathBuf {
 }
 
 fn run(
-    operation: fn(&Path, &Value, &CancellationToken, &Limits) -> ion_core::CodingToolOutput,
+    operation: fn(&Path, &Value, &CancellationToken, &Limits) -> ion_core::ToolOutput,
     root: &Path,
     arguments: Value,
 ) -> Value {

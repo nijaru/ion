@@ -2,7 +2,7 @@
 use std::path::PathBuf;
 
 use anyhow::{Context, Result, ensure};
-use ion_core::CodingAgent;
+use ion_core::Agent;
 use ion_host::image_input::LoadedImage;
 use std::sync::Arc;
 use tokio_util::sync::CancellationToken;
@@ -20,7 +20,7 @@ pub(super) struct ClipboardJob {
     pub(super) task: tokio::task::JoinHandle<Result<PreparedPaste>>,
 }
 
-pub(super) fn start_clipboard_paste(ui: &mut Frontend, agent: &Arc<CodingAgent>) {
+pub(super) fn start_clipboard_paste(ui: &mut Frontend, agent: &Arc<Agent>) {
     if ui.clipboard_job.is_some() {
         ui.status = "Clipboard acquisition is already in progress".into();
         return;

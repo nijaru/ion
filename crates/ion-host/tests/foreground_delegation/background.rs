@@ -177,8 +177,13 @@ async fn transfer_failure_cannot_be_caught_to_continue_and_creates_no_child() {
     assert!(owner.snapshot().runs.is_empty());
     assert_eq!(owner.snapshot().reserved, 0);
     assert_eq!(f.parent.requests().len(), 1);
-    assert!(report.updates.iter().any(|update| matches!(update, ControlUpdate::Settled(settlement)
-        if matches!(settlement.outcome, OperationOutcome::Turn(Err(CodingAgentError::Session(_)))))));
+    assert!(
+        report
+            .updates
+            .iter()
+            .any(|update| matches!(update, ControlUpdate::Settled(settlement)
+        if matches!(settlement.outcome, OperationOutcome::Turn(Err(AgentError::Session(_))))))
+    );
     owner.join_shutdown().await.unwrap();
     let root = f.root.clone();
     drop(f);

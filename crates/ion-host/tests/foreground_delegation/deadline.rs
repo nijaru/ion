@@ -131,10 +131,7 @@ async fn deadline_stops_but_joins_and_retains_provenance_after_infrastructure_fa
             );
         }
         assert_eq!(
-            CodingSession::inspect(f.session.path())
-                .unwrap()
-                .delegations()[0]
-                .outcome,
+            Session::inspect(f.session.path()).unwrap().delegations()[0].outcome,
             outcome,
         );
         assert_eq!(f.effect.calls.load(Ordering::SeqCst), 1);
@@ -162,7 +159,7 @@ async fn deadline_stops_but_joins_and_retains_provenance_after_infrastructure_fa
             assert_eq!(failure.run.error, Some(failure.error.to_string()));
             assert!(matches!(
                 failure.error,
-                ion_core::CodingSessionError::DelegationInfrastructure(_)
+                ion_core::SessionError::DelegationInfrastructure(_)
             ));
             assert!(matches!(&failure.run.steering[0].status,
                 ion_host::SteeringStatus::Returned { input: ion_host::UserInput::Message(message), reason: ion_host::ReturnSnapshot::Stopped } if message == &guidance));

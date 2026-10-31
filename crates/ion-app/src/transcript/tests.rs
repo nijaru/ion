@@ -143,8 +143,7 @@ fn both_formats_omit_inactive_facts_and_preserve_effect_states() {
 #[test]
 fn withheld_model_images_and_raw_child_results_remain_exportable() {
     use ion_core::{
-        ChildOutcome, CodingToolOutput, ToolOccurrence, ToolOutcome, ToolResultProjection,
-        ToolSettlement,
+        ChildOutcome, ToolOccurrence, ToolOutcome, ToolOutput, ToolResultProjection, ToolSettlement,
     };
     let mut view = fixture();
     let SessionEntry::TurnStarted { input, .. } = &view.entries[0] else {
@@ -153,7 +152,7 @@ fn withheld_model_images_and_raw_child_results_remain_exportable() {
     let Content::Image(image) = &input.content[1] else {
         panic!("fixture contains an image")
     };
-    let output = CodingToolOutput {
+    let output = ToolOutput {
         value: serde_json::json!({"raw":"RAW_OBSERVATION"}),
         images: vec![image.clone()],
         is_error: false,

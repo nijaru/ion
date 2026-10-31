@@ -6,7 +6,7 @@ use serde::{Deserialize, Serialize};
 use tokio::sync::{mpsc, oneshot};
 use tokio_util::sync::CancellationToken;
 
-use crate::{AuthorityScope, CodingSession, RequestReceipt, SubmissionRequest, ToolOccurrence};
+use crate::{AuthorityScope, RequestReceipt, Session, SubmissionRequest, ToolOccurrence};
 
 mod background;
 mod execution;
@@ -73,9 +73,9 @@ impl DelegationTarget {
     /// Resolve an existing conversation without taking execution ownership.
     /// Admission later acquires its exclusive writer and rechecks identity and
     /// settlement. A saved path/header cannot supply the application's authority.
-    pub fn resume(path: impl AsRef<std::path::Path>) -> Result<Self, crate::CodingSessionError> {
+    pub fn resume(path: impl AsRef<std::path::Path>) -> Result<Self, crate::SessionError> {
         let path = path.as_ref().canonicalize()?;
-        let session = CodingSession::inspect_id(&path)?;
+        let session = Session::inspect_id(&path)?;
         Ok(Self::Resume { path, session })
     }
 
@@ -117,7 +117,7 @@ impl DelegationTarget {
 /// New files are still materialized only after that intent.
 pub(crate) enum ChildMaterialization {
     New(Vec<crate::SessionEntry>),
-    Resume(Arc<CodingSession>),
+    Resume(Arc<Session>),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -206,7 +206,7 @@ pub struct DelegationCompletion {
 
 pub(crate) type DelegationWork = Box<
     dyn FnOnce(
-            Arc<CodingSession>,
+            Arc<Session>,
             SubmissionRequest,
             CancellationToken,
         ) -> BoxFuture<'static, DelegationCompletion>
@@ -239,7 +239,7 @@ impl DelegationTask {
     pub fn new(
         spec: DelegationSpec,
         work: impl FnOnce(
-            Arc<CodingSession>,
+            Arc<Session>,
             SubmissionRequest,
             CancellationToken,
         ) -> BoxFuture<'static, DelegationCompletion>

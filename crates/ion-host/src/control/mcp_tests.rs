@@ -230,8 +230,8 @@ async fn management_authority_and_result_budget_precede_connection_effects() {
         .reconnect_mcp("peer", meta(&"large".repeat(1024)))
         .unwrap_err();
     assert!(matches!(
-        error.downcast_ref::<ion_core::CodingAgentError>(),
-        Some(ion_core::CodingAgentError::InputQueueFull { .. })
+        error.downcast_ref::<ion_core::AgentError>(),
+        Some(ion_core::AgentError::InputQueueFull { .. })
     ));
     assert_eq!(metadata.literal.len(), 5120);
     assert!(!fixture.control.is_busy());

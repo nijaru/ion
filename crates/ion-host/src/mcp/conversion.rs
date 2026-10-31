@@ -1,6 +1,6 @@
 //! Local MCP observation conversion and private artifact delivery.
 use ion_ai::{ImageContent, LoadedImage};
-use ion_core::CodingToolOutput;
+use ion_core::ToolOutput;
 use rmcp::model::{CallToolResult, ContentBlock};
 use serde_json::json;
 
@@ -32,7 +32,7 @@ pub(super) fn convert_tool_result(
     name: &str,
     result: CallToolResult,
     schema: Option<&OutputSchema>,
-) -> CodingToolOutput {
+) -> ToolOutput {
     // The remote error/success flag is the observed outcome. Local conversion
     // preserves it exactly and reports its own delivery failures beside it,
     // never as a replacement execution error.
@@ -105,7 +105,7 @@ pub(super) fn convert_tool_result(
     }
     let encoded = serde_json::to_string(&value).expect("a JSON value always encodes");
     if encoded.len() <= 64 * 1024 {
-        return CodingToolOutput {
+        return ToolOutput {
             value,
             images,
             is_error,
@@ -144,7 +144,7 @@ pub(super) fn convert_tool_result(
     value["truncated"] = json!(true);
     value["full_output_path"] = json!(full_output_path);
     value["full_output_error"] = json!(full_output_error);
-    CodingToolOutput {
+    ToolOutput {
         value,
         images,
         is_error,

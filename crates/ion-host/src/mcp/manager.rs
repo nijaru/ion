@@ -8,8 +8,7 @@ use anyhow::{Context, Result, anyhow, ensure};
 use futures_util::future::join_all;
 use ion_ai::BoxFuture;
 use ion_core::{
-    CodingToolSource, ToolActivityKind, ToolDefinition, ToolExposure, ToolPresentation,
-    ToolRegistration,
+    ToolActivityKind, ToolDefinition, ToolExposure, ToolPresentation, ToolRegistration, ToolSource,
 };
 use tokio::sync::Mutex;
 use tokio_util::sync::CancellationToken;
@@ -463,7 +462,7 @@ impl McpTools {
     }
 }
 
-impl CodingToolSource for McpTools {
+impl ToolSource for McpTools {
     fn registrations(self: Arc<Self>) -> Vec<ToolRegistration> {
         let mut registrations = Vec::new();
         // Snapshot the complete source under one guard, not independently

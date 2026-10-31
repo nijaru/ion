@@ -6,7 +6,7 @@
 //! dependent tool dispatch can continue.
 use std::sync::{Arc, Mutex, MutexGuard};
 
-use ion_core::{CodingToolOutput as ToolOutput, ToolOrigin};
+use ion_core::{ToolOrigin, ToolOutput};
 use serde::Serialize;
 use thiserror::Error;
 use tokio::sync::{oneshot, watch};

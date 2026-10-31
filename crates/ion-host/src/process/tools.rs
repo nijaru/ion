@@ -8,8 +8,8 @@ use std::{
 use base64::Engine;
 use ion_ai::BoxFuture;
 use ion_core::{
-    CodingToolOutput, CodingToolSource, ToolActivityKind, ToolDefinition, ToolExecutor,
-    ToolExposure, ToolInvocation, ToolOrigin, ToolPresentation, ToolRegistration,
+    ToolActivityKind, ToolDefinition, ToolExecutor, ToolExposure, ToolInvocation, ToolOrigin,
+    ToolOutput, ToolPresentation, ToolRegistration, ToolSource,
 };
 use serde::Deserialize;
 use serde_json::{Value, json};
@@ -60,7 +60,7 @@ impl ProcessTools {
     }
 }
 
-impl CodingToolSource for ProcessTools {
+impl ToolSource for ProcessTools {
     fn registrations(self: Arc<Self>) -> Vec<ToolRegistration> {
         vec![ToolRegistration::new(
             ToolDefinition {
@@ -91,7 +91,7 @@ impl CodingToolSource for ProcessTools {
 }
 
 impl ToolExecutor for ProcessTools {
-    fn execute<'a>(&'a self, invocation: ToolInvocation<'a>) -> BoxFuture<'a, CodingToolOutput> {
+    fn execute<'a>(&'a self, invocation: ToolInvocation<'a>) -> BoxFuture<'a, ToolOutput> {
         Box::pin(async move {
             let Some(origin) = invocation.origin() else {
                 return error("process requires an admitted Core invocation");
@@ -185,7 +185,7 @@ impl ProcessTools {
         rows: Option<u16>,
         columns: Option<u16>,
         stop: CancellationToken,
-    ) -> CodingToolOutput {
+    ) -> ToolOutput {
         let backend = backend.unwrap_or(Backend::Pipe);
         let dimensions = match backend {
             Backend::Pipe => {
@@ -269,7 +269,7 @@ impl ProcessTools {
                 };
                 let mut output = snapshot(&state, &gate);
                 output["error"] = json!(failure);
-                CodingToolOutput {
+                ToolOutput {
                     value: output,
                     images: Vec::new(),
                     is_error: true,
@@ -298,7 +298,7 @@ impl ProcessTools {
         }
     }
 
-    async fn list(&self, origin: ToolOrigin) -> CodingToolOutput {
+    async fn list(&self, origin: ToolOrigin) -> ToolOutput {
         let entries = self.owner.entries.lock().await;
         let mut processes = entries
             .values()
@@ -319,7 +319,7 @@ impl ProcessTools {
         id: Uuid,
         timeout_ms: u64,
         stop: CancellationToken,
-    ) -> CodingToolOutput {
+    ) -> ToolOutput {
         let entry = match self.owner.scoped(origin, &self.cwd, id).await {
             Ok(entry) => entry,
             Err(failure) => return error(failure),
@@ -347,7 +347,7 @@ impl ProcessTools {
         if let Some(error) = supervision_error {
             output["error"] = json!(error);
         }
-        CodingToolOutput {
+        ToolOutput {
             value: output,
             images: Vec::new(),
             is_error: cancelled || result.is_some_and(|result| result.is_err()),
@@ -362,7 +362,7 @@ impl ProcessTools {
         offset: u64,
         limit: usize,
         encoding: Encoding,
-    ) -> CodingToolOutput {
+    ) -> ToolOutput {
         let entry = match self.owner.scoped(origin, &self.cwd, id).await {
             Ok(entry) => entry,
             Err(failure) => return error(failure),
@@ -415,7 +415,7 @@ impl ProcessTools {
         success_value(output)
     }
 
-    async fn screen(&self, origin: ToolOrigin, id: Uuid, row: u16, rows: u16) -> CodingToolOutput {
+    async fn screen(&self, origin: ToolOrigin, id: Uuid, row: u16, rows: u16) -> ToolOutput {
         let entry = match self.owner.scoped(origin, &self.cwd, id).await {
             Ok(entry) => entry,
             Err(failure) => return error(failure),
@@ -458,7 +458,7 @@ impl ProcessTools {
         id: Uuid,
         dimensions: Dimensions,
         stop: CancellationToken,
-    ) -> CodingToolOutput {
+    ) -> ToolOutput {
         let entry = match self.owner.scoped(origin, &self.cwd, id).await {
             Ok(entry) => entry,
             Err(failure) => return error(failure),
@@ -521,7 +521,7 @@ impl ProcessTools {
         }
     }
 
-    async fn eof(&self, origin: ToolOrigin, id: Uuid, stop: CancellationToken) -> CodingToolOutput {
+    async fn eof(&self, origin: ToolOrigin, id: Uuid, stop: CancellationToken) -> ToolOutput {
         let entry = match self.owner.scoped(origin, &self.cwd, id).await {
             Ok(entry) => entry,
             Err(failure) => return error(failure),
@@ -541,7 +541,7 @@ impl ProcessTools {
         id: Uuid,
         data: Option<Vec<u8>>,
         stop: CancellationToken,
-    ) -> CodingToolOutput {
+    ) -> ToolOutput {
         let entry = match self.owner.scoped(origin, &self.cwd, id).await {
             Ok(entry) => entry,
             Err(failure) => return error(failure),
@@ -586,7 +586,7 @@ impl ProcessTools {
                 if let Some(failure) = &ack.error {
                     output["error"] = json!(failure);
                 }
-                CodingToolOutput {
+                ToolOutput {
                     value: output,
                     images: Vec::new(),
                     is_error: ack.cancelled || ack.error.is_some(),
@@ -606,12 +606,7 @@ impl ProcessTools {
         }
     }
 
-    async fn close(
-        &self,
-        origin: ToolOrigin,
-        id: Uuid,
-        stop: CancellationToken,
-    ) -> CodingToolOutput {
+    async fn close(&self, origin: ToolOrigin, id: Uuid, stop: CancellationToken) -> ToolOutput {
         let entry = match self.owner.scoped(origin, &self.cwd, id).await {
             Ok(entry) => entry,
             Err(failure) => return error(failure),
@@ -624,7 +619,7 @@ impl ProcessTools {
                     let mut output = snapshot(&entry.state, &entry.gate);
                     output["cancelled"] = json!(false);
                     output["error"] = json!(error);
-                    return CodingToolOutput { value: output, images: Vec::new(), is_error: true };
+                    return ToolOutput { value: output, images: Vec::new(), is_error: true };
                 }
                 false
             }
@@ -632,14 +627,14 @@ impl ProcessTools {
         };
         let mut output = snapshot(&entry.state, &entry.gate);
         output["cancelled"] = json!(cancelled);
-        CodingToolOutput {
+        ToolOutput {
             value: output,
             images: Vec::new(),
             is_error: cancelled,
         }
     }
 
-    async fn acknowledge(&self, origin: ToolOrigin, id: Uuid) -> CodingToolOutput {
+    async fn acknowledge(&self, origin: ToolOrigin, id: Uuid) -> ToolOutput {
         let mut entries = self.owner.entries.lock().await;
         let Some(entry) = entries.get(&id) else {
             return error(unavailable());
@@ -721,32 +716,32 @@ fn exit_json(status: &StatusView) -> Value {
     }
 }
 
-fn success(state: Arc<ProcessState>, gate: Arc<JoinGate>, extra: Value) -> CodingToolOutput {
+fn success(state: Arc<ProcessState>, gate: Arc<JoinGate>, extra: Value) -> ToolOutput {
     let mut value = snapshot(&state, &gate);
     if let (Some(value), Some(extra)) = (value.as_object_mut(), extra.as_object()) {
         value.extend(extra.clone());
     }
-    CodingToolOutput {
+    ToolOutput {
         value,
         images: Vec::new(),
         is_error: false,
     }
 }
-fn success_value(value: Value) -> CodingToolOutput {
-    CodingToolOutput {
+fn success_value(value: Value) -> ToolOutput {
+    ToolOutput {
         value,
         images: Vec::new(),
         is_error: false,
     }
 }
-fn error_value(value: Value) -> CodingToolOutput {
-    CodingToolOutput {
+fn error_value(value: Value) -> ToolOutput {
+    ToolOutput {
         value,
         images: Vec::new(),
         is_error: true,
     }
 }
-fn error(message: impl Into<String>) -> CodingToolOutput {
+fn error(message: impl Into<String>) -> ToolOutput {
     error_value(json!({"error": message.into()}))
 }
 fn cancellation_output(
@@ -754,7 +749,7 @@ fn cancellation_output(
     gate: &JoinGate,
     supervision_error: Option<String>,
     message: &str,
-) -> CodingToolOutput {
+) -> ToolOutput {
     let mut value = snapshot(state, gate);
     value["cancelled"] = json!(true);
     value["error"] = json!(message);

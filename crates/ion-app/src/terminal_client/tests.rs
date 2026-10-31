@@ -14,19 +14,19 @@ fn settlement_program_status_distinguishes_done_and_cancelled() {
     );
     assert_eq!(
         settlement_program_status(&OperationOutcome::Turn(Err(
-            ion_core::CodingAgentError::Cancelled
+            ion_core::AgentError::Cancelled
         ))),
         ProgramStatus::Idle
     );
     assert_eq!(
         settlement_program_status(&OperationOutcome::Compact(Err(
-            ion_core::CodingAgentError::Cancelled
+            ion_core::AgentError::Cancelled
         ))),
         ProgramStatus::Idle
     );
     assert_eq!(
         settlement_program_status(&OperationOutcome::Turn(Err(
-            ion_core::CodingAgentError::EmptyPrompt
+            ion_core::AgentError::EmptyPrompt
         ))),
         ProgramStatus::Error
     );
@@ -35,7 +35,7 @@ fn settlement_program_status_distinguishes_done_and_cancelled() {
         (true, false, ProgramStatus::Error),
         (true, true, ProgramStatus::Idle),
     ] {
-        let output = ion_core::CodingToolOutput {
+        let output = ion_core::ToolOutput {
             value: serde_json::json!({"cancelled": cancelled}),
             images: vec![],
             is_error,
@@ -131,8 +131,7 @@ impl Fixture {
                 image_input: true,
             })
             .unwrap();
-        let session =
-            Arc::new(CodingSession::create(root.join("session.sqlite"), Some(&root)).unwrap());
+        let session = Arc::new(Session::create(root.join("session.sqlite"), Some(&root)).unwrap());
         let setup = ion_host::CodingApplication::new(host.clone(), None)
             .setup(
                 session,
@@ -1004,7 +1003,7 @@ async fn settled_shell_is_reconciled_and_shutdown_errors_remain_visible() {
         if let ControlUpdate::Settled(settlement) = &mut update {
             // Inject a concurrent settlement failure at the actual UI boundary.
             settlement.outcome = OperationOutcome::Compact(Err(
-                ion_core::CodingAgentError::InvalidSummary("observation commit failed"),
+                ion_core::AgentError::InvalidSummary("observation commit failed"),
             ));
         }
         activity.cleanup_update(&mut ui, &fixture.control, update, &mut outcome);

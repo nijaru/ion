@@ -81,7 +81,7 @@ async fn live_observations_invalidate_without_readers_and_do_not_own_execution()
     );
     assert_eq!(reader.activity().unwrap().elapsed_ms, stopping.elapsed_ms);
     // Even an actual retained observation grant cannot pin the child writer.
-    let reopened = CodingSession::open(&record.path).unwrap();
+    let reopened = Session::open(&record.path).unwrap();
     assert_eq!(reopened.id(), record.child);
     drop(reopened);
     owner.join_shutdown().await.unwrap();

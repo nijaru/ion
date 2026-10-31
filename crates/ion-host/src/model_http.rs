@@ -2587,7 +2587,7 @@ mod tests {
 
     #[tokio::test]
     async fn partial_tool_and_opaque_output_stop_retries_without_admitting_calls() {
-        use ion_core::{CodingAgent, CodingAgentEvent, CodingSession, ToolSet};
+        use ion_core::{Agent, AgentEvent, Session, ToolSet};
         use std::sync::atomic::{AtomicUsize, Ordering};
         let start = "event: message_start\ndata: {\"type\":\"message_start\",\"message\":{\"type\":\"message\",\"model\":\"test-model\",\"role\":\"assistant\",\"content\":[],\"usage\":{\"input_tokens\":3,\"output_tokens\":0}}}\n\n";
         for (wire, body) in [
@@ -2611,9 +2611,9 @@ mod tests {
             });
             let root = std::env::temp_dir().join(format!("ion-partial-wire-{}", uuid::Uuid::now_v7()));
             std::fs::create_dir(&root).unwrap();
-            let session = Arc::new(CodingSession::create(root.join("session.sqlite"), Some(&root)).unwrap());
+            let session = Arc::new(Session::create(root.join("session.sqlite"), Some(&root)).unwrap());
             let model = Arc::new(HttpModelService::new(&endpoint, wire, Arc::new(|| None)).unwrap());
-            let agent = CodingAgent::with_tool_set(model, Arc::new(ToolSet::new([])), request().route.effective);
+            let agent = Agent::with_tool_set(model, Arc::new(ToolSet::new([])), request().route.effective);
             let events = Arc::new(std::sync::Mutex::new(Vec::new()));
             let observed = events.clone();
             let result = agent.submit(session.clone(), "work".into(), "test".into(), CancellationToken::new(), move |event| observed.lock().unwrap().push(event)).await;
@@ -2622,8 +2622,8 @@ mod tests {
             let events = events.lock().unwrap();
             assert!(result.is_err(), "{wire:?}");
             assert_eq!(requests.load(Ordering::SeqCst), 1, "{wire:?}");
-            assert!(events.iter().any(|event| matches!(event, CodingAgentEvent::ModelOutputObserved)), "{wire:?}");
-            assert!(!events.iter().any(|event| matches!(event, CodingAgentEvent::ProviderRetry { .. } | CodingAgentEvent::ToolStarted { .. } | CodingAgentEvent::AssistantCommitted { .. })));
+            assert!(events.iter().any(|event| matches!(event, AgentEvent::ModelOutputObserved)), "{wire:?}");
+            assert!(!events.iter().any(|event| matches!(event, AgentEvent::ProviderRetry { .. } | AgentEvent::ToolStarted { .. } | AgentEvent::AssistantCommitted { .. })));
             assert!(!format!("{events:?}").contains("PRIVATE_OPAQUE"));
             drop(session);
             std::fs::remove_dir_all(root).unwrap();

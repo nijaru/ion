@@ -1,27 +1,28 @@
 //! Shared JSONL projection of committed coding events and provisional progress.
-use ion_core::CodingAgentEvent;
+use ion_core::AgentEvent;
 use serde_json::{Value, json};
 
-pub(super) fn event_record(event: &CodingAgentEvent) -> Value {
+pub(super) fn event_record(event: &AgentEvent) -> Value {
     match event {
-        CodingAgentEvent::CompletionCommitted {
+        AgentEvent::CompletionCommitted {
             turn,
             notices,
             new_turn,
         } => {
             json!({"type":"completion_committed","turn":turn,"notices":notices,"new_turn":new_turn,"automated":true})
         }
-        CodingAgentEvent::TurnResumed { point } => json!({"type":"turn_resumed","point":point}),
-        CodingAgentEvent::TurnAccepted { turn } => json!({"type":"turn_accepted","turn":turn}),
-        CodingAgentEvent::TurnEnded { turn, reason } => {
+        AgentEvent::TurnResumed { point } => json!({"type":"turn_resumed","point":point}),
+        // This receipt stream does not echo normalized file contents or image data.
+        AgentEvent::TurnAccepted { turn, .. } => json!({"type":"turn_accepted","turn":turn}),
+        AgentEvent::TurnEnded { turn, reason } => {
             json!({"type":"turn_ended","turn":turn,"reason":reason})
         }
-        CodingAgentEvent::ModelOutputObserved => json!({"type":"model_output_observed"}),
-        CodingAgentEvent::TextDelta(text) => json!({"type":"text_delta","text":text}),
-        CodingAgentEvent::ThinkingDelta { block, text } => {
+        AgentEvent::ModelOutputObserved => json!({"type":"model_output_observed"}),
+        AgentEvent::TextDelta(text) => json!({"type":"text_delta","text":text}),
+        AgentEvent::ThinkingDelta { block, text } => {
             json!({"type":"thinking_delta","block":block,"text":text})
         }
-        CodingAgentEvent::AssistantCommitted {
+        AgentEvent::AssistantCommitted {
             turn,
             content,
             tool_activities,
@@ -29,17 +30,17 @@ pub(super) fn event_record(event: &CodingAgentEvent) -> Value {
         } => {
             json!({"type":"assistant_committed","turn":turn,"content":content,"tool_activities":tool_activities,"termination":termination})
         }
-        CodingAgentEvent::SteeringCommitted { turn, input } => {
+        AgentEvent::SteeringCommitted { turn, input } => {
             json!({"type":"steering_committed","turn":turn,"input":input})
         }
-        CodingAgentEvent::ProviderRetry {
+        AgentEvent::ProviderRetry {
             attempt,
             max_retries,
             delay_ms,
         } => {
             json!({"type":"provider_retry","attempt":attempt,"max_retries":max_retries,"delay_ms":delay_ms})
         }
-        CodingAgentEvent::ToolStarted {
+        AgentEvent::ToolStarted {
             call_id,
             name,
             arguments,
@@ -47,7 +48,7 @@ pub(super) fn event_record(event: &CodingAgentEvent) -> Value {
         } => {
             json!({"type":"tool_started","call_id":call_id,"name":name,"arguments":arguments,"activity":activity})
         }
-        CodingAgentEvent::ToolFinished {
+        AgentEvent::ToolFinished {
             call_id,
             name,
             activity,
@@ -62,14 +63,14 @@ pub(super) fn event_record(event: &CodingAgentEvent) -> Value {
             let output = outcome.inspection_output();
             json!({"type":"tool_finished","call_id":call_id,"name":name,"activity":activity,"state":state,"output":output.value,"image_mime_types":output.images.iter().map(|image| image.mime_type().as_str()).collect::<Vec<_>>(),"is_error":output.is_error,"model_projection":projection})
         }
-        CodingAgentEvent::ChildToolAdmitted {
+        AgentEvent::ChildToolAdmitted {
             parent_call_id,
             intent,
         } => json!({"type":"child_tool_admitted","parent_call_id":parent_call_id,"intent":intent}),
-        CodingAgentEvent::ChildToolStarted { parent, child } => {
+        AgentEvent::ChildToolStarted { parent, child } => {
             json!({"type":"child_tool_started","parent":parent,"child":child})
         }
-        CodingAgentEvent::ChildToolFinished {
+        AgentEvent::ChildToolFinished {
             parent,
             child,
             outcome,
@@ -82,43 +83,43 @@ pub(super) fn event_record(event: &CodingAgentEvent) -> Value {
             let output = child_output(outcome);
             json!({"type":"child_tool_finished","parent":parent,"child":child,"state":state,"output":output.value,"is_error":output.is_error,"image_mime_types":output.images.iter().map(|image| image.mime_type().as_str()).collect::<Vec<_>>()})
         }
-        CodingAgentEvent::InterruptedCalls(count) => {
+        AgentEvent::InterruptedCalls(count) => {
             json!({"type":"interrupted_calls","count":count})
         }
-        CodingAgentEvent::ContextCompactionRetry {
+        AgentEvent::ContextCompactionRetry {
             through_entry,
             next_through_entry,
         } => {
             json!({"type":"context_compaction_retry","through_entry":through_entry,"next_through_entry":next_through_entry})
         }
-        CodingAgentEvent::ContextCompacted { through_entry } => {
+        AgentEvent::ContextCompacted { through_entry } => {
             json!({"type":"context_compacted","through_entry":through_entry})
         }
-        CodingAgentEvent::ProviderReplayRebased => json!({"type":"provider_replay_rebased"}),
-        CodingAgentEvent::ProviderReplayNotice {
+        AgentEvent::ProviderReplayRebased => json!({"type":"provider_replay_rebased"}),
+        AgentEvent::ProviderReplayNotice {
             action,
             reason,
             count,
         } => json!({"type":"provider_replay_notice","action":action,"reason":reason,"count":count}),
-        CodingAgentEvent::ResponseRestarted => json!({"type":"response_restarted"}),
-        CodingAgentEvent::ToolCatalogWarning(message) => {
+        AgentEvent::ResponseRestarted => json!({"type":"response_restarted"}),
+        AgentEvent::ToolCatalogWarning(message) => {
             json!({"type":"tool_catalog_warning","message":message})
         }
-        CodingAgentEvent::Final(text) => json!({"type":"final","text":text}),
+        AgentEvent::Final(text) => json!({"type":"final","text":text}),
     }
 }
 
 /// Build a human diagnostic without performing I/O inside the effect callback.
 /// The headless owner handles a failed write by stopping admission and waiting.
-pub(super) fn diagnostic(event: &CodingAgentEvent) -> Option<String> {
+pub(super) fn diagnostic(event: &AgentEvent) -> Option<String> {
     let text = match event {
-        CodingAgentEvent::ProviderRetry {
+        AgentEvent::ProviderRetry {
             attempt,
             max_retries,
             delay_ms,
         } => format!("[provider retry {attempt}/{max_retries} in {delay_ms}ms]"),
-        CodingAgentEvent::ToolStarted { name, .. } => format!("[tool: {name}]"),
-        CodingAgentEvent::ToolFinished { name, outcome, .. } => {
+        AgentEvent::ToolStarted { name, .. } => format!("[tool: {name}]"),
+        AgentEvent::ToolFinished { name, outcome, .. } => {
             let label = match outcome {
                 ion_core::ToolOutcome::Observed { .. } => "tool",
                 ion_core::ToolOutcome::NotDispatched { .. } => "tool skipped",
@@ -132,49 +133,49 @@ pub(super) fn diagnostic(event: &CodingAgentEvent) -> Option<String> {
             }
             text
         }
-        CodingAgentEvent::ChildToolAdmitted { intent, .. } => {
+        AgentEvent::ChildToolAdmitted { intent, .. } => {
             format!("[child tool: {}]", intent.call.name)
         }
-        CodingAgentEvent::ChildToolFinished { outcome, .. } => {
+        AgentEvent::ChildToolFinished { outcome, .. } => {
             output_diagnostic("child result", &child_output(outcome))
         }
-        CodingAgentEvent::CompletionCommitted {
+        AgentEvent::CompletionCommitted {
             notices, new_turn, ..
         } => format!(
             "[{}managed-work readiness: {} report(s) ready; not acknowledged]",
             if *new_turn { "automated Turn · " } else { "" },
             notices.len()
         ),
-        CodingAgentEvent::TurnResumed { point } => format!(
+        AgentEvent::TurnResumed { point } => format!(
             "[continued interrupted Turn {} at checkpoint {}]",
             point.turn, point.checkpoint
         ),
-        CodingAgentEvent::InterruptedCalls(count) => {
+        AgentEvent::InterruptedCalls(count) => {
             format!("[recovered {count} incomplete tool call(s); effects unknown]")
         }
-        CodingAgentEvent::ContextCompactionRetry {
+        AgentEvent::ContextCompactionRetry {
             next_through_entry, ..
         } => format!("[summary request too large; retrying through entry {next_through_entry}]"),
-        CodingAgentEvent::ContextCompacted { through_entry } => {
+        AgentEvent::ContextCompacted { through_entry } => {
             format!("[context summarized through entry {through_entry}]")
         }
-        CodingAgentEvent::ProviderReplayRebased => "[provider reasoning context reset]".into(),
-        CodingAgentEvent::ProviderReplayNotice {
+        AgentEvent::ProviderReplayRebased => "[provider reasoning context reset]".into(),
+        AgentEvent::ProviderReplayNotice {
             action,
             reason,
             count,
         } => format!("[provider reasoning {action}: {count} block(s), {reason}]"),
-        CodingAgentEvent::ResponseRestarted => "[incomplete response discarded; retrying]".into(),
-        CodingAgentEvent::ToolCatalogWarning(message) => format!("[tool catalog: {message}]"),
-        CodingAgentEvent::TurnAccepted { .. }
-        | CodingAgentEvent::TurnEnded { .. }
-        | CodingAgentEvent::ModelOutputObserved
-        | CodingAgentEvent::TextDelta(_)
-        | CodingAgentEvent::ThinkingDelta { .. }
-        | CodingAgentEvent::AssistantCommitted { .. }
-        | CodingAgentEvent::SteeringCommitted { .. }
-        | CodingAgentEvent::ChildToolStarted { .. }
-        | CodingAgentEvent::Final(_) => return None,
+        AgentEvent::ResponseRestarted => "[incomplete response discarded; retrying]".into(),
+        AgentEvent::ToolCatalogWarning(message) => format!("[tool catalog: {message}]"),
+        AgentEvent::TurnAccepted { .. }
+        | AgentEvent::TurnEnded { .. }
+        | AgentEvent::ModelOutputObserved
+        | AgentEvent::TextDelta(_)
+        | AgentEvent::ThinkingDelta { .. }
+        | AgentEvent::AssistantCommitted { .. }
+        | AgentEvent::SteeringCommitted { .. }
+        | AgentEvent::ChildToolStarted { .. }
+        | AgentEvent::Final(_) => return None,
     };
     Some(
         text.chars()
@@ -189,16 +190,14 @@ pub(super) fn diagnostic(event: &CodingAgentEvent) -> Option<String> {
     )
 }
 
-fn child_output(
-    outcome: &ion_core::ChildOutcome,
-) -> std::borrow::Cow<'_, ion_core::CodingToolOutput> {
+fn child_output(outcome: &ion_core::ChildOutcome) -> std::borrow::Cow<'_, ion_core::ToolOutput> {
     match outcome {
         ion_core::ChildOutcome::Observed { output } => std::borrow::Cow::Borrowed(output),
         _ => std::borrow::Cow::Owned(outcome.clone().inspection_output()),
     }
 }
 
-fn output_diagnostic(label: &str, output: &ion_core::CodingToolOutput) -> String {
+fn output_diagnostic(label: &str, output: &ion_core::ToolOutput) -> String {
     let mut text = format!("[{label}] {}", output.value);
     for image in &output.images {
         text.push_str(&format!(
@@ -207,4 +206,21 @@ fn output_diagnostic(label: &str, output: &ion_core::CodingToolOutput) -> String
         ));
     }
     text
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn acceptance_receipt_does_not_disclose_normalized_input() {
+        let event = AgentEvent::TurnAccepted {
+            turn: 7,
+            input: ion_ai::Message::user_input("PRIVATE_NORMALIZED_FILE_CONTENT".into(), []),
+        };
+        assert_eq!(
+            event_record(&event),
+            json!({"type":"turn_accepted","turn":7})
+        );
+    }
 }

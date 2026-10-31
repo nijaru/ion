@@ -19,7 +19,7 @@ use crate::transcript_render::kind_label;
 use anyhow::{Context, Result};
 use ion_ai::{Content, Message, ModelRef};
 use ion_core::{
-    CodingSession, LiveTranscript, SessionEntry, SessionView, TranscriptItem, TranscriptProjection,
+    LiveTranscript, Session, SessionEntry, SessionView, TranscriptItem, TranscriptProjection,
     TurnEndReason,
 };
 use ion_host::image_input::{ImageSource, LoadedImage};
@@ -600,7 +600,7 @@ async fn login_in_terminal(
 }
 
 async fn copy_last_answer(
-    session: &CodingSession,
+    session: &Session,
     terminal: &mut TerminalSession,
 ) -> Result<crate::clipboard::CopyOutcome> {
     let answer = last_committed_answer(&session.view()?)?;
@@ -813,7 +813,7 @@ impl Frontend {
         self.status = format!("{} image(s) attached to the next prompt", self.images.len());
     }
 
-    fn refresh_session(&mut self, session: &CodingSession) -> Result<()> {
+    fn refresh_session(&mut self, session: &Session) -> Result<()> {
         self.completion.clear();
         self.pickers.close();
         let view = session.view()?;
@@ -834,7 +834,7 @@ impl Frontend {
         Ok(())
     }
 
-    fn load_history(&mut self, session: &CodingSession, view: &SessionView) {
+    fn load_history(&mut self, session: &Session, view: &SessionView) {
         let history = TranscriptProjection::from_session(view);
         let session_path = session.path().to_path_buf();
         let same_session = self.history_session.as_ref() == Some(&session_path);
@@ -1548,10 +1548,8 @@ fn draw_prepared(
 fn settlement_program_status(outcome: &ion_host::OperationOutcome) -> ProgramStatus {
     use ion_host::OperationOutcome;
     match outcome {
-        OperationOutcome::Turn(Err(ion_core::CodingAgentError::Cancelled))
-        | OperationOutcome::Compact(Err(ion_core::CodingAgentError::Cancelled)) => {
-            ProgramStatus::Idle
-        }
+        OperationOutcome::Turn(Err(ion_core::AgentError::Cancelled))
+        | OperationOutcome::Compact(Err(ion_core::AgentError::Cancelled)) => ProgramStatus::Idle,
         OperationOutcome::Shell(Ok(output)) if output.value["cancelled"] == true => {
             ProgramStatus::Idle
         }

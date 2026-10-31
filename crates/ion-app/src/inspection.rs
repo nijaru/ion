@@ -8,9 +8,9 @@ use ion_ai::{
     ResponseTermination, ToolCall, ToolResult, Usage,
 };
 use ion_core::{
-    ChildIntent, ChildOutcome, CodingToolOutput, ModelContextSnapshot, SessionEntry, SessionView,
-    StoredToolActivity, ToolOccurrence, ToolOutcome, ToolResultProjection, ToolSettlement,
-    TurnEndReason, UnobservedUserShell, UserShellOutcome,
+    ChildIntent, ChildOutcome, ModelContextSnapshot, SessionEntry, SessionView, StoredToolActivity,
+    ToolOccurrence, ToolOutcome, ToolOutput, ToolResultProjection, ToolSettlement, TurnEndReason,
+    UnobservedUserShell, UserShellOutcome,
 };
 use serde::{Serialize, Serializer, ser::SerializeStruct};
 
@@ -228,7 +228,7 @@ struct SettlementInspection {
 enum OutcomeInspection {
     Observed {
         #[serde(serialize_with = "omit")]
-        output: CodingToolOutput,
+        output: ToolOutput,
         projection: ToolResultProjection,
     },
     NotDispatched {
@@ -242,7 +242,7 @@ enum OutcomeInspection {
 enum ChildInspection {
     Observed {
         #[serde(serialize_with = "omit")]
-        output: CodingToolOutput,
+        output: ToolOutput,
     },
     NotDispatched {
         reason: String,
@@ -251,7 +251,7 @@ enum ChildInspection {
 }
 
 #[derive(Serialize)]
-#[serde(remote = "CodingToolOutput")]
+#[serde(remote = "ToolOutput")]
 struct OutputInspection {
     value: serde_json::Value,
     #[serde(serialize_with = "omit_each")]
@@ -281,7 +281,7 @@ projection!(
     ToolSettlement => SettlementInspection,
     ToolOutcome => OutcomeInspection,
     ChildOutcome => ChildInspection,
-    CodingToolOutput => OutputInspection,
+    ToolOutput => OutputInspection,
     ion_core::DelegationRecord => DelegationInspection,
     ion_core::DelegationSpec => DelegationSpecInspection,
 );
@@ -386,7 +386,7 @@ mod tests {
         ]);
         assistant.role = Role::Assistant;
         assistant.provider_replay = Some(ProviderReplay::new("test", "fixture", raw()));
-        let output = CodingToolOutput {
+        let output = ToolOutput {
             value: raw(),
             images: vec![image.clone()],
             is_error: false,

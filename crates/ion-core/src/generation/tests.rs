@@ -95,12 +95,12 @@ async fn cancellation_from_retry_observer_settles_the_agent_without_redispatch()
     let root = std::env::temp_dir().join(format!("ion-retry-stop-{}", uuid::Uuid::now_v7()));
     std::fs::create_dir(&root).unwrap();
     let session =
-        Arc::new(crate::CodingSession::create(root.join("session.sqlite"), Some(&root)).unwrap());
+        Arc::new(crate::Session::create(root.join("session.sqlite"), Some(&root)).unwrap());
     let service = Arc::new(InterruptedStream {
         prefix: Mutex::new(Some(Vec::new())),
         requests: AtomicUsize::new(0),
     });
-    let agent = crate::CodingAgent::with_tool_set(
+    let agent = crate::Agent::with_tool_set(
         service.clone(),
         Arc::new(crate::ToolSet::new([])),
         request().route.effective,

@@ -4,7 +4,7 @@ use std::sync::{Arc, Mutex};
 use ion_ai::{Content, Message};
 use serde::Serialize;
 
-use crate::{AgentLimits, CodingAgentError, json_size::encoded_len, session::valid_user_message};
+use crate::{AgentError, AgentLimits, json_size::encoded_len, session::valid_user_message};
 
 /// Shared by steering and follow-ups, not a process-RSS or model-context quota.
 /// The default preserves the existing RPC retained-input allowance.
@@ -35,7 +35,7 @@ impl InputBudget {
         message: Message,
         metadata: M,
         limits: AgentLimits,
-    ) -> Result<AcceptedInput<M>, CodingAgentError> {
+    ) -> Result<AcceptedInput<M>, AgentError> {
         let reservation = self.reserve(&message, &metadata, limits)?;
         Ok(AcceptedInput {
             message,
@@ -51,7 +51,7 @@ impl InputBudget {
         message: &Message,
         metadata: &impl Serialize,
         limits: AgentLimits,
-    ) -> Result<InputReservation, CodingAgentError> {
+    ) -> Result<InputReservation, AgentError> {
         validate_input(message, limits)?;
         let bytes = encoded_len(&(message, metadata))?;
         let mut used = self
@@ -59,7 +59,7 @@ impl InputBudget {
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         if bytes > self.limit.saturating_sub(*used) {
-            return Err(CodingAgentError::InputQueueFull {
+            return Err(AgentError::InputQueueFull {
                 max_encoded_bytes: self.limit,
             });
         }
@@ -112,12 +112,9 @@ impl Drop for InputReservation {
     }
 }
 
-pub(crate) fn validate_input(
-    message: &Message,
-    limits: AgentLimits,
-) -> Result<(), CodingAgentError> {
+pub(crate) fn validate_input(message: &Message, limits: AgentLimits) -> Result<(), AgentError> {
     if !valid_user_message(message) {
-        return Err(CodingAgentError::InvalidUserInput);
+        return Err(AgentError::InvalidUserInput);
     }
     if !limits.image_input
         && message
@@ -125,10 +122,10 @@ pub(crate) fn validate_input(
             .iter()
             .any(|part| matches!(part, Content::Image(_)))
     {
-        return Err(CodingAgentError::ImagesUnsupported);
+        return Err(AgentError::ImagesUnsupported);
     }
     if encoded_len(message)? > limits.max_request_bytes {
-        return Err(CodingAgentError::InputTooLarge {
+        return Err(AgentError::InputTooLarge {
             max_encoded_bytes: limits.max_request_bytes,
         });
     }
@@ -153,7 +150,7 @@ mod tests {
             .unwrap();
         assert!(matches!(
             budget.admit(message.clone(), &(), AgentLimits::default()),
-            Err(CodingAgentError::InputQueueFull { .. })
+            Err(AgentError::InputQueueFull { .. })
         ));
         // Moving accepted steering to another host queue must not free capacity.
         let restored = steering;
@@ -195,7 +192,7 @@ mod tests {
         assert_eq!(original, metadata);
         assert!(matches!(
             budget.admit(message.clone(), (), AgentLimits::default()),
-            Err(CodingAgentError::InputQueueFull { .. })
+            Err(AgentError::InputQueueFull { .. })
         ));
         drop(reservation);
         assert!(
@@ -215,7 +212,7 @@ mod tests {
         };
         assert!(matches!(
             budget.admit(input, &(), limits),
-            Err(CodingAgentError::InputTooLarge { .. })
+            Err(AgentError::InputTooLarge { .. })
         ));
         let image = ion_ai::ImageContent::from_bytes(&[
             137, 80, 78, 71, 13, 10, 26, 10, 0, 0, 0, 13, 73, 72, 68, 82, 0, 0, 0, 1, 0, 0, 0, 1,
@@ -236,7 +233,7 @@ mod tests {
                 &(),
                 AgentLimits::default()
             ),
-            Err(CodingAgentError::ImagesUnsupported)
+            Err(AgentError::ImagesUnsupported)
         ));
         assert!(matches!(
             budget.admit(
@@ -244,7 +241,7 @@ mod tests {
                 &(),
                 AgentLimits::default()
             ),
-            Err(CodingAgentError::InvalidUserInput)
+            Err(AgentError::InvalidUserInput)
         ));
         let mut input = Message::user_input("question".into(), []);
         input
@@ -252,7 +249,7 @@ mod tests {
             .push(ion_ai::Content::Thinking("not user input".into()));
         assert!(matches!(
             budget.admit(input, &(), AgentLimits::default()),
-            Err(CodingAgentError::InvalidUserInput)
+            Err(AgentError::InvalidUserInput)
         ));
         assert_eq!(*budget.used.lock().unwrap(), 0);
     }

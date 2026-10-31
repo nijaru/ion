@@ -42,7 +42,7 @@ impl Fixture {
             })
             .unwrap();
         let path = host.sessions(Some(cwd.clone())).new_path().unwrap();
-        let session = Arc::new(ion_core::CodingSession::create(path, Some(&cwd)).unwrap());
+        let session = Arc::new(ion_core::Session::create(path, Some(&cwd)).unwrap());
         session.select_model(selected.identity()).unwrap();
         let setup = ion_host::CodingApplication::new(host.clone(), None)
             .setup(session, selected, None, None, host.resources(&cwd).unwrap())
@@ -602,7 +602,7 @@ async fn passive_overflow_retains_question_invalidation_without_stopping_core() 
             .update(
                 ControlUpdate::Activity(ion_host::Observation::Event {
                     operation,
-                    event: Arc::new(ion_core::CodingAgentEvent::TextDelta(text.into())),
+                    event: Arc::new(ion_core::AgentEvent::TextDelta(text.into())),
                 }),
                 &mut output,
             )

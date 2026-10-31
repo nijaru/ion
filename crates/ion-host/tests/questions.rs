@@ -14,8 +14,8 @@ use ion_ai::{
     Role, Script, ScriptedModelService, ToolCall, ToolSpec, Usage,
 };
 use ion_core::{
-    ChildOutcome, CodeLimits, CodingAgent, CodingSession, CodingToolOutput, CodingToolSource,
-    SessionEntry, ToolDefinition, ToolExecutor, ToolInvocation, ToolSet,
+    Agent, ChildOutcome, CodeLimits, Session, SessionEntry, ToolDefinition, ToolExecutor,
+    ToolInvocation, ToolOutput, ToolSet, ToolSource,
 };
 use ion_host::{
     Application, ApplicationRuntime, ControlUpdate, Delivery, PendingQuestion, QuestionAnswer,
@@ -50,7 +50,7 @@ struct Effect {
     root: PathBuf,
 }
 
-impl CodingToolSource for Effect {
+impl ToolSource for Effect {
     fn registrations(self: Arc<Self>) -> Vec<ion_core::ToolRegistration> {
         vec![ion_core::ToolRegistration::new(
             ToolDefinition::external(ToolSpec {
@@ -69,7 +69,7 @@ impl CodingToolSource for Effect {
 }
 
 impl ToolExecutor for Effect {
-    fn execute<'a>(&'a self, invocation: ToolInvocation<'a>) -> BoxFuture<'a, CodingToolOutput> {
+    fn execute<'a>(&'a self, invocation: ToolInvocation<'a>) -> BoxFuture<'a, ToolOutput> {
         let value = invocation.call().arguments["value"]
             .as_str()
             .unwrap_or_default()
@@ -79,7 +79,7 @@ impl ToolExecutor for Effect {
         Box::pin(async move {
             calls.fetch_add(1, Ordering::SeqCst);
             fs::write(root.join("effect.txt"), &value).unwrap();
-            CodingToolOutput {
+            ToolOutput {
                 value: json!({"effect": value}),
                 images: Vec::new(),
                 is_error: false,
@@ -104,12 +104,12 @@ impl Application for App {
         _: Option<&ModelRef>,
         questions: Option<Arc<QuestionCustody>>,
     ) -> Result<ApplicationRuntime> {
-        let mut sources: Vec<Arc<dyn CodingToolSource>> = vec![self.effect.clone()];
+        let mut sources: Vec<Arc<dyn ToolSource>> = vec![self.effect.clone()];
         if let Some(questions) = questions {
             sources.push(Arc::new(QuestionTools::new(questions)));
         }
         let tools = ToolSet::new(sources).with_code_mode(Arc::new(QuickJs), CodeLimits::default());
-        let agent = CodingAgent::with_tool_set(self.service.clone(), Arc::new(tools), model());
+        let agent = Agent::with_tool_set(self.service.clone(), Arc::new(tools), model());
         Ok(ApplicationRuntime::new(Arc::new(agent)))
     }
 }
@@ -129,7 +129,7 @@ fn fixture(scripts: Vec<Script>, with_consumer: bool) -> Fixture {
     fs::create_dir_all(&cwd).unwrap();
     let cwd = fs::canonicalize(&cwd).unwrap();
     let catalog = SessionCatalog::new(root.join("state"), Some(cwd.clone()));
-    let session = Arc::new(CodingSession::create(catalog.new_path().unwrap(), Some(&cwd)).unwrap());
+    let session = Arc::new(Session::create(catalog.new_path().unwrap(), Some(&cwd)).unwrap());
     let service = Arc::new(ScriptedModelService::new(scripts));
     let calls = Arc::new(AtomicUsize::new(0));
     let custody = with_consumer.then(QuestionCustody::new);
@@ -408,7 +408,7 @@ async fn responder_loss_stops_before_dependent_dispatch() {
     drop(fixture.responder.take());
     let settlement = wait_for_settlement(&mut fixture).await;
     match settlement.outcome {
-        ion_host::OperationOutcome::Turn(Err(ion_core::CodingAgentError::Cancelled)) => {}
+        ion_host::OperationOutcome::Turn(Err(ion_core::AgentError::Cancelled)) => {}
         ion_host::OperationOutcome::Turn(other) => panic!("unexpected Turn outcome: {other:?}"),
         _ => panic!("unexpected non-Turn settlement"),
     }
@@ -472,7 +472,7 @@ async fn responder_loss_in_code_mode_stops_the_root_turn_before_dependent_effect
     .expect("responder loss did not settle the Turn");
     assert!(matches!(
         settlement.outcome,
-        ion_host::OperationOutcome::Turn(Err(ion_core::CodingAgentError::Cancelled))
+        ion_host::OperationOutcome::Turn(Err(ion_core::AgentError::Cancelled))
     ));
     assert_eq!(fixture.calls.load(Ordering::SeqCst), 0);
     assert!(!fixture.effect.exists());
@@ -571,7 +571,7 @@ async fn control_stop_before_answer_prevents_dependent_dispatch() {
     let settlement = wait_for_settlement(&mut fixture).await;
     assert!(matches!(
         settlement.outcome,
-        ion_host::OperationOutcome::Turn(Err(ion_core::CodingAgentError::Cancelled))
+        ion_host::OperationOutcome::Turn(Err(ion_core::AgentError::Cancelled))
     ));
     assert_eq!(fixture.calls.load(Ordering::SeqCst), 0);
     assert!(!fixture.effect.exists());
@@ -713,7 +713,7 @@ async fn replacement_rebinds_custody_and_shutdown_revokes_saved_responder() {
         .expect("pending question Turn settles during shutdown");
     assert!(matches!(
         settlement.outcome,
-        ion_host::OperationOutcome::Turn(Err(ion_core::CodingAgentError::Cancelled))
+        ion_host::OperationOutcome::Turn(Err(ion_core::AgentError::Cancelled))
     ));
     assert!(
         fixture

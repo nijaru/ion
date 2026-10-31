@@ -13,9 +13,8 @@ use ion_ai::{
     ResponseTermination, Role, Script, ScriptedModelService, ToolCall, ToolSpec, Usage,
 };
 use ion_core::{
-    AuthorityScope, CodingAgent, CodingSession, CodingToolOutput, CodingToolSource,
-    DelegationOutcome, ToolDefinition, ToolExecutor, ToolInvocation, ToolRegistration, ToolSet,
-    TurnEndReason,
+    Agent, AuthorityScope, DelegationOutcome, Session, ToolDefinition, ToolExecutor,
+    ToolInvocation, ToolOutput, ToolRegistration, ToolSet, ToolSource, TurnEndReason,
 };
 use ion_host::{
     Application, ApplicationRuntime, BackgroundOwner, ControlUpdate, OperationOutcome,
@@ -24,7 +23,7 @@ use ion_host::{
 use serde_json::json;
 
 struct App {
-    agent: Arc<CodingAgent>,
+    agent: Arc<Agent>,
     instructions: &'static str,
 }
 impl Application for App {
@@ -46,19 +45,19 @@ impl Application for App {
     }
 }
 struct Effect {
-    parent: Arc<CodingSession>,
+    parent: Arc<Session>,
     file: PathBuf,
     pause: bool,
     release: Option<Arc<tokio::sync::Notify>>,
     synced: Arc<tokio::sync::Notify>,
 }
-impl CodingToolSource for Effect {
+impl ToolSource for Effect {
     fn registrations(self: Arc<Self>) -> Vec<ToolRegistration> {
         vec![ToolRegistration::new(definition("effect"), self)]
     }
 }
 impl ToolExecutor for Effect {
-    fn execute<'a>(&'a self, invocation: ToolInvocation<'a>) -> BoxFuture<'a, CodingToolOutput> {
+    fn execute<'a>(&'a self, invocation: ToolInvocation<'a>) -> BoxFuture<'a, ToolOutput> {
         Box::pin(async move {
             let links = self.parent.view().expect("parent facts").delegations();
             let link = links.first().expect("intent before child effect");
@@ -93,13 +92,13 @@ struct Delegate {
     child: SessionDelegation,
     owner: Option<Arc<BackgroundOwner>>,
 }
-impl CodingToolSource for Delegate {
+impl ToolSource for Delegate {
     fn registrations(self: Arc<Self>) -> Vec<ToolRegistration> {
         vec![ToolRegistration::new(definition("delegate"), self)]
     }
 }
 impl ToolExecutor for Delegate {
-    fn execute<'a>(&'a self, invocation: ToolInvocation<'a>) -> BoxFuture<'a, CodingToolOutput> {
+    fn execute<'a>(&'a self, invocation: ToolInvocation<'a>) -> BoxFuture<'a, ToolOutput> {
         Box::pin(async move {
             let task = match self.child.clone().prepare(
                 Message::user_input("perform the child effect".into(), []),
@@ -137,8 +136,8 @@ fn definition(name: &str) -> ToolDefinition {
         input_schema: json!({"type":"object","additionalProperties":false}),
     })
 }
-fn output(value: serde_json::Value, is_error: bool) -> CodingToolOutput {
-    CodingToolOutput {
+fn output(value: serde_json::Value, is_error: bool) -> ToolOutput {
+    ToolOutput {
         value,
         images: Vec::new(),
         is_error,
@@ -222,9 +221,9 @@ async fn main() -> Result<()> {
     let parent_turn = if fork { 2 } else { 1 };
     let recovering = resume || new;
     let session = Arc::new(if recovering {
-        CodingSession::open(root.join("parent.sqlite"))?
+        Session::open(root.join("parent.sqlite"))?
     } else {
-        CodingSession::create(root.join("parent.sqlite"), None)?
+        Session::create(root.join("parent.sqlite"), None)?
     });
     let original_id = session.id();
     let child_service = Arc::new(ScriptedModelService::new(if recovering {
@@ -245,9 +244,9 @@ async fn main() -> Result<()> {
         release: background.then(|| release.clone()),
         synced: synced.clone(),
     });
-    let child_agent = Arc::new(CodingAgent::with_tool_set(
+    let child_agent = Arc::new(Agent::with_tool_set(
         child_service.clone(),
-        Arc::new(ToolSet::new([effects as Arc<dyn CodingToolSource>])),
+        Arc::new(ToolSet::new([effects as Arc<dyn ToolSource>])),
         model("child"),
     ));
     let tools = Arc::new(Delegate {
@@ -291,9 +290,9 @@ async fn main() -> Result<()> {
     }
     let service = Arc::new(ScriptedModelService::new(scripts));
     let agent = Arc::new(
-        CodingAgent::with_tool_set(
+        Agent::with_tool_set(
             service.clone(),
-            Arc::new(ToolSet::new([tools as Arc<dyn CodingToolSource>])),
+            Arc::new(ToolSet::new([tools as Arc<dyn ToolSource>])),
             model("parent"),
         )
         .with_recovery_scope(AuthorityScope::new(if fork {
@@ -356,7 +355,7 @@ async fn main() -> Result<()> {
         let view = session.view()?;
         let links = view.delegations();
         ensure!(links.len() == 1 && view.id == original_id, "relationship or parent identity changed");
-        let child = CodingSession::open(&links[0].record.path)?;
+        let child = Session::open(&links[0].record.path)?;
         ensure!(child.id() == links[0].record.child && child.view()?.parent_delegation() == Some(&links[0].record), "child materialization identity changed");
         if recovering {
             ensure!(links[0].record == old.unwrap() && links[0].outcome == Some(DelegationOutcome::Unknown), "lost relationship was replayed or certainty invented");

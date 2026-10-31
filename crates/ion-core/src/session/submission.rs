@@ -61,7 +61,11 @@ pub struct RequestReceipt {
 
 #[derive(Debug)]
 pub(crate) enum TurnAdmission {
-    New { turn: u64, interrupted: usize },
+    New {
+        turn: u64,
+        interrupted: usize,
+        input: Message,
+    },
     Existing(RequestReceipt),
 }
 

@@ -211,8 +211,7 @@ mod tests {
         let native = Arc::new(
             LocalTools::with_environment(std::env::temp_dir(), environment.clone()).unwrap(),
         );
-        let catalog =
-            ion_core::ToolSet::new([native as Arc<dyn ion_core::CodingToolSource>]).snapshot();
+        let catalog = ion_core::ToolSet::new([native as Arc<dyn ion_core::ToolSource>]).snapshot();
         let observed = catalog
             .execute_untracked(
                 &ion_ai::ToolCall {

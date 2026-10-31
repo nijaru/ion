@@ -165,7 +165,7 @@ impl Control {
                         );
                         let status = match &result {
                             Ok(_) => "completed",
-                            Err(ion_core::CodingAgentError::Cancelled) => "cancelled",
+                            Err(ion_core::AgentError::Cancelled) => "cancelled",
                             Err(_) => "failed",
                         };
                         let mut record = if let Some(turn) = reply.turn {
@@ -187,7 +187,7 @@ impl Control {
                             .metadata
                             .context("compaction retains protocol metadata")?;
                         let mut record = json!({"type":"compact_end","id":metadata.id,"status":match &result {
-                            Ok(_) => "completed", Err(ion_core::CodingAgentError::Cancelled) => "cancelled", Err(_) => "failed",
+                            Ok(_) => "completed", Err(ion_core::AgentError::Cancelled) => "cancelled", Err(_) => "failed",
                         }});
                         match result {
                             Ok(changed) => record["changed"] = json!(changed),
@@ -324,16 +324,16 @@ impl Control {
     }
 }
 
-fn unknown_agent_task(error: &ion_core::CodingAgentError) -> Option<anyhow::Error> {
+fn unknown_agent_task(error: &ion_core::AgentError) -> Option<anyhow::Error> {
     match error {
-        ion_core::CodingAgentError::Session(error) => unknown_session_task(error),
+        ion_core::AgentError::Session(error) => unknown_session_task(error),
         _ => None,
     }
 }
-fn unknown_session_task(error: &ion_core::CodingSessionError) -> Option<anyhow::Error> {
+fn unknown_session_task(error: &ion_core::SessionError) -> Option<anyhow::Error> {
     matches!(
         error,
-        ion_core::CodingSessionError::Operation(ion_core::OperationError::TaskFailed(_))
+        ion_core::SessionError::Operation(ion_core::OperationError::TaskFailed(_))
     )
     .then(|| anyhow!("Core operation task failed; unfinished effects remain unknown: {error:#}"))
 }

@@ -254,10 +254,7 @@ async fn acknowledged_metadata_keeps_its_byte_reservation_until_settlement_trans
         snapshot.inputs[0].phase,
         InputCustodyPhase::Acknowledged(_)
     ));
-    assert!(matches!(
-        probe(),
-        Err(CodingAgentError::InputQueueFull { .. })
-    ));
+    assert!(matches!(probe(), Err(AgentError::InputQueueFull { .. })));
 
     model.release();
     tokio::time::timeout(Duration::from_secs(5), async {
@@ -267,10 +264,7 @@ async fn acknowledged_metadata_keeps_its_byte_reservation_until_settlement_trans
     })
     .await
     .unwrap();
-    assert!(matches!(
-        probe(),
-        Err(CodingAgentError::InputQueueFull { .. })
-    ));
+    assert!(matches!(probe(), Err(AgentError::InputQueueFull { .. })));
     let mut accepted = Vec::new();
     while let Some(update) = fixture.control.take_update() {
         if let ControlUpdate::Settled(settlement) = update {

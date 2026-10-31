@@ -1,7 +1,7 @@
 //! One bounded, sorted directory listing.
 use std::{fs, path::Path};
 
-use ion_core::CodingToolOutput as ToolOutput;
+use ion_core::ToolOutput;
 use serde_json::{Value, json};
 use tokio_util::sync::CancellationToken;
 

@@ -1529,7 +1529,7 @@ Core operation or a new Turn. Stop and foreground EOF/quit cancel and join it.
 Cancellation is not proof that remote effects stopped or were rolled back.
 
 For Rust embedders, `CodingApplication::new(host, tools)` adds an optional custom
-`CodingToolSource` to the coding tools; a same-name registration replaces that
+`ToolSource` to the coding tools; a same-name registration replaces that
 built-in. Use `.with_mcp_tools(Arc<McpTools>)` to retain typed MCP tool access and
 explicit management authority. The optional `Application::mcp_tools()` accessor
 defaults to none; coding children share tool access without inheriting that grant.
@@ -2717,7 +2717,7 @@ application's model default. The recipe remains attached through reload and
 replacement. Clone retains the resolved runtime rather than resolving a route
 name again. Explicit model selection and reopening resolve through the recipe;
 unavailable requested identities fail rather than silently selecting a default.
-Create a workspace-free Session with `CodingSession::create(path, None)` and its
+Create a workspace-free Session with `Session::create(path, None)` and its
 catalog with `SessionCatalog::new(state_root, None)`—no dummy directory is needed.
 The coding executable rejects workspace-free Sessions for coding operations;
 inspection can still represent their `cwd` as null.
@@ -2927,14 +2927,14 @@ cargo run --locked -p ion --example service -- "$(mktemp -d)"
 It is synthetic SDK qualification, not a network authentication implementation,
 a mandatory daemon or evidence of service scale or live-model adherence.
 
-For lower-level integration, `ion-core::CodingAgent` and `CodingSession` expose
+For lower-level integration, `ion-core::Agent` and `Session` expose
 retained `Operation` handles and abstract model/tool contracts;
 `Host::agent(selected, tool_set)` combines a selected HTTP route with a complete
 caller-owned `ToolSet`, without adding coding tools or Code Mode. Custom `ModelService`
 and tool sources can be assembled inside an `Application` and use shared control. Starting a Core operation reserves execution
 immediately and rejects concurrent starts. Retain/join each handle:
 dropping an owning wait requests stop, while timing out a borrowed `&mut operation`
-only stops waiting. `CodingSession::shutdown()` joins retained work and reports
+only stops waiting. `Session::shutdown()` joins retained work and reports
 unread failures. A real operation-task panic blocks live owner reuse and leaves
 effects unknown. Custom `ModelService` implementations must provide pure
 `validate_controls` to support explicit reasoning; the default refuses it.

@@ -63,7 +63,7 @@ impl From<&ReturnReason> for ReturnSnapshot {
 pub enum OutcomeSnapshot {
     Turn(std::result::Result<String, String>),
     Compact(std::result::Result<bool, String>),
-    Shell(std::result::Result<CodingToolOutput, String>),
+    Shell(std::result::Result<ToolOutput, String>),
 }
 impl From<&OperationOutcome> for OutcomeSnapshot {
     fn from(outcome: &OperationOutcome) -> Self {

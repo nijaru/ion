@@ -1,7 +1,7 @@
 use super::*;
 use crate::{
-    AgentLimits, CodingAgent, CodingSession, CodingToolOutput, CodingToolSource as ToolSource,
-    ToolDefinition, ToolExecutor, ToolInvocation, ToolRegistration, ToolSet,
+    Agent, AgentLimits, Session, ToolDefinition, ToolExecutor, ToolInvocation, ToolOutput,
+    ToolRegistration, ToolSet, ToolSource,
 };
 use ion_ai::{
     BoxFuture, Content, ImageContent, Message, ModelExecution, ModelRef, ModelResponse, ModelRoute,
@@ -45,8 +45,8 @@ fn configured(
     tools: Arc<dyn ToolSource>,
     model: ModelRef,
     limits: AgentLimits,
-) -> CodingAgent {
-    CodingAgent::new(service, tools, model).with_limits(limits)
+) -> Agent {
+    Agent::new(service, tools, model).with_limits(limits)
 }
 
 fn text_response(text: &str, usage: Usage) -> Script {
@@ -100,9 +100,9 @@ fn tool_response(usage: Usage) -> Script {
 struct EchoExecutor(usize);
 
 impl ToolExecutor for EchoExecutor {
-    fn execute<'a>(&'a self, _invocation: ToolInvocation<'a>) -> BoxFuture<'a, CodingToolOutput> {
+    fn execute<'a>(&'a self, _invocation: ToolInvocation<'a>) -> BoxFuture<'a, ToolOutput> {
         Box::pin(async {
-            CodingToolOutput {
+            ToolOutput {
                 value: serde_json::json!({"echo": "y".repeat(self.0)}),
                 images: Vec::new(),
                 is_error: false,
@@ -158,7 +158,7 @@ fn gif_image() -> ImageContent {
 #[tokio::test]
 async fn committed_tool_exchange_calibrates_next_budget_from_total_input() {
     let root = root("tool");
-    let session = Arc::new(CodingSession::create(root.join("session.db"), None).unwrap());
+    let session = Arc::new(Session::create(root.join("session.db"), None).unwrap());
     let service = Arc::new(ScriptedModelService::new([
         tool_response(Usage::known_with_cache(30_000, 1, 25_000, 0)),
         text_response("done", Usage::unknown()),
@@ -212,7 +212,7 @@ async fn observed_usage_avoids_false_context_rejection() {
     }
 
     let root = root("preserve-context");
-    let session = Arc::new(CodingSession::create(root.join("session.db"), None).unwrap());
+    let session = Arc::new(Session::create(root.join("session.db"), None).unwrap());
     let service = Arc::new(ScriptedModelService::new([
         tool_response(Usage::known(10_000, 1)),
         text_response("done", Usage::unknown()),
@@ -264,7 +264,7 @@ async fn observed_usage_avoids_false_context_rejection() {
 async fn incompatible_context_or_route_clears_the_sample_after_unknown_usage() {
     for change in ["instructions", "tools", "model"] {
         let root = root(change);
-        let session = Arc::new(CodingSession::create(root.join("session.db"), None).unwrap());
+        let session = Arc::new(Session::create(root.join("session.db"), None).unwrap());
         let service = Arc::new(ScriptedModelService::new([
             text_response("first", Usage::known(85_000, 1)),
             text_response("probe", Usage::unknown()),
@@ -338,7 +338,7 @@ async fn incompatible_context_or_route_clears_the_sample_after_unknown_usage() {
 #[tokio::test]
 async fn replaced_service_does_not_share_calibration_and_unknown_usage_keeps_it_cold() {
     let root = root("service");
-    let session = Arc::new(CodingSession::create(root.join("session.db"), None).unwrap());
+    let session = Arc::new(Session::create(root.join("session.db"), None).unwrap());
     let first = Arc::new(ScriptedModelService::new([
         text_response("first", Usage::known(85_000, 1)),
         text_response("again", Usage::unknown()),
@@ -405,7 +405,7 @@ async fn replaced_service_does_not_share_calibration_and_unknown_usage_keeps_it_
 #[tokio::test]
 async fn rejected_preparation_preserves_the_current_bindings_evidence() {
     let root = root("rejected-preparation");
-    let session = Arc::new(CodingSession::create(root.join("session.db"), None).unwrap());
+    let session = Arc::new(Session::create(root.join("session.db"), None).unwrap());
     let service = Arc::new(ScriptedModelService::new([
         text_response("first", Usage::known(85_000, 1)),
         text_response("again", Usage::unknown()),
@@ -465,7 +465,7 @@ async fn rejected_preparation_preserves_the_current_bindings_evidence() {
 #[tokio::test]
 async fn replay_reset_clears_calibration_and_unknown_usage_does_not_restore_it() {
     let root = root("replay");
-    let session = Arc::new(CodingSession::create(root.join("session.db"), None).unwrap());
+    let session = Arc::new(Session::create(root.join("session.db"), None).unwrap());
     let service = Arc::new(ScriptedModelService::new([
         replay_response("first", Usage::known(80_000, 1)),
         Script::OpenError(ProviderError {
@@ -529,7 +529,7 @@ async fn replay_reset_clears_calibration_and_unknown_usage_does_not_restore_it()
 #[tokio::test]
 async fn compaction_clears_calibration_before_the_next_request() {
     let root = root("compaction");
-    let session = Arc::new(CodingSession::create(root.join("session.db"), None).unwrap());
+    let session = Arc::new(Session::create(root.join("session.db"), None).unwrap());
     let service = Arc::new(ScriptedModelService::new([
         text_response("first", Usage::known(80_000, 1)),
         text_response("next", Usage::unknown()),
@@ -584,7 +584,7 @@ async fn compaction_clears_calibration_before_the_next_request() {
 #[tokio::test]
 async fn identical_images_keep_observed_context_and_changed_images_fall_back() {
     let root = root("images");
-    let session = Arc::new(CodingSession::create(root.join("session.db"), None).unwrap());
+    let session = Arc::new(Session::create(root.join("session.db"), None).unwrap());
     let service = Arc::new(ScriptedModelService::new([
         text_response("first", Usage::known(100_000, 1)),
         text_response("same", Usage::unknown()),
@@ -664,7 +664,7 @@ async fn identical_images_keep_observed_context_and_changed_images_fall_back() {
 #[tokio::test]
 async fn tiny_calibrated_estimate_cannot_relax_the_retained_byte_limit() {
     let root = root("bytes");
-    let session = Arc::new(CodingSession::create(root.join("session.db"), None).unwrap());
+    let session = Arc::new(Session::create(root.join("session.db"), None).unwrap());
     let service = Arc::new(ScriptedModelService::new([text_response(
         "first",
         Usage::known(1, 1),

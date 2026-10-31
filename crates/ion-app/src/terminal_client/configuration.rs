@@ -3,7 +3,7 @@ use std::collections::BTreeMap;
 
 use anyhow::Result;
 use ion_ai::{ModelRef, ProviderErrorKind, Reasoning};
-use ion_core::CodingAgentError;
+use ion_core::AgentError;
 use ion_host::{CredentialStatus, Host, Selection, SessionControl};
 use ion_terminal::{Screen, TerminalSession};
 
@@ -110,7 +110,7 @@ impl Picker {
                     }),
                     value: PickerValue::Reasoning(reasoning),
                 }),
-                Err(CodingAgentError::Provider(error))
+                Err(AgentError::Provider(error))
                     if error.kind == ProviderErrorKind::Unsupported => {}
                 Err(error) => return Err(error.into()),
             }

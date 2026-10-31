@@ -3,7 +3,7 @@ use std::{path::Path, sync::Arc};
 
 use anyhow::{Context, Result};
 use ion_ai::{BoxFuture, ModelRef};
-use ion_core::{CodingAgent, CodingSession, CodingToolOutput, CodingToolSource, ToolSelection};
+use ion_core::{Agent, Session, ToolOutput, ToolSelection, ToolSource};
 use tokio_util::sync::CancellationToken;
 
 use crate::{
@@ -52,11 +52,11 @@ pub trait UserShell: Send + Sync {
 }
 
 pub type PreparedShell =
-    Box<dyn FnOnce(CancellationToken) -> BoxFuture<'static, CodingToolOutput> + Send>;
+    Box<dyn FnOnce(CancellationToken) -> BoxFuture<'static, ToolOutput> + Send>;
 
 #[derive(Clone)]
 pub struct ApplicationRuntime {
-    pub agent: Arc<CodingAgent>,
+    pub agent: Arc<Agent>,
     pub shell: Option<Arc<dyn UserShell>>,
     /// Allow trusted client input to read local image paths. This is not an OS
     /// sandbox or a path allowlist. Encoded/normalized images need no file access.
@@ -68,7 +68,7 @@ pub struct ApplicationRuntime {
 
 impl ApplicationRuntime {
     /// No native input or shell authority is inherited by a custom application.
-    pub fn new(agent: Arc<CodingAgent>) -> Self {
+    pub fn new(agent: Arc<Agent>) -> Self {
         Self {
             agent,
             shell: None,
@@ -95,7 +95,7 @@ enum CodingRole {
 #[derive(Clone)]
 pub struct CodingApplication {
     host: Arc<Host>,
-    external_tools: Option<Arc<dyn CodingToolSource>>,
+    external_tools: Option<Arc<dyn ToolSource>>,
     mcp_tools: Option<Arc<crate::McpTools>>,
     code_mode: bool,
     selection: SelectionPolicy,
@@ -121,7 +121,7 @@ const READ_ONLY_TOOLS: &[&str] = &[
 ];
 
 impl CodingApplication {
-    pub fn new(host: Arc<Host>, external_tools: Option<Arc<dyn CodingToolSource>>) -> Self {
+    pub fn new(host: Arc<Host>, external_tools: Option<Arc<dyn ToolSource>>) -> Self {
         let processes = Arc::new(crate::ProcessOwner::new(64).expect("supported process capacity"));
         let owner = Arc::new(ApplicationOwner::new(
             Arc::new(crate::BackgroundOwner::new(64).expect("supported custody capacity")),
@@ -200,7 +200,7 @@ impl CodingApplication {
     /// preflight and binding use the same discovered bytes.
     pub fn setup(
         &self,
-        session: Arc<CodingSession>,
+        session: Arc<Session>,
         selected: Selection,
         reasoning: Option<ion_ai::Reasoning>,
         questions: Option<QuestionCustody>,
@@ -257,7 +257,7 @@ impl CodingApplication {
         let native = Arc::new(
             LocalTools::with_environment(cwd, environment.clone())?.with_project_instructions(),
         );
-        let mut sources: Vec<Arc<dyn CodingToolSource>> = vec![
+        let mut sources: Vec<Arc<dyn ToolSource>> = vec![
             native.clone(),
             Arc::new(crate::WebTools::new()?),
             Arc::new(crate::SearchTools::coding(
@@ -289,7 +289,7 @@ impl CodingApplication {
         sources.extend(
             self.mcp_tools
                 .iter()
-                .map(|tools| tools.clone() as Arc<dyn CodingToolSource>),
+                .map(|tools| tools.clone() as Arc<dyn ToolSource>),
         );
         sources.extend(self.external_tools.iter().cloned());
         let selection = match &self.selection {

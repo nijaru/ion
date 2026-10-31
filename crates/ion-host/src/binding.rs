@@ -3,7 +3,7 @@ use std::{fs, path::PathBuf, sync::Arc};
 
 use anyhow::{Result, ensure};
 use ion_ai::ModelRef;
-use ion_core::{CodingAgent, CodingSession, ForkPoint};
+use ion_core::{Agent, ForkPoint, Session};
 use serde::Serialize;
 
 use crate::{
@@ -16,7 +16,7 @@ pub struct SessionSetup {
     pub(crate) initial_completion_delivery: crate::CompletionDelivery,
     application: Arc<dyn Application>,
     pub(crate) catalog: SessionCatalog,
-    pub(crate) session: Arc<CodingSession>,
+    pub(crate) session: Arc<Session>,
     pub(crate) runtime: ApplicationRuntime,
     pub(crate) resources: Resources,
     pub(crate) commands: CommandCatalog,
@@ -32,7 +32,7 @@ impl SessionSetup {
     /// An omitted model restores the Session preference, then the application's
     /// default for a fresh Session. Omitted reasoning restores its saved value.
     pub fn new(
-        session: Arc<CodingSession>,
+        session: Arc<Session>,
         catalog: SessionCatalog,
         application: Arc<dyn Application>,
         model: Option<&ModelRef>,
@@ -56,7 +56,7 @@ impl SessionSetup {
     }
 
     pub(crate) fn from_prepared(
-        session: Arc<CodingSession>,
+        session: Arc<Session>,
         catalog: SessionCatalog,
         application: Arc<dyn Application>,
         resources: Resources,
@@ -101,10 +101,10 @@ impl SessionSetup {
     pub fn catalog(&self) -> &SessionCatalog {
         &self.catalog
     }
-    pub fn session(&self) -> &Arc<CodingSession> {
+    pub fn session(&self) -> &Arc<Session> {
         &self.session
     }
-    pub fn agent(&self) -> &Arc<CodingAgent> {
+    pub fn agent(&self) -> &Arc<Agent> {
         &self.runtime.agent
     }
     pub fn resources(&self) -> &Resources {
@@ -125,7 +125,7 @@ impl SessionSetup {
 
     fn prepare(
         &self,
-        session: &CodingSession,
+        session: &Session,
         model: Option<&ModelRef>,
     ) -> Result<(Resources, CommandCatalog, ApplicationRuntime)> {
         let resources = self.application.resources(session.cwd())?;
@@ -162,10 +162,10 @@ impl<M: Serialize + Send + 'static> SessionControl<M> {
     pub fn catalog(&self) -> &SessionCatalog {
         self.setup.catalog()
     }
-    pub fn session(&self) -> &Arc<CodingSession> {
+    pub fn session(&self) -> &Arc<Session> {
         self.setup.session()
     }
-    pub fn agent(&self) -> &Arc<CodingAgent> {
+    pub fn agent(&self) -> &Arc<Agent> {
         self.setup.agent()
     }
     pub fn resources(&self) -> &Resources {
@@ -233,7 +233,7 @@ impl<M: Serialize + Send + 'static> SessionControl<M> {
             .agent
             .validate_reasoning(ion_ai::Reasoning::ProviderDefault)?;
         let path = self.setup.catalog.new_path()?;
-        let session = Arc::new(CodingSession::create(&path, previous.cwd())?);
+        let session = Arc::new(Session::create(&path, previous.cwd())?);
         runtime.agent.select_model(&session)?;
         self.publish(session, runtime, resources, commands);
         Ok(())
@@ -311,7 +311,7 @@ impl<M: Serialize + Send + 'static> SessionControl<M> {
         }
         let session = match self.background().and_then(|owner| owner.parent(&path)) {
             Some(parent) => parent,
-            None => Arc::new(CodingSession::open(path)?),
+            None => Arc::new(Session::open(path)?),
         };
         ensure!(
             session.cwd() == previous.cwd(),
@@ -325,7 +325,7 @@ impl<M: Serialize + Send + 'static> SessionControl<M> {
 
     fn publish(
         &mut self,
-        session: Arc<CodingSession>,
+        session: Arc<Session>,
         runtime: ApplicationRuntime,
         resources: Resources,
         commands: CommandCatalog,

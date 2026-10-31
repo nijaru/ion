@@ -2,7 +2,7 @@
 use std::sync::Arc;
 
 use ion_ai::{BoxFuture, ToolCall};
-use ion_core::{CodingToolOutput, ToolExecutor};
+use ion_core::{ToolExecutor, ToolOutput};
 use rmcp::model::{
     CallToolRequest, CallToolRequestParams, CallToolResult, ClientRequest, ServerResult,
 };
@@ -21,7 +21,7 @@ impl ToolExecutor for McpExecutor {
     fn execute<'a>(
         &'a self,
         invocation: ion_core::ToolInvocation<'a>,
-    ) -> BoxFuture<'a, CodingToolOutput> {
+    ) -> BoxFuture<'a, ToolOutput> {
         let call = invocation.call();
         let stop = invocation.stop().clone();
         Box::pin(async move {
@@ -51,7 +51,7 @@ impl McpExecutor {
         &self,
         call: &ToolCall,
         stop: CancellationToken,
-    ) -> Result<(CallToolResult, Option<String>), CodingToolOutput> {
+    ) -> Result<(CallToolResult, Option<String>), ToolOutput> {
         let Some(args) = call.arguments.as_object() else {
             return Err(tool_error(
                 "MCP tool arguments must be an object".to_owned(),
@@ -90,7 +90,7 @@ impl McpExecutor {
         }
     }
 
-    fn failed(&self, error: impl std::fmt::Display) -> CodingToolOutput {
+    fn failed(&self, error: impl std::fmt::Display) -> ToolOutput {
         tool_error(format!(
             "MCP server {} tool call failed: {error}",
             self.server.name

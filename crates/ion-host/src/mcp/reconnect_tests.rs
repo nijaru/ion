@@ -124,7 +124,7 @@ impl Fixture {
         McpTools::connect(&self.config, &self.root, CancellationToken::new()).await
     }
     fn tools(source: &Arc<McpTools>) -> ion_core::ToolSet {
-        ion_core::ToolSet::new([source.clone() as Arc<dyn CodingToolSource>])
+        ion_core::ToolSet::new([source.clone() as Arc<dyn ToolSource>])
     }
 }
 impl Drop for Fixture {

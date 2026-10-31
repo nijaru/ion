@@ -77,7 +77,7 @@ async fn fixture(mode: &str) -> (PathBuf, Arc<McpTools>, ion_core::ToolSet) {
         McpTools::connect(&config, &root, tokio_util::sync::CancellationToken::new()).await;
     assert!(startup.diagnostics.is_empty(), "{:?}", startup.diagnostics);
     let source = startup.tools.unwrap();
-    let tools = ion_core::ToolSet::new([source.clone() as Arc<dyn CodingToolSource>]);
+    let tools = ion_core::ToolSet::new([source.clone() as Arc<dyn ToolSource>]);
     (root, source, tools)
 }
 
@@ -463,7 +463,7 @@ server.serve_forever()
     let startup =
         McpTools::connect(&config, &root, tokio_util::sync::CancellationToken::new()).await;
     let source = startup.tools.unwrap();
-    let issued = ion_core::ToolSet::new([source.clone() as Arc<dyn CodingToolSource>]).snapshot();
+    let issued = ion_core::ToolSet::new([source.clone() as Arc<dyn ToolSource>]).snapshot();
     let stop = CancellationToken::new();
     let task_stop = stop.clone();
     let work = tokio::spawn(async move {
@@ -615,8 +615,7 @@ server.serve_forever()
             McpTools::connect(&config, &root, tokio_util::sync::CancellationToken::new()).await;
         assert!(startup.diagnostics.is_empty(), "{:?}", startup.diagnostics);
         let source = startup.tools.unwrap();
-        let issued =
-            ion_core::ToolSet::new([source.clone() as Arc<dyn CodingToolSource>]).snapshot();
+        let issued = ion_core::ToolSet::new([source.clone() as Arc<dyn ToolSource>]).snapshot();
         let call = ToolCall {
             id: "http-sse".into(),
             name: name.into(),

@@ -1,6 +1,6 @@
 //! Provisional terminal projection of shared control updates, not execution custody.
 use anyhow::{Context, Result};
-use ion_core::{CodingAgentEvent, LiveTranscript, SessionEntry};
+use ion_core::{AgentEvent, LiveTranscript};
 use ion_host::{
     ControlUpdate, Delivery, InputPhase, Observation, OperationId, OperationOutcome, ReturnReason,
     SessionControl, UserInput,
@@ -141,17 +141,15 @@ impl Activity {
                 ui.status.clear();
             }
             ControlUpdate::Activity(Observation::Event { operation, event }) => {
-                if matches!(
-                    event.as_ref(),
-                    CodingAgentEvent::ContextCompactionRetry { .. }
-                ) && self.live.as_ref().is_none_or(|(id, _)| *id != operation)
+                if matches!(event.as_ref(), AgentEvent::ContextCompactionRetry { .. })
+                    && self.live.as_ref().is_none_or(|(id, _)| *id != operation)
                     && let Some(note) = crate::agent_events::diagnostic(&event)
                 {
                     // Manual compaction has no live Turn transcript.
                     ui.note(note);
                 }
-                if let CodingAgentEvent::TurnAccepted { turn }
-                | CodingAgentEvent::CompletionCommitted {
+                if let AgentEvent::TurnAccepted { turn, .. }
+                | AgentEvent::CompletionCommitted {
                     turn,
                     new_turn: true,
                     ..
@@ -171,38 +169,7 @@ impl Activity {
                         self.live = None;
                         return Ok(None);
                     }
-                    let view = match control
-                        .session()
-                        .view()
-                        .context("Session history refresh failed")
-                    {
-                        Ok(view) => view,
-                        Err(error) => {
-                            self.live = None;
-                            ui.status = format!("{error:#}");
-                            return Ok(Some(error));
-                        }
-                    };
-                    let mut live = if matches!(
-                        event.as_ref(),
-                        CodingAgentEvent::CompletionCommitted { new_turn: true, .. }
-                    ) {
-                        LiveTranscript::default()
-                    } else {
-                        let input = view
-                            .entries
-                            .iter()
-                            .find_map(|entry| match entry {
-                                SessionEntry::TurnStarted {
-                                    turn: candidate,
-                                    input,
-                                    ..
-                                } if candidate == turn => Some(input),
-                                _ => None,
-                            })
-                            .context("accepted Turn has no committed input")?;
-                        LiveTranscript::with_user_input(input)
-                    };
+                    let mut live = LiveTranscript::default();
                     live.observe(&event);
                     self.live = Some((operation, live));
                 } else if let Some((id, live)) = &mut self.live
@@ -211,13 +178,13 @@ impl Activity {
                     live.observe(&event);
                 } else if matches!(
                     event.as_ref(),
-                    CodingAgentEvent::AssistantCommitted { .. }
-                        | CodingAgentEvent::SteeringCommitted { .. }
-                        | CodingAgentEvent::CompletionCommitted { .. }
-                        | CodingAgentEvent::ToolFinished { .. }
-                        | CodingAgentEvent::ChildToolAdmitted { .. }
-                        | CodingAgentEvent::ChildToolFinished { .. }
-                        | CodingAgentEvent::TurnEnded { .. }
+                    AgentEvent::AssistantCommitted { .. }
+                        | AgentEvent::SteeringCommitted { .. }
+                        | AgentEvent::CompletionCommitted { .. }
+                        | AgentEvent::ToolFinished { .. }
+                        | AgentEvent::ChildToolAdmitted { .. }
+                        | AgentEvent::ChildToolFinished { .. }
+                        | AgentEvent::TurnEnded { .. }
                 ) {
                     // After a gap, keep showing newly committed work without
                     // rebuilding a strict live stream from a surviving suffix.
@@ -268,12 +235,12 @@ impl Activity {
             ControlUpdate::Settled(settlement) => {
                 self.live = None;
                 let result = match settlement.outcome {
-                    OperationOutcome::Turn(Err(ion_core::CodingAgentError::Cancelled))
+                    OperationOutcome::Turn(Err(ion_core::AgentError::Cancelled))
                         if settlement.stop_requested =>
                     {
                         Ok("Turn stopped".into())
                     }
-                    OperationOutcome::Compact(Err(ion_core::CodingAgentError::Cancelled))
+                    OperationOutcome::Compact(Err(ion_core::AgentError::Cancelled))
                         if settlement.stop_requested =>
                     {
                         Ok("Compaction stopped".into())
@@ -430,7 +397,7 @@ mod tests {
                 &fixture.control,
                 ControlUpdate::Activity(Observation::Event {
                     operation: id,
-                    event: Arc::new(CodingAgentEvent::ContextCompactionRetry {
+                    event: Arc::new(AgentEvent::ContextCompactionRetry {
                         through_entry: 10,
                         next_through_entry: 4,
                     }),
@@ -495,8 +462,11 @@ mod tests {
             .compact(None, super::super::EditorDraft::at_end("compact".into()))
             .unwrap();
         let mut live = LiveTranscript::default();
-        live.observe(&CodingAgentEvent::TurnAccepted { turn: 1 });
-        live.observe(&CodingAgentEvent::TextDelta("lost prefix".into()));
+        live.observe(&AgentEvent::TurnAccepted {
+            turn: 1,
+            input: ion_ai::Message::user_input("request".into(), []),
+        });
+        live.observe(&AgentEvent::TextDelta("lost prefix".into()));
         let mut activity = Activity {
             live: Some((id, live)),
         };
@@ -513,8 +483,8 @@ mod tests {
         );
         assert!(activity.live().is_none());
         for event in [
-            CodingAgentEvent::ResponseRestarted,
-            CodingAgentEvent::TextDelta("surviving tail".into()),
+            AgentEvent::ResponseRestarted,
+            AgentEvent::TextDelta("surviving tail".into()),
         ] {
             assert!(
                 activity
@@ -551,7 +521,10 @@ mod tests {
                     &fixture.control,
                     ControlUpdate::Activity(Observation::Event {
                         operation: id,
-                        event: Arc::new(CodingAgentEvent::TurnAccepted { turn: 2 }),
+                        event: Arc::new(AgentEvent::TurnAccepted {
+                            turn: 2,
+                            input: ion_ai::Message::user_input("next request".into(), []),
+                        }),
                     })
                 )
                 .unwrap()

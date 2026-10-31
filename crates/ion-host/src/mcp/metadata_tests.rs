@@ -54,7 +54,7 @@ for line in sys.stdin:
     let startup =
         McpTools::connect(&config, &root, tokio_util::sync::CancellationToken::new()).await;
     let source = startup.tools.unwrap();
-    let issued = ion_core::ToolSet::new([source.clone() as Arc<dyn CodingToolSource>]).snapshot();
+    let issued = ion_core::ToolSet::new([source.clone() as Arc<dyn ToolSource>]).snapshot();
     let mut observed = Vec::new();
     for spec in issued.specs() {
         observed.push(
@@ -84,8 +84,7 @@ for line in sys.stdin:
         server.tool_list_version.fetch_add(1, Ordering::AcqRel);
     }
     assert!(source.refresh(CancellationToken::new()).await.is_empty());
-    let refreshed =
-        ion_core::ToolSet::new([source.clone() as Arc<dyn CodingToolSource>]).snapshot();
+    let refreshed = ion_core::ToolSet::new([source.clone() as Arc<dyn ToolSource>]).snapshot();
     for (server, original) in [("a", "b__c"), ("a__b", "c")] {
         let expected = if server == "a" {
             "Remote tool\n\nMCP server a: Catalog purpose"
@@ -184,7 +183,7 @@ for line in sys.stdin:
         McpTools::connect(&config, &root, tokio_util::sync::CancellationToken::new()).await;
     assert!(startup.diagnostics.is_empty(), "{:?}", startup.diagnostics);
     let source = startup.tools.unwrap();
-    let snapshot = ion_core::ToolSet::new([source.clone() as Arc<dyn CodingToolSource>]).snapshot();
+    let snapshot = ion_core::ToolSet::new([source.clone() as Arc<dyn ToolSource>]).snapshot();
     for (server, fallback) in [
         ("direct", Some(ToolExposure::Direct)),
         ("deferred", Some(ToolExposure::Deferred)),

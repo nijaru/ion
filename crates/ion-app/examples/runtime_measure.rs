@@ -12,8 +12,8 @@ use ion_ai::{
     ResponseTermination, Role, Script, ScriptedModelService, ToolChoice, ToolSpec, Usage,
 };
 use ion_core::{
-    CodingAgent, CodingSession, CodingToolOutput, CodingToolSource, ToolDefinition, ToolExecutor,
-    ToolRegistration, ToolSet, TranscriptProjection,
+    Agent, Session, ToolDefinition, ToolExecutor, ToolOutput, ToolRegistration, ToolSet,
+    ToolSource, TranscriptProjection,
 };
 use ion_host::SessionCatalog;
 use ion_terminal::{Frame, Screen};
@@ -85,7 +85,7 @@ fn completion(text: String) -> Script {
 
 struct NoTools;
 
-impl CodingToolSource for NoTools {
+impl ToolSource for NoTools {
     fn registrations(self: Arc<Self>) -> Vec<ToolRegistration> {
         Vec::new()
     }
@@ -96,7 +96,7 @@ struct CatalogTools {
     deferred: bool,
 }
 
-impl CodingToolSource for CatalogTools {
+impl ToolSource for CatalogTools {
     fn registrations(self: Arc<Self>) -> Vec<ToolRegistration> {
         let definitions: Vec<ToolDefinition> = {
             (0..self.count)
@@ -137,10 +137,10 @@ impl ToolExecutor for CatalogTools {
     fn execute<'a>(
         &'a self,
         invocation: ion_core::ToolInvocation<'a>,
-    ) -> BoxFuture<'a, CodingToolOutput> {
+    ) -> BoxFuture<'a, ToolOutput> {
         let call = invocation.call();
         Box::pin(async move {
-            CodingToolOutput {
+            ToolOutput {
                 value: json!({"tool": call.name, "matches":[]}),
                 images: Vec::new(),
                 is_error: false,
@@ -149,12 +149,7 @@ impl ToolExecutor for CatalogTools {
     }
 }
 
-async fn fill(
-    agent: &CodingAgent,
-    session: &Arc<CodingSession>,
-    turns: usize,
-    label: &str,
-) -> Result<()> {
+async fn fill(agent: &Agent, session: &Arc<Session>, turns: usize, label: &str) -> Result<()> {
     for index in 0..turns {
         agent
             .submit(
@@ -171,7 +166,7 @@ async fn fill(
     Ok(())
 }
 
-fn request_from(session: &CodingSession) -> Result<ModelRequest> {
+fn request_from(session: &Session) -> Result<ModelRequest> {
     Ok(ModelRequest {
         route: ModelRoute::direct(model(), ModelRouteReason::UserRequest),
         provider_session_id: Some(session.provider_session_id().to_string()),
@@ -213,16 +208,16 @@ async fn run(workspace: &std::path::Path, state: &std::path::Path) -> Result<()>
     let short_service = Arc::new(ScriptedModelService::new(
         (0..SHORT_TURNS).map(|index| completion(format!("short response {index}"))),
     ));
-    let short_agent = CodingAgent::new(short_service, Arc::new(NoTools), model());
-    let short = Arc::new(CodingSession::create(catalog.new_path()?, Some(workspace))?);
+    let short_agent = Agent::new(short_service, Arc::new(NoTools), model());
+    let short = Arc::new(Session::create(catalog.new_path()?, Some(workspace))?);
     fill(&short_agent, &short, SHORT_TURNS, "short").await?;
 
     let discovery_service = Arc::new(ScriptedModelService::new(
         (0..DISCOVERY_SESSIONS).map(|index| completion(format!("discovery {index}"))),
     ));
-    let discovery_agent = CodingAgent::new(discovery_service, Arc::new(NoTools), model());
+    let discovery_agent = Agent::new(discovery_service, Arc::new(NoTools), model());
     for index in 0..DISCOVERY_SESSIONS {
-        let session = Arc::new(CodingSession::create(catalog.new_path()?, Some(workspace))?);
+        let session = Arc::new(Session::create(catalog.new_path()?, Some(workspace))?);
         discovery_agent
             .submit(
                 session.clone(),
@@ -242,8 +237,8 @@ async fn run(workspace: &std::path::Path, state: &std::path::Path) -> Result<()>
         })
         .chain((0..16).map(|index| completion(format!("summary chunk {index}"))));
     let long_service = Arc::new(ScriptedModelService::new(long_scripts));
-    let long_agent = CodingAgent::new(long_service, Arc::new(NoTools), model());
-    let long = Arc::new(CodingSession::create(catalog.new_path()?, Some(workspace))?);
+    let long_agent = Agent::new(long_service, Arc::new(NoTools), model());
+    let long = Arc::new(Session::create(catalog.new_path()?, Some(workspace))?);
     fill(&long_agent, &long, LONG_PREFILL_TURNS, "long").await?;
 
     let mut turn_samples = Vec::with_capacity(MEASURED_TURNS);
@@ -328,11 +323,11 @@ async fn run(workspace: &std::path::Path, state: &std::path::Path) -> Result<()>
     );
 
     for count in [50usize, 100, 250] {
-        let direct_host: Arc<dyn CodingToolSource> = Arc::new(CatalogTools {
+        let direct_host: Arc<dyn ToolSource> = Arc::new(CatalogTools {
             count,
             deferred: false,
         });
-        let deferred_host: Arc<dyn CodingToolSource> = Arc::new(CatalogTools {
+        let deferred_host: Arc<dyn ToolSource> = Arc::new(CatalogTools {
             count,
             deferred: true,
         });

@@ -233,7 +233,7 @@ async fn stderr_is_bounded_private_and_drained_without_blocking_tool_results() {
     let startup =
         McpTools::connect(&config, &root, tokio_util::sync::CancellationToken::new()).await;
     let source = startup.tools.unwrap();
-    let tools = ion_core::ToolSet::new([source.clone() as Arc<dyn CodingToolSource>]);
+    let tools = ion_core::ToolSet::new([source.clone() as Arc<dyn ToolSource>]);
     let call = ion_ai::ToolCall {
         id: "logs".into(),
         name: "mcp__5_owned__log".into(),

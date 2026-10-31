@@ -9,7 +9,7 @@ use serde::{Deserialize, Serialize};
 use tokio::sync::Notify;
 use uuid::Uuid;
 
-use crate::{CodingSession, CodingSessionError};
+use crate::{Session, SessionError};
 
 /// Delivery requested by a trusted receiving host. This value alone is not a grant.
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -238,12 +238,12 @@ impl CompletionInbox {
     }
     pub(crate) fn batch(
         &self,
-        session: &CodingSession,
+        session: &Session,
         turn: Option<u64>,
         natural_request: bool,
-    ) -> Result<CompletionBatch<'_>, CodingSessionError> {
+    ) -> Result<CompletionBatch<'_>, SessionError> {
         if session.id() != self.session {
-            return Err(CodingSessionError::CompletionTargetMismatch);
+            return Err(SessionError::CompletionTargetMismatch);
         }
         let mut state = lock(&self.state);
         if state.slots.is_empty() {
@@ -387,7 +387,7 @@ mod tests {
     fn another_session_cannot_consume_or_destroy_receiving_custody() {
         let root = std::env::temp_dir().join(format!("ion-notice-scope-{}", Uuid::now_v7()));
         std::fs::create_dir(&root).unwrap();
-        let other = CodingSession::create(root.join("other.sqlite"), Some(&root)).unwrap();
+        let other = Session::create(root.join("other.sqlite"), Some(&root)).unwrap();
         let inbox = CompletionInbox::new(Uuid::now_v7());
         let permit = inbox.reserve(0, None, CompletionDelivery::Wake).unwrap();
         permit.offer(CompletionNotice {
@@ -397,7 +397,7 @@ mod tests {
         });
         assert!(matches!(
             inbox.batch(&other, None, false),
-            Err(CodingSessionError::CompletionTargetMismatch)
+            Err(SessionError::CompletionTargetMismatch)
         ));
         assert!(inbox.has_wake());
         assert_eq!(permit.receipt().snapshot(), CompletionStatus::Queued);

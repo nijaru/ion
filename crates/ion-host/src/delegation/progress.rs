@@ -6,7 +6,7 @@ use std::{
 };
 
 use ion_ai::Content;
-use ion_core::{CodingAgentEvent as AgentEvent, DelegationPartialOutput, RequestKey};
+use ion_core::{AgentEvent, DelegationPartialOutput, RequestKey};
 use serde::Serialize;
 use tokio::time::Instant;
 

@@ -36,7 +36,7 @@ impl ChildReport {
         }
     }
 
-    fn settled(&mut self, outcome: Result<String, ion_core::CodingAgentError>) {
+    fn settled(&mut self, outcome: Result<String, ion_core::AgentError>) {
         match outcome {
             Ok(text) => {
                 // Reliable settlement supersedes a lost progress prefix. Keep
@@ -80,7 +80,7 @@ impl ChildReport {
 mod tests {
     use super::*;
     use ion_ai::Content;
-    use ion_core::{CodingAgentEvent as AgentEvent, MAX_DELEGATION_PARTIAL_BYTES};
+    use ion_core::{AgentEvent, MAX_DELEGATION_PARTIAL_BYTES};
 
     fn event(report: &mut ChildReport, event: AgentEvent) {
         report.progress.observe(&event);

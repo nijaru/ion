@@ -10,8 +10,8 @@ use serde_json::{Value, json};
 use tokio_util::sync::CancellationToken;
 
 use ion_core::{
-    CodingToolOutput as ToolOutput, CodingToolSource as ToolSource, ToolActivityKind,
-    ToolDefinition, ToolExecutor, ToolExposure, ToolPresentation, ToolRegistration,
+    ToolActivityKind, ToolDefinition, ToolExecutor, ToolExposure, ToolOutput, ToolPresentation,
+    ToolRegistration, ToolSource,
 };
 
 pub(crate) mod command;
@@ -729,8 +729,8 @@ mod tests {
             Script, ScriptedModelService, Usage,
         };
         use ion_core::{
-            AgentLimits, CodingAgent, CodingAgentError, CodingAgentEvent, CodingSession,
-            PromptCacheWarmingPolicy, SessionEntry, TurnEndReason,
+            Agent, AgentError, AgentEvent, AgentLimits, PromptCacheWarmingPolicy, Session,
+            SessionEntry, TurnEndReason,
         };
 
         for warming in [false, true] {
@@ -738,7 +738,7 @@ mod tests {
                 std::env::temp_dir().join(format!("ion-turn-cancel-{}", uuid::Uuid::now_v7()));
             fs::create_dir(&root).unwrap();
             let path = root.join("session.sqlite");
-            let session = Arc::new(CodingSession::create(&path, Some(&root)).unwrap());
+            let session = Arc::new(Session::create(&path, Some(&root)).unwrap());
             let response = ModelResponse {
                 message: Message {
                     role: Role::Assistant,
@@ -761,7 +761,7 @@ mod tests {
             let model = Arc::new(ScriptedModelService::new([Script::Stream(vec![
                 ModelStreamEvent::Completed(response),
             ])]));
-            let agent = CodingAgent::new(
+            let agent = Agent::new(
                 model.clone(),
                 Arc::new(LocalTools::new(&root).unwrap()),
                 ModelRef {
@@ -809,10 +809,7 @@ mod tests {
                 .expect("Turn cancellation did not settle")
                 .unwrap();
             ready.expect("native command did not start");
-            assert!(
-                matches!(result, Err(CodingAgentError::Cancelled)),
-                "{result:?}"
-            );
+            assert!(matches!(result, Err(AgentError::Cancelled)), "{result:?}");
             let view = session.view().unwrap();
             let output = view
                 .entries
@@ -831,7 +828,7 @@ mod tests {
             );
             assert_eq!(output.value["stdout"], "OBSERVED_BEFORE_CANCEL\n");
             assert!(output.value["exit_code"].is_number() || output.value["signal"].is_number());
-            assert!(events.iter().any(|event| matches!(event, CodingAgentEvent::ToolFinished { outcome: ion_core::ToolOutcome::Observed { output, .. }, .. } if output.value["cancelled"] == true)));
+            assert!(events.iter().any(|event| matches!(event, AgentEvent::ToolFinished { outcome: ion_core::ToolOutcome::Observed { output, .. }, .. } if output.value["cancelled"] == true)));
             assert!(matches!(
                 view.entries.last(),
                 Some(SessionEntry::TurnEnded {
@@ -845,7 +842,7 @@ mod tests {
                 "no dependent request or warming after cancellation"
             );
             drop(session);
-            let reopened = Arc::new(CodingSession::open(&path).unwrap());
+            let reopened = Arc::new(Session::open(&path).unwrap());
             assert_eq!(reopened.view().unwrap().entries, view.entries);
             drop(reopened);
             fs::remove_dir_all(root).unwrap();

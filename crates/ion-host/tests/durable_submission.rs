@@ -5,8 +5,8 @@ use ion_ai::{
     Role, Script, ScriptedModelService, ToolCall, ToolSpec, Usage,
 };
 use ion_core::{
-    AuthorityScope, CodingAgent, CodingSession, CodingToolOutput, CodingToolSource, RequestKey,
-    SessionEntry, ToolDefinition, ToolExecutor, ToolOutcome, ToolRegistration, TurnEndReason,
+    Agent, AuthorityScope, RequestKey, Session, SessionEntry, ToolDefinition, ToolExecutor,
+    ToolOutcome, ToolOutput, ToolRegistration, ToolSource, TurnEndReason,
 };
 use ion_host::{
     Application, ApplicationRuntime, ControlUpdate, Delivery, OperationOutcome, RequestAdmission,
@@ -23,7 +23,7 @@ use std::{
 use tokio_util::sync::CancellationToken;
 
 struct Effect(PathBuf);
-impl CodingToolSource for Effect {
+impl ToolSource for Effect {
     fn registrations(self: Arc<Self>) -> Vec<ToolRegistration> {
         vec![ToolRegistration::new(
             ToolDefinition::external(ToolSpec {
@@ -39,7 +39,7 @@ impl ToolExecutor for Effect {
     fn execute<'a>(
         &'a self,
         invocation: ion_core::ToolInvocation<'a>,
-    ) -> BoxFuture<'a, CodingToolOutput> {
+    ) -> BoxFuture<'a, ToolOutput> {
         let stop = invocation.stop().clone();
         Box::pin(async move {
             let mut file = OpenOptions::new()
@@ -53,7 +53,7 @@ impl ToolExecutor for Effect {
             // The fixture is killed here: the real effect is independently durable,
             // but no ToolOutput has reached Core. There is no replay suppression.
             stop.cancelled().await;
-            CodingToolOutput {
+            ToolOutput {
                 value: serde_json::json!("effect"),
                 images: Vec::new(),
                 is_error: false,
@@ -77,7 +77,7 @@ impl Application for Fixture {
         _: Option<Arc<ion_host::QuestionCustody>>,
     ) -> Result<ApplicationRuntime> {
         Ok(ApplicationRuntime::new(Arc::new(
-            CodingAgent::new(
+            Agent::new(
                 self.service.clone(),
                 self.effect.clone(),
                 ModelRef {
@@ -119,9 +119,9 @@ fn message() -> Message {
 async fn worker(root: &Path, mode: &str) {
     let path = root.join("session.db");
     let session = Arc::new(if mode == "effect" {
-        CodingSession::create(&path, None).unwrap()
+        Session::create(&path, None).unwrap()
     } else {
-        CodingSession::open(&path).unwrap()
+        Session::open(&path).unwrap()
     });
     let scripts = if mode == "effect" {
         vec![response(vec![Content::ToolCall(ToolCall {
@@ -310,11 +310,11 @@ async fn worker(root: &Path, mode: &str) {
             match settlement.outcome {
                 OperationOutcome::Turn(result) => {
                     if mode == "cancel" {
-                        assert!(matches!(result, Err(ion_core::CodingAgentError::Cancelled)));
+                        assert!(matches!(result, Err(ion_core::AgentError::Cancelled)));
                     } else if mode == "prefix" {
                         assert!(matches!(
                             result,
-                            Err(ion_core::CodingAgentError::ReplayContextChanged)
+                            Err(ion_core::AgentError::ReplayContextChanged)
                         ));
                     } else {
                         result.unwrap();
@@ -460,7 +460,7 @@ fn durable_submission_survives_process_loss() {
         first.0.kill().unwrap();
         assert!(!first.0.wait().unwrap().success());
         reader.join().unwrap();
-        let view = CodingSession::inspect(root.join("session.db")).unwrap();
+        let view = Session::inspect(root.join("session.db")).unwrap();
         assert_eq!(view.unfinished_turn, Some(1));
         assert!(
             !view

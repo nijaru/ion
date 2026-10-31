@@ -100,7 +100,7 @@ for line in sys.stdin:
     assert!(startup.diagnostics[0].contains("unchecked"));
     assert!(!startup.diagnostics[0].contains("SCHEMA_CANARY"));
     let source = startup.tools.unwrap();
-    let tools = ion_core::ToolSet::new([source.clone() as Arc<dyn CodingToolSource>]);
+    let tools = ion_core::ToolSet::new([source.clone() as Arc<dyn ToolSource>]);
     let issued = tools.snapshot();
     assert_eq!(issued.specs().len(), 2, "an unchecked schema hid the tool");
     let call = ToolCall {

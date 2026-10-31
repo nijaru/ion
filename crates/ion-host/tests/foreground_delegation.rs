@@ -11,9 +11,8 @@ use ion_ai::{
     Role, Script, ScriptedModelService, ToolCall, ToolSpec, Usage,
 };
 use ion_core::{
-    AuthorityScope, CodeLimits, CodingAgent, CodingAgentError, CodingSession, CodingToolOutput,
-    CodingToolSource, DelegationOutcome, ToolDefinition, ToolExecutor, ToolInvocation,
-    ToolRegistration, ToolSet, TurnEndReason,
+    Agent, AgentError, AuthorityScope, CodeLimits, DelegationOutcome, Session, ToolDefinition,
+    ToolExecutor, ToolInvocation, ToolOutput, ToolRegistration, ToolSet, ToolSource, TurnEndReason,
 };
 use ion_host::{
     Application, ApplicationRuntime, ControlUpdate, OperationOutcome, Resources, SessionCatalog,
@@ -42,7 +41,7 @@ mod report;
 mod steering;
 
 struct App {
-    agent: Arc<CodingAgent>,
+    agent: Arc<Agent>,
     instructions: &'static str,
     owner: Option<Arc<ion_host::ApplicationOwner>>,
 }
@@ -63,20 +62,20 @@ impl Application for App {
     }
 }
 struct Effect {
-    parent: Arc<CodingSession>,
+    parent: Arc<Session>,
     calls: AtomicUsize,
     started: watch::Sender<bool>,
     stopped: watch::Sender<bool>,
     release: Notify,
     block: bool,
 }
-impl CodingToolSource for Effect {
+impl ToolSource for Effect {
     fn registrations(self: Arc<Self>) -> Vec<ToolRegistration> {
         vec![ToolRegistration::new(definition("effect"), self)]
     }
 }
 struct DeferredChildTools(Arc<Effect>);
-impl CodingToolSource for DeferredChildTools {
+impl ToolSource for DeferredChildTools {
     fn registrations(self: Arc<Self>) -> Vec<ToolRegistration> {
         vec![ToolRegistration::new(
             definition("effect").deferred(),
@@ -85,7 +84,7 @@ impl CodingToolSource for DeferredChildTools {
     }
 }
 impl ToolExecutor for Effect {
-    fn execute<'a>(&'a self, invocation: ToolInvocation<'a>) -> BoxFuture<'a, CodingToolOutput> {
+    fn execute<'a>(&'a self, invocation: ToolInvocation<'a>) -> BoxFuture<'a, ToolOutput> {
         let origin = invocation.origin().unwrap();
         // Count forbidden follow-on parent execution too. A child-only assertion
         // here could panic before recording that effect and mask a gateway bug.
@@ -94,10 +93,7 @@ impl ToolExecutor for Effect {
             let links = self.parent.view().unwrap().delegations();
             let record = &links.last().unwrap().record;
             assert_eq!(record.child, origin.session());
-            assert_eq!(
-                CodingSession::inspect_id(&record.path).unwrap(),
-                record.child
-            );
+            assert_eq!(Session::inspect_id(&record.path).unwrap(), record.child);
             assert!(links.last().unwrap().outcome.is_none());
         }
         self.started.send_replace(true);
@@ -139,13 +135,13 @@ struct Delegate {
     progress: std::sync::Mutex<Option<ion_host::ChildProgress>>,
     completion: std::sync::Mutex<Option<ion_host::CompletionTarget>>,
 }
-impl CodingToolSource for Delegate {
+impl ToolSource for Delegate {
     fn registrations(self: Arc<Self>) -> Vec<ToolRegistration> {
         vec![ToolRegistration::new(definition("delegate"), self)]
     }
 }
 impl ToolExecutor for Delegate {
-    fn execute<'a>(&'a self, invocation: ToolInvocation<'a>) -> BoxFuture<'a, CodingToolOutput> {
+    fn execute<'a>(&'a self, invocation: ToolInvocation<'a>) -> BoxFuture<'a, ToolOutput> {
         Box::pin(async move {
             let task = async || {
                 let input = Message::user_input("count two characters".into(), []);
@@ -299,8 +295,8 @@ fn definition(name: &str) -> ToolDefinition {
         input_schema: json!({"type":"object"}),
     })
 }
-fn output(value: serde_json::Value) -> CodingToolOutput {
-    CodingToolOutput {
+fn output(value: serde_json::Value) -> ToolOutput {
+    ToolOutput {
         value,
         images: Vec::new(),
         is_error: false,
@@ -334,7 +330,7 @@ fn model(name: &str) -> ModelRef {
 }
 struct Fixture {
     root: PathBuf,
-    session: Arc<CodingSession>,
+    session: Arc<Session>,
     parent: Arc<ScriptedModelService>,
     child: Arc<ScriptedModelService>,
     effect: Arc<Effect>,
@@ -382,7 +378,7 @@ impl Fixture {
     ) -> Self {
         let root = std::env::temp_dir().join(format!("ion-foreground-{}", uuid::Uuid::now_v7()));
         std::fs::create_dir(&root).unwrap();
-        let session = Arc::new(CodingSession::create(root.join("parent.sqlite"), None).unwrap());
+        let session = Arc::new(Session::create(root.join("parent.sqlite"), None).unwrap());
         let effect = Arc::new(Effect {
             parent: session.clone(),
             calls: AtomicUsize::new(0),
@@ -398,12 +394,12 @@ impl Fixture {
                 Content::Text("two".into()),
             ]),
         ]));
-        let child_agent = Arc::new(CodingAgent::with_tool_set(
+        let child_agent = Arc::new(Agent::with_tool_set(
             child_service.unwrap_or_else(|| child.clone()),
             Arc::new(ToolSet::new([if context.is_some() {
-                Arc::new(DeferredChildTools(effect.clone())) as Arc<dyn CodingToolSource>
+                Arc::new(DeferredChildTools(effect.clone())) as Arc<dyn ToolSource>
             } else {
-                effect.clone() as Arc<dyn CodingToolSource>
+                effect.clone() as Arc<dyn ToolSource>
             }])),
             model("child"),
         ));
@@ -459,8 +455,8 @@ impl Fixture {
         }
         let parent = Arc::new(ScriptedModelService::new(scripts));
         let tools = ToolSet::new([
-            delegate.clone() as Arc<dyn CodingToolSource>,
-            effect.clone() as Arc<dyn CodingToolSource>,
+            delegate.clone() as Arc<dyn ToolSource>,
+            effect.clone() as Arc<dyn ToolSource>,
         ]);
         let tools = if composed {
             tools.with_code_mode(
@@ -470,7 +466,7 @@ impl Fixture {
         } else {
             tools
         };
-        let agent = Arc::new(CodingAgent::with_tool_set(
+        let agent = Arc::new(Agent::with_tool_set(
             parent.clone(),
             Arc::new(tools),
             model("parent"),
@@ -552,13 +548,10 @@ async fn fresh_foreground_child_reconciles_without_inheriting_parent_configurati
     };
     assert_eq!(answer.as_deref(), Some("two"));
     assert_eq!(
-        CodingSession::inspect(f.session.path())
-            .unwrap()
-            .delegations()[0]
-            .outcome,
+        Session::inspect(f.session.path()).unwrap().delegations()[0].outcome,
         links[0].outcome
     );
-    let child = CodingSession::open(&links[0].record.path).unwrap();
+    let child = Session::open(&links[0].record.path).unwrap();
     assert_eq!(
         child.view().unwrap().parent_delegation(),
         Some(&links[0].record)
@@ -637,7 +630,7 @@ async fn forked_child_shares_only_the_chosen_history_and_current_child_capabilit
             ion_core::DelegationTarget::Fork { point: actual, .. } if actual == point
         ));
         assert_eq!(links[0].record.site.turn, 2);
-        let child = CodingSession::open(&links[0].record.path).unwrap();
+        let child = Session::open(&links[0].record.path).unwrap();
         assert_eq!(
             child.view().unwrap().parent_delegation(),
             Some(&links[0].record)
@@ -716,7 +709,7 @@ async fn abandoned_tool_wait_still_joins_child_and_parent_stop_reaches_cleanup()
             .updates
             .iter()
             .any(|update| matches!(update, ControlUpdate::Settled(settlement)
-        if matches!(settlement.outcome, OperationOutcome::Turn(Err(CodingAgentError::Cancelled)))))
+        if matches!(settlement.outcome, OperationOutcome::Turn(Err(AgentError::Cancelled)))))
     );
     let root = f.root.clone();
     drop(f);
@@ -739,7 +732,7 @@ async fn relationship_faults_cannot_be_caught_to_continue_direct_or_composed_wor
         assert_eq!(f.effect.calls.load(Ordering::SeqCst), effects);
         assert_eq!(f.session.view().unwrap().last_end, None);
         assert!(report.updates.iter().any(|update| matches!(update, ControlUpdate::Settled(settlement)
-            if matches!(settlement.outcome, OperationOutcome::Turn(Err(CodingAgentError::Session(ion_core::CodingSessionError::Sqlite(_))))))));
+            if matches!(settlement.outcome, OperationOutcome::Turn(Err(AgentError::Session(ion_core::SessionError::Sqlite(_))))))));
         let links = f.session.view().unwrap().delegations();
         if effects == 0 {
             assert!(links.is_empty());
@@ -747,7 +740,7 @@ async fn relationship_faults_cannot_be_caught_to_continue_direct_or_composed_wor
         } else {
             assert_eq!(links.len(), 1);
             assert!(links[0].outcome.is_none());
-            let child = CodingSession::open(&links[0].record.path).unwrap();
+            let child = Session::open(&links[0].record.path).unwrap();
             assert_eq!(
                 child.view().unwrap().last_end,
                 Some((1, TurnEndReason::Completed))

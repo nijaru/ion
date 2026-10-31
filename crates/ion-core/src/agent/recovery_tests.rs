@@ -8,9 +8,9 @@ impl ToolExecutor for Counter {
     fn execute<'a>(
         &'a self,
         _invocation: crate::ToolInvocation<'a>,
-    ) -> BoxFuture<'a, crate::CodingToolOutput> {
+    ) -> BoxFuture<'a, crate::ToolOutput> {
         Box::pin(async move {
-            crate::CodingToolOutput {
+            crate::ToolOutput {
                 value: serde_json::json!(self.0.fetch_add(1, Ordering::SeqCst) + 1),
                 images: vec![],
                 is_error: false,

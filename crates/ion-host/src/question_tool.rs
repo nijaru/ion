@@ -10,8 +10,8 @@ use crate::question::{
 };
 use ion_ai::ToolSpec;
 use ion_core::{
-    CodingToolOutput, CodingToolSource, ToolActivityKind, ToolDefinition, ToolExecutor,
-    ToolExposure, ToolInvocation, ToolPresentation, ToolRegistration,
+    ToolActivityKind, ToolDefinition, ToolExecutor, ToolExposure, ToolInvocation, ToolOutput,
+    ToolPresentation, ToolRegistration, ToolSource,
 };
 use serde_json::{Map, Value, json};
 
@@ -30,7 +30,7 @@ impl QuestionTools {
     }
 }
 
-impl CodingToolSource for QuestionTools {
+impl ToolSource for QuestionTools {
     fn registrations(self: Arc<Self>) -> Vec<ToolRegistration> {
         let definition = ToolDefinition {
             result_schema: None,
@@ -123,10 +123,7 @@ impl CodingToolSource for QuestionTools {
 }
 
 impl ToolExecutor for QuestionTools {
-    fn execute<'a>(
-        &'a self,
-        invocation: ToolInvocation<'a>,
-    ) -> ion_ai::BoxFuture<'a, CodingToolOutput> {
+    fn execute<'a>(&'a self, invocation: ToolInvocation<'a>) -> ion_ai::BoxFuture<'a, ToolOutput> {
         let custody = self.custody.clone();
         Box::pin(async move {
             let Some(origin) = invocation.origin() else {
@@ -180,16 +177,16 @@ impl Drop for PendingGuard<'_> {
     }
 }
 
-fn unavailable(error: QuestionError) -> CodingToolOutput {
+fn unavailable(error: QuestionError) -> ToolOutput {
     match error {
         QuestionError::NotAttached => rejected("question responder is unavailable"),
         other => rejected(other.to_string()),
     }
 }
 
-fn rejected(message: impl Into<String>) -> CodingToolOutput {
+fn rejected(message: impl Into<String>) -> ToolOutput {
     let message = bounded(&format!("{TOOL_NAME}: {}", message.into()));
-    CodingToolOutput {
+    ToolOutput {
         value: json!({"error": message}),
         images: Vec::new(),
         is_error: true,

@@ -1066,10 +1066,10 @@ impl Session {
         exclude_from_context: bool,
         stop: CancellationToken,
         execute: F,
-    ) -> Operation<crate::CodingToolOutput, SessionError>
+    ) -> Operation<crate::ToolOutput, SessionError>
     where
         F: FnOnce(String, CancellationToken) -> W + Send + 'static,
-        W: std::future::Future<Output = crate::CodingToolOutput> + Send + 'static,
+        W: std::future::Future<Output = crate::ToolOutput> + Send + 'static,
     {
         let session = self.clone();
         self.operations.start(stop.clone(), async move {
@@ -1380,7 +1380,7 @@ impl Session {
     }
 
     /// Persist an idle Session's identity without route validation. Use
-    /// `CodingAgent::select_model` to preflight the retained generation preference.
+    /// `Agent::select_model` to preflight the retained generation preference.
     pub fn select_model(&self, model: ModelRef) -> Result<(), SessionError> {
         let guard = self.operations.try_lock().map_err(SessionError::from)?;
         self.record_selection(&guard, model, None)
@@ -1455,7 +1455,9 @@ impl Session {
         model: ModelRef,
     ) -> Result<(u64, usize), SessionError> {
         match self.admit_turn(input, model, None, None)? {
-            TurnAdmission::New { turn, interrupted } => Ok((turn, interrupted)),
+            TurnAdmission::New {
+                turn, interrupted, ..
+            } => Ok((turn, interrupted)),
             TurnAdmission::Existing(_) => unreachable!("anonymous input cannot reconcile"),
         }
     }
@@ -1511,7 +1513,14 @@ impl Session {
             recovery,
         });
         append(&mut store, &entries)?;
-        Ok(TurnAdmission::New { turn, interrupted })
+        let Some(SessionEntry::TurnStarted { input, .. }) = entries.pop() else {
+            unreachable!("admission batch ends with its committed TurnStarted");
+        };
+        Ok(TurnAdmission::New {
+            turn,
+            interrupted,
+            input,
+        })
     }
 
     #[cfg(test)]
@@ -2648,7 +2657,7 @@ mod tests {
                 assert_eq!(command, "echo done");
                 admitted.send(()).unwrap();
                 released.await.unwrap();
-                crate::CodingToolOutput {
+                crate::ToolOutput {
                     value: serde_json::json!({"stdout":"done","exit_code":0}),
                     images: Vec::new(),
                     is_error: false,

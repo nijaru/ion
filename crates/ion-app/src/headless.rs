@@ -3,7 +3,7 @@ use std::io;
 
 use anyhow::{Result, anyhow};
 use ion_ai::Message;
-use ion_core::{CodingAgentError, CodingAgentEvent};
+use ion_core::{AgentError, AgentEvent};
 use ion_host::{
     ControlUpdate, Observation, OperationOutcome, ReturnReason, SessionControl, SessionSetup,
     UserInput,
@@ -82,7 +82,7 @@ async fn foreground(
     // A signal received during binding must not admit the launch batch.
     tokio::select! {
         biased;
-        _ = signal.recv() => return Err(CodingAgentError::Cancelled.into()),
+        _ = signal.recv() => return Err(AgentError::Cancelled.into()),
         () = std::future::ready(()) => {}
     }
     match request {
@@ -147,7 +147,7 @@ async fn foreground(
                 listening = false;
                 control.request_stop();
                 request_shutdown();
-                if parent_result.is_some() { parent_result = Some(Err(CodingAgentError::Cancelled.into())); }
+                if parent_result.is_some() { parent_result = Some(Err(AgentError::Cancelled.into())); }
             }
             published = output.advance(), if output.is_healthy() && output.has_pending() => {
                 if let Err(error) = published {
@@ -185,7 +185,7 @@ async fn foreground(
                 ControlUpdate::Activity(Observation::Event { event, .. }) => {
                     // Final is delivered reliably from settlement, never twice
                     // and never dependent on a provisional observation ring.
-                    if matches!(event.as_ref(), CodingAgentEvent::Final(_)) { continue; }
+                    if matches!(event.as_ref(), AgentEvent::Final(_)) { continue; }
                     if suppress_progress || !output.can_acquire() {
                         omitted = omitted.saturating_add(1);
                         suppress_progress = true;
@@ -210,7 +210,7 @@ async fn foreground(
                     let stopped = matches!(input.reason, ReturnReason::Stopped);
                     let error = match input.reason {
                         ReturnReason::Preparation(error) => error,
-                        ReturnReason::Stopped => CodingAgentError::Cancelled.into(),
+                        ReturnReason::Stopped => AgentError::Cancelled.into(),
                         reason => anyhow!("input was not accepted: {reason:?}"),
                     };
                     rejected = Some(match rejected.take() {
@@ -295,8 +295,8 @@ async fn foreground(
                     Ok(_) => "completed",
                     Err(error)
                         if matches!(
-                            error.downcast_ref::<CodingAgentError>(),
-                            Some(CodingAgentError::Cancelled)
+                            error.downcast_ref::<AgentError>(),
+                            Some(AgentError::Cancelled)
                         ) =>
                     {
                         "cancelled"

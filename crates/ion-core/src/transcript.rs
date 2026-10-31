@@ -487,12 +487,6 @@ pub struct LiveTranscript {
 }
 
 impl LiveTranscript {
-    pub fn with_user_input(input: &Message) -> Self {
-        let mut live = Self::default();
-        live.builder.push_user(None, false, input);
-        live
-    }
-
     pub fn projection(&self) -> &TranscriptProjection {
         &self.builder.projection
     }
@@ -514,15 +508,9 @@ impl LiveTranscript {
     pub fn observe(&mut self, event: &AgentEvent) {
         self.revision += 1;
         match event {
-            AgentEvent::TurnAccepted { turn } => {
+            AgentEvent::TurnAccepted { turn, input } => {
                 self.turn = Some(*turn);
-                for item in &mut self.builder.projection.items {
-                    if let TranscriptItem::User(message) = item
-                        && message.turn.is_none()
-                    {
-                        message.turn = Some(*turn);
-                    }
-                }
+                self.builder.push_user(Some(*turn), false, input);
             }
             AgentEvent::CompletionCommitted { turn, notices, .. } => {
                 self.turn = Some(*turn);
@@ -933,7 +921,10 @@ mod tests {
     #[test]
     fn execution_start_changes_only_the_committed_call() {
         let mut live = LiveTranscript::default();
-        live.observe(&AgentEvent::TurnAccepted { turn: 1 });
+        live.observe(&AgentEvent::TurnAccepted {
+            turn: 1,
+            input: Message::user_input("request".into(), []),
+        });
         live.observe(&committed(
             1,
             vec![
@@ -948,7 +939,7 @@ mod tests {
             arguments: serde_json::json!({"path":"not-a"}),
             activity: ToolActivity::external("not-read"),
         });
-        let TranscriptItem::ActivityGroup(group) = &live.projection().items[0] else {
+        let TranscriptItem::ActivityGroup(group) = &live.projection().items[1] else {
             panic!()
         };
         assert_eq!(group.activities[0].state, ActivityState::Running);
@@ -967,7 +958,7 @@ mod tests {
                 },
             },
         });
-        let TranscriptItem::ActivityGroup(group) = &live.projection().items[0] else {
+        let TranscriptItem::ActivityGroup(group) = &live.projection().items[1] else {
             panic!()
         };
         assert_eq!(group.activities[0].state, ActivityState::Completed);
@@ -977,7 +968,10 @@ mod tests {
     #[test]
     fn live_projection_reopens_a_group_when_partial_text_is_restarted() {
         let mut live = LiveTranscript::default();
-        live.observe(&AgentEvent::TurnAccepted { turn: 7 });
+        live.observe(&AgentEvent::TurnAccepted {
+            turn: 7,
+            input: Message::user_input("request".into(), []),
+        });
         live.observe(&committed(
             7,
             vec![call(
@@ -1022,8 +1016,8 @@ mod tests {
                 subject: Some("src/main.rs".into()),
             },
         });
-        assert_eq!(live.projection().items.len(), 1);
-        let TranscriptItem::ActivityGroup(group) = &live.projection().items[0] else {
+        assert_eq!(live.projection().items.len(), 2);
+        let TranscriptItem::ActivityGroup(group) = &live.projection().items[1] else {
             panic!("expected one activity group");
         };
         assert!(group.open);
@@ -1034,7 +1028,10 @@ mod tests {
     #[test]
     fn thinking_and_prose_share_response_restart_and_commit_custody() {
         let mut live = LiveTranscript::default();
-        live.observe(&AgentEvent::TurnAccepted { turn: 1 });
+        live.observe(&AgentEvent::TurnAccepted {
+            turn: 1,
+            input: Message::user_input("request".into(), []),
+        });
         live.observe(&committed(1, vec![Content::Text("kept".into())]));
         for (block, text) in [(0, "first "), (0, "thought"), (1, "summary")] {
             live.observe(&AgentEvent::ThinkingDelta {
@@ -1057,7 +1054,7 @@ mod tests {
         );
         live.observe(&AgentEvent::ResponseRestarted);
         assert!(live.provisional_item_index().is_none());
-        assert_eq!(live.projection().items.len(), 1);
+        assert_eq!(live.projection().items.len(), 2);
         live.observe(&AgentEvent::ThinkingDelta {
             block: 0,
             text: "new thought".into(),
@@ -1070,8 +1067,8 @@ mod tests {
             ],
         ));
         assert!(live.provisional_item_index().is_none());
-        assert_eq!(live.projection().items.len(), 3);
-        let TranscriptItem::Assistant(message) = &live.projection().items[1] else {
+        assert_eq!(live.projection().items.len(), 4);
+        let TranscriptItem::Assistant(message) = &live.projection().items[2] else {
             panic!()
         };
         assert_eq!(
@@ -1083,7 +1080,10 @@ mod tests {
     #[test]
     fn live_committed_text_splits_the_next_tool_group() {
         let mut live = LiveTranscript::default();
-        live.observe(&AgentEvent::TurnAccepted { turn: 3 });
+        live.observe(&AgentEvent::TurnAccepted {
+            turn: 3,
+            input: Message::user_input("request".into(), []),
+        });
         live.observe(&committed(
             3,
             vec![call("one", "read", serde_json::json!({"path":"one.rs"}))],
@@ -1112,18 +1112,18 @@ mod tests {
                 call("two", "edit", serde_json::json!({"path":"two.rs"})),
             ],
         ));
-        assert_eq!(live.projection().items.len(), 3);
+        assert_eq!(live.projection().items.len(), 4);
         assert!(matches!(
-            &live.projection().items[0],
+            &live.projection().items[1],
             TranscriptItem::ActivityGroup(ActivityGroup { open: false, .. })
         ));
         assert!(matches!(
-            &live.projection().items[1],
+            &live.projection().items[2],
             TranscriptItem::Assistant(TranscriptMessage { parts, .. })
                 if parts == &vec![TranscriptPart::Text("Now editing.".into())]
         ));
         assert!(matches!(
-            &live.projection().items[2],
+            &live.projection().items[3],
             TranscriptItem::ActivityGroup(ActivityGroup { open: true, .. })
         ));
     }

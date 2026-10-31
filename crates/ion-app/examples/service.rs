@@ -6,7 +6,7 @@ use ion_ai::{
     ModelStreamEvent, ProviderError, ResponseTermination, Role, Script, ScriptedModelService,
     Usage,
 };
-use ion_core::{CodingAgent, CodingSession, ToolSet, TurnEndReason};
+use ion_core::{Agent, Session, ToolSet, TurnEndReason};
 use ion_host::{
     Application, ApplicationRuntime, ControlObserver, ControlSnapshot, ControlUpdate, Delivery,
     Resources, SessionCatalog, SessionControl, SessionSetup, UpdateSnapshot, UserInput,
@@ -98,9 +98,11 @@ impl Application for App {
             selected.is_none_or(|model| model == &identity()),
             "unknown model"
         );
-        Ok(ApplicationRuntime::new(Arc::new(
-            CodingAgent::with_tool_set(self.0.clone(), Arc::new(ToolSet::new([])), identity()),
-        )))
+        Ok(ApplicationRuntime::new(Arc::new(Agent::with_tool_set(
+            self.0.clone(),
+            Arc::new(ToolSet::new([])),
+            identity(),
+        ))))
     }
 }
 
@@ -190,7 +192,7 @@ async fn until(mut ready: impl FnMut() -> bool) -> Result<()> {
 
 async fn qualify(
     connection: &Connection,
-    session: &CodingSession,
+    session: &Session,
     model: &Model,
     stop: &CancellationToken,
     shutdown: &CancellationToken,
@@ -287,7 +289,7 @@ async fn qualify(
     until(|| {
         matches!(
             session.reserve_idle(),
-            Err(ion_core::CodingSessionError::Operation(
+            Err(ion_core::SessionError::Operation(
                 ion_core::OperationError::Closed
             ))
         )
@@ -332,7 +334,7 @@ async fn qualify_projection(root: PathBuf) -> Result<()> {
         permits: Semaphore::new(0),
     });
     let catalog = SessionCatalog::new(root, None);
-    let session = Arc::new(CodingSession::create(catalog.new_path()?, None)?);
+    let session = Arc::new(Session::create(catalog.new_path()?, None)?);
     let mut control = SessionSetup::new(
         session,
         catalog,
@@ -405,7 +407,7 @@ async fn main() -> Result<()> {
     let app = Arc::new(App(model.clone()));
     let catalog = SessionCatalog::new(root.clone(), None);
     let path = catalog.new_path()?;
-    let session = Arc::new(CodingSession::create(&path, None)?);
+    let session = Arc::new(Session::create(&path, None)?);
     let mut control =
         SessionSetup::new(session.clone(), catalog, app.clone(), None, None, None)?.into_control();
     control
@@ -456,7 +458,7 @@ async fn main() -> Result<()> {
     ensure!(report.updates.iter().any(|u| matches!(u, ControlUpdate::Returned(input) if input.metadata.correlation == "third" && input.metadata.marker.get() == 7)), "original metadata lost");
     drop(control);
     drop(session);
-    let reopened = Arc::new(CodingSession::open(path)?);
+    let reopened = Arc::new(Session::open(path)?);
     let mut replacement = SessionSetup::new(
         reopened,
         SessionCatalog::new(root, None),

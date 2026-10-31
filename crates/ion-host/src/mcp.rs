@@ -5,7 +5,7 @@ use std::sync::{
 };
 
 use indexmap::IndexMap;
-use ion_core::CodingToolOutput;
+use ion_core::ToolOutput;
 use rmcp::{
     ClientHandler, RoleClient,
     service::{NotificationContext, RunningService},
@@ -16,7 +16,7 @@ use tokio_util::sync::CancellationToken;
 #[cfg(test)]
 use {
     futures_util::future::join_all,
-    ion_core::{CodingToolSource, ToolResultSchema},
+    ion_core::{ToolResultSchema, ToolSource},
     serde_json::Value,
     std::{fs, time::Duration},
 };
@@ -94,8 +94,8 @@ pub use manager::{
     McpToolCounts, McpTools,
 };
 
-fn tool_error(message: String) -> CodingToolOutput {
-    CodingToolOutput {
+fn tool_error(message: String) -> ToolOutput {
+    ToolOutput {
         value: json!({"error":message}),
         images: Vec::new(),
         is_error: true,
@@ -104,7 +104,7 @@ fn tool_error(message: String) -> CodingToolOutput {
 
 #[cfg(test)]
 async fn read_native_snapshot(path: &str) -> Value {
-    let source: Arc<dyn CodingToolSource> =
+    let source: Arc<dyn ToolSource> =
         Arc::new(crate::local_tools::LocalTools::new(std::env::temp_dir()).unwrap());
     let catalog = ion_core::ToolSet::new([source])
         .with_selection(ion_core::ToolSelection::include(["read".into()]))
@@ -192,7 +192,7 @@ for line in sys.stdin:
             McpTools::connect(&config, &root, tokio_util::sync::CancellationToken::new()).await;
         assert!(startup.diagnostics.is_empty(), "{:?}", startup.diagnostics);
         let source = startup.tools.unwrap();
-        let tools = ion_core::ToolSet::new([source.clone() as Arc<dyn CodingToolSource>]);
+        let tools = ion_core::ToolSet::new([source.clone() as Arc<dyn ToolSource>]);
         let issued = tools.snapshot();
 
         // Persisted startup policy cannot revoke an active or issued capability.
@@ -305,7 +305,7 @@ for line in sys.stdin:
                 let startup = McpTools::connect(&config, &root, tokio_util::sync::CancellationToken::new()).await;
                 assert!(startup.diagnostics.is_empty(), "{:?}", startup.diagnostics);
                 let source = startup.tools.unwrap();
-                let issued = ion_core::ToolSet::new([source.clone() as Arc<dyn CodingToolSource>]).snapshot();
+                let issued = ion_core::ToolSet::new([source.clone() as Arc<dyn ToolSource>]).snapshot();
                 let (entered, started) = tokio::sync::oneshot::channel();
                 let (release, held) = tokio::sync::oneshot::channel::<()>();
                 let blocker = tokio::task::spawn_blocking(move || {

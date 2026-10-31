@@ -61,8 +61,9 @@ fn failed_request_commit_preserves_interrupted_work_and_retry_authority() {
             .unwrap(),
         TurnAdmission::New {
             turn: 2,
-            interrupted: 1
-        }
+            interrupted: 1,
+            input: accepted,
+        } if accepted == input("next")
     ));
     let receipt = session.request_receipt(&key).unwrap().unwrap();
     let entries = session.view().unwrap().entries;

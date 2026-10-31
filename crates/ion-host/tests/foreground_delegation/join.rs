@@ -143,7 +143,7 @@ async fn expiry_moves_same_live_run_and_grant_without_refreshing_execution_deadl
     assert_eq!(f.effect.calls.load(Ordering::SeqCst), 1);
     assert_eq!(f.child.requests().len(), 1);
     assert_eq!(
-        CodingSession::open(&transferred.record.path).unwrap().id(),
+        Session::open(&transferred.record.path).unwrap().id(),
         transferred.record.child
     );
     owner.join_shutdown().await.unwrap();
@@ -247,7 +247,7 @@ async fn stop_and_failed_transfers_join_started_work_before_parent_release() {
         if storage_fault {
             assert!(report.updates.iter().any(|update| matches!(update,
                 ControlUpdate::Settled(settlement) if matches!(settlement.outcome,
-                    OperationOutcome::Turn(Err(CodingAgentError::Session(ion_core::CodingSessionError::Sqlite(_)))))
+                    OperationOutcome::Turn(Err(AgentError::Session(ion_core::SessionError::Sqlite(_)))))
             )), "caught transfer fault must retain its typed Session cause");
             assert_eq!(f.session.view().unwrap().last_end, None);
             assert_eq!(

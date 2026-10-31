@@ -35,7 +35,9 @@ impl Agent {
             let input = crate::completion::notice_message(&notices);
             self.validate_submission(&session, &input, &stop)?;
             let (binding, catalog) = self.admission_binding(&session, &instructions)?;
-            let TurnAdmission::New { turn, interrupted } = session.admit_turn_input(
+            let TurnAdmission::New {
+                turn, interrupted, ..
+            } = session.admit_turn_input(
                 input,
                 self.model.clone(),
                 None,
@@ -59,8 +61,7 @@ impl Agent {
                             TurnStart {
                                 turn,
                                 interrupted,
-                                resumed: None,
-                                completion: notices,
+                                origin: TurnOrigin::Automated { notices },
                                 catalog,
                             },
                             instructions,

@@ -198,7 +198,7 @@ pub(super) fn turn_observer<M: Send + 'static>(
 ) -> impl FnMut(AgentEvent) + Send + 'static {
     move |event| {
         match &event {
-            AgentEvent::TurnAccepted { turn } => {
+            AgentEvent::TurnAccepted { turn, .. } => {
                 lock(&custody).accept(root.expect("new Turn retains a root"), operation, *turn);
             }
             AgentEvent::SteeringCommitted { turn, .. } => {

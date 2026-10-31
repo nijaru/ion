@@ -1,6 +1,6 @@
 //! Native read-only repository discovery: directory listing, file globs and
 //! content search. This is ordinary host filesystem access, not a sandbox.
-use ion_core::CodingToolOutput as ToolOutput;
+use ion_core::ToolOutput;
 use serde::Deserialize;
 use serde_json::Value;
 use tokio_util::sync::CancellationToken;

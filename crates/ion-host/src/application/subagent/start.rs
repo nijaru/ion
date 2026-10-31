@@ -188,7 +188,7 @@ impl Start {
     }
 }
 
-pub(super) fn failure(error: anyhow::Error, timeout_ms: u64) -> ion_core::CodingToolOutput {
+pub(super) fn failure(error: anyhow::Error, timeout_ms: u64) -> ion_core::ToolOutput {
     let timeout = match error.downcast_ref::<DelegationPreparationError>() {
         Some(DelegationPreparationError::TimedOut { elapsed_ms, .. }) => Some(*elapsed_ms),
         _ => None,

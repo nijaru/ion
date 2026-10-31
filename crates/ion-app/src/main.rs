@@ -8,7 +8,7 @@ use std::{
 
 use anyhow::{Context, Result, bail, ensure};
 use ion_ai::{Content, Message};
-use ion_core::{CodingSession, ForkPoint};
+use ion_core::{ForkPoint, Session};
 use ion_host::{Application, CredentialStatus, Host, Resources, SavedSelection};
 
 mod agent_events;
@@ -373,7 +373,7 @@ async fn run_cli(cli: Invocation) -> Result<()> {
                 catalog.new_path()?
             };
             let existing = if cli.resume_session || cli.continue_session || path.is_file() {
-                Some(CodingSession::inspect_metadata(&path)?)
+                Some(Session::inspect_metadata(&path)?)
             } else {
                 None
             };
@@ -393,13 +393,13 @@ async fn run_cli(cli: Invocation) -> Result<()> {
                 .map_or(catalog, |view| host.sessions(view.cwd.clone()));
             if matches!(action, Action::Inspect) {
                 ensure!(existing.is_some(), "session does not exist");
-                let view = CodingSession::inspect(&path)?;
+                let view = Session::inspect(&path)?;
                 inspection::write(&view, &mut io::stdout().lock())?;
                 return Ok(());
             }
             if matches!(action, Action::Usage) {
                 ensure!(existing.is_some(), "session does not exist");
-                let view = CodingSession::inspect(&path)?;
+                let view = Session::inspect(&path)?;
                 print_stdout(format_args!(
                     "Session {}\n{}",
                     view.id,
@@ -409,7 +409,7 @@ async fn run_cli(cli: Invocation) -> Result<()> {
             }
             if let Action::Export { path: output } = &action {
                 ensure!(existing.is_some(), "session does not exist");
-                let view = CodingSession::inspect(&path)?;
+                let view = Session::inspect(&path)?;
                 if let Some(output) = output {
                     let target = if output.is_absolute() {
                         output.clone()
@@ -430,7 +430,7 @@ async fn run_cli(cli: Invocation) -> Result<()> {
             }
             if matches!(action, Action::Turns) {
                 ensure!(existing.is_some(), "session does not exist");
-                let view = CodingSession::inspect(&path)?;
+                let view = Session::inspect(&path)?;
                 for turn in view.turns() {
                     print_stdout(format_args!(
                         "{}\t{}\t{}",
@@ -447,7 +447,7 @@ async fn run_cli(cli: Invocation) -> Result<()> {
             }
             if matches!(action, Action::Clone) {
                 ensure!(existing.is_some(), "session does not exist");
-                let source = CodingSession::open(&path)?;
+                let source = Session::open(&path)?;
                 let target = catalog.new_path()?;
                 let cloned = source.clone_to(&target)?;
                 let id = cloned.id().to_string();
@@ -456,7 +456,7 @@ async fn run_cli(cli: Invocation) -> Result<()> {
             }
             if let Action::Fork { turn, after } = &action {
                 ensure!(existing.is_some(), "session does not exist");
-                let source = CodingSession::open(&path)?;
+                let source = Session::open(&path)?;
                 let target = catalog.new_path()?;
                 let fork = source.fork_to(
                     &target,
@@ -640,9 +640,9 @@ async fn run_cli(cli: Invocation) -> Result<()> {
                 validate_launch_size(&ion_ai::Message::user_input(instructions.clone(), []))?;
             }
             let session = Arc::new(if existing.is_some() {
-                CodingSession::open(&path)?
+                Session::open(&path)?
             } else {
-                CodingSession::create(&path, Some(&cwd))?
+                Session::create(&path, Some(&cwd))?
             });
             if let Some(view) = &existing {
                 ensure!(

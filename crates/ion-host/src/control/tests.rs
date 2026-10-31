@@ -4,7 +4,7 @@ use ion_ai::{
     BoxFuture, Content, ModelRequest, ModelResponse, ModelService, ModelStream, ModelStreamEvent,
     ProviderError, ResponseTermination, Role, Usage,
 };
-use ion_core::{AgentLimits, CodingAgent, CodingSession, ToolSet};
+use ion_core::{Agent, AgentLimits, Session, ToolSet};
 use std::{
     cell::Cell, fs, os::unix::fs::PermissionsExt, path::PathBuf, sync::atomic::AtomicUsize,
     time::Duration,
@@ -23,8 +23,8 @@ async fn compaction_focus_is_charged_before_admission_and_returns_exact_metadata
         .unwrap_err();
     assert_eq!(source.literal, "  /compact literal 雪\n");
     assert!(matches!(
-        error.downcast_ref::<ion_core::CodingAgentError>(),
-        Some(ion_core::CodingAgentError::InputQueueFull { .. })
+        error.downcast_ref::<ion_core::AgentError>(),
+        Some(ion_core::AgentError::InputQueueFull { .. })
     ));
     assert!(!fixture.control.is_busy());
     assert_eq!(fixture.control.session().view().unwrap().entries, before);
@@ -171,8 +171,7 @@ impl<M: Serialize + Send + 'static> Fixture<M> {
                 image_input: images,
             })
             .unwrap();
-        let session =
-            Arc::new(CodingSession::create(root.join("session.sqlite"), Some(&root)).unwrap());
+        let session = Arc::new(Session::create(root.join("session.sqlite"), Some(&root)).unwrap());
         let mut setup = crate::CodingApplication::new(host.clone(), None)
             .setup(
                 session,
@@ -183,7 +182,7 @@ impl<M: Serialize + Send + 'static> Fixture<M> {
             )
             .unwrap();
         setup.runtime.agent = Arc::new(
-            CodingAgent::with_tool_set(
+            Agent::with_tool_set(
                 model.clone(),
                 Arc::new(ToolSet::new([])),
                 setup.runtime.agent.model().clone(),
@@ -323,11 +322,8 @@ async fn batch_admission_preserves_all_originals_and_rolls_back_before_start() {
     assert!(
         rejected
             .reason
-            .downcast_ref::<ion_core::CodingAgentError>()
-            .is_some_and(|error| matches!(
-                error,
-                ion_core::CodingAgentError::InputQueueFull { .. }
-            ))
+            .downcast_ref::<ion_core::AgentError>()
+            .is_some_and(|error| matches!(error, ion_core::AgentError::InputQueueFull { .. }))
     );
     assert_eq!(rejected.inputs.len(), 2);
     assert_eq!(
@@ -403,7 +399,7 @@ async fn dispatched_prompt_is_not_prepared_again_before_acceptance() {
     assert_eq!(settlements.len(), 1);
     assert!(matches!(
         settlements[0].outcome,
-        OperationOutcome::Turn(Err(CodingAgentError::Cancelled))
+        OperationOutcome::Turn(Err(AgentError::Cancelled))
     ));
     assert_eq!(settlements[0].accepted[0].id, id);
     assert_eq!(settlements[0].accepted[0].metadata.literal, "literal root");
@@ -985,7 +981,7 @@ async fn user_command_reuses_shell_admission_share_and_cancellation_custody() {
     let (_, settled) = settle(&mut fixture.control).await;
     assert!(matches!(
         settled.outcome,
-        OperationOutcome::Shell(Err(ion_core::CodingSessionError::UserShellCancelled))
+        OperationOutcome::Shell(Err(ion_core::SessionError::UserShellCancelled))
     ));
     assert_eq!(settled.metadata.unwrap().literal, "wait literal");
     assert!(!fixture.control.is_busy());
@@ -1036,9 +1032,9 @@ async fn panic_blocks_reuse_and_preserves_primary_and_cleanup_failures() {
     let (_, settlement) = settle(&mut fixture.control).await;
     assert!(matches!(
         settlement.outcome,
-        OperationOutcome::Turn(Err(CodingAgentError::Session(
-            CodingSessionError::Operation(ion_core::OperationError::TaskFailed(_))
-        )))
+        OperationOutcome::Turn(Err(AgentError::Session(SessionError::Operation(
+            ion_core::OperationError::TaskFailed(_)
+        ))))
     ));
     let rejected = fixture
         .control
@@ -1060,7 +1056,7 @@ async fn panic_blocks_reuse_and_preserves_primary_and_cleanup_failures() {
     let report = fixture.control.shutdown().await;
     assert!(matches!(
         report.cleanup_errors.as_slice(),
-        [CodingSessionError::Operation(
+        [SessionError::Operation(
             ion_core::OperationError::TaskFailed(_)
         )]
     ));

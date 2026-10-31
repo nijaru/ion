@@ -7,7 +7,7 @@ use super::{
     execution::{Completion, run_child},
     *,
 };
-use crate::{CodingSessionError, Operation, OperationError, operation::OperationOwner};
+use crate::{Operation, OperationError, SessionError, operation::OperationOwner};
 
 /// A trusted live Host destination. Core reserves custody before durable
 /// admission, returning the destination's stop scope. Exact retries need no
@@ -29,14 +29,14 @@ pub enum BackgroundStartError {
     #[error("background start refused: {0}")]
     Refused(String),
     #[error("{0}")]
-    Infrastructure(#[source] CodingSessionError),
+    Infrastructure(#[source] SessionError),
 }
 
 /// Only a live invocation gateway can create this single-use transfer. It can
 /// contain a cold or already-polled callback; moving it never recreates work.
 /// Historical coordinates, owner UUIDs and serialized receipts cannot make one.
 pub struct BackgroundJob {
-    parent: Arc<crate::CodingSession>,
+    parent: Arc<crate::Session>,
     record: DelegationRecord,
     execution: Option<ion_ai::BoxFuture<'static, Completion>>,
     stop: CancellationToken,
@@ -54,7 +54,7 @@ impl<F: FnOnce()> Drop for FailOnDrop<F> {
 
 impl BackgroundJob {
     pub(super) fn new(
-        parent: Arc<crate::CodingSession>,
+        parent: Arc<crate::Session>,
         record: DelegationRecord,
         prepared: ChildMaterialization,
         work: DelegationWork,
@@ -88,7 +88,7 @@ impl BackgroundJob {
 
     /// The actual retained parent, not authority reconstructed from its ID.
     /// Unread results must not keep its exclusive writer after settlement.
-    pub fn parent(&self) -> &Arc<crate::CodingSession> {
+    pub fn parent(&self) -> &Arc<crate::Session> {
         &self.parent
     }
 
@@ -99,7 +99,7 @@ impl BackgroundJob {
     /// A parent stop observed before commit refuses transfer; a racing stop may
     /// lose to commit. After commit the destination's reserved stop scope owns it.
     /// A joined infrastructure error carries its committed receipt in
-    /// `CodingSessionError::DelegationSettledFailure`; failed settlement does not.
+    /// `SessionError::DelegationSettledFailure`; failed settlement does not.
     /// The failure hook must not panic or block on the installation lock.
     pub fn start(
         &mut self,
@@ -108,7 +108,7 @@ impl BackgroundJob {
     ) -> Result<
         (
             DelegationReceipt,
-            Operation<DelegationReceipt, CodingSessionError>,
+            Operation<DelegationReceipt, SessionError>,
         ),
         BackgroundStartError,
     > {
@@ -116,7 +116,7 @@ impl BackgroundJob {
             || self.record.ownership != (DelegationOwnership::Background { owner: destination })
         {
             return Err(BackgroundStartError::Infrastructure(
-                CodingSessionError::InvalidHistory,
+                SessionError::InvalidHistory,
             ));
         }
         let owner = Arc::new(OperationOwner::default());
@@ -131,7 +131,7 @@ impl BackgroundJob {
         let record = self.record.clone();
         let prepared = owner.start_prepared(self.stop.clone(), || {
             if self.parent_stop.is_cancelled() || self.stop.is_cancelled() {
-                return Err(CodingSessionError::Operation(OperationError::Closed));
+                return Err(SessionError::Operation(OperationError::Closed));
             }
             parent.transfer_delegation(&record, &lease)?;
             let execution = self
@@ -157,14 +157,12 @@ impl BackgroundJob {
                                     outcome: Some(outcome),
                                 };
                                 match infrastructure {
-                                    Some(error) => {
-                                        Err(CodingSessionError::DelegationSettledFailure {
-                                            receipt: Box::new(receipt),
-                                            error: Box::new(
-                                                CodingSessionError::DelegationInfrastructure(error),
-                                            ),
-                                        })
-                                    }
+                                    Some(error) => Err(SessionError::DelegationSettledFailure {
+                                        receipt: Box::new(receipt),
+                                        error: Box::new(SessionError::DelegationInfrastructure(
+                                            error,
+                                        )),
+                                    }),
                                     None => Ok(receipt),
                                 }
                             });
@@ -178,7 +176,7 @@ impl BackgroundJob {
         match prepared {
             Ok((receipt, Some(operation))) => Ok((receipt, operation)),
             Ok((_, None)) => unreachable!("a transfer always retains work"),
-            Err(CodingSessionError::Operation(OperationError::Closed)) => Err(
+            Err(SessionError::Operation(OperationError::Closed)) => Err(
                 BackgroundStartError::Refused("stopped before ownership transfer".into()),
             ),
             Err(error) => Err(BackgroundStartError::Infrastructure(error)),

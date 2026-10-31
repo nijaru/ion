@@ -10,8 +10,7 @@ use ion_ai::{
     ScriptedModelService, ToolCall, Usage,
 };
 use ion_core::{
-    CodingAgent, CodingAgentError, CodingAgentEvent, CodingSession, CodingToolSource, SessionEntry,
-    ToolOutcome, ToolSet,
+    Agent, AgentError, AgentEvent, Session, SessionEntry, ToolOutcome, ToolSet, ToolSource,
 };
 use serde_json::{Value, json};
 use tokio::sync::oneshot;
@@ -50,10 +49,10 @@ fn model(scripts: Vec<Script>) -> Arc<ScriptedModelService> {
     Arc::new(ScriptedModelService::new(scripts))
 }
 fn tool_set(tools: Arc<ProcessTools>) -> Arc<ToolSet> {
-    Arc::new(ToolSet::new([tools as Arc<dyn CodingToolSource>]))
+    Arc::new(ToolSet::new([tools as Arc<dyn ToolSource>]))
 }
-fn agent(service: Arc<ScriptedModelService>, tools: Arc<ProcessTools>) -> CodingAgent {
-    CodingAgent::with_tool_set(
+fn agent(service: Arc<ScriptedModelService>, tools: Arc<ProcessTools>) -> Agent {
+    Agent::with_tool_set(
         service,
         tool_set(tools),
         ModelRef {
@@ -62,11 +61,7 @@ fn agent(service: Arc<ScriptedModelService>, tools: Arc<ProcessTools>) -> Coding
         },
     )
 }
-async fn submit(
-    agent: &CodingAgent,
-    session: &Arc<CodingSession>,
-    input: &str,
-) -> anyhow::Result<()> {
+async fn submit(agent: &Agent, session: &Arc<Session>, input: &str) -> anyhow::Result<()> {
     agent
         .submit(
             session.clone(),
@@ -78,7 +73,7 @@ async fn submit(
         .await?;
     Ok(())
 }
-fn process_outputs(session: &CodingSession) -> Vec<Value> {
+fn process_outputs(session: &Session) -> Vec<Value> {
     session
         .view()
         .unwrap()
@@ -133,8 +128,7 @@ async fn pipe_and_pty_keep_the_starting_environment_across_binding_replacement()
         let root = std::env::temp_dir().join(format!("ion-process-env-{}", Uuid::now_v7()));
         std::fs::create_dir(&root).unwrap();
         let owner = Arc::new(ProcessOwner::new(2).unwrap());
-        let session =
-            Arc::new(CodingSession::create(root.join("session.sqlite"), Some(&root)).unwrap());
+        let session = Arc::new(Session::create(root.join("session.sqlite"), Some(&root)).unwrap());
         let environment = |version: &str| {
             Arc::new(crate::CommandEnvironment::new(
             "/bin/bash".into(),
@@ -189,8 +183,7 @@ async fn core_workflow_survives_turns_and_exposes_actual_pipe_input_and_output()
     let root = std::env::temp_dir().join(format!("ion-process-workflow-{}", Uuid::now_v7()));
     std::fs::create_dir(&root).unwrap();
     let owner = Arc::new(ProcessOwner::new(1).unwrap());
-    let session =
-        Arc::new(CodingSession::create(root.join("session.sqlite"), Some(&root)).unwrap());
+    let session = Arc::new(Session::create(root.join("session.sqlite"), Some(&root)).unwrap());
     let command = "printf 'READY\\n'; printf effect > marker; while IFS= read -r line; do printf 'GOT:%s\\n' \"$line\"; done; printf 'ERR\\n' >&2; exit 3";
     let first = agent(
         model(turn(
@@ -263,8 +256,7 @@ async fn cancelled_wait_does_not_kill_and_close_really_joins() {
     let root = std::env::temp_dir().join(format!("ion-process-cancel-{}", Uuid::now_v7()));
     std::fs::create_dir(&root).unwrap();
     let owner = Arc::new(ProcessOwner::new(1).unwrap());
-    let session =
-        Arc::new(CodingSession::create(root.join("session.sqlite"), Some(&root)).unwrap());
+    let session = Arc::new(Session::create(root.join("session.sqlite"), Some(&root)).unwrap());
     let first = agent(
         model(turn(
             vec![call(
@@ -300,7 +292,7 @@ async fn cancelled_wait_does_not_kill_and_close_really_joins() {
             String::new(),
             stop,
             move |event| {
-                if let CodingAgentEvent::ToolStarted { name, .. } = event
+                if let AgentEvent::ToolStarted { name, .. } = event
                     && name == "process"
                     && let Some(sender) = started_tx.take()
                 {
@@ -317,10 +309,7 @@ async fn cancelled_wait_does_not_kill_and_close_really_joins() {
         )
         .await;
     started_rx.await.unwrap().await.unwrap();
-    assert!(
-        matches!(result, Err(CodingAgentError::Cancelled)),
-        "{result:?}"
-    );
+    assert!(matches!(result, Err(AgentError::Cancelled)), "{result:?}");
     let cancelled = process_outputs(&session).pop().unwrap();
     assert_eq!(cancelled["cancelled"], true, "{cancelled}");
 
@@ -356,8 +345,7 @@ async fn cancelled_close_reports_incomplete_join_and_retains_stop() {
     std::fs::create_dir(&root).unwrap();
     let owner = Arc::new(ProcessOwner::new(1).unwrap());
     let tools = Arc::new(ProcessTools::new(&root, owner.clone()).unwrap());
-    let session =
-        Arc::new(CodingSession::create(root.join("session.sqlite"), Some(&root)).unwrap());
+    let session = Arc::new(Session::create(root.join("session.sqlite"), Some(&root)).unwrap());
     let starter = agent(
         model(turn(
             vec![call(
@@ -392,7 +380,7 @@ async fn cancelled_close_reports_incomplete_join_and_retains_stop() {
             String::new(),
             stop,
             move |event| {
-                if matches!(event, CodingAgentEvent::ToolStarted { .. })
+                if matches!(event, AgentEvent::ToolStarted { .. })
                     && let Some(sender) = cancel_tx.take()
                 {
                     // Let close request its owned stop before cancelling its wait.
@@ -438,10 +426,7 @@ async fn cancelled_close_reports_incomplete_join_and_retains_stop() {
     session.shutdown().await.unwrap();
     std::fs::remove_dir_all(root).unwrap();
 
-    assert!(
-        matches!(result, Err(CodingAgentError::Cancelled)),
-        "{result:?}"
-    );
+    assert!(matches!(result, Err(AgentError::Cancelled)), "{result:?}");
     joined.unwrap();
     let close = close.expect("close observation");
     assert_eq!(close.value["cancelled"], true, "{close:?}");
@@ -478,7 +463,7 @@ async fn absent_and_foreign_authority_reject_before_effects() {
     assert!(output.is_error);
     assert!(!root.join("marker").exists());
 
-    let session_a = Arc::new(CodingSession::create(root.join("a.sqlite"), Some(&root)).unwrap());
+    let session_a = Arc::new(Session::create(root.join("a.sqlite"), Some(&root)).unwrap());
     let first = agent(
         model(turn(
             vec![
@@ -503,7 +488,7 @@ async fn absent_and_foreign_authority_reject_before_effects() {
     let id = started_id(&process_outputs(&session_a)[1]);
     until(&root.join("marker")).await;
 
-    let session_b = Arc::new(CodingSession::create(root.join("b.sqlite"), Some(&root)).unwrap());
+    let session_b = Arc::new(Session::create(root.join("b.sqlite"), Some(&root)).unwrap());
     let foreign = agent(
         model(turn(
             vec![call("close", json!({"action":"close","id":id}))],
@@ -568,8 +553,7 @@ async fn output_flood_reports_gaps_and_direct_exit_does_not_wait_for_held_pipes(
     let root = std::env::temp_dir().join(format!("ion-process-flood-{}", Uuid::now_v7()));
     std::fs::create_dir(&root).unwrap();
     let owner = Arc::new(ProcessOwner::new(2).unwrap());
-    let session =
-        Arc::new(CodingSession::create(root.join("session.sqlite"), Some(&root)).unwrap());
+    let session = Arc::new(Session::create(root.join("session.sqlite"), Some(&root)).unwrap());
     let first = agent(
         model(turn(
             vec![
@@ -636,8 +620,7 @@ async fn cancelled_input_reports_the_actual_written_prefix() {
     let root = std::env::temp_dir().join(format!("ion-process-input-cancel-{}", Uuid::now_v7()));
     std::fs::create_dir(&root).unwrap();
     let owner = Arc::new(ProcessOwner::new(1).unwrap());
-    let session =
-        Arc::new(CodingSession::create(root.join("session.sqlite"), Some(&root)).unwrap());
+    let session = Arc::new(Session::create(root.join("session.sqlite"), Some(&root)).unwrap());
     let first = agent(
         model(turn(
             vec![call(
@@ -678,7 +661,7 @@ async fn cancelled_input_reports_the_actual_written_prefix() {
             String::new(),
             stop,
             move |event| {
-                if let CodingAgentEvent::ToolStarted { name, .. } = event
+                if let AgentEvent::ToolStarted { name, .. } = event
                     && name == "process"
                     && observed.fetch_add(1, std::sync::atomic::Ordering::SeqCst) == 1
                 {
@@ -691,10 +674,7 @@ async fn cancelled_input_reports_the_actual_written_prefix() {
             },
         )
         .await;
-    assert!(
-        matches!(result, Err(CodingAgentError::Cancelled)),
-        "{result:?}"
-    );
+    assert!(matches!(result, Err(AgentError::Cancelled)), "{result:?}");
     let outputs = process_outputs(&session);
     assert_eq!(outputs[1]["bytes_written"], 8192, "{}", outputs[1]);
     let partial = &outputs[2];
@@ -728,7 +708,7 @@ async fn ending_a_child_scope_joins_and_reclaims_capacity_for_the_parent() {
     std::fs::create_dir(&root).unwrap();
     let owner = Arc::new(ProcessOwner::new(1).unwrap());
     let tools = Arc::new(ProcessTools::new(&root, owner.clone()).unwrap());
-    let child = Arc::new(CodingSession::create(root.join("child.sqlite"), Some(&root)).unwrap());
+    let child = Arc::new(Session::create(root.join("child.sqlite"), Some(&root)).unwrap());
     let child_agent = agent(
         model(turn(
             vec![call(
@@ -747,7 +727,7 @@ async fn ending_a_child_scope_joins_and_reclaims_capacity_for_the_parent() {
     child.shutdown().await.unwrap();
     owner.close_session(child.id()).await.unwrap();
 
-    let parent = Arc::new(CodingSession::create(root.join("parent.sqlite"), Some(&root)).unwrap());
+    let parent = Arc::new(Session::create(root.join("parent.sqlite"), Some(&root)).unwrap());
     let parent_agent = agent(
         model(turn(
             vec![call(
@@ -778,8 +758,7 @@ async fn owner_shutdown_stops_and_joins_running_processes() {
     let root = std::env::temp_dir().join(format!("ion-process-shutdown-{}", Uuid::now_v7()));
     std::fs::create_dir(&root).unwrap();
     let owner = Arc::new(ProcessOwner::new(1).unwrap());
-    let session =
-        Arc::new(CodingSession::create(root.join("session.sqlite"), Some(&root)).unwrap());
+    let session = Arc::new(Session::create(root.join("session.sqlite"), Some(&root)).unwrap());
     let runner = agent(
         model(turn(
             vec![call(
@@ -828,8 +807,7 @@ async fn core_pty_start_has_a_real_controlling_terminal_and_dimensions() {
     let root = std::env::temp_dir().join(format!("ion-pty-contract-{}", Uuid::now_v7()));
     std::fs::create_dir(&root).unwrap();
     let owner = Arc::new(ProcessOwner::new(1).unwrap());
-    let session =
-        Arc::new(CodingSession::create(root.join("session.sqlite"), Some(&root)).unwrap());
+    let session = Arc::new(Session::create(root.join("session.sqlite"), Some(&root)).unwrap());
     let command = concat!(
         "i=n o=n e=n d=n; ",
         "[ -t 0 ] && i=y; [ -t 1 ] && o=y; [ -t 2 ] && e=y; ",
@@ -929,8 +907,7 @@ async fn pty_screen_projects_alternate_tui_split_unicode_and_input_modes() {
     let root = std::env::temp_dir().join(format!("ion-pty-screen-{}", Uuid::now_v7()));
     std::fs::create_dir(&root).unwrap();
     let owner = Arc::new(ProcessOwner::new(1).unwrap());
-    let session =
-        Arc::new(CodingSession::create(root.join("session.sqlite"), Some(&root)).unwrap());
+    let session = Arc::new(Session::create(root.join("session.sqlite"), Some(&root)).unwrap());
     let command = concat!(
         "printf 'MAIN\\033[31mRED\\033[0m\\033[3;5H'; ",
         "printf '\\033[?1049h'; ",
@@ -995,8 +972,7 @@ async fn pty_program_dsr_receives_the_automatic_cursor_reply() {
     let root = std::env::temp_dir().join(format!("ion-pty-dsr-{}", Uuid::now_v7()));
     std::fs::create_dir(&root).unwrap();
     let owner = Arc::new(ProcessOwner::new(1).unwrap());
-    let session =
-        Arc::new(CodingSession::create(root.join("session.sqlite"), Some(&root)).unwrap());
+    let session = Arc::new(Session::create(root.join("session.sqlite"), Some(&root)).unwrap());
     let command = concat!(
         "stty raw -echo; ",
         "printf '\\033[4;7H\\033[6n'; ",
@@ -1051,8 +1027,7 @@ async fn pty_resize_updates_the_tty_projection_and_signals_the_foreground_group(
     let root = std::env::temp_dir().join(format!("ion-pty-resize-{}", Uuid::now_v7()));
     std::fs::create_dir(&root).unwrap();
     let owner = Arc::new(ProcessOwner::new(1).unwrap());
-    let session =
-        Arc::new(CodingSession::create(root.join("session.sqlite"), Some(&root)).unwrap());
+    let session = Arc::new(Session::create(root.join("session.sqlite"), Some(&root)).unwrap());
     let command = concat!(
         "trap 'stty size > winch; printf \"SIGWINCH\\n\"' WINCH; ",
         "stty size > initial; ",
@@ -1130,8 +1105,7 @@ async fn invalid_dimensions_and_cross_backend_actions_reject_without_effects() {
     let root = std::env::temp_dir().join(format!("ion-pty-invalid-{}", Uuid::now_v7()));
     std::fs::create_dir(&root).unwrap();
     let owner = Arc::new(ProcessOwner::new(2).unwrap());
-    let session =
-        Arc::new(CodingSession::create(root.join("session.sqlite"), Some(&root)).unwrap());
+    let session = Arc::new(Session::create(root.join("session.sqlite"), Some(&root)).unwrap());
     let first = agent(
         model(turn(
             vec![
@@ -1281,8 +1255,7 @@ async fn oversized_control_string_keeps_raw_terminal_bytes_and_disables_screen()
     let root = std::env::temp_dir().join(format!("ion-pty-osc-{}", Uuid::now_v7()));
     std::fs::create_dir(&root).unwrap();
     let owner = Arc::new(ProcessOwner::new(1).unwrap());
-    let session =
-        Arc::new(CodingSession::create(root.join("session.sqlite"), Some(&root)).unwrap());
+    let session = Arc::new(Session::create(root.join("session.sqlite"), Some(&root)).unwrap());
     let command = concat!(
         "printf '\\033]0;'; head -c 5000 /dev/zero | tr '\\000' x; ",
         "printf '\\007'; printf 'AFTER\\n'"
@@ -1360,8 +1333,7 @@ async fn application_shutdown_stops_and_joins_a_live_pty() {
     let root = std::env::temp_dir().join(format!("ion-pty-shutdown-{}", Uuid::now_v7()));
     std::fs::create_dir(&root).unwrap();
     let owner = Arc::new(ProcessOwner::new(1).unwrap());
-    let session =
-        Arc::new(CodingSession::create(root.join("session.sqlite"), Some(&root)).unwrap());
+    let session = Arc::new(Session::create(root.join("session.sqlite"), Some(&root)).unwrap());
     let runner = agent(
         model(turn(
             vec![call(
@@ -1416,8 +1388,7 @@ async fn exited_pty_screen_remains_stable_until_ack_and_releases_capacity() {
     let root = std::env::temp_dir().join(format!("ion-pty-ack-{}", Uuid::now_v7()));
     std::fs::create_dir(&root).unwrap();
     let owner = Arc::new(ProcessOwner::new(1).unwrap());
-    let session =
-        Arc::new(CodingSession::create(root.join("session.sqlite"), Some(&root)).unwrap());
+    let session = Arc::new(Session::create(root.join("session.sqlite"), Some(&root)).unwrap());
     let tools = Arc::new(ProcessTools::new(&root, owner.clone()).unwrap());
     let first = agent(
         model(turn(
@@ -1506,8 +1477,7 @@ async fn interactive_bash_reads_a_command_and_exits_in_the_owned_session() {
     let root = std::env::temp_dir().join(format!("ion-pty-bash-{}", Uuid::now_v7()));
     std::fs::create_dir(&root).unwrap();
     let owner = Arc::new(ProcessOwner::new(1).unwrap());
-    let session =
-        Arc::new(CodingSession::create(root.join("session.sqlite"), Some(&root)).unwrap());
+    let session = Arc::new(Session::create(root.join("session.sqlite"), Some(&root)).unwrap());
     let command = format!(
         "HOME='{}' HISTFILE=/dev/null bash --noprofile --norc -i",
         root.display()
@@ -1582,8 +1552,7 @@ async fn human_attachment_owns_terminal_input_until_detach() {
     let root = std::env::temp_dir().join(format!("ion-pty-attach-{}", Uuid::now_v7()));
     std::fs::create_dir(&root).unwrap();
     let owner = Arc::new(ProcessOwner::new(1).unwrap());
-    let session =
-        Arc::new(CodingSession::create(root.join("session.sqlite"), Some(&root)).unwrap());
+    let session = Arc::new(Session::create(root.join("session.sqlite"), Some(&root)).unwrap());
     let runner = agent(
         model(turn(
             vec![call(
@@ -1701,8 +1670,7 @@ async fn attachment_scope_rejects_foreign_pipe_and_double_attach() {
     let other = root.join("other");
     std::fs::create_dir(&other).unwrap();
     let owner = Arc::new(ProcessOwner::new(2).unwrap());
-    let session =
-        Arc::new(CodingSession::create(root.join("session.sqlite"), Some(&root)).unwrap());
+    let session = Arc::new(Session::create(root.join("session.sqlite"), Some(&root)).unwrap());
     let runner = agent(
         model(turn(
             vec![
@@ -1765,8 +1733,7 @@ async fn attachment_view_ends_when_the_program_exits() {
     let root = std::env::temp_dir().join(format!("ion-pty-attach-exit-{}", Uuid::now_v7()));
     std::fs::create_dir(&root).unwrap();
     let owner = Arc::new(ProcessOwner::new(1).unwrap());
-    let session =
-        Arc::new(CodingSession::create(root.join("session.sqlite"), Some(&root)).unwrap());
+    let session = Arc::new(Session::create(root.join("session.sqlite"), Some(&root)).unwrap());
     let runner = agent(
         model(turn(
             vec![call(
@@ -1820,8 +1787,7 @@ async fn stale_attachment_cannot_release_a_newer_lease() {
     let root = std::env::temp_dir().join(format!("ion-pty-attach-stale-{}", Uuid::now_v7()));
     std::fs::create_dir(&root).unwrap();
     let owner = Arc::new(ProcessOwner::new(1).unwrap());
-    let session =
-        Arc::new(CodingSession::create(root.join("session.sqlite"), Some(&root)).unwrap());
+    let session = Arc::new(Session::create(root.join("session.sqlite"), Some(&root)).unwrap());
     let runner = agent(
         model(turn(
             vec![call(

@@ -2,7 +2,7 @@
 use tokio_util::sync::CancellationToken;
 
 use super::*;
-use crate::CodingSession;
+use crate::Session;
 
 pub(super) type Completion = (DelegationOutcome, Option<String>);
 
@@ -25,7 +25,7 @@ pub(super) async fn run_child(
             None,
         );
     }
-    let child = match CodingSession::materialize_delegation(&record, prepared) {
+    let child = match Session::materialize_delegation(&record, prepared) {
         Ok(child) => child,
         Err(error) => {
             let message = format!(
