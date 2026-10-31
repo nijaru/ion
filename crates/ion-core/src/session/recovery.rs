@@ -95,7 +95,7 @@ impl Session {
             &store.state.pending,
             &BTreeSet::new(),
         ));
-        append(&mut store, &entries)?;
+        store.append(&entries)?;
         Ok((
             RecoveryPoint {
                 checkpoint: store.state.sequence,

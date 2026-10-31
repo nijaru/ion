@@ -256,9 +256,7 @@ impl Session {
         if projection.state.active.is_some() || projection.state.pending_shell.is_some() {
             return Err(SessionError::InvalidForkPoint);
         }
-        append(
-            &mut store,
-            &[SessionEntry::DelegationAdmitted {
+        store.append(&[SessionEntry::DelegationAdmitted {
                 record: record.clone(),
             }],
         )?;
@@ -280,9 +278,7 @@ impl Session {
             return Err(SessionError::InvalidHistory);
         };
         let mut store = self.store.lock().map_err(|_| SessionError::Poisoned)?;
-        append(
-            &mut store,
-            &[SessionEntry::DelegationTransferred {
+        store.append(&[SessionEntry::DelegationTransferred {
                 run: record.run,
                 owner,
             }],
@@ -299,9 +295,7 @@ impl Session {
         outcome: DelegationOutcome,
     ) -> Result<(), SessionError> {
         let mut store = self.store.lock().map_err(|_| SessionError::Poisoned)?;
-        append(
-            &mut store,
-            &[SessionEntry::DelegationSettled {
+        store.append(&[SessionEntry::DelegationSettled {
                 run: record.run,
                 outcome,
             }],
@@ -334,7 +328,7 @@ impl Session {
                     return Err(SessionError::InvalidHistory);
                 }
                 let mut store = child.store.lock().map_err(|_| SessionError::Poisoned)?;
-                append(&mut store, &binding)?;
+                store.append(&binding)?;
                 drop(store);
                 Ok(child)
             }

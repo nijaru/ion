@@ -281,7 +281,7 @@ impl PreparedNavigation<'_> {
         entries.push(SessionEntry::ContextSelected {
             head_entry: self.head,
         });
-        append(&mut store, &entries)?;
+        store.append(&entries)?;
         Ok(self.session.position(&store))
     }
 }

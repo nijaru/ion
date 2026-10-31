@@ -1206,9 +1206,7 @@ fn rejected_batch_does_not_publish_projection_or_settled_cut() {
         let mut store = session.store.lock().unwrap();
         let before = store.settled.clone();
         assert!(matches!(
-            append(
-                &mut store,
-                &[
+            store.append(&[
                     SessionEntry::Assistant {
                         turn,
                         message: answer.clone(),

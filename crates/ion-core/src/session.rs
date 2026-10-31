@@ -67,7 +67,7 @@ pub use records::{
 pub use recovery::{AuthorityScope, RecoveryBinding, RecoveryPoint, RecoveryState};
 pub(crate) use store::MAX_ENTRY_BYTES;
 use store::{
-    FORMAT_VERSION, Header, SessionLock, Store, append, configure_connection, database_path,
+    FORMAT_VERSION, Header, SessionLock, Store, configure_connection, database_path,
     encode_entry, initialize_new, lock, prepare_writer, project_connection, read_entries,
     read_header,
 };
@@ -865,7 +865,7 @@ impl Session {
             command,
             exclude_from_context,
         });
-        append(&mut store, &entries)?;
+        store.append(&entries)?;
         Ok(store.state.sequence)
     }
 
@@ -876,9 +876,7 @@ impl Session {
         is_error: bool,
     ) -> Result<(), SessionError> {
         let mut store = self.store.lock().map_err(|_| SessionError::Poisoned)?;
-        append(
-            &mut store,
-            &[SessionEntry::UserShellSettled {
+        store.append(&[SessionEntry::UserShellSettled {
                 admission_entry,
                 outcome: UserShellOutcome::Observed { output, is_error },
             }],
@@ -1048,7 +1046,7 @@ impl Session {
         if entries.is_empty() {
             return Ok(false);
         }
-        append(&mut store, &entries)?;
+        store.append(&entries)?;
         Ok(true)
     }
 
@@ -1056,7 +1054,7 @@ impl Session {
     /// an adapter detects a changed signed context before dispatch.
     pub(crate) fn rebase_provider_replay(&self, turn: u64) -> Result<(), SessionError> {
         let mut store = self.store.lock().map_err(|_| SessionError::Poisoned)?;
-        append(&mut store, &[SessionEntry::ProviderReplayRebased { turn }])
+        store.append(&[SessionEntry::ProviderReplayRebased { turn }])
     }
 
     pub(crate) fn record_cache_warm(
@@ -1066,9 +1064,7 @@ impl Session {
         usage: Usage,
     ) -> Result<(), SessionError> {
         let mut store = self.store.lock().map_err(|_| SessionError::Poisoned)?;
-        append(
-            &mut store,
-            &[SessionEntry::CacheWarm {
+        store.append(&[SessionEntry::CacheWarm {
                 turn,
                 execution,
                 usage,
@@ -1084,9 +1080,7 @@ impl Session {
         usage: Usage,
     ) -> Result<(), SessionError> {
         let mut store = self.store.lock().map_err(|_| SessionError::Poisoned)?;
-        append(
-            &mut store,
-            &[SessionEntry::Compacted {
+        store.append(&[SessionEntry::Compacted {
                 through_entry,
                 summary,
                 execution,
@@ -1201,7 +1195,7 @@ impl Session {
         if entries.is_empty() {
             return Ok(());
         }
-        append(&mut store, &entries)
+        store.append(&entries)
     }
 
     /// Close any interrupted Turn and accept the next input in one transaction.
@@ -1286,7 +1280,7 @@ impl Session {
             request,
             recovery,
         });
-        append(&mut store, &entries)?;
+        store.append(&entries)?;
         let Some(SessionEntry::TurnStarted { input, .. }) = entries.pop() else {
             unreachable!("admission batch ends with its committed TurnStarted");
         };
@@ -1324,9 +1318,7 @@ impl Session {
                 .as_ref()
                 .is_some_and(|previous| previous != &effective)
             {
-                append(
-                    &mut store,
-                    &[SessionEntry::EffectiveModelChanged {
+                store.append(&[SessionEntry::EffectiveModelChanged {
                         turn,
                         model: effective.clone(),
                     }],
@@ -1449,7 +1441,7 @@ impl Session {
         }
         let mut store = self.store.lock().map_err(|_| SessionError::Poisoned)?;
         let entry = store.state.sequence + 1;
-        append(&mut store, &entries)?;
+        store.append(&entries)?;
         let mut inputs = CommittedInputEntries::default();
         for (offset, fact) in entries.iter().enumerate() {
             let coordinate = entry + offset as u64;
@@ -1518,7 +1510,7 @@ impl Session {
         );
         let mut store = self.store.lock().map_err(|_| SessionError::Poisoned)?;
         let entry = store.state.sequence + 1;
-        append(&mut store, &entries)?;
+        store.append(&entries)?;
         Ok((entry, results))
     }
 
@@ -1554,7 +1546,7 @@ impl Session {
         }
         let mut store = self.store.lock().map_err(|_| SessionError::Poisoned)?;
         let first = store.state.sequence + 1;
-        append(&mut store, &entries)?;
+        store.append(&entries)?;
         Ok(CommittedInputEntries {
             steering: first..first + steering_count,
             completion: has_completion.then_some(first + steering_count),
@@ -1601,7 +1593,7 @@ impl Session {
             entries.push(SessionEntry::ModelContextChanged { turn, context });
         }
         let mut store = self.store.lock().map_err(|_| SessionError::Poisoned)?;
-        append(&mut store, &entries)
+        store.append(&entries)
     }
 
     #[cfg(test)]
@@ -1629,9 +1621,7 @@ impl Session {
         intent: crate::ChildIntent,
     ) -> Result<(), SessionError> {
         let mut store = self.store.lock().map_err(|_| SessionError::Poisoned)?;
-        append(
-            &mut store,
-            &[SessionEntry::ChildToolAdmitted { turn, intent }],
+        store.append(&[SessionEntry::ChildToolAdmitted { turn, intent }],
         )
     }
 
@@ -1649,7 +1639,7 @@ impl Session {
             outcome,
         };
         let mut store = self.store.lock().map_err(|_| SessionError::Poisoned)?;
-        append(&mut store, std::slice::from_ref(&entry))?;
+        store.append(std::slice::from_ref(&entry))?;
         let SessionEntry::ChildToolResult { outcome, .. } = entry else {
             unreachable!()
         };
@@ -1688,7 +1678,7 @@ impl Session {
             .collect();
         let mut entries = pending_results(turn, &store.state.pending, unstarted);
         entries.push(SessionEntry::TurnEnded { turn, reason });
-        append(&mut store, &entries)?;
+        store.append(&entries)?;
         Ok(settlements)
     }
 }

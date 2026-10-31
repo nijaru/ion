@@ -77,103 +77,103 @@ impl Store {
             })
             .collect()
     }
-}
 
-pub(super) fn append(store: &mut Store, entries: &[SessionEntry]) -> Result<(), SessionError> {
-    let mut replacement = None;
-    let mut candidate = store.state.clone();
-    // A shared pending shell owns the final context message. Seed only that
-    // slot so candidate settlement can replace it without rebuilding history.
-    let pending_message = store
-        .state
-        .pending_shell
-        .as_ref()
-        .filter(|shell| !shell.exclude_from_context)
-        .map(|shell| {
-            ProjectedMessage::new(
-                shell.admission_entry,
-                shell_message(&shell.command, &UserShellOutcome::Unknown, false),
-            )
-        });
-    let replace_pending_message = pending_message.is_some();
-    let mut new_messages: Vec<_> = pending_message.into_iter().collect();
-    let message_start = store.messages.len() - usize::from(replace_pending_message);
-    let mut new_context_changes = Vec::new();
-    let mut new_settled = Vec::new();
-    let encoded = entries
-        .iter()
-        .enumerate()
-        .map(|(offset, entry)| {
-            candidate.apply(entry, &mut new_messages, &store.settled, &mut new_settled)?;
-            if let SessionEntry::ContextSelected { head_entry } = entry {
-                if replacement.is_some() || offset + 1 != entries.len() {
-                    return Err(SessionError::InvalidHistory);
+    pub(super) fn append(&mut self, entries: &[SessionEntry]) -> Result<(), SessionError> {
+        let mut replacement = None;
+        let mut candidate = self.state.clone();
+        // A shared pending shell owns the final context message. Seed only that
+        // slot so candidate settlement can replace it without rebuilding history.
+        let pending_message = self
+            .state
+            .pending_shell
+            .as_ref()
+            .filter(|shell| !shell.exclude_from_context)
+            .map(|shell| {
+                ProjectedMessage::new(
+                    shell.admission_entry,
+                    shell_message(&shell.command, &UserShellOutcome::Unknown, false),
+                )
+            });
+        let replace_pending_message = pending_message.is_some();
+        let mut new_messages: Vec<_> = pending_message.into_iter().collect();
+        let message_start = self.messages.len() - usize::from(replace_pending_message);
+        let mut new_context_changes = Vec::new();
+        let mut new_settled = Vec::new();
+        let encoded = entries
+            .iter()
+            .enumerate()
+            .map(|(offset, entry)| {
+                candidate.apply(entry, &mut new_messages, &self.settled, &mut new_settled)?;
+                if let SessionEntry::ContextSelected { head_entry } = entry {
+                    if replacement.is_some() || offset + 1 != entries.len() {
+                        return Err(SessionError::InvalidHistory);
+                    }
+                    let navigation::RestoredContext {
+                        state,
+                        messages,
+                        settled,
+                        changes,
+                    } = restore_context(
+                        &self.context_index,
+                        *head_entry,
+                        ProjectionMode::Full,
+                        &|entry| navigation::read_entry(&self.connection, entry),
+                    )?;
+                    candidate.restore_context(state);
+                    replacement = Some((messages, settled, changes));
                 }
-                let navigation::RestoredContext {
-                    state,
-                    messages,
-                    settled,
-                    changes,
-                } = restore_context(
-                    &store.context_index,
-                    *head_entry,
-                    ProjectionMode::Full,
-                    &|entry| navigation::read_entry(&store.connection, entry),
-                )?;
-                candidate.restore_context(state);
-                replacement = Some((messages, settled, changes));
-            }
-            if let SessionEntry::ModelContextChanged { context, .. } = entry {
-                new_context_changes.push(ModelContextChange {
-                    after_message: message_start + new_messages.len(),
-                    context: model_context_state(context),
-                });
-            }
-            encode_entry(entry)
-        })
-        .collect::<Result<Vec<_>, SessionError>>()?;
-    let tx = store.connection.transaction()?;
-    for body in encoded {
-        tx.execute("INSERT INTO entries(body) VALUES (?1)", params![body])?;
-    }
-    tx.commit()?;
-    let mut sequence = store.state.sequence;
-    for entry in entries {
-        sequence += 1;
-        store.child_records.observe(sequence, entry);
-        store.context_index.observe(entry);
-        if let SessionEntry::DelegationSettled { run, .. } = entry {
-            store.live_backgrounds.remove(run);
+                if let SessionEntry::ModelContextChanged { context, .. } = entry {
+                    new_context_changes.push(ModelContextChange {
+                        after_message: message_start + new_messages.len(),
+                        context: model_context_state(context),
+                    });
+                }
+                encode_entry(entry)
+            })
+            .collect::<Result<Vec<_>, SessionError>>()?;
+        let tx = self.connection.transaction()?;
+        for body in encoded {
+            tx.execute("INSERT INTO entries(body) VALUES (?1)", params![body])?;
         }
-    }
-    if entries.iter().any(|entry| {
-        matches!(
-            entry,
-            SessionEntry::ContextSelected { .. }
-                | SessionEntry::Compacted { .. }
-                | SessionEntry::ProviderReplayRebased { .. }
-                | SessionEntry::EffectiveModelChanged { .. }
-                | SessionEntry::ModelSelected { .. }
-                | SessionEntry::ReasoningSelected { .. }
-                | SessionEntry::ModelContextChanged { .. }
-        )
-    }) {
-        store.calibration = None;
-    }
-    store.state = candidate;
-    if let Some((messages, settled, changes)) = replacement {
-        store.messages = messages;
-        store.settled = settled;
-        store.context_changes = changes;
-    } else {
-        store.settled.extend(new_settled);
-        if replace_pending_message {
-            store.messages.pop();
+        tx.commit()?;
+        let mut sequence = self.state.sequence;
+        for entry in entries {
+            sequence += 1;
+            self.child_records.observe(sequence, entry);
+            self.context_index.observe(entry);
+            if let SessionEntry::DelegationSettled { run, .. } = entry {
+                self.live_backgrounds.remove(run);
+            }
         }
-        store.messages.extend(new_messages);
-        store.context_changes.extend(new_context_changes);
+        if entries.iter().any(|entry| {
+            matches!(
+                entry,
+                SessionEntry::ContextSelected { .. }
+                    | SessionEntry::Compacted { .. }
+                    | SessionEntry::ProviderReplayRebased { .. }
+                    | SessionEntry::EffectiveModelChanged { .. }
+                    | SessionEntry::ModelSelected { .. }
+                    | SessionEntry::ReasoningSelected { .. }
+                    | SessionEntry::ModelContextChanged { .. }
+            )
+        }) {
+            self.calibration = None;
+        }
+        self.state = candidate;
+        if let Some((messages, settled, changes)) = replacement {
+            self.messages = messages;
+            self.settled = settled;
+            self.context_changes = changes;
+        } else {
+            self.settled.extend(new_settled);
+            if replace_pending_message {
+                self.messages.pop();
+            }
+            self.messages.extend(new_messages);
+            self.context_changes.extend(new_context_changes);
+        }
+        Ok(())
     }
-    Ok(())
 }
 
 pub(super) fn encode_entry(entry: &SessionEntry) -> Result<Vec<u8>, SessionError> {
