@@ -47,8 +47,8 @@ mod records;
 mod recovery;
 #[cfg(test)]
 mod recovery_tests;
-mod submission;
 mod store;
+mod submission;
 #[cfg(test)]
 mod submission_tests;
 use crate::request::{RequestCalibration, RequestMeasurement, RequestScope};
@@ -56,8 +56,7 @@ use code_inspection::ChildRecordIndex;
 use context::{ProjectedMessage, context_projection};
 use projection::{
     ProjectionMode, message_from_entry, model_context_state, model_message, project,
-    projected_entry_messages, shell_message, shell_outcome_at,
-    valid_model_context,
+    projected_entry_messages, shell_message, shell_outcome_at, valid_model_context,
 };
 pub(crate) use records::valid_user_message;
 pub use records::{
@@ -66,12 +65,13 @@ pub use records::{
     UnobservedUserShell, UserShellOutcome,
 };
 pub use recovery::{AuthorityScope, RecoveryBinding, RecoveryPoint, RecoveryState};
+use store::{
+    FORMAT_VERSION, Header, SessionLock, Store, append, configure_connection, database_path,
+    encode_entry, initialize_new, lock, prepare_writer, project_connection, read_entries,
+    read_header,
+};
 pub(crate) use submission::TurnAdmission;
 pub use submission::{RequestKey, RequestReceipt, SubmissionRequest};
-use store::{
-    Header, SessionLock, Store, FORMAT_VERSION, append, configure_connection, database_path,
-    encode_entry, initialize_new, lock, prepare_writer, project_connection, read_entries, read_header,
-};
 
 fn completed_termination() -> ResponseTermination {
     ResponseTermination::Completed
