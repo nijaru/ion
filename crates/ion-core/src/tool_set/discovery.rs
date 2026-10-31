@@ -12,8 +12,8 @@ const K1: f64 = 1.2;
 const B: f64 = 0.75;
 const NAME_WEIGHT: f64 = 3.0;
 const STOP_WORDS: &[&str] = &[
-    "a", "an", "and", "are", "as", "at", "be", "by", "for", "from", "in", "is", "it", "of",
-    "on", "or", "that", "the", "this", "to", "with",
+    "a", "an", "and", "are", "as", "at", "be", "by", "for", "from", "in", "is", "it", "of", "on",
+    "or", "that", "the", "this", "to", "with",
 ];
 
 struct Document<'a> {
