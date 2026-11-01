@@ -168,8 +168,10 @@ async fn committed_tool_exchange_calibrates_next_budget_from_total_input() {
         Arc::new(Echo),
         model(),
         AgentLimits {
-            max_output_tokens: 20_000,
-            context_window_tokens: Some(55_000),
+            // Keep calibrated clamping above the compaction reserve: this
+            // fixture isolates total-input accounting, not pressure planning.
+            max_output_tokens: 60_000,
+            context_window_tokens: Some(80_000),
             ..AgentLimits::default()
         },
     );
@@ -189,11 +191,11 @@ async fn committed_tool_exchange_calibrates_next_budget_from_total_input() {
     );
     let requests = service.requests();
     assert_eq!(requests.len(), 2);
-    assert_eq!(requests[0].controls.max_output_tokens, 20_000);
+    assert_eq!(requests[0].controls.max_output_tokens, 60_000);
     // Total input includes cache reads. Subtracting them would keep the full
-    // ceiling; adding them would exceed the window and fail the turn.
+    // ceiling; adding them would unnecessarily trigger pressure compaction.
     assert!(
-        requests[1].controls.max_output_tokens < 20_000,
+        requests[1].controls.max_output_tokens < 60_000,
         "next request did not use the committed total input usage: {}",
         requests[1].controls.max_output_tokens
     );
@@ -410,7 +412,16 @@ async fn rejected_preparation_preserves_the_current_bindings_evidence() {
         text_response("first", Usage::known(85_000, 1)),
         text_response("again", Usage::unknown()),
     ]));
-    let original = configured(service.clone(), Arc::new(Echo), model(), limits());
+    let original = configured(
+        service.clone(),
+        Arc::new(Echo),
+        model(),
+        AgentLimits {
+            max_output_tokens: 128_000,
+            context_window_tokens: Some(200_000),
+            ..limits()
+        },
+    );
     original
         .submit(
             session.clone(),
@@ -428,7 +439,7 @@ async fn rejected_preparation_preserves_the_current_bindings_evidence() {
         model(),
         AgentLimits {
             max_request_bytes: 500,
-            ..limits()
+            ..original.limits()
         },
     );
     assert!(matches!(
@@ -455,7 +466,7 @@ async fn rejected_preparation_preserves_the_current_bindings_evidence() {
         .await
         .unwrap();
     assert!(
-        service.requests()[1].controls.max_output_tokens < 20_000,
+        service.requests()[1].controls.max_output_tokens < 128_000,
         "a rejected preparation discarded the current binding's observed usage"
     );
     drop(session);
@@ -476,7 +487,16 @@ async fn replay_reset_clears_calibration_and_unknown_usage_does_not_restore_it()
         text_response("recovered", Usage::unknown()),
         text_response("third", Usage::unknown()),
     ]));
-    let agent = configured(service.clone(), Arc::new(Echo), model(), limits());
+    let agent = configured(
+        service.clone(),
+        Arc::new(Echo),
+        model(),
+        AgentLimits {
+            max_output_tokens: 128_000,
+            context_window_tokens: Some(200_000),
+            ..limits()
+        },
+    );
     agent
         .submit(
             session.clone(),
@@ -511,15 +531,15 @@ async fn replay_reset_clears_calibration_and_unknown_usage_does_not_restore_it()
     let requests = service.requests();
     assert_eq!(requests.len(), 4);
     assert!(
-        requests[1].controls.max_output_tokens < 20_000,
+        requests[1].controls.max_output_tokens < 128_000,
         "initial replay request did not use the committed sample"
     );
     assert_eq!(
-        requests[2].controls.max_output_tokens, 20_000,
+        requests[2].controls.max_output_tokens, 128_000,
         "replay rebase did not clear the sample"
     );
     assert_eq!(
-        requests[3].controls.max_output_tokens, 20_000,
+        requests[3].controls.max_output_tokens, 128_000,
         "unknown usage restored a sample from before the replay reset"
     );
     drop(session);
@@ -591,8 +611,8 @@ async fn identical_images_keep_observed_context_and_changed_images_fall_back() {
         text_response("changed", Usage::unknown()),
     ]));
     let limits = AgentLimits {
-        max_output_tokens: 20_000,
-        context_window_tokens: Some(120_000),
+        max_output_tokens: 150_000,
+        context_window_tokens: Some(240_000),
         image_input: true,
         ..AgentLimits::default()
     };
@@ -648,13 +668,13 @@ async fn identical_images_keep_observed_context_and_changed_images_fall_back() {
         .unwrap();
 
     let requests = service.requests();
-    assert_eq!(requests[0].controls.max_output_tokens, 20_000);
+    assert_eq!(requests[0].controls.max_output_tokens, 150_000);
     assert!(
-        requests[1].controls.max_output_tokens < 20_000,
+        requests[1].controls.max_output_tokens < 150_000,
         "identical images did not retain their observed context baseline"
     );
     assert_eq!(
-        requests[2].controls.max_output_tokens, 20_000,
+        requests[2].controls.max_output_tokens, 150_000,
         "changed images reused a different image sample"
     );
     drop(session);

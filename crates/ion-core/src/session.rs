@@ -1790,7 +1790,7 @@ fn pending_settlement(
     }
 }
 
-fn summary_message(through_entry: u64, summary: &str) -> Message {
+pub(crate) fn summary_message(through_entry: u64, summary: &str) -> Message {
     Message {
         role: Role::User,
         content: vec![Content::Text(format!(

@@ -23,6 +23,7 @@ const IMAGE_INPUT_ALLOWANCE_TOKENS: u64 = 16_384;
 pub(crate) struct RequestMeasurement {
     retained_bytes: usize,
     fallback_input_tokens: u64,
+    fixed_input_tokens: u64,
     message_count: usize,
     image_identity: Option<[u8; 32]>,
     trailing_input_tokens: Option<u64>,
@@ -46,6 +47,10 @@ impl RequestMeasurement {
         } else {
             retained_bytes
         };
+        let fixed_input_tokens = bytes_to_tokens(encoded_len(&LatestRequest::new(
+            request,
+            &[] as &[Message],
+        ))?);
         let images = measure_images(&request.messages);
         let fallback_input_tokens =
             bytes_to_tokens(neutral_bytes.saturating_sub(images.encoded_bytes))
@@ -75,6 +80,7 @@ impl RequestMeasurement {
         Ok(Self {
             retained_bytes,
             fallback_input_tokens,
+            fixed_input_tokens,
             message_count: request.messages.len(),
             image_identity: images.identity,
             trailing_input_tokens,
@@ -87,6 +93,10 @@ impl RequestMeasurement {
 
     pub(crate) fn fallback_input_tokens(&self) -> u64 {
         self.fallback_input_tokens
+    }
+
+    pub(crate) fn fixed_input_tokens(&self) -> u64 {
+        self.fixed_input_tokens
     }
 }
 

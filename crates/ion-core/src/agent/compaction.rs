@@ -54,7 +54,7 @@ impl Agent {
             return Err(AgentError::Cancelled);
         }
         self.validate_reasoning(session.reasoning()?)?;
-        let keep_bytes = self.keep_bytes().min(
+        let keep_bytes = self.limits.compaction_keep_bytes(0).min(
             crate::json_size::encoded_len(&crate::prompt_size::NeutralMessages(
                 &session.context_messages()?,
             ))? / 2,
@@ -62,7 +62,7 @@ impl Agent {
         let mut changed = false;
         loop {
             match self
-                .compact_inner(instructions, session, &stop, keep_bytes, observe)
+                .compact_inner(instructions, session, &stop, keep_bytes, false, observe)
                 .await?
             {
                 Some(chunked) => {
@@ -76,20 +76,13 @@ impl Agent {
         }
     }
 
-    pub(super) fn keep_bytes(&self) -> usize {
-        let model_budget = self
-            .limits
-            .usable_context_tokens()
-            .map_or(usize::MAX, |tokens| (tokens as usize).saturating_mul(3));
-        self.limits.max_request_bytes.min(model_budget) / 2
-    }
-
     pub(super) async fn compact_inner<F>(
         &self,
         instructions: Option<&str>,
         session: &Session,
         stop: &CancellationToken,
         keep_bytes: usize,
+        must_shrink: bool,
         observe: &mut F,
     ) -> Result<Option<bool>, AgentError>
     where
@@ -97,7 +90,7 @@ impl Agent {
     {
         let output_tokens = self.limits.max_output_tokens.min(4096);
         let mut max_through_entry = u64::MAX;
-        let (through_entry, chunked, generated) = loop {
+        let (through_entry, chunked, source_bytes, generated) = loop {
             if stop.is_cancelled() {
                 return Err(AgentError::Cancelled);
             }
@@ -124,6 +117,9 @@ impl Agent {
                     Ok(None)
                 };
             };
+            let source_bytes = crate::json_size::encoded_len(
+                &crate::prompt_size::NeutralMessages(&plan.messages),
+            )?;
             let mut request = ModelRequest {
                 route: ModelRoute::direct(self.model.clone(), ModelRouteReason::Auxiliary),
                 provider_session_id: Some(session.provider_session_id().to_string()),
@@ -178,7 +174,12 @@ impl Agent {
                 max_through_entry = smaller;
                 continue;
             }
-            break (plan.through_entry, plan.chunked, attempt.into_result()?);
+            break (
+                plan.through_entry,
+                plan.chunked,
+                source_bytes,
+                attempt.into_result()?,
+            );
         };
         let GeneratedResponse { response, route } = generated;
         let summary = summary_text(&response).and_then(|summary| {
@@ -203,6 +204,21 @@ impl Agent {
                 return Err(error);
             }
         };
+        // Optional output-room planning must not replace a usable context with
+        // a larger summary. Mandatory recovery and explicit compaction retain
+        // their existing policy; their provider wire can differ from this view.
+        if must_shrink
+            && crate::json_size::encoded_len(&crate::prompt_size::NeutralMessages(&[
+                crate::session::summary_message(through_entry, &summary),
+            ]))? >= source_bytes
+        {
+            session.record_uncommitted_usage(
+                crate::session::ModelUsagePurpose::Compaction,
+                execution,
+                response.usage,
+            )?;
+            return Ok(None);
+        }
         session.record_compaction(through_entry, summary, execution, response.usage)?;
         observe(AgentEvent::ContextCompacted { through_entry });
         Ok(Some(chunked))

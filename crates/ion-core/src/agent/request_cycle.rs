@@ -52,6 +52,7 @@ impl<'a> RequestCycle<'a> {
         F: FnMut(AgentEvent) + Send,
     {
         let mut recovered_overflow = false;
+        let mut reserve_attempted = false;
         loop {
             // Yield even for an entirely buffered service/tool sequence.
             tokio::task::yield_now().await;
@@ -97,7 +98,8 @@ impl<'a> RequestCycle<'a> {
                             None,
                             self.session,
                             self.stop,
-                            self.agent.keep_bytes(),
+                            self.agent.limits.compaction_keep_bytes(0),
+                            false,
                             observe,
                         )
                         .await?
@@ -110,6 +112,23 @@ impl<'a> RequestCycle<'a> {
                 Err(error) => return Err(error),
             };
             let output_budget = prepared.output_budget();
+            let output_reserve = prepared.output_reserve(self.agent.limits);
+            let keep_bytes = prepared.keep_bytes(self.agent.limits);
+            // One attempt per model/tool step, not per rebuild: fixed overhead
+            // or an uncompactable suffix can still require a clamped budget.
+            if output_budget < output_reserve && !prefix_bound && !reserve_attempted {
+                reserve_attempted = true;
+                match self
+                    .agent
+                    .compact_inner(None, self.session, self.stop, keep_bytes, true, observe)
+                    .await
+                {
+                    // A discarded summary may also have awaited I/O. Honor
+                    // steering/stop queued during the attempt before issuing.
+                    Ok(_) | Err(AgentError::ContextTooLarge) => continue,
+                    Err(error) => return Err(error),
+                }
+            }
             let issued = prepared
                 .issue(self.session, &self.agent.service, self.stop, observe)
                 .await?;
@@ -139,13 +158,7 @@ impl<'a> RequestCycle<'a> {
             {
                 match self
                     .agent
-                    .compact_inner(
-                        None,
-                        self.session,
-                        self.stop,
-                        self.agent.keep_bytes(),
-                        observe,
-                    )
+                    .compact_inner(None, self.session, self.stop, keep_bytes, false, observe)
                     .await
                 {
                     Ok(None) => {}

@@ -172,6 +172,16 @@ impl PreparedRequest {
         self.request.controls.max_output_tokens
     }
 
+    pub fn output_reserve(&self, limits: AgentLimits) -> u32 {
+        limits.preferred_output_reserve(self.measurement.fixed_input_tokens())
+    }
+
+    pub fn keep_bytes(&self, limits: AgentLimits) -> usize {
+        limits.compaction_keep_bytes(
+            self.measurement.fixed_input_tokens() + u64::from(self.output_reserve(limits)),
+        )
+    }
+
     pub fn reasoning(&self) -> Reasoning {
         self.request.controls.reasoning
     }
@@ -234,6 +244,23 @@ impl AgentLimits {
             // more than half of a small model's entire context as headroom.
             window - (window / 2).min(8_192)
         })
+    }
+
+    /// A planning target, not an admission minimum. Split the capacity left
+    /// after fixed instructions/tools so large prompts and small windows still
+    /// leave room for messages rather than demanding an impossible ceiling.
+    pub(crate) fn preferred_output_reserve(self, fixed_input_tokens: u64) -> u32 {
+        self.usable_context_tokens().map_or(0, |capacity| {
+            (u64::from(capacity).saturating_sub(fixed_input_tokens) / 2)
+                .min(u64::from(self.max_output_tokens)) as u32
+        })
+    }
+
+    pub(crate) fn compaction_keep_bytes(self, reserved_tokens: u64) -> usize {
+        let model_budget = self.usable_context_tokens().map_or(usize::MAX, |tokens| {
+            (u64::from(tokens).saturating_sub(reserved_tokens) as usize).saturating_mul(3)
+        });
+        self.max_request_bytes.min(model_budget) / 2
     }
 
     pub(crate) fn controls(self, reasoning: Reasoning, with_tools: bool) -> GenerationControls {

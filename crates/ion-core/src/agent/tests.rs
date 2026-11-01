@@ -3694,6 +3694,301 @@ async fn short_length_stop_compacts_and_retries_without_dispatching_partial_call
 }
 
 #[tokio::test]
+async fn output_pressure_compacts_before_issuing_a_coding_request() {
+    let root = std::env::temp_dir().join(format!("ion-output-room-{}", uuid::Uuid::now_v7()));
+    std::fs::create_dir(&root).unwrap();
+    let session = Arc::new(Session::create(root.join("session.sqlite"), Some(&root)).unwrap());
+    let scripts = Arc::new(ScriptedModelService::new([
+        response(vec![Content::Text("history ".repeat(1200))]),
+        response(vec![Content::Text("Earlier work summarized.".into())]),
+        response(vec![Content::ToolCall(ToolCall {
+            id: "write-once".into(),
+            name: "write".into(),
+            arguments: serde_json::json!({"path":"answer.txt","content":"done"}),
+            raw_arguments: None,
+        })]),
+        response(vec![Content::Text("done".into())]),
+    ]));
+    let agent = Agent::new(scripts.clone(), Arc::new(TestTools::new(&root)), model());
+    agent
+        .submit(
+            session.clone(),
+            "first".into(),
+            "test".into(),
+            CancellationToken::new(),
+            |_| {},
+        )
+        .await
+        .unwrap();
+    let before = session.view().unwrap().entries;
+    let agent = agent.with_limits(AgentLimits {
+        max_output_tokens: 2500,
+        context_window_tokens: Some(10_000),
+        ..AgentLimits::default()
+    });
+    let answer = agent
+        .submit(
+            session.clone(),
+            "write the answer".into(),
+            "test".into(),
+            CancellationToken::new(),
+            |_| {},
+        )
+        .await
+        .unwrap();
+    assert_eq!(answer, "done");
+    assert_eq!(
+        std::fs::read_to_string(root.join("answer.txt")).unwrap(),
+        "done"
+    );
+    let requests = scripts.requests();
+    assert_eq!(requests.len(), 4);
+    assert!(requests[1].tools.is_empty());
+    assert_eq!(requests[2].controls.max_output_tokens, 2500);
+    let after = session.view().unwrap();
+    assert!(after.entries.starts_with(&before));
+    assert_eq!(after.usage().compaction.observations, 1);
+    assert_eq!(after.usage().uncommitted.observations, 0);
+    assert_eq!(
+        after
+            .entries
+            .iter()
+            .filter(|entry| matches!(entry, SessionEntry::ToolResult { .. }))
+            .count(),
+        1
+    );
+    drop((agent, session));
+    let reopened = Session::open(root.join("session.sqlite")).unwrap();
+    assert_eq!(reopened.view().unwrap().entries, after.entries);
+    drop(reopened);
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[tokio::test]
+async fn output_pressure_without_a_settled_prefix_still_issues_a_clamped_request() {
+    let root = std::env::temp_dir().join(format!("ion-no-output-cut-{}", uuid::Uuid::now_v7()));
+    std::fs::create_dir(&root).unwrap();
+    let session = Arc::new(Session::create(root.join("session.sqlite"), Some(&root)).unwrap());
+    let scripts = Arc::new(ScriptedModelService::new([response(vec![Content::Text(
+        "done".into(),
+    )])]));
+    let agent = Agent::new(scripts.clone(), Arc::new(TestTools::new(&root)), model()).with_limits(
+        AgentLimits {
+            max_output_tokens: 2500,
+            context_window_tokens: Some(10_000),
+            ..AgentLimits::default()
+        },
+    );
+    assert_eq!(
+        agent
+            .submit(
+                session.clone(),
+                "history ".repeat(1200),
+                "test".into(),
+                CancellationToken::new(),
+                |_| {}
+            )
+            .await
+            .unwrap(),
+        "done"
+    );
+    let requests = scripts.requests();
+    assert_eq!(requests.len(), 1);
+    assert!(requests[0].controls.max_output_tokens > 0);
+    assert!(requests[0].controls.max_output_tokens < 2500);
+    assert!(session.view().unwrap().compacted_through.is_none());
+    drop((agent, session));
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[tokio::test]
+async fn output_pressure_preserves_an_active_signed_prefix() {
+    for bound in [false, true] {
+        let root = std::env::temp_dir().join(format!("ion-output-prefix-{}", uuid::Uuid::now_v7()));
+        std::fs::create_dir(&root).unwrap();
+        std::fs::write(root.join("large.txt"), "history ".repeat(1200)).unwrap();
+        let session = Arc::new(Session::create(root.join("session.sqlite"), Some(&root)).unwrap());
+        let replay =
+            ion_ai::ProviderReplay::new(model().provider, "opaque", serde_json::json!("signed"))
+                .with_prefix_binding(bound);
+        let mut responses = vec![Script::Stream(vec![ModelStreamEvent::Completed(
+            ModelResponse {
+                message: Message {
+                    role: Role::Assistant,
+                    content: vec![Content::ToolCall(ToolCall {
+                        id: "read-once".into(),
+                        name: "read".into(),
+                        arguments: serde_json::json!({"path":"large.txt"}),
+                        raw_arguments: None,
+                    })],
+                    provider_replay: Some(replay.clone()),
+                },
+                usage: Usage::unknown(),
+                termination: ResponseTermination::Completed,
+                returned_model: None,
+            },
+        )])];
+        if !bound {
+            responses.push(response(vec![Content::Text(
+                "File contents summarized.".into(),
+            )]));
+        }
+        responses.push(response(vec![Content::Text("done".into())]));
+        let scripts = Arc::new(ScriptedModelService::new(responses));
+        let agent = Agent::new(scripts.clone(), Arc::new(TestTools::new(&root)), model())
+            .with_limits(AgentLimits {
+                max_output_tokens: 2500,
+                context_window_tokens: Some(10_000),
+                ..AgentLimits::default()
+            });
+        assert_eq!(
+            agent
+                .submit(
+                    session.clone(),
+                    "read file".into(),
+                    "test".into(),
+                    CancellationToken::new(),
+                    |_| {}
+                )
+                .await
+                .unwrap(),
+            "done"
+        );
+        let requests = scripts.requests();
+        let view = session.view().unwrap();
+        assert_eq!(view.usage().compaction.observations, usize::from(!bound));
+        assert_eq!(
+            view.entries
+                .iter()
+                .filter(|entry| matches!(entry, SessionEntry::ToolResult { .. }))
+                .count(),
+            1
+        );
+        let continuation = requests.last().unwrap();
+        if bound {
+            assert_eq!(requests.len(), 2);
+            assert!(continuation.controls.max_output_tokens < 2500);
+            assert_eq!(
+                continuation.messages[1].provider_replay.as_ref(),
+                Some(&replay)
+            );
+        } else {
+            assert_eq!(requests.len(), 3);
+            assert_eq!(continuation.controls.max_output_tokens, 2500);
+        }
+        drop((agent, session));
+        std::fs::remove_dir_all(root).unwrap();
+    }
+}
+
+#[tokio::test]
+async fn output_room_planning_is_one_shot_and_discards_a_growing_summary() {
+    const GUIDANCE: &str = "Inspect only; do not modify files.";
+    struct SteerDuringSummary {
+        service: Arc<ScriptedModelService>,
+        steering: Arc<SteeringInbox>,
+    }
+    impl ModelService for SteerDuringSummary {
+        fn stream<'a>(
+            &'a self,
+            request: ModelRequest,
+        ) -> BoxFuture<'a, Result<ion_ai::ModelStream, ProviderError>> {
+            Box::pin(async move {
+                if request.route.reason == ModelRouteReason::Auxiliary {
+                    self.steering.push(GUIDANCE.into()).unwrap();
+                }
+                self.service.stream(request).await
+            })
+        }
+    }
+    for grows in [false, true] {
+        let root = std::env::temp_dir().join(format!("ion-output-plan-{}", uuid::Uuid::now_v7()));
+        std::fs::create_dir(&root).unwrap();
+        let session = Arc::new(Session::create(root.join("session.sqlite"), Some(&root)).unwrap());
+        let scripts = Arc::new(ScriptedModelService::new([
+            response(vec![Content::Text("h".repeat(1000))]),
+            Script::Stream(vec![ModelStreamEvent::Completed(ModelResponse {
+                message: Message {
+                    role: Role::Assistant,
+                    content: vec![Content::Text("z".repeat(if grows { 9000 } else { 500 }))],
+                    provider_replay: None,
+                },
+                usage: Usage::known(500, 1200),
+                termination: ResponseTermination::Completed,
+                returned_model: None,
+            })]),
+            response(vec![Content::Text("done".into())]),
+        ]));
+        let agent = Agent::new(scripts.clone(), Arc::new(TestTools::new(&root)), model());
+        agent
+            .submit(
+                session.clone(),
+                "first".into(),
+                "test".into(),
+                CancellationToken::new(),
+                |_| {},
+            )
+            .await
+            .unwrap();
+        let before = session.view().unwrap().entries;
+        let limits = AgentLimits {
+            max_output_tokens: 2500,
+            context_window_tokens: Some(10_000),
+            ..AgentLimits::default()
+        };
+        let steering = Arc::new(SteeringInbox::new(limits, crate::InputBudget::default()));
+        let agent = Agent::new(
+            Arc::new(SteerDuringSummary {
+                service: scripts.clone(),
+                steering: steering.clone(),
+            }),
+            Arc::new(TestTools::new(&root)),
+            model(),
+        )
+        .with_limits(limits);
+        assert_eq!(
+            agent
+                .submit_with_steering(
+                    session.clone(),
+                    "h".repeat(9600),
+                    "test".into(),
+                    CancellationToken::new(),
+                    steering.clone(),
+                    |_| {}
+                )
+                .await
+                .unwrap(),
+            "done"
+        );
+        let requests = scripts.requests();
+        assert_eq!(
+            requests.len(),
+            3,
+            "planning must not loop until its target fits"
+        );
+        assert!(requests[1].tools.is_empty());
+        assert!(!requests[2].tools.is_empty());
+        assert_eq!(
+            requests[2].messages.last(),
+            Some(&user_text(GUIDANCE.into()))
+        );
+        assert!(steering.take_uncommitted().is_empty());
+        let view = session.view().unwrap();
+        assert!(view.entries.starts_with(&before));
+        assert_eq!(view.usage().compaction.observations, usize::from(!grows));
+        assert_eq!(view.usage().uncommitted.observations, usize::from(grows));
+        if grows {
+            assert_eq!(view.usage().uncommitted.output_tokens.reported, 1200);
+            assert!(view.compacted_through.is_none());
+        }
+        assert!(requests[2].controls.max_output_tokens > 0);
+        assert!(requests[2].controls.max_output_tokens < 2500);
+        drop((agent, session));
+        std::fs::remove_dir_all(root).unwrap();
+    }
+}
+
+#[tokio::test]
 async fn full_dispatched_output_budget_does_not_trigger_context_recovery() {
     struct FillBudget {
         requests: Mutex<Vec<ModelRequest>>,
@@ -4480,71 +4775,95 @@ async fn cancelled_summary_does_not_change_the_context_projection() {
 }
 
 #[tokio::test]
-async fn request_pressure_rebuild_includes_steering_queued_during_compaction() {
-    let root = std::env::temp_dir().join(format!("ion-pressure-{}", uuid::Uuid::now_v7()));
-    std::fs::create_dir(&root).unwrap();
-    let session = Arc::new(Session::create(root.join("session.sqlite"), Some(&root)).unwrap());
-    // Two settled exchanges leave a smaller valid summary cut. A single
-    // oversized exchange need not fit once historical framing is charged.
-    for task in ["first", "second"] {
-        let (turn, _) = session.begin_turn(task.into(), model()).unwrap();
-        session
-            .record_assistant(
-                turn,
-                Message {
-                    role: Role::Assistant,
-                    content: vec![Content::Text("x".repeat(1_100))],
-                    provider_replay: None,
+async fn request_pressure_rebuild_rechecks_steering_and_stop() {
+    for (byte_pressure, cancel) in [(true, false), (false, false), (false, true)] {
+        let limits = if byte_pressure {
+            AgentLimits {
+                max_request_bytes: 3_200,
+                ..AgentLimits::default()
+            }
+        } else {
+            AgentLimits {
+                context_window_tokens: Some(4096),
+                max_output_tokens: 1024,
+                ..AgentLimits::default()
+            }
+        };
+        let root = std::env::temp_dir().join(format!("ion-pressure-{}", uuid::Uuid::now_v7()));
+        std::fs::create_dir(&root).unwrap();
+        let session = Arc::new(Session::create(root.join("session.sqlite"), Some(&root)).unwrap());
+        // Two settled exchanges leave a smaller valid summary cut. A single
+        // oversized exchange need not fit once historical framing is charged.
+        for task in ["first", "second"] {
+            let (turn, _) = session.begin_turn(task.into(), model()).unwrap();
+            session
+                .record_assistant(
+                    turn,
+                    Message {
+                        role: Role::Assistant,
+                        content: vec![Content::Text("x".repeat(1_500))],
+                        provider_replay: None,
+                    },
+                    Usage::unknown(),
+                    false,
+                )
+                .unwrap();
+        }
+        let scripts = Arc::new(ScriptedModelService::new([
+            response(vec![Content::Text("Earlier task completed.".into())]),
+            response(vec![Content::Text("continued".into())]),
+        ]));
+        let agent = Agent::new(scripts.clone(), Arc::new(TestTools::new(&root)), model())
+            .with_limits(limits);
+        let steering = Arc::new(SteeringInbox::new(
+            agent.limits(),
+            crate::InputBudget::default(),
+        ));
+        let observed_steering = steering.clone();
+        let stop = CancellationToken::new();
+        let observed_stop = stop.clone();
+        let guidance = "Inspect only; do not modify files.";
+        let result = agent
+            .submit_with_steering(
+                session.clone(),
+                "next".into(),
+                "test".into(),
+                stop,
+                steering.clone(),
+                move |event| {
+                    if matches!(event, AgentEvent::ContextCompacted { .. }) {
+                        if cancel {
+                            observed_stop.cancel();
+                        } else {
+                            observed_steering.push(guidance.into()).unwrap();
+                        }
+                    }
                 },
-                Usage::unknown(),
-                false,
             )
-            .unwrap();
+            .await;
+        let requests = scripts.requests();
+        if cancel {
+            assert!(matches!(result, Err(AgentError::Cancelled)));
+            assert_eq!(
+                requests.len(),
+                1,
+                "stop must precede the rebuilt coding request"
+            );
+            assert!(session.view().unwrap().unfinished_turn.is_none());
+        } else {
+            assert_eq!(
+                requests[1].messages.last(),
+                Some(&user_text(guidance.into()))
+            );
+            assert_eq!(requests.len(), 2);
+            assert_eq!(result.unwrap(), "continued");
+        }
+        assert!(requests[0].tools.is_empty());
+        assert!(steering.take_uncommitted().is_empty());
+        assert!(session.view().unwrap().compacted_through.is_some());
+        drop(session);
+        std::fs::remove_dir_all(root).unwrap();
     }
-    let scripts = Arc::new(ScriptedModelService::new([
-        response(vec![Content::Text("Earlier task completed.".into())]),
-        response(vec![Content::Text("continued".into())]),
-    ]));
-    let agent = Agent::new(scripts.clone(), Arc::new(TestTools::new(&root)), model()).with_limits(
-        AgentLimits {
-            // Explicit retained-answer pressure, not verbose native-tool
-            // descriptions in this minimal protocol fixture.
-            max_request_bytes: 3_200,
-            ..AgentLimits::default()
-        },
-    );
-    let steering = Arc::new(SteeringInbox::new(
-        agent.limits(),
-        crate::InputBudget::default(),
-    ));
-    let observed_steering = steering.clone();
-    let guidance = "Inspect only; do not modify files.";
-    let result = agent
-        .submit_with_steering(
-            session.clone(),
-            "next".into(),
-            "test".into(),
-            CancellationToken::new(),
-            steering.clone(),
-            move |event| {
-                if matches!(event, AgentEvent::ContextCompacted { .. }) {
-                    observed_steering.push(guidance.into()).unwrap();
-                }
-            },
-        )
-        .await;
-    let requests = scripts.requests();
-    assert_eq!(
-        requests[1].messages.last(),
-        Some(&user_text(guidance.into()))
-    );
-    assert_eq!(requests.len(), 2);
-    assert!(requests[0].tools.is_empty());
-    assert_eq!(result.unwrap(), "continued");
-    assert!(steering.take_uncommitted().is_empty());
-    assert!(session.view().unwrap().compacted_through.is_some());
-    drop(session);
-    std::fs::remove_dir_all(root).unwrap();
 }
 
 #[tokio::test]
