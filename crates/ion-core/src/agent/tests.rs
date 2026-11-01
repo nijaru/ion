@@ -1632,7 +1632,7 @@ async fn model_result_limits_preserve_observed_effects_and_inspection() {
             })
             .unwrap();
         assert_eq!(summary_result["is_error"], output.is_error);
-        assert_eq!(summary_result["result"], model_result.result);
+        assert_eq!(summary_result["result"]["Full"], model_result.result);
         let summary_request = serde_json::to_string(summary_request).unwrap();
         if let Some(report) = output.value["report"].as_str() {
             assert!(!summary_request.contains(report));
