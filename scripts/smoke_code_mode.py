@@ -55,11 +55,8 @@ def program(prompt):
         return "await Promise.all(['a','b'].map(x=>tools.exec({command:`touch ${x}.ready; sleep 1.5; printf done`}))); return true;"
     if prompt == "SELECT":
         return "const report=await tools.read({path:'one'}); text({length:report.value.content.length}); const picture=await tools.read({path:'pixel.png'}); image(picture.images[0]);"
-    if prompt == "HISTORY_SOURCE":
-        command = "printf 'HISTORY_NEEDLE_SMOKE\\n' >> effects; printf 'HISTORY_NEEDLE_SMOKE\\n'"
-        return "await tools.exec(" + json.dumps({"command": command}) + "); return true;"
     if prompt == "HISTORY_RECOVERY":
-        return "const found=await tools.history({action:'search',query:'HISTORY_'+'NEEDLE_SMOKE'}); if(found.is_error) throw new Error(JSON.stringify(found.value)); const target=found.value.entries.find(entry=>entry.kind==='tool_result'&&entry.tool&&entry.tool.name==='exec'); if(!target) throw new Error('missing compacted tool result'); const page=await tools.history({action:'read',entry:target.entry,limit:512}); if(page.is_error) throw new Error(JSON.stringify(page.value)); return {entry:target.entry,state:target.state,content:page.value.entry.content,next:page.value.entry.next_offset};"
+        return "const self=await tools.history({action:'search',query:'OWN_QUERY_ONLY_SMOKE'}); if(self.is_error||self.value.entries.length) throw new Error('query matched itself'); const found=await tools.history({action:'search',query:'HISTORY_NEEDLE_SMOKE',tool:'exec'}); if(found.is_error) throw new Error(JSON.stringify(found.value)); if(found.value.provenance.through_entry!==self.value.provenance.through_entry) throw new Error('snapshot changed between children'); const [target]=found.value.entries; if(found.value.entries.length!==1||target.tool.name!=='exec') throw new Error('missing original exec result'); const page=await tools.history({action:'read',entry:target.entry,limit:512}); if(page.is_error) throw new Error(JSON.stringify(page.value)); if(page.value.provenance.through_entry!==found.value.provenance.through_entry) throw new Error('read changed snapshot'); return {entry:target.entry,state:target.state,content:page.value.entry.content,next:page.value.entry.next_offset};"
     if prompt == "MCP":
         return "const candidates=await searchTools('Lookup an item'); const bounded=await searchTools('Lookup an item',{limit:1}); if(bounded.length!==1 || bounded[0].name!==candidates[0].name) throw new Error('bounded discovery'); let rejected=false; try { await searchTools('Lookup an item',{limit:null}); } catch (_) { rejected=true; } if(!rejected) throw new Error('invalid limit admitted'); const [candidate]=bounded; const d=await describeTool(candidate.name); if(d.input_schema.required[0]!=='index' || await describeTool('code_mode')!==null || await describeTool('missing')!==null) throw new Error('discovery contract'); if(!d.result_schema) throw new Error('missing result schema'); const hint=d.result_schema; if(JSON.stringify(hint.path)!=='[\"value\",\"structured_content\"]' || hint.schema.properties.count.$ref!=='#/$defs/Count' || hint.schema.$defs.Count.type!=='integer') throw new Error('incorrect result location or schema'); const rs=await Promise.all([1,2].map(index=>tools[d.name]({index}))); const values=rs.map(r=>hint.path.reduce((v,key)=>v[key],r)); const err=await tools[d.name]({index:-1}); if(!err.is_error || err.value.content!=='PRIVATE'+'_MCP_-1' || err.value.structured_content.count!=='unvalidated') throw new Error('observation rewritten'); return {total:values.reduce((n,r)=>n+r.count,0),error_flag:err.is_error,error_count:err.value.structured_content.count,declaration:d.declaration};"
     if prompt in ("IO", "STDERR"):
@@ -228,7 +225,7 @@ with tempfile.TemporaryDirectory(prefix="ion-code-mode-") as temporary:
             capture.unlink()
 
         # Recover a committed tool observation after a real compaction through
-        # the built Code Mode route. The summary request does not see the needle;
+        # the built Code Mode route. The generated summary omits the needle;
         # the history tool reads the original tool-result entry and must not
         # repeat its shell effect.
         history_work = work / "history"

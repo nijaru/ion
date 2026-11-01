@@ -647,6 +647,7 @@ pub(crate) async fn run<F: FnMut(AgentEvent) + Send>(
                                 crate::session::history::execute(
                                     session,
                                     &admitted.intent.call,
+                                    admitted.intent.parent,
                                     child_stop.clone(),
                                 )
                                 .await,

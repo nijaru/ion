@@ -94,7 +94,8 @@ impl OrderedBatch {
                 }
                 match dispatch {
                     ToolDispatch::History => Ok(ToolExecution::output(
-                        crate::session::history::execute(session, call, stop.clone()).await,
+                        crate::session::history::execute(session, call, occurrence, stop.clone())
+                            .await,
                     )),
                     ToolDispatch::Composition(runtime, limits) => crate::code_gateway::run(
                         runtime,

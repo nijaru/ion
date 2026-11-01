@@ -3246,6 +3246,87 @@ async fn idle_preferences_survive_unfinished_shell_without_recovering_it() {
 }
 
 #[tokio::test]
+async fn history_batch_reads_exclude_the_issuing_request_and_sibling_results() {
+    let root = std::env::temp_dir().join(format!("ion-history-batch-{}", uuid::Uuid::now_v7()));
+    std::fs::create_dir(&root).unwrap();
+    let session = Arc::new(Session::create(root.join("session.sqlite"), Some(&root)).unwrap());
+    let call = |id: &str, name: &str, arguments| {
+        Content::ToolCall(ToolCall {
+            id: id.into(),
+            name: name.into(),
+            arguments,
+            raw_arguments: None,
+        })
+    };
+    let scripts = Arc::new(ScriptedModelService::new([
+        response(vec![call(
+            "original",
+            "exec",
+            serde_json::json!({"command":"original evidence"}),
+        )]),
+        response(vec![
+            call(
+                "search",
+                "history",
+                serde_json::json!({"action":"search","query":"SELF_QUERY_TOKEN"}),
+            ),
+            call("list", "history", serde_json::json!({"action":"list"})),
+        ]),
+        response(vec![Content::Text("recovered".into())]),
+    ]));
+    let tools =
+        ToolSet::new([Arc::new(TestTools::new(&root)) as Arc<dyn ToolSource>]).with_history();
+    let agent = Agent::with_tool_set(scripts.clone(), Arc::new(tools), model());
+    agent
+        .submit(
+            session.clone(),
+            "recover evidence".into(),
+            "test".into(),
+            CancellationToken::new(),
+            |_| {},
+        )
+        .await
+        .unwrap();
+    let requests = scripts.requests();
+    let results = requests
+        .last()
+        .unwrap()
+        .messages
+        .iter()
+        .flat_map(|message| &message.content)
+        .filter_map(|part| match part {
+            Content::ToolResult(result) if result.name == "history" => Some(result),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(results.len(), 2);
+    assert!(
+        results[0].result["entries"].as_array().unwrap().is_empty(),
+        "a query must not find itself"
+    );
+    let bound = results[0].result["provenance"]["through_entry"]
+        .as_u64()
+        .unwrap();
+    assert_eq!(results[1].result["provenance"]["through_entry"], bound);
+    assert!(
+        results[1].result["entries"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|entry| entry["entry"].as_u64().unwrap() <= bound)
+    );
+    assert!(
+        results[1].result["entries"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|entry| entry["tool"]["call_id"] == "original")
+    );
+    drop((agent, session));
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[tokio::test]
 async fn manual_compaction_uses_no_tools_and_keeps_raw_history() {
     let root = std::env::temp_dir().join(format!("ion-compact-{}", uuid::Uuid::now_v7()));
     std::fs::create_dir(&root).unwrap();

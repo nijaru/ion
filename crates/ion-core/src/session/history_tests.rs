@@ -37,7 +37,10 @@ fn settlement(call_id: &str, name: &str, outcome: ToolOutcome) -> ToolSettlement
 
 fn history_query(session: &Session, value: Value) -> Result<Value, HistoryError> {
     session
-        .prepare_history(&serde_json::to_string(&value).unwrap())?
+        .prepare_history(
+            &serde_json::to_string(&value).unwrap(),
+            session.entry_count().unwrap(),
+        )?
         .read(&CancellationToken::new())
 }
 
@@ -83,18 +86,14 @@ fn compaction_keeps_original_tool_output_bounded_states_and_utf8_pages() {
                         raw_arguments: None,
                     }),
                 ],
-                provider_replay: Some(ion_ai::ProviderReplay::new(
-                    "test",
-                    "opaque",
-                    json!("REPLAY_SECRET_ALPHA"),
-                )),
+                provider_replay: None,
             },
             Usage::unknown(),
             false,
         )
         .unwrap();
     let large_output = json!({
-        "stdout": format!("HISTORY_NEEDLE_START 😀 {}", "x".repeat(12_000)),
+        "stdout": format!("HISTORY_NEEDLE_START 😀 {}😀 Ran 8 tests in 0.01s\nOK\n", "雪".repeat(4000)),
         "exit_code": 0
     });
     session
@@ -146,10 +145,7 @@ fn compaction_keeps_original_tool_output_bounded_states_and_utf8_pages() {
             turn,
             Message {
                 role: Role::Assistant,
-                content: vec![
-                    Content::Thinking("THINKING_SECRET_ALPHA".into()),
-                    Content::Text("answer after evidence".into()),
-                ],
+                content: vec![Content::Text("answer after evidence".into())],
                 provider_replay: None,
             },
             Usage::unknown(),
@@ -182,20 +178,11 @@ fn compaction_keeps_original_tool_output_bounded_states_and_utf8_pages() {
         )
         .unwrap();
     let view = session.view().unwrap();
-    let context = session.context_messages().unwrap();
-    let summary = context[0]
-        .content
-        .iter()
-        .find_map(|part| match part {
-            Content::Text(text) => Some(text),
-            _ => None,
-        })
-        .unwrap();
-    assert!(summary.contains(&format!(
-        "selected context through entry {}",
-        plan.through_entry
-    )));
-    assert!(!summary.contains("HISTORY_NEEDLE_START"));
+    assert!(
+        !serde_json::to_string(&session.context_messages().unwrap())
+            .unwrap()
+            .contains("HISTORY_NEEDLE_START")
+    );
     let tool_entry = view
         .entries
         .iter()
@@ -227,11 +214,20 @@ fn compaction_keeps_original_tool_output_bounded_states_and_utf8_pages() {
             .contains("HISTORY_NEEDLE_START")
     );
 
+    let tail = history_query(
+        &session,
+        json!({"action":"search","query":"ran 8 tests","tool":"exec"}),
+    )
+    .unwrap();
+    assert_eq!(tail["entries"][0]["entry"], tool_entry);
+    let preview = tail["entries"][0]["preview"].as_str().unwrap();
+    assert!(preview.contains("Ran 8 tests"), "{preview}");
+    assert!(preview.len() <= 384);
+    assert_eq!(tail["entries"][0]["preview_truncated"], true);
+
     let document = read_all(&session, tool_entry, 7).unwrap();
     let decoded: Value = serde_json::from_str(&document).unwrap();
     assert_eq!(decoded, large_output);
-    assert!(!document.contains("output_withheld"));
-    assert!(!document.contains("REPLAY_SECRET_ALPHA"));
     let emoji = document.find('😀').unwrap();
     assert!(
         history_query(
@@ -253,17 +249,14 @@ fn compaction_keeps_original_tool_output_bounded_states_and_utf8_pages() {
         json!({"state":"not_dispatched","reason":"test dispatch refusal"})
     );
 
-    // Search is literal and model-visible only: thinking and opaque replay are
-    // not part of the record corpus.
-    for hidden in ["THINKING_SECRET_ALPHA", "REPLAY_SECRET_ALPHA"] {
-        let hidden = history_query(&session, json!({"action":"search","query":hidden})).unwrap();
-        assert!(hidden["entries"].as_array().unwrap().is_empty(), "{hidden}");
-    }
     let cancelled = CancellationToken::new();
     cancelled.cancel();
     assert!(
         session
-            .prepare_history(&json!({"action":"list"}).to_string())
+            .prepare_history(
+                &json!({"action":"list"}).to_string(),
+                session.entry_count().unwrap()
+            )
             .unwrap()
             .read(&cancelled)
             .is_err()
@@ -368,10 +361,7 @@ fn search_metadata_is_bounded_while_entry_coordinates_stay_authoritative() {
         "EXACT{}",
         "z".repeat(super::records::MAX_METADATA_BYTES - "EXACT".len())
     );
-    let exact_name = format!(
-        "name{}",
-        "z".repeat(super::records::MAX_METADATA_BYTES - "name".len())
-    );
+    let exact_name = long_name[..super::records::MAX_METADATA_BYTES].to_owned();
     session
         .record_assistant(
             turn,
@@ -452,6 +442,23 @@ fn search_metadata_is_bounded_while_entry_coordinates_stay_authoritative() {
     assert!(exact_read["entry"].get("tool_truncated").is_none());
     assert_eq!(exact_read["entry"]["tool"]["call_id"], exact_call_id);
     assert_eq!(exact_read["entry"]["tool"]["name"], exact_name);
+    // These two tools have identical displayed names after truncation. A
+    // selector must compare the full stored name, not the bounded metadata.
+    for action in ["search", "list"] {
+        let mut query = json!({"action":action,"tool":exact_name});
+        if action == "search" {
+            query["query"] = json!("ok");
+        }
+        let selected = history_query(&session, query).unwrap();
+        let coordinates = selected["entries"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|entry| entry["entry"].as_u64().unwrap())
+            .collect::<Vec<_>>();
+        assert_eq!(coordinates, [exact_entry]);
+        assert_eq!(selected["provenance"]["tool"], exact_name);
+    }
     drop(session);
     fs::remove_dir_all(root).unwrap();
 }
@@ -580,7 +587,22 @@ fn private_shell_thinking_replay_and_image_bytes_are_excluded_from_search_and_re
         serde_json::from_str::<Value>(&picture_document).unwrap(),
         json!({"path":"picture.png"})
     );
-    assert!(!picture_document.contains(&image_prefix));
+    let assistant = picture["entries"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|entry| {
+            entry["kind"] == "assistant"
+                && entry["preview"]
+                    .as_str()
+                    .unwrap()
+                    .contains("calling picture")
+        })
+        .unwrap();
+    let assistant_document = read_all(&session, assistant["entry"].as_u64().unwrap(), 64).unwrap();
+    assert!(assistant_document.contains("calling picture"));
+    assert!(!assistant_document.contains("THINKING_SECRET_BETA"));
+    assert!(!assistant_document.contains("REPLAY_SECRET_BETA"));
     drop(session);
     fs::remove_dir_all(root).unwrap();
 }
@@ -611,7 +633,10 @@ fn search_cursor_scan_bound_and_committed_upper_snapshot_are_truthful() {
     }
     let committed_upper = session.entry_count().unwrap();
     let prepared = session
-        .prepare_history(&json!({"action":"search","query":"OLD_UNIQUE_NEEDLE"}).to_string())
+        .prepare_history(
+            &json!({"action":"search","query":"OLD_UNIQUE_NEEDLE"}).to_string(),
+            session.entry_count().unwrap(),
+        )
         .unwrap();
     let first = prepared.read(&CancellationToken::new()).unwrap();
     assert!(first["entries"].as_array().unwrap().is_empty(), "{first}");
@@ -635,7 +660,10 @@ fn search_cursor_scan_bound_and_committed_upper_snapshot_are_truthful() {
     // A prepared read cannot see later commits, including a read of their exact
     // entry coordinate.
     let stale_read = session
-        .prepare_history(&json!({"action":"read","entry":committed_upper + 1}).to_string())
+        .prepare_history(
+            &json!({"action":"read","entry":committed_upper + 1}).to_string(),
+            session.entry_count().unwrap(),
+        )
         .unwrap();
     let later = session
         .admit_user_shell("printf LATER_COMMIT".into(), false)
@@ -656,20 +684,31 @@ fn search_cursor_scan_bound_and_committed_upper_snapshot_are_truthful() {
     assert_eq!(session.entry_count().unwrap(), later + 1);
     assert!(
         session
-            .prepare_history(&json!({"action":"search","query":""}).to_string())
+            .prepare_history(
+                &json!({"action":"search","query":""}).to_string(),
+                session.entry_count().unwrap()
+            )
             .is_err()
     );
     assert!(
         session
-            .prepare_history(&json!({"action":"list","limit":0}).to_string())
+            .prepare_history(
+                &json!({"action":"list","limit":0}).to_string(),
+                session.entry_count().unwrap()
+            )
             .is_err()
     );
     for invalid in [
         json!({"action":"search","query":"x","before":null}),
         json!({"action":"list","before":null}),
+        json!({"action":"list","tool":null}),
+        json!({"action":"list","tool":" "}),
+        json!({"action":"search","query":"Ran","tool":"x".repeat(513)}),
     ] {
         assert!(
-            session.prepare_history(&invalid.to_string()).is_err(),
+            session
+                .prepare_history(&invalid.to_string(), session.entry_count().unwrap())
+                .is_err(),
             "{invalid}"
         );
     }
@@ -702,7 +741,10 @@ fn read_offset_is_bounded_by_projected_document_size_not_stored_entry_bytes() {
     assert!(u64::try_from(offset).unwrap() > total);
 
     let prepared = session
-        .prepare_history(&json!({"action":"read","entry":entry,"offset":offset}).to_string())
+        .prepare_history(
+            &json!({"action":"read","entry":entry,"offset":offset}).to_string(),
+            session.entry_count().unwrap(),
+        )
         .unwrap();
     let error = prepared.read(&CancellationToken::new()).unwrap_err();
     assert_eq!(
@@ -721,10 +763,16 @@ fn prepared_history_does_not_join_shell_settlement_committed_after_its_bound() {
         .admit_user_shell("printf PREPARED_SHELL_COMMAND".into(), false)
         .unwrap();
     let prepared_read = session
-        .prepare_history(&json!({"action":"read","entry":admission}).to_string())
+        .prepare_history(
+            &json!({"action":"read","entry":admission}).to_string(),
+            session.entry_count().unwrap(),
+        )
         .unwrap();
     let prepared_search = session
-        .prepare_history(&json!({"action":"search","query":"PREPARED_SHELL_OUTPUT"}).to_string())
+        .prepare_history(
+            &json!({"action":"search","query":"PREPARED_SHELL_OUTPUT"}).to_string(),
+            session.entry_count().unwrap(),
+        )
         .unwrap();
     session
         .record_user_shell(admission, json!({"stdout":"PREPARED_SHELL_OUTPUT"}), false)
@@ -774,6 +822,57 @@ fn search_charges_a_shell_settlement_outside_its_cursor_window() {
         "{page}"
     );
     assert_eq!(page["oversized_entry"], true);
+    drop(session);
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn search_previews_show_the_matching_message_part_and_shell_output() {
+    let (root, path) = fixture();
+    let session = Session::create(&path, Some(&root)).unwrap();
+    let text = format!("a\0{} LATE_EVIDENCE", "😀".repeat(500));
+    let content = vec![
+        Content::Text("unrelated first part".into()),
+        Content::Text(text.clone()),
+    ];
+    let (turn, _) = session
+        .begin_turn_message(
+            Message {
+                role: Role::User,
+                content: content.clone(),
+                provider_replay: None,
+            },
+            model(),
+        )
+        .unwrap();
+    session
+        .record_assistant(
+            turn,
+            Message {
+                role: Role::Assistant,
+                content,
+                provider_replay: None,
+            },
+            Usage::unknown(),
+            false,
+        )
+        .unwrap();
+    let admission = session
+        .admit_user_shell("printf original-command".into(), false)
+        .unwrap();
+    session
+        .record_user_shell(admission, json!({"stdout":text}), false)
+        .unwrap();
+    let found =
+        history_query(&session, json!({"action":"search","query":"LATE_EVIDENCE"})).unwrap();
+    let entries = found["entries"].as_array().unwrap();
+    assert_eq!(entries.len(), 3);
+    for entry in entries {
+        let preview = entry["preview"].as_str().unwrap();
+        assert!(preview.contains("LATE_EVIDENCE"), "{entry}");
+        assert!(preview.len() <= 384);
+        assert_eq!(entry["preview_truncated"], true);
+    }
     drop(session);
     fs::remove_dir_all(root).unwrap();
 }

@@ -1,7 +1,7 @@
 //! Bounded, read-only retrieval of committed model-facing Session records.
 //!
-//! The selection is fixed from the Session's committed sequence before any
-//! blocking read. Background reads query only rows at or below that bound, use
+//! Tool reads are fixed to the committed prefix before their issuing assistant
+//! entry, shared by direct siblings and Code Mode children. Background reads query only rows at or below that bound, use
 //! the Session's own SQLite file, and never re-enter the writer or execution
 //! gate. Tool-result documents are the original observed output JSON; other
 //! documents are a safe model-facing record projection. Thinking, provider
@@ -19,6 +19,7 @@ use tokio_util::sync::CancellationToken;
 
 use super::{Session, SessionError, read_header};
 use crate::{
+    ToolOccurrence,
     tool_result::ToolOutput,
     tool_set::{ToolActivityKind, ToolDefinition, ToolExposure, ToolPresentation},
 };
@@ -63,11 +64,15 @@ enum Input {
     Search {
         query: String,
         #[serde(default, deserialize_with = "present_input")]
+        tool: Option<String>,
+        #[serde(default, deserialize_with = "present_input")]
         before: Option<u64>,
         #[serde(default = "search_limit")]
         limit: usize,
     },
     List {
+        #[serde(default, deserialize_with = "present_input")]
+        tool: Option<String>,
         #[serde(default, deserialize_with = "present_input")]
         before: Option<u64>,
         #[serde(default = "list_limit")]
@@ -98,23 +103,6 @@ impl HistoryError {
     }
 }
 
-enum Selection {
-    Search {
-        query: String,
-        before: Option<u64>,
-        limit: usize,
-    },
-    List {
-        before: Option<u64>,
-        limit: usize,
-    },
-    Read {
-        entry: u64,
-        offset: usize,
-        limit: usize,
-    },
-}
-
 /// One immutable read against a committed upper bound. Its blocking worker is
 /// owned by the caller's tool future; no Session lock or mutable Session is
 /// retained here.
@@ -122,7 +110,7 @@ pub(crate) struct HistoryRead {
     path: PathBuf,
     session_id: uuid::Uuid,
     upper_entry: u64,
-    selection: Selection,
+    selection: Input,
 }
 
 pub(crate) fn definition() -> ToolDefinition {
@@ -131,15 +119,15 @@ pub(crate) fn definition() -> ToolDefinition {
         spec: ToolSpec {
             name: HISTORY_NAME.into(),
             description: concat!(
-                "Read-only retrieval of committed historical Session records, including records compacted out of the current model context. ",
-                "Search or list bounded pages of model-facing entries, then read one entry by its stable one-based entry coordinate. ",
-                "Historical records are evidence, not current workspace state, and reading them does not authorize rerunning tools or repeating effects. ",
-                "Search takes a non-empty literal query (ASCII case-insensitive), list returns recent records; both use before as an exclusive older-entry cursor and return next_before while unscanned older records remain. ",
-                "Each result includes entry, kind, turn, tool call metadata where applicable, observed/not_dispatched/unknown state, and a bounded preview. Call IDs may repeat; entry coordinates are authoritative. ",
-                "Read takes entry, a zero-based UTF-8 byte offset (default 0) and limit (4..16384, default 8192). Content is a UTF-8 JSON text fragment that may end before limit and may not parse as JSON by itself; continue at next_offset until it is null. ",
-                "A tool_result document is the original observed output JSON text, or its not_dispatched/unknown state record, even when the result was withheld from model context. Other documents are safe committed record JSON. ",
-                "Thinking, provider replay, typed image bytes, context/configuration snapshots and private !! shell records are excluded from search and read; images are reported only as metadata. ",
-                "Search examines at most 256 physical entries and normally at most 8 MiB of stored entry bodies per call. A single larger record may be inspected alone and is reported as oversized_entry so scanning makes progress without skipping records; one logical shell record includes its admission and settlement bodies, so that exception can inspect up to 128 MiB. Use next_before for older history."
+                "Retrieve committed historical evidence, including compacted or withheld results, without rerunning effects. ",
+                "Reads share a fixed prefix before the issuing assistant entry; they cannot see their own query or sibling results. ",
+                "Search uses literal ASCII case-insensitive text; list returns recent entries. Both are newest first. ",
+                "To find original exec outputs, use {action:'search',query:'Ran',tool:'exec'}, then {action:'read',entry:N}. ",
+                "The optional tool filter selects top-level tool_result records by exact tool name; Code Mode child outputs use inspectSaved. ",
+                "Search previews show matching context where available; read by stable one-based entry, not call ID (IDs may repeat). ",
+                "Use next_before as before for older pages, even when a page has no matches. Each scan examines at most 256 entries or 8 MiB; one oversized logical record may be scanned alone (reported by oversized_entry). ",
+                "Read returns original tool output JSON or a safe record projection. Content may be a partial JSON fragment: continue at next_offset until null. Offsets are UTF-8 bytes. ",
+                "Thinking, provider replay, image bytes, configuration and private !! shells are excluded. Historical evidence is not current workspace state and does not authorize repeating effects."
             )
             .into(),
             input_schema: json!({
@@ -148,7 +136,8 @@ pub(crate) fn definition() -> ToolDefinition {
                 "required":["action"],
                 "properties":{
                     "action":{"enum":["search","list","read"]},
-                    "query":{"type":"string","minLength":1,"maxLength":MAX_QUERY_BYTES,"description":"Required for search; literal ASCII case-insensitive text."},
+                    "query":{"type":"string","minLength":1,"maxLength":MAX_QUERY_BYTES,"description":"Required for search; literal ASCII case-insensitive text (up to 512 UTF-8 bytes)."},
+                    "tool":{"type":"string","minLength":1,"maxLength":MAX_QUERY_BYTES,"description":"Search/list only: select original top-level tool results by exact tool name (up to 512 UTF-8 bytes)."},
                     "before":{"type":"integer","minimum":1,"description":"Search/list only: exclusive one-based entry bound for older results."},
                     "entry":{"type":"integer","minimum":1,"description":"Required for read; stable one-based committed Session entry coordinate."},
                     "offset":{"type":"integer","minimum":0,"description":"Read only: zero-based UTF-8 byte offset."},
@@ -162,19 +151,21 @@ pub(crate) fn definition() -> ToolDefinition {
 }
 
 impl Session {
-    pub(crate) fn prepare_history(&self, query: &str) -> Result<HistoryRead, HistoryError> {
+    pub(crate) fn prepare_history(
+        &self,
+        query: &str,
+        upper_entry: u64,
+    ) -> Result<HistoryRead, HistoryError> {
         let input: Input = serde_json::from_str(query).map_err(|error| {
             HistoryError::request(format!("invalid history arguments: {error}"))
         })?;
-        let upper_entry = self
-            .store
-            .lock()
-            .map_err(|_| SessionError::Poisoned)?
-            .state
-            .sequence;
-        let selection = match input {
+        if upper_entry > self.entry_count()? {
+            return Err(SessionError::InvalidHistory.into());
+        }
+        match &input {
             Input::Search {
                 query,
+                tool,
                 before,
                 limit,
             } => {
@@ -186,60 +177,54 @@ impl Session {
                         "history search query exceeds {MAX_QUERY_BYTES} bytes"
                     )));
                 }
-                validate_before(before)?;
-                validate_limit(limit)?;
-                Selection::Search {
-                    query,
-                    before,
-                    limit,
-                }
+                validate_page(tool.as_deref(), *before, *limit)?;
             }
-            Input::List { before, limit } => {
-                validate_before(before)?;
-                validate_limit(limit)?;
-                Selection::List { before, limit }
-            }
-            Input::Read {
-                entry,
-                offset,
+            Input::List {
+                tool,
+                before,
                 limit,
             } => {
-                if entry == 0 {
+                validate_page(tool.as_deref(), *before, *limit)?;
+            }
+            Input::Read { entry, limit, .. } => {
+                if *entry == 0 {
                     return Err(HistoryError::request(
                         "history entry must be a one-based committed entry coordinate",
                     ));
                 }
-                if !(READ_MIN_LIMIT..=READ_MAX_LIMIT).contains(&limit) {
+                if !(READ_MIN_LIMIT..=READ_MAX_LIMIT).contains(limit) {
                     return Err(HistoryError::request(format!(
                         "history read limit must be {READ_MIN_LIMIT}..{READ_MAX_LIMIT} bytes"
                     )));
                 }
-                Selection::Read {
-                    entry,
-                    offset,
-                    limit,
-                }
             }
-        };
+        }
         Ok(HistoryRead {
             path: self.path.clone(),
             session_id: self.header.provider_session_id,
             upper_entry,
-            selection,
+            selection: input,
         })
     }
 }
 
-fn validate_before(before: Option<u64>) -> Result<(), HistoryError> {
+fn validate_page(
+    tool: Option<&str>,
+    before: Option<u64>,
+    limit: usize,
+) -> Result<(), HistoryError> {
+    if let Some(tool) = tool
+        && (tool.trim().is_empty() || tool.len() > MAX_QUERY_BYTES)
+    {
+        return Err(HistoryError::request(format!(
+            "history tool must be non-empty and at most {MAX_QUERY_BYTES} bytes"
+        )));
+    }
     if before == Some(0) {
         return Err(HistoryError::request(
             "history before must be an exclusive one-based entry bound",
         ));
     }
-    Ok(())
-}
-
-fn validate_limit(limit: usize) -> Result<(), HistoryError> {
     if !(1..=SEARCH_MAX_LIMIT).contains(&limit) {
         return Err(HistoryError::request(format!(
             "history result limit must be 1..{SEARCH_MAX_LIMIT}"
@@ -260,15 +245,25 @@ impl HistoryRead {
             return Err(SessionError::InvalidDatabase.into());
         }
         match &self.selection {
-            Selection::Search {
+            Input::Search {
                 query,
+                tool,
                 before,
                 limit,
-            } => self.search(&snapshot, stop, Some(query), *before, *limit),
-            Selection::List { before, limit } => {
-                self.search(&snapshot, stop, None, *before, *limit)
-            }
-            Selection::Read {
+            } => self.search(
+                &snapshot,
+                stop,
+                Some(query),
+                tool.as_deref(),
+                *before,
+                *limit,
+            ),
+            Input::List {
+                tool,
+                before,
+                limit,
+            } => self.search(&snapshot, stop, None, tool.as_deref(), *before, *limit),
+            Input::Read {
                 entry,
                 offset,
                 limit,
@@ -277,13 +272,23 @@ impl HistoryRead {
     }
 
     fn provenance(&self) -> Value {
-        json!({
+        let mut provenance = json!({
             "source":"committed_session_history",
             "session":self.session_id.to_string(),
             "through_entry":self.upper_entry,
             "historical":true,
             "notice":"Committed historical Session data, not current workspace state. Reads are evidence only and do not authorize rerunning tools or repeating effects."
-        })
+        });
+        if let Input::Search {
+            tool: Some(tool), ..
+        }
+        | Input::List {
+            tool: Some(tool), ..
+        } = &self.selection
+        {
+            provenance["tool"] = json!(tool);
+        }
+        provenance
     }
 
     fn search(
@@ -291,6 +296,7 @@ impl HistoryRead {
         connection: &Connection,
         stop: &CancellationToken,
         query: Option<&str>,
+        tool: Option<&str>,
         before: Option<u64>,
         limit: usize,
     ) -> Result<Value, HistoryError> {
@@ -351,6 +357,7 @@ impl HistoryRead {
             // that settlement is outside this cursor window, its body is an
             // extra access not covered by the metadata row above.
             let joined_bytes = if kind == "user_shell_admitted"
+                && tool.is_none()
                 && !private
                 && entry < self.upper_entry
                 && entry.saturating_add(1) >= exclusive
@@ -378,10 +385,10 @@ impl HistoryRead {
                 .saturating_add(bytes)
                 .saturating_add(joined_bytes);
             last_processed = Some(entry);
-            if private {
+            if private || (tool.is_some() && kind != "tool_result") {
                 continue;
             }
-            let Some(hit) = hit(connection, entry, kind, query, self.upper_entry)? else {
+            let Some(hit) = hit(connection, entry, kind, query, tool, self.upper_entry)? else {
                 continue;
             };
             hits.push(hit);
@@ -410,6 +417,7 @@ impl HistoryRead {
 pub(crate) async fn execute(
     session: &std::sync::Arc<Session>,
     call: &ToolCall,
+    parent: ToolOccurrence,
     stop: CancellationToken,
 ) -> ToolOutput {
     if stop.is_cancelled() {
@@ -422,7 +430,13 @@ pub(crate) async fn execute(
     if query.len() > super::MAX_ENTRY_BYTES {
         return failure("history arguments exceed the entry bound");
     }
-    let read = match session.prepare_history(&query) {
+    // Admission guarantees a committed, one-based issuing assistant entry.
+    // All siblings and composed children read the same pre-invocation prefix.
+    let upper_entry = parent
+        .assistant_entry
+        .checked_sub(1)
+        .expect("admitted assistant entry is one-based");
+    let read = match session.prepare_history(&query, upper_entry) {
         Ok(read) => read,
         Err(error) => return failure(error.to_string()),
     };

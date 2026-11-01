@@ -4,7 +4,7 @@
 //! exclusion. Search matches and read documents are projected directly from the
 //! Session database without retaining a writer or execution lock.
 
-use rusqlite::{Connection, OptionalExtension, params};
+use rusqlite::{Connection, OptionalExtension, named_params, params};
 use serde_json::{Value, json};
 use tokio_util::sync::CancellationToken;
 
@@ -13,6 +13,39 @@ use super::{HistoryError, HistoryRead, SessionError};
 const MAX_PREVIEW_BYTES: usize = 384;
 pub(super) const MAX_METADATA_BYTES: usize = 128;
 const KIND_PREFIX_BYTES: usize = 64;
+
+// Shared by search and exact reads: summaries and model projections never
+// replace the original tool output document.
+const TOOL_RESULT_SOURCE: &str = r#"WITH source AS (
+    SELECT
+        json_extract(body,'$.data.turn') AS turn,
+        json_extract(body,'$.data.result.call_id') AS tool_call_id,
+        json_extract(body,'$.data.result.name') AS tool_name,
+        substr(json_extract(body,'$.data.result.call_id'),1,:metadata) AS call_id,
+        length(CAST(json_extract(body,'$.data.result.call_id') AS BLOB)) AS call_id_bytes,
+        substr(json_extract(body,'$.data.result.name'),1,:metadata) AS name,
+        length(CAST(json_extract(body,'$.data.result.name') AS BLOB)) AS name_bytes,
+        json_extract(body,'$.data.result.outcome.state') AS state,
+        json_extract(body,'$.data.result.outcome.reason') AS reason,
+        json_extract(body,'$.data.result.outcome.output.is_error') AS is_error,
+        json_array_length(json_extract(body,'$.data.result.outcome.output.images')) AS image_count,
+        CASE json_extract(body,'$.data.result.outcome.state')
+            WHEN 'observed' THEN CAST(body AS TEXT) -> '$.data.result.outcome.output.value'
+            WHEN 'not_dispatched' THEN json_object('state','not_dispatched','reason',json_extract(body,'$.data.result.outcome.reason'))
+            ELSE json_object('state','unknown')
+        END AS document
+    FROM entries WHERE seq=:entry
+)"#;
+
+// SQLite text substr stops at NUL, so locate and slice excerpts as bytes.
+// Rust aligns their UTF-8 boundaries without loading the full document.
+const PREVIEW_COLUMNS: &str = r#"
+    substr(CAST(document AS BLOB),
+        CASE WHEN :query IS NULL OR length(CAST(document AS BLOB))<=:preview_limit THEN 1
+             ELSE max(1,instr(CAST(lower(document) AS BLOB),CAST(lower(:query) AS BLOB))-:preview_limit/4) END,
+        :preview_limit),
+    length(CAST(document AS BLOB))
+"#;
 
 impl HistoryRead {
     pub(super) fn read_entry(
@@ -71,33 +104,17 @@ impl HistoryRead {
             return Err(HistoryError::request("history read cancelled"));
         }
         let row = connection.query_row(
-            r#"WITH source AS (
-                SELECT
-                    json_extract(body,'$.data.turn') AS turn,
-                    substr(json_extract(body,'$.data.result.call_id'),1,?4) AS call_id,
-                    length(CAST(json_extract(body,'$.data.result.call_id') AS BLOB)) AS call_id_bytes,
-                    substr(json_extract(body,'$.data.result.name'),1,?4) AS name,
-                    length(CAST(json_extract(body,'$.data.result.name') AS BLOB)) AS name_bytes,
-                    json_extract(body,'$.data.result.outcome.state') AS state,
-                    json_extract(body,'$.data.result.outcome.output.is_error') AS is_error,
-                    json_array_length(json_extract(body,'$.data.result.outcome.output.images')) AS image_count,
-                    CASE json_extract(body,'$.data.result.outcome.state')
-                        WHEN 'observed' THEN CAST(body AS TEXT) -> '$.data.result.outcome.output.value'
-                        WHEN 'not_dispatched' THEN json_object('state','not_dispatched','reason',json_extract(body,'$.data.result.outcome.reason'))
-                        ELSE json_object('state','unknown')
-                    END AS document
-                FROM entries WHERE seq=?1
-            )
+            &format!(r#"{TOOL_RESULT_SOURCE}
             SELECT turn,call_id,call_id_bytes,name,name_bytes,state,is_error,image_count,
                    length(CAST(document AS BLOB)),
-                   substr(CAST(document AS BLOB),?2+1,?3)
-            FROM source"#,
-            params![
-                i64::try_from(entry).map_err(|_| SessionError::InvalidHistory)?,
-                i64::try_from(offset).map_err(|_| SessionError::InvalidHistory)?,
-                i64::try_from(limit.saturating_add(4)).map_err(|_| SessionError::InvalidHistory)?,
-                i64::try_from(MAX_METADATA_BYTES).map_err(|_| SessionError::InvalidHistory)?,
-            ],
+                   substr(CAST(document AS BLOB),:offset+1,:length)
+            FROM source"#),
+            named_params! {
+                ":entry":i64::try_from(entry).map_err(|_| SessionError::InvalidHistory)?,
+                ":offset":i64::try_from(offset).map_err(|_| SessionError::InvalidHistory)?,
+                ":length":i64::try_from(limit.saturating_add(4)).map_err(|_| SessionError::InvalidHistory)?,
+                ":metadata":i64::try_from(MAX_METADATA_BYTES).map_err(|_| SessionError::InvalidHistory)?,
+            },
             |row| {
                 Ok((
                     row.get::<_, Option<i64>>(0)?,
@@ -431,44 +448,29 @@ pub(super) fn hit(
     entry: u64,
     kind: &str,
     query: Option<&str>,
+    tool: Option<&str>,
     upper_entry: u64,
 ) -> Result<Option<Value>, SessionError> {
     let seq = i64::try_from(entry).map_err(|_| SessionError::InvalidHistory)?;
     let preview_limit =
-        i64::try_from(MAX_PREVIEW_BYTES + 4).map_err(|_| SessionError::InvalidHistory)?;
+        i64::try_from(MAX_PREVIEW_BYTES).map_err(|_| SessionError::InvalidHistory)?;
     match kind {
         "tool_result" => {
             let row = connection.query_row(
-                r#"SELECT
-                    json_extract(body,'$.data.turn'),
-                    substr(json_extract(body,'$.data.result.call_id'),1,?4),
-                    length(CAST(json_extract(body,'$.data.result.call_id') AS BLOB)),
-                    substr(json_extract(body,'$.data.result.name'),1,?4),
-                    length(CAST(json_extract(body,'$.data.result.name') AS BLOB)),
-                    json_extract(body,'$.data.result.outcome.state'),
-                    json_extract(body,'$.data.result.outcome.output.is_error'),
-                    json_array_length(json_extract(body,'$.data.result.outcome.output.images')),
-                    CASE WHEN ?1 IS NULL THEN 1 ELSE instr(lower(
-                        COALESCE(json_extract(body,'$.data.result.call_id'),'') || char(10) ||
-                        COALESCE(json_extract(body,'$.data.result.name'),'') || char(10) ||
-                        COALESCE(CAST((CAST(body AS TEXT) -> '$.data.result.outcome.output.value') AS TEXT),'') || char(10) ||
-                        COALESCE(json_extract(body,'$.data.result.outcome.reason'),'')
-                    ),lower(?1)) END,
-                    substr(CAST(COALESCE(
-                        CAST((CAST(body AS TEXT) -> '$.data.result.outcome.output.value') AS TEXT),
-                        json_extract(body,'$.data.result.outcome.reason'),''
-                    ) AS BLOB),1,?2),
-                    length(CAST(COALESCE(
-                        CAST((CAST(body AS TEXT) -> '$.data.result.outcome.output.value') AS TEXT),
-                        json_extract(body,'$.data.result.outcome.reason'),''
-                    ) AS BLOB))
-                FROM entries WHERE seq=?3"#,
-                params![
-                    query,
-                    preview_limit,
-                    seq,
-                    i64::try_from(MAX_METADATA_BYTES).map_err(|_| SessionError::InvalidHistory)?
-                ],
+                &format!(r#"{TOOL_RESULT_SOURCE}
+                SELECT turn,call_id,call_id_bytes,name,name_bytes,state,is_error,image_count,
+                    CASE WHEN :tool IS NOT NULL AND tool_name IS NOT :tool THEN 0
+                         WHEN :query IS NULL THEN 1
+                         ELSE instr(lower(tool_call_id || char(10) || tool_name || char(10) || document || char(10) || COALESCE(reason,'')),lower(:query)) END,
+                    {PREVIEW_COLUMNS}
+                FROM source"#),
+                named_params! {
+                    ":entry":seq,
+                    ":metadata":i64::try_from(MAX_METADATA_BYTES).map_err(|_| SessionError::InvalidHistory)?,
+                    ":query":query,
+                    ":tool":tool,
+                    ":preview_limit":preview_limit,
+                },
                 |row| {
                     Ok((
                         row.get::<_, Option<i64>>(0)?,
@@ -525,82 +527,52 @@ pub(super) fn hit(
             }
             Ok(Some(value))
         }
-        "assistant" => {
-            let row = connection.query_row(
-                r#"SELECT
-                    json_extract(body,'$.data.turn'),
+        "assistant" | "turn_started" | "steering" => {
+            let source = if kind == "assistant" {
+                r#"SELECT json_extract(body,'$.data.turn') AS turn,
                     (SELECT count(*) FROM json_each(body,'$.data.message.content') p
-                     WHERE json_type(p.value,'$.Image') IS NOT NULL),
-                    CASE WHEN ?1 IS NULL THEN 1 ELSE EXISTS(
-                        SELECT 1 FROM json_each(body,'$.data.message.content') p
-                        WHERE (json_type(p.value,'$.Text') IS NOT NULL
-                               AND instr(lower(json_extract(p.value,'$.Text')),lower(?1))>0)
-                           OR (json_type(p.value,'$.ToolCall') IS NOT NULL
-                               AND instr(lower(
-                                   COALESCE(json_extract(p.value,'$.ToolCall.name'),'') || char(10) ||
-                                   COALESCE(CAST(json_extract(p.value,'$.ToolCall.arguments') AS TEXT),'')
-                               ),lower(?1))>0)
-                    ) END,
-                    substr(CAST(COALESCE(
+                     WHERE json_type(p.value,'$.Image') IS NOT NULL) AS image_count,
+                    COALESCE(
                         (SELECT json_extract(p.value,'$.Text') FROM json_each(body,'$.data.message.content') p
-                         WHERE json_type(p.value,'$.Text') IS NOT NULL ORDER BY p.key LIMIT 1),
-                        (SELECT 'tool_call: ' || json_extract(p.value,'$.ToolCall.name')
+                         WHERE json_type(p.value,'$.Text') IS NOT NULL
+                           AND (:query IS NULL OR instr(lower(json_extract(p.value,'$.Text')),lower(:query))>0)
+                         ORDER BY p.key LIMIT 1),
+                        (SELECT 'tool_call: ' || json_extract(p.value,'$.ToolCall.name') ||
+                            CASE WHEN :query IS NULL THEN '' ELSE char(10) || COALESCE(CAST(json_extract(p.value,'$.ToolCall.arguments') AS TEXT),'') END
                          FROM json_each(body,'$.data.message.content') p
-                         WHERE json_type(p.value,'$.ToolCall') IS NOT NULL ORDER BY p.key LIMIT 1),
-                        ''
-                    ) AS BLOB),1,?2),
-                    length(CAST(COALESCE(
-                        (SELECT json_extract(p.value,'$.Text') FROM json_each(body,'$.data.message.content') p
-                         WHERE json_type(p.value,'$.Text') IS NOT NULL ORDER BY p.key LIMIT 1),
-                        (SELECT 'tool_call: ' || json_extract(p.value,'$.ToolCall.name')
-                         FROM json_each(body,'$.data.message.content') p
-                         WHERE json_type(p.value,'$.ToolCall') IS NOT NULL ORDER BY p.key LIMIT 1),
-                        ''
-                    ) AS BLOB))
-                FROM entries WHERE seq=?3"#,
-                params![query, preview_limit, seq],
-                |row| {
-                    Ok((
-                        row.get::<_, Option<i64>>(0)?,
-                        row.get::<_, Option<i64>>(1)?,
-                        row.get::<_, i64>(2)?,
-                        row.get::<_, Option<Vec<u8>>>(3)?,
-                        row.get::<_, Option<i64>>(4)?,
-                    ))
-                },
-            )?;
-            let (turn, image_count, matched, preview_bytes, total) = row;
-            if matched == 0 {
-                return Ok(None);
-            }
-            let (preview, truncated) = preview(preview_bytes, total);
-            Ok(Some(json!({
-                "entry":entry,"kind":"assistant","role":"assistant","turn":turn,
-                "image_count":image_count,"images_omitted":image_count.is_some_and(|count| count > 0),
-                "preview":preview,"preview_truncated":truncated
-            })))
-        }
-        "turn_started" | "steering" => {
-            let row = connection.query_row(
-                r#"SELECT
-                    json_extract(body,'$.data.turn'),
+                         WHERE json_type(p.value,'$.ToolCall') IS NOT NULL
+                           AND (:query IS NULL OR instr(lower(
+                               json_extract(p.value,'$.ToolCall.name') || char(10) ||
+                               COALESCE(CAST(json_extract(p.value,'$.ToolCall.arguments') AS TEXT),'')
+                           ),lower(:query))>0)
+                         ORDER BY p.key LIMIT 1),''
+                    ) AS document
+                FROM entries WHERE seq=:entry"#
+            } else {
+                r#"SELECT json_extract(body,'$.data.turn') AS turn,
                     (SELECT count(*) FROM json_each(body,'$.data.input.content') p
-                     WHERE json_type(p.value,'$.Image') IS NOT NULL),
-                    CASE WHEN ?1 IS NULL THEN 1 ELSE EXISTS(
-                        SELECT 1 FROM json_each(body,'$.data.input.content') p
-                        WHERE json_type(p.value,'$.Text') IS NOT NULL
-                          AND instr(lower(json_extract(p.value,'$.Text')),lower(?1))>0
-                    ) END,
-                    substr(CAST(COALESCE(
+                     WHERE json_type(p.value,'$.Image') IS NOT NULL) AS image_count,
+                    COALESCE(
                         (SELECT json_extract(p.value,'$.Text') FROM json_each(body,'$.data.input.content') p
-                         WHERE json_type(p.value,'$.Text') IS NOT NULL ORDER BY p.key LIMIT 1),''
-                    ) AS BLOB),1,?2),
-                    length(CAST(COALESCE(
-                        (SELECT json_extract(p.value,'$.Text') FROM json_each(body,'$.data.input.content') p
-                         WHERE json_type(p.value,'$.Text') IS NOT NULL ORDER BY p.key LIMIT 1),''
-                    ) AS BLOB))
-                FROM entries WHERE seq=?3"#,
-                params![query, preview_limit, seq],
+                         WHERE json_type(p.value,'$.Text') IS NOT NULL
+                           AND (:query IS NULL OR instr(lower(json_extract(p.value,'$.Text')),lower(:query))>0)
+                         ORDER BY p.key LIMIT 1),''
+                    ) AS document
+                FROM entries WHERE seq=:entry"#
+            };
+            let row = connection.query_row(
+                &format!(
+                    r#"WITH source AS ({source})
+                SELECT turn,image_count,
+                    CASE WHEN :query IS NULL THEN 1 ELSE instr(lower(document),lower(:query)) END,
+                    {PREVIEW_COLUMNS}
+                FROM source"#
+                ),
+                named_params! {
+                    ":entry":seq,
+                    ":query":query,
+                    ":preview_limit":preview_limit,
+                },
                 |row| {
                     Ok((
                         row.get::<_, Option<i64>>(0)?,
@@ -617,33 +589,35 @@ pub(super) fn hit(
             }
             let (preview, truncated) = preview(preview_bytes, total);
             Ok(Some(json!({
-                "entry":entry,"kind":kind,"role":"user","turn":turn,
+                "entry":entry,"kind":kind,"role":if kind == "assistant" { "assistant" } else { "user" },"turn":turn,
                 "image_count":image_count,"images_omitted":image_count.is_some_and(|count| count > 0),
                 "preview":preview,"preview_truncated":truncated
             })))
         }
         "user_shell_admitted" => {
             let row = connection.query_row(
-                r#"SELECT
-                    COALESCE(json_extract(s.body,'$.data.outcome.kind'),'unknown'),
-                    json_extract(s.body,'$.data.outcome.is_error'),
-                    CASE WHEN ?1 IS NULL THEN 1 ELSE instr(lower(
-                        COALESCE(json_extract(e.body,'$.data.command'),'') || char(10) ||
-                        COALESCE(CAST(json_extract(s.body,'$.data.outcome.output') AS TEXT),'')
-                    ),lower(?1)) END,
-                    substr(CAST(json_extract(e.body,'$.data.command') AS BLOB),1,?2),
-                    length(CAST(json_extract(e.body,'$.data.command') AS BLOB))
-                FROM entries e
-                LEFT JOIN entries s ON s.seq=e.seq+1
-                    AND s.seq<=?4
-                    AND json_extract(s.body,'$.kind')='user_shell_settled'
-                WHERE e.seq=?3"#,
-                params![
-                    query,
-                    preview_limit,
-                    seq,
-                    i64::try_from(upper_entry).map_err(|_| SessionError::InvalidHistory)?
-                ],
+                &format!(r#"WITH source AS (
+                    SELECT COALESCE(json_extract(s.body,'$.data.outcome.kind'),'unknown') AS state,
+                        json_extract(s.body,'$.data.outcome.is_error') AS is_error,
+                        json_extract(e.body,'$.data.command') ||
+                            CASE WHEN :query IS NULL THEN '' ELSE char(10) ||
+                                COALESCE(CAST(json_extract(s.body,'$.data.outcome.output') AS TEXT),'') END AS document
+                    FROM entries e
+                    LEFT JOIN entries s ON s.seq=e.seq+1
+                        AND s.seq<=:upper
+                        AND json_extract(s.body,'$.kind')='user_shell_settled'
+                    WHERE e.seq=:entry
+                )
+                SELECT state,is_error,
+                    CASE WHEN :query IS NULL THEN 1 ELSE instr(lower(document),lower(:query)) END,
+                    {PREVIEW_COLUMNS}
+                FROM source"#),
+                named_params! {
+                    ":entry":seq,
+                    ":query":query,
+                    ":preview_limit":preview_limit,
+                    ":upper":i64::try_from(upper_entry).map_err(|_| SessionError::InvalidHistory)?,
+                },
                 |row| {
                     Ok((
                         row.get::<_, String>(0)?,
@@ -689,7 +663,12 @@ fn preview(bytes: Option<Vec<u8>>, total: Option<i64>) -> (String, bool) {
     let Some(bytes) = bytes else {
         return (String::new(), false);
     };
-    let text = match std::str::from_utf8(&bytes) {
+    let start = bytes
+        .iter()
+        .take_while(|byte| **byte & 0xc0 == 0x80)
+        .count();
+    let bytes = &bytes[start..];
+    let text = match std::str::from_utf8(bytes) {
         Ok(text) => text,
         Err(error) => {
             std::str::from_utf8(&bytes[..error.valid_up_to()]).expect("valid UTF-8 prefix")
