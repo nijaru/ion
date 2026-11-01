@@ -263,7 +263,10 @@ impl Session {
             record,
             match resumed {
                 Some(child) => ChildMaterialization::Resume(child),
-                None => ChildMaterialization::New(context),
+                None => ChildMaterialization::New {
+                    entries: context,
+                    artifact_source: Some((self.path.clone(), self.provider_session_id())),
+                },
             },
         ))
     }
@@ -329,7 +332,10 @@ impl Session {
                 drop(store);
                 Ok(child)
             }
-            ChildMaterialization::New(mut context) => {
+            ChildMaterialization::New {
+                entries: mut context,
+                artifact_source,
+            } => {
                 if matches!(record.spec.target, DelegationTarget::Resume { .. }) {
                     return Err(SessionError::InvalidHistory);
                 }
@@ -342,6 +348,9 @@ impl Session {
                         record.spec.cwd.as_deref(),
                         record.child,
                         &context,
+                        artifact_source
+                            .as_ref()
+                            .map(|(path, id)| (path.as_path(), *id)),
                     )?
                 };
                 let view = child.view()?;

@@ -458,7 +458,10 @@ async fn absent_and_foreign_authority_reject_before_effects() {
         raw_arguments: None,
     };
     let output = catalog
-        .execute_untracked(&start, CancellationToken::new())
+        .execute(ion_core::ToolInvocation::untracked(
+            &start,
+            CancellationToken::new(),
+        ))
         .await;
     assert!(output.is_error);
     assert!(!root.join("marker").exists());

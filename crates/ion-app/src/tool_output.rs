@@ -4,7 +4,7 @@ use crate::{
     presentation_style::{Role, Theme},
     transcript_render::ThinkingVisibility,
 };
-use ion_core::{ActivityState, ToolActivityKind, TranscriptActivity};
+use ion_core::{ActivityState, ArtifactRef, ToolActivityKind, TranscriptActivity};
 use ratatui::text::{Line, Span};
 use serde_json::Value;
 
@@ -124,6 +124,7 @@ pub(crate) fn render_activity(
         }
         _ => {}
     }
+    render_artifacts(rows, &result.artifacts, prefix, width, detail);
     if let Some(error) = result.value["error"].as_str() {
         note(rows, prefix, "error", width, detail.theme);
         render_text(
@@ -178,6 +179,7 @@ pub(crate) fn render_folded_reads(
         let Some(result) = &activity.result else {
             continue;
         };
+        render_artifacts(rows, &result.artifacts, prefix, width, detail);
         let preceding = result.value["start_line"]
             .as_u64()
             .is_some_and(|start| start > 1);
@@ -287,16 +289,7 @@ pub(crate) fn render_command(
                 detail.theme,
             );
         }
-        if let Some(path) = output[format!("{stream}_full_path")].as_str() {
-            note(
-                rows,
-                prefix,
-                &format!("… {stream} temporary raw capture: {path}"),
-                width,
-                detail.theme,
-            );
-        }
-        if let Some(error) = output[format!("{stream}_full_error")].as_str() {
+        if let Some(error) = output[format!("{stream}_artifact_error")].as_str() {
             note(
                 rows,
                 prefix,
@@ -305,6 +298,35 @@ pub(crate) fn render_command(
                 detail.theme,
             );
         }
+    }
+}
+
+pub(crate) fn artifact_metadata(artifacts: &[ArtifactRef]) -> impl Iterator<Item = String> + '_ {
+    artifacts.iter().enumerate().map(|(index, artifact)| {
+        format!(
+            "Session artifact {index} · {} · {} bytes · {} · id {} · sha256 {}",
+            artifact.label,
+            artifact.bytes,
+            if artifact.complete {
+                "complete"
+            } else {
+                "incomplete"
+            },
+            artifact.id,
+            artifact.sha256,
+        )
+    })
+}
+
+pub(crate) fn render_artifacts(
+    rows: &mut Vec<MappedLine>,
+    artifacts: &[ArtifactRef],
+    prefix: &str,
+    width: usize,
+    detail: &RenderOptions<'_>,
+) {
+    for metadata in artifact_metadata(artifacts) {
+        note(rows, prefix, &metadata, width, detail.theme);
     }
 }
 
@@ -393,9 +415,19 @@ fn note(rows: &mut Vec<MappedLine>, prefix: &str, text: &str, width: usize, them
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
     use serde_json::json;
+
+    pub(crate) fn artifact(label: &str, complete: bool) -> ArtifactRef {
+        ArtifactRef {
+            id: uuid::Uuid::from_u128(42),
+            label: label.into(),
+            bytes: 1234,
+            sha256: "a".repeat(64),
+            complete,
+        }
+    }
 
     #[test]
     fn command_discloses_decoding_loss_artifacts_and_incomplete_capture_in_both_views() {
@@ -406,10 +438,9 @@ mod tests {
                 &json!({
                     "stdout": "\u{fffd}", "stdout_lossy": true,
                     "stdout_complete": true, "stdout_truncated": false,
-                    "stdout_full_path": "/tmp/raw",
                     "stderr": "partial", "stderr_lossy": false,
                     "stderr_complete": false, "stderr_truncated": true,
-                    "stderr_full_error": "injected failure"
+                    "stderr_artifact_error": "injected failure"
                 }),
                 "",
                 120,
@@ -422,13 +453,38 @@ mod tests {
                 3,
                 true,
             );
+            render_artifacts(
+                &mut rows,
+                &[artifact("stdout", true), artifact("stderr", false)],
+                "",
+                200,
+                &RenderOptions::new(
+                    detail,
+                    &crate::keybindings::KeyBindings::default(),
+                    &Theme::default(),
+                    ThinkingVisibility::Hidden,
+                ),
+            );
             let text = rows
                 .iter()
                 .map(|row| row.line.to_string())
                 .collect::<Vec<_>>()
                 .join("\n");
             assert!(text.contains("stdout decoding loss"), "{text}");
-            assert!(text.contains("temporary raw capture: /tmp/raw"), "{text}");
+            assert!(
+                text.contains("Session artifact 0 · stdout · 1234 bytes · complete"),
+                "{text}"
+            );
+            assert!(
+                text.contains("Session artifact 1 · stderr · 1234 bytes · incomplete"),
+                "{text}"
+            );
+            assert!(
+                text.contains(&uuid::Uuid::from_u128(42).to_string()),
+                "{text}"
+            );
+            assert!(text.contains(&"a".repeat(64)), "{text}");
+            assert!(!text.contains("temporary"), "{text}");
             assert!(text.contains("stderr capture incomplete"), "{text}");
             assert!(text.contains("omitted byte count unknown"), "{text}");
             assert!(
@@ -462,6 +518,67 @@ mod tests {
     }
 
     #[test]
+    fn retained_artifact_display_uses_typed_metadata_for_commands_reads_and_external_tools() {
+        let keys = crate::keybindings::KeyBindings::default();
+        let theme = Theme::default();
+        for kind in [
+            ToolActivityKind::Command,
+            ToolActivityKind::Read,
+            ToolActivityKind::External,
+        ] {
+            let mut activity = TranscriptActivity {
+                identity: ion_core::TranscriptActivityIdentity::Tool(ion_core::ToolOccurrence {
+                    assistant_entry: 2,
+                    ordinal: 0,
+                }),
+                call_id: "capture".into(),
+                name: "capture".into(),
+                activity: ion_core::ToolActivity {
+                    kind,
+                    subject: None,
+                },
+                arguments: Value::Null,
+                state: ActivityState::Completed,
+                result: Some(ion_core::ActivityResult {
+                    projection: Some(ion_core::ToolResultProjection::Observed),
+                    value: json!({"raw_result_artifact": 0, "artifacts": [artifact("OPAQUE_JSON", true)]}),
+                    image_mime_types: vec![],
+                    artifacts: vec![],
+                    is_error: false,
+                }),
+                children: vec![],
+            };
+            for mode in [OutputDetail::Compact, OutputDetail::Expanded] {
+                let detail = RenderOptions::new(mode, &keys, &theme, ThinkingVisibility::Hidden);
+                let mut rows = vec![];
+                render_activity(&mut rows, &activity, "", 200, &detail);
+                assert!(
+                    !rows
+                        .iter()
+                        .any(|row| row.line.to_string().contains("Session artifact"))
+                );
+                activity.result.as_mut().unwrap().artifacts =
+                    vec![artifact("raw_mcp_result\u{1b}", false)];
+                render_activity(&mut rows, &activity, "", 200, &detail);
+                let text = rows
+                    .iter()
+                    .map(|row| row.line.to_string())
+                    .collect::<Vec<_>>()
+                    .join("\n");
+                assert!(
+                    text.contains("Session artifact 0 · raw_mcp_result� · 1234 bytes · incomplete"),
+                    "{text}"
+                );
+                assert!(
+                    !text.contains('\u{1b}') && !text.contains("OPAQUE_JSON"),
+                    "{text}"
+                );
+                activity.result.as_mut().unwrap().artifacts.clear();
+            }
+        }
+    }
+
+    #[test]
     fn only_successful_compact_commands_fold_stdout_and_never_stderr() {
         let mut activity = TranscriptActivity {
             identity: ion_core::TranscriptActivityIdentity::Tool(ion_core::ToolOccurrence {
@@ -477,6 +594,7 @@ mod tests {
             arguments: json!({"command": "probe"}),
             state: ActivityState::Completed,
             result: Some(ion_core::ActivityResult {
+                artifacts: Vec::new(),
                 projection: Some(ion_core::ToolResultProjection::Observed),
                 value: json!({"stdout": "OBSERVED_STDOUT\n", "stderr": "OBSERVED_STDERR\n"}),
                 image_mime_types: vec![],
@@ -533,6 +651,7 @@ mod tests {
                 arguments: Value::Null,
                 state: ActivityState::Failed,
                 result: Some(ion_core::ActivityResult {
+                    artifacts: Vec::new(),
                     projection: Some(ion_core::ToolResultProjection::Observed),
                     value: json!({"error":cause}),
                     image_mime_types: vec![],

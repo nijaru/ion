@@ -85,6 +85,7 @@ fn selected_tool_copy_is_unwrapped_recorded_evidence_and_keeps_inspector_state()
                 "diff": {"text": diff, "truncated": true}
             }),
             image_mime_types: vec!["image/png".into()],
+            artifacts: Vec::new(),
             is_error: false,
         }),
     );
@@ -105,6 +106,7 @@ fn selected_tool_copy_is_unwrapped_recorded_evidence_and_keeps_inspector_state()
             projection: Some(ToolResultProjection::Observed),
             value: serde_json::json!({"stdout": "CHILD_RESULT"}),
             image_mime_types: vec!["image/jpeg".into()],
+            artifacts: Vec::new(),
             is_error: false,
         }),
         children: Vec::new(),
@@ -418,8 +420,7 @@ fn resume_history_tail_bounds_shell_only_history() {
                 },
                 command: format!("echo {index}"),
                 outcome: Some(ion_core::UserShellOutcome::Observed {
-                    output: serde_json::Value::Null,
-                    is_error: false,
+                    output: ion_core::ToolOutput::success(serde_json::Value::Null),
                 }),
                 exclude_from_context: false,
             })

@@ -3,7 +3,7 @@
 
 use super::*;
 
-pub(super) const FORMAT_VERSION: u32 = 18;
+pub(super) const FORMAT_VERSION: u32 = 19;
 // An 8 MiB raw prompt or streamed response can grow up to sixfold when JSON
 // escapes control characters. Keep the storage bound above that encoded size.
 pub(crate) const MAX_ENTRY_BYTES: usize = 64 * 1024 * 1024;
@@ -36,6 +36,55 @@ pub(super) struct Store {
 }
 
 pub(super) struct SessionLock(pub(super) File);
+
+pub(super) struct CreatedDatabase {
+    path: PathBuf,
+    identity: (u64, u64),
+    keep: bool,
+}
+impl CreatedDatabase {
+    pub(super) fn publish(&mut self) {
+        self.keep = true;
+    }
+}
+impl Drop for CreatedDatabase {
+    fn drop(&mut self) {
+        if self.keep {
+            return;
+        }
+        if let Ok(metadata) = fs::symlink_metadata(&self.path)
+            && (metadata.dev(), metadata.ino()) == self.identity
+        {
+            let _ = fs::remove_file(&self.path);
+            for suffix in ["-wal", "-shm"] {
+                let mut path = self.path.as_os_str().to_os_string();
+                path.push(suffix);
+                let _ = fs::remove_file(PathBuf::from(path));
+            }
+        }
+        // The lock file's stable inode belongs to future attempts as well.
+    }
+}
+
+pub(super) fn create_database_file(path: &Path) -> Result<CreatedDatabase, SessionError> {
+    let file = OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .mode(0o600)
+        .open(path)?;
+    let metadata = match file.metadata() {
+        Ok(metadata) => metadata,
+        Err(error) => {
+            let _ = fs::remove_file(path);
+            return Err(error.into());
+        }
+    };
+    Ok(CreatedDatabase {
+        path: path.to_path_buf(),
+        identity: (metadata.dev(), metadata.ino()),
+        keep: false,
+    })
+}
 
 impl Drop for SessionLock {
     fn drop(&mut self) {
@@ -115,7 +164,12 @@ impl Store {
             .map(|shell| {
                 ProjectedMessage::new(
                     shell.admission_entry,
-                    shell_message(&shell.command, &UserShellOutcome::Unknown, false),
+                    shell_message(
+                        &shell.command,
+                        &UserShellOutcome::Unknown,
+                        false,
+                        shell.admission_entry,
+                    ),
                 )
             });
         let replace_pending_message = pending_message.is_some();
@@ -127,6 +181,9 @@ impl Store {
             .iter()
             .enumerate()
             .map(|(offset, entry)| {
+                for reference in artifacts::references(entry) {
+                    artifacts::validate(&self.connection, reference)?;
+                }
                 let transition = candidate.apply(entry, &|coordinate| {
                     self.settled.contains(&coordinate) || new_settled.contains(&coordinate)
                 })?;
@@ -256,6 +313,22 @@ pub(super) fn read_entries(connection: &Connection) -> Result<Vec<SessionEntry>,
     Ok(entries)
 }
 
+pub(super) fn shell_settlement(
+    connection: &Connection,
+    admission: u64,
+    upper: u64,
+) -> Result<Option<(u64, usize)>, SessionError> {
+    use rusqlite::OptionalExtension;
+    let row: Option<(i64,i64)> = connection.query_row("SELECT seq,length(body) FROM entries WHERE json_extract(body,'$.kind')='user_shell_settled' AND json_extract(body,'$.data.admission_entry')=?1 AND seq<=?2", params![i64::try_from(admission).map_err(|_| SessionError::InvalidHistory)?, i64::try_from(upper).map_err(|_| SessionError::InvalidHistory)?], |row| Ok((row.get(0)?,row.get(1)?))).optional()?;
+    row.map(|(coordinate, bytes)| {
+        Ok((
+            u64::try_from(coordinate).map_err(|_| SessionError::InvalidHistory)?,
+            usize::try_from(bytes).map_err(|_| SessionError::InvalidHistory)?,
+        ))
+    })
+    .transpose()
+}
+
 pub(super) fn read_entry(
     connection: &Connection,
     entry: u64,
@@ -308,6 +381,7 @@ pub(super) fn read_header(connection: &Connection) -> Result<Header, SessionErro
 
 pub(super) fn configure_connection(connection: &Connection) -> Result<(), SessionError> {
     connection.busy_timeout(Duration::from_secs(5))?;
+    connection.pragma_update(None, "foreign_keys", true)?;
     Ok(())
 }
 
@@ -325,7 +399,9 @@ CREATE UNIQUE INDEX request_keys ON entries(json_extract(body, '$.data.request.s
 CREATE UNIQUE INDEX delegation_runs ON entries(json_extract(body, '$.data.record.run')) WHERE json_extract(body, '$.kind') = 'delegation_admitted';
 CREATE UNIQUE INDEX delegation_created_children ON entries(json_extract(body, '$.data.record.child')) WHERE json_extract(body, '$.kind') = 'delegation_admitted' AND json_extract(body, '$.data.record.spec.target.type') IN ('fresh', 'fork');
 CREATE UNIQUE INDEX child_bindings ON entries(json_extract(body, '$.data.record.run')) WHERE json_extract(body, '$.kind') = 'child_session_of';
-CREATE INDEX turn_ends ON entries(json_extract(body, '$.data.turn')) WHERE json_extract(body, '$.kind') = 'turn_ended';")?;
+CREATE INDEX turn_ends ON entries(json_extract(body, '$.data.turn')) WHERE json_extract(body, '$.kind') = 'turn_ended';
+CREATE UNIQUE INDEX shell_results ON entries(json_extract(body,'$.data.admission_entry')) WHERE json_extract(body,'$.kind')='user_shell_settled';")?;
+    super::artifacts::initialize(connection)?;
     Ok(())
 }
 

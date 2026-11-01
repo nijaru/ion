@@ -178,6 +178,7 @@ fn default_wait_ms() -> u64 {
 }
 fn output(value: Value, is_error: bool) -> ToolOutput {
     ToolOutput {
+        artifacts: Vec::new(),
         value,
         images: Vec::new(),
         is_error,

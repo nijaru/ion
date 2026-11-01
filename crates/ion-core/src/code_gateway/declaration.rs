@@ -34,7 +34,7 @@ pub(super) fn render(spec: &ToolSpec) -> String {
         .replace('\u{2029}', "\\u2029");
     format!(
         "// Advisory types, not validation; consult input_schema and result_schema.\n\
-         {notice}declare const tools: {{\n  {name}(args: {input}): Promise<{{ value: unknown; is_error: boolean; images: Array<{{ type: \"image\"; id: string; mime_type: string }}>; }}>;\n}};"
+         {notice}declare const tools: {{\n  {name}(args: {input}): Promise<{{ value: unknown; is_error: boolean; images: Array<{{ type: \"image\"; id: string; mime_type: string }}>; artifacts: Array<{{ id: string; label: string; bytes: number; sha256: string; complete: boolean }}>; parent: {{ assistant_entry: number; ordinal: number }}; child: number; }}>;\n}};"
     )
 }
 

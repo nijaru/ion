@@ -299,6 +299,7 @@ fn output(value: serde_json::Value) -> ToolOutput {
     ToolOutput {
         value,
         images: Vec::new(),
+        artifacts: Vec::new(),
         is_error: false,
     }
 }

@@ -24,11 +24,12 @@ async fn user_shell_operation_rejects_overlap_and_commits_before_release() {
         "echo done".into(),
         false,
         CancellationToken::new(),
-        move |command, _| async move {
+        move |command, _, _| async move {
             assert_eq!(command, "echo done");
             admitted.send(()).unwrap();
             released.await.unwrap();
             crate::ToolOutput {
+                artifacts: Vec::new(),
                 value: serde_json::json!({"stdout":"done","exit_code":0}),
                 images: Vec::new(),
                 is_error: false,
@@ -40,7 +41,7 @@ async fn user_shell_operation_rejects_overlap_and_commits_before_release() {
         "must not run".into(),
         false,
         CancellationToken::new(),
-        |_, _| async { panic!("occupied owner dispatched a shell") },
+        |_, _, _| async { panic!("occupied owner dispatched a shell") },
     );
     assert!(matches!(rejected.await, Err(SessionError::OperationActive)));
     assert_eq!(session.view().unwrap().entries.len(), 1);
@@ -144,14 +145,13 @@ fn shell_admission_recovers_before_authority_and_rejects_failed_recovery() {
     session
         .record_user_shell(
             admission,
-            serde_json::json!({"stdout":"new","exit_code":0}),
-            false,
+            crate::ToolOutput::success(serde_json::json!({"stdout":"new","exit_code":0})),
         )
         .unwrap();
     drop(session);
     let reopened = Session::open(&path).unwrap();
     assert!(
-        matches!(reopened.view().unwrap().entries.last(), Some(SessionEntry::UserShellSettled { outcome: UserShellOutcome::Observed { output, .. }, .. }) if output["stdout"] == "new")
+        matches!(reopened.view().unwrap().entries.last(), Some(SessionEntry::UserShellSettled { outcome: UserShellOutcome::Observed { output, .. }, .. }) if output.value["stdout"] == "new")
     );
     for copy in [
         reopened.clone_to(root.join("clone.sqlite")).unwrap(),
@@ -212,8 +212,7 @@ fn shell_admission_and_result_faults_leave_only_committed_authority() {
     assert!(matches!(
         session.record_user_shell(
             admission,
-            serde_json::json!({"stdout":"observed", "exit_code":0}),
-            false
+            crate::ToolOutput::success(serde_json::json!({"stdout":"observed", "exit_code":0}))
         ),
         Err(SessionError::Sqlite(_))
     ));
@@ -301,7 +300,10 @@ fn interrupted_shell_recovery_is_atomic_private_and_never_replayed() {
                 .admit_user_shell("new-command".into(), false)
                 .unwrap();
             session
-                .record_user_shell(admission, serde_json::json!({"stdout":"new"}), false)
+                .record_user_shell(
+                    admission,
+                    crate::ToolOutput::success(serde_json::json!({"stdout":"new"})),
+                )
                 .unwrap();
         } else {
             let (turn, _) = session
@@ -420,7 +422,7 @@ fn passive_metadata_is_bounded_validated_and_does_not_recover_history() {
     // Inject corruption below normal JSON-index validation, not a valid append.
     connection
         .execute_batch(
-            "DROP INDEX request_keys; DROP INDEX turn_ends; DROP INDEX delegation_runs; DROP INDEX delegation_created_children; DROP INDEX child_bindings;",
+            "DROP INDEX request_keys; DROP INDEX turn_ends; DROP INDEX delegation_runs; DROP INDEX delegation_created_children; DROP INDEX child_bindings; DROP INDEX shell_results;",
         )
         .unwrap();
     connection
@@ -522,8 +524,7 @@ fn metadata_validation_needs_no_projected_shell_payload() {
     session
         .record_user_shell(
             admission,
-            serde_json::json!({"stdout": "x".repeat(65536)}),
-            false,
+            crate::ToolOutput::success(serde_json::json!({"stdout": "x".repeat(65536)})),
         )
         .unwrap();
     let settlement = session.view().unwrap().entries.pop().unwrap();
@@ -543,6 +544,7 @@ fn metadata_validation_needs_no_projected_shell_payload() {
         Some(&root),
         uuid::Uuid::now_v7(),
         &entries,
+        None,
     )
     .unwrap();
     let view = interleaved.view().unwrap();
@@ -730,14 +732,13 @@ fn shared_shell_context_preserves_host_metadata_after_reopen() {
     let output = serde_json::json!({
         "stdout": "\u{fffd}", "stdout_lossy": true, "stdout_complete": true,
         "stdout_truncated": false, "stdout_omitted_bytes": 0,
-        "stdout_full_path": "/capture/raw", "stdout_full_error": null,
+        "stdout_artifact_error": "retention unavailable",
         "stderr_complete": false, "stderr_omitted_bytes": null,
-        "stderr_full_error": "read failed", "exit_code": 0,
+        "stderr_artifact_error": "read failed", "exit_code": 0,
         "additional_host_data": {"nested": [true, "preserve exactly"]}
     });
     let expected = serde_json::to_value(UserShellOutcome::Observed {
-        output: output.clone(),
-        is_error: false,
+        output: crate::ToolOutput::success(output.clone()),
     })
     .unwrap();
     let check = |session: &Session| {
@@ -755,7 +756,9 @@ fn shared_shell_context_preserves_host_metadata_after_reopen() {
     let admission = session
         .admit_user_shell("binary output".into(), false)
         .unwrap();
-    session.record_user_shell(admission, output, false).unwrap();
+    session
+        .record_user_shell(admission, crate::ToolOutput::success(output))
+        .unwrap();
     check(&session);
     drop(session);
     let reopened = Session::open(&path).unwrap();
@@ -770,11 +773,17 @@ fn user_shell_context_choice_survives_reopen_and_compaction() {
     let session = Session::create(&path, Some(&root)).unwrap();
     let admission = session.admit_user_shell("pwd".into(), false).unwrap();
     session
-        .record_user_shell(admission, serde_json::json!({"stdout":"visible"}), false)
+        .record_user_shell(
+            admission,
+            crate::ToolOutput::success(serde_json::json!({"stdout":"visible"})),
+        )
         .unwrap();
     let admission = session.admit_user_shell("secret".into(), true).unwrap();
     session
-        .record_user_shell(admission, serde_json::json!({"stdout":"private"}), false)
+        .record_user_shell(
+            admission,
+            crate::ToolOutput::success(serde_json::json!({"stdout":"private"})),
+        )
         .unwrap();
     let view = session.view().unwrap();
     assert_eq!(view.display_messages().len(), 2);
@@ -825,8 +834,7 @@ fn user_shell_context_choice_survives_reopen_and_compaction() {
     reopened
         .record_user_shell(
             admission,
-            serde_json::json!({"stdout":"suffix-observation"}),
-            false,
+            crate::ToolOutput::success(serde_json::json!({"stdout":"suffix-observation"})),
         )
         .unwrap();
     let context = serde_json::to_string(&reopened.context_messages().unwrap()).unwrap();
@@ -2318,6 +2326,7 @@ fn parent_result_cannot_settle_a_pending_child() {
             0,
             crate::ChildOutcome::Observed {
                 output: crate::tool_result::ToolOutput {
+                    artifacts: Vec::new(),
                     value: serde_json::json!({"written":true}),
                     images: Vec::new(),
                     is_error: false,
@@ -2539,6 +2548,7 @@ fn code_inspection_preserves_states_exact_values_and_bounded_metadata() {
             },
             _ => crate::ChildOutcome::Observed {
                 output: crate::tool_result::ToolOutput {
+                    artifacts: Vec::new(),
                     value: match child {
                         0 => serde_json::json!(u64::MAX),
                         3 => serde_json::Value::Null,
@@ -3293,8 +3303,7 @@ fn context_timeline_tracks_committed_message_boundaries() {
         session
             .record_user_shell(
                 admission,
-                serde_json::json!({"stdout":"observed","exit_code":0}),
-                false,
+                crate::ToolOutput::success(serde_json::json!({"stdout":"observed","exit_code":0})),
             )
             .unwrap();
     }

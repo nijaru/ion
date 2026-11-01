@@ -538,7 +538,7 @@ impl<M: Serialize + Send + 'static> SessionControl<M> {
             command,
             exclude_from_context,
             self.work_stop(),
-            move |_, stop| tools(stop),
+            move |_, stop, artifacts| tools(stop, artifacts),
         );
         self.install_direct(id, Work::Shell(work), metadata, reservation);
         Ok(id)

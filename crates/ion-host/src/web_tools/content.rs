@@ -1,10 +1,5 @@
 //! Bounded text projection. HTML parsing/rendering and snapshot I/O stay in the
 //! joined blocking worker, not in the network future that cancellation drops.
-use std::{
-    fs::OpenOptions,
-    io::{self, Write},
-    os::unix::fs::OpenOptionsExt,
-};
 use tokio_util::sync::CancellationToken;
 use url::Url;
 
@@ -15,7 +10,7 @@ pub(super) struct Projection {
     pub format: &'static str,
     pub bytes: usize,
     pub truncated: bool,
-    pub full_path: Option<String>,
+    pub artifact: Option<ion_core::ArtifactRef>,
     pub full_error: Option<String>,
 }
 
@@ -87,6 +82,7 @@ pub(super) fn project(
     final_url: Url,
     stop: CancellationToken,
     deadline: tokio::time::Instant,
+    artifacts: Option<ion_core::ArtifactSink>,
 ) -> Result<Projection, Failure> {
     check(&stop, deadline)?;
     let source = String::from_utf8(body).map_err(|_| {
@@ -117,8 +113,13 @@ pub(super) fn project(
     }
     let bytes = text.len();
     let truncated = bytes > max_bytes;
-    let (full_path, full_error) = if truncated {
-        match save_snapshot(&text) {
+    let (artifact, full_error) = if truncated {
+        match artifacts
+            .ok_or_else(|| {
+                std::io::Error::other("raw capture requires an explicit Session artifact sink")
+            })
+            .and_then(|sink| sink.capture("converted_text", text.as_bytes()))
+        {
             Ok(path) => (Some(path), None),
             Err(error) => (
                 None,
@@ -141,28 +142,11 @@ pub(super) fn project(
         format: if html { "html_text" } else { "text" },
         bytes,
         truncated,
-        full_path,
+        artifact,
         full_error,
     })
 }
 
 fn unsafe_control(c: char) -> bool {
     c.is_control() && !matches!(c, '\n' | '\r' | '\t')
-}
-
-fn save_snapshot(text: &str) -> io::Result<String> {
-    let path = std::env::temp_dir().join(format!("ion-web-{}.txt", uuid::Uuid::now_v7()));
-    let display = path
-        .to_str()
-        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "snapshot path is not UTF-8"))?;
-    let mut file = OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .mode(0o600)
-        .open(&path)?;
-    if let Err(error) = file.write_all(text.as_bytes()).and_then(|()| file.flush()) {
-        let _ = std::fs::remove_file(&path);
-        return Err(error);
-    }
-    Ok(display.to_owned())
 }

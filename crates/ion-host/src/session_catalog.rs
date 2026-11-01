@@ -456,7 +456,9 @@ mod tests {
                     command.clone(),
                     excluded,
                     CancellationToken::new(),
-                    move |command, stop| async move { tools.run_user_shell(&command, stop).await },
+                    move |command, stop, artifacts| async move {
+                        tools.run_user_shell(&command, stop, Some(artifacts)).await
+                    },
                 )
                 .await
                 .unwrap();
@@ -469,8 +471,8 @@ mod tests {
             )));
             assert!(entries.iter().any(|entry| matches!(entry,
                 ion_core::SessionEntry::UserShellSettled {
-                    outcome: ion_core::UserShellOutcome::Observed { output: raw, is_error: false }, ..
-                } if raw == &output.value
+                    outcome: ion_core::UserShellOutcome::Observed { output: raw }, ..
+                } if raw == &output
             )));
             agent(&catalog, 1)
                 .submit(

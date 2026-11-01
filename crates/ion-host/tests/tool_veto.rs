@@ -267,7 +267,10 @@ else:
     };
     let result = agent
         .tool_catalog()
-        .execute_untracked(&call, CancellationToken::new())
+        .execute(ion_core::ToolInvocation::untracked(
+            &call,
+            CancellationToken::new(),
+        ))
         .await;
     assert!(
         result.is_error

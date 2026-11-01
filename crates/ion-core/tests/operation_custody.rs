@@ -80,6 +80,7 @@ impl ToolExecutor for BlockingWrite {
             });
             tokio::select! { result=&mut worker => { result.unwrap(); }, ()=stop.cancelled() => { worker.await.unwrap(); } }
             ToolOutput {
+                artifacts: Vec::new(),
                 value: serde_json::json!({"written":true}),
                 images: Vec::new(),
                 is_error: false,
@@ -232,7 +233,7 @@ async fn stop_before_admission_is_inert_and_genuine_task_panic_closes_live_execu
     let stop = CancellationToken::new();
     stop.cancel();
     let cancelled = session
-        .run_user_shell("must not admit".into(), false, stop, |_, _| async {
+        .run_user_shell("must not admit".into(), false, stop, |_, _, _| async {
             panic!("pre-stopped work executed")
         })
         .await;
@@ -240,7 +241,7 @@ async fn stop_before_admission_is_inert_and_genuine_task_panic_closes_live_execu
     assert_eq!(session.entry_count().unwrap(), 0);
     let stop = CancellationToken::new();
     let failed = session
-        .run_user_shell("interrupted".into(), false, stop.clone(), |_, _| async {
+        .run_user_shell("interrupted".into(), false, stop.clone(), |_, _, _| async {
             panic!("controlled execution task panic before host work")
         })
         .await;
@@ -249,7 +250,7 @@ async fn stop_before_admission_is_inert_and_genuine_task_panic_closes_live_execu
             "must not resume".into(),
             false,
             CancellationToken::new(),
-            |_, _| async { panic!("poisoned execution resumed") },
+            |_, _, _| async { panic!("poisoned execution resumed") },
         )
         .await;
     let preference = session.select_model(model());
@@ -297,7 +298,7 @@ async fn unread_settlement_failure_survives_shutdown_and_blocks_silent_replaceme
             "write".into(),
             false,
             CancellationToken::new(),
-            move |_, _| async move {
+            move |_, _, _| async move {
                 started.add_permits(1);
                 held.await.unwrap();
                 fs::write(target, "once").unwrap();
@@ -325,7 +326,7 @@ async fn unread_settlement_failure_survives_shutdown_and_blocks_silent_replaceme
                 "must not rerun".into(),
                 false,
                 CancellationToken::new(),
-                |_, _| async { panic!("failed/closed owner dispatched") },
+                |_, _, _| async { panic!("failed/closed owner dispatched") },
             )
             .await;
         let unchanged = session.entry_count().unwrap() == before;
@@ -387,7 +388,7 @@ async fn idle_reservation_excludes_concurrent_admission_and_releases_on_preparat
                 "must not admit".into(),
                 false,
                 CancellationToken::new(),
-                |_, _| async { panic!("reserved Session admitted work") },
+                |_, _, _| async { panic!("reserved Session admitted work") },
             )
             .now_or_never()
             .unwrap()
@@ -401,7 +402,7 @@ async fn idle_reservation_excludes_concurrent_admission_and_releases_on_preparat
             "new".into(),
             false,
             CancellationToken::new(),
-            |_, _| async { shell_output() },
+            |_, _, _| async { shell_output() },
         )
         .await;
     drop(session);
@@ -413,6 +414,7 @@ async fn idle_reservation_excludes_concurrent_admission_and_releases_on_preparat
 
 fn shell_output() -> ToolOutput {
     ToolOutput {
+        artifacts: Vec::new(),
         value: serde_json::json!({"stdout":"settled","cancelled":true}),
         images: Vec::new(),
         is_error: false,
@@ -430,7 +432,7 @@ async fn shutdown_and_operation_waiters_share_actual_completion() {
         "fixture".into(),
         false,
         stop.clone(),
-        move |_, _| async move {
+        move |_, _, _| async move {
             held.await.unwrap();
             shell_output()
         },
@@ -469,7 +471,7 @@ async fn abandoned_shutdown_keeps_admission_closed_and_started_work_holds_writer
         "fixture".into(),
         false,
         CancellationToken::new(),
-        move |_, _| async move {
+        move |_, _, _| async move {
             ready.add_permits(1);
             held.await.unwrap();
             shell_output()
@@ -484,7 +486,7 @@ async fn abandoned_shutdown_keeps_admission_closed_and_started_work_holds_writer
             "must not start".into(),
             false,
             CancellationToken::new(),
-            |_, _| async { panic!("closed admission dispatched") },
+            |_, _, _| async { panic!("closed admission dispatched") },
         )
         .await;
     let unchanged = session.entry_count().unwrap() == before;
@@ -514,6 +516,6 @@ async fn abandoned_shutdown_keeps_admission_closed_and_started_work_holds_writer
     ));
     assert!(unchanged && held_lease);
     assert!(
-        matches!(observed.entries.last(),Some(SessionEntry::UserShellSettled { outcome: ion_core::UserShellOutcome::Observed { output,.. },.. }) if output["stdout"]=="settled")
+        matches!(observed.entries.last(),Some(SessionEntry::UserShellSettled { outcome: ion_core::UserShellOutcome::Observed { output,.. },.. }) if output.value["stdout"]=="settled")
     );
 }

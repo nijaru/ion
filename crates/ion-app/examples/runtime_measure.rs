@@ -139,13 +139,7 @@ impl ToolExecutor for CatalogTools {
         invocation: ion_core::ToolInvocation<'a>,
     ) -> BoxFuture<'a, ToolOutput> {
         let call = invocation.call();
-        Box::pin(async move {
-            ToolOutput {
-                value: json!({"tool": call.name, "matches":[]}),
-                images: Vec::new(),
-                is_error: false,
-            }
-        })
+        Box::pin(async move { ToolOutput::success(json!({"tool": call.name, "matches":[]})) })
     }
 }
 

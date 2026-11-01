@@ -166,6 +166,7 @@ fn fixture() -> (std::path::PathBuf, Arc<Session>, u64, ToolCall) {
             0,
             ChildOutcome::Observed {
                 output: ToolOutput {
+                    artifacts: Vec::new(),
                     value: json!({"small":1}),
                     images: vec![],
                     is_error: false,

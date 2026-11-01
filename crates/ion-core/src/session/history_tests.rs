@@ -471,13 +471,19 @@ fn private_shell_thinking_replay_and_image_bytes_are_excluded_from_search_and_re
         .admit_user_shell("printf PRIVATE_SHELL_COMMAND".into(), true)
         .unwrap();
     session
-        .record_user_shell(private, json!({"stdout":"PRIVATE_SHELL_OUTPUT"}), false)
+        .record_user_shell(
+            private,
+            crate::ToolOutput::success(json!({"stdout":"PRIVATE_SHELL_OUTPUT"})),
+        )
         .unwrap();
     let public = session
         .admit_user_shell("printf PUBLIC_SHELL_COMMAND".into(), false)
         .unwrap();
     session
-        .record_user_shell(public, json!({"stdout":"PUBLIC_SHELL_OUTPUT"}), false)
+        .record_user_shell(
+            public,
+            crate::ToolOutput::success(json!({"stdout":"PUBLIC_SHELL_OUTPUT"})),
+        )
         .unwrap();
     let (turn, _) = session
         .begin_turn("inspect picture".into(), model())
@@ -617,7 +623,10 @@ fn search_cursor_scan_bound_and_committed_upper_snapshot_are_truthful() {
         .admit_user_shell("printf OLD_UNIQUE_NEEDLE".into(), false)
         .unwrap();
     session
-        .record_user_shell(needle, json!({"stdout":"OLD_UNIQUE_NEEDLE"}), false)
+        .record_user_shell(
+            needle,
+            crate::ToolOutput::success(json!({"stdout":"OLD_UNIQUE_NEEDLE"})),
+        )
         .unwrap();
     for index in 0..(super::MAX_SCAN_ENTRIES + 8) {
         let admission = session
@@ -626,8 +635,7 @@ fn search_cursor_scan_bound_and_committed_upper_snapshot_are_truthful() {
         session
             .record_user_shell(
                 admission,
-                json!({"stdout":format!("filler-{index}")}),
-                false,
+                crate::ToolOutput::success(json!({"stdout":format!("filler-{index}")})),
             )
             .unwrap();
     }
@@ -669,7 +677,10 @@ fn search_cursor_scan_bound_and_committed_upper_snapshot_are_truthful() {
         .admit_user_shell("printf LATER_COMMIT".into(), false)
         .unwrap();
     session
-        .record_user_shell(later, json!({"stdout":"LATER_COMMIT"}), false)
+        .record_user_shell(
+            later,
+            crate::ToolOutput::success(json!({"stdout":"LATER_COMMIT"})),
+        )
         .unwrap();
     let bounded = prepared.read(&CancellationToken::new()).unwrap();
     assert_eq!(bounded["provenance"]["through_entry"], committed_upper);
@@ -775,7 +786,10 @@ fn prepared_history_does_not_join_shell_settlement_committed_after_its_bound() {
         )
         .unwrap();
     session
-        .record_user_shell(admission, json!({"stdout":"PREPARED_SHELL_OUTPUT"}), false)
+        .record_user_shell(
+            admission,
+            crate::ToolOutput::success(json!({"stdout":"PREPARED_SHELL_OUTPUT"})),
+        )
         .unwrap();
 
     let bounded = prepared_read.read(&CancellationToken::new()).unwrap();
@@ -803,7 +817,10 @@ fn search_charges_a_shell_settlement_outside_its_cursor_window() {
         .admit_user_shell("printf HUGE_SETTLEMENT_COMMAND".into(), false)
         .unwrap();
     session
-        .record_user_shell(admission, json!({"stdout":output}), false)
+        .record_user_shell(
+            admission,
+            crate::ToolOutput::success(json!({"stdout":output})),
+        )
         .unwrap();
     let page = history_query(
         &session,
@@ -861,7 +878,10 @@ fn search_previews_show_the_matching_message_part_and_shell_output() {
         .admit_user_shell("printf original-command".into(), false)
         .unwrap();
     session
-        .record_user_shell(admission, json!({"stdout":text}), false)
+        .record_user_shell(
+            admission,
+            crate::ToolOutput::success(json!({"stdout":text})),
+        )
         .unwrap();
     let found =
         history_query(&session, json!({"action":"search","query":"LATE_EVIDENCE"})).unwrap();
@@ -886,7 +906,10 @@ fn list_is_newest_first_and_pages_without_repeating_or_skipping_entries() {
             .admit_user_shell(format!("printf list-{index}"), false)
             .unwrap();
         session
-            .record_user_shell(admission, json!({"stdout":format!("list-{index}")}), false)
+            .record_user_shell(
+                admission,
+                crate::ToolOutput::success(json!({"stdout":format!("list-{index}")})),
+            )
             .unwrap();
     }
     let first = history_query(&session, json!({"action":"list","limit":5})).unwrap();

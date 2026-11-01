@@ -470,7 +470,7 @@ fn output_modes_disclose_ranges_streams_and_uncoalesced_observations() {
     );
     read.result.as_mut().unwrap().projection =
         Some(ion_core::ToolResultProjection::RequestLimitExceeded);
-    let second = activity(
+    let mut second = activity(
         "r2",
         ToolActivityKind::Read,
         "other.txt",
@@ -479,15 +479,19 @@ fn output_modes_disclose_ranges_streams_and_uncoalesced_observations() {
             serde_json::json!({"content":"SECOND_READ", "start_line":4, "next_line":5, "file_bytes":15, "has_more":false}),
         ),
     );
-    let command = activity(
+    second.result.as_mut().unwrap().artifacts =
+        vec![crate::tool_output::tests::artifact("read_capture", true)];
+    let mut command = activity(
         "c",
         ToolActivityKind::Command,
         "test",
         ActivityState::Failed,
         Some(
-            serde_json::json!({"exit_code":7, "stdout":"FIRST_STDOUT\ntwo\nthree\nLAST_STDOUT", "stderr":"diagnostic\u{1b}[2J", "stdout_truncated":true, "stdout_full_path":"/capture/stdout"}),
+            serde_json::json!({"exit_code":7, "stdout":"FIRST_STDOUT\ntwo\nthree\nLAST_STDOUT", "stderr":"diagnostic\u{1b}[2J", "stdout_truncated":true, "stdout_artifact":0}),
         ),
     );
+    command.result.as_mut().unwrap().artifacts =
+        vec![crate::tool_output::tests::artifact("stdout", true)];
     let single = TranscriptProjection {
         items: vec![TranscriptItem::ActivityGroup(ActivityGroup {
             source: ion_core::TranscriptSource { entry: 15, part: 0 },
@@ -506,7 +510,7 @@ fn output_modes_disclose_ranges_streams_and_uncoalesced_observations() {
             ThinkingVisibility::Hidden,
         ),
     );
-    // Ranges, omission notices and capture paths are essential evidence,
+    // Ranges, omission notices and retained metadata are essential evidence,
     // not decoration whose legibility may depend on terminal faint support.
     assert!(compact_rows.iter().all(|row| {
         !row.style.add_modifier.contains(Modifier::DIM)
@@ -534,7 +538,10 @@ fn output_modes_disclose_ranges_streams_and_uncoalesced_observations() {
     );
     assert!(compact.contains("1 earlier stdout lines") && compact.contains("1 more content lines"));
     assert!(compact.contains("not shared with model") && compact.contains("Exited 7"));
-    assert!(compact.contains("/capture/stdout") && compact.contains("stdout truncated"));
+    assert!(
+        compact.contains("Session artifact 0 · stdout · 1234 bytes · complete")
+            && compact.contains("stdout truncated")
+    );
     let grouped = TranscriptProjection {
         items: vec![TranscriptItem::ActivityGroup(ActivityGroup {
             source: ion_core::TranscriptSource { entry: 16, part: 0 },
@@ -557,6 +564,7 @@ fn output_modes_disclose_ranges_streams_and_uncoalesced_observations() {
     let folded = plain_rows(&grouped, 120).join("\n");
     assert!(!folded.contains("SECOND_READ"));
     assert!(folded.contains("2 read outputs folded"));
+    assert!(folded.contains("Session artifact 0 · read_capture · 1234 bytes · complete"));
     assert!(
         folded.contains("other.txt: content · lines 4–4")
             && folded.contains("earlier lines not recorded")
@@ -600,6 +608,7 @@ fn output_modes_disclose_ranges_streams_and_uncoalesced_observations() {
         "**literal**",
         "not shared with model",
         "stdout truncated",
+        "Session artifact 0 · read_capture · 1234 bytes · complete",
     ] {
         assert!(expanded.contains(text), "{expanded}");
     }
@@ -887,14 +896,21 @@ fn shell_preview_shows_observed_output_outcome_and_context_choice() {
             source: ion_core::TranscriptSource { entry: 28, part: 0 },
             command: "run-check".into(),
             outcome: Some(ion_core::UserShellOutcome::Observed {
-                output: serde_json::json!({
-                    "stdout": "first\nsecond\nthird\nfourth\nOBSERVED_OUTPUT\n",
-                    "stderr": "\u{1b}[2JOBSERVED_FAILURE\n",
-                    "exit_code": 7,
-                    "stdout_truncated": true,
-                    "stdout_full_path": "/tmp/capture.txt"
-                }),
-                is_error: true,
+                output: ion_core::ToolOutput {
+                    value: serde_json::json!({
+                        "stdout": "first\nsecond\nthird\nfourth\nOBSERVED_OUTPUT\n",
+                        "stderr": "\u{1b}[2JOBSERVED_FAILURE\n",
+                        "exit_code": 7,
+                        "stdout_truncated": true,
+                        "stdout_artifact": 0
+                    }),
+                    images: Vec::new(),
+                    artifacts: vec![crate::tool_output::tests::artifact(
+                        "stdout\u{1b}[2J",
+                        false,
+                    )],
+                    is_error: true,
+                },
             }),
             exclude_from_context: true,
         })],
@@ -905,7 +921,8 @@ fn shell_preview_shows_observed_output_outcome_and_context_choice() {
     assert!(rendered.contains("exit 7"));
     assert!(rendered.contains("not shared with model"));
     assert!(rendered.contains("stdout truncated"));
-    assert!(rendered.contains("/tmp/capture.txt"));
+    assert!(rendered.contains("Session artifact 0 · stdout�[2J · 1234 bytes · incomplete"));
+    assert!(!rendered.contains("temporary"));
     assert!(rendered.contains("earlier stdout lines"));
     assert!(!rendered.contains("\u{1b}"));
 }
@@ -935,6 +952,7 @@ fn activity(
             projection: Some(ion_core::ToolResultProjection::Observed),
             value,
             image_mime_types: Vec::new(),
+            artifacts: Vec::new(),
             is_error: state != ActivityState::Completed,
         }),
     }

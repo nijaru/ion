@@ -8,6 +8,8 @@ import os
 import pty
 import select
 import shlex
+import shutil
+from smoke_artifacts import artifact_bytes, BASE64_JS
 import signal
 import sqlite3
 import struct
@@ -48,7 +50,7 @@ def program(prompt):
     if prompt == "RECOVER_FAIL":
         producer = "import secrets; print(secrets.token_hex(24)); print('X'*100000)"
         command = f"printf ONCE >> effects; {shlex.quote(sys.executable)} -c {shlex.quote(producer)}; exit 7"
-        return "await tools.exec(" + json.dumps({"command": command}) + "); throw new Error('after effect');"
+        return "const r=await tools.exec(" + json.dumps({"command": command}) + "); if(r.artifacts.length!==1||r.child!==0)throw new Error('missing capture provenance'); let rejected=false; try {await inspectSaved({kind:'artifact',parent:r.parent,child:r.child,artifact:0,offset:r.artifacts[0].bytes+1});}catch(_){rejected=true;} if(!rejected)throw new Error('invalid range accepted'); const page=await inspectSaved({kind:'artifact',parent:r.parent,child:r.child,artifact:0,offset:0,limit:1024}); if(!page.complete||page.encoding!=='base64'||page.offset!==0)throw new Error('current capture unavailable after recoverable range error'); throw new Error('after effect');"
     if prompt == "GUARD":
         return "const before=await tools.read({path:'guarded',limit:1}); if(!before.value.has_more) throw new Error('expected paged source'); const first=await tools.write({path:'guarded',content:'FIRST',base_digest:before.value.base_digest}); if(first.is_error) throw new Error('first guarded write'); const second=await tools.write({path:'guarded',content:'SECOND',base_digest:first.value.new_digest}); if(second.is_error) throw new Error('second guarded write'); const stale=await tools.write({path:'guarded',content:'LOST',base_digest:before.value.base_digest}); const after=await tools.read({path:'guarded'}); return {first:first.value.new_digest,second:second.value.new_digest,stale:stale.is_error,final:after.value.content};"
     if prompt == "ACTIVE":
@@ -82,7 +84,7 @@ class Provider(BaseHTTPRequestHandler):
             if prompt == "RECOVER_CAPTURE":
                 assert "assistant_entry" not in json.dumps(messages), "cut retained the original locator"
             discovery = "const refs=await inspectSaved({kind:'parents'}); let parent; for(const ref of refs.parents) { const cs=await inspectSaved({kind:'children',parent:ref.parent}); if(cs.children.some(c=>c.name==='exec')) { parent=ref.parent; break; } } if(!parent) throw new Error('saved exec not found'); "
-            code = discovery + "const meta=await inspectSaved({kind:'children',parent}); const path=await inspectSaved({kind:'output',parent,child:0,pointer:'/stdout_full_path'}); const exit=await inspectSaved({kind:'output',parent,child:0,pointer:'/exit_code'}); const saved=await tools.read({path:JSON.parse(path.json),limit:1024}); if(saved.is_error) return {read_failure:saved.value}; return {nonce:saved.value.content.split('\\n')[0], original_failed:path.is_error, exit:JSON.parse(exit.json), states:meta.children.map(c=>c.state)};"
+            code = BASE64_JS + discovery + "const meta=await inspectSaved({kind:'children',parent}); const saved=await inspectSaved({kind:'artifact',parent,child:0,artifact:0,offset:0,limit:1024}); const exit=await inspectSaved({kind:'output',parent,child:0,pointer:'/exit_code'}); return {nonce:utf8(base64Bytes(saved.data)).split('\\n')[0],original_failed:exit.is_error,exit:JSON.parse(exit.json),states:meta.children.map(c=>c.state)};"
             if prompt == "INSPECT_RPC":
                 code = discovery + "const exit=await inspectSaved({kind:'output',parent,child:0,pointer:'/exit_code'}); return {exit:JSON.parse(exit.json), original_failed:exit.is_error};"
             delta = {"tool_calls": [{"index": 0, "id": "inspect", "type": "function", "function": {"name": "code_mode", "arguments": json.dumps({"code": code})}}]}
@@ -149,7 +151,9 @@ with tempfile.TemporaryDirectory(prefix="ion-code-mode-") as temporary:
     (workspace / "one").write_text("PRIVATE_ONE_" * 100)
     (workspace / "two").write_text("PRIVATE_TWO_" * 100)
     (workspace / "pixel.png").write_bytes(base64.b64decode("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGP4z8DwHwAFAAH/iZk9HQAAAABJRU5ErkJggg=="))
-    env = {**os.environ, "ION_HOME": str(work / "ion"), "XDG_CONFIG_HOME": str(work / "config"), "XDG_STATE_HOME": str(work / "state"), "TERM": "xterm-256color"}
+    transient = work / "transient"
+    transient.mkdir()
+    env = {**os.environ, "TMPDIR": str(transient), "ION_HOME": str(work / "ion"), "XDG_CONFIG_HOME": str(work / "config"), "XDG_STATE_HOME": str(work / "state"), "TERM": "xterm-256color"}
     server = ThreadingHTTPServer(("127.0.0.1", 0), Provider)
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
@@ -200,29 +204,28 @@ with tempfile.TemporaryDirectory(prefix="ion-code-mode-") as temporary:
         records = [json.loads(line) for line in run(env, recovery_work, "--code-mode", "--json", "run", "RECOVER_FAIL").stdout.splitlines()]
         recovery_id = next(record["id"] for record in records if record["type"] == "session")
         original = next(record for record in records if record["type"] == "child_tool_finished")
-        capture = Path(original["output"]["stdout_full_path"])
-        try:
-            failed_parent = next(record for record in records if record["type"] == "tool_finished")
-            assert isinstance(failed_parent["output"].get("parent"), dict), "failed guest has no stable evidence locator"
-            saved_bytes = capture.read_bytes()
-            nonce = saved_bytes.splitlines()[0].decode()
-            assert len(saved_bytes) == 100050 and len(nonce) == 48
-            assert nonce not in original["output"]["stdout"]
-            # The controlled summary omits locators. This tests the cut/reopen
-            # boundary, not live-model summary fidelity or adherence.
-            run(env, recovery_work, "--session", recovery_id, "compact")
-            before_recovery = len(requests)
-            records = [json.loads(line) for line in run(env, recovery_work, "--session", recovery_id, "--code-mode", "--json", "run", "RECOVER_CAPTURE").stdout.splitlines()]
-            recovered = next(record for record in records if record["type"] == "tool_finished")
-            assert not recovered["is_error"], recovered
-            assert recovered["output"]["result"] == {"nonce": nonce, "original_failed": True, "exit": 7, "states": ["observed"]}, recovered
-            assert recovered["output"]["calls"] == 1
-            assert len([record for record in records if record["type"] == "child_tool_finished"]) == 1
-            assert nonce not in json.dumps(requests[before_recovery])
-            assert (recovery_work / "effects").read_text() == "ONCE"
-            assert capture.read_bytes() == saved_bytes
-        finally:
-            capture.unlink()
+        failed_parent = next(record for record in records if record["type"] == "tool_finished")
+        assert isinstance(failed_parent["output"].get("parent"), dict), "failed guest has no stable evidence locator"
+        reference=original["artifacts"][original["output"]["stdout_artifact"]]
+        saved_bytes = artifact_bytes(work,reference)
+        shutil.rmtree(transient)
+        transient.mkdir()
+        nonce = saved_bytes.splitlines()[0].decode()
+        assert len(saved_bytes) == 100050 and len(nonce) == 48
+        assert nonce not in original["output"]["stdout"]
+        # The controlled summary omits locators. This tests the cut/reopen
+        # boundary, not live-model summary fidelity or adherence.
+        run(env, recovery_work, "--session", recovery_id, "compact")
+        before_recovery = len(requests)
+        records = [json.loads(line) for line in run(env, recovery_work, "--session", recovery_id, "--code-mode", "--json", "run", "RECOVER_CAPTURE").stdout.splitlines()]
+        recovered = next(record for record in records if record["type"] == "tool_finished")
+        assert not recovered["is_error"], recovered
+        assert recovered["output"]["result"] == {"nonce": nonce, "original_failed": True, "exit": 7, "states": ["observed"]}, recovered
+        assert recovered["output"]["calls"] == 0
+        assert not any(record["type"] == "child_tool_finished" for record in records)
+        assert nonce not in json.dumps(requests[before_recovery])
+        assert (recovery_work / "effects").read_text() == "ONCE"
+        assert artifact_bytes(work,reference) == saved_bytes
 
         # Recover a committed tool observation after a real compaction through
         # the built Code Mode route. The generated summary omits the needle;
@@ -246,7 +249,7 @@ with tempfile.TemporaryDirectory(prefix="ion-code-mode-") as temporary:
         assert (history_work / "effects").read_text() == "HISTORY_NEEDLE_SMOKE\n"
 
         # Read the same settled facts through RPC after another process reopen,
-        # even though the external capture has now been removed.
+        # after temporary-directory removal; capture bytes remain in the Session.
         inspector = subprocess.Popen([binary, "--cwd", recovery_work, "--session", recovery_id, "--code-mode", "rpc"], env=env, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, bufsize=0)
         try:
             assert read_record(inspector)["type"] == "ready"

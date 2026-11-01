@@ -103,6 +103,7 @@ impl ToolExecutor for EchoExecutor {
     fn execute<'a>(&'a self, _invocation: ToolInvocation<'a>) -> BoxFuture<'a, ToolOutput> {
         Box::pin(async {
             ToolOutput {
+                artifacts: Vec::new(),
                 value: serde_json::json!({"echo": "y".repeat(self.0)}),
                 images: Vec::new(),
                 is_error: false,

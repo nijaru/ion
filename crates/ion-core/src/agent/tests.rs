@@ -65,6 +65,7 @@ impl ToolExecutor for TestTools {
         Box::pin(async move {
             if stop.is_cancelled() {
                 return ToolOutput {
+                    artifacts: Vec::new(),
                     value: serde_json::json!({"error":"cancelled before tool start"}),
                     images: Vec::new(),
                     is_error: true,
@@ -74,6 +75,7 @@ impl ToolExecutor for TestTools {
                 "read" => {
                     let Some(path) = call.arguments.get("path").and_then(Value::as_str) else {
                         return ToolOutput {
+                            artifacts: Vec::new(),
                             value: serde_json::json!({"error":"invalid read arguments"}),
                             images: Vec::new(),
                             is_error: true,
@@ -81,11 +83,13 @@ impl ToolExecutor for TestTools {
                     };
                     match std::fs::read_to_string(self.root.join(path)) {
                         Ok(content) => ToolOutput {
+                            artifacts: Vec::new(),
                             value: serde_json::json!({"path":path,"content":content}),
                             images: Vec::new(),
                             is_error: false,
                         },
                         Err(error) => ToolOutput {
+                            artifacts: Vec::new(),
                             value: serde_json::json!({"error":error.to_string()}),
                             images: Vec::new(),
                             is_error: true,
@@ -97,6 +101,7 @@ impl ToolExecutor for TestTools {
                     let content = call.arguments.get("content").and_then(Value::as_str);
                     let (Some(path), Some(content)) = (path, content) else {
                         return ToolOutput {
+                            artifacts: Vec::new(),
                             value: serde_json::json!({"error":"invalid write arguments"}),
                             images: Vec::new(),
                             is_error: true,
@@ -107,6 +112,7 @@ impl ToolExecutor for TestTools {
                         && let Err(error) = std::fs::create_dir_all(parent)
                     {
                         return ToolOutput {
+                            artifacts: Vec::new(),
                             value: serde_json::json!({"error":error.to_string()}),
                             images: Vec::new(),
                             is_error: true,
@@ -114,11 +120,13 @@ impl ToolExecutor for TestTools {
                     }
                     match std::fs::write(&path, content) {
                         Ok(()) => ToolOutput {
+                            artifacts: Vec::new(),
                             value: serde_json::json!({"path":path.to_string_lossy(),"written":content.len()}),
                             images: Vec::new(),
                             is_error: false,
                         },
                         Err(error) => ToolOutput {
+                            artifacts: Vec::new(),
                             value: serde_json::json!({"error":error.to_string()}),
                             images: Vec::new(),
                             is_error: true,
@@ -126,11 +134,13 @@ impl ToolExecutor for TestTools {
                     }
                 }
                 "exec" => ToolOutput {
+                    artifacts: Vec::new(),
                     value: serde_json::json!({"command":call.arguments.get("command"),"exit_code":0}),
                     images: Vec::new(),
                     is_error: false,
                 },
                 _ => ToolOutput {
+                    artifacts: Vec::new(),
                     value: serde_json::json!({"error":format!("unknown tool: {}",call.name)}),
                     images: Vec::new(),
                     is_error: true,
@@ -381,6 +391,7 @@ async fn issued_request_keeps_capability_and_metadata_until_its_calls_settle() {
         ) -> BoxFuture<'a, ToolOutput> {
             Box::pin(async move {
                 ToolOutput {
+                    artifacts: Vec::new(),
                     value: serde_json::json!({"generation": self.0}),
                     images: Vec::new(),
                     is_error: false,
@@ -501,6 +512,7 @@ impl ToolExecutor for SlowRead {
         Box::pin(async {
             tokio::time::sleep(std::time::Duration::from_secs(30)).await;
             ToolOutput {
+                artifacts: Vec::new(),
                 value: serde_json::json!({"content":"ok"}),
                 images: Vec::new(),
                 is_error: false,
@@ -1222,6 +1234,7 @@ async fn deferred_tool_search_activates_next_request_and_survives_reopen_and_for
             let call = invocation.call();
             Box::pin(async move {
                 ToolOutput {
+                    artifacts: Vec::new(),
                     value: serde_json::json!({"tool":call.name,"value":"found"}),
                     images: Vec::new(),
                     is_error: false,
@@ -1430,21 +1443,25 @@ async fn model_result_limits_preserve_observed_effects_and_inspection() {
     }
     for output in [
         ToolOutput {
+            artifacts: Vec::new(),
             value: serde_json::json!({"report":"x".repeat(32_768)}),
             images: Vec::new(),
             is_error: false,
         },
         ToolOutput {
+            artifacts: Vec::new(),
             value: serde_json::json!({"path":"picture.png"}),
             images: vec![tiny_image()],
             is_error: false,
         },
         ToolOutput {
+            artifacts: Vec::new(),
             value: serde_json::json!({"report":"x".repeat(32_768)}),
             images: Vec::new(),
             is_error: true,
         },
         ToolOutput {
+            artifacts: Vec::new(),
             value: serde_json::json!({"path":"picture.png"}),
             images: vec![tiny_image()],
             is_error: true,
@@ -1679,6 +1696,7 @@ async fn tool_images_are_committed_replayed_and_rejected_on_a_text_only_route() 
         ) -> BoxFuture<'a, ToolOutput> {
             Box::pin(async {
                 ToolOutput {
+                    artifacts: Vec::new(),
                     value: serde_json::json!({"path":"picture.png"}),
                     images: vec![tiny_image()],
                     is_error: false,
@@ -3159,7 +3177,7 @@ async fn idle_preferences_survive_unfinished_shell_without_recovering_it() {
         "touch should-not-execute".into(),
         false,
         CancellationToken::new(),
-        move |_, _| async move {
+        move |_, _, _| async move {
             admitted.send(()).unwrap();
             failure.await.unwrap();
             // Admission is durable, but no host effect has been attempted.
@@ -4396,6 +4414,7 @@ async fn cancellation_durably_rejects_only_unstarted_calls() {
             std::fs::write(self.0.join(&call.id), "observed effect").unwrap();
             Box::pin(async {
                 ToolOutput {
+                    artifacts: Vec::new(),
                     // The words are not execution truth; this is an observed error.
                     value: serde_json::json!({"error":"The tool result was not committed. Its external effect is unknown; inspect the working directory before retrying."}),
                     images: Vec::new(),
@@ -4579,7 +4598,10 @@ async fn cancellation_durably_rejects_only_unstarted_calls() {
             arguments: serde_json::json!({}),
             raw_arguments: None,
         };
-        let future = catalog.execute_untracked(&call, CancellationToken::new());
+        let future = catalog.execute(crate::ToolInvocation::untracked(
+            &call,
+            CancellationToken::new(),
+        ));
         assert!(!root.join("lazy").exists());
         future.await;
         assert!(root.join("lazy").exists());
@@ -4610,6 +4632,7 @@ async fn malformed_tool_arguments_return_error_without_dispatch() {
             Box::pin(async move {
                 std::fs::write(self.0.join("effect"), "dispatched").unwrap();
                 ToolOutput {
+                    artifacts: Vec::new(),
                     value: serde_json::json!({"written":true}),
                     images: Vec::new(),
                     is_error: false,
@@ -4673,7 +4696,10 @@ async fn malformed_tool_arguments_return_error_without_dispatch() {
     for call in &calls {
         assert!(
             catalog
-                .execute_untracked(call, CancellationToken::new())
+                .execute(crate::ToolInvocation::untracked(
+                    call,
+                    CancellationToken::new()
+                ))
                 .await
                 .is_error
         );
@@ -4687,7 +4713,10 @@ async fn malformed_tool_arguments_return_error_without_dispatch() {
     };
     assert!(
         !catalog
-            .execute_untracked(&valid, CancellationToken::new())
+            .execute(crate::ToolInvocation::untracked(
+                &valid,
+                CancellationToken::new()
+            ))
             .await
             .is_error
     );

@@ -59,12 +59,18 @@ impl LocalTools {
     }
 
     /// Run a user's direct command through the native shell execution path.
-    pub async fn run_user_shell(&self, command: &str, stop: CancellationToken) -> ToolOutput {
+    pub async fn run_user_shell(
+        &self,
+        command: &str,
+        stop: CancellationToken,
+        artifacts: Option<ion_core::ArtifactSink>,
+    ) -> ToolOutput {
         command::run(
             &self.environment,
             &self.cwd,
             &json!({"command": command}),
             stop,
+            artifacts,
         )
         .await
     }
@@ -74,8 +80,8 @@ impl crate::UserShell for LocalTools {
     fn prepare(&self, command: &str) -> anyhow::Result<crate::PreparedShell> {
         let tools = Self::with_environment(&self.cwd, self.environment.clone())?;
         let command = command.to_owned();
-        Ok(Box::new(move |stop| {
-            Box::pin(async move { tools.run_user_shell(&command, stop).await })
+        Ok(Box::new(move |stop, artifacts| {
+            Box::pin(async move { tools.run_user_shell(&command, stop, Some(artifacts)).await })
         }))
     }
 }
@@ -180,6 +186,7 @@ impl ToolExecutor for LocalExecutor {
                     &self.tools.cwd,
                     &call.arguments,
                     stop,
+                    invocation.artifact_sink().cloned(),
                 )
                 .await;
             }
@@ -291,6 +298,7 @@ where
 
 fn success(value: Value) -> ToolOutput {
     ToolOutput {
+        artifacts: Vec::new(),
         value,
         images: Vec::new(),
         is_error: false,
@@ -298,6 +306,7 @@ fn success(value: Value) -> ToolOutput {
 }
 fn error(message: impl Into<String>) -> ToolOutput {
     ToolOutput {
+        artifacts: Vec::new(),
         value: json!({"error": message.into()}),
         images: Vec::new(),
         is_error: true,
@@ -311,7 +320,7 @@ fn specs() -> Vec<ToolSpec> {
         ToolSpec { name: "grep".into(), description: "Search one UTF-8 regular file or a directory recursively. Returns one item per matching line with path relative to the returned root, a 1-based line number, the first match's zero-based byte_offset (usable with read byte_offset), and a UTF-8 snippet of at most 1024 bytes; long-line truncation is visible. pattern is a regex by default; literal=true searches literal text; ignore_case is optional. glob filters files with the same basename/relative-path semantics as find. path defaults to the working directory; absolute paths are allowed. Hidden files are included; discovered symlinks are not followed and the .git tree is skipped. .gitignore and .ignore rules are convenience only, not a secret or security boundary. Binary/invalid UTF-8 files, files over 8 MiB and the total 32 MiB inspected-source budget are reported; traversal is bounded to 20000 visited entries and depth 9; limit defaults to 100 and is at most 1000. Check exhaustive, skipped and omissions: an empty incomplete result is not proof of no match. root names the returned search root and root_kind is file or directory: for a file root, use root itself and match paths are its basename; otherwise match paths are relative to root. Output is serialized JSON bounded to 64 KiB; use read with byte_offset for a full long line.".into(), input_schema: json!({"type":"object","additionalProperties":false,"required":["pattern"],"properties":{"pattern":{"type":"string","minLength":1,"maxLength":4096,"description":"Regex, or literal text when literal=true."},"path":{"type":"string","description":"File or directory to search (default: current directory)."},"glob":{"type":"string","minLength":1,"maxLength":4096,"description":"Optional file glob, e.g. '*.rs' or 'src/**/*.ts'."},"ignore_case":{"type":"boolean","description":"Case-insensitive matching (default false)."},"literal":{"type":"boolean","description":"Treat pattern as literal text instead of a regex (default false)."},"limit":{"type":"integer","minimum":1,"maximum":1000,"description":"Maximum matching lines (default 100)."}}}) },
         ToolSpec { name: "edit".into(), description: "Apply one or more disjoint exact text replacements to a UTF-8 file in one write. Requires base_digest from a read of the complete current file; stale content is rejected. Each old_text must occur exactly once in the original file; overlapping edits are rejected. Operates with the host user's permissions.".into(), input_schema: json!({"type":"object","additionalProperties":false,"required":["path","edits","base_digest"],"properties":{"path":{"type":"string"},"edits":{"type":"array","minItems":1,"items":{"type":"object","additionalProperties":false,"required":["old_text","new_text"],"properties":{"old_text":{"type":"string","minLength":1},"new_text":{"type":"string"}}}},"base_digest":{"type":"string","description":"Complete-file digest returned by read; required."}}}) },
         ToolSpec { name: "write".into(), description: "Create or replace a UTF-8 file in the live working directory. Replacing an existing file requires base_digest from read, or unconditional=true only for an intentional unread replacement; creation needs neither and creates missing parents. A supplied digest must match the entire existing regular file under the native mutation lock; stale, missing or unreadable targets reject. Use exact edit or complete-source guarded replacement, not an incomplete read window. Success returns path, created, bytes and new_digest (SHA256 of published content), plus a bounded unified diff when the previous content is readable UTF-8; otherwise diff_omitted explains the omission. The digest is not a lease against later changes.".into(), input_schema: json!({"type":"object","additionalProperties":false,"required":["path","content"],"properties":{"path":{"type":"string"},"content":{"type":"string"},"base_digest":{"type":"string","description":"Complete-file digest returned by read; required to replace an existing file."},"unconditional":{"type":"boolean","description":"Only for intentional unguarded replacement; do not use after a read."}}}) },
-        ToolSpec { name: "exec".into(), description: "Run a Bash command (or POSIX sh when Bash is unavailable) in the live working directory with the host user's permissions; this is not sandboxed. Timeout is optional. Returns the observed direct command exit and the final 64 KiB of each raw output stream decoded as UTF-8. Per-stream stdout_/stderr_ flags: lossy means decoding replaced bytes in the returned tail (including possible UTF-8 boundary cuts, not a literal U+FFFD); complete means pipe EOF was observed; truncated means bytes were omitted or capture is incomplete. omitted_bytes counts raw bytes outside the tail, or is null when capture is incomplete. For complete truncated or lossy captures, full_path names a private temporary raw file when available; full_error reports capture/artifact failures. Artifact paths do not guarantee retention. Inspect available raw evidence instead of rerunning effects. Capture/decoding loss does not change a known command exit. Cancellation is best effort.".into(), input_schema: json!({"type":"object","additionalProperties":false,"required":["command"],"properties":{"command":{"type":"string"},"timeout_ms":{"type":"integer","minimum":1}}}) },
+        ToolSpec { name: "exec".into(), description: "Run a Bash command (or POSIX sh when Bash is unavailable) in the live working directory with the host user's permissions; this is not sandboxed. Timeout is optional. Returns the observed direct command exit and the final 64 KiB of each raw output stream decoded as UTF-8. Per-stream stdout_/stderr_ flags: lossy means decoding replaced bytes in the returned tail (including possible UTF-8 boundary cuts, not a literal U+FFFD); complete means pipe EOF was observed; truncated means bytes were omitted or capture is incomplete. omitted_bytes counts raw bytes outside the tail, or is null when capture is incomplete. Overflow or invalid-UTF8 bytes use typed Session artifacts when available: stdout_artifact/stderr_artifact index the receipt list, including observed incomplete prefixes; stdout_artifact_error/stderr_artifact_error report read/retention failures. Capture completeness is separate from command success. Direct model results with artifacts wrap native fields under output beside entry/artifacts metadata; history action artifact reads by entry/index. Code Mode keeps raw fields under value and carries artifacts/parent/child for inspectSaved kind artifact. Inspect retained evidence instead of rerunning effects. Capture/decoding loss does not change a known command exit. Cancellation is best effort.".into(), input_schema: json!({"type":"object","additionalProperties":false,"required":["command"],"properties":{"command":{"type":"string"},"timeout_ms":{"type":"integer","minimum":1}}}) },
     ]
 }
 

@@ -47,11 +47,7 @@ async fn sealed_blocks_publish_during_a_turn_but_provisional_boundaries_do_not()
             activity,
             outcome: ToolOutcome::Observed {
                 projection: ToolResultProjection::Observed,
-                output: ToolOutput {
-                    value: serde_json::json!({"content":"observed"}),
-                    images: vec![],
-                    is_error: false,
-                },
+                output: ToolOutput::success(serde_json::json!({"content":"observed"})),
             },
         },
     ] {

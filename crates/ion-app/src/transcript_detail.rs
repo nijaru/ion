@@ -182,20 +182,29 @@ impl DetailView {
                                 );
                                 push_wrapped(&mut rows, &shell.command, width);
                                 match &shell.outcome {
-                                    Some(ion_core::UserShellOutcome::Observed {
-                                        output,
-                                        is_error,
-                                    }) => {
+                                    Some(ion_core::UserShellOutcome::Observed { output }) => {
                                         push_wrapped(
                                             &mut rows,
-                                            if *is_error {
+                                            if output.is_error {
                                                 "Result marked as error"
                                             } else {
                                                 "Result marked as successful"
                                             },
                                             width,
                                         );
-                                        render_json(&mut rows, output, width);
+                                        render_json(&mut rows, &output.value, width);
+                                        for metadata in
+                                            crate::tool_output::artifact_metadata(&output.artifacts)
+                                        {
+                                            push_wrapped(&mut rows, &metadata, width);
+                                        }
+                                        for image in &output.images {
+                                            push_wrapped(
+                                                &mut rows,
+                                                &format!("[image: {}]", image.mime_type().as_str()),
+                                                width,
+                                            );
+                                        }
                                     }
                                     Some(ion_core::UserShellOutcome::Unknown) | None => {
                                         push_wrapped(
@@ -355,6 +364,9 @@ fn append_activity(text: &mut String, number: &str, activity: &TranscriptActivit
         } else {
             push_field(text, &json_text(&result.value));
         }
+        for metadata in crate::tool_output::artifact_metadata(&result.artifacts) {
+            push_field(text, &metadata);
+        }
         for mime in &result.image_mime_types {
             push_field(text, &format!("[image: {mime}]"));
         }
@@ -399,8 +411,7 @@ mod tests {
                 source: ion_core::TranscriptSource { entry: 1, part: 0 },
                 command: "previous-check".into(),
                 outcome: Some(ion_core::UserShellOutcome::Observed {
-                    output: serde_json::json!({"stdout": "SAVED_SHELL"}),
-                    is_error: false,
+                    output: ToolOutput::success(serde_json::json!({"stdout": "SAVED_SHELL"})),
                 }),
                 exclude_from_context: true,
             })],
@@ -452,6 +463,7 @@ mod tests {
                 output: ToolOutput {
                     value: serde_json::json!({"stdout": format!("{}\nEND_MARKER", "x".repeat(4_000))}),
                     images: Vec::new(),
+                    artifacts: vec![crate::tool_output::tests::artifact("stdout", true)],
                     is_error: false,
                 },
             },
@@ -491,6 +503,10 @@ mod tests {
         assert!(output.contains("run-check"));
         assert!(output.contains("Result"));
         assert!(output.contains("END_MARKER"));
+        assert!(output.contains("Session artifact 0 · stdout · 1234 bytes · complete"));
+        let (_, evidence) = selected.copy_evidence().unwrap();
+        assert!(evidence.contains("Session artifact 0 · stdout · 1234 bytes · complete"));
+        assert!(evidence.contains(&"a".repeat(64)));
     }
 
     #[test]

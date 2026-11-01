@@ -152,10 +152,7 @@ pub enum ModelUsagePurpose {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum UserShellOutcome {
-    Observed {
-        output: serde_json::Value,
-        is_error: bool,
-    },
+    Observed { output: crate::ToolOutput },
     Unknown,
 }
 

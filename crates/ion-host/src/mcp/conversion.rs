@@ -5,7 +5,7 @@ use rmcp::model::{CallToolResult, ContentBlock};
 use serde_json::json;
 
 use super::{
-    artifact::{save_full_mcp_output, save_raw_mcp_result},
+    artifact::ResultArtifacts,
     resource_content::{self, ResourceContent, ResourceData},
     schema::{OutputSchema, OutputValidation},
 };
@@ -32,10 +32,12 @@ pub(super) fn convert_tool_result(
     name: &str,
     result: CallToolResult,
     schema: Option<&OutputSchema>,
+    sink: Option<ion_core::ArtifactSink>,
 ) -> ToolOutput {
     // The remote error/success flag is the observed outcome. Local conversion
     // preserves it exactly and reports its own delivery failures beside it,
     // never as a replacement execution error.
+    let mut artifacts = ResultArtifacts::new(sink);
     let is_error = result.is_error.unwrap_or(false);
     let validation = schema.map(|schema| schema.validate(&result));
     let validation_needs_raw = validation
@@ -47,7 +49,7 @@ pub(super) fn convert_tool_result(
     let mut retained_blocks = 0usize;
     let mut omitted_blocks = 0usize;
     for (index, part) in result.content.iter().enumerate() {
-        match convert_block(name, part) {
+        match convert_block(name, part, &mut artifacts) {
             Ok((pieces, image)) => {
                 retained_blocks += 1;
                 content.extend(pieces);
@@ -72,9 +74,9 @@ pub(super) fn convert_tool_result(
     // Retain the full response when conversion omitted content or conformance
     // was not established. Validation never rewrites the server's observation.
     let retain_raw = omitted_blocks > 0 || validation_needs_raw;
-    let (raw_result_path, raw_result_error) = if retain_raw {
-        match save_raw_mcp_result(&result) {
-            Ok(path) => (Some(path), None),
+    let (raw_result_artifact, raw_result_error) = if retain_raw {
+        match artifacts.json("raw_mcp_result", &result) {
+            Ok(index) => (Some(index), None),
             Err(error) => (None, Some(format!("{error:#}"))),
         }
     } else {
@@ -91,7 +93,7 @@ pub(super) fn convert_tool_result(
         value["omitted_blocks"] = json!(omitted_blocks);
     }
     if retain_raw {
-        value["raw_result_path"] = json!(raw_result_path);
+        value["raw_result_artifact"] = json!(raw_result_artifact);
         value["raw_result_error"] = json!(raw_result_error);
     }
     if let Some(validation) = validation {
@@ -106,15 +108,17 @@ pub(super) fn convert_tool_result(
     let encoded = serde_json::to_string(&value).expect("a JSON value always encodes");
     if encoded.len() <= 64 * 1024 {
         return ToolOutput {
+            artifacts: artifacts.references,
             value,
             images,
             is_error,
         };
     }
-    let (full_output_path, full_output_error) = match save_full_mcp_output(encoded.as_bytes()) {
-        Ok(path) => (Some(path), None),
-        Err(error) => (None, Some(error.to_string())),
-    };
+    let (full_output_artifact, full_output_error) =
+        match artifacts.bytes("full_mcp_output", encoded.as_bytes()) {
+            Ok(index) => (Some(index), None),
+            Err(error) => (None, Some(error.to_string())),
+        };
     let prefix_end = floor_char_boundary(&encoded, 10 * 1024);
     let suffix_start = floor_char_boundary(&encoded, encoded.len() - 10 * 1024);
     // Truncation replaces the inline observation with a bounded preview: the
@@ -131,7 +135,7 @@ pub(super) fn convert_tool_result(
         value["structured_content_omitted"] = json!(true);
     }
     value["content"] = json!(format!(
-        "MCP result truncated from {} bytes. Read full_output_path with read using byte_offset=0, continuing at next_byte, or bounded exec when available.{}\n{}\n[... omitted middle ...]\n{}",
+        "MCP result truncated from {} bytes. Retrieve the full_mcp_output Session artifact using history or inspectSaved; do not rerun the effect.{}\n{}\n[... omitted middle ...]\n{}",
         encoded.len(),
         if structured_omitted {
             " Structured content is in the full output."
@@ -142,9 +146,10 @@ pub(super) fn convert_tool_result(
         &encoded[suffix_start..]
     ));
     value["truncated"] = json!(true);
-    value["full_output_path"] = json!(full_output_path);
+    value["full_output_artifact"] = json!(full_output_artifact);
     value["full_output_error"] = json!(full_output_error);
     ToolOutput {
+        artifacts: artifacts.references,
         value,
         images,
         is_error,
@@ -156,6 +161,7 @@ pub(super) fn convert_tool_result(
 fn convert_block(
     name: &str,
     part: &ContentBlock,
+    artifacts: &mut ResultArtifacts,
 ) -> Result<(Vec<String>, Option<ImageContent>), String> {
     match part {
         ContentBlock::Text(text) => Ok((vec![text.text.clone()], None)),
@@ -179,15 +185,16 @@ fn convert_block(
                     pieces.insert(0, format!("Resource {uri}:"));
                     Ok((pieces, image))
                 }
-                ResourceData::Blob { size, saved } => {
-                    let path = saved.map_err(|error| {
-                        format!("resource {uri} could not be saved to a private file: {error}")
+                ResourceData::Blob { bytes } => {
+                    let size = bytes.len();
+                    let index = artifacts.bytes("mcp_resource", &bytes).map_err(|error| {
+                        format!("resource {uri} could not be retained in Session: {error}")
                     })?;
                     Ok((
                         vec![format!(
-                            "Embedded resource saved to a private file: {}",
+                            "Embedded resource retained as a Session artifact: {}",
                             json!({
-                                "uri": uri, "mimeType": mime_type, "savedPath": path, "size": size
+                                "uri": uri, "mimeType": mime_type, "artifact": index, "size": size
                             })
                         )],
                         None,

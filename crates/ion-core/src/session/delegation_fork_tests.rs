@@ -80,14 +80,20 @@ fn fork_copies_literal_prefix_and_coordinates_but_not_parent_ownership_or_config
                 .record_selection(&idle, parent_model.clone(), Some(Reasoning::High))
                 .unwrap();
         }
+        let retained = parent
+            .artifact_sink()
+            .capture("delegated", b"original delegated bytes\0\xff")
+            .unwrap();
         let shell = parent
             .admit_user_shell("historical shell context".into(), false)
             .unwrap();
         parent
             .record_user_shell(
                 shell,
-                serde_json::json!({"stdout": "historical result"}),
-                false,
+                crate::ToolOutput {
+                    artifacts: vec![retained.clone()],
+                    ..crate::ToolOutput::success(serde_json::json!({"stdout": "historical result"}))
+                },
             )
             .unwrap();
         let old_key = RequestKey::new("source-delivery".into(), "accepted".into()).unwrap();
@@ -223,7 +229,11 @@ fn fork_copies_literal_prefix_and_coordinates_but_not_parent_ownership_or_config
                 *request = None;
             }
         }
-        let crate::delegation::ChildMaterialization::New(prefix) = context else {
+        let crate::delegation::ChildMaterialization::New {
+            entries: prefix,
+            artifact_source,
+        } = context
+        else {
             panic!("fork creates a new conversation")
         };
         assert_eq!(
@@ -232,9 +242,17 @@ fn fork_copies_literal_prefix_and_coordinates_but_not_parent_ownership_or_config
         );
         let child = Session::materialize_delegation(
             &record,
-            crate::delegation::ChildMaterialization::New(prefix.clone()),
+            crate::delegation::ChildMaterialization::New {
+                entries: prefix.clone(),
+                artifact_source: artifact_source.clone(),
+            },
         )
         .unwrap();
+        let child_path = child.path().to_path_buf();
+        assert_eq!(
+            child.read_artifact(&retained, 0, 16384).unwrap().bytes,
+            b"original delegated bytes\0\xff"
+        );
         let view = child.view().unwrap();
         assert_eq!(&view.entries[..cutoff], expected);
         assert!(
@@ -282,7 +300,10 @@ fn fork_copies_literal_prefix_and_coordinates_but_not_parent_ownership_or_config
         // Same header and link are insufficient if the copied prefix differs.
         let exact = Session::materialize_delegation(
             &record,
-            crate::delegation::ChildMaterialization::New(prefix.clone()),
+            crate::delegation::ChildMaterialization::New {
+                entries: prefix.clone(),
+                artifact_source: artifact_source.clone(),
+            },
         )
         .unwrap();
         drop(exact);
@@ -295,16 +316,30 @@ fn fork_copies_literal_prefix_and_coordinates_but_not_parent_ownership_or_config
             .find(|entry| matches!(entry, SessionEntry::UserShellSettled { .. }))
             .unwrap()
         {
-            *output = serde_json::json!("different history");
+            output.value = serde_json::json!("different history");
         }
         assert!(matches!(
             Session::materialize_delegation(
                 &record,
-                crate::delegation::ChildMaterialization::New(wrong)
+                crate::delegation::ChildMaterialization::New {
+                    entries: wrong,
+                    artifact_source
+                }
             ),
             Err(SessionError::InvalidHistory)
         ));
+        let parent_path = parent.path().to_path_buf();
         drop((parent, ancestor));
+        fs::remove_file(parent_path).unwrap();
+        let independent = Session::open(child_path).unwrap();
+        assert_eq!(
+            independent
+                .read_artifact(&retained, 0, 16384)
+                .unwrap()
+                .bytes,
+            b"original delegated bytes\0\xff"
+        );
+        drop(independent);
         fs::remove_dir_all(root).unwrap();
     }
 }

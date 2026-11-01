@@ -96,46 +96,11 @@ pub use manager::{
 
 fn tool_error(message: String) -> ToolOutput {
     ToolOutput {
+        artifacts: Vec::new(),
         value: json!({"error":message}),
         images: Vec::new(),
         is_error: true,
     }
-}
-
-#[cfg(test)]
-async fn read_native_snapshot(path: &str) -> Value {
-    let source: Arc<dyn ToolSource> =
-        Arc::new(crate::local_tools::LocalTools::new(std::env::temp_dir()).unwrap());
-    let catalog = ion_core::ToolSet::new([source])
-        .with_selection(ion_core::ToolSelection::include(["read".into()]))
-        .snapshot();
-    let mut encoded = String::new();
-    let mut offset = 0;
-    loop {
-        let call = ion_ai::ToolCall {
-            id: "snapshot-page".into(),
-            name: "read".into(),
-            arguments: json!({"path":path,"byte_offset":offset}),
-            raw_arguments: None,
-        };
-        let output = catalog
-            .execute_untracked(&call, CancellationToken::new())
-            .await;
-        if output.is_error {
-            fs::remove_file(path).unwrap();
-        }
-        assert!(!output.is_error, "{}", output.value);
-        let content = output.value["content"].as_str().unwrap();
-        assert!(content.len() <= 64 * 1024);
-        encoded.push_str(content);
-        if !output.value["has_more"].as_bool().unwrap() {
-            break;
-        }
-        let next = output.value["next_byte"].as_u64().unwrap();
-        assert!(next > offset, "pagination must make progress");
-        offset = next;
-    }
-    serde_json::from_str(&encoded).unwrap()
 }
 
 #[cfg(test)]
@@ -221,11 +186,17 @@ for line in sys.stdin:
             raw_arguments: None,
         };
         let observed = issued
-            .execute_untracked(&call, CancellationToken::new())
+            .execute(ion_core::ToolInvocation::untracked(
+                &call,
+                CancellationToken::new(),
+            ))
             .await;
         source.shutdown().await.unwrap();
         let closed = issued
-            .execute_untracked(&call, CancellationToken::new())
+            .execute(ion_core::ToolInvocation::untracked(
+                &call,
+                CancellationToken::new(),
+            ))
             .await;
         fs::remove_dir_all(root).unwrap();
 
@@ -259,6 +230,7 @@ for line in sys.stdin:
                 ("list_mcp_resource_templates", json!({"server":"settlement"}), "resources/templates/list", "/resourceTemplates/0/name"),
                 ("list_mcp_resources", json!({}), "resources/list", "/resources/0/name"),
             ] {
+                let owner = crate::test_support::ArtifactFixture::new();
                 let root = std::env::temp_dir().join(format!("ion-mcp-settlement-{}", uuid::Uuid::now_v7()));
                 fs::create_dir(&root).unwrap();
                 let config = McpConfig::new(&root);
@@ -315,11 +287,12 @@ for line in sys.stdin:
                 started.await.unwrap();
                 let stop = CancellationToken::new();
                 let task_stop = stop.clone();
+                let sink=owner.sink();
                 let mut work = tokio::spawn(async move {
-                    issued.execute_untracked(&ToolCall {
+                    issued.execute(ion_core::ToolInvocation::untracked(&ToolCall {
                         id: "observed".into(), name: name.into(),
                         arguments, raw_arguments: None,
-                    }, task_stop).await
+                    }, task_stop).with_artifact_sink(sink)).await
                 });
                 // The ordered notification follows routing of the response to
                 // its request handle. Conversion must release the connection
@@ -359,9 +332,7 @@ for line in sys.stdin:
                 };
                 let requests = fs::read_to_string(root.join("requests")).unwrap();
                 fs::remove_dir_all(root).unwrap();
-                let path = output.value["full_output_path"].as_str().unwrap();
-                let saved: Value = serde_json::from_slice(&fs::read(path).unwrap()).unwrap();
-                fs::remove_file(path).unwrap();
+                let saved = owner.json(&output,"full_output_artifact");
                 assert!(observed.is_ok(), "{name}: peer did not observe the ordered response");
                 cleanup.unwrap();
                 assert!(independent, "{name}: conversion held the MCP connection");
@@ -414,6 +385,7 @@ for line in sys.stdin:
 
     #[test]
     fn mcp_image_result_is_typed_and_mime_mismatch_omits_the_image_with_a_notice() {
+        let owner = crate::test_support::ArtifactFixture::new();
         let data = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGP4z8DwHwAFAAH/iZk9HQAAAABJRU5ErkJggg==";
         let result = convert_tool_result(
             "picture",
@@ -422,6 +394,7 @@ for line in sys.stdin:
                 ContentBlock::image(data, "image/png"),
             ]),
             None,
+            Some(owner.sink()),
         );
         assert!(!result.is_error, "{}", result.value);
         assert_eq!(result.images.len(), 1);
@@ -431,11 +404,12 @@ for line in sys.stdin:
                 .unwrap()
                 .contains("[image: image/png]")
         );
-        assert!(result.value.get("raw_result_path").is_none());
+        assert!(result.value.get("raw_result_artifact").is_none());
         let mismatch = convert_tool_result(
             "picture",
             CallToolResult::success(vec![ContentBlock::image(data, "image/jpeg")]),
             None,
+            Some(owner.sink()),
         );
         // Validation still withholds the mismatched image; the server's
         // success survives with an indexed conversion notice instead of a
@@ -446,32 +420,33 @@ for line in sys.stdin:
         assert!(notice.contains("block 0"), "{notice}");
         assert!(notice.contains("MIME type"), "{notice}");
         assert_eq!(mismatch.value["omitted_blocks"], 1);
-        let raw = mismatch.value["raw_result_path"].as_str().unwrap();
         assert!(mismatch.value["raw_result_error"].is_null());
-        let saved: Value = serde_json::from_slice(&fs::read(raw).unwrap()).unwrap();
+        let saved = owner.json(&mismatch, "raw_result_artifact");
         assert_eq!(saved["content"].as_array().unwrap().len(), 1);
-        fs::remove_file(raw).unwrap();
     }
 
     #[tokio::test]
     async fn large_mcp_result_remains_readable_without_entering_model_context() {
+        let owner = crate::test_support::ArtifactFixture::new();
         let full_text = "important start\n".to_owned() + &"é".repeat(40 * 1024) + "\nimportant end";
         let output = convert_tool_result(
             "report",
             CallToolResult::success(vec![ContentBlock::text(full_text.clone())]),
             None,
+            Some(owner.sink()),
         );
         assert!(!output.is_error, "{}", output.value);
         assert_eq!(output.value["truncated"], true);
         assert!(output.value["content"].as_str().unwrap().len() < 64 * 1024);
-        let path = output.value["full_output_path"].as_str().unwrap();
-        let saved = read_native_snapshot(path).await;
+        let saved = owner.json(&output, "full_output_artifact");
         assert_eq!(saved["content"], full_text);
-        #[cfg(unix)]
         assert_eq!(
-            fs::metadata(path).unwrap().permissions().mode() & 0o777,
+            fs::metadata(owner.session.path())
+                .unwrap()
+                .permissions()
+                .mode()
+                & 0o777,
             0o600
         );
-        fs::remove_file(path).unwrap();
     }
 }

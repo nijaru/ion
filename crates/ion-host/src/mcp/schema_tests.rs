@@ -4,6 +4,7 @@ use std::{io::ErrorKind, os::unix::fs::PermissionsExt};
 
 #[test]
 fn conformance_and_raw_observation_survive_inline_truncation() {
+    let owner = crate::test_support::ArtifactFixture::new();
     let schema = schema::OutputSchema::capture(json!({"type": "array"}));
     let raw = json!({
         "content": [{"type": "text", "text": "server text"}],
@@ -12,7 +13,7 @@ fn conformance_and_raw_observation_survive_inline_truncation() {
         "_meta": {"private": "RAW_ONLY"}
     });
     let result = serde_json::from_value(raw.clone()).unwrap();
-    let output = conversion::convert_tool_result("wide", result, Some(&schema));
+    let output = conversion::convert_tool_result("wide", result, Some(&schema), Some(owner.sink()));
     assert!(!output.is_error);
     assert_eq!(output.value["is_error"], false);
     assert_eq!(
@@ -23,25 +24,29 @@ fn conformance_and_raw_observation_survive_inline_truncation() {
     assert_eq!(output.value["structured_content_omitted"], true);
     assert!(output.value["structured_content"].is_null());
     assert!(serde_json::to_vec(&output.value).unwrap().len() < 64 * 1024);
-    let raw_path = output.value["raw_result_path"].as_str().unwrap();
-    let full_path = output.value["full_output_path"].as_str().unwrap();
-    let saved_raw: Value = serde_json::from_slice(&fs::read(raw_path).unwrap()).unwrap();
-    let saved_full: Value = serde_json::from_slice(&fs::read(full_path).unwrap()).unwrap();
+    let raw_index = output.value["raw_result_artifact"].as_u64().unwrap();
+    let full_index = output.value["full_output_artifact"].as_u64().unwrap();
+    let saved_raw: Value =
+        serde_json::from_slice(&owner.bytes(&output.artifacts[raw_index as usize])).unwrap();
+    let saved_full: Value =
+        serde_json::from_slice(&owner.bytes(&output.artifacts[full_index as usize])).unwrap();
     assert_eq!(saved_raw, raw);
     assert_eq!(saved_full["structured_content"], raw["structuredContent"]);
     assert_eq!(saved_full["output_schema_validation"]["status"], "invalid");
     assert_eq!(saved_full["is_error"], false);
-    for path in [raw_path, full_path] {
-        assert_eq!(
-            fs::metadata(path).unwrap().permissions().mode() & 0o777,
-            0o600
-        );
-        fs::remove_file(path).unwrap();
-    }
+    assert_eq!(
+        fs::metadata(owner.session.path())
+            .unwrap()
+            .permissions()
+            .mode()
+            & 0o777,
+        0o600
+    );
 }
 
 #[tokio::test]
 async fn frozen_output_contracts_preserve_results_and_unchecked_tools_across_refresh() {
+    let owner = crate::test_support::ArtifactFixture::new();
     let root =
         std::env::temp_dir().join(format!("ion-mcp-schema-capture-{}", uuid::Uuid::now_v7()));
     fs::create_dir_all(&root).unwrap();
@@ -110,7 +115,10 @@ for line in sys.stdin:
         raw_arguments: None,
     };
     let first = issued
-        .execute_untracked(&call, CancellationToken::new())
+        .execute(
+            ion_core::ToolInvocation::untracked(&call, CancellationToken::new())
+                .with_artifact_sink(owner.sink()),
+        )
         .await;
     assert_eq!(first.value["output_schema_validation"]["status"], "valid");
     let refreshed = tokio::time::timeout(Duration::from_secs(5), async {
@@ -141,17 +149,26 @@ for line in sys.stdin:
     .await
     .unwrap();
     let old = issued
-        .execute_untracked(&call, CancellationToken::new())
+        .execute(
+            ion_core::ToolInvocation::untracked(&call, CancellationToken::new())
+                .with_artifact_sink(owner.sink()),
+        )
         .await;
     let changed = refreshed
-        .execute_untracked(&call, CancellationToken::new())
+        .execute(
+            ion_core::ToolInvocation::untracked(&call, CancellationToken::new())
+                .with_artifact_sink(owner.sink()),
+        )
         .await;
     let unchecked_call = ToolCall {
         name: "mcp__6_schema__unchecked".into(),
         ..call.clone()
     };
     let unchecked = refreshed
-        .execute_untracked(&unchecked_call, CancellationToken::new())
+        .execute(
+            ion_core::ToolInvocation::untracked(&unchecked_call, CancellationToken::new())
+                .with_artifact_sink(owner.sink()),
+        )
         .await;
     source.shutdown().await.unwrap();
     assert_eq!(
@@ -172,20 +189,22 @@ for line in sys.stdin:
         assert_eq!(output.value["structured_content"]["value"], "VALUE_CANARY");
     }
     for output in [&changed, &unchecked] {
-        let path = output.value["raw_result_path"].as_str().unwrap();
+        let raw = owner.json(output, "raw_result_artifact");
         assert!(output.value["raw_result_error"].is_null());
         assert_eq!(
-            fs::metadata(path).unwrap().permissions().mode() & 0o777,
+            fs::metadata(owner.session.path())
+                .unwrap()
+                .permissions()
+                .mode()
+                & 0o777,
             0o600
         );
-        let raw: Value = serde_json::from_slice(&fs::read(path).unwrap()).unwrap();
         assert_eq!(raw["structuredContent"], output.value["structured_content"]);
         assert_eq!(raw["isError"], false);
         assert!(
             raw.get("output_schema_validation").is_none(),
             "local status rewrote raw observation"
         );
-        fs::remove_file(path).unwrap();
     }
     assert_eq!(
         fs::read_to_string(calls).unwrap(),

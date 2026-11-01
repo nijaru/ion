@@ -51,8 +51,9 @@ pub trait UserShell: Send + Sync {
     fn prepare(&self, command: &str) -> Result<PreparedShell>;
 }
 
-pub type PreparedShell =
-    Box<dyn FnOnce(CancellationToken) -> BoxFuture<'static, ToolOutput> + Send>;
+pub type PreparedShell = Box<
+    dyn FnOnce(CancellationToken, ion_core::ArtifactSink) -> BoxFuture<'static, ToolOutput> + Send,
+>;
 
 #[derive(Clone)]
 pub struct ApplicationRuntime {

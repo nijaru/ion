@@ -79,7 +79,7 @@ impl ToolExecutor for Recorder {
                 tokio::select! {
                     () = self.release.notified() => {},
                     () = stop.cancelled() => return ToolOutput {
-                        value: json!("stopped"), images: Vec::new(), is_error: true,
+                        value: json!("stopped"), images: Vec::new(), artifacts: Vec::new(), is_error: true,
                     },
                 }
             }
@@ -92,6 +92,7 @@ impl ToolExecutor for Recorder {
             ToolOutput {
                 value: Value::Bool(true),
                 images: Vec::new(),
+                artifacts: Vec::new(),
                 is_error: false,
             }
         })
@@ -141,14 +142,20 @@ async fn provenance_comes_from_committed_occurrences_not_provider_ids_or_argumen
         raw_arguments: None,
     };
     let catalog = tools.snapshot();
-    let unpolled = catalog.execute_untracked(&raw_call, CancellationToken::new());
+    let unpolled = catalog.execute(ion_core::ToolInvocation::untracked(
+        &raw_call,
+        CancellationToken::new(),
+    ));
     assert!(recorder.entered.lock().unwrap().is_empty());
     drop(unpolled);
     assert!(recorder.entered.lock().unwrap().is_empty());
     assert!(session.view().unwrap().entries.is_empty());
     assert!(
         !catalog
-            .execute_untracked(&raw_call, CancellationToken::new())
+            .execute(ion_core::ToolInvocation::untracked(
+                &raw_call,
+                CancellationToken::new()
+            ))
             .await
             .is_error
     );

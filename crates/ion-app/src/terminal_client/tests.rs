@@ -38,6 +38,7 @@ fn settlement_program_status_distinguishes_done_and_cancelled() {
         let output = ion_core::ToolOutput {
             value: serde_json::json!({"cancelled": cancelled}),
             images: vec![],
+            artifacts: vec![],
             is_error,
         };
         assert_eq!(

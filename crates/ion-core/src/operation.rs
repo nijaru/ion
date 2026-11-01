@@ -3,7 +3,10 @@ use futures_util::FutureExt;
 use std::{
     future::{Future, poll_fn},
     pin::Pin,
-    sync::{Arc, Mutex, MutexGuard},
+    sync::{
+        Arc, Mutex, MutexGuard,
+        atomic::{AtomicBool, Ordering},
+    },
     task::{Context, Poll, Wake, Waker},
 };
 use thiserror::Error;
@@ -145,6 +148,8 @@ impl<T, E> Drop for Operation<T, E> {
 
 pub(crate) struct OperationOwner {
     state: Mutex<State>,
+    closed: AtomicBool,
+    contended: AtomicBool,
     wake: Arc<Notify>,
     join_waker: Waker,
 }
@@ -164,6 +169,8 @@ impl Default for OperationOwner {
         let wake = Arc::new(Notify::new());
         Self {
             state: Mutex::new(State::default()),
+            closed: AtomicBool::new(false),
+            contended: AtomicBool::new(false),
             join_waker: Waker::from(Arc::new(JoinWake(wake.clone()))),
             wake,
         }
@@ -172,7 +179,6 @@ impl Default for OperationOwner {
 
 #[derive(Default)]
 struct State {
-    closed: bool,
     next_id: u64,
     settled: u64,
     failure: Option<String>,
@@ -192,21 +198,68 @@ struct Running {
 /// Synchronous preference/admission authority. The guard holds no async work.
 /// A reversible idle reservation for synchronous preflight and publication.
 /// It grants no execution authority. Do not hold it across asynchronous work.
-pub struct IdleSession<'a>(MutexGuard<'a, State>);
+pub struct IdleSession<'a>(StateGuard<'a>);
+
+struct StateGuard<'a> {
+    state: Option<MutexGuard<'a, State>>,
+    owner: &'a OperationOwner,
+}
+impl std::ops::Deref for StateGuard<'_> {
+    type Target = State;
+    fn deref(&self) -> &State {
+        self.state
+            .as_deref()
+            .expect("state guard is live until Drop")
+    }
+}
+impl std::ops::DerefMut for StateGuard<'_> {
+    fn deref_mut(&mut self) -> &mut State {
+        self.state
+            .as_deref_mut()
+            .expect("state guard is live until Drop")
+    }
+}
+impl Drop for StateGuard<'_> {
+    fn drop(&mut self) {
+        drop(self.state.take());
+        if self.owner.contended.swap(false, Ordering::SeqCst) {
+            self.owner.wake.notify_waiters();
+        }
+    }
+}
 
 impl OperationOwner {
-    fn lock(&self) -> MutexGuard<'_, State> {
-        self.state
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
+    fn try_state(&self) -> Option<StateGuard<'_>> {
+        let state = match self.state.try_lock() {
+            Ok(state) => state,
+            Err(std::sync::TryLockError::WouldBlock) => return None,
+            Err(std::sync::TryLockError::Poisoned(error)) => error.into_inner(),
+        };
+        Some(StateGuard {
+            state: Some(state),
+            owner: self,
+        })
+    }
+
+    fn poll_state<'a>(
+        &'a self,
+        cx: &mut Context<'_>,
+        notified: &mut Pin<Box<OwnedNotified>>,
+    ) -> Poll<StateGuard<'a>> {
+        while notified.as_mut().poll(cx).is_ready() {
+            *notified = Box::pin(self.wake.clone().notified_owned());
+        }
+        if let Some(state) = self.try_state() {
+            return Poll::Ready(state);
+        }
+        self.contended.store(true, Ordering::SeqCst);
+        // Recheck after registering contention: an unlock before registration
+        // must not strand this waiter. Wake only on contention, not every poll.
+        self.try_state().map_or(Poll::Pending, Poll::Ready)
     }
 
     pub(crate) fn try_lock(&self) -> Result<IdleSession<'_>, OperationError> {
-        let mut state = match self.state.try_lock() {
-            Ok(state) => state,
-            Err(std::sync::TryLockError::WouldBlock) => return Err(OperationError::Active),
-            Err(std::sync::TryLockError::Poisoned(error)) => error.into_inner(),
-        };
+        let mut state = self.try_state().ok_or(OperationError::Active)?;
         if state
             .running
             .as_ref()
@@ -220,7 +273,7 @@ impl OperationOwner {
             state.finish(result);
             self.wake.notify_waiters();
         }
-        state.idle()?;
+        state.idle(self.closed.load(Ordering::SeqCst))?;
         Ok(IdleSession(state))
     }
 
@@ -323,10 +376,7 @@ impl OperationOwner {
         // Register each waiter before polling the retained join. A single task
         // waker fans out to operation and shutdown waiters; polling JoinHandle
         // with competing caller wakers would strand whichever was overwritten.
-        while notified.as_mut().poll(cx).is_ready() {
-            *notified = Box::pin(self.wake.clone().notified_owned());
-        }
-        let mut state = self.lock();
+        let mut state = std::task::ready!(self.poll_state(cx, notified));
         if id <= state.settled {
             return Poll::Ready(Ok(()));
         }
@@ -352,37 +402,42 @@ impl OperationOwner {
     /// Close admission before waiting. Cancellation of this wait leaves both
     /// closure and task custody intact. Runtime destruction is not shutdown.
     pub(crate) async fn shutdown(&self) -> Result<(), OperationError> {
-        let id = {
-            let mut state = self.lock();
-            state.closed = true;
-            if let Some(running) = &state.running {
+        self.closed.store(true, Ordering::SeqCst);
+        let mut notified = Box::pin(self.wake.clone().notified_owned());
+        let id = poll_fn(|cx| {
+            let state = std::task::ready!(self.poll_state(cx, &mut notified));
+            Poll::Ready(if let Some(running) = &state.running {
                 running.stop.cancel();
-                Some(running.id)
+                Ok(Some(running.id))
             } else if let Some(failure) = &state.failure {
-                return Err(OperationError::TaskFailed(failure.clone()));
+                Err(OperationError::TaskFailed(failure.clone()))
             } else {
-                None
-            }
-        };
+                Ok(None)
+            })
+        })
+        .await?;
         if let Some(id) = id {
-            let mut notified = Box::pin(self.wake.clone().notified_owned());
             poll_fn(|cx| self.poll_join(id, cx, &mut notified)).await?;
         }
-        self.lock().completion_failure().map_or(Ok(()), |error| {
-            Err(OperationError::UnreportedFailure(error))
+        poll_fn(|cx| {
+            let state = std::task::ready!(self.poll_state(cx, &mut notified));
+            Poll::Ready(state.completion_failure().map_or(Ok(()), |error| {
+                Err(OperationError::UnreportedFailure(error))
+            }))
         })
+        .await
     }
 }
 
 impl State {
-    fn idle(&self) -> Result<(), OperationError> {
+    fn idle(&self, closed: bool) -> Result<(), OperationError> {
         if let Some(failure) = &self.failure {
             return Err(OperationError::TaskFailed(failure.clone()));
         }
         if let Some(error) = self.completion_failure() {
             return Err(OperationError::UnreportedFailure(error));
         }
-        if self.closed {
+        if closed {
             return Err(OperationError::Closed);
         }
         if self.running.is_some() {

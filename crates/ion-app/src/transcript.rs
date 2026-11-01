@@ -111,10 +111,7 @@ fn document(view: &SessionView, mut doc: impl Document) -> String {
                 {
                     doc.literal(notice);
                 }
-                doc.json(&output.value);
-                for image in &output.images {
-                    doc.image(image);
-                }
+                tool_output(&mut doc, &output);
             }
             SessionEntry::ChildToolAdmitted { intent, .. } => {
                 doc.heading(&format!(
@@ -149,10 +146,7 @@ fn document(view: &SessionView, mut doc: impl Document) -> String {
                     "Child result · parent {}:{} · child {} · {state}",
                     parent.assistant_entry, parent.ordinal, child
                 ));
-                doc.json(&output.value);
-                for image in &output.images {
-                    doc.image(image);
-                }
+                tool_output(&mut doc, &output);
             }
             SessionEntry::UserShellAdmitted {
                 command,
@@ -160,8 +154,13 @@ fn document(view: &SessionView, mut doc: impl Document) -> String {
             } => {
                 let outcome = view.user_shell_outcome(entry_index as u64 + 1);
                 let state = match outcome {
-                    ion_core::UserShellOutcome::Observed { is_error: true, .. } => "error",
-                    ion_core::UserShellOutcome::Observed { .. } => "ok",
+                    ion_core::UserShellOutcome::Observed { output } => {
+                        if output.is_error {
+                            "error"
+                        } else {
+                            "ok"
+                        }
+                    }
                     ion_core::UserShellOutcome::Unknown => "external effect unknown",
                 };
                 doc.heading(&format!(
@@ -174,7 +173,9 @@ fn document(view: &SessionView, mut doc: impl Document) -> String {
                 ));
                 doc.literal(&format!("$ {command}"));
                 match outcome {
-                    ion_core::UserShellOutcome::Observed { output, .. } => doc.json(output),
+                    ion_core::UserShellOutcome::Observed { output } => {
+                        tool_output(&mut doc, output)
+                    }
                     ion_core::UserShellOutcome::Unknown => {
                         doc.literal(ion_core::UserShellOutcome::unknown_notice())
                     }
@@ -205,6 +206,16 @@ fn document(view: &SessionView, mut doc: impl Document) -> String {
         }
     }
     doc.finish()
+}
+
+fn tool_output(doc: &mut impl Document, output: &ion_core::ToolOutput) {
+    doc.json(&output.value);
+    for metadata in crate::tool_output::artifact_metadata(&output.artifacts) {
+        doc.literal(&metadata);
+    }
+    for image in &output.images {
+        doc.image(image);
+    }
 }
 
 fn message(doc: &mut impl Document, message: &Message) {

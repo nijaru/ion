@@ -12,14 +12,19 @@ pub(super) fn append_message(
         SessionEntry::UserShellAdmitted {
             command,
             exclude_from_context: false,
-        } => Some(shell_message(command, &UserShellOutcome::Unknown, false)),
+        } => Some(shell_message(
+            command,
+            &UserShellOutcome::Unknown,
+            false,
+            coordinate,
+        )),
         SessionEntry::UserShellSettled { outcome, .. } => {
             let shell = closed_shell.expect("validated shell settlement owns its admission");
             if !shell.exclude_from_context {
                 messages
                     .last_mut()
                     .expect("shared shell owns the final projected message")
-                    .message = shell_message(&shell.command, outcome, false);
+                    .message = shell_message(&shell.command, outcome, false, shell.admission_entry);
             }
             None
         }
@@ -86,6 +91,7 @@ pub(super) fn selected_messages(
                 command,
                 shell_outcome_at(entries, coordinate),
                 *exclude_from_context,
+                coordinate,
             )),
             SessionEntry::ToolResult { result, .. } if display => {
                 Some(result.message(coordinate, true))
@@ -142,7 +148,12 @@ pub(super) fn message_from_entry(coordinate: u64, entry: &SessionEntry) -> Optio
     }
 }
 
-pub(super) fn shell_message(command: &str, outcome: &UserShellOutcome, excluded: bool) -> Message {
+pub(super) fn shell_message(
+    command: &str,
+    outcome: &UserShellOutcome,
+    excluded: bool,
+    admission_entry: u64,
+) -> Message {
     let mut body = format!(
         "User {} shell command{}:\n$ {command}",
         match outcome {
@@ -156,14 +167,43 @@ pub(super) fn shell_message(command: &str, outcome: &UserShellOutcome, excluded:
         }
     );
     match outcome {
-        UserShellOutcome::Observed { .. } => {
-            // Host owns capture semantics. Preserve its entire observation,
-            // rather than a Core whitelist that silently loses new metadata.
+        UserShellOutcome::Observed { output } => {
+            // Preserve opaque host JSON and typed references, but never stringify
+            // typed image bytes into model/history text.
+            #[derive(Serialize)]
+            struct SharedOutput<'a> {
+                value: &'a serde_json::Value,
+                images: &'a [ion_ai::ImageContent],
+                artifacts: &'a [crate::ArtifactRef],
+                is_error: bool,
+            }
+            #[derive(Serialize)]
+            struct Observation<'a> {
+                kind: &'static str,
+                output: SharedOutput<'a>,
+            }
             body.push_str("\nObserved host result:\n");
             body.push_str(
-                &serde_json::to_string(outcome)
-                    .expect("a shell observation contains only serializable JSON"),
+                &serde_json::to_string(&Observation {
+                    kind: "observed",
+                    output: SharedOutput {
+                        value: &output.value,
+                        images: &[],
+                        artifacts: &output.artifacts,
+                        is_error: output.is_error,
+                    },
+                })
+                .expect("a shell observation contains serializable JSON"),
             );
+            if !output.artifacts.is_empty() {
+                body.push_str(&format!("\nRetained artifacts: history action artifact, entry {admission_entry}, zero-based artifact index. Pages contain base64 raw bytes; do not rerun the command to recover them."));
+            }
+            if !output.images.is_empty() {
+                body.push_str(&format!(
+                    "\n{} typed images retained for inspection, omitted from shell text.",
+                    output.images.len()
+                ));
+            }
         }
         UserShellOutcome::Unknown => {
             body.push('\n');

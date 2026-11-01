@@ -1,6 +1,8 @@
 """Exercise MCP configuration, tool/resource delivery, refresh and owned lifecycle."""
 
+import base64
 import json
+from smoke_artifacts import artifact_bytes
 import os
 import signal
 import subprocess
@@ -23,7 +25,8 @@ def check_embedded_delivery(body):
     assert tool["role"] == "tool" and images["role"] == "user", body
     envelope = json.loads(tool["content"])
     assert envelope["is_error"] is False, envelope
-    value = envelope["result"]
+    capture = envelope["result"]
+    value = capture["output"]
     content = value["content"]
     assert not value["is_error"] and "conversion_notices" not in value, value
     assert "EMBEDDED_NOTE" in content and '{"rows":2}' in content and "metadata only" in content, value
@@ -31,10 +34,10 @@ def check_embedded_delivery(body):
     projected = [part["image_url"]["url"] for part in images["content"] if part["type"] == "image_url"]
     assert len(projected) == 2 and all(url.startswith("data:image/png;base64,") for url in projected), images
     assert projected[0] != projected[1], "distinct inline and embedded images were not retained"
-    metadata = next(json.loads(line[line.index("{"):]) for line in content.splitlines() if '"savedPath"' in line)
-    saved = Path(metadata["savedPath"])
-    assert saved.parent == work / "tmp" and saved.read_bytes() == b"\x00\x01binary", metadata
-    assert saved.stat().st_mode & 0o777 == 0o600 and metadata["size"] == 8, metadata
+    metadata = next(json.loads(line[line.index("{"):]) for line in content.splitlines() if '"artifact"' in line)
+    reference=capture["artifacts"][metadata["artifact"]]
+    assert reference["complete"] and artifact_bytes(work,reference) == b"\x00\x01binary", metadata
+    assert metadata["size"] == 8, metadata
 
 
 class Provider(BaseHTTPRequestHandler):
@@ -142,7 +145,7 @@ class Provider(BaseHTTPRequestHandler):
             ]
         elif len(requests) == 16:
             names = {tool["function"]["name"] for tool in body["tools"]}
-            assert names == {"read", "mcp__4_demo__large_report"}, names
+            assert names == {"history", "mcp__4_demo__large_report"}, names
             changes = [
                 {"id": "mcp", "choices": [{"index": 0, "delta": {"tool_calls": [{"index": 0, "id": "call-large", "type": "function", "function": {"name": "mcp__4_demo__large_report", "arguments": "{}"}}]}, "finish_reason": None}]},
                 {"id": "mcp", "choices": [{"index": 0, "delta": {}, "finish_reason": "tool_calls"}]},
@@ -150,37 +153,43 @@ class Provider(BaseHTTPRequestHandler):
         elif len(requests) == 17:
             envelope = json.loads(body["messages"][-1]["content"])
             assert envelope["is_error"] is False, envelope
-            result = envelope["result"]
-            assert result["truncated"] is True and len(result["content"]) < 64 * 1024, result
-            path = Path(result["full_output_path"])
-            full = json.loads(path.read_text())
-            assert full["content"].startswith("START_MARKER\n") and full["content"].endswith("\nEND_MARKER"), full
-            changes = [
-                {"id": "mcp", "choices": [{"index": 0, "delta": {"tool_calls": [{"index": 0, "id": "read-head", "type": "function", "function": {"name": "read", "arguments": json.dumps({"path": str(path), "byte_offset": 0, "byte_limit": 4096})}}]}, "finish_reason": None}]},
-                {"id": "mcp", "choices": [{"index": 0, "delta": {}, "finish_reason": "tool_calls"}]},
+            capture=envelope["result"]
+            result=capture["output"]
+            assert result["truncated"] is True and len(result["content"])<64*1024, result
+            index=result["full_output_artifact"]
+            full_bytes=artifact_bytes(work,capture["artifacts"][index])
+            full=json.loads(full_bytes)
+            assert full["content"].startswith("START_MARKER\n") and full["content"].endswith("\nEND_MARKER"),full
+            self.server.large_capture=(capture["entry"],index,full_bytes)
+            arguments={"action":"artifact","entry":capture["entry"],"artifact":index,"offset":0,"limit":4096}
+            changes=[
+                {"id":"mcp","choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"id":"read-head","type":"function","function":{"name":"history","arguments":json.dumps(arguments)}}]},"finish_reason":None}]},
+                {"id":"mcp","choices":[{"index":0,"delta":{},"finish_reason":"tool_calls"}]},
             ]
-        elif len(requests) == 18:
-            envelope = json.loads(body["messages"][-1]["content"])
-            assert envelope["is_error"] is False, envelope
-            page = envelope["result"]
-            assert "START_MARKER\\n" in page["content"], page
-            assert page["start_byte"] == 0 and page["has_more"], page
-            assert page["next_byte"] == len(page["content"].encode()) <= 4096, page
-            changes = [
-                {"id": "mcp", "choices": [{"index": 0, "delta": {"tool_calls": [{"index": 0, "id": "read-middle", "type": "function", "function": {"name": "read", "arguments": json.dumps({"path": page["path"], "byte_offset": 32768, "byte_limit": 4096})}}]}, "finish_reason": None}]},
-                {"id": "mcp", "choices": [{"index": 0, "delta": {}, "finish_reason": "tool_calls"}]},
+        elif len(requests)==18:
+            envelope=json.loads(body["messages"][-1]["content"])
+            assert envelope["is_error"] is False,envelope
+            page=envelope["result"]
+            data=base64.b64decode(page["data"])
+            entry,index,original=self.server.large_capture
+            assert data==original[:4096] and b"START_MARKER\\n" in data,page
+            assert page["offset"]==0 and page["next_offset"]==len(data),page
+            arguments={"action":"artifact","entry":entry,"artifact":index,"offset":32768,"limit":4096}
+            changes=[
+                {"id":"mcp","choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"id":"read-middle","type":"function","function":{"name":"history","arguments":json.dumps(arguments)}}]},"finish_reason":None}]},
+                {"id":"mcp","choices":[{"index":0,"delta":{},"finish_reason":"tool_calls"}]},
             ]
-        elif len(requests) == 19:
-            envelope = json.loads(body["messages"][-1]["content"])
-            assert envelope["is_error"] is False, envelope
-            page = envelope["result"]
-            assert "MIDDLE_MARKER" in page["content"], page
-            assert page["start_byte"] == 32768 and page["has_more"], page
-            assert page["next_byte"] == 32768 + len(page["content"].encode()) <= 32768 + 4096, page
-            Path(page["path"]).unlink()
-            changes = [
-                {"id": "mcp", "choices": [{"index": 0, "delta": {"content": "MCP_LARGE_OK"}, "finish_reason": None}]},
-                {"id": "mcp", "choices": [{"index": 0, "delta": {}, "finish_reason": "stop"}]},
+        elif len(requests)==19:
+            envelope=json.loads(body["messages"][-1]["content"])
+            assert envelope["is_error"] is False,envelope
+            page=envelope["result"]
+            data=base64.b64decode(page["data"])
+            original=self.server.large_capture[2]
+            assert data==original[32768:32768+4096] and b"MIDDLE_MARKER" in data,page
+            assert page["offset"]==32768 and page["next_offset"]==32768+len(data),page
+            changes=[
+                {"id":"mcp","choices":[{"index":0,"delta":{"content":"MCP_LARGE_OK"},"finish_reason":None}]},
+                {"id":"mcp","choices":[{"index":0,"delta":{},"finish_reason":"stop"}]},
             ]
         elif len(requests) == 20:
             names = {tool["function"]["name"] for tool in body["tools"]}
@@ -283,7 +292,7 @@ text('MCP_PURPOSE_DISCOVERY_OK');
 const picture = await tools.mcp__4_demo__picture({{}});
 if (picture.is_error || picture.images.length !== 2 ||
     !picture.value.content.includes('EMBEDDED_NOTE') ||
-    !picture.value.content.includes('savedPath') ||
+    !picture.value.content.includes('artifact') || picture.artifacts.length!==1 ||
     !picture.value.content.includes('metadata only'))
     throw new Error('embedded MCP data was not delivered through Code Mode');
 text('MCP_EMBEDDED_COMPOSED_OK');
@@ -782,7 +791,7 @@ with tempfile.TemporaryDirectory(prefix="ion-mcp-") as temporary:
         http_changed = subprocess.run([binary, "--cwd", workspace, "run", "Call the remote changing tools."], env=env, check=True, capture_output=True, text=True)
         assert http_changed.stdout.strip() == "MCP_HTTP_REFRESH_OK", http_changed
         assert len(remote_calls) == 4 and remote_calls[-1]["params"]["name"] == "lowercase", remote_calls
-        large = subprocess.run([binary, "--cwd", workspace, "--tools", "read,mcp__4_demo__large_report", "run", "Read the large MCP report, including its omitted middle."], env=env, check=True, capture_output=True, text=True, timeout=30)
+        large = subprocess.run([binary, "--cwd", workspace, "--tools", "history,mcp__4_demo__large_report", "run", "Read the large MCP report, including its omitted middle."], env=env, check=True, capture_output=True, text=True, timeout=30)
         assert large.stdout.strip() == "MCP_LARGE_OK", large
         resource = subprocess.run([binary, "--cwd", workspace, "run", "Read the MCP guide resource."], env=env, check=True, capture_output=True, text=True)
         assert resource.stdout.strip() == "MCP_RESOURCE_OK", resource

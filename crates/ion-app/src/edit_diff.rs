@@ -134,6 +134,7 @@ mod tests {
             result: Some(ActivityResult {
                 projection: Some(ToolResultProjection::Observed),
                 value: json!({"path":"file", "diff":{"text":"--- file\n+++ file\n@@ -1 +1 @@\n-old\n+new\n","truncated":false}}),
+                artifacts: Vec::new(),
                 image_mime_types: vec![],
                 is_error: false,
             }),
@@ -179,6 +180,7 @@ mod tests {
             result: Some(ActivityResult {
                 projection: Some(ToolResultProjection::Observed),
                 value: json!({"path":"file", "diff":{"text":text,"truncated":true}}),
+                artifacts: Vec::new(),
                 image_mime_types: vec![],
                 is_error: false,
             }),

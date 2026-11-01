@@ -1,60 +1,52 @@
-//! Private MCP artifacts, shared by tool and resource delivery.
-use std::{
-    fs::{self, OpenOptions},
-    io::{BufWriter, Write},
-    os::unix::fs::OpenOptionsExt,
-    path::PathBuf,
-};
+//! Typed capture collection for one observed MCP response. Runs in the joined
+//! conversion worker; opaque server JSON never owns these references.
+use std::io::Write;
 
-use anyhow::Result as AnyResult;
-use rmcp::model::CallToolResult;
+use anyhow::{Result, anyhow};
+use ion_core::{ArtifactRef, ArtifactSink};
+use serde::Serialize;
 
-/// The original wire response, streamed to a private artifact. Nothing is
-/// cloned or base64-copied into the model context.
-pub(super) fn save_raw_mcp_result(result: &CallToolResult) -> AnyResult<PathBuf> {
-    write_private_artifact(
-        private_artifact_path("ion-mcp-raw-result", ".json")?,
-        |file| {
-            let mut writer = BufWriter::new(file);
-            serde_json::to_writer(&mut writer, result)?;
-            writer.flush()?;
-            Ok(())
-        },
-    )
-}
-pub(super) fn save_full_mcp_output(bytes: &[u8]) -> AnyResult<PathBuf> {
-    write_private_artifact(private_artifact_path("ion-mcp-output", ".json")?, |file| {
-        file.write_all(bytes)?;
-        Ok(())
-    })
+pub(super) struct ResultArtifacts {
+    sink: Option<ArtifactSink>,
+    pub references: Vec<ArtifactRef>,
 }
 
-pub(super) fn private_artifact_path(prefix: &str, extension: &str) -> AnyResult<PathBuf> {
-    let mut nonce = [0u8; 16];
-    getrandom::fill(&mut nonce)
-        .map_err(|error| anyhow::anyhow!("cannot name MCP artifact: {error}"))?;
-    let serial = u128::from_ne_bytes(nonce);
-    Ok(std::env::temp_dir().join(format!(
-        "{prefix}-{}-{serial:032x}{extension}",
-        std::process::id()
-    )))
-}
-
-/// A private 0600 artifact. A failed write removes its partial file instead of
-/// leaving untrustworthy evidence, and reports the real error.
-pub(super) fn write_private_artifact(
-    path: PathBuf,
-    write: impl FnOnce(&mut fs::File) -> AnyResult<()>,
-) -> AnyResult<PathBuf> {
-    let mut file = OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .mode(0o600)
-        .open(&path)?;
-    if let Err(error) = write(&mut file) {
-        drop(file);
-        let _ = fs::remove_file(&path);
-        return Err(error);
+impl ResultArtifacts {
+    pub fn new(sink: Option<ArtifactSink>) -> Self {
+        Self {
+            sink,
+            references: Vec::new(),
+        }
     }
-    Ok(path)
+
+    pub fn bytes(&mut self, label: &str, bytes: &[u8]) -> Result<usize> {
+        self.save(label, |writer| {
+            writer.write_all(bytes)?;
+            Ok(())
+        })
+    }
+
+    pub fn json(&mut self, label: &str, value: &impl Serialize) -> Result<usize> {
+        self.save(label, |writer| {
+            serde_json::to_writer(writer, value)?;
+            Ok(())
+        })
+    }
+
+    fn save(
+        &mut self,
+        label: &str,
+        write: impl FnOnce(&mut ion_core::ArtifactWriter) -> Result<()>,
+    ) -> Result<usize> {
+        let sink = self
+            .sink
+            .as_ref()
+            .ok_or_else(|| anyhow!("raw capture requires an explicit Session artifact sink"))?;
+        let mut writer = sink.start(label)?;
+        write(&mut writer)?;
+        let reference = writer.finish(true)?;
+        let index = self.references.len();
+        self.references.push(reference);
+        Ok(index)
+    }
 }

@@ -187,6 +187,7 @@ fn unavailable(error: QuestionError) -> ToolOutput {
 fn rejected(message: impl Into<String>) -> ToolOutput {
     let message = bounded(&format!("{TOOL_NAME}: {}", message.into()));
     ToolOutput {
+        artifacts: Vec::new(),
         value: json!({"error": message}),
         images: Vec::new(),
         is_error: true,

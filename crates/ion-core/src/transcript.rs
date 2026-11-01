@@ -63,6 +63,7 @@ pub struct ActivityResult {
     pub projection: Option<ToolResultProjection>,
     pub value: Value,
     pub image_mime_types: Vec<String>,
+    pub artifacts: Vec<crate::ArtifactRef>,
     pub is_error: bool,
 }
 
@@ -402,6 +403,7 @@ impl TranscriptBuilder {
         activity.result = Some(activity_result(
             output.value.clone(),
             &output.images,
+            output.artifacts.clone(),
             output.is_error,
             outcome.projection(),
         ));
@@ -452,6 +454,7 @@ impl TranscriptBuilder {
         activity.result = Some(activity_result(
             output.value,
             &output.images,
+            output.artifacts,
             output.is_error,
             None,
         ));
@@ -523,12 +526,14 @@ fn result_state(is_error: bool, value: &Value) -> ActivityState {
 fn activity_result(
     value: Value,
     images: &[ion_ai::ImageContent],
+    artifacts: Vec<crate::ArtifactRef>,
     is_error: bool,
     projection: Option<ToolResultProjection>,
 ) -> ActivityResult {
     ActivityResult {
         projection,
         value,
+        artifacts,
         image_mime_types: images
             .iter()
             .map(|image| image.mime_type().as_str().to_owned())
@@ -1186,6 +1191,7 @@ mod tests {
             outcome: crate::ToolOutcome::Observed {
                 projection: crate::ToolResultProjection::Observed,
                 output: ToolOutput {
+                    artifacts: Vec::new(),
                     value: serde_json::json!({"content":"observed"}),
                     images: vec![],
                     is_error: false,
@@ -1226,6 +1232,7 @@ mod tests {
             outcome: crate::ToolOutcome::Observed {
                 projection: crate::ToolResultProjection::Observed,
                 output: ToolOutput {
+                    artifacts: Vec::new(),
                     value: serde_json::json!({"path":"src/lib.rs"}),
                     images: Vec::new(),
                     is_error: false,
@@ -1395,6 +1402,7 @@ mod tests {
             outcome: crate::ToolOutcome::Observed {
                 projection: crate::ToolResultProjection::Observed,
                 output: ToolOutput {
+                    artifacts: Vec::new(),
                     value: serde_json::json!({}),
                     images: Vec::new(),
                     is_error: false,

@@ -593,7 +593,7 @@ fn render_shell(
         width,
         Wrapping::Literal,
     );
-    let Some(ion_core::UserShellOutcome::Observed { output, is_error }) = &shell.outcome else {
+    let Some(ion_core::UserShellOutcome::Observed { output }) = &shell.outcome else {
         if shell.exclude_from_context {
             rows.extend(wrap_mapped(
                 "",
@@ -618,28 +618,38 @@ fn render_shell(
         ));
         return rows;
     };
-    crate::tool_output::render_command(&mut rows, output, "  ", width, detail, 4, !is_error);
-    let mut state = if let Some(signal) = output["signal"].as_i64() {
+    crate::tool_output::render_command(
+        &mut rows,
+        &output.value,
+        "  ",
+        width,
+        detail,
+        4,
+        !output.is_error,
+    );
+    crate::tool_output::render_artifacts(&mut rows, &output.artifacts, "  ", width, detail);
+    let value = &output.value;
+    let mut state = if let Some(signal) = value["signal"].as_i64() {
         format!("signal {signal}")
-    } else if let Some(code) = output["exit_code"].as_i64() {
+    } else if let Some(code) = value["exit_code"].as_i64() {
         format!("exit {code}")
-    } else if output["wait_error"].as_str().is_some() {
+    } else if value["wait_error"].as_str().is_some() {
         "exit unknown; inspect details".into()
-    } else if *is_error {
+    } else if output.is_error {
         "failed; inspect details".into()
     } else {
         "completed".into()
     };
-    if output["cancelled"].as_bool() == Some(true) {
+    if value["cancelled"].as_bool() == Some(true) {
         state.push_str(" · cancelled");
     }
-    if output["timed_out"].as_bool() == Some(true) {
+    if value["timed_out"].as_bool() == Some(true) {
         state.push_str(" · timed out");
     }
     if shell.exclude_from_context {
         state.push_str(" · not shared with model");
     }
-    let style = if *is_error {
+    let style = if output.is_error {
         detail.theme.style(Role::Error)
     } else {
         detail.theme.style(Role::Secondary)

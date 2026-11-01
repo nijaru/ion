@@ -101,7 +101,7 @@ async fn cancellation_notifies_the_issued_request_and_keeps_a_healthy_connection
     let task_name = name.clone();
     let work = tokio::spawn(async move {
         issued
-            .execute_untracked(
+            .execute(ion_core::ToolInvocation::untracked(
                 &ToolCall {
                     id: "stopped".into(),
                     name: task_name,
@@ -109,7 +109,7 @@ async fn cancellation_notifies_the_issued_request_and_keeps_a_healthy_connection
                     raw_arguments: None,
                 },
                 task_stop,
-            )
+            ))
             .await
     });
     wait_file(&root.join("calls")).await;
@@ -120,7 +120,7 @@ async fn cancellation_notifies_the_issued_request_and_keeps_a_healthy_connection
         .unwrap();
     let issued = tools.snapshot();
     let next = issued
-        .execute_untracked(
+        .execute(ion_core::ToolInvocation::untracked(
             &ToolCall {
                 id: "next".into(),
                 name,
@@ -128,7 +128,7 @@ async fn cancellation_notifies_the_issued_request_and_keeps_a_healthy_connection
                 raw_arguments: None,
             },
             CancellationToken::new(),
-        )
+        ))
         .await;
     source.shutdown().await.unwrap();
     let requests: Vec<Value> = fs::read_to_string(root.join("calls"))
@@ -172,8 +172,11 @@ async fn public_shutdown_retires_unanswered_tools_and_resources_without_caller_c
         let work_call = call.clone();
         let stop = CancellationToken::new();
         let work_stop = stop.clone();
-        let mut work =
-            tokio::spawn(async move { issued.execute_untracked(&work_call, work_stop).await });
+        let mut work = tokio::spawn(async move {
+            issued
+                .execute(ion_core::ToolInvocation::untracked(&work_call, work_stop))
+                .await
+        });
         let entered = tokio::time::timeout(Duration::from_secs(2), async {
             while !root.join("calls").exists() {
                 tokio::time::sleep(Duration::from_millis(5)).await;
@@ -202,7 +205,10 @@ async fn public_shutdown_retires_unanswered_tools_and_resources_without_caller_c
             let _ = work.await;
         }
         let late = late_issued
-            .execute_untracked(&call, CancellationToken::new())
+            .execute(ion_core::ToolInvocation::untracked(
+                &call,
+                CancellationToken::new(),
+            ))
             .await;
         let requests = fs::read_to_string(root.join("calls")).unwrap();
         let pid = fs::read_to_string(root.join("pid")).unwrap();
@@ -250,7 +256,7 @@ async fn input_required_does_not_issue_an_uncommitted_continuation() {
     let (root, source, tools) = fixture("mrtr").await;
     let issued = tools.snapshot();
     let output = issued
-        .execute_untracked(
+        .execute(ion_core::ToolInvocation::untracked(
             &ToolCall {
                 id: "one".into(),
                 name: issued.specs()[0].name.clone(),
@@ -258,7 +264,7 @@ async fn input_required_does_not_issue_an_uncommitted_continuation() {
                 raw_arguments: None,
             },
             CancellationToken::new(),
-        )
+        ))
         .await;
     source.shutdown().await.unwrap();
     let count = fs::read_to_string(root.join("calls"))
@@ -286,7 +292,7 @@ async fn cancellation_settles_backpressured_local_issuance_before_returning() {
     let task_stop = stop.clone();
     let work = tokio::spawn(async move {
         issued
-            .execute_untracked(
+            .execute(ion_core::ToolInvocation::untracked(
                 &ToolCall {
                     id: "pressured".into(),
                     name: issued.specs()[0].name.clone(),
@@ -294,7 +300,7 @@ async fn cancellation_settles_backpressured_local_issuance_before_returning() {
                     raw_arguments: None,
                 },
                 task_stop,
-            )
+            ))
             .await
     });
     // The root is deliberately not reading; a complete request cannot fit in
@@ -323,7 +329,7 @@ async fn forced_retirement_joins_an_independently_running_invocation() {
     let issued = tools.snapshot();
     let other = tokio::spawn(async move {
         issued
-            .execute_untracked(
+            .execute(ion_core::ToolInvocation::untracked(
                 &ToolCall {
                     id: "independent".into(),
                     name: issued.specs()[0].name.clone(),
@@ -331,7 +337,7 @@ async fn forced_retirement_joins_an_independently_running_invocation() {
                     raw_arguments: None,
                 },
                 CancellationToken::new(),
-            )
+            ))
             .await
     });
     wait_file(&root.join("blocked")).await;
@@ -340,7 +346,7 @@ async fn forced_retirement_joins_an_independently_running_invocation() {
     let task_stop = stop.clone();
     let work = tokio::spawn(async move {
         issued
-            .execute_untracked(
+            .execute(ion_core::ToolInvocation::untracked(
                 &ToolCall {
                     id: "pressured".into(),
                     name: issued.specs()[0].name.clone(),
@@ -348,7 +354,7 @@ async fn forced_retirement_joins_an_independently_running_invocation() {
                     raw_arguments: None,
                 },
                 task_stop,
-            )
+            ))
             .await
     });
     tokio::time::sleep(Duration::from_millis(200)).await;
@@ -468,7 +474,7 @@ server.serve_forever()
     let task_stop = stop.clone();
     let work = tokio::spawn(async move {
         issued
-            .execute_untracked(
+            .execute(ion_core::ToolInvocation::untracked(
                 &ToolCall {
                     id: "http".into(),
                     name: issued.specs()[0].name.clone(),
@@ -476,7 +482,7 @@ server.serve_forever()
                     raw_arguments: None,
                 },
                 task_stop,
-            )
+            ))
             .await
     });
     wait_file(&root.join("called")).await;
@@ -622,7 +628,10 @@ server.serve_forever()
             arguments,
             raw_arguments: None,
         };
-        let mut work = issued.execute_untracked(&call, CancellationToken::new());
+        let mut work = issued.execute(ion_core::ToolInvocation::untracked(
+            &call,
+            CancellationToken::new(),
+        ));
         assert!(futures_util::poll!(&mut work).is_pending());
         let server = &source.servers()[0];
         tokio::time::timeout(Duration::from_secs(30), async {
@@ -681,6 +690,7 @@ server.serve_forever()
 
 #[test]
 fn partial_conversion_keeps_supported_text_structured_and_outcome() {
+    let owner = crate::test_support::ArtifactFixture::new();
     let result: CallToolResult = serde_json::from_value(json!({
         "content": [
             {"type": "text", "text": "kept"},
@@ -691,7 +701,7 @@ fn partial_conversion_keeps_supported_text_structured_and_outcome() {
         "structuredContent": {"rows": 2}
     }))
     .unwrap();
-    let output = convert_tool_result("mixed", result, None);
+    let output = convert_tool_result("mixed", result, None, Some(owner.sink()));
     assert!(!output.is_error, "{}", output.value);
     assert_eq!(output.value["is_error"], false, "{}", output.value);
     let content = output.value["content"].as_str().unwrap();
@@ -704,21 +714,22 @@ fn partial_conversion_keeps_supported_text_structured_and_outcome() {
     assert_eq!(notices.len(), 1);
     assert!(notices[0].as_str().unwrap().contains("block 1"));
     assert!(output.images.is_empty());
-    let raw = output.value["raw_result_path"].as_str().unwrap();
+    let raw = output.value["raw_result_artifact"].as_u64().unwrap();
     assert!(
         output.value["raw_result_error"].is_null(),
         "{}",
         output.value
     );
-    let saved: Value = serde_json::from_slice(&fs::read(raw).unwrap()).unwrap();
+    let saved: Value =
+        serde_json::from_slice(&owner.bytes(&output.artifacts[raw as usize])).unwrap();
     assert_eq!(saved["content"].as_array().unwrap().len(), 4);
     assert_eq!(saved["content"][2]["uri"], "mem://report");
     assert_eq!(saved["structuredContent"], json!({"rows": 2}));
-    fs::remove_file(raw).unwrap();
 }
 
 #[test]
 fn embedded_resources_deliver_supplied_data_without_reading_uris() {
+    let owner = crate::test_support::ArtifactFixture::new();
     use base64::Engine;
     use std::os::unix::fs::PermissionsExt;
 
@@ -735,7 +746,7 @@ fn embedded_resources_deliver_supplied_data_without_reading_uris() {
         ],
         "structuredContent":{"rows":2}
     })).unwrap();
-    let output = convert_tool_result("embedded", result, None);
+    let output = convert_tool_result("embedded", result, None, Some(owner.sink()));
     assert!(!output.is_error);
     assert_eq!(output.value["structured_content"], json!({"rows":2}));
     assert!(
@@ -743,7 +754,7 @@ fn embedded_resources_deliver_supplied_data_without_reading_uris() {
         "{}",
         output.value
     );
-    assert!(output.value.get("raw_result_path").is_none());
+    assert!(output.value.get("raw_result_artifact").is_none());
     let content = output.value["content"].as_str().unwrap();
     for expected in [
         "mem://note",
@@ -759,27 +770,30 @@ fn embedded_resources_deliver_supplied_data_without_reading_uris() {
     assert!(!content.contains("META_MUST_NOT_BE_PROJECTED"));
     assert_eq!(output.images.len(), 1);
     assert_eq!(output.images[0].mime_type().as_str(), "image/png");
-    let file = content
+    let index = content
         .lines()
         .filter_map(|line| {
             let start = line.find('{')?;
             let metadata: Value = serde_json::from_str(&line[start..]).ok()?;
-            metadata.get("savedPath")?.as_str().map(PathBuf::from)
+            metadata.get("artifact")?.as_u64()
         })
         .next()
-        .expect("binary resource has no retrieval path");
-    assert_eq!(fs::read(&file).unwrap(), binary);
+        .expect("binary resource artifact index");
+    assert_eq!(owner.bytes(&output.artifacts[index as usize]), binary);
     assert_eq!(
-        fs::metadata(&file).unwrap().permissions().mode() & 0o777,
+        fs::metadata(owner.session.path())
+            .unwrap()
+            .permissions()
+            .mode()
+            & 0o777,
         0o600
     );
-    assert_eq!(file.extension().unwrap(), "bin");
-    fs::remove_file(file).unwrap();
     fs::remove_file(canary).unwrap();
 }
 
 #[test]
 fn invalid_image_omission_keeps_following_content() {
+    let owner = crate::test_support::ArtifactFixture::new();
     let result: CallToolResult = serde_json::from_value(json!({
         "content": [
             {"type": "image", "data": "%%%", "mimeType": "image/png"},
@@ -789,7 +803,7 @@ fn invalid_image_omission_keeps_following_content() {
         ]
     }))
     .unwrap();
-    let output = convert_tool_result("picture", result, None);
+    let output = convert_tool_result("picture", result, None, Some(owner.sink()));
     assert!(!output.is_error, "{}", output.value);
     assert_eq!(output.value["content"], "still here");
     assert!(
@@ -804,14 +818,15 @@ fn invalid_image_omission_keeps_following_content() {
     }
     assert_eq!(output.value["retained_blocks"], 1);
     assert_eq!(output.value["omitted_blocks"], 3);
-    let raw = output.value["raw_result_path"].as_str().unwrap();
-    let saved: Value = serde_json::from_slice(&fs::read(raw).unwrap()).unwrap();
+    let raw = output.value["raw_result_artifact"].as_u64().unwrap();
+    let saved: Value =
+        serde_json::from_slice(&owner.bytes(&output.artifacts[raw as usize])).unwrap();
     assert_eq!(saved["content"].as_array().unwrap().len(), 4);
-    fs::remove_file(raw).unwrap();
 }
 
 #[test]
 fn server_execution_error_is_not_replaced_by_conversion_notices() {
+    let owner = crate::test_support::ArtifactFixture::new();
     let result: CallToolResult = serde_json::from_value(json!({
         "content": [
             {"type": "text", "text": "partial"},
@@ -820,7 +835,7 @@ fn server_execution_error_is_not_replaced_by_conversion_notices() {
         "isError": true
     }))
     .unwrap();
-    let output = convert_tool_result("broken", result, None);
+    let output = convert_tool_result("broken", result, None, Some(owner.sink()));
     assert!(output.is_error, "{}", output.value);
     assert_eq!(output.value["is_error"], true);
     assert!(
@@ -830,14 +845,15 @@ fn server_execution_error_is_not_replaced_by_conversion_notices() {
             .contains("partial")
     );
     assert_eq!(output.value["omitted_blocks"], 1);
-    let raw = output.value["raw_result_path"].as_str().unwrap();
-    let saved: Value = serde_json::from_slice(&fs::read(raw).unwrap()).unwrap();
+    let raw = output.value["raw_result_artifact"].as_u64().unwrap();
+    let saved: Value =
+        serde_json::from_slice(&owner.bytes(&output.artifacts[raw as usize])).unwrap();
     assert_eq!(saved["isError"], true);
-    fs::remove_file(raw).unwrap();
 }
 
 #[test]
 fn truncated_conversion_keeps_notices_and_retrieval_references() {
+    let owner = crate::test_support::ArtifactFixture::new();
     let full_text = "start\n".to_owned() + &"é".repeat(40 * 1024) + "\nend";
     for block in [
         json!({"type":"text", "text":full_text}),
@@ -852,7 +868,7 @@ fn truncated_conversion_keeps_notices_and_retrieval_references() {
             "isError": false
         }))
         .unwrap();
-        let output = convert_tool_result("big", result, None);
+        let output = convert_tool_result("big", result, None, Some(owner.sink()));
         assert!(!output.is_error, "{}", output.value);
         assert_eq!(output.value["truncated"], true);
         assert!(output.value["content"].as_str().unwrap().len() < 64 * 1024);
@@ -866,11 +882,12 @@ fn truncated_conversion_keeps_notices_and_retrieval_references() {
                 .unwrap()
                 .contains("block 1")
         );
-        let raw = output.value["raw_result_path"].as_str().unwrap();
-        let full = output.value["full_output_path"].as_str().unwrap();
+        let raw = output.value["raw_result_artifact"].as_u64().unwrap();
+        let full = output.value["full_output_artifact"].as_u64().unwrap();
         assert!(output.value["full_output_error"].is_null());
         assert_ne!(raw, full, "raw and normalized artifacts must be distinct");
-        let normalized: Value = serde_json::from_slice(&fs::read(full).unwrap()).unwrap();
+        let normalized: Value =
+            serde_json::from_slice(&owner.bytes(&output.artifacts[full as usize])).unwrap();
         if block["type"] == "text" {
             assert_eq!(normalized["content"], full_text);
         } else {
@@ -883,17 +900,17 @@ fn truncated_conversion_keeps_notices_and_retrieval_references() {
             normalized["conversion_notices"],
             output.value["conversion_notices"]
         );
-        assert_eq!(normalized["raw_result_path"].as_str().unwrap(), raw);
-        let raw_saved: Value = serde_json::from_slice(&fs::read(raw).unwrap()).unwrap();
+        assert_eq!(normalized["raw_result_artifact"].as_u64().unwrap(), raw);
+        let raw_saved: Value =
+            serde_json::from_slice(&owner.bytes(&output.artifacts[raw as usize])).unwrap();
         assert_eq!(raw_saved["content"].as_array().unwrap().len(), 2);
         assert_eq!(raw_saved["content"][0], block);
-        fs::remove_file(raw).unwrap();
-        fs::remove_file(full).unwrap();
     }
 }
 
 #[test]
 fn oversized_structured_content_is_not_retained_inline() {
+    let owner = crate::test_support::ArtifactFixture::new();
     // The inline preview must stay bounded even when the large payload is
     // structured content rather than text. The artifact keeps the full value.
     let rows: Vec<Value> = (0..8000)
@@ -902,7 +919,7 @@ fn oversized_structured_content_is_not_retained_inline() {
     let result: CallToolResult =
         serde_json::from_value(json!({ "content": [], "structuredContent": { "rows": rows } }))
             .unwrap();
-    let output = convert_tool_result("wide", result, None);
+    let output = convert_tool_result("wide", result, None, Some(owner.sink()));
     let inline = serde_json::to_string(&output.value).unwrap();
     assert!(
         inline.len() < 64 * 1024,
@@ -918,8 +935,9 @@ fn oversized_structured_content_is_not_retained_inline() {
             .unwrap()
             .contains("Structured content")
     );
-    let full = output.value["full_output_path"].as_str().unwrap();
-    let saved: Value = serde_json::from_slice(&fs::read(full).unwrap()).unwrap();
+    let full = output.value["full_output_artifact"].as_u64().unwrap();
+    let saved: Value =
+        serde_json::from_slice(&owner.bytes(&output.artifacts[full as usize])).unwrap();
     assert_eq!(
         saved["structured_content"]["rows"]
             .as_array()
@@ -927,16 +945,16 @@ fn oversized_structured_content_is_not_retained_inline() {
             .len(),
         8000
     );
-    fs::remove_file(full).unwrap();
 }
 
 #[test]
 fn omission_notices_stay_bounded_for_many_unsupported_blocks() {
+    let owner = crate::test_support::ArtifactFixture::new();
     let blocks: Vec<Value> = (0..64)
         .map(|_| json!({"type": "audio", "data": "AAAA", "mimeType": "audio/wav"}))
         .collect();
     let result: CallToolResult = serde_json::from_value(json!({"content": blocks})).unwrap();
-    let output = convert_tool_result("many", result, None);
+    let output = convert_tool_result("many", result, None, Some(owner.sink()));
     assert!(!output.is_error, "{}", output.value);
     assert_eq!(output.value["omitted_blocks"], 64);
     assert_eq!(output.value["retained_blocks"], 0);
@@ -950,28 +968,30 @@ fn omission_notices_stay_bounded_for_many_unsupported_blocks() {
         inline < 4 * 1024,
         "inline warnings expanded to {inline} bytes"
     );
-    let raw = output.value["raw_result_path"].as_str().unwrap();
-    fs::remove_file(raw).unwrap();
+    assert_eq!(
+        owner.json(&output, "raw_result_artifact")["content"]
+            .as_array()
+            .unwrap()
+            .len(),
+        64
+    );
 }
 
 #[test]
-fn failed_artifact_write_reports_error_and_removes_partial_file() {
-    use std::io::Write;
-    let root = std::env::temp_dir().join(format!("ion-mcp-artifact-{}", uuid::Uuid::now_v7()));
-    fs::create_dir(&root).unwrap();
-    let path = root.join("raw.json");
-    let failure = artifact::write_private_artifact(path.clone(), |file| {
-        file.write_all(b"{\"content\": [")?;
-        Err(anyhow::anyhow!("simulated artifact failure"))
-    });
-    let error = format!(
-        "{:#}",
-        failure.expect_err("failed write must not report a path")
-    );
-    assert!(error.contains("simulated artifact failure"), "{error}");
-    assert!(
-        !path.exists(),
-        "partial artifact must not survive a failed write"
-    );
-    fs::remove_dir_all(root).unwrap();
+fn unavailable_capture_is_separate_from_the_observed_server_outcome() {
+    for is_error in [false, true] {
+        let result:CallToolResult=serde_json::from_value(json!({"content":[{"type":"audio","data":"AAAA","mimeType":"audio/wav"}],"isError":is_error})).unwrap();
+        let output = convert_tool_result("untracked", result, None, None);
+        assert_eq!(output.is_error, is_error);
+        assert_eq!(output.value["is_error"], is_error);
+        assert_eq!(output.value["omitted_blocks"], 1);
+        assert!(output.artifacts.is_empty());
+        assert!(output.value["raw_result_artifact"].is_null());
+        assert!(
+            output.value["raw_result_error"]
+                .as_str()
+                .unwrap()
+                .contains("Session artifact sink")
+        );
+    }
 }

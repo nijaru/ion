@@ -77,7 +77,9 @@ impl OrderedBatch {
                 None,
                 self.plan.reasoning(),
             );
-            let invocation = invocation.with_model_messages(&self.plan.request().messages);
+            let invocation = invocation
+                .with_model_messages(&self.plan.request().messages)
+                .with_artifact_sink(session.artifact_sink());
             let tool = Box::pin(async {
                 if stop.is_cancelled() {
                     return Err(AgentError::Cancelled);

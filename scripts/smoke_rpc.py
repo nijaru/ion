@@ -273,13 +273,13 @@ with tempfile.TemporaryDirectory(prefix="ion-rpc-") as temporary:
             assert ack["id"] == identity and ack["success"] and ack["data"]["disposition"] == "started", ack
             ended = until(child, lambda r: r["type"] == "shell_end")[-1]
             assert ended["id"] == identity and ended["status"] == "completed", ended
-            assert ended["outcome"]["kind"] == "observed" and not ended["outcome"]["is_error"], ended
-            assert ended["outcome"]["output"]["stdout"] == identity + "\n", ended
+            assert ended["outcome"]["kind"] == "observed" and not ended["outcome"]["output"]["is_error"], ended
+            assert ended["outcome"]["output"]["value"]["stdout"] == identity + "\n", ended
         send(child, {"id": "exit-error", "type": "shell", "command": "printf failure >&2; exit 7", "exclude_from_context": True})
         assert read_response(child)["success"]
         ended = until(child, lambda r: r["type"] == "shell_end")[-1]
-        assert ended["id"] == "exit-error" and ended["status"] == "failed" and ended["outcome"]["is_error"], ended
-        assert ended["outcome"]["output"]["exit_code"] == 7 and ended["outcome"]["output"]["stderr"] == "failure", ended
+        assert ended["id"] == "exit-error" and ended["status"] == "failed" and ended["outcome"]["output"]["is_error"], ended
+        assert ended["outcome"]["output"]["value"]["exit_code"] == 7 and ended["outcome"]["output"]["value"]["stderr"] == "failure", ended
         assert len(requests) == before_shell, "direct shell requested model generation"
 
         send(child, {"id": "reasoning-high", "type": "set_reasoning", "effort": "high"})
@@ -875,7 +875,7 @@ with tempfile.TemporaryDirectory(prefix="ion-rpc-") as temporary:
                 assert inputs == [seed], "partial JSON frame was corrupted"
                 endings = [record for record in records if record["type"] == "shell_end"]
                 assert len(endings) == 1 and endings[0]["status"] == "cancelled", records
-                assert endings[0]["outcome"]["output"]["cancelled"] is True, endings
+                assert endings[0]["outcome"]["output"]["value"]["cancelled"] is True, endings
                 if abort:
                     acknowledgements = [record for record in records if record.get("id") == "pressure-abort"]
                     assert len(acknowledgements) == 1 and acknowledgements[0]["success"], records

@@ -63,7 +63,7 @@ pub(super) fn event_record(event: &AgentEvent) -> Value {
             };
             let projection = outcome.projection();
             let output = outcome.inspection_output();
-            json!({"type":"tool_finished","call_id":call_id,"name":name,"activity":activity,"state":state,"output":output.value,"image_mime_types":output.images.iter().map(|image| image.mime_type().as_str()).collect::<Vec<_>>(),"is_error":output.is_error,"model_projection":projection})
+            json!({"type":"tool_finished","call_id":call_id,"name":name,"activity":activity,"state":state,"output":output.value,"artifacts":output.artifacts,"image_mime_types":output.images.iter().map(|image| image.mime_type().as_str()).collect::<Vec<_>>(),"is_error":output.is_error,"model_projection":projection})
         }
         AgentEvent::ChildToolAdmitted {
             parent_call_id,
@@ -83,7 +83,7 @@ pub(super) fn event_record(event: &AgentEvent) -> Value {
                 ion_core::ChildOutcome::Unknown => "unknown",
             };
             let output = child_output(outcome);
-            json!({"type":"child_tool_finished","parent":parent,"child":child,"state":state,"output":output.value,"is_error":output.is_error,"image_mime_types":output.images.iter().map(|image| image.mime_type().as_str()).collect::<Vec<_>>()})
+            json!({"type":"child_tool_finished","parent":parent,"child":child,"state":state,"output":output.value,"artifacts":output.artifacts,"is_error":output.is_error,"image_mime_types":output.images.iter().map(|image| image.mime_type().as_str()).collect::<Vec<_>>()})
         }
         AgentEvent::InterruptedCalls(count) => {
             json!({"type":"interrupted_calls","count":count})
@@ -201,6 +201,10 @@ fn child_output(outcome: &ion_core::ChildOutcome) -> std::borrow::Cow<'_, ion_co
 
 fn output_diagnostic(label: &str, output: &ion_core::ToolOutput) -> String {
     let mut text = format!("[{label}] {}", output.value);
+    for metadata in crate::tool_output::artifact_metadata(&output.artifacts) {
+        text.push('\n');
+        text.push_str(&metadata);
+    }
     for image in &output.images {
         text.push_str(&format!(
             "\n[{label} image: {}]",
@@ -213,6 +217,57 @@ fn output_diagnostic(label: &str, output: &ion_core::ToolOutput) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn output_events_retain_typed_artifacts_without_echoing_image_data() {
+        let image = ion_ai::normalize_rgba(1, 1, vec![20, 40, 60, 255])
+            .unwrap()
+            .content;
+        let output = ion_core::ToolOutput {
+            value: json!({"raw_result_artifact": 0, "result": "raw observation"}),
+            images: vec![image],
+            artifacts: vec![crate::tool_output::tests::artifact(
+                "raw_reply\u{1b}",
+                false,
+            )],
+            is_error: false,
+        };
+        for event in [
+            AgentEvent::ToolFinished {
+                call_id: "capture".into(),
+                name: "capture".into(),
+                activity: ion_core::ToolActivity::external("capture"),
+                outcome: ion_core::ToolOutcome::Observed {
+                    output: output.clone(),
+                    projection: ion_core::ToolResultProjection::ImagesUnsupported,
+                },
+            },
+            AgentEvent::ChildToolFinished {
+                parent: ion_core::ToolOccurrence {
+                    assistant_entry: 1,
+                    ordinal: 0,
+                },
+                child: 0,
+                outcome: ion_core::ChildOutcome::Observed {
+                    output: output.clone(),
+                },
+            },
+        ] {
+            let record = event_record(&event);
+            assert_eq!(record["output"], output.value);
+            assert_eq!(
+                record["artifacts"],
+                serde_json::to_value(&output.artifacts).unwrap()
+            );
+            assert_eq!(record["image_mime_types"], json!(["image/png"]));
+            assert!(!record.to_string().contains(output.images[0].data()));
+            let diagnostic = diagnostic(&event).unwrap();
+            assert!(
+                diagnostic.contains("Session artifact 0 · raw_reply� · 1234 bytes · incomplete")
+            );
+            assert!(!diagnostic.contains('\u{1b}'));
+        }
+    }
 
     #[test]
     fn acceptance_receipt_does_not_disclose_normalized_input() {

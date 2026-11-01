@@ -94,6 +94,62 @@ async fn started_shell(control: &mut Control, root: &std::path::Path) {
 }
 
 #[tokio::test]
+async fn shell_end_retains_complete_tool_output_and_session_artifacts() {
+    let mut fixture = Fixture::new();
+    let mut control = fixture.take();
+    let session = control.host.session().clone();
+    assert_eq!(
+        invoke(
+            &mut control,
+            json!({"type":"shell","id":"capture","command":"printf '\\377'"})
+        )
+        .unwrap()["success"],
+        true
+    );
+    let mut bytes = Vec::new();
+    let mut output = Output::new(&mut bytes);
+    tokio::time::timeout(Duration::from_secs(5), async {
+        while control.host.is_busy() {
+            let update = control.host.next().await;
+            control.update(update, &mut output).unwrap();
+        }
+    })
+    .await
+    .unwrap();
+    output.finish().await.unwrap();
+    drop(output);
+    let records = records(&bytes);
+    let published = records
+        .iter()
+        .find(|record| record["type"] == "shell_end")
+        .unwrap();
+    let view = session.view().unwrap();
+    let outcome = view
+        .entries
+        .iter()
+        .find_map(|entry| match entry {
+            ion_core::SessionEntry::UserShellSettled { outcome, .. } => Some(outcome),
+            _ => None,
+        })
+        .unwrap();
+    assert_eq!(published["id"], "capture");
+    assert_eq!(published["outcome"], serde_json::to_value(outcome).unwrap());
+    let ion_core::UserShellOutcome::Observed { output } = outcome else {
+        panic!("shell must commit observed output")
+    };
+    assert_eq!(output.artifacts.len(), 1);
+    assert_eq!(output.artifacts[0].label, "stdout");
+    assert!(output.artifacts[0].complete);
+    assert_eq!(
+        session
+            .read_artifact(&output.artifacts[0], 0, 1)
+            .unwrap()
+            .bytes,
+        [255]
+    );
+}
+
+#[tokio::test]
 async fn interruption_joins_native_work_without_draining_an_unread_transport() {
     for eof in [false, true] {
         let mut fixture = Fixture::new();
@@ -482,7 +538,7 @@ async fn stalled_inspection_does_not_block_abort_or_eof_join() {
             "partial publication was duplicated or lost"
         );
         assert!(records.iter().any(|record| record["type"] == "shell_end"
-            && record["outcome"]["output"]["cancelled"] == true));
+            && record["outcome"]["output"]["value"]["cancelled"] == true));
         if abort {
             assert!(
                 records

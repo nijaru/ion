@@ -123,6 +123,7 @@ enum QuestionResult {
 impl QuestionResult {
     fn answered(answers: Vec<CompletedAnswer>) -> ToolOutput {
         ToolOutput {
+            artifacts: Vec::new(),
             value: serde_json::to_value(Self::Answered { answers })
                 .expect("typed question result serializes"),
             images: Vec::new(),
@@ -132,6 +133,7 @@ impl QuestionResult {
 
     fn cancelled(reason: impl Into<String>) -> ToolOutput {
         ToolOutput {
+            artifacts: Vec::new(),
             value: serde_json::to_value(Self::Cancelled {
                 reason: reason.into(),
             })

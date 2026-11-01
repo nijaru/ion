@@ -242,7 +242,10 @@ async fn stderr_is_bounded_private_and_drained_without_blocking_tool_results() {
     };
     let output = tools
         .snapshot()
-        .execute_untracked(&call, CancellationToken::new())
+        .execute(ion_core::ToolInvocation::untracked(
+            &call,
+            CancellationToken::new(),
+        ))
         .await;
     source.shutdown().await.unwrap();
     let log = source.servers()[0]

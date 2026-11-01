@@ -116,7 +116,10 @@ impl DelegationTarget {
 /// A resume holds the actual exclusive writer before parent intent is committed.
 /// New files are still materialized only after that intent.
 pub(crate) enum ChildMaterialization {
-    New(Vec<crate::SessionEntry>),
+    New {
+        entries: Vec<crate::SessionEntry>,
+        artifact_source: Option<(PathBuf, uuid::Uuid)>,
+    },
     Resume(Arc<Session>),
 }
 

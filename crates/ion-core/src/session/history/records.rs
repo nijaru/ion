@@ -157,6 +157,11 @@ impl HistoryRead {
             }
         }
         metadata["state"] = json!(state);
+        metadata["artifact_count"] = json!(super::super::artifacts::observation_count(
+            connection,
+            entry,
+            "$.data.result.outcome.output.artifacts"
+        )?);
         if let Some(is_error) = is_error {
             metadata["is_error"] = json!(is_error);
         }
@@ -298,11 +303,17 @@ impl HistoryRead {
         if stop.is_cancelled() {
             return Err(HistoryError::request("history read cancelled"));
         }
+        let settlement =
+            super::super::store::shell_settlement(connection, entry, self.upper_entry)?
+                .map(|(coordinate, _)| {
+                    i64::try_from(coordinate).map_err(|_| SessionError::InvalidHistory)
+                })
+                .transpose()?;
         let row = connection.query_row(
             r#"WITH source AS (
                 SELECT
                     COALESCE(json_extract(s.body,'$.data.outcome.kind'),'unknown') AS state,
-                    json_extract(s.body,'$.data.outcome.is_error') AS is_error,
+                    json_extract(s.body,'$.data.outcome.output.is_error') AS is_error,
                     json_object(
                         'entry',e.seq,
                         'kind','user_shell_admitted',
@@ -310,15 +321,15 @@ impl HistoryRead {
                         'outcome',CASE json_extract(s.body,'$.data.outcome.kind')
                             WHEN 'observed' THEN json_object(
                                 'state','observed',
-                                'is_error',json_extract(s.body,'$.data.outcome.is_error'),
-                                'output',json_extract(s.body,'$.data.outcome.output')
+                                'is_error',json_extract(s.body,'$.data.outcome.output.is_error'),
+                                'output',json_remove(json_extract(s.body,'$.data.outcome.output'),'$.images')
                             )
                             WHEN 'unknown' THEN json_object('state','unknown')
                             ELSE json_object('state','unknown')
                         END
                     ) AS document
                 FROM entries e
-                LEFT JOIN entries s ON s.seq=e.seq+1
+                LEFT JOIN entries s ON s.seq=?5
                     AND s.seq<=?4
                     AND json_extract(s.body,'$.kind')='user_shell_settled'
                 WHERE e.seq=?1 AND json_extract(e.body,'$.data.exclude_from_context')=0
@@ -331,6 +342,7 @@ impl HistoryRead {
                 i64::try_from(offset).map_err(|_| SessionError::InvalidHistory)?,
                 i64::try_from(limit.saturating_add(4)).map_err(|_| SessionError::InvalidHistory)?,
                 i64::try_from(self.upper_entry).map_err(|_| SessionError::InvalidHistory)?,
+                settlement,
             ],
             |row| {
                 Ok((
@@ -406,22 +418,6 @@ pub(super) fn entry_prefix(connection: &Connection, entry: u64) -> Result<String
             |row| row.get(0),
         )
         .map_err(Into::into)
-}
-
-pub(super) fn entry_body_bytes(
-    connection: &Connection,
-    entry: u64,
-) -> Result<Option<usize>, SessionError> {
-    let bytes: Option<i64> = connection
-        .query_row(
-            "SELECT length(body) FROM entries WHERE seq=?1",
-            [i64::try_from(entry).map_err(|_| SessionError::InvalidHistory)?],
-            |row| row.get(0),
-        )
-        .optional()?;
-    bytes
-        .map(|bytes| usize::try_from(bytes).map_err(|_| SessionError::InvalidHistory))
-        .transpose()
 }
 
 pub(super) fn private_shell(connection: &Connection, entry: u64) -> Result<bool, SessionError> {
@@ -595,15 +591,20 @@ pub(super) fn hit(
             })))
         }
         "user_shell_admitted" => {
+            let settlement = super::super::store::shell_settlement(connection, entry, upper_entry)?
+                .map(|(coordinate, _)| {
+                    i64::try_from(coordinate).map_err(|_| SessionError::InvalidHistory)
+                })
+                .transpose()?;
             let row = connection.query_row(
                 &format!(r#"WITH source AS (
                     SELECT COALESCE(json_extract(s.body,'$.data.outcome.kind'),'unknown') AS state,
-                        json_extract(s.body,'$.data.outcome.is_error') AS is_error,
+                        json_extract(s.body,'$.data.outcome.output.is_error') AS is_error,
                         json_extract(e.body,'$.data.command') ||
                             CASE WHEN :query IS NULL THEN '' ELSE char(10) ||
-                                COALESCE(CAST(json_extract(s.body,'$.data.outcome.output') AS TEXT),'') END AS document
+                                COALESCE(CAST(json_remove(json_extract(s.body,'$.data.outcome.output'),'$.images') AS TEXT),'') END AS document
                     FROM entries e
-                    LEFT JOIN entries s ON s.seq=e.seq+1
+                    LEFT JOIN entries s ON s.seq=:settlement
                         AND s.seq<=:upper
                         AND json_extract(s.body,'$.kind')='user_shell_settled'
                     WHERE e.seq=:entry
@@ -617,6 +618,7 @@ pub(super) fn hit(
                     ":query":query,
                     ":preview_limit":preview_limit,
                     ":upper":i64::try_from(upper_entry).map_err(|_| SessionError::InvalidHistory)?,
+                    ":settlement":settlement,
                 },
                 |row| {
                     Ok((

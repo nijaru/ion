@@ -42,7 +42,7 @@ async fn optional_native_inputs_reject_null_before_effects() {
     ] {
         arguments[field] = Value::Null;
         let output = catalog
-            .execute_untracked(
+            .execute(ion_core::ToolInvocation::untracked(
                 &ToolCall {
                     id: "boundary".into(),
                     name: name.into(),
@@ -50,7 +50,7 @@ async fn optional_native_inputs_reject_null_before_effects() {
                     raw_arguments: None,
                 },
                 CancellationToken::new(),
-            )
+            ))
             .await;
         let unchanged = fs::read(root.join("file.txt")).unwrap() == b"old";
         let no_marker = !root.join("marker").exists();
@@ -185,8 +185,14 @@ async fn concurrent_guarded_writes_admit_one_current_digest() {
         arguments: json!({"path":path,"content":content,"base_digest":hex_digest(b"seed")}),
     });
     let (first, second) = tokio::join!(
-        catalogs[0].execute_untracked(&calls[0], CancellationToken::new()),
-        catalogs[1].execute_untracked(&calls[1], CancellationToken::new()),
+        catalogs[0].execute(ion_core::ToolInvocation::untracked(
+            &calls[0],
+            CancellationToken::new()
+        )),
+        catalogs[1].execute(ion_core::ToolInvocation::untracked(
+            &calls[1],
+            CancellationToken::new()
+        )),
     );
     assert_ne!(first.is_error, second.is_error, "{first:?} {second:?}");
     let (winner, loser) = if first.is_error {
@@ -231,8 +237,14 @@ async fn concurrent_native_edits_preserve_guards_and_disjoint_changes() {
             ToolCall { id: anchor.into(), name: "edit".into(), arguments, raw_arguments: None }
         });
         let outputs = tokio::join!(
-            catalogs[0].execute_untracked(&calls[0], CancellationToken::new()),
-            catalogs[1].execute_untracked(&calls[1], CancellationToken::new()),
+            catalogs[0].execute(ion_core::ToolInvocation::untracked(
+                &calls[0],
+                CancellationToken::new()
+            )),
+            catalogs[1].execute(ion_core::ToolInvocation::untracked(
+                &calls[1],
+                CancellationToken::new()
+            )),
         );
         let final_bytes = fs::read(root.join("file")).unwrap();
         let final_text = std::str::from_utf8(&final_bytes).unwrap();
@@ -297,7 +309,7 @@ async fn stopped_native_mutations_leave_an_externally_locked_target_unchanged() 
             raw_arguments: None,
         };
         let stop = CancellationToken::new();
-        let pending = catalog.execute_untracked(&call, stop.clone());
+        let pending = catalog.execute(ion_core::ToolInvocation::untracked(&call, stop.clone()));
         tokio::pin!(pending);
         assert!(
             tokio::time::timeout(Duration::from_millis(20), &mut pending)
@@ -374,7 +386,7 @@ fn queued_file_work_keeps_async_polling_live_and_cancels_before_effects() {
                 raw_arguments: None,
             };
             let stop = CancellationToken::new();
-            let mut work = Box::pin(catalog.execute_untracked(&call, stop.clone()));
+            let mut work = Box::pin(catalog.execute(ion_core::ToolInvocation::untracked(&call, stop.clone())));
             let observed = tokio::time::timeout(Duration::from_millis(10), &mut work).await;
             let pending = observed.is_err();
             stop.cancel();

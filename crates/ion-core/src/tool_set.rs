@@ -516,15 +516,9 @@ impl ToolCatalog {
     /// Invoke a frozen capability, including a deferred one. This low-level
     /// operation does not admit a Turn or publish Session facts; coding execution
     /// must remain inside the Turn's commit/settlement boundary.
-    pub fn execute_untracked<'a>(
-        &'a self,
-        call: &'a ToolCall,
-        stop: CancellationToken,
-    ) -> BoxFuture<'a, ToolOutput> {
-        self.execute(crate::ToolInvocation::untracked(call, stop))
-    }
-
-    pub(crate) fn execute<'a>(
+    /// Supply an untracked invocation for low-level use, optionally with an
+    /// explicit artifact sink. An invocation is not an admission receipt.
+    pub fn execute<'a>(
         &'a self,
         invocation: crate::ToolInvocation<'a>,
     ) -> BoxFuture<'a, ToolOutput> {
@@ -542,11 +536,13 @@ impl ToolCatalog {
                     }
                 },
                 ToolDispatch::Composition(..) => ToolOutput {
+                    artifacts: Vec::new(),
                     value: serde_json::json!({"error":"code_mode requires the Session effect gateway"}),
                     images: Vec::new(),
                     is_error: true,
                 },
                 ToolDispatch::History => ToolOutput {
+                    artifacts: Vec::new(),
                     value: serde_json::json!({"error":"history requires an active Session"}),
                     images: Vec::new(),
                     is_error: true,
@@ -646,6 +642,7 @@ impl ToolCatalog {
             Ok(input) => input,
             Err(error) => {
                 return ToolExecution::output(ToolOutput {
+                    artifacts: Vec::new(),
                     value: serde_json::json!({
                         "error": format!("invalid tool_search arguments: {error}")
                     }),
@@ -657,6 +654,7 @@ impl ToolCatalog {
         let query = input.query.trim().to_ascii_lowercase();
         if query.is_empty() {
             return ToolExecution::output(ToolOutput {
+                artifacts: Vec::new(),
                 value: serde_json::json!({"error":"tool_search query is empty"}),
                 images: Vec::new(),
                 is_error: true,
@@ -665,6 +663,7 @@ impl ToolCatalog {
         let limit = input.limit.unwrap_or(DEFAULT_TOOL_SEARCH_LIMIT);
         if !(1..=MAX_TOOL_SEARCH_LIMIT).contains(&limit) {
             return ToolExecution::output(ToolOutput {
+                artifacts: Vec::new(),
                 value: serde_json::json!({
                     "error": format!("tool_search limit must be between 1 and {MAX_TOOL_SEARCH_LIMIT}")
                 }),
@@ -700,6 +699,7 @@ impl ToolCatalog {
             .collect::<Vec<_>>();
         ToolExecution::Observed {
             output: ToolOutput {
+                artifacts: Vec::new(),
                 value: serde_json::json!({
                     "loaded": tools,
                     "count": tools.len(),
@@ -750,6 +750,7 @@ mod tests {
         ) -> BoxFuture<'a, ToolOutput> {
             Box::pin(async move {
                 ToolOutput {
+                    artifacts: Vec::new(),
                     value: json!(self.result),
                     images: Vec::new(),
                     is_error: false,
@@ -811,7 +812,10 @@ mod tests {
         for catalog in [&before, &after] {
             assert_eq!(
                 catalog
-                    .execute_untracked(&call("custom"), CancellationToken::new())
+                    .execute(crate::ToolInvocation::untracked(
+                        &call("custom"),
+                        CancellationToken::new()
+                    ))
                     .await
                     .value,
                 json!("added"),
@@ -819,21 +823,30 @@ mod tests {
         }
         assert_eq!(
             before
-                .execute_untracked(&call("read"), CancellationToken::new())
+                .execute(crate::ToolInvocation::untracked(
+                    &call("read"),
+                    CancellationToken::new()
+                ))
                 .await
                 .value,
             json!("changing:read")
         );
         assert_eq!(
             after
-                .execute_untracked(&call("read"), CancellationToken::new())
+                .execute(crate::ToolInvocation::untracked(
+                    &call("read"),
+                    CancellationToken::new()
+                ))
                 .await
                 .value,
             json!("builtin")
         );
         assert_eq!(
             after
-                .execute_untracked(&call("new"), CancellationToken::new())
+                .execute(crate::ToolInvocation::untracked(
+                    &call("new"),
+                    CancellationToken::new()
+                ))
                 .await
                 .value,
             json!("changing:new")
@@ -861,7 +874,10 @@ mod tests {
         };
         assert_eq!(
             catalog
-                .execute_untracked(&call, CancellationToken::new())
+                .execute(crate::ToolInvocation::untracked(
+                    &call,
+                    CancellationToken::new()
+                ))
                 .await
                 .value,
             json!("deferred")
@@ -968,6 +984,7 @@ mod tests {
             let call = invocation.call();
             Box::pin(async move {
                 ToolOutput {
+                    artifacts: Vec::new(),
                     value: json!(call.name),
                     images: Vec::new(),
                     is_error: false,
@@ -1031,7 +1048,10 @@ mod tests {
             raw_arguments: None,
         };
         let output = catalog
-            .execute_untracked(&call, CancellationToken::new())
+            .execute(crate::ToolInvocation::untracked(
+                &call,
+                CancellationToken::new(),
+            ))
             .await;
         assert!(output.is_error);
         assert!(output.value["error"].as_str().unwrap().contains("Session"));

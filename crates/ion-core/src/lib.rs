@@ -39,11 +39,12 @@ pub use delegation::{
 pub use input::{AcceptedInput, InputBudget, InputReservation};
 pub use invocation::{ToolInvocation, ToolOccurrence, ToolOrigin};
 pub use session::{
-    AuthorityScope, ContextPoint, ContextPosition, ForkPoint, ModelContextSnapshot,
-    ModelUsagePurpose, PreparedNavigation, RecoveryBinding, RecoveryPoint, RecoveryState,
-    RequestKey, RequestReceipt, Session, SessionEntry, SessionError, SessionInputPreview,
-    SessionMetadata, SessionStatus, SessionView, StoredToolActivity, SubmissionRequest,
-    TurnEndReason, TurnSummary, UnobservedUserShell, UserShellOutcome,
+    ArtifactPage, ArtifactRef, ArtifactSink, ArtifactWriter, AuthorityScope, ContextPoint,
+    ContextPosition, ForkPoint, ModelContextSnapshot, ModelUsagePurpose, PreparedNavigation,
+    RecoveryBinding, RecoveryPoint, RecoveryState, RequestKey, RequestReceipt, Session,
+    SessionEntry, SessionError, SessionInputPreview, SessionMetadata, SessionStatus, SessionView,
+    StoredToolActivity, SubmissionRequest, TurnEndReason, TurnSummary, UnobservedUserShell,
+    UserShellOutcome,
 };
 pub use session_usage::{ModelUsage, SessionUsage, TokenCount, UsageTotals};
 pub use tool_policy::{ToolDecision, ToolPolicy, ToolPolicyRequest};

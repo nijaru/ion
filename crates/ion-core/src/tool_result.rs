@@ -7,10 +7,21 @@ use serde_json::Value;
 
 use crate::json_size::encoded_len;
 
+const ARTIFACT_RETRIEVAL: &str = "Retained Session bytes. Use history action artifact with this result entry and zero-based artifact index; Code Mode children use inspectSaved kind artifact. Offsets are raw bytes; pages are base64.";
+
+#[derive(Serialize)]
+struct ArtifactModelOutput<'a> {
+    entry: u64,
+    output: &'a Value,
+    artifacts: &'a [crate::ArtifactRef],
+    retrieval: &'static str,
+}
+
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct ToolOutput {
     pub value: Value,
     pub images: Vec<ion_ai::ImageContent>,
+    pub artifacts: Vec<crate::ArtifactRef>,
     pub is_error: bool,
 }
 
@@ -44,6 +55,7 @@ impl ToolOutcome {
             Self::Unknown => "The tool result was not committed. Its external effect is unknown; inspect the working directory before retrying.".into(),
         };
         Cow::Owned(ToolOutput {
+            artifacts: Vec::new(),
             value: serde_json::json!({"error": error}),
             images: Vec::new(),
             is_error: true,
@@ -66,6 +78,7 @@ impl ToolSettlement {
             name: result.name,
             outcome: ToolOutcome::Observed {
                 output: ToolOutput {
+                    artifacts: Vec::new(),
                     value: result.result,
                     images: result.images,
                     is_error: result.is_error,
@@ -76,11 +89,12 @@ impl ToolSettlement {
     }
 
     pub(crate) fn message(&self, entry: u64, display: bool) -> Message {
-        let output = if let ToolOutcome::Observed { output, projection } = &self.outcome
+        let mut output = if let ToolOutcome::Observed { output, projection } = &self.outcome
             && !display
             && let Some(notice) = projection.model_notice(entry)
         {
             ToolOutput {
+                artifacts: Vec::new(),
                 value: serde_json::json!({"output_withheld":projection,"notice":notice}),
                 images: Vec::new(),
                 is_error: output.is_error,
@@ -88,12 +102,14 @@ impl ToolSettlement {
         } else {
             self.outcome.inspection_output().into_owned()
         };
+        let images = std::mem::take(&mut output.images);
+        let is_error = output.is_error;
         let result = ToolResult {
             call_id: self.call_id.clone(),
             name: self.name.clone(),
-            result: output.value,
-            images: output.images,
-            is_error: output.is_error,
+            result: output.into_model_value(entry),
+            images,
+            is_error,
         };
         Message {
             role: Role::Tool,
@@ -115,6 +131,26 @@ pub enum ToolResultProjection {
 }
 
 impl ToolOutput {
+    pub fn success(value: Value) -> Self {
+        Self {
+            value,
+            images: Vec::new(),
+            artifacts: Vec::new(),
+            is_error: false,
+        }
+    }
+
+    /// A model-facing envelope derived from typed metadata. Opaque tool JSON
+    /// is never scanned for artifact authority or overwritten by reserved keys.
+    pub(crate) fn into_model_value(self, entry: u64) -> Value {
+        if self.artifacts.is_empty() {
+            self.value
+        } else {
+            serde_json::json!({"entry":entry,"output":self.value,"artifacts":self.artifacts,
+                "retrieval":ARTIFACT_RETRIEVAL})
+        }
+    }
+
     pub(crate) fn model_projection(
         &self,
         image_input: bool,
@@ -125,7 +161,20 @@ impl ToolOutput {
         }
         // ImageContent validates at construction/deserialization. It is not an
         // arbitrary base64 string requiring another tolerant validation branch.
-        if encoded_len(&(&self.value, &self.images))? > max_request_bytes {
+        let bytes = if self.artifacts.is_empty() {
+            encoded_len(&(&self.value, &self.images))?
+        } else {
+            encoded_len(&(
+                ArtifactModelOutput {
+                    entry: u64::MAX,
+                    output: &self.value,
+                    artifacts: &self.artifacts,
+                    retrieval: ARTIFACT_RETRIEVAL,
+                },
+                &self.images,
+            ))?
+        };
+        if bytes > max_request_bytes {
             return Ok(ToolResultProjection::RequestLimitExceeded);
         }
         Ok(ToolResultProjection::Observed)

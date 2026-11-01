@@ -505,6 +505,7 @@ impl ion_core::ToolExecutor for DiscoverySource {
             ion_core::ToolOutput {
                 value: json!("executed"),
                 images: Vec::new(),
+                artifacts: Vec::new(),
                 is_error: false,
             }
         })

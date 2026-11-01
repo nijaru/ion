@@ -74,6 +74,7 @@ enum EntryInspection {
     },
     UserShellSettled {
         admission_entry: u64,
+        #[serde(serialize_with = "omit")]
         outcome: UserShellOutcome,
     },
     Steering {
@@ -258,11 +259,22 @@ enum ChildInspection {
 }
 
 #[derive(Serialize)]
+#[serde(remote = "UserShellOutcome", tag = "kind", rename_all = "snake_case")]
+enum ShellInspection {
+    Observed {
+        #[serde(serialize_with = "omit")]
+        output: ToolOutput,
+    },
+    Unknown,
+}
+
+#[derive(Serialize)]
 #[serde(remote = "ToolOutput")]
 struct OutputInspection {
     value: serde_json::Value,
     #[serde(serialize_with = "omit_each")]
     images: Vec<ImageContent>,
+    artifacts: Vec<ion_core::ArtifactRef>,
     is_error: bool,
 }
 
@@ -289,6 +301,7 @@ projection!(
     ToolOutcome => OutcomeInspection,
     ChildOutcome => ChildInspection,
     ToolOutput => OutputInspection,
+    UserShellOutcome => ShellInspection,
     ion_core::DelegationRecord => DelegationInspection,
     ion_core::DelegationSpec => DelegationSpecInspection,
 );
@@ -396,6 +409,7 @@ mod tests {
         let output = ToolOutput {
             value: raw(),
             images: vec![image.clone()],
+            artifacts: vec![crate::tool_output::tests::artifact("retained", true)],
             is_error: false,
         };
         let parent = ToolOccurrence {
@@ -474,7 +488,9 @@ mod tests {
                 turn: 1,
                 parent,
                 child: 0,
-                outcome: ChildOutcome::Observed { output },
+                outcome: ChildOutcome::Observed {
+                    output: output.clone(),
+                },
             },
             SessionEntry::ChildToolResult {
                 turn: 1,
@@ -492,10 +508,7 @@ mod tests {
             },
             SessionEntry::UserShellSettled {
                 admission_entry: 12,
-                outcome: UserShellOutcome::Observed {
-                    output: raw(),
-                    is_error: false,
-                },
+                outcome: UserShellOutcome::Observed { output },
             },
         ];
         SessionView {
@@ -546,6 +559,7 @@ mod tests {
         expected["entries"][4]["data"]["result"]["outcome"]["output"]["images"][0]["data"] =
             json!(marker);
         expected["entries"][6]["data"]["outcome"]["output"]["images"][0]["data"] = json!(marker);
+        expected["entries"][9]["data"]["outcome"]["output"]["images"][0]["data"] = json!(marker);
         for index in [0, 1] {
             expected["messages"][index]["content"][1]["Image"]["data"] = json!(marker);
         }

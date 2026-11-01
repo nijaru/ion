@@ -178,7 +178,10 @@ fn materialization_uses_only_the_committed_identity_and_binding() {
     let materialize = |record: &crate::DelegationRecord| {
         Session::materialize_delegation(
             record,
-            crate::delegation::ChildMaterialization::New(Vec::new()),
+            crate::delegation::ChildMaterialization::New {
+                entries: Vec::new(),
+                artifact_source: None,
+            },
         )
     };
     let child = materialize(&record).unwrap();

@@ -18,7 +18,7 @@ use tokio_util::sync::CancellationToken;
 
 use super::{
     Server,
-    artifact::save_full_mcp_output,
+    artifact::ResultArtifacts,
     conversion,
     request::RequestError,
     resource_content::{self, ResourceContent, ResourceData},
@@ -29,7 +29,7 @@ const LIST_RESOURCES: &str = "list_mcp_resources";
 const LIST_TEMPLATES: &str = "list_mcp_resource_templates";
 const READ_RESOURCE: &str = "read_mcp_resource";
 /// Keep one resource payload below the model-facing inline bound. Larger
-/// observations remain available through a private JSON file.
+/// observations remain available through typed Session artifacts.
 const MAX_INLINE_RESULT_BYTES: usize = 64 * 1024;
 const MAX_RESOURCE_PAGES: usize = 64;
 const RESOURCE_PREVIEW_BYTES: usize = 4 * 1024;
@@ -174,11 +174,16 @@ impl ToolExecutor for ResourceExecutor {
     fn execute<'a>(&'a self, invocation: ToolInvocation<'a>) -> BoxFuture<'a, ToolOutput> {
         let call = invocation.call();
         let stop = invocation.stop().clone();
+        let artifacts = invocation.artifact_sink().cloned();
         Box::pin(async move {
             let mut output = match self.kind {
-                Kind::Resources => list(call, &self.servers, &stop, Kind::Resources).await,
-                Kind::Templates => list(call, &self.servers, &stop, Kind::Templates).await,
-                Kind::Read => read(call, &self.servers, &stop).await,
+                Kind::Resources => {
+                    list(call, &self.servers, &stop, Kind::Resources, artifacts).await
+                }
+                Kind::Templates => {
+                    list(call, &self.servers, &stop, Kind::Templates, artifacts).await
+                }
+                Kind::Read => read(call, &self.servers, &stop, artifacts).await,
             };
             let selected = call
                 .arguments
@@ -200,6 +205,7 @@ async fn list(
     servers: &[Arc<Server>],
     stop: &CancellationToken,
     kind: Kind,
+    artifacts: Option<ion_core::ArtifactSink>,
 ) -> ToolOutput {
     let arguments: ListArguments = match serde_json::from_value(call.arguments.clone()) {
         Ok(arguments) => arguments,
@@ -243,7 +249,12 @@ async fn list(
             if let Some(error) = cleanup_error {
                 value.insert("cleanupError".into(), Value::String(error));
             }
-            let mut output = bound_read_result(Value::Object(value), Vec::new(), false);
+            let mut output = bound_read_result(
+                Value::Object(value),
+                Vec::new(),
+                false,
+                ResultArtifacts::new(artifacts),
+            );
             if output.value.get("truncated").is_some_and(Value::is_boolean)
                 && let Some(object) = output.value.as_object_mut()
             {
@@ -284,7 +295,12 @@ async fn list(
         if !warnings.is_empty() {
             value.insert("warnings".into(), Value::Array(warnings));
         }
-        bound_read_result(Value::Object(value), Vec::new(), false)
+        bound_read_result(
+            Value::Object(value),
+            Vec::new(),
+            false,
+            ResultArtifacts::new(artifacts),
+        )
     })
     .await
 }
@@ -386,7 +402,12 @@ async fn list_all(
     ))
 }
 
-async fn read(call: &ToolCall, servers: &[Arc<Server>], stop: &CancellationToken) -> ToolOutput {
+async fn read(
+    call: &ToolCall,
+    servers: &[Arc<Server>],
+    stop: &CancellationToken,
+    artifacts: Option<ion_core::ArtifactSink>,
+) -> ToolOutput {
     let arguments: ReadArguments = match serde_json::from_value(call.arguments.clone()) {
         Ok(arguments) => arguments,
         Err(error) => {
@@ -419,7 +440,8 @@ async fn read(call: &ToolCall, servers: &[Arc<Server>], stop: &CancellationToken
     };
     let name = server.name.clone();
     let uri = uri.to_owned();
-    conversion::run(move || read_result(&name, &uri, result.contents, cleanup_error)).await
+    conversion::run(move || read_result(&name, &uri, result.contents, cleanup_error, artifacts))
+        .await
 }
 
 fn read_result(
@@ -427,8 +449,10 @@ fn read_result(
     uri: &str,
     contents: Vec<ResourceContents>,
     cleanup_error: Option<String>,
+    artifacts: Option<ion_core::ArtifactSink>,
 ) -> ToolOutput {
-    let conversion = match convert_read_contents(contents) {
+    let mut artifacts = ResultArtifacts::new(artifacts);
+    let conversion = match convert_read_contents(contents, &mut artifacts) {
         Ok(conversion) => conversion,
         Err(error) => return tool_error(format!("MCP server {server} {error}")),
     };
@@ -445,7 +469,12 @@ fn read_result(
     if let Some(error) = cleanup_error {
         value.insert("cleanupError".into(), Value::String(error));
     }
-    let mut output = bound_read_result(Value::Object(value), conversion.images, conversion.failed);
+    let mut output = bound_read_result(
+        Value::Object(value),
+        conversion.images,
+        conversion.failed,
+        artifacts,
+    );
     if let Some(preview) = conversion.preview
         && output.value.get("truncated").is_some_and(Value::is_boolean)
         && let Some(object) = output.value.as_object_mut()
@@ -461,7 +490,10 @@ fn read_result(
     output
 }
 
-fn convert_read_contents(contents: Vec<ResourceContents>) -> Result<ReadConversion, String> {
+fn convert_read_contents(
+    contents: Vec<ResourceContents>,
+    artifacts: &mut ResultArtifacts,
+) -> Result<ReadConversion, String> {
     let empty = contents.is_empty();
     let mut conversion = ReadConversion::default();
     for content in contents {
@@ -485,17 +517,18 @@ fn convert_read_contents(contents: Vec<ResourceContents>) -> Result<ReadConversi
                 );
                 conversion.images.push(image.content);
             }
-            ResourceData::Blob { size, saved } => {
-                match saved {
-                    Ok(path) => conversion.contents.push(
-                        json!({"uri":uri, "mimeType":mime_type, "savedPath":path, "size":size}),
+            ResourceData::Blob { bytes } => {
+                let size = bytes.len();
+                match artifacts.bytes("mcp_resource", &bytes) {
+                    Ok(index) => conversion.contents.push(
+                        json!({"uri":uri, "mimeType":mime_type, "artifact":index, "size":size}),
                     ),
                     Err(error) => {
                         conversion.failed = true;
                         conversion.warnings.push(format!(
-                            "resource {uri} could not be saved to a private file: {error}"
+                            "resource {uri} could not be retained in Session: {error}"
                         ));
-                        conversion.contents.push(json!({"uri":uri, "mimeType":mime_type, "size":size, "savedError":error}));
+                        conversion.contents.push(json!({"uri":uri, "mimeType":mime_type, "size":size, "savedError":error.to_string()}));
                     }
                 }
             }
@@ -598,7 +631,12 @@ fn preview(text: &str) -> String {
     text[..end].to_owned()
 }
 
-fn bound_read_result(value: Value, images: Vec<ImageContent>, failed: bool) -> ToolOutput {
+fn bound_read_result(
+    value: Value,
+    images: Vec<ImageContent>,
+    failed: bool,
+    mut artifacts: ResultArtifacts,
+) -> ToolOutput {
     let encoded = match serde_json::to_vec(&value) {
         Ok(encoded) => encoded,
         Err(error) => {
@@ -607,32 +645,36 @@ fn bound_read_result(value: Value, images: Vec<ImageContent>, failed: bool) -> T
     };
     if encoded.len() <= MAX_INLINE_RESULT_BYTES {
         return ToolOutput {
+            artifacts: artifacts.references,
             value,
             images,
             is_error: failed,
         };
     }
-    let (full_output_path, full_output_error, notice) = match save_full_mcp_output(&encoded) {
-        Ok(path) => (
-            Some(path),
+    let (full_output_artifact, full_output_error, notice) = match artifacts
+        .bytes("full_mcp_output", &encoded)
+    {
+        Ok(index) => (
+            Some(index),
             None,
             format!(
-                "MCP resource output exceeded the {MAX_INLINE_RESULT_BYTES}-byte inline bound. Read full_output_path with read using byte_offset=0, continuing at next_byte, or bounded exec when available; the file is a private JSON snapshot of the observation."
+                "MCP resource output exceeded the {MAX_INLINE_RESULT_BYTES}-byte inline bound. Retrieve the full_mcp_output Session artifact using history or inspectSaved. It is a retained JSON snapshot, not permission to repeat the effect."
             ),
         ),
         Err(error) => (
             None,
             Some(error.to_string()),
             format!(
-                "MCP resource output exceeded the {MAX_INLINE_RESULT_BYTES}-byte inline bound and could not be saved to a private file. Reduce the resource or retry."
+                "MCP resource output exceeded the {MAX_INLINE_RESULT_BYTES}-byte inline bound and could not be retained. This does not mean the request was not executed or authorize replay."
             ),
         ),
     };
     ToolOutput {
+        artifacts: artifacts.references,
         value: json!({
             "truncated": true,
             "original_bytes": encoded.len(),
-            "full_output_path": full_output_path,
+            "full_output_artifact": full_output_artifact,
             "full_output_error": full_output_error,
             "notice": notice,
         }),

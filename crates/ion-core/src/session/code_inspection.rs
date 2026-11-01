@@ -62,6 +62,15 @@ enum Query {
         parent: ToolOccurrence,
         after: Option<usize>,
     },
+    Artifact {
+        parent: ToolOccurrence,
+        child: usize,
+        artifact: usize,
+        #[serde(default)]
+        offset: u64,
+        #[serde(default = "page_limit")]
+        limit: usize,
+    },
     Output {
         parent: ToolOccurrence,
         child: usize,
@@ -94,6 +103,12 @@ enum Selection {
         rows: Vec<(usize, ChildRecords)>,
         next_after: Option<usize>,
     },
+    Artifact {
+        entry: u64,
+        artifact: usize,
+        offset: u64,
+        limit: usize,
+    },
     Output {
         child: usize,
         records: ChildRecords,
@@ -107,6 +122,7 @@ impl Session {
     pub(crate) fn prepare_code_inspection(
         &self,
         query: &str,
+        issuer: ToolOccurrence,
     ) -> Result<CodeInspection, InspectionError> {
         let query: Query = serde_json::from_str(query).map_err(|error| {
             InspectionError::Request(format!("invalid inspection query: {error}"))
@@ -121,11 +137,12 @@ impl Session {
                     .range((Unbounded, upper))
                     .rev()
                     .filter(|(parent, _)| {
-                        !store
-                            .state
-                            .pending
-                            .iter()
-                            .any(|pending| pending.occurrence == **parent)
+                        parent.assistant_entry < issuer.assistant_entry
+                            && !store
+                                .state
+                                .pending
+                                .iter()
+                                .any(|pending| pending.occurrence == **parent)
                     });
                 let rows = parents
                     .by_ref()
@@ -136,11 +153,12 @@ impl Session {
                 Selection::Parents { rows, next_before }
             }
             Query::Children { parent, after } => {
-                let children = settled_children(&store, parent)?;
+                let children = visible_children(&store, parent, issuer)?;
                 let lower = after.map_or(Unbounded, Excluded);
                 let mut children = children.range((lower, Unbounded));
                 let rows = children
                     .by_ref()
+                    .filter(|(_, records)| records.outcome.is_some())
                     .take(10)
                     .map(|(&child, &records)| (child, records))
                     .collect::<Vec<_>>();
@@ -149,6 +167,26 @@ impl Session {
                     parent,
                     rows,
                     next_after,
+                }
+            }
+            Query::Artifact {
+                parent,
+                child,
+                artifact,
+                offset,
+                limit,
+            } => {
+                if !(1..=super::artifacts::PAGE_BYTES).contains(&limit) {
+                    return Err(InspectionError::Request(
+                        "artifact limit must be 1..16384 bytes".into(),
+                    ));
+                }
+                let records = committed_child(&store, parent, child, issuer)?;
+                Selection::Artifact {
+                    entry: records.outcome.expect("committed child checked above"),
+                    artifact,
+                    offset,
+                    limit,
                 }
             }
             Query::Output {
@@ -165,9 +203,7 @@ impl Session {
                         "output limit must be 4..65536 bytes and pointer a JSON Pointer".into(),
                     ));
                 }
-                let records = *settled_children(&store, parent)?
-                    .get(&child)
-                    .ok_or_else(|| InspectionError::Request("unknown child ordinal".into()))?;
+                let records = committed_child(&store, parent, child, issuer)?;
                 Selection::Output {
                     child,
                     records,
@@ -186,22 +222,32 @@ impl Session {
 
     #[cfg(test)]
     pub(crate) fn inspect_code(&self, query: &str) -> Result<Value, InspectionError> {
-        self.prepare_code_inspection(query)?.read()
+        self.prepare_code_inspection(
+            query,
+            ToolOccurrence {
+                assistant_entry: self.entry_count()? + 1,
+                ordinal: 0,
+            },
+        )?
+        .read()
     }
 }
 
-fn settled_children(
+fn visible_children(
     store: &Store,
     parent: ToolOccurrence,
+    issuer: ToolOccurrence,
 ) -> Result<&BTreeMap<usize, ChildRecords>, InspectionError> {
-    if store
-        .state
-        .pending
-        .iter()
-        .any(|pending| pending.occurrence == parent)
+    if parent != issuer
+        && (parent.assistant_entry >= issuer.assistant_entry
+            || store
+                .state
+                .pending
+                .iter()
+                .any(|pending| pending.occurrence == parent))
     {
         return Err(InspectionError::Request(
-            "inspection requires a settled parent call".into(),
+            "inspection requires a parent from the issuing prefix or a committed child of this invocation".into(),
         ));
     }
     store
@@ -209,6 +255,19 @@ fn settled_children(
         .0
         .get(&parent)
         .ok_or_else(|| InspectionError::Request("parent has no saved Code Mode child calls".into()))
+}
+
+fn committed_child(
+    store: &Store,
+    parent: ToolOccurrence,
+    child: usize,
+    issuer: ToolOccurrence,
+) -> Result<ChildRecords, InspectionError> {
+    visible_children(store, parent, issuer)?
+        .get(&child)
+        .copied()
+        .filter(|records| records.outcome.is_some())
+        .ok_or_else(|| InspectionError::Request("child has no committed observation".into()))
 }
 
 impl CodeInspection {
@@ -226,6 +285,28 @@ impl CodeInspection {
             return Err(SessionError::InvalidDatabase.into());
         }
         match self.selection {
+            Selection::Artifact {
+                entry,
+                artifact,
+                offset,
+                limit,
+            } => {
+                let reference = super::artifacts::observation_reference(
+                    &snapshot,
+                    entry,
+                    "$.data.outcome.output.artifacts",
+                    artifact,
+                )?
+                .ok_or_else(|| InspectionError::Request("unknown artifact index".into()))?;
+                super::artifacts::page(&snapshot, &reference, offset, limit).map_err(|error| {
+                    match error {
+                        SessionError::InvalidArtifactRange => {
+                            InspectionError::Request(error.to_string())
+                        }
+                        other => InspectionError::Session(other),
+                    }
+                })
+            }
             Selection::Parents { rows, next_before } => {
                 let parents = rows
                     .into_iter()
@@ -327,6 +408,11 @@ fn summary(
         json!({"child":child,"name":name,"name_truncated":name_truncated,"state":metadata.state});
     match metadata.state.as_str() {
         "observed" => {
+            result["artifact_count"] = json!(super::artifacts::observation_count(
+                connection,
+                u64::try_from(outcome).map_err(|_| SessionError::InvalidHistory)?,
+                "$.data.outcome.output.artifacts"
+            )?);
             result["is_error"] = json!(metadata.is_error.ok_or(SessionError::InvalidHistory)?);
             result["image_count"] =
                 json!(metadata.image_count.ok_or(SessionError::InvalidHistory)?);

@@ -371,6 +371,7 @@ fn activity_reading_uses_occurrences_and_children_through_fold_and_reflow() {
         result: Some(ActivityResult {
             projection: Some(ion_core::ToolResultProjection::Observed),
             value: serde_json::json!({"content":"same observed result"}),
+            artifacts: Vec::new(),
             image_mime_types: vec![],
             is_error: false,
         }),
@@ -656,6 +657,7 @@ fn deep_tool_child_shell_and_diff_fields_survive_remeasurement_and_hidden_disclo
         result: Some(ActivityResult {
             projection: Some(ion_core::ToolResultProjection::Observed),
             value,
+            artifacts: Vec::new(),
             image_mime_types: vec![],
             is_error: state == ActivityState::Failed,
         }),
@@ -770,8 +772,9 @@ fn deep_tool_child_shell_and_diff_fields_survive_remeasurement_and_hidden_disclo
                 source: shell_source,
                 command: text.clone(),
                 outcome: Some(UserShellOutcome::Observed {
-                    output: json!({"stdout":text,"stderr":text,"exit_code":0}),
-                    is_error: false,
+                    output: ion_core::ToolOutput::success(
+                        json!({"stdout":text,"stderr":text,"exit_code":0}),
+                    ),
                 }),
                 exclude_from_context: false,
             }),

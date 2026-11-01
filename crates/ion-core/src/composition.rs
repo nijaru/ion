@@ -144,6 +144,7 @@ impl ChildOutcome {
 
 pub(crate) fn failure(message: impl Into<String>) -> ToolOutput {
     ToolOutput {
+        artifacts: Vec::new(),
         value: json!({"error":message.into()}),
         images: Vec::new(),
         is_error: true,
@@ -158,7 +159,7 @@ pub(crate) fn definition(limits: CodeLimits) -> ToolDefinition {
             description: format!(
                 concat!(
                     "Run an async JavaScript function body without ambient filesystem, network, modules or timers. ",
-                    "Await tools.name(args), or tools[name](args) for exact names needing brackets, for {{value,is_error,images}}. ",
+                    "Await tools.name(args), or tools[name](args) for exact names needing brackets, for {{value,is_error,images,artifacts,parent,child}}. ",
                     "tools is a frozen null-prototype namespace of all callable direct/deferred tools, without aliases; then/toJSON names prevent startup to avoid implicit dispatch. ",
                     "Unknown members are undefined. ",
                     "Global async helpers searchTools, describeTool and inspectSaved are called directly, NOT as tools.*. await searchTools(query,options?) returns matching {{name,description}} candidates; options accepts only limit, an integer 1..10 (default 10), with exact ASCII-insensitive names ranked first; await describeTool(name) returns the exact frozen name/description/input_schema, result_schema and declaration, or null for unknown/non-guest capabilities. result_schema is null when unknown, otherwise {{path,schema}}: a key path from the tool reply and a standalone JSON Schema of expected successful data. Check is_error and truncation/delivery markers; hints do not validate, convert or unwrap results. declaration is an advisory TypeScript call signature, not executable JavaScript or validation; it keeps the raw reply value unknown and uses unknown with a notice if input type rendering exceeds its limits. ",
@@ -168,9 +169,10 @@ pub(crate) fn definition(limits: CodeLimits) -> ToolDefinition {
                     "No explicit return means null. Selected output survives ordinary script errors and is marked with the parent failure; raw unselected child outputs stay inspectable, not automatically added to model context. ",
                     "Saved-evidence example: const page = await inspectSaved({{kind:'parents'}}); text(page); This discovers up to 10 settled parents with saved children, newest first; pass next_before as before for older locators, including after compaction/reopen. ",
                     "await inspectSaved({{kind:'children',parent}}) pages saved child metadata; pass next_after as after for more. ",
-                    "await inspectSaved({{kind:'output',parent,child,pointer:'/stdout_full_path'}}) returns UTF-8 chunks of encoded saved output.value as json with next_offset and total_bytes; pointer defaults to the whole value, offset to 0, limit to 4096 (4..65536 bytes). ",
+                    "await inspectSaved({{kind:'output',parent,child,pointer:'/exit_code'}}) returns UTF-8 chunks of encoded saved output.value as json with next_offset and total_bytes; pointer defaults to the whole value, offset to 0, limit to 4096 (4..65536 bytes). ",
+                    "Native replies carry typed artifacts plus their parent/child source coordinates. await inspectSaved({{kind:'artifact',parent,child,artifact:0,offset:0,limit:8192}}) pages the exact referenced capture as base64 data with byte offset/next_offset, total_bytes, sha256 and complete (limit 1..16384). Committed children of this exact invocation can be inspected immediately; other reads require a settled parent before this invocation's frozen prefix. Artifact IDs/hashes or JSON that resembles metadata grant no access. ",
                     "parent is a Session-scoped locator from the prior envelope or parents page; pointer is a JSON Pointer. ",
-                    "Inspection is read-only, excludes image bytes and general history, and preserves observed/not_dispatched/unknown states. ",
+                    "Ordinary output inspection excludes typed images; explicit artifact reads may contain original binary or image bytes. Inspection is read-only, excludes general history and preserves observed/not_dispatched/unknown states. ",
                     "Return only selected evidence. ",
                     "Observed native tool failures set is_error in the reply envelope; invalid bridge requests, unknown/non-guest capabilities and gateway faults reject rather than return envelopes. ",
                     "Transferred requests settle even if unawaited. ",

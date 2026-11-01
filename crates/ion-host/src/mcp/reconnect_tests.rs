@@ -220,10 +220,10 @@ async fn replacement_joins_shared_requests_and_never_retargets_issued_capabiliti
     let child_catalog = tools.snapshot();
     let pending = tokio::spawn(async move {
         child_catalog
-            .execute_untracked(
+            .execute(ion_core::ToolInvocation::untracked(
                 &call("mcp__4_peer__probe", json!({"wait":true})),
                 CancellationToken::new(),
-            )
+            ))
             .await
     });
     fixture.wait("waiting").await;
@@ -235,25 +235,25 @@ async fn replacement_joins_shared_requests_and_never_retargets_issued_capabiliti
         .unwrap();
     let fresh = tools.snapshot();
     let old_call = issued
-        .execute_untracked(
+        .execute(ion_core::ToolInvocation::untracked(
             &call("mcp__4_peer__probe", json!({})),
             CancellationToken::new(),
-        )
+        ))
         .await;
     let old_resource = issued
-        .execute_untracked(
+        .execute(ion_core::ToolInvocation::untracked(
             &call(
                 "read_mcp_resource",
                 json!({"server":"peer", "uri":"mem://generation"}),
             ),
             CancellationToken::new(),
-        )
+        ))
         .await;
     let new_call = fresh
-        .execute_untracked(
+        .execute(ion_core::ToolInvocation::untracked(
             &call("mcp__4_peer__probe", json!({})),
             CancellationToken::new(),
-        )
+        ))
         .await;
     source.shutdown().await.unwrap();
     result.unwrap();
@@ -348,10 +348,10 @@ async fn initial_and_replacement_failures_remain_explicitly_recoverable() {
     source.reconnect("peer").unwrap().join().await.unwrap();
     let output = tools
         .snapshot()
-        .execute_untracked(
+        .execute(ion_core::ToolInvocation::untracked(
             &call("mcp__4_peer__probe", json!({})),
             CancellationToken::new(),
-        )
+        ))
         .await;
     source.shutdown().await.unwrap();
     assert_eq!(output.value["structured_content"]["generation"], "three");

@@ -24,13 +24,14 @@ impl ToolExecutor for McpExecutor {
     ) -> BoxFuture<'a, ToolOutput> {
         let call = invocation.call();
         let stop = invocation.stop().clone();
+        let artifacts = invocation.artifact_sink().cloned();
         Box::pin(async move {
             let mut output = match self.call(call, stop).await {
                 Ok((result, cleanup_error)) => {
                     let name = call.name.clone();
                     let schema = self.output_schema.clone();
                     let mut output = conversion::run(move || {
-                        conversion::convert_tool_result(&name, result, schema.as_deref())
+                        conversion::convert_tool_result(&name, result, schema.as_deref(), artifacts)
                     })
                     .await;
                     if let Some(error) = cleanup_error {

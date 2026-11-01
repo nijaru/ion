@@ -1,11 +1,9 @@
 //! Supplied MCP resource bytes. URIs are metadata, never implicit reads.
-use std::{borrow::Cow, io::Write, path::PathBuf};
+use std::borrow::Cow;
 
 use base64::{Engine, engine::general_purpose::STANDARD};
 use ion_ai::{ImageMime, LoadedImage, MAX_SOURCE_BYTES, normalize_image};
 use rmcp::model::ResourceContents;
-
-use super::artifact;
 
 pub(super) struct ResourceContent<'a> {
     pub uri: &'a str,
@@ -16,10 +14,7 @@ pub(super) struct ResourceContent<'a> {
 pub(super) enum ResourceData<'a> {
     Text(Cow<'a, str>),
     Image(LoadedImage),
-    Blob {
-        size: usize,
-        saved: Result<PathBuf, String>,
-    },
+    Blob { bytes: Vec<u8> },
 }
 
 pub(super) fn convert(resource: &ResourceContents) -> Result<ResourceContent<'_>, String> {
@@ -52,19 +47,14 @@ pub(super) fn convert(resource: &ResourceContents) -> Result<ResourceContent<'_>
                     .decode(blob)
                     .map_err(|_| format!("resource {uri} returned invalid base64 data"))?;
                 if is_text_mime(mime_type.as_deref()) {
-                    ResourceData::Text(Cow::Owned(String::from_utf8_lossy(&bytes).into_owned()))
+                    match String::from_utf8(bytes) {
+                        Ok(text) => ResourceData::Text(Cow::Owned(text)),
+                        Err(error) => ResourceData::Blob {
+                            bytes: error.into_bytes(),
+                        },
+                    }
                 } else {
-                    let size = bytes.len();
-                    let saved =
-                        artifact::private_artifact_path("ion-mcp-resource", &extension_of(uri))
-                            .and_then(|path| {
-                                artifact::write_private_artifact(path, |file| {
-                                    file.write_all(&bytes)?;
-                                    Ok(())
-                                })
-                            })
-                            .map_err(|error| format!("{error:#}"));
-                    ResourceData::Blob { size, saved }
+                    ResourceData::Blob { bytes }
                 }
             };
             Ok(ResourceContent {
@@ -105,23 +95,4 @@ fn is_text_mime(mime_type: Option<&str>) -> bool {
         || media_type == "application/json"
         || media_type.ends_with("+json")
         || media_type.ends_with("+xml")
-}
-
-fn extension_of(uri: &str) -> String {
-    let path = uri
-        .split(['?', '#'])
-        .next()
-        .unwrap_or(uri)
-        .trim_end_matches('/');
-    let name = path.rsplit('/').next().unwrap_or(path);
-    let Some((_, extension)) = name.rsplit_once('.') else {
-        return ".bin".into();
-    };
-    if extension.is_empty()
-        || extension.len() > 8
-        || !extension.bytes().all(|byte| byte.is_ascii_alphanumeric())
-    {
-        return ".bin".into();
-    }
-    format!(".{extension}")
 }

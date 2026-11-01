@@ -22,10 +22,15 @@ async fn execute(
     tools: &ion_core::ToolCatalog,
     name: &str,
     arguments: Value,
-) -> ion_core::ToolOutput {
-    tools
-        .execute_untracked(&call(name, arguments), CancellationToken::new())
-        .await
+) -> (ion_core::ToolOutput, crate::test_support::ArtifactFixture) {
+    let owner = crate::test_support::ArtifactFixture::new();
+    let output = tools
+        .execute(
+            ion_core::ToolInvocation::untracked(&call(name, arguments), CancellationToken::new())
+                .with_artifact_sink(owner.sink()),
+        )
+        .await;
+    (output, owner)
 }
 
 fn resource_server() -> String {
@@ -164,7 +169,7 @@ async fn resources_list_templates_read_and_capability_gating() {
         "{names:?}"
     );
 
-    let listed = execute(&tools, "list_mcp_resources", json!({})).await;
+    let (listed, _listed_owner) = execute(&tools, "list_mcp_resources", json!({})).await;
     assert!(!listed.is_error, "{}", listed.value);
     let resources = listed.value["resources"].as_array().unwrap();
     assert_eq!(resources.len(), 2, "{}", listed.value);
@@ -185,7 +190,8 @@ async fn resources_list_templates_read_and_capability_gating() {
         listed.value
     );
 
-    let first_page = execute(&tools, "list_mcp_resources", json!({"server": "resource"})).await;
+    let (first_page, _first_page_owner) =
+        execute(&tools, "list_mcp_resources", json!({"server": "resource"})).await;
     assert_eq!(first_page.value["nextCursor"], "p2");
     assert_eq!(
         first_page.value["resources"].as_array().unwrap().len(),
@@ -194,7 +200,7 @@ async fn resources_list_templates_read_and_capability_gating() {
         first_page.value
     );
 
-    let second_page = execute(
+    let (second_page, _second_page_owner) = execute(
         &tools,
         "list_mcp_resources",
         json!({"server": "resource", "cursor": "p2"}),
@@ -203,11 +209,12 @@ async fn resources_list_templates_read_and_capability_gating() {
     assert!(second_page.value.get("nextCursor").is_none());
     assert_eq!(second_page.value["resources"][0]["uri"], "mem://two");
 
-    let cursor_without_server =
+    let (cursor_without_server, _cursor_without_server_owner) =
         execute(&tools, "list_mcp_resources", json!({"cursor": "p2"})).await;
     assert!(cursor_without_server.is_error);
 
-    let broken = execute(&tools, "list_mcp_resources", json!({"server": "broken"})).await;
+    let (broken, _broken_owner) =
+        execute(&tools, "list_mcp_resources", json!({"server": "broken"})).await;
     assert!(broken.is_error);
     assert!(
         broken.value["error"]
@@ -218,7 +225,8 @@ async fn resources_list_templates_read_and_capability_gating() {
         broken.value
     );
 
-    let templates = execute(&tools, "list_mcp_resource_templates", json!({})).await;
+    let (templates, _templates_owner) =
+        execute(&tools, "list_mcp_resource_templates", json!({})).await;
     assert!(!templates.is_error, "{}", templates.value);
     assert_eq!(
         templates.value["resourceTemplates"]
@@ -232,7 +240,7 @@ async fn resources_list_templates_read_and_capability_gating() {
         "mem://{id}"
     );
 
-    let text = execute(
+    let (text, _text_owner) = execute(
         &tools,
         "read_mcp_resource",
         json!({"server": "resource", "uri": "mem://one"}),
@@ -242,7 +250,7 @@ async fn resources_list_templates_read_and_capability_gating() {
     assert_eq!(text.value["contents"][0]["text"], "hello");
     assert!(text.images.is_empty());
 
-    let json_blob = execute(
+    let (json_blob, _json_blob_owner) = execute(
         &tools,
         "read_mcp_resource",
         json!({"server": "resource", "uri": "mem://two"}),
@@ -251,7 +259,7 @@ async fn resources_list_templates_read_and_capability_gating() {
     assert!(!json_blob.is_error, "{}", json_blob.value);
     assert_eq!(json_blob.value["contents"][0]["text"], "{\"a\":1}");
 
-    let image = execute(
+    let (image, _image_owner) = execute(
         &tools,
         "read_mcp_resource",
         json!({"server": "resource", "uri": "mem://image"}),
@@ -262,28 +270,27 @@ async fn resources_list_templates_read_and_capability_gating() {
     assert_eq!(image.images.len(), 1);
     assert_eq!(image.images[0].mime_type().as_str(), "image/png");
 
-    let binary = execute(
+    let (binary, binary_owner) = execute(
         &tools,
         "read_mcp_resource",
         json!({"server": "resource", "uri": "mem://file.bin"}),
     )
     .await;
     assert!(!binary.is_error, "{}", binary.value);
-    let saved = binary.value["contents"][0]["savedPath"]
-        .as_str()
-        .expect("binary resource saved path")
-        .to_owned();
-    assert!(saved.ends_with(".bin"), "{saved}");
-    let metadata = fs::metadata(&saved).unwrap();
+    let index = binary.value["contents"][0]["artifact"].as_u64().unwrap() as usize;
+    let reference = &binary.artifacts[index];
+    assert!(reference.complete);
+    assert_eq!(binary_owner.bytes(reference), b"\x00\x01binary");
     assert_eq!(
-        metadata.permissions().mode() & 0o777,
-        0o600,
-        "private resource capture"
+        fs::metadata(binary_owner.session.path())
+            .unwrap()
+            .permissions()
+            .mode()
+            & 0o777,
+        0o600
     );
-    assert_eq!(fs::read(&saved).unwrap(), b"\x00\x01binary");
-    fs::remove_file(&saved).unwrap();
 
-    let large = execute(
+    let (large, large_owner) = execute(
         &tools,
         "read_mcp_resource",
         json!({"server": "resource", "uri": "mem://large"}),
@@ -293,20 +300,17 @@ async fn resources_list_templates_read_and_capability_gating() {
     assert_eq!(large.value["truncated"], true);
     assert!(large.value["original_bytes"].as_u64().unwrap() > 64 * 1024);
     assert_eq!(large.value["preview"].as_str().unwrap().len(), 4096);
-    let full_path = large.value["full_output_path"]
-        .as_str()
-        .expect("large resource full output path")
-        .to_owned();
-    let full = super::read_native_snapshot(&full_path).await;
-    assert_eq!(full["contents"][0]["text"].as_str().unwrap().len(), 70000);
-    fs::remove_file(&full_path).unwrap();
+    let full = large_owner.json(&large, "full_output_artifact");
+    assert_eq!(full["contents"][0]["text"], "x".repeat(70000));
 
-    let invalid_listing = execute(&tools, "list_mcp_resources", json!({"unknown": true})).await;
+    let (invalid_listing, _invalid_listing_owner) =
+        execute(&tools, "list_mcp_resources", json!({"unknown": true})).await;
     assert!(invalid_listing.is_error);
-    let invalid_read = execute(&tools, "read_mcp_resource", json!({"server": "resource"})).await;
+    let (invalid_read, _invalid_read_owner) =
+        execute(&tools, "read_mcp_resource", json!({"server": "resource"})).await;
     assert!(invalid_read.is_error);
 
-    let empty = execute(
+    let (empty, _empty_owner) = execute(
         &tools,
         "read_mcp_resource",
         json!({"server": "resource", "uri": "mem://empty"}),
@@ -316,7 +320,7 @@ async fn resources_list_templates_read_and_capability_gating() {
     assert_eq!(empty.value["contents"], json!([]));
     assert_eq!(empty.value["warnings"][0], "Resource is empty.");
 
-    let missing = execute(
+    let (missing, _missing_owner) = execute(
         &tools,
         "read_mcp_resource",
         json!({"server": "missing", "uri": "mem://one"}),
@@ -441,7 +445,11 @@ for line in sys.stdin:
         json!({"server": "stoppable", "uri": "mem://slow"}),
     );
     let task_stop = stop.clone();
-    let task = tokio::spawn(async move { tools.execute_untracked(&call, task_stop).await });
+    let task = tokio::spawn(async move {
+        tools
+            .execute(ion_core::ToolInvocation::untracked(&call, task_stop))
+            .await
+    });
     tokio::time::timeout(std::time::Duration::from_secs(5), async {
         while !root.join("requested").exists() {
             tokio::time::sleep(std::time::Duration::from_millis(10)).await;
@@ -509,11 +517,11 @@ for line in sys.stdin:
     assert!(startup.diagnostics.is_empty(), "{:?}", startup.diagnostics);
     let source = startup.tools.unwrap();
     let tools = ToolSet::new([source.clone() as Arc<dyn ToolSource>]).snapshot();
-    let listed = execute(&tools, "list_mcp_resources", json!({})).await;
+    let (listed, _listed_owner) = execute(&tools, "list_mcp_resources", json!({})).await;
     assert!(!listed.is_error, "{}", listed.value);
     assert_eq!(listed.value["resources"][0]["server"], "resources-only");
     assert_eq!(listed.value["resources"][0]["uri"], "mem://only");
-    let text = execute(
+    let (text, _text_owner) = execute(
         &tools,
         "read_mcp_resource",
         json!({"server": "resources-only", "uri": "mem://only"}),

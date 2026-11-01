@@ -13,6 +13,8 @@ mod command_args;
 mod command_environment;
 mod completion;
 mod config_file;
+#[cfg(test)]
+mod test_support;
 pub use completion::CompletionTarget;
 pub use ion_core::CompletionDelivery;
 mod control;

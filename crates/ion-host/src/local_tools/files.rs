@@ -152,6 +152,7 @@ pub(super) fn read(cwd: &Path, args: &Value, stop: &CancellationToken) -> ToolOu
             Err(e) => return error(format!("read image {}: {e}", input.path)),
         };
         return ToolOutput {
+            artifacts: Vec::new(),
             value: json!({"path":input.path,"content":format!("Read image file [{}]", image.content.mime_type().as_str()),"note":image.note}),
             images: vec![image.content],
             is_error: false,

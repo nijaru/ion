@@ -40,7 +40,13 @@ Run `ion --help` and `ion COMMAND --help` for complete supported options. The cu
 
 The coding recipe runs native commands **with your host permissions**. Tool selection/read-only flags are model loadout controls, not a sandbox. Cancellation does not undo filesystem effects; interrupted effects may have unknown outcomes and are not blindly replayed.
 
-Compaction summarizes bounded excerpts of large tool outputs; original recorded result envelopes remain in the Session. The coding `history` tool can search and read that evidence without rerunning commands. Overflow/raw payloads saved by tools to temporary files are not yet Session-managed artifacts and may be lost to temporary-directory cleanup.
+Compaction summarizes bounded excerpts; original result envelopes and retained captures remain in the Session's SQLite database. Native command overflow/raw bytes, omitted web snapshots (converted text, not raw HTML), and retained MCP responses/resources use typed artifact receipts. Capture completeness is separate from command or server success. Partial, unfinished and unclaimed captures are retained conservatively, not automatically deleted or replayed.
+
+The coding `history` tool searches recorded evidence without rerunning effects. Its `artifact` action reads a referenced capture by source entry and artifact index; Code Mode uses `inspectSaved({kind:'artifact',parent,child,artifact:0})`, including committed children of the current invocation. Pages are binary-safe base64 with byte offsets and a maximum 16 KiB payload. Readers enforce the issuing request's frozen prefix and exclude private `!!` shell results. An ID, hash or look-alike JSON reference grants no access.
+
+Conversation clones, forks and delegated forks copy their referenced observed captures before publishing the new history; they do not copy unclaimed forensic data. A consistent whole-database backup can retain that data as well. Chunk commits add SQLite/WAL work and disk retention; there is no automatic artifact eviction.
+
+**Storage/API break:** the current Session format is **19**. Format 18 and older are rejected, not migrated. Rust `ToolOutput` includes typed `artifacts`; observed shell outcomes retain the whole output. Low-level tool execution takes an explicit `ToolInvocation`; outside admitted execution, callers must supply an artifact sink to retain captures. These unreleased APIs have no compatibility shim.
 
 Configuration, saved credentials, resources and sessions use `~/.ion` by default, or `ION_HOME` when set; workspace-specific `.ion` is separate. No automatic migration from old XDG storage is performed.
 

@@ -73,6 +73,7 @@ pub struct ToolInvocation<'a> {
     reasoning: Option<Reasoning>,
     delegation: Option<crate::delegation::AdmissionPort>,
     model_messages: &'a [Message],
+    artifacts: Option<crate::ArtifactSink>,
 }
 
 impl<'a> ToolInvocation<'a> {
@@ -87,6 +88,7 @@ impl<'a> ToolInvocation<'a> {
             reasoning: None,
             delegation: None,
             model_messages: &[],
+            artifacts: None,
         }
     }
 
@@ -109,6 +111,20 @@ impl<'a> ToolInvocation<'a> {
 
     pub(crate) fn with_model_messages(mut self, messages: &'a [Message]) -> Self {
         self.model_messages = messages;
+        self
+    }
+
+    /// Retain raw evidence in this Session. Untracked execution must supply an
+    /// explicit sink or report unavailable retention, never a temporary lease.
+    pub fn artifact_sink(&self) -> Option<&crate::ArtifactSink> {
+        self.artifacts.as_ref()
+    }
+
+    pub fn with_artifact_sink(mut self, sink: crate::ArtifactSink) -> Self {
+        self.artifacts = Some(match self.origin {
+            Some(origin) => sink.for_tool(origin),
+            None => sink,
+        });
         self
     }
 
@@ -181,6 +197,7 @@ impl<'a> ToolInvocation<'a> {
                 delegation: Some(port),
                 reasoning: Some(reasoning),
                 model_messages: &[],
+                artifacts: None,
                 origin: Some(ToolOrigin {
                     session,
                     turn,

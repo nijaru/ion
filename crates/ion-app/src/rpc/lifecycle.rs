@@ -211,7 +211,7 @@ impl Control {
                                 } else {
                                     "completed"
                                 };
-                                json!({"type":"shell_end","id":metadata.id,"status":status,"outcome":ion_core::UserShellOutcome::Observed { output: output.value, is_error: output.is_error }})
+                                json!({"type":"shell_end","id":metadata.id,"status":status,"outcome":ion_core::UserShellOutcome::Observed { output }})
                             }
                             Err(error) => {
                                 json!({"type":"shell_end","id":metadata.id,"status":"failed","error":format!("{error:#}")})

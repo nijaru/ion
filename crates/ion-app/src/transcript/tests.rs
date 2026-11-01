@@ -155,6 +155,10 @@ fn withheld_model_images_and_raw_child_results_remain_exportable() {
     let output = ToolOutput {
         value: serde_json::json!({"raw":"RAW_OBSERVATION"}),
         images: vec![image.clone()],
+        artifacts: vec![crate::tool_output::tests::artifact(
+            "raw <reply>\u{1b}",
+            false,
+        )],
         is_error: false,
     };
     view.entries.push(SessionEntry::ToolResult {
@@ -184,6 +188,14 @@ fn withheld_model_images_and_raw_child_results_remain_exportable() {
     assert!(result.contains("Tool result · read · read · ok"));
     assert!(result.contains("Image result not shared with this text-only model"));
     assert!(result.contains("Child result · parent 2:0 · child 1 · ok"));
+    assert_eq!(
+        result
+            .matches("Session artifact 0 · raw &lt;reply&gt;� · 1234 bytes · incomplete")
+            .count(),
+        2
+    );
+    assert_eq!(result.matches(&"a".repeat(64)).count(), 2);
+    assert!(!result.contains('\u{1b}'));
 }
 
 #[test]

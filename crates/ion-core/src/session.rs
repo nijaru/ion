@@ -25,8 +25,10 @@ use serde::{Deserialize, Serialize};
 use thiserror::Error;
 use tokio_util::sync::CancellationToken;
 
+mod artifacts;
 pub(crate) mod code_inspection;
 mod context;
+pub use artifacts::{ArtifactPage, ArtifactRef, ArtifactSink, ArtifactWriter};
 mod context_index;
 use context_index::{ContextIndex, working_context};
 mod navigation;
@@ -604,11 +606,12 @@ pub struct Session {
     header: Header,
     path: PathBuf,
     pub(crate) operations: Arc<OperationOwner>,
+    artifact_work: artifacts::CaptureWork,
 }
 
 impl Session {
     pub fn create(path: impl AsRef<Path>, cwd: Option<&Path>) -> Result<Self, SessionError> {
-        Self::create_initial(path.as_ref(), cwd, uuid::Uuid::new_v4(), &[])
+        Self::create_initial(path.as_ref(), cwd, uuid::Uuid::new_v4(), &[], None)
     }
 
     fn create_initial(
@@ -616,6 +619,7 @@ impl Session {
         cwd: Option<&Path>,
         id: uuid::Uuid,
         entries: &[SessionEntry],
+        artifact_source: Option<(&Path, uuid::Uuid)>,
     ) -> Result<Self, SessionError> {
         let projection = project(entries.iter().map(Ok), ProjectionMode::Working, &|entry| {
             Ok(entries[(entry - 1) as usize].clone())
@@ -628,14 +632,18 @@ impl Session {
         if cwd.as_ref().is_some_and(|cwd| !cwd.is_dir()) {
             return Err(SessionError::InvalidWorkingDirectory);
         }
-        fs::create_dir_all(path.parent().ok_or(SessionError::InvalidPath)?)?;
-        OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .mode(0o600)
-            .open(path)?;
-        let path = database_path(path)?;
+        let filename = path.file_name().ok_or(SessionError::InvalidPath)?;
+        let parent = path
+            .parent()
+            .filter(|path| !path.as_os_str().is_empty())
+            .unwrap_or(Path::new("."));
+        fs::create_dir_all(parent)?;
+        let path = parent.canonicalize()?.join(filename);
+        // Hold the canonical lease through creation and failed-initialization
+        // cleanup; another opener must never own a database we are removing.
         let lock = lock(&path)?;
+        let mut creation = store::create_database_file(&path)?;
+        let path = database_path(&path)?;
         let mut connection = Connection::open(&path)?;
         initialize_new(&connection)?;
         let header = Header {
@@ -647,6 +655,18 @@ impl Session {
             name: None,
         };
         let tx = connection.transaction()?;
+        if let Some((path, id)) = artifact_source {
+            let source = Connection::open_with_flags(path, OpenFlags::SQLITE_OPEN_READ_ONLY)?;
+            configure_connection(&source)?;
+            let snapshot = source.unchecked_transaction()?;
+            if read_header(&snapshot)?.provider_session_id != id {
+                return Err(SessionError::InvalidDatabase);
+            }
+            artifacts::copy(&snapshot, &tx, entries)?;
+        }
+        for reference in entries.iter().flat_map(artifacts::references) {
+            artifacts::validate(&tx, reference)?;
+        }
         tx.execute(
             "INSERT INTO session(id, header) VALUES (1, ?1)",
             params![serde_json::to_vec(&header)?],
@@ -655,12 +675,14 @@ impl Session {
             tx.execute("INSERT INTO entries(body) VALUES (?1)", params![body])?;
         }
         tx.commit()?;
+        creation.publish();
         Ok(Self {
             store: Mutex::new(Store::from_projection(connection, projection)),
             _lock: lock,
             header,
             path,
             operations: Arc::new(OperationOwner::default()),
+            artifact_work: artifacts::CaptureWork::default(),
         })
     }
 
@@ -683,6 +705,7 @@ impl Session {
             header,
             path,
             operations: Arc::new(OperationOwner::default()),
+            artifact_work: artifacts::CaptureWork::default(),
         })
     }
 
@@ -736,6 +759,7 @@ impl Session {
             self.header.cwd.as_deref(),
             uuid::Uuid::new_v4(),
             &without_delivery_keys(entries),
+            Some((&self.path, self.provider_session_id())),
         )
     }
 
@@ -832,7 +856,7 @@ impl Session {
         execute: F,
     ) -> Operation<crate::ToolOutput, SessionError>
     where
-        F: FnOnce(String, CancellationToken) -> W + Send + 'static,
+        F: FnOnce(String, CancellationToken, ArtifactSink) -> W + Send + 'static,
         W: std::future::Future<Output = crate::ToolOutput> + Send + 'static,
     {
         let session = self.clone();
@@ -841,8 +865,8 @@ impl Session {
                 return Err(SessionError::UserShellCancelled);
             }
             let entry = session.admit_user_shell(command.clone(), exclude_from_context)?;
-            let output = execute(command, stop).await;
-            session.record_user_shell(entry, output.value.clone(), output.is_error)?;
+            let output = execute(command, stop, session.artifact_sink().for_shell(entry)).await;
+            session.record_user_shell(entry, output.clone())?;
             Ok(output)
         })
     }
@@ -865,13 +889,12 @@ impl Session {
     fn record_user_shell(
         &self,
         admission_entry: u64,
-        output: serde_json::Value,
-        is_error: bool,
+        output: crate::ToolOutput,
     ) -> Result<(), SessionError> {
         let mut store = self.store.lock().map_err(|_| SessionError::Poisoned)?;
         store.append(&[SessionEntry::UserShellSettled {
             admission_entry,
-            outcome: UserShellOutcome::Observed { output, is_error },
+            outcome: UserShellOutcome::Observed { output },
         }])
     }
 
@@ -891,7 +914,19 @@ impl Session {
     /// without consuming a retained handle's result. Complete shutdown before
     /// destroying the Tokio runtime; a genuine task panic cannot prove quiescence.
     pub async fn shutdown(&self) -> Result<(), SessionError> {
-        self.operations.shutdown().await.map_err(SessionError::from)
+        let execution = self.operations.shutdown().await.map_err(SessionError::from);
+        let storage = self
+            .artifact_work
+            .shutdown()
+            .await
+            .map_err(SessionError::ArtifactStorage);
+        match (execution, storage) {
+            (Err(execution), Err(storage)) => {
+                Err(SessionError::Shutdown(format!("{execution}; {storage}")))
+            }
+            (Err(error), _) | (_, Err(error)) => Err(error),
+            _ => Ok(()),
+        }
     }
 
     pub fn entry_count(&self) -> Result<u64, SessionError> {
@@ -1812,6 +1847,12 @@ pub enum SessionError {
     InvalidPath,
     #[error("invalid working directory")]
     InvalidWorkingDirectory,
+    #[error("artifact offset or page limit is out of range")]
+    InvalidArtifactRange,
+    #[error("artifact storage failed: {0}")]
+    ArtifactStorage(String),
+    #[error("Session shutdown failed: {0}")]
+    Shutdown(String),
     #[error("invalid or inconsistent session history")]
     InvalidHistory,
     #[error("invalid session database")]
@@ -1863,5 +1904,7 @@ impl From<OperationError> for SessionError {
     }
 }
 
+#[cfg(test)]
+mod artifacts_tests;
 #[cfg(test)]
 mod tests;

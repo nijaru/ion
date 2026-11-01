@@ -184,7 +184,10 @@ impl<F: FnMut(AgentEvent)> Gate<'_, F> {
                         .reply
                         .send(Err("inspection query JSON byte limit exceeded".into()));
                 } else {
-                    match self.session.prepare_code_inspection(&query_json) {
+                    match self
+                        .session
+                        .prepare_code_inspection(&query_json, self.parent)
+                    {
                         Ok(inspection) => {
                             let stop = self.stop.clone();
                             let (sender, result) = oneshot::channel();
@@ -363,6 +366,9 @@ impl<F: FnMut(AgentEvent)> Gate<'_, F> {
                             value: &'a Value,
                             is_error: bool,
                             images: Vec<Value>,
+                            artifacts: &'a [crate::ArtifactRef],
+                            parent: ToolOccurrence,
+                            child: usize,
                         }
                         let images = output
                             .images
@@ -380,6 +386,9 @@ impl<F: FnMut(AgentEvent)> Gate<'_, F> {
                         let value = Reply {
                             value: &output.value,
                             is_error: output.is_error,
+                            artifacts: &output.artifacts,
+                            parent: self.parent,
+                            child: admitted.intent.child,
                             images,
                         };
                         if self.stop.is_cancelled() {
@@ -468,6 +477,7 @@ fn selected_output(
     });
     let mut output = match result {
         Ok(value) => ToolOutput {
+            artifacts: Vec::new(),
             value: json!({"result":value}),
             images: Vec::new(),
             is_error: false,
@@ -636,7 +646,9 @@ pub(crate) async fn run<F: FnMut(AgentEvent) + Send>(
                         Some(admitted.intent.child),
                         reasoning,
                     );
-                    let invocation = invocation.with_model_messages(model_messages);
+                    let invocation = invocation
+                        .with_model_messages(model_messages)
+                        .with_artifact_sink(session.artifact_sink());
                     let execution = async {
                         match catalog.dispatch(invocation).await {
                             ToolDispatch::Rejected(reason) => {

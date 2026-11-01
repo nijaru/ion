@@ -139,7 +139,7 @@ async fn direct_shell_preflights_before_recovery_or_admission() {
             "old command".into(),
             false,
             CancellationToken::new(),
-            |_, _| async { panic!("fixture interruption before native execution") },
+            |_, _, _| async { panic!("fixture interruption before native execution") },
         )
         .await;
     assert!(matches!(
@@ -172,7 +172,7 @@ async fn direct_shell_preflights_before_recovery_or_admission() {
     control.new_session().unwrap();
     let original = session.view().unwrap();
     assert!(
-        matches!(original.entries.last(), Some(ion_core::SessionEntry::UserShellSettled { outcome: ion_core::UserShellOutcome::Observed { output, .. }, .. }) if output["stdout"] == "captured")
+        matches!(original.entries.last(), Some(ion_core::SessionEntry::UserShellSettled { outcome: ion_core::UserShellOutcome::Observed { output, .. }, .. }) if output.value["stdout"] == "captured")
     );
     assert!(
         !control

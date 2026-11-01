@@ -23,7 +23,7 @@ use crate::{
     tool_result::ToolOutput,
     tool_set::{ToolActivityKind, ToolDefinition, ToolExposure, ToolPresentation},
 };
-use records::{entry_body_bytes, entry_prefix, hit, kind_from_prefix, private_shell};
+use records::{entry_prefix, hit, kind_from_prefix, private_shell};
 
 pub(crate) const HISTORY_NAME: &str = "history";
 const SEARCH_DEFAULT_LIMIT: usize = 5;
@@ -78,6 +78,14 @@ enum Input {
         #[serde(default = "list_limit")]
         limit: usize,
     },
+    Artifact {
+        entry: u64,
+        artifact: usize,
+        #[serde(default)]
+        offset: u64,
+        #[serde(default = "read_limit")]
+        limit: usize,
+    },
     Read {
         entry: u64,
         #[serde(default)]
@@ -127,6 +135,7 @@ pub(crate) fn definition() -> ToolDefinition {
                 "Search previews show matching context where available; read by stable one-based entry, not call ID (IDs may repeat). ",
                 "Use next_before as before for older pages, even when a page has no matches. Each scan examines at most 256 entries or 8 MiB; one oversized logical record may be scanned alone (reported by oversized_entry). ",
                 "Read returns original tool output JSON or a safe record projection. Content may be a partial JSON fragment: continue at next_offset until null. Offsets are UTF-8 bytes. ",
+                "Retained binary captures use {action:'artifact',entry:N,artifact:0,offset:0}; pages return base64 data and raw-byte next_offset. Source entries and private-shell restrictions still apply. A content hash is not a read locator. " ,
                 "Thinking, provider replay, image bytes, configuration and private !! shells are excluded. Historical evidence is not current workspace state and does not authorize repeating effects."
             )
             .into(),
@@ -135,12 +144,13 @@ pub(crate) fn definition() -> ToolDefinition {
                 "additionalProperties":false,
                 "required":["action"],
                 "properties":{
-                    "action":{"enum":["search","list","read"]},
+                    "action":{"enum":["search","list","read","artifact"]},
                     "query":{"type":"string","minLength":1,"maxLength":MAX_QUERY_BYTES,"description":"Required for search; literal ASCII case-insensitive text (up to 512 UTF-8 bytes)."},
                     "tool":{"type":"string","minLength":1,"maxLength":MAX_QUERY_BYTES,"description":"Search/list only: select original top-level tool results by exact tool name (up to 512 UTF-8 bytes)."},
                     "before":{"type":"integer","minimum":1,"description":"Search/list only: exclusive one-based entry bound for older results."},
                     "entry":{"type":"integer","minimum":1,"description":"Required for read; stable one-based committed Session entry coordinate."},
-                    "offset":{"type":"integer","minimum":0,"description":"Read only: zero-based UTF-8 byte offset."},
+                    "offset":{"type":"integer","minimum":0,"description":"Zero-based byte offset; artifact offsets address raw bytes."},
+                    "artifact":{"type":"integer","minimum":0,"description":"Artifact only: zero-based index in the source record's typed artifacts array."},
                     "limit":{"type":"integer","minimum":1,"maximum":READ_MAX_LIMIT,"description":"Search/list result count (1..10) or read byte limit (4..16384)."}
                 }
             }),
@@ -186,6 +196,14 @@ impl Session {
             } => {
                 validate_page(tool.as_deref(), *before, *limit)?;
             }
+            Input::Artifact { entry, limit, .. }
+                if *entry == 0 || !(1..=READ_MAX_LIMIT).contains(limit) =>
+            {
+                return Err(HistoryError::request(
+                    "artifact requires a committed entry and limit 1..16384",
+                ));
+            }
+            Input::Artifact { .. } => {}
             Input::Read { entry, limit, .. } => {
                 if *entry == 0 {
                     return Err(HistoryError::request(
@@ -268,6 +286,29 @@ impl HistoryRead {
                 offset,
                 limit,
             } => self.read_entry(&snapshot, stop, *entry, *offset, *limit),
+            Input::Artifact {
+                entry,
+                artifact,
+                offset,
+                limit,
+            } => {
+                if *entry > self.upper_entry {
+                    return Err(HistoryError::request(
+                        "artifact source is newer than the committed read bound",
+                    ));
+                }
+                let reference = super::artifacts::history_reference(
+                    &snapshot,
+                    *entry,
+                    self.upper_entry,
+                    *artifact,
+                )?;
+                let mut result = super::artifacts::page(&snapshot, &reference, *offset, *limit)?;
+                result["entry"] = json!(entry);
+                result["artifact_index"] = json!(artifact);
+                result["provenance"] = self.provenance();
+                Ok(result)
+            }
         }
     }
 
@@ -353,16 +394,16 @@ impl HistoryRead {
                 return Err(SessionError::InvalidHistory.into());
             };
             let private = kind == "user_shell_admitted" && private_shell(connection, entry)?;
-            // A shell record's visible outcome is its next settlement. When
-            // that settlement is outside this cursor window, its body is an
-            // extra access not covered by the metadata row above.
+            // Settlement is keyed by admission, not physical adjacency. Charge
+            // its body when it falls outside this cursor's metadata window.
             let joined_bytes = if kind == "user_shell_admitted"
                 && tool.is_none()
                 && !private
                 && entry < self.upper_entry
-                && entry.saturating_add(1) >= exclusive
             {
-                entry_body_bytes(connection, entry.saturating_add(1))?.unwrap_or(0)
+                super::store::shell_settlement(connection, entry, self.upper_entry)?
+                    .filter(|(coordinate, _)| *coordinate >= exclusive)
+                    .map_or(0, |(_, bytes)| bytes)
             } else {
                 0
             };
@@ -444,6 +485,7 @@ pub(crate) async fn execute(
     let joined = tokio::task::spawn_blocking(move || read.read(&worker_stop)).await;
     match joined {
         Ok(Ok(value)) => ToolOutput {
+            artifacts: Vec::new(),
             value,
             images: Vec::new(),
             is_error: false,
@@ -456,6 +498,7 @@ pub(crate) async fn execute(
 
 fn failure(message: impl Into<String>) -> ToolOutput {
     ToolOutput {
+        artifacts: Vec::new(),
         value: json!({"error":message.into()}),
         images: Vec::new(),
         is_error: true,

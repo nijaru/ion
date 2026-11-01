@@ -56,6 +56,7 @@ impl ToolExecutor for Effect {
             ToolOutput {
                 value: serde_json::json!("effect"),
                 images: Vec::new(),
+                artifacts: Vec::new(),
                 is_error: false,
             }
         })

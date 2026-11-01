@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
 """Credential-free built coding web retrieval, composition and source oracle."""
+import base64
 import hashlib
+from smoke_artifacts import artifact_bytes, BASE64_JS
 import json
 import os
 import subprocess
@@ -61,34 +63,36 @@ class Provider(BaseHTTPRequestHandler):
                 if prompt == "WEB_READONLY":
                     assert "exec" not in names and "write" not in names, names
                 if prompt in {"WEB_CODE", "WEB_EXCLUDED"}:
-                    code = "const r=await tools.web_fetch(" + json.dumps(args) + ");"
+                    code = BASE64_JS + "const r=await tools.web_fetch(" + json.dumps(args) + ");"
                     if prompt == "WEB_CODE":
                         code += (
                             "if(r.is_error||!r.value.untrusted||!r.value.truncated)throw new Error('bad retrieval');"
                             "const p=await tools.web_fetch(" + json.dumps({"url": url + "/pdf"}) + ");"
                             "const i=await tools.web_fetch({url:'file:///etc/passwd'});"
-                            "const full=await tools.read({path:r.value.full_path});"
-                            "text({source:r.value.source,content:full.value.content,pdf:p.value.error.kind,invalid:i.value.error.kind});"
+                            "const full=await inspectSaved({kind:'artifact',parent:r.parent,child:r.child,artifact:0});"
+                            "text({source:r.value.source,content:utf8(base64Bytes(full.data)),pdf:p.value.error.kind,invalid:i.value.error.kind});"
                         )
                     self.calls([("code", "code_mode", {"code": code})])
                 else:
                     self.calls([("fetch", "web_fetch", args), ("pdf", "web_fetch", {"url": url + "/pdf"}), ("scheme", "web_fetch", {"url": "file:///etc/passwd"})])
             elif step == 1 and prompt not in {"WEB_CODE", "WEB_EXCLUDED"}:
                 results = [json.loads(m["content"]) for m in body["messages"] if m["role"] == "tool"]
-                fetched = results[0]["result"]
+                capture=results[0]["result"]
+                fetched = capture["output"]
                 assert fetched["untrusted"] and fetched["truncated"], fetched
                 assert fetched["source"]["body_sha256"] == DIGEST, fetched
                 assert results[1]["result"]["error"]["kind"] == "unsupported_content", results
                 assert results[2]["result"]["error"]["kind"] == "invalid_url", results
-                self.calls([("snapshot", "read", {"path": fetched["full_path"]})])
+                self.calls([("snapshot", "history", {"action":"artifact","entry":capture["entry"],"artifact":0})])
             else:
                 last = json.loads(body["messages"][-1]["content"])
                 if prompt == "WEB_EXCLUDED":
                     assert last["is_error"], last
                 else:
                     assert not last["is_error"], last
-                    assert "WEB_FETCH_DOCUMENT" in json.dumps(last), last
-                    assert "UNEXPECTED_SCRIPT" not in json.dumps(last), last
+                    selected=json.dumps(last) if prompt=="WEB_CODE" else base64.b64decode(last["result"]["data"]).decode()
+                    assert "WEB_FETCH_DOCUMENT" in selected,last
+                    assert "UNEXPECTED_SCRIPT" not in selected,last
                     if prompt == "WEB_CODE":
                         assert DIGEST in json.dumps(last), last
                 self.events({"content": "WEB_FETCH_OK"}, "stop")
@@ -226,15 +230,16 @@ if __name__ == "__main__":
                     else:
                         continue
                     if outcome["state"] == "observed":
-                        outputs.append(outcome["output"]["value"])
-                fetched = next(o for o in outputs if o.get("source", {}).get("body_sha256") == DIGEST)
+                        outputs.append(outcome["output"])
+                retained = next(o for o in outputs if o["value"].get("source", {}).get("body_sha256") == DIGEST)
+                fetched = retained["value"]
                 assert fetched["source"]["final_url"] == f"http://localhost:{web.server_port}/document", fetched
                 assert fetched["source"]["body_bytes"] == len(DOCUMENT), fetched
-                snapshot = Path(fetched["full_path"])
-                assert snapshot.is_relative_to(root / "tmp"), snapshot
-                text = snapshot.read_text()
-                assert "WEB_FETCH_DOCUMENT" in text and "UNEXPECTED_SCRIPT" not in text, text
-                assert f"http://localhost:{web.server_port}/reference" in text, text
+                reference = retained["artifacts"][0]
+                assert reference["complete"]
+                text = artifact_bytes(root,reference).decode()
+                assert "WEB_FETCH_DOCUMENT" in text and "UNEXPECTED_SCRIPT" not in text,text
+                assert f"http://localhost:{web.server_port}/reference" in text,text
             env.update(MODEL_TOKEN="model-secret", SEARCH_TOKEN="search-secret")
             cases = [
                 ("SEARCH_NATIVE", "openai", []),

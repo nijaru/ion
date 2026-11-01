@@ -11,6 +11,7 @@ impl ToolExecutor for Counter {
     ) -> BoxFuture<'a, crate::ToolOutput> {
         Box::pin(async move {
             crate::ToolOutput {
+                artifacts: Vec::new(),
                 value: serde_json::json!(self.0.fetch_add(1, Ordering::SeqCst) + 1),
                 images: vec![],
                 is_error: false,

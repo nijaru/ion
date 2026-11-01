@@ -8,6 +8,7 @@ repository.workspace = true
 description = "Ion durable coding-turn runtime"
 
 [dependencies]
+base64 = "0.22.1"
 futures-util = "0.3.34"
 ion-ai.workspace = true
 rusqlite = { version = "0.40.2", features = ["bundled"] }

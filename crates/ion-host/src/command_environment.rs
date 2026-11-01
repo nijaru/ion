@@ -205,7 +205,8 @@ mod tests {
             .prepare("helper; printf '|'; probe; printf '|%s' '$(false)'")
             .unwrap();
         drop(tools);
-        let output = prepared(CancellationToken::new()).await;
+        let owner = crate::test_support::ArtifactFixture::new();
+        let output = prepared(CancellationToken::new(), owner.sink()).await;
         assert!(!output.is_error, "{}", output.value);
         assert_eq!(output.value["stdout"], "/chosen/venv:bound|alias|$(false)");
         let native = Arc::new(
@@ -213,7 +214,7 @@ mod tests {
         );
         let catalog = ion_core::ToolSet::new([native as Arc<dyn ion_core::ToolSource>]).snapshot();
         let observed = catalog
-            .execute_untracked(
+            .execute(ion_core::ToolInvocation::untracked(
                 &ion_ai::ToolCall {
                     id: "env".into(),
                     name: "exec".into(),
@@ -221,7 +222,7 @@ mod tests {
                     raw_arguments: None,
                 },
                 CancellationToken::new(),
-            )
+            ))
             .await;
         assert!(!observed.is_error, "{}", observed.value);
         assert_eq!(observed.value["stdout"], "/chosen/venv:bound");
@@ -263,7 +264,7 @@ mod tests {
                     )
                     .unwrap();
                     let output = tools
-                        .run_user_shell("printf PAYLOAD", CancellationToken::new())
+                        .run_user_shell("printf PAYLOAD", CancellationToken::new(), None)
                         .await;
                     assert_eq!(output.is_error, malformed, "{}", output.value);
                     let recorded = serde_json::to_string(&output.value).unwrap();
@@ -301,7 +302,7 @@ mod tests {
         );
         let tools = LocalTools::with_environment(std::env::temp_dir(), environment).unwrap();
         let output = tools
-            .run_user_shell("printf FORBIDDEN", CancellationToken::new())
+            .run_user_shell("printf FORBIDDEN", CancellationToken::new(), None)
             .await;
         assert!(output.is_error);
         assert_eq!(output.value["exit_code"], 1);
@@ -325,7 +326,7 @@ mod tests {
         );
         let tools = LocalTools::with_environment(&root, environment).unwrap();
         let stop = CancellationToken::new();
-        let work = tools.run_user_shell("touch forbidden", stop.clone());
+        let work = tools.run_user_shell("touch forbidden", stop.clone(), None);
         let cancel = async {
             tokio::time::timeout(std::time::Duration::from_secs(3), async {
                 while !root.join("ready").exists() {

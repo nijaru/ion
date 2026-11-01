@@ -270,6 +270,7 @@ impl ProcessTools {
                 let mut output = snapshot(&state, &gate);
                 output["error"] = json!(failure);
                 ToolOutput {
+                    artifacts: Vec::new(),
                     value: output,
                     images: Vec::new(),
                     is_error: true,
@@ -348,6 +349,7 @@ impl ProcessTools {
             output["error"] = json!(error);
         }
         ToolOutput {
+            artifacts: Vec::new(),
             value: output,
             images: Vec::new(),
             is_error: cancelled || result.is_some_and(|result| result.is_err()),
@@ -587,6 +589,7 @@ impl ProcessTools {
                     output["error"] = json!(failure);
                 }
                 ToolOutput {
+                    artifacts: Vec::new(),
                     value: output,
                     images: Vec::new(),
                     is_error: ack.cancelled || ack.error.is_some(),
@@ -619,7 +622,8 @@ impl ProcessTools {
                     let mut output = snapshot(&entry.state, &entry.gate);
                     output["cancelled"] = json!(false);
                     output["error"] = json!(error);
-                    return ToolOutput { value: output, images: Vec::new(), is_error: true };
+                    return ToolOutput {
+                        artifacts: Vec::new(), value: output, images: Vec::new(), is_error: true };
                 }
                 false
             }
@@ -628,6 +632,7 @@ impl ProcessTools {
         let mut output = snapshot(&entry.state, &entry.gate);
         output["cancelled"] = json!(cancelled);
         ToolOutput {
+            artifacts: Vec::new(),
             value: output,
             images: Vec::new(),
             is_error: cancelled,
@@ -722,6 +727,7 @@ fn success(state: Arc<ProcessState>, gate: Arc<JoinGate>, extra: Value) -> ToolO
         value.extend(extra.clone());
     }
     ToolOutput {
+        artifacts: Vec::new(),
         value,
         images: Vec::new(),
         is_error: false,
@@ -729,6 +735,7 @@ fn success(state: Arc<ProcessState>, gate: Arc<JoinGate>, extra: Value) -> ToolO
 }
 fn success_value(value: Value) -> ToolOutput {
     ToolOutput {
+        artifacts: Vec::new(),
         value,
         images: Vec::new(),
         is_error: false,
@@ -736,6 +743,7 @@ fn success_value(value: Value) -> ToolOutput {
 }
 fn error_value(value: Value) -> ToolOutput {
     ToolOutput {
+        artifacts: Vec::new(),
         value,
         images: Vec::new(),
         is_error: true,

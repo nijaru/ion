@@ -59,7 +59,7 @@ for line in sys.stdin:
     for spec in issued.specs() {
         observed.push(
             issued
-                .execute_untracked(
+                .execute(ion_core::ToolInvocation::untracked(
                     &ToolCall {
                         id: spec.name.clone(),
                         name: spec.name.clone(),
@@ -67,7 +67,7 @@ for line in sys.stdin:
                         raw_arguments: None,
                     },
                     CancellationToken::new(),
-                )
+                ))
                 .await,
         );
     }
@@ -211,7 +211,7 @@ for line in sys.stdin:
                 expected == Some(ToolExposure::Direct)
             );
             let result = snapshot
-                .execute_untracked(
+                .execute(ion_core::ToolInvocation::untracked(
                     &ToolCall {
                         id: name.clone(),
                         name,
@@ -219,7 +219,7 @@ for line in sys.stdin:
                         raw_arguments: None,
                     },
                     CancellationToken::new(),
-                )
+                ))
                 .await;
             assert_eq!(result.is_error, expected.is_none(), "{}", result.value);
             if expected.is_some() {
@@ -237,7 +237,7 @@ for line in sys.stdin:
         }
     }
     let resources = snapshot
-        .execute_untracked(
+        .execute(ion_core::ToolInvocation::untracked(
             &ToolCall {
                 id: "hidden-resource".into(),
                 name: "read_mcp_resource".into(),
@@ -245,7 +245,7 @@ for line in sys.stdin:
                 raw_arguments: None,
             },
             CancellationToken::new(),
-        )
+        ))
         .await;
     assert!(
         resources.is_error,

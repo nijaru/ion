@@ -66,15 +66,12 @@ impl ToolExecutor for CharacterCounter {
                             .expect("qualification marker");
                         stop.cancelled().await;
                     }
-                    ToolOutput {
-                        value: json!(text.chars().count()),
-                        images: Vec::new(),
-                        is_error: false,
-                    }
+                    ToolOutput::success(json!(text.chars().count()))
                 }
                 None => ToolOutput {
                     value: json!("text must be a string"),
                     images: Vec::new(),
+                    artifacts: Vec::new(),
                     is_error: true,
                 },
             }

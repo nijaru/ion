@@ -49,6 +49,7 @@ async fn local_http_redirects_keep_source_identity_without_cookie_or_auth_state(
         .fetch(
             &json!({"url":format!("{base}/start#fragment")}),
             CancellationToken::new(),
+            None,
         )
         .await;
     assert!(!result.is_error, "{}", result.value);
@@ -157,7 +158,7 @@ async fn unsupported_or_incomplete_responses_fail_explicitly_without_body_disclo
         let (url, server) = fixture(vec![reply]).await;
         let result = WebTools::new()
             .unwrap()
-            .fetch(&json!({"url":url}), CancellationToken::new())
+            .fetch(&json!({"url":url}), CancellationToken::new(), None)
             .await;
         assert!(result.is_error, "{}", result.value);
         assert_eq!(result.value["error"]["kind"], kind, "{}", result.value);
@@ -177,7 +178,7 @@ async fn redirect_budget_bounds_requests_and_never_upgrades_selected_http() {
     .await;
     let result = WebTools::new()
         .unwrap()
-        .fetch(&json!({"url":base}), CancellationToken::new())
+        .fetch(&json!({"url":base}), CancellationToken::new(), None)
         .await;
     assert_eq!(result.value["error"]["kind"], "redirect_limit");
     assert_eq!(server.await.unwrap().len(), MAX_REDIRECTS + 1);
@@ -218,7 +219,7 @@ async fn cancellation_stops_waiting_for_headers_without_retry() {
     let client = tokio::spawn(async move {
         WebTools::new()
             .unwrap()
-            .fetch(&json!({"url":url}), child_stop)
+            .fetch(&json!({"url":url}), child_stop, None)
             .await
     });
     ready.await.unwrap();
@@ -235,6 +236,7 @@ async fn cancellation_stops_waiting_for_headers_without_retry() {
 
 #[tokio::test]
 async fn inline_utf8_prefix_links_to_complete_private_snapshot_not_a_live_refetch() {
+    let owner = crate::test_support::ArtifactFixture::new();
     let text = "é".repeat(100);
     let (url, server) = fixture(vec![response(
         "200 OK",
@@ -244,7 +246,11 @@ async fn inline_utf8_prefix_links_to_complete_private_snapshot_not_a_live_refetc
     .await;
     let result = WebTools::new()
         .unwrap()
-        .fetch(&json!({"url":url, "max_bytes":5}), CancellationToken::new())
+        .fetch(
+            &json!({"url":url, "max_bytes":5}),
+            CancellationToken::new(),
+            Some(owner.sink()),
+        )
         .await;
     assert!(!result.is_error, "{}", result.value);
     assert_eq!(result.value["content"], "éé");
@@ -254,14 +260,19 @@ async fn inline_utf8_prefix_links_to_complete_private_snapshot_not_a_live_refetc
         result.value["source"]["body_sha256"],
         format!("{:x}", Sha256::digest(text.as_bytes()))
     );
-    let path = std::path::PathBuf::from(result.value["full_path"].as_str().unwrap());
-    assert_eq!(std::fs::read_to_string(&path).unwrap(), text);
+    assert_eq!(result.artifacts.len(), 1);
+    let reference = &result.artifacts[0];
+    assert!(reference.complete);
+    assert_eq!(owner.bytes(reference), text.as_bytes());
     use std::os::unix::fs::PermissionsExt;
     assert_eq!(
-        std::fs::metadata(&path).unwrap().permissions().mode() & 0o777,
+        std::fs::metadata(owner.session.path())
+            .unwrap()
+            .permissions()
+            .mode()
+            & 0o777,
         0o600
     );
-    std::fs::remove_file(path).unwrap();
     server.await.unwrap();
 }
 
@@ -278,12 +289,21 @@ fn html_work_is_bounded_and_cancelled_before_snapshot_publication() {
         url.clone(),
         CancellationToken::new(),
         deadline,
+        None,
     );
     assert!(matches!(result, Err(("conversion_limit", _))));
     let stopped = CancellationToken::new();
     stopped.cancel();
     assert!(matches!(
-        content::project(vec![b'x'; 100], "text/plain", 4, url, stopped, deadline),
+        content::project(
+            vec![b'x'; 100],
+            "text/plain",
+            4,
+            url,
+            stopped,
+            deadline,
+            None
+        ),
         Err(("cancelled", _))
     ));
 }
@@ -303,6 +323,7 @@ fn table_layout_cannot_amplify_text_projection() {
         Url::parse("http://localhost/").unwrap(),
         CancellationToken::new(),
         tokio::time::Instant::now() + DEADLINE,
+        None,
     )
     .unwrap_or_else(|error| panic!("{error:?}"));
     assert!(!output.truncated);
@@ -322,6 +343,7 @@ fn formatting_attributes_cannot_be_reconstructed_or_buffered_without_limits() {
         Url::parse("http://localhost/").unwrap(),
         CancellationToken::new(),
         deadline,
+        None,
     );
     assert!(matches!(result, Err(("conversion_limit", _))));
     let end_attributes = (0..257).map(|n| format!(" a{n}=x")).collect::<String>();
@@ -337,6 +359,7 @@ fn formatting_attributes_cannot_be_reconstructed_or_buffered_without_limits() {
             Url::parse("http://localhost/").unwrap(),
             CancellationToken::new(),
             deadline,
+            None,
         );
         assert!(matches!(result, Err(("conversion_limit", _))));
     }

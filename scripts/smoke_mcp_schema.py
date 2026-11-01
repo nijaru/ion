@@ -8,6 +8,7 @@ import tempfile
 import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
+from smoke_artifacts import artifact_bytes
 
 ROOT = Path(__file__).resolve().parent.parent
 BINARY = Path(os.environ.get("ION_SMOKE_BIN", ROOT / "target/debug/ion"))
@@ -21,9 +22,9 @@ def verify_observation(output, status):
     assert value["is_error"] is False and value["structured_content"] == {"count": "VALUE_CANARY"}, value
     assert value["output_schema_validation"]["status"] == status, value
     assert value["raw_result_error"] is None, value
-    path = Path(value["raw_result_path"])
-    assert path.parent == work / "tmp" and path.stat().st_mode & 0o777 == 0o600, path
-    raw = json.loads(path.read_text())
+    reference=output["artifacts"][value["raw_result_artifact"]]
+    assert reference["complete"]
+    raw = json.loads(artifact_bytes(work,reference))
     assert raw["structuredContent"] == value["structured_content"] and raw["isError"] is False, raw
     assert raw["_meta"] == {"retained": "RAW_ONLY"} and "output_schema_validation" not in raw, raw
 
@@ -68,7 +69,7 @@ return [checked, unchecked];
             else:
                 envelope = json.loads(body["messages"][-1]["content"])
                 assert envelope["is_error"] is False, envelope
-                verify_observation({"value": envelope["result"], "is_error": envelope["is_error"]}, "invalid" if step == 2 + offset else "not_checked")
+                verify_observation({"value": envelope["result"]["output"], "artifacts":envelope["result"]["artifacts"], "is_error": envelope["is_error"]}, "invalid" if step == 2 + offset else "not_checked")
                 if step == 2 + offset:
                     name, arguments = UNCHECKED, {}
                 else:

@@ -82,6 +82,7 @@ impl ToolExecutor for Effect {
             ToolOutput {
                 value: json!({"effect": value}),
                 images: Vec::new(),
+                artifacts: Vec::new(),
                 is_error: false,
             }
         })
