@@ -541,7 +541,7 @@ pub(super) fn page(
         text.chars()
             .all(|c| !c.is_control() || matches!(c, '\n' | '\r' | '\t'))
     });
-    let (encoding, data, bytes) = match text {
+    let (encoding, data, data_bytes) = match text {
         Some(text) => ("utf8", serde_json::json!(text), text.len()),
         None => (
             "base64",
@@ -549,7 +549,7 @@ pub(super) fn page(
             page.bytes.len(),
         ),
     };
-    let end = offset + bytes as u64;
+    let end = offset + data_bytes as u64;
     let end_label = reference.label.floor_char_boundary(128);
     Ok(serde_json::json!({
         "artifact_id": reference.id,
@@ -561,6 +561,7 @@ pub(super) fn page(
         "offset": offset,
         "encoding": encoding,
         "data": data,
+        "data_bytes": data_bytes,
         "next_offset": (end < reference.bytes).then_some(end),
     }))
 }

@@ -50,7 +50,7 @@ def program(prompt):
     if prompt == "RECOVER_FAIL":
         producer = "import secrets; print(secrets.token_hex(24)); print('X'*100000)"
         command = f"printf ONCE >> effects; {shlex.quote(sys.executable)} -c {shlex.quote(producer)}; exit 7"
-        return "const r=await tools.exec(" + json.dumps({"command": command}) + "); if(r.artifacts.length!==1||r.child!==0)throw new Error('missing capture provenance'); let rejected=false; try {await inspectSaved({kind:'artifact',parent:r.parent,child:r.child,artifact:0,offset:r.artifacts[0].bytes+1});}catch(_){rejected=true;} if(!rejected)throw new Error('invalid range accepted'); const page=await inspectSaved({kind:'artifact',parent:r.parent,child:r.child,artifact:0,offset:0,limit:1024}); if(!page.complete||page.encoding!=='utf8'||page.offset!==0)throw new Error('current capture unavailable after recoverable range error'); throw new Error('after effect');"
+        return "const r=await tools.exec(" + json.dumps({"command": command}) + "); if(r.artifacts.length!==1||r.child!==0)throw new Error('missing capture provenance'); let rejected=false; try {await inspectSaved({kind:'artifact',parent:r.parent,child:r.child,artifact:0,offset:r.artifacts[0].bytes+1});}catch(_){rejected=true;} if(!rejected)throw new Error('invalid range accepted'); const page=await inspectSaved({kind:'artifact',parent:r.parent,child:r.child,artifact:0,offset:0,limit:1024}); if(!page.complete||page.encoding!=='utf8'||page.offset!==0||page.data_bytes!==1024)throw new Error('current capture unavailable after recoverable range error'); throw new Error('after effect');"
     if prompt == "BINARY_CAPTURE":
         producer = "import os; os.write(1,bytes(range(256))*300)"
         command = f"{shlex.quote(sys.executable)} -c {shlex.quote(producer)}"
@@ -176,7 +176,7 @@ with tempfile.TemporaryDirectory(prefix="ion-code-mode-") as temporary:
         binary_parent = next(record for record in binary_records if record["type"] == "tool_finished")
         binary_page = binary_parent["output"]["result"]
         assert binary_page["encoding"] == "base64" and base64.b64decode(binary_page["data"], validate=True) == bytes(range(256)), binary_parent
-        assert binary_page["offset"] == 0 and binary_page["next_offset"] == 256 and binary_page["total_bytes"] == 76800, binary_page
+        assert binary_page["offset"] == 0 and binary_page["data_bytes"] == 256 and binary_page["next_offset"] == 256 and binary_page["total_bytes"] == 76800, binary_page
         binary_child = next(record for record in binary_records if record["type"] == "child_tool_finished")
         assert artifact_bytes(work, binary_child["artifacts"][0]) == bytes(range(256)) * 300
         # The guard must cover unread lines, not just this first-line page.

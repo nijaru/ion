@@ -135,7 +135,7 @@ pub(crate) fn definition() -> ToolDefinition {
                 "Search previews show matching context where available; read by stable one-based entry, not call ID (IDs may repeat). ",
                 "Use next_before as before for older pages, even when a page has no matches. Each scan examines at most 256 entries or 8 MiB; one oversized logical record may be scanned alone (reported by oversized_entry). ",
                 "Read returns original tool output JSON or a safe record projection. Content may be a partial JSON fragment: continue at next_offset until null. Offsets are UTF-8 bytes. ",
-                "Retained binary captures use {action:'artifact',entry:N,artifact:0,offset:0}; pages return data with encoding utf8 for readable text or base64 for other bytes. Follow raw-byte next_offset; text pages preserve character boundaries. Source entries and private-shell restrictions still apply. A content hash is not a read locator. " ,
+                "Retained binary captures use {action:'artifact',entry:N,artifact:0,offset:0}; pages return data with encoding utf8 for readable text or base64 for other bytes, and data_bytes is the page's original raw byte count, not its string or encoded length. Follow raw-byte next_offset; consume final data before treating null next_offset as EOF; text pages preserve character boundaries. Source entries and private-shell restrictions still apply. A content hash is not a read locator. " ,
                 "Thinking, provider replay, image bytes, configuration and private !! shells are excluded. Historical evidence is not current workspace state and does not authorize repeating effects."
             )
             .into(),

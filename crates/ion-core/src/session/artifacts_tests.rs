@@ -177,6 +177,7 @@ fn artifact_pages_render_text_without_losing_raw_bytes() {
         assert_eq!(page["encoding"], encoding, "{payload:?}, {offset}, {limit}");
         assert_eq!(page_bytes(&page), expected);
         assert_eq!(page["offset"], offset);
+        assert_eq!(page["data_bytes"], expected.len());
         assert_eq!(page["next_offset"], json!(next));
 
         if offset != 0 {
@@ -188,6 +189,7 @@ fn artifact_pages_render_text_without_losing_raw_bytes() {
             loop {
                 let page = artifacts::page(&store.connection, &reference, offset, limit).unwrap();
                 let bytes = page_bytes(&page);
+                assert_eq!(page["data_bytes"], bytes.len());
                 assert!(bytes.len() <= limit);
                 rebuilt.extend_from_slice(&bytes);
                 let Some(next) = page["next_offset"].as_u64() else {
