@@ -1,8 +1,12 @@
 //! Immutable service preflight and prepare-before-publish binding replacement.
-use std::{fs, path::PathBuf, sync::Arc};
+use std::{
+    fs,
+    path::{Path, PathBuf},
+    sync::Arc,
+};
 
 use anyhow::{Result, ensure};
-use ion_ai::ModelRef;
+use ion_ai::{ModelRef, Reasoning};
 use ion_core::{Agent, ForkPoint, Session};
 use serde::Serialize;
 
@@ -21,6 +25,12 @@ pub struct SessionSetup {
     pub(crate) resources: Resources,
     pub(crate) commands: CommandCatalog,
     pub(crate) questions: Option<Arc<QuestionCustody>>,
+}
+
+struct PreparedBinding {
+    resources: Resources,
+    commands: CommandCatalog,
+    runtime: ApplicationRuntime,
 }
 
 impl SessionSetup {
@@ -125,17 +135,22 @@ impl SessionSetup {
 
     fn prepare(
         &self,
-        session: &Session,
+        cwd: Option<&Path>,
         model: Option<&ModelRef>,
-    ) -> Result<(Resources, CommandCatalog, ApplicationRuntime)> {
-        let resources = self.application.resources(session.cwd())?;
-        let commands = self.application.commands(session.cwd())?;
+        reasoning: Reasoning,
+    ) -> Result<PreparedBinding> {
+        let resources = self.application.resources(cwd)?;
+        let commands = self.application.commands(cwd)?;
         let runtime = self
             .application
-            .runtime(session.cwd(), model, self.questions.clone())?;
+            .runtime(cwd, model, self.questions.clone())?;
         validate_model(&runtime, model)?;
-        runtime.agent.validate_reasoning(session.reasoning()?)?;
-        Ok((resources, commands, runtime))
+        runtime.agent.validate_reasoning(reasoning)?;
+        Ok(PreparedBinding {
+            resources,
+            commands,
+            runtime,
+        })
     }
 }
 
@@ -223,19 +238,13 @@ impl<M: Serialize + Send + 'static> SessionControl<M> {
         let _idle = previous.reserve_idle()?;
         // Preflight before allocating/publishing a new database. New Sessions
         // intentionally reset reasoning, unlike conversation copies.
-        let resources = self.setup.application.resources(previous.cwd())?;
-        let commands = self.setup.application.commands(previous.cwd())?;
-        let runtime =
-            self.setup
-                .application
-                .runtime(previous.cwd(), None, self.setup.questions.clone())?;
-        runtime
-            .agent
-            .validate_reasoning(ion_ai::Reasoning::ProviderDefault)?;
+        let prepared = self
+            .setup
+            .prepare(previous.cwd(), None, Reasoning::ProviderDefault)?;
         let path = self.setup.catalog.new_path()?;
         let session = Arc::new(Session::create(&path, previous.cwd())?);
-        runtime.agent.select_model(&session)?;
-        self.publish(session, runtime, resources, commands);
+        prepared.runtime.agent.select_model(&session)?;
+        self.publish(session, prepared);
         Ok(())
     }
 
@@ -243,16 +252,21 @@ impl<M: Serialize + Send + 'static> SessionControl<M> {
         self.ensure_replaceable()?;
         let previous = self.setup.session.clone();
         let _idle = previous.reserve_idle()?;
-        let resources = self.setup.application.resources(previous.cwd())?;
-        let commands = self.setup.application.commands(previous.cwd())?;
         // Retain the resolved configuration, not its lookup key. An unsaved
         // route must remain usable; a changed store must not redirect a clone.
-        let runtime = self.setup.runtime.clone();
-        runtime.agent.validate_reasoning(previous.reasoning()?)?;
+        let prepared = PreparedBinding {
+            resources: self.setup.application.resources(previous.cwd())?,
+            commands: self.setup.application.commands(previous.cwd())?,
+            runtime: self.setup.runtime.clone(),
+        };
+        prepared
+            .runtime
+            .agent
+            .validate_reasoning(previous.reasoning()?)?;
         let path = self.setup.catalog.new_path()?;
         let session = Arc::new(previous.clone_to(&path)?);
         let id = session.id().to_string();
-        self.publish(session, runtime, resources, commands);
+        self.publish(session, prepared);
         Ok(id)
     }
 
@@ -261,19 +275,13 @@ impl<M: Serialize + Send + 'static> SessionControl<M> {
         let previous = self.setup.session.clone();
         let _idle = previous.reserve_idle()?;
         let (model, reasoning) = previous.fork_preferences(point)?;
-        let resources = self.setup.application.resources(previous.cwd())?;
-        let commands = self.setup.application.commands(previous.cwd())?;
-        let runtime = self.setup.application.runtime(
-            previous.cwd(),
-            Some(&model),
-            self.setup.questions.clone(),
-        )?;
-        validate_model(&runtime, Some(&model))?;
-        runtime.agent.validate_reasoning(reasoning)?;
+        let prepared = self
+            .setup
+            .prepare(previous.cwd(), Some(&model), reasoning)?;
         let path = self.setup.catalog.new_path()?;
         let session = Arc::new(previous.fork_to(&path, point)?);
         let id = session.id().to_string();
-        self.publish(session, runtime, resources, commands);
+        self.publish(session, prepared);
         Ok(id)
     }
 
@@ -287,17 +295,11 @@ impl<M: Serialize + Send + 'static> SessionControl<M> {
         self.ensure_replaceable()?;
         let session = self.setup.session.clone();
         let mut navigation = session.prepare_navigation(expected, head_entry)?;
-        let resources = self.setup.application.resources(session.cwd())?;
-        let commands = self.setup.application.commands(session.cwd())?;
-        let runtime = self.setup.application.runtime(
-            session.cwd(),
-            navigation.model(),
-            self.setup.questions.clone(),
-        )?;
-        validate_model(&runtime, navigation.model())?;
-        runtime.agent.validate_reasoning(navigation.reasoning())?;
+        let prepared =
+            self.setup
+                .prepare(session.cwd(), navigation.model(), navigation.reasoning())?;
         let position = navigation.commit()?;
-        self.publish(session.clone(), runtime, resources, commands);
+        self.publish(session.clone(), prepared);
         Ok(position)
     }
 
@@ -318,26 +320,22 @@ impl<M: Serialize + Send + 'static> SessionControl<M> {
             "session belongs to another working directory"
         );
         let model = session.model_preference()?;
-        let (resources, commands, runtime) = self.setup.prepare(&session, model.as_ref())?;
-        self.publish(session, runtime, resources, commands);
+        let prepared = self
+            .setup
+            .prepare(session.cwd(), model.as_ref(), session.reasoning()?)?;
+        self.publish(session, prepared);
         Ok(())
     }
 
-    fn publish(
-        &mut self,
-        session: Arc<Session>,
-        runtime: ApplicationRuntime,
-        resources: Resources,
-        commands: CommandCatalog,
-    ) {
+    fn publish(&mut self, session: Arc<Session>, prepared: PreparedBinding) {
         if let Some(questions) = &self.setup.questions {
             questions.rebind_session(self.owner, session.id());
         }
         self.completions.rebind(session.id());
         self.setup.session = session;
-        self.setup.runtime = runtime;
-        self.setup.resources = resources;
-        self.setup.commands = commands;
+        self.setup.runtime = prepared.runtime;
+        self.setup.resources = prepared.resources;
+        self.setup.commands = prepared.commands;
     }
 }
 
