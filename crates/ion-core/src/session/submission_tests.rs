@@ -158,7 +158,10 @@ fn logical_identity_survives_moves_but_copies_do_not_inherit_deliveries() {
     ] {
         assert_ne!(copy.id(), id);
         assert!(copy.request_receipt(&key).unwrap().is_none());
-        assert_eq!(copy.messages().unwrap(), session.messages().unwrap());
+        assert_eq!(
+            copy.view().unwrap().messages,
+            session.view().unwrap().messages
+        );
     }
     let other_scope = RequestKey::new("tenant-b".into(), "same-id".into()).unwrap();
     assert!(matches!(

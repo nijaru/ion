@@ -216,6 +216,8 @@ pub struct SessionView {
     pub cwd: Option<PathBuf>,
     pub name: Option<String>,
     pub entries: Vec<SessionEntry>,
+    /// Complete selected model-facing path, without applying compaction.
+    /// Use `Session::context_messages` for the current request working context.
     pub messages: Vec<Message>,
     /// Original entry coordinates on the selected context path, in order.
     pub context_path: Vec<u64>,

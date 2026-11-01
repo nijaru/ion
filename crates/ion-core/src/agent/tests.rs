@@ -982,7 +982,11 @@ async fn changed_signed_context_rebases_once_before_dispatch() {
     let requests = service.requests();
     assert!(requests[0].messages[1].provider_replay.is_some());
     assert!(requests[1].messages[1].provider_replay.is_none());
-    assert!(session.messages().unwrap()[1].provider_replay.is_some());
+    assert!(
+        session.view().unwrap().messages[1]
+            .provider_replay
+            .is_some()
+    );
     assert!(
         session.context_messages().unwrap()[1]
             .provider_replay
@@ -1160,7 +1164,7 @@ async fn coding_task_uses_one_loop_and_resumes_after_reopen() {
         std::fs::read_to_string(root.join("answer.txt")).unwrap(),
         "hello ion\n"
     );
-    assert_eq!(session.messages().unwrap().len(), 5);
+    assert_eq!(session.view().unwrap().messages.len(), 5);
     drop(session);
     let reopened = Arc::new(Session::open(&path).unwrap());
     let scripts = Arc::new(ScriptedModelService::new([response(vec![Content::Text(
@@ -1178,7 +1182,7 @@ async fn coding_task_uses_one_loop_and_resumes_after_reopen() {
         .await
         .unwrap();
     assert_eq!(answer, "still here");
-    assert_eq!(reopened.messages().unwrap().len(), 7);
+    assert_eq!(reopened.view().unwrap().messages.len(), 7);
     drop(reopened);
     std::fs::remove_dir_all(root).unwrap();
 }
@@ -1719,7 +1723,7 @@ async fn tool_images_are_committed_replayed_and_rejected_on_a_text_only_route() 
     drop(session);
     let reopened = Arc::new(Session::open(&path).unwrap());
     assert!(
-        matches!(&reopened.messages().unwrap()[2].content[0], Content::ToolResult(result) if result.images.len() == 1)
+        matches!(&reopened.view().unwrap().messages[2].content[0], Content::ToolResult(result) if result.images.len() == 1)
     );
     let text_service = Arc::new(ScriptedModelService::new([]));
     let text_agent = Agent::new(text_service.clone(), Arc::new(ImageTool), model());
@@ -1843,8 +1847,9 @@ async fn empty_completed_responses_fail_without_poisoning_resume() {
     }
     assert!(
         !session
-            .messages()
+            .view()
             .unwrap()
+            .messages
             .iter()
             .any(|message| message.role == Role::Assistant)
     );
@@ -3384,7 +3389,7 @@ async fn manual_compaction_uses_no_tools_and_keeps_raw_history() {
     drop(session);
     let session = Arc::new(Session::open(&path).unwrap());
     assert_eq!(session.provider_session_id().to_string(), provider_id);
-    assert_eq!(session.messages().unwrap().len(), 2);
+    assert_eq!(session.view().unwrap().messages.len(), 2);
     assert_eq!(session.context_messages().unwrap().len(), 1);
     agent
         .submit(
@@ -3413,7 +3418,7 @@ async fn manual_compaction_uses_no_tools_and_keeps_raw_history() {
             .all(|request| request.controls.reasoning == Reasoning::High)
     );
     assert_eq!(session.reasoning().unwrap(), Reasoning::High);
-    assert_eq!(session.messages().unwrap().len(), 4);
+    assert_eq!(session.view().unwrap().messages.len(), 4);
     drop(session);
     std::fs::remove_dir_all(root).unwrap();
 }
@@ -3474,7 +3479,7 @@ async fn provider_overflow_rebuild_includes_steering_queued_during_compaction() 
     assert_eq!(requests[3].messages.len(), 3);
     assert_eq!(result.unwrap(), "continued");
     assert!(steering.take_uncommitted().is_empty());
-    assert_eq!(session.messages().unwrap().len(), 5);
+    assert_eq!(session.view().unwrap().messages.len(), 5);
     assert!(session.view().unwrap().compacted_through.is_some());
     drop(session);
     std::fs::remove_dir_all(root).unwrap();
@@ -4648,8 +4653,9 @@ async fn malformed_tool_arguments_return_error_without_dispatch() {
         .unwrap();
     assert!(!root.join("effect").exists());
     let results = session
-        .messages()
+        .view()
         .unwrap()
+        .messages
         .into_iter()
         .flat_map(|message| message.content)
         .filter_map(|part| match part {
@@ -5482,11 +5488,11 @@ async fn incomplete_tool_call_is_reported_without_reexecution() {
     assert_eq!(*interrupted.lock().unwrap(), 1);
     assert!(!root.join("should-not-exist").exists());
     assert!(matches!(
-        &reopened.messages().unwrap()[1].content[0],
+        &reopened.view().unwrap().messages[1].content[0],
         Content::ToolCall(_)
     ));
     assert!(matches!(
-        &reopened.messages().unwrap()[2].content[0],
+        &reopened.view().unwrap().messages[2].content[0],
         Content::ToolResult(_)
     ));
     drop(reopened);

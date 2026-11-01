@@ -498,7 +498,7 @@ fn prompt_metadata_uses_only_the_first_line_bounded_by_unicode_characters() {
 }
 
 #[test]
-fn metadata_projection_retains_only_pending_shared_shell_slot() {
+fn metadata_validation_needs_no_projected_shell_payload() {
     let (root, path) = fixture();
     let session = Session::create(&path, Some(&root)).unwrap();
     let admission = session.admit_user_shell("shared".into(), false).unwrap();
@@ -507,8 +507,8 @@ fn metadata_projection_retains_only_pending_shared_shell_slot() {
         model: "selected".into(),
     };
     let mut entries = session.view().unwrap().entries;
-    // Preferences may intervene without releasing the slot that settlement
-    // must replace. Metadata must neither reject this prefix nor recover it.
+    // Metadata may intervene without ending shell custody. Validation needs
+    // the admission, not a materialized model message or speculative recovery.
     entries.push(SessionEntry::ModelSelected {
         model: model.clone(),
     });
@@ -516,7 +516,7 @@ fn metadata_projection_retains_only_pending_shared_shell_slot() {
         Ok(entries[(entry - 1) as usize].clone())
     })
     .unwrap();
-    assert_eq!(pending.messages.len(), 1);
+    assert!(pending.messages.is_empty());
     assert_eq!(pending.state.last_model, Some(model));
     assert!(pending.state.pending_shell.is_some());
     session
@@ -538,9 +538,23 @@ fn metadata_projection_retains_only_pending_shared_shell_slot() {
         settled.first_input,
         Session::inspect_metadata(&path).unwrap().first_input
     );
-    // Discarding messages must not admit a second settlement.
+    let interleaved = Session::create_initial(
+        &root.join("interleaved.sqlite"),
+        Some(&root),
+        uuid::Uuid::now_v7(),
+        &entries,
+    )
+    .unwrap();
+    let view = interleaved.view().unwrap();
+    assert!(matches!(
+        view.user_shell_outcome(admission),
+        UserShellOutcome::Observed { .. }
+    ));
+    assert_eq!(view.display_messages(), view.messages);
+    drop(interleaved);
+    // Dropping presentation data must not admit a second settlement.
     entries.push(entries.last().unwrap().clone());
-    for mode in [ProjectionMode::Full, ProjectionMode::Metadata] {
+    for mode in [ProjectionMode::Working, ProjectionMode::Metadata] {
         assert!(matches!(
             project(entries.iter().map(Ok), mode, &|entry| Ok(entries
                 [(entry - 1) as usize]
@@ -1673,10 +1687,20 @@ fn historical_compaction_does_not_reconstruct_new_prefix_pins() {
         vec![summary_message(through, "historical summary"), answer]
     );
     assert_eq!(
-        reopened.messages().unwrap().len(),
+        reopened.view().unwrap().messages.len(),
         3,
         "original input remains durable, but must not retroactively change the replay prefix"
     );
+    let prefix = reopened.context_messages().unwrap();
+    let plan = reopened
+        .compaction_plan(None, 0, usize::MAX, true, u64::MAX)
+        .unwrap()
+        .unwrap();
+    assert!(
+        plan.retained_input_bytes > 0,
+        "a later cut still accounts for the original active input"
+    );
+    assert_eq!(reopened.context_messages().unwrap(), prefix);
     drop(reopened);
     fs::remove_dir_all(root).unwrap();
 }
@@ -1765,7 +1789,7 @@ fn compaction_changes_only_the_model_projection_and_survives_reopen() {
             false,
         )
         .unwrap();
-    assert_eq!(session.messages().unwrap().len(), 4);
+    assert_eq!(session.view().unwrap().messages.len(), 4);
     assert_eq!(session.context_messages().unwrap().len(), 3);
     assert_input_budget();
     drop(session);
@@ -1804,11 +1828,11 @@ fn human_thinking_stays_in_facts_not_model_context_across_history_operations() {
         |entry| matches!(entry, SessionEntry::Assistant { message: saved, .. } if saved == &message)
     ));
     assert_eq!(
-        session.messages().unwrap()[1].content,
+        session.view().unwrap().messages[1].content,
         vec![Content::Text("answer".into())]
     );
     assert_eq!(
-        session.messages().unwrap()[1].provider_replay,
+        session.view().unwrap().messages[1].provider_replay,
         message.provider_replay
     );
     let clone = session
@@ -1823,7 +1847,10 @@ fn human_thinking_stays_in_facts_not_model_context_across_history_operations() {
     for copy in [&clone, &fork] {
         assert_eq!(copy.view().unwrap().display_messages()[1], message);
         assert_eq!(copy.view().unwrap().entries, facts);
-        assert_eq!(copy.messages().unwrap(), session.messages().unwrap());
+        assert_eq!(
+            copy.view().unwrap().messages,
+            session.view().unwrap().messages
+        );
     }
     session
         .record_compaction(3, "summary".into(), test_execution(), Usage::unknown())
@@ -1841,11 +1868,11 @@ fn human_thinking_stays_in_facts_not_model_context_across_history_operations() {
     assert_eq!(reopened.view().unwrap().display_messages()[1], message);
     assert!(reopened.view().unwrap().entries.starts_with(&facts));
     assert_eq!(
-        reopened.messages().unwrap()[1].provider_replay,
+        reopened.view().unwrap().messages[1].provider_replay,
         message.provider_replay
     );
     assert_eq!(
-        reopened.messages().unwrap()[1].content,
+        reopened.view().unwrap().messages[1].content,
         vec![Content::Text("answer".into())]
     );
     drop((reopened, clone, fork));
@@ -1888,7 +1915,7 @@ fn model_switch_does_not_revive_earlier_opaque_replay() {
     assert_eq!(session.context_messages().unwrap(), second_context);
     assert_eq!(
         second_context[1].content,
-        session.messages().unwrap()[1].content
+        session.view().unwrap().messages[1].content
     );
     session
         .record_assistant(
@@ -1954,8 +1981,9 @@ fn model_switch_does_not_revive_earlier_opaque_replay() {
     assert_eq!(reopened.context_messages_for(&gemini).unwrap(), current);
     assert_eq!(
         reopened
-            .messages()
+            .view()
             .unwrap()
+            .messages
             .iter()
             .filter(|message| message.provider_replay.is_some())
             .count(),
@@ -2128,8 +2156,9 @@ fn effective_model_route_changes_do_not_revive_old_replay_under_one_logical_mode
     );
     assert_eq!(
         reopened
-            .messages()
+            .view()
             .unwrap()
+            .messages
             .iter()
             .filter(|message| message.provider_replay.is_some())
             .count(),
@@ -2182,7 +2211,7 @@ fn provider_rebase_is_durable_and_keeps_raw_assistant_history() {
             .is_none()
     );
     assert_eq!(
-        session.messages().unwrap()[1]
+        session.view().unwrap().messages[1]
             .provider_replay
             .as_ref()
             .unwrap()
@@ -2212,7 +2241,11 @@ fn provider_rebase_is_durable_and_keeps_raw_assistant_history() {
             .provider_replay
             .is_none()
     );
-    assert!(reopened.messages().unwrap()[1].provider_replay.is_some());
+    assert!(
+        reopened.view().unwrap().messages[1]
+            .provider_replay
+            .is_some()
+    );
     drop(reopened);
     fs::remove_dir_all(root).unwrap();
 }
@@ -3055,7 +3088,7 @@ fn failed_tool_result_survives_reopen() {
     drop(session);
     let reopened = Session::open(&path).unwrap();
     assert!(matches!(
-        &reopened.messages().unwrap()[2].content[0],
+        &reopened.view().unwrap().messages[2].content[0],
         Content::ToolResult(ToolResult { is_error: true, .. })
     ));
     drop(reopened);

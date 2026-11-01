@@ -47,7 +47,7 @@ impl Drop for SessionLock {
 
 impl Store {
     pub(super) fn from_projection(connection: Connection, projection: HistoryProjection) -> Self {
-        Self {
+        let mut store = Self {
             connection,
             state: projection.state,
             settled: projection.settled,
@@ -57,6 +57,30 @@ impl Store {
             context_index: projection.context_index,
             calibration: None,
             live_backgrounds: BTreeMap::new(),
+        };
+        store.prune_context();
+        store
+    }
+
+    fn prune_context(&mut self) {
+        if let Some((through, _)) = &self.state.compaction {
+            self.messages.retain(|record| {
+                record.entry > *through
+                    || self
+                        .state
+                        .compaction_inputs
+                        .binary_search(&record.entry)
+                        .is_ok()
+                    || self
+                        .state
+                        .active_inputs
+                        .binary_search(&record.entry)
+                        .is_ok()
+            });
+            self.settled.retain(|entry| entry > through);
+        }
+        if self.state.compaction.is_some() || self.state.replay_epoch_start != 0 {
+            self.context_changes.clear();
         }
     }
 
@@ -103,26 +127,43 @@ impl Store {
             .iter()
             .enumerate()
             .map(|(offset, entry)| {
-                candidate.apply(entry, &mut new_messages, &self.settled, &mut new_settled)?;
+                let transition = candidate.apply(entry, &|coordinate| {
+                    self.settled.contains(&coordinate) || new_settled.contains(&coordinate)
+                })?;
+                if transition.settled {
+                    new_settled.push(candidate.sequence);
+                }
+                projection::append_message(
+                    &mut new_messages,
+                    candidate.sequence,
+                    entry,
+                    transition.closed_shell.as_ref(),
+                );
                 if let SessionEntry::ContextSelected { head_entry } = entry {
                     if replacement.is_some() || offset + 1 != entries.len() {
                         return Err(SessionError::InvalidHistory);
                     }
-                    let navigation::RestoredContext {
-                        state,
+                    if !self.context_index.can_select(*head_entry) {
+                        return Err(SessionError::InvalidContextPoint);
+                    }
+                    candidate.restore_context(
+                        self.context_index.read_context(*head_entry, &|entry| {
+                            read_entry(&self.connection, entry)
+                        })?,
+                    );
+                    let context_index::WorkingContext {
                         messages,
                         settled,
                         changes,
-                    } = restore_context(
-                        &self.context_index,
-                        *head_entry,
-                        ProjectionMode::Full,
-                        &|entry| navigation::read_entry(&self.connection, entry),
-                    )?;
-                    candidate.restore_context(state);
+                    } = working_context(&self.context_index, *head_entry, &candidate, &|entry| {
+                        read_entry(&self.connection, entry)
+                    })?;
                     replacement = Some((messages, settled, changes));
                 }
-                if let SessionEntry::ModelContextChanged { context, .. } = entry {
+                if let SessionEntry::ModelContextChanged { context, .. } = entry
+                    && candidate.compaction.is_none()
+                    && candidate.replay_epoch_start == 0
+                {
                     new_context_changes.push(ModelContextChange {
                         after_message: message_start + new_messages.len(),
                         context: model_context_state(context),
@@ -172,6 +213,7 @@ impl Store {
             self.messages.extend(new_messages);
             self.context_changes.extend(new_context_changes);
         }
+        self.prune_context();
         Ok(())
     }
 }
@@ -201,9 +243,7 @@ pub(super) fn project_connection(
         Ok(None) => None,
         Err(error) => Some(Err(error.into())),
     });
-    project(entries, mode, &|entry| {
-        navigation::read_entry(connection, entry)
-    })
+    project(entries, mode, &|entry| read_entry(connection, entry))
 }
 
 pub(super) fn read_entries(connection: &Connection) -> Result<Vec<SessionEntry>, SessionError> {
@@ -214,6 +254,19 @@ pub(super) fn read_entries(connection: &Connection) -> Result<Vec<SessionEntry>,
         entries.push(decode_entry(row, entries.len() as u64 + 1)?);
     }
     Ok(entries)
+}
+
+pub(super) fn read_entry(
+    connection: &Connection,
+    entry: u64,
+) -> Result<SessionEntry, SessionError> {
+    let mut statement =
+        connection.prepare_cached("SELECT seq, body FROM entries WHERE seq = ?1")?;
+    let mut rows = statement.query(params![
+        i64::try_from(entry).map_err(|_| SessionError::InvalidContextPoint)?
+    ])?;
+    let row = rows.next()?.ok_or(SessionError::InvalidHistory)?;
+    decode_entry(row, entry)
 }
 
 fn decode_entry(row: &rusqlite::Row<'_>, expected: u64) -> Result<SessionEntry, SessionError> {

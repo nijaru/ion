@@ -40,6 +40,100 @@ fn select(session: &Session, head: u64) -> ContextPosition {
 }
 
 #[test]
+fn compacted_payloads_leave_the_working_set_but_remain_inspectable() {
+    let (root, path, session) = fixture();
+    for _ in 0..12 {
+        finish(&session, "inspectable input", &"x".repeat(32 * 1024));
+    }
+    let original = session.view().unwrap();
+    let through = session.entry_count().unwrap();
+    session
+        .record_compaction(
+            through,
+            "summary".into(),
+            original.last_execution.clone().unwrap(),
+            Usage::unknown(),
+        )
+        .unwrap();
+    assert_eq!(session.view().unwrap().messages, original.messages);
+    assert!(
+        session.store.lock().unwrap().messages.is_empty(),
+        "archived payloads remain resident after compaction"
+    );
+    assert!(session.store.lock().unwrap().context_changes.is_empty());
+    let expected = session.context_messages().unwrap();
+    drop(session);
+    let reopened = Session::open(&path).unwrap();
+    assert_eq!(reopened.context_messages().unwrap(), expected);
+    assert_eq!(reopened.view().unwrap().messages, original.messages);
+    assert!(
+        reopened.store.lock().unwrap().messages.is_empty(),
+        "reopen resurrected the compacted archive into the working set"
+    );
+    select(&reopened, through);
+    let selected = original
+        .messages
+        .into_iter()
+        .map(|mut message| {
+            message.provider_replay = None;
+            message
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(reopened.context_messages().unwrap(), selected);
+    drop(reopened);
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn preference_replay_does_not_reread_selected_transcripts() {
+    let (root, _, session) = fixture();
+    let mut heads = Vec::new();
+    for _ in 0..60 {
+        finish(&session, "input", "answer");
+        heads.push(session.entry_count().unwrap());
+    }
+    let original = session.view().unwrap().entries;
+    let reads = |head: u64| {
+        let mut entries = original[..head as usize].to_vec();
+        for _ in 0..32 {
+            entries.push(SessionEntry::ContextSelected { head_entry: head });
+        }
+        let reads = std::cell::Cell::new(0usize);
+        let projection = project(
+            entries.iter().map(Ok),
+            ProjectionMode::Metadata,
+            &|coordinate| {
+                reads.set(reads.get() + 1);
+                Ok(entries[(coordinate - 1) as usize].clone())
+            },
+        )
+        .unwrap();
+        assert_eq!(projection.state.last_model, Some(model("one")));
+        project(
+            entries.iter().map(Ok),
+            ProjectionMode::Working,
+            &|coordinate| {
+                let entry = &entries[(coordinate - 1) as usize];
+                assert!(
+                    !matches!(entry, SessionEntry::TurnEnded { .. }),
+                    "working context rereads metadata with no message payload"
+                );
+                Ok(entry.clone())
+            },
+        )
+        .unwrap();
+        reads.get()
+    };
+    assert_eq!(
+        reads(heads[3]),
+        reads(heads[59]),
+        "restoring preferences rereads the entire selected transcript"
+    );
+    drop(session);
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
 fn status_tracks_renaming_reasoning_selection_and_reopen() {
     let (root, path, session) = fixture();
     assert_eq!(session.status().unwrap().entries, 0);
@@ -91,7 +185,7 @@ fn alternatives_survive_selection_reopen_copies_and_new_global_turn_ids() {
         .unwrap();
     let position = select(&session, 0);
     assert_eq!(position.session, original.id);
-    assert!(session.messages().unwrap().is_empty());
+    assert!(session.view().unwrap().messages.is_empty());
     assert!(
         matches!(
             session
@@ -122,7 +216,7 @@ fn alternatives_survive_selection_reopen_copies_and_new_global_turn_ids() {
         &original.entries
     );
     select(&session, original_head);
-    assert_eq!(session.messages().unwrap().len(), 2);
+    assert_eq!(session.view().unwrap().messages.len(), 2);
     assert!(
         serde_json::to_string(&session.context_messages().unwrap())
             .unwrap()
@@ -490,17 +584,17 @@ fn late_background_results_keep_the_initiating_path_and_live_ownership() {
     drop(prepared);
     let position = session.context_position().unwrap();
     assert_eq!(position.head_entry, 0);
-    assert!(session.messages().unwrap().is_empty());
+    assert!(session.view().unwrap().messages.is_empty());
     assert_eq!(
         session.view().unwrap().delegations()[0].outcome,
         Some(crate::DelegationOutcome::Unknown)
     );
     select(&session, source_head);
-    assert_eq!(session.messages().unwrap().len(), 3);
+    assert_eq!(session.view().unwrap().messages.len(), 3);
     let path = session.path().to_path_buf();
     drop(session);
     let reopened = Session::open(path).unwrap();
-    assert_eq!(reopened.messages().unwrap().len(), 3);
+    assert_eq!(reopened.view().unwrap().messages.len(), 3);
     drop(reopened);
     drop(lease);
     fs::remove_dir_all(root).unwrap();

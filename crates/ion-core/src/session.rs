@@ -27,10 +27,11 @@ use tokio_util::sync::CancellationToken;
 
 pub(crate) mod code_inspection;
 mod context;
+mod context_index;
+use context_index::{ContextIndex, working_context};
 mod navigation;
 #[cfg(test)]
 mod navigation_tests;
-use navigation::{ContextIndex, restore_context};
 pub use navigation::{ContextPoint, ContextPosition, PreparedNavigation};
 mod delegation;
 #[cfg(test)]
@@ -55,8 +56,8 @@ use crate::request::{RequestCalibration, RequestMeasurement, RequestScope};
 use code_inspection::ChildRecordIndex;
 use context::{ProjectedMessage, context_projection};
 use projection::{
-    ProjectionMode, message_from_entry, model_context_state, model_message, project,
-    projected_entry_messages, shell_message, shell_outcome_at, valid_model_context,
+    MessageAudience, ProjectionMode, model_context_state, project, selected_messages,
+    shell_message, shell_outcome_at, valid_model_context,
 };
 pub(crate) use records::valid_user_message;
 pub use records::{
@@ -68,7 +69,8 @@ pub use recovery::{AuthorityScope, RecoveryBinding, RecoveryPoint, RecoveryState
 pub(crate) use store::MAX_ENTRY_BYTES;
 use store::{
     FORMAT_VERSION, Header, SessionLock, Store, configure_connection, database_path, encode_entry,
-    initialize_new, lock, prepare_writer, project_connection, read_entries, read_header,
+    initialize_new, lock, prepare_writer, project_connection, read_entries, read_entry,
+    read_header,
 };
 pub(crate) use submission::TurnAdmission;
 pub use submission::{RequestKey, RequestReceipt, SubmissionRequest};
@@ -153,18 +155,12 @@ pub(crate) struct CommittedAssistant {
 impl SessionView {
     /// Conversation display, including user commands kept out of model context.
     pub fn display_messages(&self) -> Vec<Message> {
-        let selected: BTreeSet<_> = self.context_path.iter().copied().collect();
-        projected_entry_messages(&self.entries, true)
-            .into_iter()
-            .enumerate()
-            .filter(|(index, _)| selected.contains(&(*index as u64 + 1)))
-            .filter_map(|(_, message)| message)
-            .collect()
+        selected_messages(&self.entries, &self.context_path, MessageAudience::Display)
     }
 
     /// Missing settlement is passively projected as unknown, never repaired here.
     pub fn user_shell_outcome(&self, admission_entry: u64) -> &UserShellOutcome {
-        shell_outcome_at(&self.entries, admission_entry as usize)
+        shell_outcome_at(&self.entries, admission_entry)
     }
 
     pub fn turns(&self) -> Vec<TurnSummary> {
@@ -257,6 +253,12 @@ struct State {
     last_usage: Option<Usage>,
 }
 
+#[derive(Default)]
+struct EntryTransition {
+    settled: bool,
+    closed_shell: Option<PendingShell>,
+}
+
 impl State {
     fn select_model(&mut self, model: &ModelRef) {
         self.last_model = Some(model.clone());
@@ -276,10 +278,9 @@ impl State {
     fn apply(
         &mut self,
         entry: &SessionEntry,
-        messages: &mut Vec<ProjectedMessage>,
-        settled: &BTreeSet<u64>,
-        new_settled: &mut Vec<u64>,
-    ) -> Result<(), SessionError> {
+        is_settled: &impl Fn(u64) -> bool,
+    ) -> Result<EntryTransition, SessionError> {
+        let mut transition = EntryTransition::default();
         match entry {
             SessionEntry::ContextSelected { .. } => {
                 if self.active.is_some() || self.pending_shell.is_some() || !self.pending.is_empty()
@@ -331,12 +332,6 @@ impl State {
                 {
                     return Err(SessionError::InvalidHistory);
                 }
-                if !exclude_from_context {
-                    messages.push(ProjectedMessage::new(
-                        self.sequence + 1,
-                        shell_message(command, &UserShellOutcome::Unknown, false),
-                    ));
-                }
                 self.pending_shell = Some(PendingShell {
                     admission_entry: self.sequence + 1,
                     command: command.clone(),
@@ -344,8 +339,7 @@ impl State {
                 });
             }
             SessionEntry::UserShellSettled {
-                admission_entry,
-                outcome,
+                admission_entry, ..
             } => {
                 let shell = self
                     .pending_shell
@@ -354,15 +348,8 @@ impl State {
                 if self.active.is_some() || shell.admission_entry != *admission_entry {
                     return Err(SessionError::InvalidHistory);
                 }
-                if !shell.exclude_from_context {
-                    // No intervening message is legal while a shell is pending.
-                    messages
-                        .last_mut()
-                        .ok_or(SessionError::InvalidHistory)?
-                        .message = shell_message(&shell.command, outcome, false);
-                }
-                self.pending_shell = None;
-                new_settled.push(self.sequence + 1);
+                transition.closed_shell = self.pending_shell.take();
+                transition.settled = true;
             }
             SessionEntry::UncommittedUsage { .. } => {}
             SessionEntry::CacheWarm {
@@ -388,7 +375,7 @@ impl State {
                     || !self.pending.is_empty()
                     || self.pending_shell.is_some()
                     || summary.trim().is_empty()
-                    || !(settled.contains(through_entry) || new_settled.contains(through_entry))
+                    || !is_settled(*through_entry)
                     || self
                         .compaction
                         .as_ref()
@@ -426,16 +413,11 @@ impl State {
                 self.prefix_bound_in_turn = false;
                 self.recovery = recovery.clone();
                 self.last_id = *turn;
-                messages.push(ProjectedMessage::new(self.sequence + 1, input.clone()));
             }
             SessionEntry::Completion { turn, notices } => {
                 if self.active != Some(*turn) || !self.pending.is_empty() || notices.is_empty() {
                     return Err(SessionError::InvalidHistory);
                 }
-                messages.push(ProjectedMessage::new(
-                    self.sequence + 1,
-                    crate::completion::notice_message(notices),
-                ));
             }
             SessionEntry::Steering { turn, input } => {
                 if self.active != Some(*turn)
@@ -444,7 +426,6 @@ impl State {
                 {
                     return Err(SessionError::InvalidHistory);
                 }
-                messages.push(ProjectedMessage::new(self.sequence + 1, input.clone()));
             }
             SessionEntry::Assistant {
                 turn,
@@ -477,12 +458,13 @@ impl State {
                     return Err(SessionError::InvalidHistory);
                 }
                 let mut activity_index = 0usize;
+                let mut call_ids = BTreeSet::new();
                 for part in &message.content {
                     match part {
                         Content::ToolCall(ToolCall { id, name, .. })
                             if !id.is_empty() && !name.is_empty() =>
                         {
-                            if self.pending.iter().any(|pending| pending.call_id == *id) {
+                            if !call_ids.insert(id.as_str()) {
                                 return Err(SessionError::InvalidHistory);
                             }
                             let Some(stored) = tool_activities.get(activity_index) else {
@@ -512,18 +494,12 @@ impl State {
                 if activity_index != tool_activities.len() {
                     return Err(SessionError::InvalidHistory);
                 }
-                messages.push(ProjectedMessage::new(
-                    self.sequence + 1,
-                    model_message(message),
-                ));
                 self.assistant_seen_in_turn = true;
                 self.prefix_bound_in_turn |= message
                     .provider_replay
                     .as_ref()
                     .is_some_and(|replay| replay.prefix_bound);
-                if self.pending.is_empty() {
-                    new_settled.push(self.sequence + 1);
-                }
+                transition.settled = self.pending.is_empty();
             }
             SessionEntry::ToolResult { turn, result } => {
                 let position = self.pending.iter().position(|pending| {
@@ -543,13 +519,7 @@ impl State {
                     return Err(SessionError::InvalidHistory);
                 }
                 self.pending.remove(position);
-                messages.push(ProjectedMessage::new(
-                    self.sequence + 1,
-                    result.message(self.sequence + 1, false),
-                ));
-                if self.pending.is_empty() {
-                    new_settled.push(self.sequence + 1);
-                }
+                transition.settled = self.pending.is_empty();
             }
             SessionEntry::ChildToolAdmitted { turn, intent } => {
                 let parent = self
@@ -604,12 +574,12 @@ impl State {
                 self.assistant_seen_in_turn = false;
                 self.prefix_bound_in_turn = false;
                 self.last_end = Some((*turn, reason.clone()));
-                new_settled.push(self.sequence + 1);
+                transition.settled = true;
             }
         }
         self.apply_context(entry);
         self.sequence += 1;
-        Ok(())
+        Ok(transition)
     }
 }
 
@@ -647,7 +617,7 @@ impl Session {
         id: uuid::Uuid,
         entries: &[SessionEntry],
     ) -> Result<Self, SessionError> {
-        let projection = project(entries.iter().map(Ok), ProjectionMode::Full, &|entry| {
+        let projection = project(entries.iter().map(Ok), ProjectionMode::Working, &|entry| {
             Ok(entries[(entry - 1) as usize].clone())
         })?;
         let encoded = entries
@@ -705,7 +675,7 @@ impl Session {
         )?;
         configure_connection(&connection)?;
         let header = read_header(&connection)?;
-        let projection = project_connection(&connection, ProjectionMode::Full)?;
+        let projection = project_connection(&connection, ProjectionMode::Working)?;
         prepare_writer(&connection)?;
         Ok(Self {
             store: Mutex::new(Store::from_projection(connection, projection)),
@@ -806,19 +776,20 @@ impl Session {
         let entries = read_entries(&connection)?;
         let HistoryProjection {
             state,
-            messages,
             context_index,
             ..
-        } = project(entries.iter().map(Ok), ProjectionMode::Full, &|entry| {
+        } = project(entries.iter().map(Ok), ProjectionMode::Metadata, &|entry| {
             Ok(entries[(entry - 1) as usize].clone())
         })?;
+        let context_path = context_index.path(context_index.head());
+        let messages = selected_messages(&entries, &context_path, MessageAudience::Model);
         Ok(SessionView {
             id: header.id,
             cwd: header.cwd,
             name: header.name,
-            context_path: context_index.path(context_index.head()),
+            context_path,
             entries,
-            messages: messages.into_iter().map(|record| record.message).collect(),
+            messages,
             unfinished_turn: state.active,
             unfinished_user_shell: state.pending_shell.map(|shell| UnobservedUserShell {
                 admission_entry: shell.admission_entry,
@@ -849,19 +820,6 @@ impl Session {
     pub fn provider_session_id(&self) -> uuid::Uuid {
         self.header.provider_session_id
     }
-    /// Model-facing conversation: human thinking is excluded; opaque replay
-    /// retains its producing provider. Use the view for human/raw inspection.
-    pub fn messages(&self) -> Result<Vec<Message>, SessionError> {
-        Ok(self
-            .store
-            .lock()
-            .map_err(|_| SessionError::Poisoned)?
-            .messages
-            .iter()
-            .map(|record| record.message.clone())
-            .collect())
-    }
-
     /// Run one admitted direct shell through retained, Session-owned custody.
     /// The host must preflight its executor before calling this entry point.
     /// Its owned callback respects stop before new effects and joins all work
@@ -1157,17 +1115,15 @@ impl Session {
         let store = self.store.lock().map_err(|_| SessionError::Poisoned)?;
         let entries = read_entries(&store.connection)?;
         let header = read_header(&store.connection)?;
+        let context_path = store.context_index.path(store.context_index.head());
+        let messages = selected_messages(&entries, &context_path, MessageAudience::Model);
         Ok(SessionView {
             id: header.id,
             cwd: header.cwd,
             name: header.name,
-            context_path: store.context_index.path(store.context_index.head()),
+            context_path,
             entries,
-            messages: store
-                .messages
-                .iter()
-                .map(|record| record.message.clone())
-                .collect(),
+            messages,
             unfinished_turn: store.state.active,
             unfinished_user_shell: store.state.pending_shell.as_ref().map(|shell| {
                 UnobservedUserShell {

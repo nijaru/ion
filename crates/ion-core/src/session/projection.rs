@@ -2,6 +2,35 @@
 
 use super::*;
 
+pub(super) fn append_message(
+    messages: &mut Vec<ProjectedMessage>,
+    coordinate: u64,
+    entry: &SessionEntry,
+    closed_shell: Option<&PendingShell>,
+) {
+    let message = match entry {
+        SessionEntry::UserShellAdmitted {
+            command,
+            exclude_from_context: false,
+        } => Some(shell_message(command, &UserShellOutcome::Unknown, false)),
+        SessionEntry::UserShellSettled { outcome, .. } => {
+            let shell = closed_shell.expect("validated shell settlement owns its admission");
+            if !shell.exclude_from_context {
+                messages
+                    .last_mut()
+                    .expect("shared shell owns the final projected message")
+                    .message = shell_message(&shell.command, outcome, false);
+            }
+            None
+        }
+        SessionEntry::Assistant { message, .. } => Some(model_message(message)),
+        _ => message_from_entry(coordinate, entry),
+    };
+    if let Some(message) = message {
+        messages.push(ProjectedMessage::new(coordinate, message));
+    }
+}
+
 pub(super) fn model_context_state(context: &ModelContextSnapshot) -> ModelContextState {
     ModelContextState {
         instructions: Some(context.instructions.clone()),
@@ -17,37 +46,52 @@ pub(super) fn valid_model_context(context: &ModelContextSnapshot) -> bool {
         .all(|tool| !tool.name.trim().is_empty() && names.insert(tool.name.as_str()))
 }
 
-pub(super) fn shell_outcome_at(
-    entries: &[SessionEntry],
-    settlement_index: usize,
-) -> &UserShellOutcome {
-    match entries.get(settlement_index) {
-        Some(SessionEntry::UserShellSettled { outcome, .. }) => outcome,
-        _ => &UserShellOutcome::Unknown,
-    }
+pub(super) fn shell_outcome_at(entries: &[SessionEntry], admission: u64) -> &UserShellOutcome {
+    let suffix = usize::try_from(admission)
+        .ok()
+        .and_then(|start| entries.get(start..))
+        .unwrap_or_default();
+    // Shared shells cannot overlap. Searching from each admission visits only
+    // its own interval, including intervening metadata, not the whole journal.
+    suffix
+        .iter()
+        .find_map(|entry| match entry {
+            SessionEntry::UserShellSettled {
+                admission_entry,
+                outcome,
+            } if *admission_entry == admission => Some(outcome),
+            _ => None,
+        })
+        .unwrap_or(&UserShellOutcome::Unknown)
 }
 
-pub(super) fn projected_entry_messages(
+#[derive(Clone, Copy)]
+pub(super) enum MessageAudience {
+    Model,
+    Display,
+}
+
+pub(super) fn selected_messages(
     entries: &[SessionEntry],
-    display: bool,
-) -> Vec<Option<Message>> {
-    entries
-        .iter()
-        .enumerate()
-        .map(|(index, entry)| match entry {
+    path: &[u64],
+    audience: MessageAudience,
+) -> Vec<Message> {
+    let display = matches!(audience, MessageAudience::Display);
+    path.iter()
+        .filter_map(|&coordinate| match &entries[(coordinate - 1) as usize] {
             SessionEntry::UserShellAdmitted {
                 command,
                 exclude_from_context,
             } if display || !exclude_from_context => Some(shell_message(
                 command,
-                shell_outcome_at(entries, index + 1),
+                shell_outcome_at(entries, coordinate),
                 *exclude_from_context,
             )),
             SessionEntry::ToolResult { result, .. } if display => {
-                Some(result.message(index as u64 + 1, true))
+                Some(result.message(coordinate, true))
             }
             SessionEntry::Assistant { message, .. } if !display => Some(model_message(message)),
-            other => message_from_entry(index as u64 + 1, other),
+            other => message_from_entry(coordinate, other),
         })
         .collect()
 }
@@ -135,7 +179,7 @@ pub(super) fn shell_message(command: &str, outcome: &UserShellOutcome, excluded:
 
 #[derive(Clone, Copy)]
 pub(super) enum ProjectionMode {
-    Full,
+    Working,
     Metadata,
 }
 
@@ -145,9 +189,6 @@ pub(super) fn project<E: Borrow<SessionEntry>>(
     read: &impl Fn(u64) -> Result<SessionEntry, SessionError>,
 ) -> Result<HistoryProjection, SessionError> {
     let mut state = State::default();
-    let mut settled = BTreeSet::new();
-    let mut messages = Vec::new();
-    let mut context_changes = Vec::new();
     let mut child_records = ChildRecordIndex::default();
     let mut context_index = ContextIndex::default();
     let mut turns = 0usize;
@@ -181,17 +222,15 @@ pub(super) fn project<E: Borrow<SessionEntry>>(
         {
             return Err(SessionError::InvalidHistory);
         }
-        let mut new_settled = Vec::new();
-        state.apply(entry, &mut messages, &settled, &mut new_settled)?;
+        state.apply(entry, &|coordinate| context_index.is_settled(coordinate))?;
         if let SessionEntry::ContextSelected { head_entry } = entry {
-            let restored = restore_context(&context_index, *head_entry, mode, read)?;
-            state.restore_context(restored.state);
-            messages = restored.messages;
-            settled = restored.settled;
-            context_changes = restored.changes;
+            if !context_index.can_select(*head_entry) {
+                return Err(SessionError::InvalidContextPoint);
+            }
+            state.restore_context(context_index.read_context(*head_entry, read)?);
         }
         context_index.observe(entry);
-        if matches!(mode, ProjectionMode::Full) {
+        if !matches!(mode, ProjectionMode::Metadata) {
             child_records.observe(state.sequence, entry);
         }
         if matches!(entry, SessionEntry::TurnStarted { .. }) {
@@ -200,30 +239,13 @@ pub(super) fn project<E: Borrow<SessionEntry>>(
         if first_input.is_none() {
             first_input = input_preview(entry);
         }
-        match mode {
-            ProjectionMode::Full => {
-                if let SessionEntry::ModelContextChanged { context, .. } = entry {
-                    context_changes.push(ModelContextChange {
-                        after_message: messages.len(),
-                        context: model_context_state(context),
-                    });
-                }
-            }
-            ProjectionMode::Metadata => {
-                // apply needs only the final shared-shell slot for settlement.
-                // No intervening message is legal while that shell is pending;
-                // keep its slot until settlement and release all other payloads.
-                if !state
-                    .pending_shell
-                    .as_ref()
-                    .is_some_and(|shell| !shell.exclude_from_context)
-                {
-                    messages.clear();
-                }
-            }
-        }
-        settled.extend(new_settled);
     }
+    let (settled, messages, context_changes) = if matches!(mode, ProjectionMode::Metadata) {
+        (BTreeSet::new(), Vec::new(), Vec::new())
+    } else {
+        let restored = working_context(&context_index, context_index.head(), &state, read)?;
+        (restored.settled, restored.messages, restored.changes)
+    };
     Ok(HistoryProjection {
         turns,
         first_input,
