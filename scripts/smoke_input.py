@@ -1438,9 +1438,9 @@ with tempfile.TemporaryDirectory(prefix="ion-input-") as temporary:
                     terminal.paint()
                     facts = shell_facts()
                     outcome = next(entry["data"]["outcome"] for entry in facts if entry["kind"] == "user_shell_settled")
-                    assert outcome["kind"] == "observed" and outcome["is_error"], outcome
-                    assert outcome["output"]["stdout"] == "OBSERVED_QUEUE\n", outcome
-                    assert outcome["output"]["cancelled"] == cancelled, outcome
+                    assert outcome["kind"] == "observed" and outcome["output"]["is_error"], outcome
+                    assert outcome["output"]["value"]["stdout"] == "OBSERVED_QUEUE\n", outcome
+                    assert outcome["output"]["value"]["cancelled"] == cancelled, outcome
                     try:
                         os.kill(pid, 0)
                     except ProcessLookupError:
@@ -1465,7 +1465,7 @@ with tempfile.TemporaryDirectory(prefix="ion-input-") as temporary:
                         assert user_text(requests[-1]) == "unsent", user_text(requests[-1])
                         terminal.wait(lambda: "DONE_unsent" in terminal.text())
                     else:
-                        assert outcome["output"]["exit_code"] == 7, outcome
+                        assert outcome["output"]["value"]["exit_code"] == 7, outcome
                         terminal.wait(lambda: len(requests) == before + 1)
                         assert user_text(requests[-1]) == "QUEUED🦀", user_text(requests[-1])
                         terminal.wait(lambda: "DONE_QUEUED" in terminal.text())

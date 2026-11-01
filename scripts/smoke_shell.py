@@ -157,7 +157,7 @@ def terminal_failure_settles_operation(workspace, env, mode, coding, fault):
         else:
             shells = observed_shells(view)
             assert len(shells) == 1, ("shell outcome was lost on rendering failure", [entry["kind"] for entry in view["entries"]])
-            result = shells[-1][1]["output"]
+            result = shells[-1][1]["output"]["value"]
         assert result["stdout"] == "CAPTURED_BEFORE_RENDER_FAILURE\n" and result["cancelled"], result
         assert result["signal"] is not None and result["wait_error"] is None, result
         turns = [entry for entry in view["entries"] if entry["kind"] == "turn_started"]
@@ -287,9 +287,9 @@ for mode in ("inline", "fullscreen"):
             inspect = subprocess.run([binary, "--cwd", workspace, "--session", session_id, "inspect"], env=env, capture_output=True, text=True, check=True).stdout
             entries = observed_shells(json.loads(inspect))
             assert len(entries) == 3, entries
-            assert entries[0][1]["output"]["stdout"] == "VISIBLE_OUTPUT\n" and not entries[0][0]["exclude_from_context"]
-            assert entries[1][1]["output"]["stderr"] == "FAILED_STDERR\n" and entries[1][1]["output"]["exit_code"] == 7 and entries[1][1]["is_error"]
-            assert entries[2][1]["output"]["stdout"] == "PRIVATE_OUTPUT\n" and entries[2][0]["exclude_from_context"]
+            assert entries[0][1]["output"]["value"]["stdout"] == "VISIBLE_OUTPUT\n" and not entries[0][0]["exclude_from_context"]
+            assert entries[1][1]["output"]["value"]["stderr"] == "FAILED_STDERR\n" and entries[1][1]["output"]["value"]["exit_code"] == 7 and entries[1][1]["output"]["is_error"]
+            assert entries[2][1]["output"]["value"]["stdout"] == "PRIVATE_OUTPUT\n" and entries[2][0]["exclude_from_context"]
             transcript = (workspace / "session.txt").read_text()
             assert "VISIBLE_OUTPUT" in transcript and "PRIVATE_OUTPUT" in transcript and "not shared with model" in transcript
             assert (workspace / "session.txt").stat().st_mode & 0o777 == 0o600

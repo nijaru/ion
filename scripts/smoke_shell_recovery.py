@@ -141,7 +141,7 @@ def qualify(case, excluded=False):
             assert after["unfinished_user_shell"] is None and after["unfinished_turn"] is None, after
             closed = [entry["data"] for entry in after["entries"] if entry["kind"] == "user_shell_settled"]
             assert closed[0] == {"admission_entry": occurrence, "outcome": {"kind": "unknown"}}, closed
-            assert closed[1]["outcome"]["kind"] == "observed" and closed[1]["outcome"]["output"]["stdout"] == "RECOVERY_DONE", closed
+            assert closed[1]["outcome"]["kind"] == "observed" and closed[1]["outcome"]["output"]["value"]["stdout"] == "RECOVERY_DONE", closed
             assert any(command in part.get("Text", "") for message in after["messages"] for part in message["content"]) == (not excluded), after["messages"]
             print(f"Ion {mode} shell {case} unknown inspection/recovery/no replay ({'!!' if excluded else '!'}): OK")
         finally:

@@ -128,7 +128,7 @@ def qualify(case):
                         assert len(returned) == 1 and returned[0]["reason"] == "stopped", records
                         assert returned[0]["input"] == {"Prompt": {"text": "forbidden", "images": [], "files": []}}, returned
                     assert ended["id"] == "direct" and ended["status"] == "cancelled", ended
-                    assert ended["outcome"]["kind"] == "observed" and ended["outcome"]["output"]["cancelled"], ended
+                    assert ended["outcome"]["kind"] == "observed" and ended["outcome"]["output"]["value"]["cancelled"], ended
                 if case == "abort":
                     child.stdin.close()
                 if case != "crash":
@@ -151,7 +151,7 @@ def qualify(case):
                     assert ("external effect unknown" in json.dumps(before["messages"])) == (not excluded), before
                 else:
                     assert before["unfinished_user_shell"] is None and len(outcomes) == 1, before
-                    output = outcomes[0]["output"]
+                    output = outcomes[0]["output"]["value"]
                     assert outcomes[0]["kind"] == "observed" and output["stdout"] == "BEFORE_STOP\n" and output["cancelled"] and output["wait_error"] is None, output
             if pid is not None:
                 try:
@@ -171,7 +171,7 @@ def qualify(case):
                 assert read(child)["data"]["entries"] == before["entries"], "opening repaired or replayed history"
                 send({"id": "next", "type": "shell", "command": "printf NEXT"})
                 assert read(child)["success"]
-                assert until(child, lambda record: record["type"] == "shell_end")["outcome"]["output"]["stdout"] == "NEXT"
+                assert until(child, lambda record: record["type"] == "shell_end")["outcome"]["output"]["value"]["stdout"] == "NEXT"
                 child.stdin.close()
                 assert child.wait(timeout=8) == 0, child.stderr.read()
                 after = inspect()

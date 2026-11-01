@@ -1,4 +1,5 @@
 """Independent operator-side verification of committed Session capture bytes."""
+from contextlib import closing
 import hashlib
 import json
 import sqlite3
@@ -25,7 +26,7 @@ const utf8 = bytes => decodeURIComponent(bytes.map(byte=>'%'+byte.toString(16).p
 def artifact_bytes(root, reference):
     """Verify receipts, contiguous chunks and both checksums without Ion helpers."""
     for path in Path(root).rglob("*.sqlite"):
-        with sqlite3.connect(f"{path.as_uri()}?mode=ro", uri=True) as db:
+        with closing(sqlite3.connect(f"{path.as_uri()}?mode=ro", uri=True)) as db:
             if not db.execute("SELECT 1 FROM sqlite_master WHERE name='artifacts'").fetchone():
                 continue
             row = db.execute("SELECT receipt FROM artifacts WHERE id=?", (reference["id"],)).fetchone()
