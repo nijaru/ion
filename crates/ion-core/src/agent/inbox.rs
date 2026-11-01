@@ -1,7 +1,7 @@
 //! Atomic user-steering and automated-readiness intake at complete boundaries.
 use super::*;
+use crate::session::AssistantRecord;
 use crate::{CompletionInbox, CompletionNotice};
-use ion_ai::ModelExecution;
 
 /// Host-owned prepared steering. Automated readiness retains independent,
 /// receiving-owned custody, shared across this receiver's operations.
@@ -117,18 +117,11 @@ impl<M> SteeringInbox<M> {
             completions: notices,
         })
     }
-    #[expect(
-        clippy::too_many_arguments,
-        reason = "one atomic assistant/input transaction"
-    )]
     pub(super) fn record_assistant(
         &self,
         session: &Session,
         turn: u64,
-        message: Message,
-        tool_activities: Vec<StoredToolActivity>,
-        execution: ModelExecution,
-        usage: ion_ai::Usage,
+        assistant: AssistantRecord,
         limits: AgentLimits,
     ) -> Result<(crate::session::CommittedAssistant, CommittedInputs), AgentError> {
         let mut pending = self
@@ -144,12 +137,9 @@ impl<M> SteeringInbox<M> {
         let notices = completion
             .as_ref()
             .map_or_else(Vec::new, |batch| batch.notices());
-        let (committed, entries) = session.record_assistant_with_inputs(
+        let (committed, entries) = session.commit_assistant(
             turn,
-            message,
-            tool_activities,
-            execution,
-            usage,
+            assistant,
             pending
                 .iter()
                 .map(|input| input.message().clone())

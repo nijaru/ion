@@ -446,13 +446,13 @@ async fn only_generated_output_bars_retry_after_a_stream_error() {
         .await;
         if retry {
             assert_eq!(result.route.reason, ModelRouteReason::Retry);
-            assert_eq!(result.output, OutputCustody::Observed);
+            assert_eq!(result.output, OutputObservation::Observed);
             assert!(result.outcome.is_ok());
             assert_eq!(retries, 1);
             assert_eq!(notices, 1, "input-transformation notices remain visible");
             assert_eq!(service.requests.load(Ordering::SeqCst), 2);
         } else {
-            assert_eq!(result.output, OutputCustody::Observed);
+            assert_eq!(result.output, OutputObservation::Observed);
             assert_eq!(result.route, request.route);
             assert!(matches!(
                 result.outcome,
@@ -470,22 +470,22 @@ async fn only_generated_output_bars_retry_after_a_stream_error() {
 #[tokio::test]
 async fn completion_only_attempt_evidence_does_not_depend_on_observer_events() {
     for (content, expected) in [
-        (Vec::new(), OutputCustody::Unobserved),
+        (Vec::new(), OutputObservation::Unobserved),
         (
             vec![Content::Text(String::new())],
-            OutputCustody::Unobserved,
+            OutputObservation::Unobserved,
         ),
         (
             vec![Content::Thinking(String::new())],
-            OutputCustody::Unobserved,
+            OutputObservation::Unobserved,
         ),
         (
             vec![Content::Thinking("private output".into())],
-            OutputCustody::Observed,
+            OutputObservation::Observed,
         ),
         (
             vec![Content::Text("partial".into())],
-            OutputCustody::Observed,
+            OutputObservation::Observed,
         ),
         (
             vec![Content::ToolCall(ToolCall {
@@ -494,7 +494,7 @@ async fn completion_only_attempt_evidence_does_not_depend_on_observer_events() {
                 arguments: serde_json::json!({}),
                 raw_arguments: None,
             })],
-            OutputCustody::Observed,
+            OutputObservation::Observed,
         ),
     ] {
         let service: Arc<dyn ModelService> =

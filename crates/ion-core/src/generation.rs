@@ -46,7 +46,7 @@ impl ObservedUsage {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum OutputCustody {
+pub(crate) enum OutputObservation {
     Unobserved,
     Observed,
 }
@@ -57,7 +57,7 @@ pub(crate) enum OutputCustody {
 pub(crate) struct GenerationAttempt {
     pub outcome: Result<ModelResponse, AgentError>,
     pub route: ModelRoute,
-    pub output: OutputCustody,
+    pub output: OutputObservation,
     pub timing: std::ops::Range<tokio::time::Instant>,
     /// Unsettled evidence: failed attempts consume it through account_failure.
     pub usage: Option<ObservedUsage>,
@@ -101,7 +101,7 @@ where
         return GenerationAttempt {
             outcome: Err(error.into()),
             route: request.route.clone(),
-            output: OutputCustody::Unobserved,
+            output: OutputObservation::Unobserved,
             timing: now..now,
             usage: None,
         };
@@ -125,7 +125,7 @@ where
         }
         match &evidence.outcome {
             Err(AgentError::Provider(error))
-                if evidence.output == OutputCustody::Unobserved
+                if evidence.output == OutputObservation::Unobserved
                     && attempt < 2
                     && retryable_provider_error(error) =>
             {
@@ -174,9 +174,9 @@ where
         outcome,
         route,
         output: if output_observed {
-            OutputCustody::Observed
+            OutputObservation::Observed
         } else {
-            OutputCustody::Unobserved
+            OutputObservation::Unobserved
         },
         timing: started..tokio::time::Instant::now(),
         usage,

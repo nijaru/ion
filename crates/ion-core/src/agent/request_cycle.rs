@@ -2,7 +2,7 @@
 //! generation and retain the frozen request; rebuilds always return to intake.
 use super::{Agent, AgentError, AgentEvent, SteeringInbox};
 use crate::{
-    generation::OutputCustody,
+    generation::OutputObservation,
     request::{RequestPlan, RequestStep},
     session::{Session, SessionError},
     tool_set::ToolCatalog,
@@ -156,7 +156,7 @@ impl<'a> RequestCycle<'a> {
                         ..
                     }) if *output < u64::from(output_budget)
                 );
-            if ((overflow && attempt.output == OutputCustody::Unobserved) || recoverable_length)
+            if ((overflow && attempt.output == OutputObservation::Unobserved) || recoverable_length)
                 && !prefix_bound
                 && !recovered_overflow
             {

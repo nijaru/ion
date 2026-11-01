@@ -1921,21 +1921,24 @@ fn effective_model_route_changes_do_not_revive_old_replay_under_one_logical_mode
             .any(|entry| matches!(entry, SessionEntry::EffectiveModelChanged { .. }))
     );
     session
-        .record_assistant_with_activities(
+        .commit_assistant(
             first,
-            Message {
-                role: Role::Assistant,
-                content: vec![Content::Text("first answer".into())],
-                provider_replay: Some(ProviderReplay::new(
-                    "anthropic",
-                    "anthropic_content_blocks",
-                    serde_json::json!({"opaque":"a"}),
-                )),
+            AssistantRecord {
+                message: Message {
+                    role: Role::Assistant,
+                    content: vec![Content::Text("first answer".into())],
+                    provider_replay: Some(ProviderReplay::new(
+                        "anthropic",
+                        "anthropic_content_blocks",
+                        serde_json::json!({"opaque":"a"}),
+                    )),
+                },
+                tool_activities: Vec::new(),
+                execution: execution(physical_a.clone(), "claude-a-20261004"),
+                usage: Usage::known(10, 2),
             },
             Vec::new(),
-            execution(physical_a.clone(), "claude-a-20261004"),
-            Usage::known(10, 2),
-            false,
+            Vec::new(),
         )
         .unwrap();
 
@@ -1955,21 +1958,24 @@ fn effective_model_route_changes_do_not_revive_old_replay_under_one_logical_mode
             .all(|message| message.provider_replay.is_none())
     );
     session
-        .record_assistant_with_activities(
+        .commit_assistant(
             second,
-            Message {
-                role: Role::Assistant,
-                content: vec![Content::Text("second answer".into())],
-                provider_replay: Some(ProviderReplay::new(
-                    "openrouter",
-                    "openrouter_plain_reasoning",
-                    serde_json::json!("b"),
-                )),
+            AssistantRecord {
+                message: Message {
+                    role: Role::Assistant,
+                    content: vec![Content::Text("second answer".into())],
+                    provider_replay: Some(ProviderReplay::new(
+                        "openrouter",
+                        "openrouter_plain_reasoning",
+                        serde_json::json!("b"),
+                    )),
+                },
+                tool_activities: Vec::new(),
+                execution: execution(physical_b.clone(), "provider/model-b-20261004"),
+                usage: Usage::known(12, 3),
             },
             Vec::new(),
-            execution(physical_b.clone(), "provider/model-b-20261004"),
-            Usage::known(12, 3),
-            false,
+            Vec::new(),
         )
         .unwrap();
 
@@ -1986,17 +1992,20 @@ fn effective_model_route_changes_do_not_revive_old_replay_under_one_logical_mode
             .all(|message| message.provider_replay.is_none())
     );
     session
-        .record_assistant_with_activities(
+        .commit_assistant(
             third,
-            Message {
-                role: Role::Assistant,
-                content: vec![Content::Text("third answer".into())],
-                provider_replay: None,
+            AssistantRecord {
+                message: Message {
+                    role: Role::Assistant,
+                    content: vec![Content::Text("third answer".into())],
+                    provider_replay: None,
+                },
+                tool_activities: Vec::new(),
+                execution: execution(physical_a.clone(), "claude-a-20261004"),
+                usage: Usage::known(14, 4),
             },
             Vec::new(),
-            execution(physical_a.clone(), "claude-a-20261004"),
-            Usage::known(14, 4),
-            false,
+            Vec::new(),
         )
         .unwrap();
 

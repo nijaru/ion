@@ -9,7 +9,7 @@ use super::{
 use crate::{
     generation::GeneratedResponse,
     request::RequestStep,
-    session::{Session, StoredToolActivity, TurnEndReason},
+    session::{AssistantRecord, Session, StoredToolActivity, TurnEndReason},
     tool_set::ToolActivity,
 };
 use ion_ai::{
@@ -152,10 +152,12 @@ impl Turn<'_> {
                 if truncated_calls {
                     let (entry, results) = session.record_truncated_assistant(
                         turn,
-                        response.message,
-                        tool_activities.clone(),
-                        execution.clone(),
-                        response.usage,
+                        AssistantRecord {
+                            message: response.message,
+                            tool_activities: tool_activities.clone(),
+                            execution: execution.clone(),
+                            usage: response.usage,
+                        },
                     )?;
                     observe(AgentEvent::AssistantCommitted {
                         turn,
@@ -195,31 +197,22 @@ impl Turn<'_> {
                     })
                     .collect::<Vec<_>>()
                     .join("\n");
+                let assistant = AssistantRecord {
+                    message: response.message,
+                    tool_activities: tool_activities.clone(),
+                    execution: execution.clone(),
+                    usage: response.usage,
+                };
                 // Assistant plus ready boundary input commits atomically. Later
                 // arrivals remain in the inbox for the next request boundary.
                 let commitment = if calls.is_empty()
                     && let Some(inbox) = steering
                 {
-                    inbox.record_assistant(
-                        session,
-                        turn,
-                        response.message,
-                        tool_activities.clone(),
-                        execution.clone(),
-                        response.usage,
-                        agent.limits,
-                    )
+                    inbox.record_assistant(session, turn, assistant, agent.limits)
                 } else {
                     session
-                        .record_assistant_with_activities(
-                            turn,
-                            response.message,
-                            tool_activities.clone(),
-                            execution.clone(),
-                            response.usage,
-                            false,
-                        )
-                        .map(|committed| (committed, CommittedInputs::default()))
+                        .commit_assistant(turn, assistant, Vec::new(), Vec::new())
+                        .map(|(committed, _)| (committed, CommittedInputs::default()))
                         .map_err(Into::into)
                 };
                 let (committed, committed_steering) = match commitment {

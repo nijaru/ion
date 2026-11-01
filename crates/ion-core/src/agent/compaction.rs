@@ -9,7 +9,7 @@ use tokio_util::sync::CancellationToken;
 
 use super::{Agent, AgentError, AgentEvent, contained_observer, observation_result};
 use crate::{
-    generation::{GeneratedResponse, OutputCustody, generate_with_retry},
+    generation::{GeneratedResponse, OutputObservation, generate_with_retry},
     session::Session,
 };
 
@@ -157,7 +157,7 @@ impl Agent {
             // Estimates can miss provider capacity. Halve the remaining settled
             // cuts, never replay a partial summary or change the model/authority.
             if overflow
-                && attempt.output == OutputCustody::Unobserved
+                && attempt.output == OutputObservation::Unobserved
                 && let Some(smaller) = plan.smaller_through_entry
             {
                 observe(AgentEvent::ContextCompactionRetry {

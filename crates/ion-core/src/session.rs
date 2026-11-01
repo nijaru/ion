@@ -119,6 +119,31 @@ impl RequestBasis {
     }
 }
 
+pub(crate) struct AssistantRecord {
+    pub message: Message,
+    pub tool_activities: Vec<StoredToolActivity>,
+    pub execution: ModelExecution,
+    pub usage: Usage,
+}
+
+impl AssistantRecord {
+    fn into_entry(
+        self,
+        turn: u64,
+        termination: ResponseTermination,
+    ) -> Result<SessionEntry, SessionError> {
+        validate_tool_activities(&self.message, &self.tool_activities)?;
+        Ok(SessionEntry::Assistant {
+            turn,
+            message: self.message,
+            tool_activities: self.tool_activities,
+            execution: self.execution,
+            usage: self.usage,
+            termination,
+        })
+    }
+}
+
 #[derive(Debug)]
 pub(crate) struct CommittedAssistant {
     pub entry: u64,
@@ -1353,11 +1378,10 @@ impl Session {
                 }])?;
             }
         }
-        self.record_assistant_with_activities(
-            turn,
+        let assistant = AssistantRecord {
             message,
-            activities,
-            ModelExecution {
+            tool_activities: activities,
+            execution: ModelExecution {
                 route: ion_ai::ModelRoute {
                     logical,
                     effective,
@@ -1366,90 +1390,35 @@ impl Session {
                 returned_model: None,
             },
             usage,
-            continue_turn,
-        )
-        .map(|committed| committed.complete)
+        };
+        if continue_turn {
+            self.store
+                .lock()
+                .map_err(|_| SessionError::Poisoned)?
+                .append(&[assistant.into_entry(turn, ResponseTermination::Completed)?])?;
+            Ok(false)
+        } else {
+            self.commit_assistant(turn, assistant, Vec::new(), Vec::new())
+                .map(|(committed, _)| committed.complete)
+        }
     }
 
-    pub(crate) fn record_assistant_with_activities(
+    /// Commit the assistant and ready boundary inputs atomically. Failed writes
+    /// leave both unpublished; only real queued input keeps a text-only turn open.
+    pub(crate) fn commit_assistant(
         &self,
         turn: u64,
-        message: Message,
-        tool_activities: Vec<StoredToolActivity>,
-        execution: ModelExecution,
-        usage: Usage,
-        continue_turn: bool,
-    ) -> Result<CommittedAssistant, SessionError> {
-        self.record_assistant_entries(
-            turn,
-            message,
-            tool_activities,
-            execution,
-            usage,
-            continue_turn,
-            Vec::new(),
-            Vec::new(),
-        )
-        .map(|(assistant, _)| assistant)
-    }
-
-    /// Publish the completed assistant and queued steering in one batch; a
-    /// failed transaction must leave both unpublished for the host to recover.
-    #[expect(
-        clippy::too_many_arguments,
-        reason = "assistant execution and typed input facts share one atomic commit"
-    )]
-    pub(crate) fn record_assistant_with_inputs(
-        &self,
-        turn: u64,
-        message: Message,
-        tool_activities: Vec<StoredToolActivity>,
-        execution: ModelExecution,
-        usage: Usage,
+        assistant: AssistantRecord,
         steering: Vec<Message>,
         completion: Vec<crate::CompletionNotice>,
     ) -> Result<(CommittedAssistant, CommittedInputEntries), SessionError> {
         let continue_turn = !steering.is_empty() || !completion.is_empty();
-        self.record_assistant_entries(
-            turn,
-            message,
-            tool_activities,
-            execution,
-            usage,
-            continue_turn,
-            steering,
-            completion,
-        )
-    }
-
-    #[expect(
-        clippy::too_many_arguments,
-        reason = "one atomic assistant/steering commit carries its complete durable facts"
-    )]
-    fn record_assistant_entries(
-        &self,
-        turn: u64,
-        message: Message,
-        tool_activities: Vec<StoredToolActivity>,
-        execution: ModelExecution,
-        usage: Usage,
-        continue_turn: bool,
-        steering: Vec<Message>,
-        completion: Vec<crate::CompletionNotice>,
-    ) -> Result<(CommittedAssistant, CommittedInputEntries), SessionError> {
-        let has_calls = message
+        let has_calls = assistant
+            .message
             .content
             .iter()
             .any(|part| matches!(part, Content::ToolCall(_)));
-        validate_tool_activities(&message, &tool_activities)?;
-        let mut entries = vec![SessionEntry::Assistant {
-            turn,
-            message,
-            tool_activities,
-            execution,
-            usage,
-            termination: ResponseTermination::Completed,
-        }];
+        let mut entries = vec![assistant.into_entry(turn, ResponseTermination::Completed)?];
         if !has_calls && !continue_turn {
             entries.push(SessionEntry::TurnEnded {
                 turn,
@@ -1499,12 +1468,9 @@ impl Session {
     pub(crate) fn record_truncated_assistant(
         &self,
         turn: u64,
-        message: Message,
-        tool_activities: Vec<StoredToolActivity>,
-        execution: ModelExecution,
-        usage: Usage,
+        assistant: AssistantRecord,
     ) -> Result<(u64, Vec<crate::ToolSettlement>), SessionError> {
-        let results = message
+        let results = assistant.message
             .content
             .iter()
             .filter_map(|part| match part {
@@ -1521,15 +1487,10 @@ impl Session {
         if results.is_empty() {
             return Err(SessionError::InvalidHistory);
         }
-        validate_tool_activities(&message, &tool_activities)?;
-        let mut entries = vec![SessionEntry::Assistant {
+        let mut entries = vec![assistant.into_entry(
             turn,
-            message,
-            tool_activities,
-            execution,
-            usage,
-            termination: ResponseTermination::Incomplete(IncompleteReason::MaxOutputTokens),
-        }];
+            ResponseTermination::Incomplete(IncompleteReason::MaxOutputTokens),
+        )?];
         entries.extend(
             results
                 .iter()

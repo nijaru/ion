@@ -2955,17 +2955,19 @@ fn steering_commit_releases_host_metadata_outside_inbox_lock() {
                 .record_assistant(
                     &session,
                     turn,
-                    Message {
-                        role: Role::Assistant,
-                        content: vec![Content::Text("answer".into())],
-                        provider_replay: None,
+                    crate::session::AssistantRecord {
+                        message: Message {
+                            role: Role::Assistant,
+                            content: vec![Content::Text("answer".into())],
+                            provider_replay: None,
+                        },
+                        tool_activities: vec![],
+                        execution: ModelExecution {
+                            route: ModelRoute::direct(model(), ModelRouteReason::UserRequest),
+                            returned_model: Some("test".into()),
+                        },
+                        usage: ion_ai::Usage::unknown(),
                     },
-                    vec![],
-                    ModelExecution {
-                        route: ModelRoute::direct(model(), ModelRouteReason::UserRequest),
-                        returned_model: Some("test".into()),
-                    },
-                    ion_ai::Usage::unknown(),
                     AgentLimits::default(),
                 )
                 .unwrap()
