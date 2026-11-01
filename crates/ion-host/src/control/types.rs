@@ -238,8 +238,9 @@ pub enum ControlUpdate<M> {
         delivery: Delivery,
         phase: InputPhase,
     },
-    /// Local transfer to a Core operation, before durable acceptance. Retains
-    /// correlation even when admission fails and the original input is returned.
+    /// Local input/operation correlation, not a durable acceptance receipt.
+    /// Ordinary queued work may still fail admission and return its original;
+    /// keyed admission has already committed before this notification.
     Dispatched {
         id: InputId,
         operation: OperationId,
