@@ -227,7 +227,7 @@ pub(super) fn edit(
     }
     let actual = hex_digest(&bytes);
     if base_digest != actual {
-        return error("file changed since supplied base_digest");
+        return error("base_digest does not match current file; read again before changing it");
     }
     let text = match String::from_utf8(bytes) {
         Ok(text) => text,
@@ -267,7 +267,9 @@ pub(super) fn write(
         return error("content exceeds 8 MiB");
     }
     if input.base_digest.is_some() && input.unconditional {
-        return error("write accepts base_digest or unconditional, not both");
+        return error(
+            "write accepts base_digest or unconditional, not both; use base_digest for a read-based replacement",
+        );
     }
     let path = match path(cwd, &input.path) {
         Ok(path) => path,
@@ -291,7 +293,7 @@ pub(super) fn write(
     let created = previous.is_none();
     if !created && input.base_digest.is_none() && !input.unconditional {
         return error(
-            "write replacement requires base_digest from read; set unconditional=true only for intentional unread replacement",
+            "write replacement requires base_digest from read; read the file and retry with that digest",
         );
     }
     let mut previous_bytes = None;
@@ -302,7 +304,9 @@ pub(super) fn write(
                 if let Some(expected) = &input.base_digest
                     && expected != &hex_digest(&bytes)
                 {
-                    return error("file changed since supplied base_digest");
+                    return error(
+                        "base_digest does not match current file; read again before changing it",
+                    );
                 }
                 previous_bytes = Some(bytes);
             }
@@ -556,7 +560,7 @@ mod tests {
         assert!(stale.is_error);
         assert_eq!(
             stale.value["error"],
-            "file changed since supplied base_digest"
+            "base_digest does not match current file; read again before changing it"
         );
         assert_eq!(fs::read(root.join("file")).unwrap(), b"first");
         for guard in [Value::Null, json!(42), json!(hex_digest(b""))] {

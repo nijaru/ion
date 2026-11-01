@@ -196,7 +196,7 @@ async fn concurrent_guarded_writes_admit_one_current_digest() {
     };
     assert_eq!(
         loser.value["error"],
-        "file changed since supplied base_digest"
+        "base_digest does not match current file; read again before changing it"
     );
     let bytes = fs::read(root.join("file")).unwrap();
     assert_eq!(winner.value["new_digest"], hex_digest(&bytes));
@@ -243,15 +243,14 @@ async fn concurrent_native_edits_preserve_guards_and_disjoint_changes() {
             .filter(|output| !output.is_error)
             .count();
         let correct = if guarded {
-            successful == 1
-                && (left ^ right)
-                && [&outputs.0, &outputs.1].iter().all(|output| {
-                    if output.is_error {
-                        output.value["error"] == "file changed since supplied base_digest"
-                    } else {
-                        output.value["new_digest"] == hex_digest(&final_bytes)
-                    }
-                })
+            successful == 1 && (left ^ right) && [&outputs.0, &outputs.1].iter().all(|output| {
+                if output.is_error {
+                    output.value["error"]
+                        == "base_digest does not match current file; read again before changing it"
+                } else {
+                    output.value["new_digest"] == hex_digest(&final_bytes)
+                }
+            })
         } else {
             successful == 0
                 && final_bytes == source.as_bytes()
