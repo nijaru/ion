@@ -6,23 +6,6 @@ import sqlite3
 import uuid
 from pathlib import Path
 
-# The guest intentionally has no Node/browser modules; decode using ordinary JS.
-BASE64_JS = """
-const base64Bytes = encoded => {
-  const alphabet='ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/';
-  let accumulator=0,bits=0; const bytes=[];
-  for(const char of encoded) {
-    if(char==='=') break;
-    const value=alphabet.indexOf(char); if(value<0) throw new Error('invalid base64');
-    accumulator=(accumulator<<6)|value; bits+=6;
-    if(bits>=8) {bits-=8; bytes.push((accumulator>>bits)&255);}
-  }
-  return bytes;
-};
-const utf8 = bytes => decodeURIComponent(bytes.map(byte=>'%'+byte.toString(16).padStart(2,'0')).join(''));
-"""
-
-
 def artifact_bytes(root, reference):
     """Verify receipts, contiguous chunks and both checksums without Ion helpers."""
     for path in Path(root).rglob("*.sqlite"):

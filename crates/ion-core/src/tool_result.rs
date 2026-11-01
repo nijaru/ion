@@ -7,7 +7,7 @@ use serde_json::Value;
 
 use crate::json_size::encoded_len;
 
-const ARTIFACT_RETRIEVAL: &str = "Retained Session bytes. Use history action artifact with this result entry and zero-based artifact index; Code Mode children use inspectSaved kind artifact. Offsets are raw bytes; pages are base64.";
+const ARTIFACT_RETRIEVAL: &str = "Retained Session bytes. Use history action artifact with this result entry and zero-based artifact index; Code Mode children use inspectSaved kind artifact. Offsets are raw bytes; page encoding is utf8 for readable text or base64 for other bytes. Follow next_offset.";
 
 #[derive(Serialize)]
 struct ArtifactModelOutput<'a> {

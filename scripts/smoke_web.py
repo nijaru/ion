@@ -1,8 +1,7 @@
 #!/usr/bin/env python3
 """Credential-free built coding web retrieval, composition and source oracle."""
-import base64
 import hashlib
-from smoke_artifacts import artifact_bytes, BASE64_JS
+from smoke_artifacts import artifact_bytes
 import json
 import os
 import subprocess
@@ -63,14 +62,15 @@ class Provider(BaseHTTPRequestHandler):
                 if prompt == "WEB_READONLY":
                     assert "exec" not in names and "write" not in names, names
                 if prompt in {"WEB_CODE", "WEB_EXCLUDED"}:
-                    code = BASE64_JS + "const r=await tools.web_fetch(" + json.dumps(args) + ");"
+                    code = "const r=await tools.web_fetch(" + json.dumps(args) + ");"
                     if prompt == "WEB_CODE":
                         code += (
                             "if(r.is_error||!r.value.untrusted||!r.value.truncated)throw new Error('bad retrieval');"
                             "const p=await tools.web_fetch(" + json.dumps({"url": url + "/pdf"}) + ");"
                             "const i=await tools.web_fetch({url:'file:///etc/passwd'});"
                             "const full=await inspectSaved({kind:'artifact',parent:r.parent,child:r.child,artifact:0});"
-                            "text({source:r.value.source,content:utf8(base64Bytes(full.data)),pdf:p.value.error.kind,invalid:i.value.error.kind});"
+                            "if(full.encoding!=='utf8')throw new Error('text capture unreadable');"
+                            "text({source:r.value.source,content:full.data,pdf:p.value.error.kind,invalid:i.value.error.kind});"
                         )
                     self.calls([("code", "code_mode", {"code": code})])
                 else:
@@ -90,7 +90,9 @@ class Provider(BaseHTTPRequestHandler):
                     assert last["is_error"], last
                 else:
                     assert not last["is_error"], last
-                    selected=json.dumps(last) if prompt=="WEB_CODE" else base64.b64decode(last["result"]["data"]).decode()
+                    if prompt != "WEB_CODE":
+                        assert last["result"]["encoding"] == "utf8", last
+                    selected=json.dumps(last) if prompt=="WEB_CODE" else last["result"]["data"]
                     assert "WEB_FETCH_DOCUMENT" in selected,last
                     assert "UNEXPECTED_SCRIPT" not in selected,last
                     if prompt == "WEB_CODE":

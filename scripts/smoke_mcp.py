@@ -170,7 +170,8 @@ class Provider(BaseHTTPRequestHandler):
             envelope=json.loads(body["messages"][-1]["content"])
             assert envelope["is_error"] is False,envelope
             page=envelope["result"]
-            data=base64.b64decode(page["data"])
+            assert page["encoding"]=="utf8",page
+            data=page["data"].encode("utf8")
             entry,index,original=self.server.large_capture
             assert data==original[:4096] and b"START_MARKER\\n" in data,page
             assert page["offset"]==0 and page["next_offset"]==len(data),page
@@ -183,7 +184,8 @@ class Provider(BaseHTTPRequestHandler):
             envelope=json.loads(body["messages"][-1]["content"])
             assert envelope["is_error"] is False,envelope
             page=envelope["result"]
-            data=base64.b64decode(page["data"])
+            assert page["encoding"]=="utf8",page
+            data=page["data"].encode("utf8")
             original=self.server.large_capture[2]
             assert data==original[32768:32768+4096] and b"MIDDLE_MARKER" in data,page
             assert page["offset"]==32768 and page["next_offset"]==32768+len(data),page

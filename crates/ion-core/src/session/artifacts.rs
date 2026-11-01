@@ -521,8 +521,46 @@ pub(super) fn page(
     limit: usize,
 ) -> Result<serde_json::Value, SessionError> {
     let page = read_page(connection, reference, offset, limit)?;
+    // Defer only an incomplete character at a text page boundary, never malformed
+    // bytes at EOF. Tiny, binary or unaligned requests keep the exact raw range.
+    let text = match std::str::from_utf8(&page.bytes) {
+        Ok(text) => Some(text),
+        Err(error)
+            if error.error_len().is_none()
+                && error.valid_up_to() > 0
+                && page.next_offset.is_some() =>
+        {
+            Some(
+                std::str::from_utf8(&page.bytes[..error.valid_up_to()])
+                    .expect("valid_up_to bounds a valid UTF-8 prefix"),
+            )
+        }
+        Err(_) => None,
+    }
+    .filter(|text| {
+        text.chars()
+            .all(|c| !c.is_control() || matches!(c, '\n' | '\r' | '\t'))
+    });
+    let (encoding, data, bytes) = match text {
+        Some(text) => ("utf8", serde_json::json!(text), text.len()),
+        None => (
+            "base64",
+            serde_json::json!(STANDARD.encode(&page.bytes)),
+            page.bytes.len(),
+        ),
+    };
+    let end = offset + bytes as u64;
     let end_label = reference.label.floor_char_boundary(128);
-    Ok(
-        serde_json::json!({"artifact_id":reference.id,"label":&reference.label[..end_label],"label_truncated":end_label < reference.label.len(),"total_bytes":reference.bytes,"sha256":reference.sha256,"complete":reference.complete,"offset":offset,"encoding":"base64","data":STANDARD.encode(page.bytes),"next_offset":page.next_offset}),
-    )
+    Ok(serde_json::json!({
+        "artifact_id": reference.id,
+        "label": &reference.label[..end_label],
+        "label_truncated": end_label < reference.label.len(),
+        "total_bytes": reference.bytes,
+        "sha256": reference.sha256,
+        "complete": reference.complete,
+        "offset": offset,
+        "encoding": encoding,
+        "data": data,
+        "next_offset": (end < reference.bytes).then_some(end),
+    }))
 }

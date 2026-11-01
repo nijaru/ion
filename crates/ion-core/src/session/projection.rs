@@ -196,7 +196,7 @@ pub(super) fn shell_message(
                 .expect("a shell observation contains serializable JSON"),
             );
             if !output.artifacts.is_empty() {
-                body.push_str(&format!("\nRetained artifacts: history action artifact, entry {admission_entry}, zero-based artifact index. Pages contain base64 raw bytes; do not rerun the command to recover them."));
+                body.push_str(&format!("\nRetained artifacts: history action artifact, entry {admission_entry}, zero-based artifact index. Pages contain data with encoding utf8 or base64 and raw-byte next_offset; do not rerun the command to recover them."));
             }
             if !output.images.is_empty() {
                 body.push_str(&format!(

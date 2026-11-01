@@ -88,10 +88,7 @@ async fn originals_survive_reopen_and_prefix_copies_without_the_source_database(
         .unwrap()
         .read(&CancellationToken::new())
         .unwrap();
-    assert_eq!(
-        STANDARD.decode(page["data"].as_str().unwrap()).unwrap(),
-        expected[262140..262153]
-    );
+    assert_eq!(page_bytes(&page), expected[262140..262153]);
     assert_eq!(page["next_offset"], 262153);
     assert_eq!(page["label_truncated"], true);
     assert!(page["label"].as_str().unwrap().len() <= 128);
@@ -131,6 +128,89 @@ async fn originals_survive_reopen_and_prefix_copies_without_the_source_database(
     assert_eq!(bytes(&copy, &reference), expected);
     drop(copy);
     fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn artifact_pages_render_text_without_losing_raw_bytes() {
+    let (root, _, session) = fixture();
+    let cases = [
+        (
+            b"plain stdout\n".as_slice(),
+            0,
+            64,
+            "utf8",
+            b"plain stdout\n".as_slice(),
+            None,
+        ),
+        ("ab🦀cd".as_bytes(), 0, 4, "utf8", b"ab", Some(2)),
+        ("ab🦀cd".as_bytes(), 2, 4, "utf8", "🦀".as_bytes(), Some(6)),
+        (
+            "ab🦀cd".as_bytes(),
+            3,
+            4,
+            "base64",
+            &[0x9f, 0xa6, 0x80, b'c'],
+            Some(7),
+        ),
+        ("ab🦀cd".as_bytes(), 2, 1, "base64", &[0xf0], Some(3)),
+        (b"bad\xffdata", 0, 64, "base64", b"bad\xffdata", None),
+        (b"a\0b\n", 0, 64, "base64", b"a\0b\n", None),
+        (
+            b"a\0\xf0\x9f\xa6\x80z",
+            0,
+            4,
+            "base64",
+            b"a\0\xf0\x9f",
+            Some(4),
+        ),
+        (b"ok\xf0\x9f", 0, 64, "base64", b"ok\xf0\x9f", None),
+        (b"", 0, 64, "utf8", b"", None),
+        (b"done", 4, 64, "utf8", b"", None),
+    ];
+    for (payload, offset, limit, encoding, expected, next) in cases {
+        let reference = session
+            .artifact_sink()
+            .capture("page text", payload)
+            .unwrap();
+        let store = session.store.lock().unwrap();
+        let page = artifacts::page(&store.connection, &reference, offset, limit).unwrap();
+        assert_eq!(page["encoding"], encoding, "{payload:?}, {offset}, {limit}");
+        assert_eq!(page_bytes(&page), expected);
+        assert_eq!(page["offset"], offset);
+        assert_eq!(page["next_offset"], json!(next));
+
+        if offset != 0 {
+            continue;
+        }
+        for limit in [1, 2, 3, 4, 7, 8192] {
+            let mut rebuilt = Vec::new();
+            let mut offset = 0;
+            loop {
+                let page = artifacts::page(&store.connection, &reference, offset, limit).unwrap();
+                let bytes = page_bytes(&page);
+                assert!(bytes.len() <= limit);
+                rebuilt.extend_from_slice(&bytes);
+                let Some(next) = page["next_offset"].as_u64() else {
+                    break;
+                };
+                assert_eq!(next, offset + bytes.len() as u64);
+                assert!(next > offset);
+                offset = next;
+            }
+            assert_eq!(rebuilt, payload);
+        }
+    }
+    drop(session);
+    fs::remove_dir_all(root).unwrap();
+}
+
+fn page_bytes(page: &serde_json::Value) -> Vec<u8> {
+    let data = page["data"].as_str().unwrap();
+    match page["encoding"].as_str().unwrap() {
+        "utf8" => data.as_bytes().to_vec(),
+        "base64" => STANDARD.decode(data).unwrap(),
+        encoding => panic!("unknown encoding: {encoding}"),
+    }
 }
 
 #[tokio::test]
@@ -459,7 +539,7 @@ fn current_child_artifacts_are_scoped_and_bad_offsets_are_request_errors() {
             .unwrap()
             .read()
             .unwrap()["data"],
-        STANDARD.encode(b"x")
+        "x"
     );
     let sibling = crate::ToolOccurrence {
         ordinal: 1,

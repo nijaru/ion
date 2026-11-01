@@ -9,7 +9,7 @@ import pty
 import select
 import shlex
 import shutil
-from smoke_artifacts import artifact_bytes, BASE64_JS
+from smoke_artifacts import artifact_bytes
 import signal
 import sqlite3
 import struct
@@ -50,7 +50,11 @@ def program(prompt):
     if prompt == "RECOVER_FAIL":
         producer = "import secrets; print(secrets.token_hex(24)); print('X'*100000)"
         command = f"printf ONCE >> effects; {shlex.quote(sys.executable)} -c {shlex.quote(producer)}; exit 7"
-        return "const r=await tools.exec(" + json.dumps({"command": command}) + "); if(r.artifacts.length!==1||r.child!==0)throw new Error('missing capture provenance'); let rejected=false; try {await inspectSaved({kind:'artifact',parent:r.parent,child:r.child,artifact:0,offset:r.artifacts[0].bytes+1});}catch(_){rejected=true;} if(!rejected)throw new Error('invalid range accepted'); const page=await inspectSaved({kind:'artifact',parent:r.parent,child:r.child,artifact:0,offset:0,limit:1024}); if(!page.complete||page.encoding!=='base64'||page.offset!==0)throw new Error('current capture unavailable after recoverable range error'); throw new Error('after effect');"
+        return "const r=await tools.exec(" + json.dumps({"command": command}) + "); if(r.artifacts.length!==1||r.child!==0)throw new Error('missing capture provenance'); let rejected=false; try {await inspectSaved({kind:'artifact',parent:r.parent,child:r.child,artifact:0,offset:r.artifacts[0].bytes+1});}catch(_){rejected=true;} if(!rejected)throw new Error('invalid range accepted'); const page=await inspectSaved({kind:'artifact',parent:r.parent,child:r.child,artifact:0,offset:0,limit:1024}); if(!page.complete||page.encoding!=='utf8'||page.offset!==0)throw new Error('current capture unavailable after recoverable range error'); throw new Error('after effect');"
+    if prompt == "BINARY_CAPTURE":
+        producer = "import os; os.write(1,bytes(range(256))*300)"
+        command = f"{shlex.quote(sys.executable)} -c {shlex.quote(producer)}"
+        return "const r=await tools.exec(" + json.dumps({"command": command}) + "); const page=await inspectSaved({kind:'artifact',parent:r.parent,child:r.child,artifact:0,limit:256}); if(page.encoding!=='base64')throw new Error('binary capture changed encoding'); return page;"
     if prompt == "GUARD":
         return "const before=await tools.read({path:'guarded',limit:1}); if(!before.value.has_more) throw new Error('expected paged source'); const first=await tools.write({path:'guarded',content:'FIRST',base_digest:before.value.base_digest}); if(first.is_error) throw new Error('first guarded write'); const second=await tools.write({path:'guarded',content:'SECOND',base_digest:first.value.new_digest}); if(second.is_error) throw new Error('second guarded write'); const stale=await tools.write({path:'guarded',content:'LOST',base_digest:before.value.base_digest}); const after=await tools.read({path:'guarded'}); return {first:first.value.new_digest,second:second.value.new_digest,stale:stale.is_error,final:after.value.content};"
     if prompt == "ACTIVE":
@@ -84,7 +88,7 @@ class Provider(BaseHTTPRequestHandler):
             if prompt == "RECOVER_CAPTURE":
                 assert "assistant_entry" not in json.dumps(messages), "cut retained the original locator"
             discovery = "const refs=await inspectSaved({kind:'parents'}); let parent; for(const ref of refs.parents) { const cs=await inspectSaved({kind:'children',parent:ref.parent}); if(cs.children.some(c=>c.name==='exec')) { parent=ref.parent; break; } } if(!parent) throw new Error('saved exec not found'); "
-            code = BASE64_JS + discovery + "const meta=await inspectSaved({kind:'children',parent}); const saved=await inspectSaved({kind:'artifact',parent,child:0,artifact:0,offset:0,limit:1024}); const exit=await inspectSaved({kind:'output',parent,child:0,pointer:'/exit_code'}); return {nonce:utf8(base64Bytes(saved.data)).split('\\n')[0],original_failed:exit.is_error,exit:JSON.parse(exit.json),states:meta.children.map(c=>c.state)};"
+            code = discovery + "const meta=await inspectSaved({kind:'children',parent}); const saved=await inspectSaved({kind:'artifact',parent,child:0,artifact:0,offset:0,limit:1024}); const exit=await inspectSaved({kind:'output',parent,child:0,pointer:'/exit_code'}); return {nonce:saved.data.split('\\n')[0],original_failed:exit.is_error,exit:JSON.parse(exit.json),states:meta.children.map(c=>c.state)};"
             if prompt == "INSPECT_RPC":
                 code = discovery + "const exit=await inspectSaved({kind:'output',parent,child:0,pointer:'/exit_code'}); return {exit:JSON.parse(exit.json), original_failed:exit.is_error};"
             delta = {"tool_calls": [{"index": 0, "id": "inspect", "type": "function", "function": {"name": "code_mode", "arguments": json.dumps({"code": code})}}]}
@@ -92,7 +96,7 @@ class Provider(BaseHTTPRequestHandler):
         elif enabled and prompt == "HISTORY_SOURCE" and fresh:
             delta = {"tool_calls": [{"index": 0, "id": "history-source", "type": "function", "function": {"name": "exec", "arguments": json.dumps({"command": "printf 'HISTORY_NEEDLE_SMOKE\\n' >> effects; printf 'HISTORY_NEEDLE_SMOKE\\n'"})}}]}
             reason = "tool_calls"
-        elif enabled and prompt in ("FANOUT", "GUARD", "MCP", "SELECT", "IO", "STDERR", "ACTIVE", "RECOVER_FAIL", "HISTORY_RECOVERY") and fresh:
+        elif enabled and prompt in ("FANOUT", "GUARD", "MCP", "SELECT", "IO", "STDERR", "ACTIVE", "RECOVER_FAIL", "BINARY_CAPTURE", "HISTORY_RECOVERY") and fresh:
             delta = {"tool_calls": [{"index": 0, "id": "parent", "type": "function", "function": {"name": "code_mode", "arguments": json.dumps({"code": program(prompt)})}}]}
             reason = "tool_calls"
         else:
@@ -168,6 +172,13 @@ with tempfile.TemporaryDirectory(prefix="ion-code-mode-") as temporary:
         assert (workspace / "changed").read_text() == "done"
         assert run(env, workspace, "--session", session_id, "export").stdout.count("PRIVATE_") == 200
         assert run(env, workspace, "--session", session_id, "run", "RESUME").stdout.strip() == "DIRECT_OK"
+        binary_records = [json.loads(line) for line in run(env, workspace, "--code-mode", "--json", "run", "BINARY_CAPTURE").stdout.splitlines()]
+        binary_parent = next(record for record in binary_records if record["type"] == "tool_finished")
+        binary_page = binary_parent["output"]["result"]
+        assert binary_page["encoding"] == "base64" and base64.b64decode(binary_page["data"], validate=True) == bytes(range(256)), binary_parent
+        assert binary_page["offset"] == 0 and binary_page["next_offset"] == 256 and binary_page["total_bytes"] == 76800, binary_page
+        binary_child = next(record for record in binary_records if record["type"] == "child_tool_finished")
+        assert artifact_bytes(work, binary_child["artifacts"][0]) == bytes(range(256)) * 300
         # The guard must cover unread lines, not just this first-line page.
         (workspace / "guarded").write_text("PRIVATE_GUARD_\n" * 4000)
         guarded = [json.loads(line) for line in run(env, workspace, "--code-mode", "--json", "run", "GUARD").stdout.splitlines()]

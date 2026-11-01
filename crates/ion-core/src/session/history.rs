@@ -135,7 +135,7 @@ pub(crate) fn definition() -> ToolDefinition {
                 "Search previews show matching context where available; read by stable one-based entry, not call ID (IDs may repeat). ",
                 "Use next_before as before for older pages, even when a page has no matches. Each scan examines at most 256 entries or 8 MiB; one oversized logical record may be scanned alone (reported by oversized_entry). ",
                 "Read returns original tool output JSON or a safe record projection. Content may be a partial JSON fragment: continue at next_offset until null. Offsets are UTF-8 bytes. ",
-                "Retained binary captures use {action:'artifact',entry:N,artifact:0,offset:0}; pages return base64 data and raw-byte next_offset. Source entries and private-shell restrictions still apply. A content hash is not a read locator. " ,
+                "Retained binary captures use {action:'artifact',entry:N,artifact:0,offset:0}; pages return data with encoding utf8 for readable text or base64 for other bytes. Follow raw-byte next_offset; text pages preserve character boundaries. Source entries and private-shell restrictions still apply. A content hash is not a read locator. " ,
                 "Thinking, provider replay, image bytes, configuration and private !! shells are excluded. Historical evidence is not current workspace state and does not authorize repeating effects."
             )
             .into(),
@@ -148,10 +148,10 @@ pub(crate) fn definition() -> ToolDefinition {
                     "query":{"type":"string","minLength":1,"maxLength":MAX_QUERY_BYTES,"description":"Required for search; literal ASCII case-insensitive text (up to 512 UTF-8 bytes)."},
                     "tool":{"type":"string","minLength":1,"maxLength":MAX_QUERY_BYTES,"description":"Search/list only: select original top-level tool results by exact tool name (up to 512 UTF-8 bytes)."},
                     "before":{"type":"integer","minimum":1,"description":"Search/list only: exclusive one-based entry bound for older results."},
-                    "entry":{"type":"integer","minimum":1,"description":"Required for read; stable one-based committed Session entry coordinate."},
+                    "entry":{"type":"integer","minimum":1,"description":"Required for read/artifact; stable one-based committed Session entry coordinate."},
                     "offset":{"type":"integer","minimum":0,"description":"Zero-based byte offset; artifact offsets address raw bytes."},
                     "artifact":{"type":"integer","minimum":0,"description":"Artifact only: zero-based index in the source record's typed artifacts array."},
-                    "limit":{"type":"integer","minimum":1,"maximum":READ_MAX_LIMIT,"description":"Search/list result count (1..10) or read byte limit (4..16384)."}
+                    "limit":{"type":"integer","minimum":1,"maximum":READ_MAX_LIMIT,"description":"Search/list result count (1..10), read byte limit (4..16384), or artifact raw-byte limit (1..16384)."}
                 }
             }),
         },
