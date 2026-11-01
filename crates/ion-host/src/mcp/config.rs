@@ -1,16 +1,13 @@
 //! MCP configuration validation and serialized atomic publication.
 use super::{http_config, values::McpValue};
-use crate::model_setup::{write_json, write_shared_json};
+use crate::config_file::{self, Visibility, content_digest, project_root, write_json};
 use anyhow::{Context, Result, bail, ensure};
 use indexmap::IndexMap;
 use serde::{Deserialize, Deserializer, Serialize, de::Error as _};
 use serde_json::value::RawValue;
-use sha2::{Digest, Sha256};
 use std::{
     collections::BTreeMap,
-    fs::{DirBuilder, File},
     io::Read,
-    os::unix::fs::DirBuilderExt,
     path::{Path, PathBuf},
 };
 use url::Url;
@@ -227,7 +224,7 @@ impl McpConfig {
         if let Some(project) = &self.project {
             match read_config(&project.path) {
                 Ok(bytes) => {
-                    let digest = digest(&bytes);
+                    let digest = content_digest(&bytes);
                     match self.project_is_trusted(project, &digest) {
                         Ok(true) => match serde_json::from_slice::<RawServers>(&bytes) {
                             Ok(raw) => parse_servers(
@@ -305,9 +302,13 @@ impl McpConfig {
             "cannot trust invalid project MCP configuration: {}",
             diagnostics.join("; ")
         );
+        let key = project_key(project)?;
+        let _lock = config_file::lock(&self.trust.with_file_name("mcp.lock"), Visibility::Private)?;
         let mut trust = self.read_trust()?;
-        trust.projects.insert(project_key(project), digest(&bytes));
-        write_json(&self.trust, &trust)
+        trust
+            .projects
+            .insert(key.to_owned(), content_digest(&bytes));
+        write_json(&self.trust, &trust, Visibility::Private)
     }
 
     pub fn untrust_project(&self) -> Result<()> {
@@ -315,19 +316,21 @@ impl McpConfig {
             .project
             .as_ref()
             .context("no project MCP configuration")?;
+        let key = project_key(project)?;
+        let _lock = config_file::lock(&self.trust.with_file_name("mcp.lock"), Visibility::Private)?;
         let mut trust = self.read_trust()?;
         ensure!(
-            trust.projects.remove(&project_key(project)).is_some(),
+            trust.projects.remove(key).is_some(),
             "project MCP configuration is not trusted"
         );
-        write_json(&self.trust, &trust)
+        write_json(&self.trust, &trust, Visibility::Private)
     }
 
     fn project_is_trusted(&self, project: &ProjectConfig, digest: &str) -> Result<bool> {
         let trust = self.read_trust()?;
         Ok(trust
             .projects
-            .get(&project_key(project))
+            .get(project_key(project)?)
             .is_some_and(|value| value == digest))
     }
 
@@ -342,7 +345,7 @@ impl McpConfig {
     }
 
     pub fn add(&self, name: &str, server: McpServer) -> Result<()> {
-        self.add_at(&self.user, name, server, false)
+        self.add_at(&self.user, name, server, Visibility::Private)
     }
 
     pub fn add_project(&self, name: &str, server: McpServer) -> Result<()> {
@@ -350,11 +353,11 @@ impl McpConfig {
             .project
             .as_ref()
             .context("no project MCP configuration")?;
-        self.add_at(&project.path, name, server, true)
+        self.add_at(&project.path, name, server, Visibility::Shared)
     }
 
     pub fn remove(&self, name: &str) -> Result<()> {
-        self.remove_at(&self.user, name, false)
+        self.remove_at(&self.user, name, Visibility::Private)
     }
 
     pub fn remove_project(&self, name: &str) -> Result<()> {
@@ -362,12 +365,12 @@ impl McpConfig {
             .project
             .as_ref()
             .context("no project MCP configuration")?;
-        self.remove_at(&project.path, name, true)
+        self.remove_at(&project.path, name, Visibility::Shared)
     }
 
     /// Persist startup enablement without changing any active connection.
     pub fn set_enabled(&self, name: &str, enabled: bool) -> Result<()> {
-        self.set_enabled_at(&self.user, name, enabled, false)
+        self.set_enabled_at(&self.user, name, enabled, Visibility::Private)
     }
 
     /// Editing project enablement invalidates its existing digest trust.
@@ -376,11 +379,18 @@ impl McpConfig {
             .project
             .as_ref()
             .context("no project MCP configuration")?;
-        self.set_enabled_at(&project.path, name, enabled, true)
+        self.set_enabled_at(&project.path, name, enabled, Visibility::Shared)
     }
 
-    fn set_enabled_at(&self, path: &Path, name: &str, enabled: bool, shared: bool) -> Result<()> {
-        let _lock = writer_lock(path, shared)?;
+    fn set_enabled_at(
+        &self,
+        path: &Path,
+        name: &str,
+        enabled: bool,
+        visibility: Visibility,
+    ) -> Result<()> {
+        let shared = matches!(visibility, Visibility::Shared);
+        let _lock = config_file::lock(&path.with_file_name("mcp.lock"), visibility)?;
         let mut servers = read_servers(path)?;
         let raw = match servers.get(name) {
             Some(raw) => raw.clone(),
@@ -405,42 +415,37 @@ impl McpConfig {
         }
         fields.insert("enabled".into(), serde_json::value::to_raw_value(&enabled)?);
         servers.insert(name.to_owned(), serde_json::value::to_raw_value(&fields)?);
-        if shared {
-            write_shared_json(path, &RawServers { servers })
-        } else {
-            write_json(path, &RawServers { servers })
-        }
+        write_json(path, &RawServers { servers }, visibility)
     }
 
-    fn add_at(&self, path: &Path, name: &str, server: McpServer, shared: bool) -> Result<()> {
+    fn add_at(
+        &self,
+        path: &Path,
+        name: &str,
+        server: McpServer,
+        visibility: Visibility,
+    ) -> Result<()> {
         validate_name(name)?;
         validate_server(&server)?;
-        let _lock = writer_lock(path, shared)?;
+
+        let _lock = config_file::lock(&path.with_file_name("mcp.lock"), visibility)?;
         let mut servers = read_servers(path)?;
         ensure!(
             !servers.contains_key(name),
             "MCP server {name} already exists"
         );
         servers.insert(name.to_owned(), serde_json::value::to_raw_value(&server)?);
-        if shared {
-            write_shared_json(path, &RawServers { servers })
-        } else {
-            write_json(path, &RawServers { servers })
-        }
+        write_json(path, &RawServers { servers }, visibility)
     }
 
-    fn remove_at(&self, path: &Path, name: &str, shared: bool) -> Result<()> {
-        let _lock = writer_lock(path, shared)?;
+    fn remove_at(&self, path: &Path, name: &str, visibility: Visibility) -> Result<()> {
+        let _lock = config_file::lock(&path.with_file_name("mcp.lock"), visibility)?;
         let mut servers = read_servers(path)?;
         ensure!(
             servers.remove(name).is_some(),
             "MCP server {name} was not found"
         );
-        if shared {
-            write_shared_json(path, &RawServers { servers })
-        } else {
-            write_json(path, &RawServers { servers })
-        }
+        write_json(path, &RawServers { servers }, visibility)
     }
 }
 
@@ -556,57 +561,11 @@ fn parse_servers(
     }
 }
 
-fn writer_lock(path: &Path, shared: bool) -> Result<File> {
-    let root = path.parent().context("MCP config has no parent")?;
-    let directory_mode = if shared { 0o755 } else { 0o700 };
-    DirBuilder::new()
-        .recursive(true)
-        .mode(directory_mode)
-        .create(root)?;
-    // The separate lock inode survives atomic replacement of mcp.json.
-    let lock = File::from(rustix::fs::open(
-        root.join("mcp.lock"),
-        rustix::fs::OFlags::RDWR
-            | rustix::fs::OFlags::CREATE
-            | rustix::fs::OFlags::CLOEXEC
-            | rustix::fs::OFlags::NONBLOCK
-            | rustix::fs::OFlags::NOFOLLOW,
-        if shared {
-            rustix::fs::Mode::RUSR
-                | rustix::fs::Mode::WUSR
-                | rustix::fs::Mode::RGRP
-                | rustix::fs::Mode::WGRP
-                | rustix::fs::Mode::ROTH
-                | rustix::fs::Mode::WOTH
-        } else {
-            rustix::fs::Mode::RUSR | rustix::fs::Mode::WUSR
-        },
-    )?);
-    ensure!(lock.metadata()?.is_file(), "MCP lock is not a regular file");
-    rustix::fs::flock(&lock, rustix::fs::FlockOperation::LockExclusive)?;
-    Ok(lock)
-}
-
-fn project_root(cwd: &Path) -> Result<PathBuf> {
-    let cwd = cwd
-        .canonicalize()
-        .with_context(|| format!("cannot resolve working directory {}", cwd.display()))?;
-    for ancestor in cwd.ancestors() {
-        if ancestor.join(".git").exists() {
-            return Ok(ancestor.to_owned());
-        }
-    }
-    Ok(cwd)
-}
-
-fn project_key(project: &ProjectConfig) -> String {
-    project.root.to_string_lossy().into_owned()
-}
-
-fn digest(bytes: &[u8]) -> String {
-    let mut hasher = Sha256::new();
-    hasher.update(bytes);
-    format!("{:x}", hasher.finalize())
+fn project_key(project: &ProjectConfig) -> Result<&str> {
+    project
+        .root
+        .to_str()
+        .context("project root is not representable as UTF-8 in mcp-trust.json")
 }
 
 fn parse_server(name: &str, value: &RawValue) -> Result<McpServer> {
@@ -828,7 +787,7 @@ mod tests {
                     "invalid".into(),
                     serde_json::value::to_raw_value(&json!({"command":7})).unwrap(),
                 );
-                write_json(path, &RawServers { servers: raw }).unwrap();
+                write_json(path, &RawServers { servers: raw }, Visibility::Private).unwrap();
             }
             let before = fs::read(path).unwrap();
             let expected: Value = serde_json::from_slice(&before).unwrap();
@@ -1347,6 +1306,22 @@ mod tests {
     }
 
     #[test]
+    fn project_trust_keys_reject_lossy_path_collisions() {
+        use std::os::unix::ffi::OsStringExt;
+
+        let projects =
+            [b"/project-\xff".to_vec(), b"/project-\xfe".to_vec()].map(|bytes| ProjectConfig {
+                root: PathBuf::from(std::ffi::OsString::from_vec(bytes)),
+                path: PathBuf::new(),
+            });
+        assert_eq!(
+            projects[0].root.to_string_lossy(),
+            projects[1].root.to_string_lossy()
+        );
+        assert!(projects.iter().all(|project| project_key(project).is_err()));
+    }
+
+    #[test]
     fn concurrent_configuration_mutations_preserve_acknowledged_updates() {
         let root = std::env::temp_dir().join(format!("ion-mcp-config-{}", uuid::Uuid::now_v7()));
         fs::create_dir(&root).unwrap();
@@ -1387,7 +1362,6 @@ mod tests {
             .map(|worker| worker.join().unwrap())
             .collect::<Vec<_>>();
         let saved = config.list().unwrap();
-        fs::remove_dir_all(root).unwrap();
         assert!(results.iter().all(Result::is_ok), "{results:?}");
         assert!(saved.diagnostics.is_empty());
         assert_eq!(
@@ -1396,6 +1370,51 @@ mod tests {
                 .map(|index| format!("new-{index}"))
                 .collect::<Vec<_>>(),
             "acknowledged add/remove updates were lost or resurrected"
+        );
+
+        let start = Arc::new(Barrier::new(16));
+        let workers = (0..16)
+            .map(|index| {
+                let project = root.join(format!("project-{index}"));
+                fs::create_dir_all(project.join(".git")).unwrap();
+                fs::create_dir_all(project.join(".ion")).unwrap();
+                fs::write(project.join(".ion/mcp.json"), br#"{"servers":{}}"#).unwrap();
+                let config = McpConfig::with_project(&root, &project).unwrap();
+                if index >= 8 {
+                    config.trust_project().unwrap();
+                }
+                let start = start.clone();
+                std::thread::spawn(move || {
+                    start.wait();
+                    if index < 8 {
+                        config.trust_project()
+                    } else {
+                        config.untrust_project()
+                    }
+                })
+            })
+            .collect::<Vec<_>>();
+        let results = workers
+            .into_iter()
+            .map(|worker| worker.join().unwrap())
+            .collect::<Vec<_>>();
+        let trusted = config.read_trust().unwrap();
+        let expected = (0..8)
+            .map(|index| {
+                root.join(format!("project-{index}"))
+                    .canonicalize()
+                    .unwrap()
+                    .into_os_string()
+                    .into_string()
+                    .unwrap()
+            })
+            .collect::<Vec<_>>();
+        fs::remove_dir_all(root).unwrap();
+        assert!(results.iter().all(Result::is_ok), "{results:?}");
+        assert_eq!(
+            trusted.projects.into_keys().collect::<Vec<_>>(),
+            expected,
+            "acknowledged trust grants or revocations were lost"
         );
     }
 }

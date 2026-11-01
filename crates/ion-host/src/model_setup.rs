@@ -1,9 +1,7 @@
 //! Host-owned model routes and the default choice. Sessions store only model identity.
 
 use std::{
-    fs::{self, DirBuilder, File, OpenOptions},
-    io::{self, Write},
-    os::unix::fs::{DirBuilderExt, OpenOptionsExt},
+    io,
     path::{Path, PathBuf},
 };
 
@@ -23,6 +21,7 @@ use crate::{
     HttpModelService, HttpWire,
     auth::{CredentialStatus, CredentialStore, validate_provider_id},
     catalog,
+    config_file::{self, Visibility, write_json},
 };
 
 #[derive(Clone, Copy, Debug, Serialize, Deserialize)]
@@ -188,7 +187,7 @@ impl ModelStore {
         validate_provider_id(&saved.provider)?;
         // Serialize read/modify/publish, including between separate CLI processes.
         // Keep the lock inode stable while replacing the configuration document.
-        let _lock = self.writer_lock()?;
+        let _lock = config_file::lock(&self.root.join("models.lock"), Visibility::Private)?;
         let mut configuration = self.configuration()?;
         let effective =
             if saved.endpoint.is_none() && catalog::find(&saved.provider, &saved.model).is_none() {
@@ -232,7 +231,11 @@ impl ModelStore {
                 scope.push(canonical);
             }
         }
-        write_json(&self.root.join("models.json"), &configuration)?;
+        write_json(
+            &self.root.join("models.json"),
+            &configuration,
+            Visibility::Private,
+        )?;
         Ok(selected)
     }
 
@@ -478,28 +481,6 @@ impl ModelStore {
         Ok(read_json(&self.root.join("models.json"))?.unwrap_or_default())
     }
 
-    fn writer_lock(&self) -> Result<File> {
-        DirBuilder::new()
-            .recursive(true)
-            .mode(0o700)
-            .create(&self.root)?;
-        let lock = File::from(rustix::fs::open(
-            self.root.join("models.lock"),
-            rustix::fs::OFlags::RDWR
-                | rustix::fs::OFlags::CREATE
-                | rustix::fs::OFlags::CLOEXEC
-                | rustix::fs::OFlags::NONBLOCK
-                | rustix::fs::OFlags::NOFOLLOW,
-            rustix::fs::Mode::RUSR | rustix::fs::Mode::WUSR,
-        )?);
-        ensure!(
-            lock.metadata()?.is_file(),
-            "model lock is not a regular file"
-        );
-        rustix::fs::flock(&lock, rustix::fs::FlockOperation::LockExclusive)?;
-        Ok(lock)
-    }
-
     fn resolve_saved(&self, saved: &SavedSelection) -> Result<Selection> {
         validate_provider_id(&saved.provider)?;
         ensure!(
@@ -584,59 +565,10 @@ fn read_json<T: DeserializeOwned>(path: &Path) -> Result<Option<T>> {
     }
 }
 
-pub(crate) fn write_json<T: Serialize>(path: &Path, value: &T) -> Result<()> {
-    write_json_with_mode(path, value, 0o600)
-}
-
-/// Project files are ordinary repository files, not private credentials.
-pub(crate) fn write_shared_json<T: Serialize>(path: &Path, value: &T) -> Result<()> {
-    write_json_with_mode(path, value, 0o644)
-}
-
-fn write_json_with_mode<T: Serialize>(path: &Path, value: &T, mode: u32) -> Result<()> {
-    let parent = path.parent().context("config path has no parent")?;
-    if !parent.exists() {
-        DirBuilder::new()
-            .recursive(true)
-            .mode(0o700)
-            .create(parent)?;
-    }
-    let mut nonce = [0u8; 8];
-    getrandom::fill(&mut nonce)
-        .map_err(|error| anyhow::anyhow!("cannot generate config temp name: {error}"))?;
-    let temp = path.with_extension(format!(
-        "{}.{:016x}.tmp",
-        std::process::id(),
-        u64::from_ne_bytes(nonce)
-    ));
-    let mut file = OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .mode(mode)
-        .open(&temp)?;
-    let result = (|| -> Result<()> {
-        file.write_all(&serde_json::to_vec_pretty(value)?)?;
-        file.sync_all()?;
-        fs::rename(&temp, path)?;
-        File::open(parent)
-            .and_then(|directory| directory.sync_all())
-            .with_context(|| {
-                format!(
-                    "published {}, but syncing its directory failed",
-                    path.display()
-                )
-            })?;
-        Ok(())
-    })();
-    if result.is_err() {
-        let _ = fs::remove_file(&temp);
-    }
-    result
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::fs;
 
     fn desktop_route(endpoint: &str) -> SavedSelection {
         SavedSelection {
@@ -815,7 +747,7 @@ mod tests {
         );
         let mut configuration: ModelConfiguration = serde_json::from_slice(&before).unwrap();
         configuration.custom.clear();
-        write_json(&publication, &configuration).unwrap();
+        write_json(&publication, &configuration, Visibility::Private).unwrap();
         assert!(store.choose(None, None, &credentials).is_err());
         fs::write(&publication, b"not JSON").unwrap();
         assert_eq!(

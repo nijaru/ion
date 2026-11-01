@@ -7,8 +7,7 @@
 
 use std::{
     collections::BTreeMap,
-    fs::{self, DirBuilder, File},
-    os::unix::fs::DirBuilderExt,
+    fs,
     path::{Path, PathBuf},
 };
 
@@ -17,9 +16,12 @@ use serde::{
     Deserialize, Deserializer, Serialize,
     de::{Error as _, MapAccess, Visitor},
 };
-use sha2::{Digest, Sha256};
 
-use crate::{command_args::quote, file_io::read_bounded, model_setup::write_json};
+use crate::{
+    command_args::quote,
+    config_file::{self, Visibility, content_digest, project_root},
+    file_io::read_bounded,
+};
 
 const MAX_MANIFEST_BYTES: usize = 1024 * 1024;
 const MAX_DESCRIPTION_BYTES: usize = 1024;
@@ -81,7 +83,7 @@ impl UserCommand {
             )
         })?;
         ensure!(
-            digest(&bytes) == self.source.digest,
+            content_digest(&bytes) == self.source.digest,
             "command source {} changed since it was loaded; run /reload after reviewing the change",
             self.source.path.display()
         );
@@ -267,7 +269,7 @@ impl CommandConfig {
         let mut diagnostics = Vec::new();
         match read_manifest(&self.user) {
             Ok(Some((bytes, path))) => {
-                let digest = digest(&bytes);
+                let digest = content_digest(&bytes);
                 parse_entries(
                     &bytes,
                     &path,
@@ -287,7 +289,7 @@ impl CommandConfig {
         if let Some(project) = &self.project {
             match read_manifest(&project.manifest) {
                 Ok(Some((bytes, path))) => {
-                    let digest = digest(&bytes);
+                    let digest = content_digest(&bytes);
                     match project_trust_state(self, project, &digest) {
                         Ok(true) => parse_entries(
                             &bytes,
@@ -344,7 +346,7 @@ impl CommandConfig {
             &bytes,
             &path,
             CommandOrigin::Project,
-            digest(&bytes),
+            content_digest(&bytes),
             None,
             &mut commands,
             &mut diagnostics,
@@ -356,13 +358,16 @@ impl CommandConfig {
         );
         let root = project_key(&project.root)?;
         let manifest = manifest_identity(&project.manifest)?;
-        let _lock = self.writer_lock()?;
+        let _lock = config_file::lock(
+            &self.trust.with_file_name("commands.lock"),
+            Visibility::Private,
+        )?;
         let mut trust = self.read_trust()?;
         trust.projects.insert(
             root,
             TrustEntry {
                 manifest,
-                digest: digest(&bytes),
+                digest: content_digest(&bytes),
             },
         );
         self.write_trust(&trust)?;
@@ -375,7 +380,10 @@ impl CommandConfig {
             .as_ref()
             .context("no project commands manifest")?;
         let root = project_key(&project.root)?;
-        let _lock = self.writer_lock()?;
+        let _lock = config_file::lock(
+            &self.trust.with_file_name("commands.lock"),
+            Visibility::Private,
+        )?;
         let mut trust = self.read_trust()?;
         ensure!(
             trust.projects.remove(&root).is_some(),
@@ -394,7 +402,7 @@ impl CommandConfig {
             encoded.len() <= MAX_MANIFEST_BYTES,
             "commands trust store would exceed the {MAX_MANIFEST_BYTES} byte limit; untrust unused projects first"
         );
-        write_json(&self.trust, trust)
+        config_file::write(&self.trust, &encoded, Visibility::Private)
     }
 
     fn read_trust(&self) -> Result<TrustFile> {
@@ -406,32 +414,6 @@ impl CommandConfig {
                 format!("cannot read commands trust store {}", self.trust.display())
             }),
         }
-    }
-
-    fn writer_lock(&self) -> Result<File> {
-        let parent = self
-            .trust
-            .parent()
-            .context("commands trust has no parent")?;
-        DirBuilder::new()
-            .recursive(true)
-            .mode(0o700)
-            .create(parent)?;
-        let lock = File::from(rustix::fs::open(
-            parent.join("commands.lock"),
-            rustix::fs::OFlags::RDWR
-                | rustix::fs::OFlags::CREATE
-                | rustix::fs::OFlags::CLOEXEC
-                | rustix::fs::OFlags::NONBLOCK
-                | rustix::fs::OFlags::NOFOLLOW,
-            rustix::fs::Mode::RUSR | rustix::fs::Mode::WUSR,
-        )?);
-        ensure!(
-            lock.metadata()?.is_file(),
-            "commands lock is not a regular file"
-        );
-        rustix::fs::flock(&lock, rustix::fs::FlockOperation::LockExclusive)?;
-        Ok(lock)
     }
 }
 
@@ -524,18 +506,6 @@ fn valid_name(name: &str) -> bool {
             .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-' || byte == b'_')
 }
 
-fn project_root(cwd: &Path) -> Result<PathBuf> {
-    let cwd = cwd
-        .canonicalize()
-        .with_context(|| format!("cannot resolve working directory {}", cwd.display()))?;
-    for ancestor in cwd.ancestors() {
-        if ancestor.join(".git").exists() {
-            return Ok(ancestor.to_owned());
-        }
-    }
-    Ok(cwd)
-}
-
 fn project_key(root: &Path) -> Result<String> {
     root.to_str()
         .map(str::to_owned)
@@ -574,12 +544,6 @@ fn trusted_project(trust: &Path, root: &str, manifest: &str, digest: &str) -> Re
         .projects
         .get(root)
         .is_some_and(|entry| entry.manifest == manifest && entry.digest == digest))
-}
-
-fn digest(bytes: &[u8]) -> String {
-    let mut hasher = Sha256::new();
-    hasher.update(bytes);
-    format!("{:x}", hasher.finalize())
 }
 
 #[cfg(test)]

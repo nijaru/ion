@@ -1,5 +1,6 @@
 use super::*;
 use crate::{CredentialStatus, ModelCycleDirection};
+use std::fs;
 
 fn choices() -> Vec<ModelChoice> {
     let store = ModelStore::new(PathBuf::new());
@@ -186,7 +187,7 @@ fn configured_and_invocation_scopes_keep_selection_and_default_ownership() {
         scope: Some(vec!["first/two".into(), "first/one".into()]),
     };
     let path = root.join("models.json");
-    write_json(&path, &configuration).unwrap();
+    write_json(&path, &configuration, Visibility::Private).unwrap();
     let original = fs::read(&path).unwrap();
     let choose = |store: &ModelStore, explicit, previous| {
         store
@@ -243,10 +244,10 @@ fn configured_and_invocation_scopes_keep_selection_and_default_ownership() {
     );
     assert_eq!(fs::read(&path).unwrap(), original);
     configuration.default = Some(identity("first", "one"));
-    write_json(&path, &configuration).unwrap();
+    write_json(&path, &configuration, Visibility::Private).unwrap();
     assert_eq!(choose(&store, None, None), identity("first", "one"));
     configuration.scope = Some(vec!["no-such-model".into()]);
-    write_json(&path, &configuration).unwrap();
+    write_json(&path, &configuration, Visibility::Private).unwrap();
     assert!(store.choose(None, None, &credentials).is_err());
     assert!(store.cycle_choices(&credentials).is_err());
     assert!(store.selection_choices(&credentials).is_err());
@@ -259,7 +260,7 @@ fn configured_and_invocation_scopes_keep_selection_and_default_ownership() {
         identity("second", "one")
     );
     configuration.scope = Some(vec!["first/*".into()]);
-    write_json(&path, &configuration).unwrap();
+    write_json(&path, &configuration, Visibility::Private).unwrap();
     store.save_default(&configuration.custom[7]).unwrap();
     let saved = store.configuration().unwrap();
     assert_eq!(saved.scope.unwrap(), ["first/*", "second/one"]);
