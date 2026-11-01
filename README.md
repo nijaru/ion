@@ -40,7 +40,7 @@ Run `ion --help` and `ion COMMAND --help` for complete supported options. The cu
 
 The coding recipe runs native commands **with your host permissions**. Tool selection/read-only flags are model loadout controls, not a sandbox. Cancellation does not undo filesystem effects; interrupted effects may have unknown outcomes and are not blindly replayed.
 
-Compaction summarizes bounded excerpts of large tool outputs; originals remain in the Session. The coding `history` tool can search and read that evidence without rerunning commands.
+Compaction summarizes bounded excerpts of large tool outputs; original recorded result envelopes remain in the Session. The coding `history` tool can search and read that evidence without rerunning commands. Overflow/raw payloads saved by tools to temporary files are not yet Session-managed artifacts and may be lost to temporary-directory cleanup.
 
 Configuration, saved credentials, resources and sessions use `~/.ion` by default, or `ION_HOME` when set; workspace-specific `.ion` is separate. No automatic migration from old XDG storage is performed.
 
