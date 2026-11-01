@@ -85,6 +85,11 @@ enum EntryInspection {
         turn: u64,
         notices: Vec<ion_core::CompletionNotice>,
     },
+    UncommittedUsage {
+        purpose: ion_core::ModelUsagePurpose,
+        execution: ModelExecution,
+        usage: Usage,
+    },
     CacheWarm {
         turn: u64,
         execution: ModelExecution,

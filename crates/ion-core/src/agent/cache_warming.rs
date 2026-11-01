@@ -121,6 +121,14 @@ pub(super) async fn execute_with_cache_warming(
     stop: &CancellationToken,
     warmer: &mut Option<PromptCacheWarmer>,
 ) -> Result<ToolExecution, AgentError> {
+    enum Selected {
+        Tool(Result<ToolExecution, AgentError>),
+        Refresh {
+            started: tokio::time::Instant,
+            completed: bool,
+        },
+        Stopped,
+    }
     tokio::pin!(tool);
     loop {
         let Some(state) = warmer.as_ref() else {
@@ -129,33 +137,46 @@ pub(super) async fn execute_with_cache_warming(
         let deadline = state.next_refresh;
         let valid_until = state.expires_at.min(state.stop_at);
         let request = state.request.clone();
-        let refresh = async {
-            tokio::time::sleep_until(deadline).await;
-            let started = tokio::time::Instant::now();
-            if started >= valid_until {
-                return (started, None);
+        // The sample outlives the refresh future: a tool finishing or Stop may
+        // drop that future after usage arrived but before provider completion.
+        let mut observed = None;
+        let outcome = {
+            let refresh = async {
+                tokio::time::sleep_until(deadline).await;
+                let started = tokio::time::Instant::now();
+                let completed = started < valid_until
+                    && refresh_prompt_cache(service, request, stop, &mut observed).await;
+                (started, completed)
+            };
+            tokio::pin!(refresh);
+            tokio::select! {
+                output = &mut tool => Selected::Tool(output),
+                (started, completed) = &mut refresh => Selected::Refresh { started, completed },
+                () = stop.cancelled() => Selected::Stopped,
             }
-            (started, refresh_prompt_cache(service, request, stop).await)
         };
-        tokio::pin!(refresh);
-        tokio::select! {
-            output = &mut tool => return output,
-            refreshed = &mut refresh => {
-                let (started, Some((execution, usage))) = refreshed else {
-                    *warmer = None;
-                    continue;
-                };
-                // Optimization accounting cannot interrupt owned effects. The
-                // next correctness-critical write still surfaces storage faults.
-                let _ = session.record_cache_warm(turn, execution, usage);
-                if !warmer.as_mut().is_some_and(|state| state.reschedule(usage, started)) {
+        if let Some(sample) = &observed {
+            // Optimization accounting cannot interrupt owned effects. The next
+            // correctness-critical write still surfaces storage faults.
+            let _ = session.record_cache_warm(turn, sample.execution.clone(), sample.usage);
+        }
+        match outcome {
+            Selected::Tool(output) => return output,
+            Selected::Stopped => {
+                *warmer = None;
+                // Refresh has been dropped; join owned executor/delegation cleanup.
+                return tool.await;
+            }
+            Selected::Refresh { started, completed } => {
+                if !completed
+                    || !observed.is_some_and(|sample| {
+                        warmer
+                            .as_mut()
+                            .is_some_and(|state| state.reschedule(sample.usage, started))
+                    })
+                {
                     *warmer = None;
                 }
-            }
-            () = stop.cancelled() => {
-                *warmer = None;
-                // Stop joins the executor and delegation cleanup; never drop it.
-                return tool.await;
             }
         }
     }

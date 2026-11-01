@@ -49,6 +49,14 @@ class Handler(BaseHTTPRequestHandler):
                 "completion_tokens": 17 if prompt == "default" else 0,
                 "prompt_tokens_details": {"cached_tokens": 555 if prompt == "default" else 0},
             }
+        if prompt in ("USAGE_REJECTED", "USAGE_INTERRUPTED"):
+            events[0]["usage"] = {"prompt_tokens": 19, "completion_tokens": 0}
+            if prompt == "USAGE_REJECTED":
+                events[-1]["choices"][0]["finish_reason"] = "content_filter"
+                events[-1]["usage"] = {"prompt_tokens": 23, "completion_tokens": 7}
+                events[-1]["model"] = "served-rejected"
+            else:
+                events = events[:1]  # Usage arrived, but no completed response.
         payload = b"".join(b"data: " + json.dumps(event).encode() + b"\n\n" for event in events)
         payload += b"data: [DONE]\n\n"
         self.send_response(200)
@@ -62,6 +70,44 @@ class Handler(BaseHTTPRequestHandler):
 
     def log_message(self, *_args):
         pass
+
+
+def exercise_discarded_usage(root, base_env, endpoint):
+    sandbox = root / "discarded-usage"
+    sandbox.mkdir()
+    env = dict(base_env, HOME=str(sandbox / "home"), ION_HOME=str(sandbox / "ion"))
+
+    def call(*args):
+        return subprocess.run([BINARY, *map(str, args)], env=env, cwd=sandbox,
+                              capture_output=True, timeout=15)
+
+    configured = call("use", "usage", "model", "--endpoint", endpoint, "--wire", "chat-completions")
+    assert configured.returncode == 0, configured.stderr
+    for prompt, input_tokens, output_tokens in (("USAGE_REJECTED", 23, 7), ("USAGE_INTERRUPTED", 19, 0)):
+        database = sandbox / f"{prompt}.sqlite"
+        count = len(requests)
+        result = call("--session", database, "run", prompt)
+        assert result.returncode != 0, result.stdout
+        assert len(requests) == count + 1, "failed output must not be replayed"
+        inspected = call("--session", database, "inspect")
+        assert inspected.returncode == 0, inspected.stderr
+        view = json.loads(inspected.stdout)
+        observations = [entry["data"] for entry in view["entries"] if entry["kind"] == "uncommitted_usage"]
+        assert len(observations) == 1, view
+        observation = observations[0]
+        assert observation["purpose"] == "assistant", observation
+        assert observation["usage"]["input_tokens"] == input_tokens, observation
+        assert observation["usage"]["output_tokens"] == output_tokens, observation
+        assert observation["execution"]["route"]["effective"] == {"provider": "usage", "model": "model"}, observation
+        if prompt == "USAGE_REJECTED":
+            assert observation["execution"]["returned_model"] == "served-rejected", observation
+        assert not any(entry["kind"] in ("assistant", "tool_result") for entry in view["entries"]), view
+        assert view["unfinished_turn"] is None and len(view["messages"]) == 1, view
+        report = call("--session", database, "usage")
+        assert report.returncode == 0, report.stderr
+        assert f"Uncommitted: {input_tokens + output_tokens} token(s), 1 observation(s)" in report.stdout.decode(), report.stdout
+        assert json.loads(call("--session", database, "inspect").stdout) == view
+        assert len(requests) == count + 1, "inspection and usage must remain passive"
 
 
 def exercise_model_scope(root, base_env, endpoint):
@@ -286,6 +332,7 @@ with tempfile.TemporaryDirectory(prefix="ion-cli-") as temporary:
         endpoint = f"http://127.0.0.1:{server.server_port}/v1/chat/completions"
         exercise_doctor(root, env, endpoint)
         exercise_model_scope(root, env, endpoint)
+        exercise_discarded_usage(root, env, endpoint)
         run("use", "pictures", "model", "--endpoint", endpoint, "--wire", "chat-completions", "--images")
         for provider, model in (("first", "vendor/model"), ("second", "other")):
             run("use", provider, model, "--endpoint", endpoint, "--wire", "chat-completions")

@@ -190,6 +190,7 @@ fn document(view: &SessionView, mut doc: impl Document) -> String {
                 doc.heading("Provider reasoning context reset")
             }
             SessionEntry::ContextSelected { .. }
+            | SessionEntry::UncommittedUsage { .. }
             | SessionEntry::CacheWarm { .. }
             | SessionEntry::ModelContextChanged { .. }
             | SessionEntry::TurnResumed { .. }

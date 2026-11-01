@@ -208,7 +208,16 @@ impl PreparedRequest {
             },
         )?;
         session.activate_request_calibration(&self.measurement, &self.scope)?;
-        let attempt = generate_with_retry(model, &self.request, stop, observe).await;
+        let attempt = generate_with_retry(model, &self.request, stop, observe, |observed| {
+            session
+                .record_uncommitted_usage(
+                    crate::session::ModelUsagePurpose::Assistant,
+                    observed.execution.clone(),
+                    observed.usage,
+                )
+                .map_err(Into::into)
+        })
+        .await;
         // Retain the route actually used by pre-output retry for cache warming.
         self.request.route = attempt.route.clone();
         Ok(IssuedRequest {

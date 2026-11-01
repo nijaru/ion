@@ -136,7 +136,8 @@ impl<'a> RequestCycle<'a> {
             if ((overflow && attempt.output == OutputCustody::Unobserved) || recoverable_length)
                 && !prefix_bound
                 && !recovered_overflow
-                && self
+            {
+                match self
                     .agent
                     .compact_inner(
                         None,
@@ -145,15 +146,30 @@ impl<'a> RequestCycle<'a> {
                         self.agent.keep_bytes(),
                         observe,
                     )
-                    .await?
-                    .is_some()
-            {
-                recovered_overflow = true;
-                if recoverable_length {
-                    self.length_recovery_attempted = true;
-                    observe(AgentEvent::ResponseRestarted);
+                    .await
+                {
+                    Ok(None) => {}
+                    Err(error @ AgentError::Session(_)) => return Err(error),
+                    recovery => {
+                        // Failed streams were accounted by generation. A completed
+                        // response is discarded only if recovery replaces it (or
+                        // fails); otherwise the Turn still owns its disposition.
+                        if let Some(observed) = &attempt.usage {
+                            self.session.record_uncommitted_usage(
+                                crate::session::ModelUsagePurpose::Assistant,
+                                observed.execution.clone(),
+                                observed.usage,
+                            )?;
+                        }
+                        let _ = recovery?;
+                        recovered_overflow = true;
+                        if recoverable_length {
+                            self.length_recovery_attempted = true;
+                            observe(AgentEvent::ResponseRestarted);
+                        }
+                        continue;
+                    }
                 }
-                continue;
             }
             let started = attempt.timing.start;
             return Ok(RequestStep {

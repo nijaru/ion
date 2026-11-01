@@ -20,6 +20,31 @@ pub(crate) struct GeneratedResponse {
     pub route: ModelRoute,
 }
 
+/// One cumulative provider observation, never a sum of stream snapshots.
+#[derive(Debug)]
+pub(crate) struct ObservedUsage {
+    pub execution: ModelExecution,
+    pub usage: Usage,
+}
+
+impl ObservedUsage {
+    fn update<'a>(
+        observed: &'a mut Option<Self>,
+        route: &ModelRoute,
+        usage: Usage,
+    ) -> &'a mut Self {
+        let current = observed.get_or_insert_with(|| Self {
+            execution: ModelExecution {
+                route: route.clone(),
+                returned_model: None,
+            },
+            usage: Usage::unknown(),
+        });
+        current.usage.apply_snapshot(usage);
+        current
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum OutputCustody {
     Unobserved,
@@ -34,6 +59,8 @@ pub(crate) struct GenerationAttempt {
     pub route: ModelRoute,
     pub output: OutputCustody,
     pub timing: std::ops::Range<tokio::time::Instant>,
+    /// Unsettled evidence: failed attempts consume it through account_failure.
+    pub usage: Option<ObservedUsage>,
 }
 
 impl GenerationAttempt {
@@ -58,14 +85,16 @@ impl GenerationAttempt {
     }
 }
 
-pub(crate) async fn generate_with_retry<F>(
+pub(crate) async fn generate_with_retry<F, A>(
     model: &Arc<dyn ModelService>,
     request: &ModelRequest,
     stop: &CancellationToken,
     observe: &mut F,
+    mut account_failure: A,
 ) -> GenerationAttempt
 where
     F: FnMut(AgentEvent) + Send,
+    A: FnMut(&ObservedUsage) -> Result<(), AgentError> + Send,
 {
     if let Err(error) = model.validate_controls(&request.route.effective, &request.controls) {
         let now = tokio::time::Instant::now();
@@ -74,6 +103,7 @@ where
             route: request.route.clone(),
             output: OutputCustody::Unobserved,
             timing: now..now,
+            usage: None,
         };
     }
     for attempt in 0..=2 {
@@ -84,6 +114,15 @@ where
             attempt_request.route.reason = ModelRouteReason::Retry;
         }
         let mut evidence = generate_once(model, attempt_request, stop, observe).await;
+        // Settle failed evidence before any redispatch. A required accounting
+        // write failing blocks the request just like other Session commits.
+        if evidence.outcome.is_err()
+            && let Some(usage) = evidence.usage.take()
+            && let Err(error) = account_failure(&usage)
+        {
+            evidence.outcome = Err(error);
+            return evidence;
+        }
         match &evidence.outcome {
             Err(AgentError::Provider(error))
                 if evidence.output == OutputCustody::Unobserved
@@ -128,7 +167,9 @@ where
 {
     let route = request.route.clone();
     let started = tokio::time::Instant::now();
-    let (outcome, output_observed) = stream_response(model, request, stop, observe).await;
+    let mut usage = None;
+    let (outcome, output_observed) =
+        stream_response(model, request, stop, observe, &mut usage).await;
     GenerationAttempt {
         outcome,
         route,
@@ -138,6 +179,7 @@ where
             OutputCustody::Unobserved
         },
         timing: started..tokio::time::Instant::now(),
+        usage,
     }
 }
 
@@ -146,10 +188,12 @@ async fn stream_response<F>(
     request: ModelRequest,
     stop: &CancellationToken,
     observe: &mut F,
+    usage: &mut Option<ObservedUsage>,
 ) -> (Result<ModelResponse, AgentError>, bool)
 where
     F: FnMut(AgentEvent) + Send,
 {
+    let route = request.route.clone();
     let stream = tokio::select! {
         // A service may dispatch while constructing its future. Do not even
         // call it when cancellation is already ready at this boundary.
@@ -187,13 +231,12 @@ where
                     observe(AgentEvent::ModelOutputObserved);
                 }
             }
-            // Accounting and empty deltas do not establish generated-output
-            // custody. In particular, Anthropic reports input usage at start.
-            Some(Ok(
-                ModelStreamEvent::Usage(_)
-                | ModelStreamEvent::TextDelta(_)
-                | ModelStreamEvent::ThinkingDelta { .. },
-            )) => {}
+            // Usage does not establish output custody: Anthropic reports input
+            // at start. Retain the latest fields, including a reported zero.
+            Some(Ok(ModelStreamEvent::Usage(snapshot))) => {
+                ObservedUsage::update(usage, &route, snapshot);
+            }
+            Some(Ok(ModelStreamEvent::TextDelta(_) | ModelStreamEvent::ThinkingDelta { .. })) => {}
             Some(Ok(ModelStreamEvent::ProviderReplayNotice {
                 action,
                 reason,
@@ -205,7 +248,10 @@ where
                     count,
                 });
             }
-            Some(Ok(ModelStreamEvent::Completed(response))) => {
+            Some(Ok(ModelStreamEvent::Completed(mut response))) => {
+                let observed = ObservedUsage::update(usage, &route, response.usage);
+                observed.execution.returned_model = response.returned_model.clone();
+                response.usage = observed.usage;
                 // Services may deliver generated content only at completion.
                 // Usage alone does not establish generated-output custody.
                 let generated = response.message.provider_replay.is_some()
@@ -253,33 +299,12 @@ pub(crate) async fn refresh_prompt_cache(
     model: &Arc<dyn ModelService>,
     mut request: ModelRequest,
     stop: &CancellationToken,
-) -> Option<(ModelExecution, Usage)> {
+    usage: &mut Option<ObservedUsage>,
+) -> bool {
     request.controls.max_output_tokens = 1;
     request.route.reason = ModelRouteReason::Auxiliary;
-    let route = request.route.clone();
-    let stream = tokio::select! {
-        biased;
-        () = stop.cancelled() => return None,
-        result = async { model.stream(request).await } => result.ok()?,
-    };
-    tokio::pin!(stream);
-    loop {
-        let event = tokio::select! {
-            event = stream.next() => event,
-            () = stop.cancelled() => return None,
-        };
-        match event {
-            Some(Ok(ModelStreamEvent::Completed(response))) => {
-                let execution = ModelExecution {
-                    route,
-                    returned_model: response.returned_model,
-                };
-                return Some((execution, response.usage));
-            }
-            Some(Ok(_)) => {}
-            Some(Err(_)) | None => return None,
-        }
-    }
+    let (outcome, _) = stream_response(model, request, stop, &mut |_| {}, usage).await;
+    outcome.is_ok()
 }
 
 fn retryable_provider_error(error: &ProviderError) -> bool {

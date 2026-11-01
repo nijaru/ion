@@ -53,6 +53,19 @@ impl Usage {
         }
     }
 
+    /// Apply a later cumulative snapshot, retaining fields it does not report.
+    /// Reported zeroes and corrections replace earlier values; never add deltas.
+    pub fn apply_snapshot(&mut self, snapshot: Self) {
+        self.input_tokens = snapshot.input_tokens.or(self.input_tokens);
+        self.output_tokens = snapshot.output_tokens.or(self.output_tokens);
+        self.cache_read_input_tokens = snapshot
+            .cache_read_input_tokens
+            .or(self.cache_read_input_tokens);
+        self.cache_write_input_tokens = snapshot
+            .cache_write_input_tokens
+            .or(self.cache_write_input_tokens);
+    }
+
     #[must_use]
     pub const fn is_known(&self) -> bool {
         self.input_tokens.is_some() && self.output_tokens.is_some()

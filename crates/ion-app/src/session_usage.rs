@@ -24,11 +24,12 @@ pub(crate) fn render(usage: &SessionUsage) -> String {
         }
         writeln!(text, "Total tokens: {}", tokens(total))
             .expect("writing to a String is infallible");
-        text.push_str("By request kind:\n");
+        text.push_str("By observation kind:\n");
         for (kind, counts) in [
             ("Assistant", usage.assistant),
             ("Compaction", usage.compaction),
             ("Cache refresh", usage.cache_warm),
+            ("Uncommitted", usage.uncommitted),
         ] {
             if counts.observations > 0 {
                 writeln!(

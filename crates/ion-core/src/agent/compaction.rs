@@ -146,7 +146,17 @@ impl Agent {
                 continue;
             };
             request.controls.max_output_tokens = available;
-            let attempt = generate_with_retry(&self.service, &request, stop, &mut |_| {}).await;
+            let attempt =
+                generate_with_retry(&self.service, &request, stop, &mut |_| {}, |observed| {
+                    session
+                        .record_uncommitted_usage(
+                            crate::session::ModelUsagePurpose::Compaction,
+                            observed.execution.clone(),
+                            observed.usage,
+                        )
+                        .map_err(Into::into)
+                })
+                .await;
             let overflow = attempt.context_length_exceeded();
             // Estimates can miss provider capacity. Halve the remaining settled
             // cuts, never replay a partial summary or change the model/authority.
@@ -158,60 +168,86 @@ impl Agent {
                     through_entry: plan.through_entry,
                     next_through_entry: smaller,
                 });
+                if let Some(observed) = attempt.usage {
+                    session.record_uncommitted_usage(
+                        crate::session::ModelUsagePurpose::Compaction,
+                        observed.execution,
+                        observed.usage,
+                    )?;
+                }
                 max_through_entry = smaller;
                 continue;
             }
             break (plan.through_entry, plan.chunked, attempt.into_result()?);
         };
         let GeneratedResponse { response, route } = generated;
-        if let ResponseTermination::Incomplete(reason) = &response.termination {
-            let reason = match reason {
-                IncompleteReason::MaxOutputTokens => "model output limit reached",
-                IncompleteReason::ContextLength => "model context limit reached",
-                IncompleteReason::ContentFilter => "provider content filter interrupted response",
-                IncompleteReason::Other(_) => "provider ended response before completion",
-            };
-            return Err(AgentError::InvalidSummary(reason));
-        }
-        if response.message.role != Role::Assistant {
-            return Err(AgentError::InvalidSummary(
-                "response is not an assistant message",
-            ));
-        }
-        if response
-            .message
-            .content
-            .iter()
-            .any(|part| !matches!(part, Content::Text(_) | Content::Thinking(_)))
-        {
-            return Err(AgentError::InvalidSummary(
-                "response contains non-text content",
-            ));
-        }
-        let summary = response
-            .message
-            .content
-            .iter()
-            .filter_map(|part| match part {
-                Content::Text(text) => Some(text.as_str()),
-                _ => None,
-            })
-            .collect::<Vec<_>>()
-            .join("\n");
-        if summary.trim().is_empty() {
-            return Err(AgentError::InvalidSummary(
-                "response contains no summary text",
-            ));
-        }
-        if stop.is_cancelled() {
-            return Err(AgentError::Cancelled);
-        }
+        let summary = summary_text(&response).and_then(|summary| {
+            if stop.is_cancelled() {
+                Err(AgentError::Cancelled)
+            } else {
+                Ok(summary)
+            }
+        });
         let execution = ModelExecution {
             route,
             returned_model: response.returned_model,
+        };
+        let summary = match summary {
+            Ok(summary) => summary,
+            Err(error) => {
+                session.record_uncommitted_usage(
+                    crate::session::ModelUsagePurpose::Compaction,
+                    execution,
+                    response.usage,
+                )?;
+                return Err(error);
+            }
         };
         session.record_compaction(through_entry, summary, execution, response.usage)?;
         observe(AgentEvent::ContextCompacted { through_entry });
         Ok(Some(chunked))
     }
+}
+
+fn summary_text(response: &ion_ai::ModelResponse) -> Result<String, AgentError> {
+    if let ResponseTermination::Incomplete(reason) = &response.termination {
+        let reason = match reason {
+            IncompleteReason::MaxOutputTokens => "model output limit reached",
+            IncompleteReason::ContextLength => "model context limit reached",
+            IncompleteReason::ContentFilter => "provider content filter interrupted response",
+            IncompleteReason::Other(_) => "provider ended response before completion",
+        };
+        return Err(AgentError::InvalidSummary(reason));
+    }
+    if response.message.role != Role::Assistant {
+        return Err(AgentError::InvalidSummary(
+            "response is not an assistant message",
+        ));
+    }
+    if response
+        .message
+        .content
+        .iter()
+        .any(|part| !matches!(part, Content::Text(_) | Content::Thinking(_)))
+    {
+        return Err(AgentError::InvalidSummary(
+            "response contains non-text content",
+        ));
+    }
+    let summary = response
+        .message
+        .content
+        .iter()
+        .filter_map(|part| match part {
+            Content::Text(text) => Some(text.as_str()),
+            _ => None,
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    if summary.trim().is_empty() {
+        return Err(AgentError::InvalidSummary(
+            "response contains no summary text",
+        ));
+    }
+    Ok(summary)
 }

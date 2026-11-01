@@ -5,6 +5,8 @@ use crate::{Message, ToolCall, Usage};
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ModelResponse {
     pub message: Message,
+    /// Final cumulative snapshot. Missing fields may have been reported in
+    /// earlier Usage events; the generation lifecycle retains those fields.
     pub usage: Usage,
     /// A finished transport stream is not necessarily a complete answer.
     pub termination: ResponseTermination,
@@ -50,7 +52,8 @@ pub enum ModelStreamEvent {
         text: String,
     },
     ToolCall(ToolCall),
-    /// Accounting only; may arrive before generation and does not bar pre-output retry.
+    /// Cumulative accounting snapshot, not a delta. Missing fields retain prior
+    /// observations. May arrive before generation and does not bar pre-output retry.
     Usage(Usage),
     /// A provider reported that saved opaque reasoning was dropped or that a
     /// prefix mismatch was allowed for this response. This input-transformation

@@ -13,7 +13,8 @@ use crate::{
     tool_set::ToolActivity,
 };
 use ion_ai::{
-    Content, IncompleteReason, ModelExecution, ModelRouteReason, ResponseTermination, Role,
+    Content, IncompleteReason, ModelExecution, ModelResponse, ModelRouteReason,
+    ResponseTermination, Role, ToolCall,
 };
 use std::{collections::BTreeSet, sync::Arc};
 use tokio_util::sync::CancellationToken;
@@ -24,6 +25,48 @@ pub(super) struct Turn<'a> {
     pub start: TurnStart,
     pub instructions: String,
     pub stop: &'a CancellationToken,
+}
+
+fn validated_calls(
+    response: &ModelResponse,
+    execution: &ModelExecution,
+    truncated_calls: bool,
+) -> Result<Vec<ToolCall>, AgentError> {
+    if response.message.role != Role::Assistant
+        || (!matches!(response.termination, ResponseTermination::Completed) && !truncated_calls)
+    {
+        return Err(AgentError::IncompleteModelResponse);
+    }
+    if response
+        .message
+        .provider_replay
+        .as_ref()
+        .is_some_and(|replay| !replay.is_compatible_with(&execution.route.effective.provider))
+    {
+        return Err(AgentError::InvalidProviderReplay);
+    }
+    let mut ids = std::collections::HashSet::new();
+    let mut calls = Vec::new();
+    let mut text = false;
+    for content in &response.message.content {
+        match content {
+            Content::ToolCall(call) => {
+                if call.id.is_empty() || call.name.is_empty() || !ids.insert(&call.id) {
+                    return Err(AgentError::InvalidToolCall);
+                }
+                calls.push(call.clone());
+            }
+            Content::Text(value) => text |= !value.trim().is_empty(),
+            Content::Thinking(_) => {}
+            Content::Image(_) | Content::ToolResult(_) => {
+                return Err(AgentError::IncompleteModelResponse);
+            }
+        }
+    }
+    if calls.is_empty() && !text {
+        return Err(AgentError::IncompleteModelResponse);
+    }
+    Ok(calls)
 }
 
 impl Turn<'_> {
@@ -87,32 +130,17 @@ impl Turn<'_> {
                     .content
                     .iter()
                     .any(|part| matches!(part, Content::ToolCall(_)));
-                if response.message.role != Role::Assistant
-                    || (!matches!(response.termination, ResponseTermination::Completed)
-                        && !truncated_calls)
-                {
-                    return Err(AgentError::IncompleteModelResponse);
-                }
-                if response
-                    .message
-                    .provider_replay
-                    .as_ref()
-                    .is_some_and(|replay| {
-                        !replay.is_compatible_with(&execution.route.effective.provider)
-                    })
-                {
-                    return Err(AgentError::InvalidProviderReplay);
-                }
-                let mut ids = std::collections::HashSet::new();
-                let mut calls = Vec::new();
-                for content in &response.message.content {
-                    if let Content::ToolCall(call) = content {
-                        if call.id.is_empty() || call.name.is_empty() || !ids.insert(&call.id) {
-                            return Err(AgentError::InvalidToolCall);
-                        }
-                        calls.push(call.clone());
+                let calls = match validated_calls(&response, &execution, truncated_calls) {
+                    Ok(calls) => calls,
+                    Err(error) => {
+                        session.record_uncommitted_usage(
+                            crate::session::ModelUsagePurpose::Assistant,
+                            execution,
+                            response.usage,
+                        )?;
+                        return Err(error);
                     }
-                }
+                };
                 let tool_activities = calls
                     .iter()
                     .map(|call| StoredToolActivity {
@@ -167,12 +195,9 @@ impl Turn<'_> {
                     })
                     .collect::<Vec<_>>()
                     .join("\n");
-                if calls.is_empty() && final_text.trim().is_empty() {
-                    return Err(AgentError::IncompleteModelResponse);
-                }
                 // Assistant plus ready boundary input commits atomically. Later
                 // arrivals remain in the inbox for the next request boundary.
-                let (committed, committed_steering) = if calls.is_empty()
+                let commitment = if calls.is_empty()
                     && let Some(inbox) = steering
                 {
                     inbox.record_assistant(
@@ -183,19 +208,34 @@ impl Turn<'_> {
                         execution.clone(),
                         response.usage,
                         agent.limits,
-                    )?
+                    )
                 } else {
-                    (
-                        session.record_assistant_with_activities(
+                    session
+                        .record_assistant_with_activities(
                             turn,
                             response.message,
                             tool_activities.clone(),
                             execution.clone(),
                             response.usage,
                             false,
-                        )?,
-                        CommittedInputs::default(),
-                    )
+                        )
+                        .map(|committed| (committed, CommittedInputs::default()))
+                        .map_err(Into::into)
+                };
+                let (committed, committed_steering) = match commitment {
+                    Ok(committed) => committed,
+                    Err(error) => {
+                        // Admission can reject ready boundary input before the
+                        // atomic write. Storage faults never get a fallback write.
+                        if !matches!(error, AgentError::Session(_)) {
+                            session.record_uncommitted_usage(
+                                crate::session::ModelUsagePurpose::Assistant,
+                                execution,
+                                response.usage,
+                            )?;
+                        }
+                        return Err(error);
+                    }
                 };
                 observe(AgentEvent::AssistantCommitted {
                     turn,

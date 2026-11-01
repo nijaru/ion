@@ -254,6 +254,7 @@ impl TranscriptProjection {
                 | SessionEntry::ProviderReplayRebased { .. }
                 | SessionEntry::ModelContextChanged { .. }
                 | SessionEntry::TurnResumed { .. }
+                | SessionEntry::UncommittedUsage { .. }
                 | SessionEntry::CacheWarm { .. }
                 | SessionEntry::Compacted { .. }
                 | SessionEntry::DelegationAdmitted { .. }

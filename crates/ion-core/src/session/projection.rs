@@ -91,6 +91,7 @@ pub(super) fn message_from_entry(coordinate: u64, entry: &SessionEntry) -> Optio
         | SessionEntry::ModelContextChanged { .. }
         | SessionEntry::TurnResumed { .. }
         | SessionEntry::ContextSelected { .. }
+        | SessionEntry::UncommittedUsage { .. }
         | SessionEntry::CacheWarm { .. }
         | SessionEntry::Compacted { .. }
         | SessionEntry::TurnEnded { .. } => None,

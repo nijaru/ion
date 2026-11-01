@@ -94,6 +94,8 @@ pub struct SessionUsage {
     pub assistant: UsageTotals,
     pub compaction: UsageTotals,
     pub cache_warm: UsageTotals,
+    /// Failed or discarded assistant/summary observations, not accepted context.
+    pub uncommitted: UsageTotals,
     /// Stable lexical order by captured logical/effective/returned identities.
     pub models: Vec<ModelUsage>,
 }
@@ -104,6 +106,7 @@ impl SessionUsage {
         let mut total = self.assistant;
         total.merge(self.compaction);
         total.merge(self.cache_warm);
+        total.merge(self.uncommitted);
         total
     }
 }
@@ -122,6 +125,9 @@ fn collect(entries: &[SessionEntry]) -> SessionUsage {
     let mut models = BTreeMap::new();
     for entry in entries {
         let (execution, usage, kind) = match entry {
+            SessionEntry::UncommittedUsage {
+                execution, usage, ..
+            } => (execution, usage, &mut result.uncommitted),
             SessionEntry::Assistant {
                 execution, usage, ..
             } => (execution, usage, &mut result.assistant),
@@ -202,6 +208,11 @@ mod tests {
         let direct = execution("other/model", "other/model", None);
         let entries = vec![
             assistant(routed.clone(), Usage::known_with_cache(100, 10, 60, 20)),
+            SessionEntry::UncommittedUsage {
+                purpose: crate::ModelUsagePurpose::Compaction,
+                execution: routed.clone(),
+                usage: Usage::known_with_cache(40, 3, 30, 0),
+            },
             SessionEntry::Compacted {
                 through_entry: 1,
                 summary: "summary".into(),
@@ -216,12 +227,12 @@ mod tests {
             },
         ];
         let stats = collect(&entries);
-        assert_eq!(stats.total().reported_tokens(), 246);
-        assert_eq!(stats.total().input_tokens.reported, 230);
+        assert_eq!(stats.total().reported_tokens(), 289);
+        assert_eq!(stats.total().input_tokens.reported, 270);
         assert_eq!(
             stats.total().cache_read_input_tokens,
             TokenCount {
-                reported: 160,
+                reported: 190,
                 unreported: 1
             }
         );
@@ -229,15 +240,16 @@ mod tests {
             (
                 stats.assistant.observations,
                 stats.compaction.observations,
-                stats.cache_warm.observations
+                stats.cache_warm.observations,
+                stats.uncommitted.observations,
             ),
-            (1, 1, 1)
+            (1, 1, 1, 1)
         );
         assert_eq!(stats.models.len(), 2);
         assert_eq!(stats.models[0].logical.provider, "logical");
         assert_eq!(stats.models[0].effective.provider, "physical");
         assert_eq!(stats.models[0].returned_model.as_deref(), Some("served"));
-        assert_eq!(stats.models[0].usage.reported_tokens(), 211);
+        assert_eq!(stats.models[0].usage.reported_tokens(), 254);
         let mut model_total = UsageTotals::default();
         for model in &stats.models {
             model_total.merge(model.usage);

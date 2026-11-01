@@ -52,6 +52,13 @@ pub enum SessionEntry {
         turn: u64,
         notices: Vec<crate::CompletionNotice>,
     },
+    /// Observed usage that did not become an accepted assistant or compaction.
+    /// No provisional content or effect intent enters history through this fact.
+    UncommittedUsage {
+        purpose: ModelUsagePurpose,
+        execution: ModelExecution,
+        usage: Usage,
+    },
     /// Provider usage from a best-effort prompt-cache refresh. This is an
     /// accounting fact only and never enters model context.
     CacheWarm {
@@ -127,6 +134,14 @@ pub enum SessionEntry {
         turn: u64,
         reason: TurnEndReason,
     },
+}
+
+/// Request purpose, independent of whether its output passed validation.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ModelUsagePurpose {
+    Assistant,
+    Compaction,
 }
 
 /// An observed host result is distinct from closure after lost observation.

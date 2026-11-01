@@ -60,8 +60,8 @@ use projection::{
 };
 pub(crate) use records::valid_user_message;
 pub use records::{
-    ForkPoint, ModelContextSnapshot, SessionEntry, SessionInputPreview, SessionMetadata,
-    SessionStatus, SessionView, StoredToolActivity, TurnEndReason, TurnSummary,
+    ForkPoint, ModelContextSnapshot, ModelUsagePurpose, SessionEntry, SessionInputPreview,
+    SessionMetadata, SessionStatus, SessionView, StoredToolActivity, TurnEndReason, TurnSummary,
     UnobservedUserShell, UserShellOutcome,
 };
 pub use recovery::{AuthorityScope, RecoveryBinding, RecoveryPoint, RecoveryState};
@@ -334,6 +334,7 @@ impl State {
                 self.pending_shell = None;
                 new_settled.push(self.sequence + 1);
             }
+            SessionEntry::UncommittedUsage { .. } => {}
             SessionEntry::CacheWarm {
                 turn, execution, ..
             } => {
@@ -1053,6 +1054,20 @@ impl Session {
     pub(crate) fn rebase_provider_replay(&self, turn: u64) -> Result<(), SessionError> {
         let mut store = self.store.lock().map_err(|_| SessionError::Poisoned)?;
         store.append(&[SessionEntry::ProviderReplayRebased { turn }])
+    }
+
+    pub(crate) fn record_uncommitted_usage(
+        &self,
+        purpose: ModelUsagePurpose,
+        execution: ModelExecution,
+        usage: Usage,
+    ) -> Result<(), SessionError> {
+        let mut store = self.store.lock().map_err(|_| SessionError::Poisoned)?;
+        store.append(&[SessionEntry::UncommittedUsage {
+            purpose,
+            execution,
+            usage,
+        }])
     }
 
     pub(crate) fn record_cache_warm(

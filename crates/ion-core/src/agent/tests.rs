@@ -1,7 +1,7 @@
 use super::*;
 use crate::tool_result::ToolOutput;
 use crate::{
-    ForkPoint, Session, ToolActivityKind, ToolDefinition, ToolExecutor, ToolExposure,
+    ForkPoint, Session, SessionEntry, ToolActivityKind, ToolDefinition, ToolExecutor, ToolExposure,
     ToolPresentation, ToolRegistration,
 };
 use ion_ai::{
@@ -605,6 +605,114 @@ async fn streaming_cache_warm_replays_request_without_entering_model_context() {
     std::fs::remove_dir_all(root).unwrap();
 }
 
+#[tokio::test(start_paused = true)]
+async fn unfinished_cache_refresh_retains_usage_when_tool_finishes_or_stop_joins() {
+    struct WarmStream {
+        inner: Arc<ScriptedModelService>,
+        stop: CancellationToken,
+        cancel: bool,
+    }
+    impl ModelService for WarmStream {
+        fn stream<'a>(
+            &'a self,
+            request: ModelRequest,
+        ) -> BoxFuture<'a, Result<ion_ai::ModelStream, ProviderError>> {
+            if request.controls.max_output_tokens != 1 {
+                return self.inner.stream(request);
+            }
+            let stop = self.stop.clone();
+            let cancel = self.cancel;
+            Box::pin(async move {
+                use futures_util::StreamExt;
+                let prefix = futures_util::stream::iter([Ok(ModelStreamEvent::Usage(Usage {
+                    input_tokens: Some(77),
+                    ..Usage::unknown()
+                }))]);
+                let tail = futures_util::stream::once(async move {
+                    if cancel {
+                        stop.cancel();
+                    }
+                    std::future::pending::<Result<ModelStreamEvent, ProviderError>>().await
+                });
+                Ok(Box::pin(prefix.chain(tail)) as ion_ai::ModelStream)
+            })
+        }
+    }
+    for cancel in [false, true] {
+        let root = std::env::temp_dir().join(format!("ion-warm-partial-{}", uuid::Uuid::now_v7()));
+        std::fs::create_dir(&root).unwrap();
+        let path = root.join("session.sqlite");
+        let session = Arc::new(Session::create(&path, Some(&root)).unwrap());
+        let stop = CancellationToken::new();
+        let inner = Arc::new(ScriptedModelService::new([
+            Script::Stream(vec![ModelStreamEvent::Completed(ModelResponse {
+                message: Message {
+                    role: Role::Assistant,
+                    content: vec![Content::ToolCall(ToolCall {
+                        id: "read".into(),
+                        name: "read".into(),
+                        arguments: serde_json::json!({}),
+                        raw_arguments: None,
+                    })],
+                    provider_replay: None,
+                },
+                usage: Usage::known_with_cache(100_000, 4, 100_000, 0),
+                termination: ResponseTermination::Completed,
+                returned_model: None,
+            })]),
+            response(vec![Content::Text("done".into())]),
+        ]));
+        let agent = Agent::new(
+            Arc::new(WarmStream {
+                inner: inner.clone(),
+                stop: stop.clone(),
+                cancel,
+            }),
+            Arc::new(SlowRead),
+            model(),
+        )
+        .with_limits(AgentLimits {
+            prompt_cache_warming: Some(PromptCacheWarmingPolicy {
+                lifetime_seconds: 11,
+                cache_write_microusd_per_million: 5_000_000,
+                cache_read_microusd_per_million: 200_000,
+                output_microusd_per_million: 20_000_000,
+                minimum_savings_microusd: 0,
+            }),
+            ..AgentLimits::default()
+        });
+        let result = agent
+            .submit(
+                session.clone(),
+                "inspect".into(),
+                "test".into(),
+                stop,
+                |_| {},
+            )
+            .await;
+        if cancel {
+            assert!(matches!(result, Err(AgentError::Cancelled)));
+        } else {
+            assert_eq!(result.unwrap(), "done");
+        }
+        assert_eq!(inner.requests().len(), if cancel { 1 } else { 2 });
+        let view = session.view().unwrap();
+        assert_eq!(view.usage().cache_warm.observations, 1);
+        assert_eq!(view.usage().cache_warm.input_tokens.reported, 77);
+        assert_eq!(view.usage().cache_warm.output_tokens.unreported, 1);
+        assert!(
+            view.entries
+                .iter()
+                .any(|entry| matches!(entry, SessionEntry::ToolResult { .. }))
+        );
+        assert_eq!(view.messages.len(), if cancel { 3 } else { 4 });
+        let usage = view.usage();
+        drop(session);
+        assert_eq!(Session::inspect(&path).unwrap().usage(), usage);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+}
+
 struct DelayedInitialResponse {
     inner: Arc<ScriptedModelService>,
     delay: std::time::Duration,
@@ -759,6 +867,7 @@ async fn transient_provider_error_retries_only_before_stream_output() {
                 retry_delay = Some(delay_ms);
             }
         },
+        |_| Ok(()),
     )
     .await
     .into_result()
@@ -785,6 +894,7 @@ async fn transient_provider_error_retries_only_before_stream_output() {
                 visible.push_str(&text);
             }
         },
+        |_| Ok(()),
     )
     .await
     .outcome
@@ -807,6 +917,7 @@ async fn transient_provider_error_retries_only_before_stream_output() {
         &request,
         &CancellationToken::new(),
         &mut |_| {},
+        |_| Ok(()),
     )
     .await
     .outcome
@@ -3436,6 +3547,72 @@ async fn context_recovery_does_not_reuse_observed_output() {
 }
 
 #[tokio::test]
+async fn rejected_assistant_retains_usage_without_committing_calls_or_effects() {
+    for (role, id, duplicate) in [
+        (Role::User, "call", false),
+        (Role::Assistant, "", false),
+        (Role::Assistant, "call", true),
+    ] {
+        let root = std::env::temp_dir().join(format!("ion-invalid-usage-{}", uuid::Uuid::now_v7()));
+        std::fs::create_dir(&root).unwrap();
+        let session = Arc::new(Session::create(root.join("session.sqlite"), Some(&root)).unwrap());
+        let call = Content::ToolCall(ToolCall {
+            id: id.into(),
+            name: "write".into(),
+            arguments: serde_json::json!({"path":"never-created","content":"bad"}),
+            raw_arguments: None,
+        });
+        let content = if duplicate {
+            vec![call.clone(), call]
+        } else {
+            vec![call]
+        };
+        let scripts = Arc::new(ScriptedModelService::new([Script::Stream(vec![
+            ModelStreamEvent::Completed(ModelResponse {
+                message: Message {
+                    role,
+                    content,
+                    provider_replay: None,
+                },
+                usage: Usage::known(23, 7),
+                termination: ResponseTermination::Completed,
+                returned_model: Some("served".into()),
+            }),
+        ])]));
+        let agent = Agent::new(scripts.clone(), Arc::new(TestTools::new(&root)), model());
+        let error = agent
+            .submit(
+                session.clone(),
+                "start".into(),
+                "test".into(),
+                CancellationToken::new(),
+                |_| {},
+            )
+            .await
+            .unwrap_err();
+        if role == Role::User {
+            assert!(matches!(error, AgentError::IncompleteModelResponse));
+        } else {
+            assert!(matches!(error, AgentError::InvalidToolCall));
+        }
+        let view = session.view().unwrap();
+        assert_eq!(view.usage().uncommitted.observations, 1);
+        assert_eq!(view.usage().uncommitted.reported_tokens(), 30);
+        assert_eq!(view.usage().assistant.observations, 0);
+        assert_eq!(view.messages.len(), 1);
+        assert!(view.unfinished_turn.is_none());
+        assert!(!view.entries.iter().any(|entry| matches!(
+            entry,
+            SessionEntry::Assistant { .. } | SessionEntry::ToolResult { .. }
+        )));
+        assert_eq!(scripts.requests().len(), 1);
+        assert!(!root.join("never-created").exists());
+        drop(session);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+}
+
+#[tokio::test]
 async fn short_length_stop_compacts_and_retries_without_dispatching_partial_call() {
     let root = std::env::temp_dir().join(format!("ion-short-length-{}", uuid::Uuid::now_v7()));
     std::fs::create_dir(&root).unwrap();
@@ -3496,6 +3673,12 @@ async fn short_length_stop_compacts_and_retries_without_dispatching_partial_call
     let requests = scripts.requests();
     assert_eq!(requests.len(), 4);
     assert!(requests[2].tools.is_empty());
+    let usage = session.view().unwrap().usage();
+    assert_eq!(usage.uncommitted.observations, 1);
+    assert_eq!(usage.uncommitted.input_tokens.reported, 100);
+    assert_eq!(usage.uncommitted.output_tokens.reported, 10);
+    assert_eq!(usage.assistant.observations, 2);
+    assert_eq!(usage.compaction.observations, 1);
     assert!(session.view().unwrap().compacted_through.is_some());
     assert!(
         !session.view().unwrap().entries.iter().any(|entry| matches!(
@@ -4212,7 +4395,13 @@ async fn invalid_summary_reports_cause_without_changing_committed_context() {
             TurnEndReason::Failed(format!("invalid_summary: {reason}"))
         );
         assert_eq!(session.context_messages().unwrap(), context);
-        assert_eq!(session.view().unwrap().entries, before.entries);
+        let after = session.view().unwrap();
+        assert_eq!(&after.entries[..before.entries.len()], before.entries);
+        assert!(
+            matches!(&after.entries[before.entries.len()..], [SessionEntry::UncommittedUsage { purpose: crate::ModelUsagePurpose::Compaction, usage, .. }] if *usage == Usage::unknown())
+        );
+        assert_eq!(after.usage().uncommitted.observations, 1);
+        assert!(!after.usage().total().has_complete_tokens());
         session.shutdown().await.unwrap();
         drop(session);
         std::fs::remove_dir_all(root).unwrap();
@@ -4276,7 +4465,15 @@ async fn cancelled_summary_does_not_change_the_context_projection() {
         Err(AgentError::Cancelled)
     ));
     let after = session.view().unwrap();
-    assert_eq!(after.entries, before.entries);
+    assert_eq!(&after.entries[..before.entries.len()], before.entries);
+    assert!(matches!(
+        &after.entries[before.entries.len()..],
+        [SessionEntry::UncommittedUsage {
+            purpose: crate::ModelUsagePurpose::Compaction,
+            ..
+        }]
+    ));
+    assert_eq!(after.messages, before.messages);
     assert_eq!(after.compacted_through, None);
     drop(session);
     std::fs::remove_dir_all(root).unwrap();
