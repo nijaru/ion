@@ -101,6 +101,9 @@ impl<'a> RequestCycle<'a> {
                     || (!reserve_handled
                         && output_budget.is_some_and(|budget| budget < plan.output_reserve())))
             {
+                // Every outcome rebuilds or exits. Do not retain this unused
+                // request while the summary builds another context view.
+                drop(plan);
                 if !required {
                     reserve_handled = true;
                 }
