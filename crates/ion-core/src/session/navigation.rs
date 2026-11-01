@@ -126,9 +126,14 @@ impl State {
     pub(super) fn apply_context(&mut self, entry: &SessionEntry) {
         match entry {
             SessionEntry::ReasoningSelected { reasoning } => self.reasoning = *reasoning,
-            SessionEntry::ModelSelected { model } | SessionEntry::TurnStarted { model, .. } => {
-                self.select_model(model)
+            SessionEntry::ModelSelected { model } => self.select_model(model),
+            SessionEntry::TurnStarted { model, .. } => {
+                self.select_model(model);
+                self.active_inputs.clear();
+                self.active_inputs.push(self.sequence + 1);
             }
+            SessionEntry::Steering { .. } => self.active_inputs.push(self.sequence + 1),
+            SessionEntry::TurnEnded { .. } => self.active_inputs.clear(),
             SessionEntry::EffectiveModelChanged { model, .. } => self.select_effective_model(model),
             SessionEntry::ProviderReplayRebased { .. } => {
                 self.replay_epoch_start = self.sequence + 1
@@ -139,8 +144,12 @@ impl State {
             SessionEntry::Compacted {
                 through_entry,
                 summary,
+                retained_inputs,
                 ..
-            } => self.compaction = Some((*through_entry, summary.clone())),
+            } => {
+                self.compaction = Some((*through_entry, summary.clone()));
+                self.compaction_inputs = retained_inputs.clone();
+            }
             SessionEntry::Assistant {
                 execution, usage, ..
             } => {
@@ -160,6 +169,7 @@ impl State {
         self.last_effective_model = source.last_effective_model;
         self.last_context = source.last_context;
         self.compaction = source.compaction;
+        self.compaction_inputs = source.compaction_inputs;
         self.last_execution = source.last_execution;
         self.last_usage = source.last_usage;
         // Navigation never revives opaque continuations or calibration from an

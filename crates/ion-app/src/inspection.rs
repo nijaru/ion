@@ -98,6 +98,8 @@ enum EntryInspection {
     Compacted {
         through_entry: u64,
         summary: String,
+        #[serde(skip_serializing_if = "Vec::is_empty")]
+        retained_inputs: Vec<u64>,
         execution: ModelExecution,
         usage: Usage,
     },

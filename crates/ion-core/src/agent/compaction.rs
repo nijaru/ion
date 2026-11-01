@@ -90,7 +90,7 @@ impl Agent {
     {
         let output_tokens = self.limits.max_output_tokens.min(4096);
         let mut max_through_entry = u64::MAX;
-        let (through_entry, chunked, source_bytes, generated) = loop {
+        let (through_entry, chunked, source_bytes, retained_input_bytes, generated) = loop {
             if stop.is_cancelled() {
                 return Err(AgentError::Cancelled);
             }
@@ -178,6 +178,7 @@ impl Agent {
                 plan.through_entry,
                 plan.chunked,
                 source_bytes,
+                plan.retained_input_bytes,
                 attempt.into_result()?,
             );
         };
@@ -210,7 +211,9 @@ impl Agent {
         if must_shrink
             && crate::json_size::encoded_len(&crate::prompt_size::NeutralMessages(&[
                 crate::session::summary_message(through_entry, &summary),
-            ]))? >= source_bytes
+            ]))?
+            .saturating_add(retained_input_bytes)
+                >= source_bytes
         {
             session.record_uncommitted_usage(
                 crate::session::ModelUsagePurpose::Compaction,

@@ -1421,6 +1421,181 @@ fn idle_model_choice_survives_reopen() {
 }
 
 #[test]
+fn compaction_preserves_current_inputs_without_changing_the_prefix_at_turn_end() {
+    let (root, path) = fixture();
+    let session = Session::create(&path, Some(&root)).unwrap();
+    let model = test_execution().route.logical;
+    let input = Message {
+        role: Role::User,
+        content: vec![
+            Content::Text("Recover original evidence; do not run commands or edit files".into()),
+            Content::Image(
+                ion_ai::normalize_rgba(1, 1, vec![255, 0, 0, 255])
+                    .unwrap()
+                    .content,
+            ),
+        ],
+        provider_replay: None,
+    };
+    let steering = Message {
+        role: Role::User,
+        content: vec![Content::Text(
+            "Cite the original result, not a summary".into(),
+        )],
+        provider_replay: None,
+    };
+    let (turn, _) = session
+        .begin_turn_message(input.clone(), model.clone())
+        .unwrap();
+    let checkpoint = || Message {
+        role: Role::Assistant,
+        content: vec![Content::Text("intermediate observation".into())],
+        provider_replay: None,
+    };
+    session
+        .record_assistant(turn, checkpoint(), Usage::unknown(), true)
+        .unwrap();
+    session
+        .record_steerings(turn, vec![steering.clone()])
+        .unwrap();
+    session
+        .record_assistant(turn, checkpoint(), Usage::unknown(), true)
+        .unwrap();
+    let through = session.entry_count().unwrap();
+    session
+        .record_compaction(
+            through,
+            "Old task: edit the project".into(),
+            test_execution(),
+            Usage::unknown(),
+        )
+        .unwrap();
+    let compacted_head = session.context_position().unwrap().head_entry;
+    let expected = vec![
+        summary_message(through, "Old task: edit the project"),
+        input.clone(),
+        steering.clone(),
+    ];
+    assert_eq!(session.request_basis(&model).unwrap().messages, expected);
+    let facts = session.view().unwrap().entries;
+    drop(session);
+    let session = Session::open(&path).unwrap();
+    assert_eq!(session.view().unwrap().entries, facts);
+    assert_eq!(session.context_messages().unwrap(), expected);
+
+    let mut signed = checkpoint();
+    let mut replay = ProviderReplay::new("test", "fixture", serde_json::json!("opaque"));
+    replay.prefix_bound = true;
+    signed.provider_replay = Some(replay);
+    session
+        .record_assistant(turn, signed.clone(), Usage::unknown(), false)
+        .unwrap();
+    let mut completed = expected;
+    completed.push(signed);
+    assert_eq!(session.context_messages().unwrap(), completed);
+    let (next, _) = session
+        .begin_turn("New task".into(), model.clone())
+        .unwrap();
+    assert_eq!(
+        &session.context_messages().unwrap()[..completed.len()],
+        completed
+    );
+    session
+        .record_assistant(next, checkpoint(), Usage::unknown(), true)
+        .unwrap();
+    let plan = session
+        .compaction_plan(None, 0, usize::MAX, true, u64::MAX)
+        .unwrap()
+        .unwrap();
+    for original in [&input, &steering] {
+        assert_eq!(
+            plan.messages
+                .iter()
+                .filter(|message| *message == original)
+                .count(),
+            1
+        );
+    }
+    session
+        .record_compaction(
+            plan.through_entry,
+            "New progress".into(),
+            test_execution(),
+            Usage::unknown(),
+        )
+        .unwrap();
+    let context = session.context_messages().unwrap();
+    assert_eq!(context.len(), 2);
+    assert_eq!(context[1].content, vec![Content::Text("New task".into())]);
+    session
+        .end_turn(next, TurnEndReason::Completed, &BTreeSet::new())
+        .unwrap();
+    session
+        .prepare_navigation(session.context_position().unwrap(), compacted_head)
+        .unwrap()
+        .commit()
+        .unwrap();
+    assert_eq!(session.context_messages().unwrap(), completed[..3]);
+    drop(session);
+    let reopened = Session::open(&path).unwrap();
+    assert_eq!(reopened.context_messages().unwrap(), completed[..3]);
+    drop(reopened);
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn historical_compaction_does_not_reconstruct_new_prefix_pins() {
+    let (root, path) = fixture();
+    let session = Session::create(&path, Some(&root)).unwrap();
+    let (turn, _) = session
+        .begin_turn("original input".into(), test_execution().route.logical)
+        .unwrap();
+    let mut answer = Message {
+        role: Role::Assistant,
+        content: vec![Content::Text("checkpoint".into())],
+        provider_replay: None,
+    };
+    session
+        .record_assistant(turn, answer.clone(), Usage::unknown(), true)
+        .unwrap();
+    let through = session.entry_count().unwrap();
+    session
+        .record_compaction(
+            through,
+            "historical summary".into(),
+            test_execution(),
+            Usage::unknown(),
+        )
+        .unwrap();
+    let mut replay = ProviderReplay::new(
+        "test",
+        "fixture",
+        serde_json::json!("bound to historical prefix"),
+    );
+    replay.prefix_bound = true;
+    answer.provider_replay = Some(replay);
+    session
+        .record_assistant(turn, answer.clone(), Usage::unknown(), true)
+        .unwrap();
+    drop(session);
+    let connection = Connection::open(&path).unwrap();
+    connection.execute("UPDATE entries SET body = CAST(json_remove(body, '$.data.retained_inputs') AS BLOB) WHERE json_extract(body, '$.kind') = 'compacted'", []).unwrap();
+    drop(connection);
+    let reopened = Session::open(&path).unwrap();
+    assert_eq!(
+        reopened.context_messages().unwrap(),
+        vec![summary_message(through, "historical summary"), answer]
+    );
+    assert_eq!(
+        reopened.messages().unwrap().len(),
+        3,
+        "original input remains durable, but must not retroactively change the replay prefix"
+    );
+    drop(reopened);
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
 fn compaction_changes_only_the_model_projection_and_survives_reopen() {
     let (root, path) = fixture();
     let session = Session::create(&path, Some(&root)).unwrap();

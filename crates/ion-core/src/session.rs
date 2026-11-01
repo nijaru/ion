@@ -183,6 +183,7 @@ pub(crate) struct CompactionPlan {
     pub messages: Vec<Message>,
     pub chunked: bool,
     pub smaller_through_entry: Option<u64>,
+    pub retained_input_bytes: usize,
 }
 
 #[derive(Clone)]
@@ -206,6 +207,10 @@ struct PendingShell {
 #[derive(Default, Clone)]
 struct State {
     active: Option<u64>,
+    active_inputs: Vec<u64>,
+    // Snapshot at compaction, not Turn end: changing pins must not silently
+    // rewrite the prefix of a retained provider continuation.
+    compaction_inputs: Vec<u64>,
     pending_shell: Option<PendingShell>,
     assistant_seen_in_turn: bool,
     prefix_bound_in_turn: bool,
@@ -348,9 +353,14 @@ impl State {
             SessionEntry::Compacted {
                 through_entry,
                 summary,
+                retained_inputs,
                 ..
             } => {
-                if !self.pending.is_empty()
+                if !retained_inputs.windows(2).all(|pair| pair[0] < pair[1])
+                    || retained_inputs.iter().any(|entry| {
+                        entry > through_entry || self.active_inputs.binary_search(entry).is_err()
+                    })
+                    || !self.pending.is_empty()
                     || self.pending_shell.is_some()
                     || summary.trim().is_empty()
                     || !(settled.contains(through_entry) || new_settled.contains(through_entry))
@@ -1092,9 +1102,17 @@ impl Session {
         usage: Usage,
     ) -> Result<(), SessionError> {
         let mut store = self.store.lock().map_err(|_| SessionError::Poisoned)?;
+        let retained_inputs = store
+            .state
+            .active_inputs
+            .iter()
+            .copied()
+            .take_while(|entry| *entry <= through_entry)
+            .collect();
         store.append(&[SessionEntry::Compacted {
             through_entry,
             summary,
+            retained_inputs,
             execution,
             usage,
         }])

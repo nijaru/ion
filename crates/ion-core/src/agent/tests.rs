@@ -3957,6 +3957,82 @@ async fn output_pressure_preserves_an_active_signed_prefix() {
 }
 
 #[tokio::test]
+async fn optional_compaction_counts_retained_inputs_when_testing_shrinkage() {
+    let root = std::env::temp_dir().join(format!("ion-input-pin-{}", uuid::Uuid::now_v7()));
+    std::fs::create_dir(&root).unwrap();
+    std::fs::write(root.join("evidence.txt"), "original evidence").unwrap();
+    let session = Arc::new(Session::create(root.join("session.sqlite"), Some(&root)).unwrap());
+    let input = format!(
+        "Recover evidence without modifications. {}",
+        "x".repeat(7500)
+    );
+    let scripts = Arc::new(ScriptedModelService::new([
+        Script::Stream(vec![ModelStreamEvent::Completed(ModelResponse {
+            message: Message {
+                role: Role::Assistant,
+                content: vec![Content::ToolCall(ToolCall {
+                    id: "read-evidence".into(),
+                    name: "read".into(),
+                    arguments: serde_json::json!({"path":"evidence.txt"}),
+                    raw_arguments: None,
+                })],
+                provider_replay: None,
+            },
+            usage: Usage::known(4500, 30),
+            termination: ResponseTermination::Completed,
+            returned_model: None,
+        })]),
+        response(vec![Content::Text("s".repeat(1000))]),
+        response(vec![Content::Text("evidence recovered".into())]),
+    ]));
+    let agent = Agent::new(scripts.clone(), Arc::new(TestTools::new(&root)), model()).with_limits(
+        AgentLimits {
+            max_output_tokens: 2500,
+            context_window_tokens: Some(10_000),
+            ..AgentLimits::default()
+        },
+    );
+    assert_eq!(
+        agent
+            .submit(
+                session.clone(),
+                input.clone(),
+                "test".into(),
+                CancellationToken::new(),
+                |_| {}
+            )
+            .await
+            .unwrap(),
+        "evidence recovered"
+    );
+    let requests = scripts.requests();
+    assert_eq!(requests.len(), 3);
+    assert!(requests[1].tools.is_empty());
+    assert!(!requests[2].tools.is_empty());
+    assert!(requests[2].controls.max_output_tokens < 2500);
+    assert_eq!(
+        requests[2]
+            .messages
+            .iter()
+            .filter(|message| **message == user_text(input.clone()))
+            .count(),
+        1
+    );
+    let view = session.view().unwrap();
+    assert!(
+        view.compacted_through.is_none(),
+        "a smaller summary plus pinned input would grow the context"
+    );
+    assert_eq!(view.usage().uncommitted.observations, 1);
+    assert_eq!(
+        std::fs::read_to_string(root.join("evidence.txt")).unwrap(),
+        "original evidence"
+    );
+    drop((agent, session));
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[tokio::test]
 async fn output_room_planning_is_one_shot_and_discards_a_growing_summary() {
     const GUIDANCE: &str = "Inspect only; do not modify files.";
     struct SteerDuringSummary {

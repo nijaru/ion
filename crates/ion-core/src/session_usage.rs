@@ -216,6 +216,7 @@ mod tests {
             SessionEntry::Compacted {
                 through_entry: 1,
                 summary: "summary".into(),
+                retained_inputs: Vec::new(),
                 execution: direct,
                 usage: Usage::known(30, 5),
             },

@@ -15,6 +15,19 @@ impl ProjectedMessage {
     }
 }
 
+fn inputs_at<'a>(
+    store: &'a Store,
+    entries: &'a [u64],
+) -> impl Iterator<Item = &'a ProjectedMessage> {
+    entries.iter().map(|entry| {
+        let index = store
+            .messages
+            .binary_search_by_key(entry, |record| record.entry)
+            .expect("input coordinates derive from messages on the selected path");
+        &store.messages[index]
+    })
+}
+
 pub(super) fn context_projection(store: &Store, model: Option<&ModelRef>) -> Vec<Message> {
     let through = store
         .state
@@ -31,15 +44,19 @@ pub(super) fn context_projection(store: &Store, model: Option<&ModelRef>) -> Vec
     let first = store
         .messages
         .partition_point(|record| record.entry <= through);
-    messages.extend(store.messages[first..].iter().map(|record| Message {
-        role: record.message.role,
-        content: record.message.content.clone(),
-        provider_replay: if clear_all || record.entry < store.state.replay_epoch_start {
-            None
-        } else {
-            record.message.provider_replay.clone()
-        },
-    }));
+    messages.extend(
+        inputs_at(store, &store.state.compaction_inputs)
+            .chain(store.messages[first..].iter())
+            .map(|record| Message {
+                role: record.message.role,
+                content: record.message.content.clone(),
+                provider_replay: if clear_all || record.entry < store.state.replay_epoch_start {
+                    None
+                } else {
+                    record.message.provider_replay.clone()
+                },
+            }),
+    );
     messages
 }
 
@@ -81,6 +98,12 @@ impl Session {
                 summary_images,
             )?);
         }
+        for record in inputs_at(&store, &store.state.compaction_inputs) {
+            prefix_bytes = prefix_bytes.saturating_add(crate::summary::content_bytes(
+                &record.message,
+                summary_images,
+            )?);
+        }
         let mut prefix_fits = Vec::new();
         let mut prefix = projected.iter().peekable();
         for &boundary in store.settled.range((previous + 1)..) {
@@ -95,10 +118,25 @@ impl Session {
             }
         }
         let mut suffix_bytes = 2usize;
+        for record in inputs_at(&store, &store.state.active_inputs) {
+            suffix_bytes = suffix_bytes
+                .saturating_add(crate::json_size::encoded_len(
+                    &crate::prompt_size::NeutralMessage::from(&record.message),
+                )?)
+                .saturating_add(1);
+        }
         let mut through = None;
         let mut suffix = projected.iter().rev().peekable();
         for &boundary in store.settled.range((previous + 1)..).rev() {
             while let Some(record) = suffix.next_if(|record| record.entry > boundary) {
+                if store
+                    .state
+                    .active_inputs
+                    .binary_search(&record.entry)
+                    .is_ok()
+                {
+                    continue;
+                }
                 suffix_bytes = suffix_bytes
                     .saturating_add(crate::json_size::encoded_len(
                         &crate::prompt_size::NeutralMessage::from(&record.message),
@@ -153,6 +191,19 @@ impl Session {
             messages.push(summary_message(*through, summary));
         }
         messages.extend(
+            inputs_at(&store, &store.state.compaction_inputs).map(|record| record.message.clone()),
+        );
+        let mut retained_input_bytes = 0usize;
+        for record in inputs_at(&store, &store.state.active_inputs)
+            .take_while(|record| record.entry <= through_entry)
+        {
+            retained_input_bytes = retained_input_bytes
+                .saturating_add(crate::json_size::encoded_len(
+                    &crate::prompt_size::NeutralMessage::from(&record.message),
+                )?)
+                .saturating_add(1);
+        }
+        messages.extend(
             projected
                 .iter()
                 .take_while(|record| record.entry <= through_entry)
@@ -163,6 +214,7 @@ impl Session {
             messages,
             chunked: through_entry < suffix_target,
             smaller_through_entry,
+            retained_input_bytes,
         }))
     }
 }

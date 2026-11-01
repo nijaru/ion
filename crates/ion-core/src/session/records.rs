@@ -70,6 +70,10 @@ pub enum SessionEntry {
     Compacted {
         through_entry: u64,
         summary: String,
+        /// Original inputs retained alongside this summary. Absence means no
+        /// retained inputs, preserving historical request/replay prefixes.
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        retained_inputs: Vec<u64>,
         execution: ModelExecution,
         #[serde(default = "Usage::unknown")]
         usage: Usage,
