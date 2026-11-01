@@ -553,6 +553,92 @@ fn metadata_projection_retains_only_pending_shared_shell_slot() {
 }
 
 #[test]
+fn persisted_entry_coordinates_are_contiguous_not_reassigned_on_read() {
+    for damage in [
+        "DELETE FROM entries WHERE seq=2",
+        "DELETE FROM entries WHERE seq=1",
+        "UPDATE entries SET seq=seq+3",
+        "UPDATE entries SET seq=0 WHERE seq=1",
+        "UPDATE entries SET seq=-1 WHERE seq=1",
+    ] {
+        let (root, path) = fixture();
+        let session = Session::create(&path, Some(&root)).unwrap();
+        for model in ["first", "middle", "last"] {
+            session
+                .select_model(ModelRef {
+                    provider: "test".into(),
+                    model: model.into(),
+                })
+                .unwrap();
+        }
+        drop(session);
+        let connection = Connection::open(&path).unwrap();
+        connection.execute_batch(damage).unwrap();
+        let coordinates = || {
+            connection
+                .prepare("SELECT seq FROM entries ORDER BY seq")
+                .unwrap()
+                .query_map([], |row| row.get::<_, i64>(0))
+                .unwrap()
+                .collect::<Result<Vec<_>, _>>()
+                .unwrap()
+        };
+        let damaged = coordinates();
+        for result in [
+            Session::open(&path).map(|_| ()),
+            Session::inspect(&path).map(|_| ()),
+            Session::inspect_metadata(&path).map(|_| ()),
+        ] {
+            assert!(
+                matches!(result, Err(SessionError::InvalidHistory)),
+                "{damage}: {result:?}"
+            );
+        }
+        assert_eq!(
+            coordinates(),
+            damaged,
+            "reader repaired physical identities"
+        );
+        drop(connection);
+        fs::remove_dir_all(root).unwrap();
+    }
+}
+
+#[test]
+fn persisted_entry_byte_limit_is_checked_before_projection() {
+    let (root, path) = fixture();
+    drop(Session::create(&path, Some(&root)).unwrap());
+    let connection = Connection::open(&path).unwrap();
+    // A valid tagged record with ignored padding exercises the storage bound,
+    // not malformed JSON or an invalid logical transition.
+    connection
+        .execute(
+            "INSERT INTO entries(body) VALUES (CAST(json_object('kind','model_selected','data',json_object('model',json_object('provider','test','model','test')),'padding',printf('%*s',?1,'')) AS BLOB))",
+            params![i64::try_from(MAX_ENTRY_BYTES + 1).unwrap()],
+        )
+        .unwrap();
+    for result in [
+        Session::open(&path).map(|_| ()),
+        Session::inspect(&path).map(|_| ()),
+        Session::inspect_metadata(&path).map(|_| ()),
+    ] {
+        assert!(
+            matches!(result, Err(SessionError::EntryTooLarge)),
+            "{result:?}"
+        );
+    }
+    assert_eq!(
+        connection
+            .query_row("SELECT count(*) FROM entries", [], |row| row
+                .get::<_, i64>(0))
+            .unwrap(),
+        1
+    );
+    drop(connection);
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
 fn opening_invalid_database_does_not_initialize_session_schema() {
     let (root, path) = fixture();
     let connection = Connection::open(&path).unwrap();

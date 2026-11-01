@@ -190,23 +190,47 @@ pub(super) fn project_connection(
 ) -> Result<HistoryProjection, SessionError> {
     // Validate one fact at a time without an owned raw-history export. The
     // projection mode determines which derived values must remain resident.
-    let mut statement = connection.prepare("SELECT body FROM entries ORDER BY seq")?;
-    let rows = statement.query_map([], |row| row.get::<_, Vec<u8>>(0))?;
-    project(
-        rows.map(|body| Ok(serde_json::from_slice::<SessionEntry>(&body?)?)),
-        mode,
-        &|entry| navigation::read_entry(connection, entry),
-    )
+    let mut statement = connection.prepare("SELECT seq, body FROM entries ORDER BY seq")?;
+    let mut rows = statement.query([])?;
+    let mut sequence = 0;
+    let entries = std::iter::from_fn(|| match rows.next() {
+        Ok(Some(row)) => {
+            sequence += 1;
+            Some(decode_entry(row, sequence))
+        }
+        Ok(None) => None,
+        Err(error) => Some(Err(error.into())),
+    });
+    project(entries, mode, &|entry| {
+        navigation::read_entry(connection, entry)
+    })
 }
 
 pub(super) fn read_entries(connection: &Connection) -> Result<Vec<SessionEntry>, SessionError> {
-    let mut statement = connection.prepare("SELECT body FROM entries ORDER BY seq")?;
-    let rows = statement.query_map([], |row| row.get::<_, Vec<u8>>(0))?;
+    let mut statement = connection.prepare("SELECT seq, body FROM entries ORDER BY seq")?;
+    let mut rows = statement.query([])?;
     let mut entries = Vec::new();
-    for body in rows {
-        entries.push(serde_json::from_slice(&body?)?);
+    while let Some(row) = rows.next()? {
+        entries.push(decode_entry(row, entries.len() as u64 + 1)?);
     }
     Ok(entries)
+}
+
+fn decode_entry(row: &rusqlite::Row<'_>, expected: u64) -> Result<SessionEntry, SessionError> {
+    // Coordinates identify effects, context branches and history reads. Never
+    // substitute iteration order for a damaged physical key.
+    let sequence: i64 = row.get(0)?;
+    if u64::try_from(sequence).ok() != Some(expected) {
+        return Err(SessionError::InvalidHistory);
+    }
+    let encoded = row.get_ref(1)?;
+    let encoded = encoded
+        .as_blob()
+        .map_err(|_| SessionError::InvalidHistory)?;
+    if encoded.len() > MAX_ENTRY_BYTES {
+        return Err(SessionError::EntryTooLarge);
+    }
+    Ok(serde_json::from_slice(encoded)?)
 }
 
 pub(super) fn read_header(connection: &Connection) -> Result<Header, SessionError> {
