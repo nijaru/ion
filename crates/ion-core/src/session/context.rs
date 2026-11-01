@@ -149,9 +149,9 @@ impl Session {
         }
         let through =
             through.or_else(|| store.settled.range((previous + 1)..).next_back().copied());
-        // Preserve the latest call/result batch when an older settled cut exists,
+        // An active continuation still needs the latest call/result batch,
         // even if its large result makes only an empty recent suffix fit.
-        let through = if keep_bytes > 0 {
+        let through = if keep_bytes > 0 && store.state.active.is_some() {
             projected
                 .last()
                 .filter(|record| record.message.role == Role::Tool)

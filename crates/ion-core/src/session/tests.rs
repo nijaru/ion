@@ -2657,13 +2657,28 @@ fn compaction_never_cuts_between_parallel_tool_results() {
 }
 
 #[test]
-fn repeated_compaction_after_cancelled_tool_batch_has_no_new_prefix() {
+fn idle_compaction_folds_settled_tool_batches_without_repeating_prefixes() {
     let (root, path) = fixture();
     let session = Session::create(&path, Some(&root)).unwrap();
     let model = ModelRef {
         provider: "test".into(),
         model: "test".into(),
     };
+    let (old_turn, _) = session
+        .begin_turn("old task".into(), model.clone())
+        .unwrap();
+    session
+        .record_assistant(
+            old_turn,
+            Message {
+                role: Role::Assistant,
+                content: vec![Content::Text("old answer".into())],
+                provider_replay: None,
+            },
+            Usage::unknown(),
+            false,
+        )
+        .unwrap();
     let (turn, _) = session.begin_turn("inspect".into(), model).unwrap();
     session
         .record_assistant(
@@ -2701,7 +2716,7 @@ fn repeated_compaction_after_cancelled_tool_batch_has_no_new_prefix() {
         .compaction_plan(None, 1, usize::MAX, false, u64::MAX)
         .unwrap()
         .unwrap();
-    assert_eq!(plan.messages.len(), 3);
+    assert_eq!(plan.messages.len(), 5);
     session
         .record_compaction(
             plan.through_entry,
