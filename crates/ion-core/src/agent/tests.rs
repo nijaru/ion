@@ -150,17 +150,19 @@ fn coding_output_budget_uses_model_ceiling_and_remaining_context() {
     assert_eq!(limits.output_budget(900, 300, 128_000), Some(128_000));
     assert_eq!(
         limits.output_budget(300_000, 100_000, 128_000),
-        Some(91_808)
+        Some(100_000)
     );
     assert_eq!(limits.output_budget(600_000, 200_000, 128_000), None);
     assert_eq!(limits.output_budget(9 * 1024 * 1024, 300, 128_000), None);
     for (window, input, expected) in [
         (0, 0, None),
-        (4096, 1024, Some(1024)),
-        (8192, 300, Some(3796)),
-        (8192, 4095, Some(1)),
-        (8192, 4096, None),
-        (16_384, 100, Some(8092)),
+        (4096, 1024, Some(3072)),
+        (8192, 300, Some(7892)),
+        (8192, 8191, Some(1)),
+        (8192, 8192, None),
+        (8192, 8193, None),
+        (16_384, 100, Some(16_284)),
+        (12_000, 8_000, Some(4_000)),
         (u32::MAX, u64::MAX, None),
     ] {
         assert_eq!(
@@ -213,7 +215,7 @@ async fn coding_requests_send_the_context_clamped_model_ceiling() {
         .unwrap();
     let requests = scripts.requests();
     assert_eq!(requests[0].controls.max_output_tokens, 128_000);
-    assert!((90_000..92_000).contains(&requests[1].controls.max_output_tokens));
+    assert!((98_000..100_000).contains(&requests[1].controls.max_output_tokens));
 
     // Compare the borrowed sizing view with the original encoded neutral
     // request, including escaped text, both image locations and a large
@@ -3849,7 +3851,7 @@ async fn output_pressure_compacts_before_issuing_a_coding_request() {
         let before = session.view().unwrap().entries;
         let agent = agent.with_limits(AgentLimits {
             max_output_tokens: 2500,
-            context_window_tokens: Some(10_000),
+            context_window_tokens: Some(5_000),
             ..AgentLimits::default()
         });
         let answer = agent
@@ -3913,7 +3915,7 @@ async fn output_pressure_without_a_settled_prefix_still_issues_a_clamped_request
     let agent = Agent::new(scripts.clone(), Arc::new(TestTools::new(&root)), model()).with_limits(
         AgentLimits {
             max_output_tokens: 2500,
-            context_window_tokens: Some(10_000),
+            context_window_tokens: Some(5_000),
             ..AgentLimits::default()
         },
     );
@@ -3984,7 +3986,7 @@ async fn output_pressure_preserves_an_active_signed_prefix() {
         let agent = Agent::new(scripts.clone(), Arc::new(TestTools::new(&root)), model())
             .with_limits(AgentLimits {
                 max_output_tokens: 2500,
-                context_window_tokens: Some(10_000),
+                context_window_tokens: Some(5_000),
                 max_request_bytes: byte_limit.unwrap_or(AgentLimits::default().max_request_bytes),
                 ..AgentLimits::default()
             });
@@ -4071,7 +4073,7 @@ async fn optional_compaction_counts_retained_inputs_when_testing_shrinkage() {
     let agent = Agent::new(scripts.clone(), Arc::new(TestTools::new(&root)), model()).with_limits(
         AgentLimits {
             max_output_tokens: 2500,
-            context_window_tokens: Some(10_000),
+            context_window_tokens: Some(5_000),
             ..AgentLimits::default()
         },
     );
@@ -4167,7 +4169,7 @@ async fn output_room_planning_is_one_shot_and_discards_a_growing_summary() {
         let before = session.view().unwrap().entries;
         let limits = AgentLimits {
             max_output_tokens: 2500,
-            context_window_tokens: Some(10_000),
+            context_window_tokens: Some(5_000),
             ..AgentLimits::default()
         };
         let steering = Arc::new(SteeringInbox::new(limits, crate::InputBudget::default()));
@@ -4267,7 +4269,7 @@ async fn full_dispatched_output_budget_does_not_trigger_context_recovery() {
         }
     }
 
-    for (ceiling, window) in [(128, None), (16_384, Some(20_000))] {
+    for (ceiling, window) in [(128, None), (16_384, Some(12_000))] {
         let root = std::env::temp_dir().join(format!("ion-full-length-{}", uuid::Uuid::now_v7()));
         std::fs::create_dir(&root).unwrap();
         let session = Arc::new(Session::create(root.join("session.sqlite"), Some(&root)).unwrap());
@@ -5018,7 +5020,7 @@ async fn request_pressure_rebuild_rechecks_steering_and_stop() {
             }
         } else {
             AgentLimits {
-                context_window_tokens: Some(4096),
+                context_window_tokens: Some(2048),
                 max_output_tokens: 1024,
                 ..AgentLimits::default()
             }
@@ -5102,7 +5104,7 @@ async fn request_pressure_rebuild_rechecks_steering_and_stop() {
 
 #[tokio::test]
 async fn compaction_uses_available_capacity_without_skipping_valid_settled_prefixes() {
-    for (window, lengths) in [(8192, vec![10]), (50_000, vec![49_900, 13_400, 34_900])] {
+    for (window, lengths) in [(4096, vec![10]), (42_000, vec![49_900, 13_400, 34_900])] {
         let root =
             std::env::temp_dir().join(format!("ion-summary-capacity-{}", uuid::Uuid::now_v7()));
         std::fs::create_dir(&root).unwrap();
@@ -5164,7 +5166,7 @@ async fn compaction_uses_available_capacity_without_skipping_valid_settled_prefi
         assert!(after.starts_with(&before));
         assert_eq!(reopened_entries, after);
         let requests = scripts.requests();
-        if window == 8192 {
+        if window == 4096 {
             assert_eq!(cuts.len(), 1);
             assert!(requests[0].controls.max_output_tokens > 0);
             assert!(requests[0].controls.max_output_tokens < 4096);

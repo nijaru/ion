@@ -81,6 +81,7 @@ pub use inbox::SteeringInbox;
 pub struct AgentLimits {
     pub max_request_bytes: usize,
     pub max_output_tokens: u32,
+    /// Total input and output token capacity, when known.
     pub context_window_tokens: Option<u32>,
     pub image_input: bool,
     pub prompt_cache_warming: Option<PromptCacheWarmingPolicy>,

@@ -243,26 +243,18 @@ impl RequestPlan {
 }
 
 impl AgentLimits {
-    pub(crate) fn usable_context_tokens(self) -> Option<u32> {
-        self.context_window_tokens.map(|window| {
-            // Keep the established reserve where it fits, but do not consume
-            // more than half of a small model's entire context as headroom.
-            window - (window / 2).min(8_192)
-        })
-    }
-
     /// A planning target, not an admission minimum. Split the capacity left
     /// after fixed instructions/tools so large prompts and small windows still
     /// leave room for messages rather than demanding an impossible ceiling.
     pub(crate) fn preferred_output_reserve(self, fixed_input_tokens: u64) -> u32 {
-        self.usable_context_tokens().map_or(0, |capacity| {
+        self.context_window_tokens.map_or(0, |capacity| {
             (u64::from(capacity).saturating_sub(fixed_input_tokens) / 2)
                 .min(u64::from(self.max_output_tokens)) as u32
         })
     }
 
     pub(crate) fn compaction_keep_bytes(self, reserved_tokens: u64) -> usize {
-        let model_budget = self.usable_context_tokens().map_or(usize::MAX, |tokens| {
+        let model_budget = self.context_window_tokens.map_or(usize::MAX, |tokens| {
             (u64::from(tokens).saturating_sub(reserved_tokens) as usize).saturating_mul(3)
         });
         self.max_request_bytes.min(model_budget) / 2
@@ -296,7 +288,7 @@ impl AgentLimits {
         if bytes > self.max_request_bytes || ceiling == 0 {
             return None;
         }
-        let Some(capacity) = self.usable_context_tokens() else {
+        let Some(capacity) = self.context_window_tokens else {
             return Some(ceiling);
         };
         let available = u64::from(capacity).saturating_sub(estimated_input);
