@@ -3,7 +3,7 @@
 use super::{Agent, AgentError, AgentEvent, SteeringInbox};
 use crate::{
     generation::OutputCustody,
-    request::{PreparedRequest, RequestStep},
+    request::{RequestPlan, RequestStep},
     session::{Session, SessionError},
     tool_set::ToolCatalog,
 };
@@ -52,7 +52,7 @@ impl<'a> RequestCycle<'a> {
         F: FnMut(AgentEvent) + Send,
     {
         let mut recovered_overflow = false;
-        let mut reserve_attempted = false;
+        let mut reserve_handled = false;
         loop {
             // Yield even for an entirely buffered service/tool sequence.
             tokio::task::yield_now().await;
@@ -81,7 +81,7 @@ impl<'a> RequestCycle<'a> {
             }
             let assistant_seen = basis.assistant_seen;
             let prefix_bound = basis.prefix_bound;
-            let prepared = match PreparedRequest::new(
+            let plan = RequestPlan::new(
                 self.session,
                 basis,
                 &self.agent.service,
@@ -89,47 +89,48 @@ impl<'a> RequestCycle<'a> {
                 reason,
                 self.agent.request_settings(self.instructions),
                 self.catalog.as_ref(),
-            ) {
-                Ok(prepared) => prepared,
-                Err(AgentError::ContextTooLarge) if !prefix_bound => {
-                    if self
-                        .agent
-                        .compact_inner(
-                            None,
-                            self.session,
-                            self.stop,
-                            self.agent.limits.compaction_keep_bytes(0),
-                            false,
-                            observe,
-                        )
-                        .await?
-                        .is_some()
-                    {
-                        continue;
-                    }
-                    return Err(AgentError::ContextTooLarge);
+            )?;
+            let output_budget = plan.output_budget();
+            let required = output_budget.is_none();
+            let keep_bytes = plan.keep_bytes();
+            // Required and optional compaction share the same measured target.
+            // A size-bounded partial cut may still need the remaining prefix;
+            // a complete cut must not trigger a redundant optional summary.
+            if !prefix_bound
+                && (required
+                    || (!reserve_handled
+                        && output_budget.is_some_and(|budget| budget < plan.output_reserve())))
+            {
+                if !required {
+                    reserve_handled = true;
                 }
-                Err(error) => return Err(error),
-            };
-            let output_budget = prepared.output_budget();
-            let output_reserve = prepared.output_reserve(self.agent.limits);
-            let keep_bytes = prepared.keep_bytes(self.agent.limits);
-            // One attempt per model/tool step, not per rebuild: fixed overhead
-            // or an uncompactable suffix can still require a clamped budget.
-            if output_budget < output_reserve && !prefix_bound && !reserve_attempted {
-                reserve_attempted = true;
                 match self
                     .agent
-                    .compact_inner(None, self.session, self.stop, keep_bytes, true, observe)
+                    .compact_inner(
+                        None,
+                        self.session,
+                        self.stop,
+                        keep_bytes,
+                        !required,
+                        observe,
+                    )
                     .await
                 {
-                    // A discarded summary may also have awaited I/O. Honor
-                    // steering/stop queued during the attempt before issuing.
-                    Ok(_) | Err(AgentError::ContextTooLarge) => continue,
+                    Ok(Some(chunked)) => {
+                        if !chunked {
+                            reserve_handled = true;
+                        }
+                        continue;
+                    }
+                    // Even a discarded summary may have awaited I/O. Return
+                    // through intake for newly queued steering/stop.
+                    Ok(None) | Err(AgentError::ContextTooLarge) if !required => continue,
+                    Ok(None) => return Err(AgentError::ContextTooLarge),
                     Err(error) => return Err(error),
                 }
             }
-            let issued = prepared
+            let output_budget = output_budget.ok_or(AgentError::ContextTooLarge)?;
+            let issued = plan
                 .issue(self.session, &self.agent.service, self.stop, observe)
                 .await?;
             let attempt = issued.attempt;
@@ -187,7 +188,7 @@ impl<'a> RequestCycle<'a> {
             let started = attempt.timing.start;
             return Ok(RequestStep {
                 generated: attempt.into_result()?,
-                prepared: issued.prepared,
+                plan: issued.plan,
                 started,
             });
         }

@@ -5,7 +5,7 @@ use super::{
     cache_warming::{PromptCacheWarmer, execute_with_cache_warming},
 };
 use crate::{
-    request::PreparedRequest,
+    request::RequestPlan,
     session::{ModelContextSnapshot, Session},
     tool_set::{ToolDispatch, ToolExecution},
 };
@@ -16,7 +16,7 @@ use tokio_util::sync::CancellationToken;
 pub(super) struct OrderedBatch {
     calls: Vec<ToolCall>,
     entry: u64,
-    prepared: PreparedRequest,
+    plan: RequestPlan,
     warmer: Option<PromptCacheWarmer>,
     never_dispatched: BTreeSet<String>,
 }
@@ -25,18 +25,18 @@ impl OrderedBatch {
     pub fn new(
         calls: Vec<ToolCall>,
         entry: u64,
-        prepared: PreparedRequest,
+        plan: RequestPlan,
         policy: Option<PromptCacheWarmingPolicy>,
         usage: ion_ai::Usage,
         started: tokio::time::Instant,
     ) -> Self {
         let warmer = policy
-            .and_then(|policy| PromptCacheWarmer::new(policy, prepared.request(), usage, started));
+            .and_then(|policy| PromptCacheWarmer::new(policy, plan.request(), usage, started));
         Self {
             never_dispatched: calls.iter().map(|call| call.id.clone()).collect(),
             calls,
             entry,
-            prepared,
+            plan,
             warmer,
         }
     }
@@ -57,7 +57,7 @@ impl OrderedBatch {
     where
         F: FnMut(AgentEvent) + Send,
     {
-        let catalog = self.prepared.catalog();
+        let catalog = self.plan.catalog();
         let mut activate_tools = BTreeSet::new();
         for (index, call) in self.calls.iter().enumerate() {
             if stop.is_cancelled() {
@@ -75,9 +75,9 @@ impl OrderedBatch {
                 turn,
                 occurrence,
                 None,
-                self.prepared.reasoning(),
+                self.plan.reasoning(),
             );
-            let invocation = invocation.with_model_messages(&self.prepared.request().messages);
+            let invocation = invocation.with_model_messages(&self.plan.request().messages);
             let tool = Box::pin(async {
                 if stop.is_cancelled() {
                     return Err(AgentError::Cancelled);
@@ -104,8 +104,8 @@ impl OrderedBatch {
                         catalog,
                         call,
                         occurrence,
-                        self.prepared.reasoning(),
-                        &self.prepared.request().messages,
+                        self.plan.reasoning(),
+                        &self.plan.request().messages,
                         stop,
                         observe,
                     )

@@ -1,4 +1,4 @@
-//! Request preparation, durable admission and request-bound execution.
+//! Request planning, durable admission and request-bound execution.
 use std::sync::Arc;
 
 use ion_ai::{
@@ -21,22 +21,24 @@ pub(crate) mod calibration;
 mod calibration_tests;
 pub(crate) use calibration::{RequestCalibration, RequestMeasurement, RequestScope};
 
-pub(crate) struct PreparedRequest {
+pub(crate) struct RequestPlan {
     turn: u64,
     request: ModelRequest,
     catalog: ToolCatalog,
     measurement: RequestMeasurement,
     scope: RequestScope,
+    limits: AgentLimits,
+    output_budget: Option<u32>,
 }
 
 pub(crate) struct IssuedRequest {
     pub attempt: GenerationAttempt,
-    pub prepared: PreparedRequest,
+    pub plan: RequestPlan,
 }
 
 pub(crate) struct RequestStep {
     pub generated: GeneratedResponse,
-    pub prepared: PreparedRequest,
+    pub plan: RequestPlan,
     pub started: tokio::time::Instant,
 }
 
@@ -73,7 +75,7 @@ impl RequestSettings<'_> {
     }
 }
 
-impl PreparedRequest {
+impl RequestPlan {
     pub fn new(
         session: &Session,
         basis: RequestBasis,
@@ -104,7 +106,7 @@ impl PreparedRequest {
         };
         let route = ModelRoute::direct(model.clone(), reason);
         let context_timeline = basis.timeline(&context);
-        let mut request = ModelRequest {
+        let request = ModelRequest {
             messages: basis.messages,
             context_timeline,
             route,
@@ -133,19 +135,19 @@ impl PreparedRequest {
             || measurement.fallback_input_tokens(),
             |calibration| calibration.estimate(&measurement),
         );
-        request.controls.max_output_tokens = limits
-            .output_budget(
-                measurement.retained_bytes(),
-                estimated_input,
-                limits.max_output_tokens,
-            )
-            .ok_or(AgentError::ContextTooLarge)?;
+        let output_budget = limits.output_budget(
+            measurement.retained_bytes(),
+            estimated_input,
+            limits.max_output_tokens,
+        );
         Ok(Self {
             turn,
             request,
             catalog,
             measurement,
             scope,
+            limits,
+            output_budget,
         })
     }
 
@@ -168,17 +170,18 @@ impl PreparedRequest {
         Ok(())
     }
 
-    pub fn output_budget(&self) -> u32 {
-        self.request.controls.max_output_tokens
+    pub fn output_budget(&self) -> Option<u32> {
+        self.output_budget
     }
 
-    pub fn output_reserve(&self, limits: AgentLimits) -> u32 {
-        limits.preferred_output_reserve(self.measurement.fixed_input_tokens())
+    pub fn output_reserve(&self) -> u32 {
+        self.limits
+            .preferred_output_reserve(self.measurement.fixed_input_tokens())
     }
 
-    pub fn keep_bytes(&self, limits: AgentLimits) -> usize {
-        limits.compaction_keep_bytes(
-            self.measurement.fixed_input_tokens() + u64::from(self.output_reserve(limits)),
+    pub fn keep_bytes(&self) -> usize {
+        self.limits.compaction_keep_bytes(
+            self.measurement.fixed_input_tokens() + u64::from(self.output_reserve()),
         )
     }
 
@@ -204,6 +207,8 @@ impl PreparedRequest {
     where
         F: FnMut(AgentEvent) + Send,
     {
+        self.request.controls.max_output_tokens =
+            self.output_budget.ok_or(AgentError::ContextTooLarge)?;
         model.validate_controls(&self.request.route.effective, &self.request.controls)?;
         session.admit_request(
             self.turn,
@@ -232,7 +237,7 @@ impl PreparedRequest {
         self.request.route = attempt.route.clone();
         Ok(IssuedRequest {
             attempt,
-            prepared: self,
+            plan: self,
         })
     }
 }

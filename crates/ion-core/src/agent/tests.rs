@@ -3695,73 +3695,128 @@ async fn short_length_stop_compacts_and_retries_without_dispatching_partial_call
 
 #[tokio::test]
 async fn output_pressure_compacts_before_issuing_a_coding_request() {
-    let root = std::env::temp_dir().join(format!("ion-output-room-{}", uuid::Uuid::now_v7()));
-    std::fs::create_dir(&root).unwrap();
-    let session = Arc::new(Session::create(root.join("session.sqlite"), Some(&root)).unwrap());
-    let scripts = Arc::new(ScriptedModelService::new([
-        response(vec![Content::Text("history ".repeat(1200))]),
-        response(vec![Content::Text("Earlier work summarized.".into())]),
-        response(vec![Content::ToolCall(ToolCall {
-            id: "write-once".into(),
-            name: "write".into(),
-            arguments: serde_json::json!({"path":"answer.txt","content":"done"}),
-            raw_arguments: None,
-        })]),
-        response(vec![Content::Text("done".into())]),
-    ]));
-    let agent = Agent::new(scripts.clone(), Arc::new(TestTools::new(&root)), model());
-    agent
-        .submit(
-            session.clone(),
-            "first".into(),
-            "test".into(),
-            CancellationToken::new(),
-            |_| {},
-        )
-        .await
-        .unwrap();
-    let before = session.view().unwrap().entries;
-    let agent = agent.with_limits(AgentLimits {
-        max_output_tokens: 2500,
-        context_window_tokens: Some(10_000),
-        ..AgentLimits::default()
-    });
-    let answer = agent
-        .submit(
-            session.clone(),
-            "write the answer".into(),
-            "test".into(),
-            CancellationToken::new(),
-            |_| {},
-        )
-        .await
-        .unwrap();
-    assert_eq!(answer, "done");
-    assert_eq!(
-        std::fs::read_to_string(root.join("answer.txt")).unwrap(),
-        "done"
-    );
-    let requests = scripts.requests();
-    assert_eq!(requests.len(), 4);
-    assert!(requests[1].tools.is_empty());
-    assert_eq!(requests[2].controls.max_output_tokens, 2500);
-    let after = session.view().unwrap();
-    assert!(after.entries.starts_with(&before));
-    assert_eq!(after.usage().compaction.observations, 1);
-    assert_eq!(after.usage().uncommitted.observations, 0);
-    assert_eq!(
-        after
-            .entries
-            .iter()
-            .filter(|entry| matches!(entry, SessionEntry::ToolResult { .. }))
-            .count(),
-        1
-    );
-    drop((agent, session));
-    let reopened = Session::open(root.join("session.sqlite")).unwrap();
-    assert_eq!(reopened.view().unwrap().entries, after.entries);
-    drop(reopened);
-    std::fs::remove_dir_all(root).unwrap();
+    struct CodingFixture {
+        history_length: usize,
+        requests: Mutex<Vec<ModelRequest>>,
+    }
+    impl ModelService for CodingFixture {
+        fn stream<'a>(
+            &'a self,
+            request: ModelRequest,
+        ) -> BoxFuture<'a, Result<ion_ai::ModelStream, ProviderError>> {
+            Box::pin(async move {
+                let earlier = request.messages.last().is_some_and(|message| message.content.iter().any(|part| matches!(part, Content::Text(text) if text.starts_with("earlier task"))));
+                let content = if request.route.reason == ModelRouteReason::Auxiliary {
+                    Content::Text("Earlier work summarized.".into())
+                } else if earlier {
+                    Content::Text("h".repeat(self.history_length))
+                } else if request.route.reason == ModelRouteReason::ToolContinuation {
+                    Content::Text("done".into())
+                } else {
+                    Content::ToolCall(ToolCall {
+                        id: "write-once".into(),
+                        name: "write".into(),
+                        arguments: serde_json::json!({"path":"answer.txt","content":"done"}),
+                        raw_arguments: None,
+                    })
+                };
+                self.requests.lock().unwrap().push(request);
+                let event = ModelStreamEvent::Completed(ModelResponse {
+                    message: Message {
+                        role: Role::Assistant,
+                        content: vec![content],
+                        provider_replay: None,
+                    },
+                    usage: Usage::unknown(),
+                    termination: ResponseTermination::Completed,
+                    returned_model: None,
+                });
+                let stream: ion_ai::ModelStream = Box::pin(futures_util::stream::iter([Ok(event)]));
+                Ok(stream)
+            })
+        }
+    }
+    for (length, seed_count, instructions, summaries) in [
+        (9600, 1, "test".to_owned(), 1),
+        (3500, 3, "i".repeat(5000), 1),
+        // This prefix does not fit a single summary request. Completing its
+        // size-bounded chunks must still restore generation room.
+        (3500, 4, "i".repeat(5000), 2),
+    ] {
+        let root = std::env::temp_dir().join(format!("ion-output-room-{}", uuid::Uuid::now_v7()));
+        std::fs::create_dir(&root).unwrap();
+        let session = Arc::new(Session::create(root.join("session.sqlite"), Some(&root)).unwrap());
+        let service = Arc::new(CodingFixture {
+            history_length: length,
+            requests: Mutex::new(Vec::new()),
+        });
+        let agent = Agent::new(service.clone(), Arc::new(TestTools::new(&root)), model());
+        for index in 0..seed_count {
+            agent
+                .submit(
+                    session.clone(),
+                    format!("earlier task {index}"),
+                    "test".into(),
+                    CancellationToken::new(),
+                    |_| {},
+                )
+                .await
+                .unwrap();
+        }
+        let before = session.view().unwrap().entries;
+        let agent = agent.with_limits(AgentLimits {
+            max_output_tokens: 2500,
+            context_window_tokens: Some(10_000),
+            ..AgentLimits::default()
+        });
+        let answer = agent
+            .submit(
+                session.clone(),
+                "write the answer".into(),
+                instructions,
+                CancellationToken::new(),
+                |_| {},
+            )
+            .await
+            .unwrap();
+        assert_eq!(answer, "done");
+        assert_eq!(
+            std::fs::read_to_string(root.join("answer.txt")).unwrap(),
+            "done"
+        );
+        let requests = service.requests.lock().unwrap();
+        assert_eq!(
+            requests.len(),
+            seed_count + summaries + 2,
+            "only source-capacity-bounded chunks should require successive summaries"
+        );
+        assert!(
+            requests[seed_count..seed_count + summaries]
+                .iter()
+                .all(|request| request.tools.is_empty())
+        );
+        assert_eq!(
+            requests[seed_count + summaries].controls.max_output_tokens,
+            2500
+        );
+        let after = session.view().unwrap();
+        assert!(after.entries.starts_with(&before));
+        assert_eq!(after.usage().compaction.observations, summaries);
+        assert_eq!(after.usage().uncommitted.observations, 0);
+        assert_eq!(
+            after
+                .entries
+                .iter()
+                .filter(|entry| matches!(entry, SessionEntry::ToolResult { .. }))
+                .count(),
+            1
+        );
+        drop((agent, session));
+        let reopened = Session::open(root.join("session.sqlite")).unwrap();
+        assert_eq!(reopened.view().unwrap().entries, after.entries);
+        drop(reopened);
+        std::fs::remove_dir_all(root).unwrap();
+    }
 }
 
 #[tokio::test]
@@ -3803,14 +3858,22 @@ async fn output_pressure_without_a_settled_prefix_still_issues_a_clamped_request
 
 #[tokio::test]
 async fn output_pressure_preserves_an_active_signed_prefix() {
-    for bound in [false, true] {
+    for (bound, byte_limit) in [
+        (false, None),
+        (true, None),
+        (false, Some(20_000)),
+        (true, Some(20_000)),
+    ] {
         let root = std::env::temp_dir().join(format!("ion-output-prefix-{}", uuid::Uuid::now_v7()));
         std::fs::create_dir(&root).unwrap();
         std::fs::write(root.join("large.txt"), "history ".repeat(1200)).unwrap();
         let session = Arc::new(Session::create(root.join("session.sqlite"), Some(&root)).unwrap());
-        let replay =
-            ion_ai::ProviderReplay::new(model().provider, "opaque", serde_json::json!("signed"))
-                .with_prefix_binding(bound);
+        let replay = ion_ai::ProviderReplay::new(
+            model().provider,
+            "opaque",
+            serde_json::json!("signed".repeat(if byte_limit.is_some() { 4000 } else { 1 })),
+        )
+        .with_prefix_binding(bound);
         let mut responses = vec![Script::Stream(vec![ModelStreamEvent::Completed(
             ModelResponse {
                 message: Message {
@@ -3839,21 +3902,23 @@ async fn output_pressure_preserves_an_active_signed_prefix() {
             .with_limits(AgentLimits {
                 max_output_tokens: 2500,
                 context_window_tokens: Some(10_000),
+                max_request_bytes: byte_limit.unwrap_or(AgentLimits::default().max_request_bytes),
                 ..AgentLimits::default()
             });
-        assert_eq!(
-            agent
-                .submit(
-                    session.clone(),
-                    "read file".into(),
-                    "test".into(),
-                    CancellationToken::new(),
-                    |_| {}
-                )
-                .await
-                .unwrap(),
-            "done"
-        );
+        let result = agent
+            .submit(
+                session.clone(),
+                "read file".into(),
+                "test".into(),
+                CancellationToken::new(),
+                |_| {},
+            )
+            .await;
+        if bound && byte_limit.is_some() {
+            assert!(matches!(result, Err(AgentError::ContextTooLarge)));
+        } else {
+            assert_eq!(result.unwrap(), "done");
+        }
         let requests = scripts.requests();
         let view = session.view().unwrap();
         assert_eq!(view.usage().compaction.observations, usize::from(!bound));
@@ -3865,7 +3930,14 @@ async fn output_pressure_preserves_an_active_signed_prefix() {
             1
         );
         let continuation = requests.last().unwrap();
-        if bound {
+        if bound && byte_limit.is_some() {
+            assert_eq!(
+                requests.len(),
+                1,
+                "an unissuable signed prefix must not be summarized or dispatched"
+            );
+            assert!(view.entries.iter().any(|entry| matches!(entry, SessionEntry::Assistant { message, .. } if message.provider_replay.as_ref() == Some(&replay))));
+        } else if bound {
             assert_eq!(requests.len(), 2);
             assert!(continuation.controls.max_output_tokens < 2500);
             assert_eq!(
@@ -3877,6 +3949,9 @@ async fn output_pressure_preserves_an_active_signed_prefix() {
             assert_eq!(continuation.controls.max_output_tokens, 2500);
         }
         drop((agent, session));
+        let reopened = Session::open(root.join("session.sqlite")).unwrap();
+        assert_eq!(reopened.view().unwrap().entries, view.entries);
+        drop(reopened);
         std::fs::remove_dir_all(root).unwrap();
     }
 }

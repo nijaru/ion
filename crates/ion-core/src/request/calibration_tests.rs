@@ -709,7 +709,8 @@ async fn tiny_calibrated_estimate_cannot_relax_the_retained_byte_limit() {
     let model = model();
     let tools = ToolSet::new([Arc::new(Echo) as Arc<dyn ToolSource>]);
     let model_service: Arc<dyn ion_ai::ModelService> = service.clone();
-    let prepared = PreparedRequest::new(
+    let before = session.view().unwrap().entries;
+    let plan = RequestPlan::new(
         &session,
         session.request_basis(&model).unwrap(),
         &model_service,
@@ -722,8 +723,19 @@ async fn tiny_calibrated_estimate_cannot_relax_the_retained_byte_limit() {
             authority: None,
         },
         None,
-    );
-    assert!(matches!(prepared, Err(AgentError::ContextTooLarge)));
+    )
+    .unwrap();
+    assert_eq!(plan.output_budget(), None);
+    let result = plan
+        .issue(
+            &session,
+            &model_service,
+            &CancellationToken::new(),
+            &mut |_| {},
+        )
+        .await;
+    assert!(matches!(result, Err(AgentError::ContextTooLarge)));
+    assert_eq!(session.view().unwrap().entries, before);
     assert_eq!(service.requests().len(), 1);
     drop(session);
     std::fs::remove_dir_all(root).unwrap();

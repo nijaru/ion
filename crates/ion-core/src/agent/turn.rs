@@ -114,10 +114,10 @@ impl Turn<'_> {
             loop {
                 let RequestStep {
                     generated: GeneratedResponse { response, route },
-                    prepared,
+                    plan,
                     started,
                 } = cycle.next(reason, steering, observe).await?;
-                let catalog = prepared.catalog();
+                let catalog = plan.catalog();
                 let execution = ModelExecution {
                     route,
                     returned_model: response.returned_model.clone(),
@@ -179,7 +179,7 @@ impl Turn<'_> {
                             outcome: result.outcome,
                         });
                     }
-                    prepared.record_observed_input(session, &execution, response.usage)?;
+                    plan.record_observed_input(session, &execution, response.usage)?;
                     continue;
                 }
                 let final_text = response
@@ -246,7 +246,7 @@ impl Turn<'_> {
                 });
                 let human_continuation = !committed_steering.steering.is_empty();
                 committed_steering.observe(turn, observe);
-                prepared.record_observed_input(session, &execution, response.usage)?;
+                plan.record_observed_input(session, &execution, response.usage)?;
                 if committed.complete {
                     observe(AgentEvent::TurnEnded {
                         turn,
@@ -267,7 +267,7 @@ impl Turn<'_> {
                         .insert(OrderedBatch::new(
                             calls,
                             committed.entry,
-                            prepared,
+                            plan,
                             agent.limits.prompt_cache_warming,
                             response.usage,
                             started,
