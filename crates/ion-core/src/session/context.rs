@@ -149,22 +149,25 @@ impl Session {
         }
         let through =
             through.or_else(|| store.settled.range((previous + 1)..).next_back().copied());
-        // An active continuation still needs the latest call/result batch,
-        // even if its large result makes only an empty recent suffix fit.
+        // New input does not consume the active assistant's call/result batch.
+        // Keep it even when only an empty recent suffix would fit, but never
+        // pin an ended Turn's batch merely because the next Turn has started.
         let through = if keep_bytes > 0 && store.state.active.is_some() {
             projected
-                .last()
-                .filter(|record| record.message.role == Role::Tool)
-                .and_then(|recent| {
-                    projected.iter().rev().find(|record| {
-                        record.entry < recent.entry
-                            && record.message.role == Role::Assistant
-                            && record
-                                .message
-                                .content
-                                .iter()
-                                .any(|part| matches!(part, Content::ToolCall(_)))
-                    })
+                .iter()
+                .rev()
+                .find(|record| record.message.role == Role::Assistant)
+                .filter(|record| {
+                    store
+                        .state
+                        .active_inputs
+                        .first()
+                        .is_some_and(|&input| record.entry > input)
+                        && record
+                            .message
+                            .content
+                            .iter()
+                            .any(|part| matches!(part, Content::ToolCall(_)))
                 })
                 .and_then(|call| {
                     store

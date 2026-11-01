@@ -2717,6 +2717,25 @@ fn idle_compaction_folds_settled_tool_batches_without_repeating_prefixes() {
         .unwrap()
         .unwrap();
     assert_eq!(plan.messages.len(), 5);
+    let next = session.clone_to(root.join("next.sqlite")).unwrap();
+    next.begin_turn("new task".into(), test_execution().route.logical)
+        .unwrap();
+    let next_plan = next
+        .compaction_plan(None, 1, usize::MAX, false, u64::MAX)
+        .unwrap()
+        .unwrap();
+    assert_eq!(next_plan.through_entry, plan.through_entry);
+    next.record_compaction(
+        next_plan.through_entry,
+        "previous task settled".into(),
+        test_execution(),
+        Usage::unknown(),
+    )
+    .unwrap();
+    let next_context = next.context_messages().unwrap();
+    assert_eq!(next_context.len(), 2);
+    assert_eq!(next_context[1], Message::user_input("new task".into(), []));
+    drop(next);
     session
         .record_compaction(
             plan.through_entry,
@@ -2805,6 +2824,32 @@ fn compaction_keeps_oversized_recent_tool_batch_when_older_cut_exists() {
         .unwrap();
     assert_eq!(plan.through_entry, 3);
     assert_eq!(plan.messages.len(), 2);
+    let steering = Message::user_input("Use the original read; do not repeat it".into(), []);
+    session
+        .record_steerings(current_turn, vec![steering.clone()])
+        .unwrap();
+    let plan = session
+        .compaction_plan(None, 1000, usize::MAX, true, u64::MAX)
+        .unwrap()
+        .unwrap();
+    assert_eq!(plan.through_entry, 3);
+    session
+        .record_inputs(
+            current_turn,
+            Vec::new(),
+            vec![crate::CompletionNotice {
+                source_session: session.id(),
+                run: uuid::Uuid::now_v7(),
+                child_session: uuid::Uuid::now_v7(),
+            }],
+        )
+        .unwrap();
+    let readiness = session.context_messages().unwrap().pop().unwrap();
+    let plan = session
+        .compaction_plan(None, 1000, usize::MAX, true, u64::MAX)
+        .unwrap()
+        .unwrap();
+    assert_eq!(plan.through_entry, 3);
     session
         .record_compaction(
             plan.through_entry,
@@ -2814,9 +2859,11 @@ fn compaction_keeps_oversized_recent_tool_batch_when_older_cut_exists() {
         )
         .unwrap();
     let context = session.context_messages().unwrap();
-    assert_eq!(context.len(), 4);
+    assert_eq!(context.len(), 6);
     assert!(matches!(context[2].content[0], Content::ToolCall(_)));
     assert!(matches!(context[3].content[0], Content::ToolResult(_)));
+    assert_eq!(context[4], steering);
+    assert_eq!(context[5], readiness);
     drop(session);
     let reopened = Session::open(&path).unwrap();
     assert_eq!(reopened.context_messages().unwrap(), context);
