@@ -139,6 +139,7 @@ async fn dropped_timed_out_and_aborted_callers_cannot_release_started_work() {
             stop.clone(),
             |_| {},
         );
+        let fence = operation.fence();
         if mode == "abort" {
             let caller = tokio::spawn(operation);
             tokio::time::timeout(Duration::from_secs(4), tools.started.acquire())
@@ -166,6 +167,7 @@ async fn dropped_timed_out_and_aborted_callers_cannot_release_started_work() {
         }
         let stopped = stop.is_cancelled();
         let blocked = !tools.finished.load(Ordering::SeqCst);
+        assert!(!fence.is_finished(), "stop is not actual completion");
         let premature = agent
             .submit(
                 session.clone(),
@@ -180,12 +182,13 @@ async fn dropped_timed_out_and_aborted_callers_cannot_release_started_work() {
         let absent_before_release = !tools.path.exists();
         tools.release();
         tokio::time::timeout(Duration::from_secs(4), async {
-            while matches!(session.ensure_idle(), Err(SessionError::OperationActive)) {
+            while !fence.is_finished() {
                 tokio::time::sleep(Duration::from_millis(1)).await;
             }
         })
         .await
         .unwrap();
+        session.ensure_idle().unwrap();
         let settled = session.view().unwrap();
         let fresh = agent
             .submit(
@@ -198,7 +201,12 @@ async fn dropped_timed_out_and_aborted_callers_cannot_release_started_work() {
             .await;
         let effect = fs::read_to_string(&tools.path).unwrap();
         session.shutdown().await.unwrap();
+        let weak = Arc::downgrade(&session);
         drop(session);
+        assert!(
+            weak.upgrade().is_none(),
+            "finished fence retained the writer lease"
+        );
         fs::remove_dir_all(root).unwrap();
         assert!(stopped && blocked && absent_before_release, "{mode}");
         assert!(
@@ -222,6 +230,7 @@ async fn dropped_timed_out_and_aborted_callers_cannot_release_started_work() {
         assert_eq!(fresh.unwrap(), "fresh");
         assert_eq!(effect, "once");
         assert_eq!(service.requests().len(), 2);
+        assert!(fence.is_finished());
     }
 }
 

@@ -88,6 +88,18 @@ impl Drop for StopOnFailure {
     }
 }
 
+/// Read-only liveness of the actual task, independent of observer delivery or
+/// whether its controlling owner has joined it. This grants no abort authority.
+#[derive(Clone)]
+pub struct OperationFence(Option<tokio::task::AbortHandle>);
+impl OperationFence {
+    pub fn is_finished(&self) -> bool {
+        self.0
+            .as_ref()
+            .is_none_or(tokio::task::AbortHandle::is_finished)
+    }
+}
+
 /// An owned stop-and-join handle, not authority to abort execution. Dropping it
 /// requests stop; the Session retains the task and its outcome until joined.
 /// Await a retained `&mut Operation` when selecting repeatedly on completion.
@@ -98,6 +110,7 @@ pub struct Operation<T, E> {
     stop: CancellationToken,
     completion: Arc<Completion<T, E>>,
     joined: bool,
+    fence: OperationFence,
     notified: Option<Pin<Box<OwnedNotified>>>,
 }
 
@@ -114,12 +127,17 @@ impl<T, E> Operation<T, E> {
                 unreported_failure: None,
             }))),
             joined: false,
+            fence: OperationFence(None),
             notified: None,
         }
     }
 
     pub fn request_stop(&self) {
         self.stop.cancel();
+    }
+
+    pub fn fence(&self) -> OperationFence {
+        self.fence.clone()
     }
 }
 
@@ -331,12 +349,16 @@ impl OperationOwner {
             let runtime = tokio::runtime::Handle::try_current()
                 .map_err(|_| E::from(OperationError::RuntimeUnavailable))?;
             let mut idle = self.try_lock().map_err(E::from)?;
-            Ok(self.install(&mut idle, stop, |completion, failure_stop| {
-                runtime.spawn_blocking(move || {
-                    completion.finish(work());
-                    failure_stop.disarm();
-                })
-            }))
+            let (operation, previous) =
+                self.install(&mut idle, stop, |completion, failure_stop| {
+                    runtime.spawn_blocking(move || {
+                        completion.finish(work());
+                        failure_stop.disarm();
+                    })
+                });
+            drop(idle);
+            drop(previous);
+            Ok(operation)
         })();
         result.unwrap_or_else(|error| Operation::ready(Err(error)))
     }
@@ -360,12 +382,14 @@ impl OperationOwner {
         let Some(work) = work else {
             return Ok((prepared, None));
         };
-        let operation = self.install(&mut idle, stop, |completion, failure_stop| {
+        let (operation, previous) = self.install(&mut idle, stop, |completion, failure_stop| {
             runtime.spawn(async move {
                 completion.finish(work.await);
                 failure_stop.disarm();
             })
         });
+        drop(idle);
+        drop(previous);
         Ok((prepared, Some(operation)))
     }
 
@@ -374,7 +398,7 @@ impl OperationOwner {
         idle: &mut IdleSession<'_>,
         stop: CancellationToken,
         spawn: impl FnOnce(Arc<Completion<T, E>>, StopOnFailure) -> JoinHandle<()>,
-    ) -> Operation<T, E>
+    ) -> (Operation<T, E>, Option<Arc<dyn CompletionCustody>>)
     where
         T: Send + 'static,
         E: Send + 'static,
@@ -386,7 +410,7 @@ impl OperationOwner {
             .next_id
             .checked_add(1)
             .expect("operation identity exhausted");
-        idle.0.completed = None;
+        let previous = idle.0.completed.take();
         let id = idle.0.next_id;
         let completion = Arc::new(Completion(Mutex::new(Outcome {
             result: None,
@@ -399,20 +423,25 @@ impl OperationOwner {
                 armed: true,
             },
         );
+        let fence = OperationFence(Some(task.abort_handle()));
         idle.0.running = Some(Running {
             id,
             stop: stop.clone(),
             task,
             _completion: completion.clone(),
         });
-        Operation {
-            owner: Some(self.clone()),
-            id,
-            stop,
-            completion,
-            joined: false,
-            notified: Some(Box::pin(self.wake.clone().notified_owned())),
-        }
+        (
+            Operation {
+                owner: Some(self.clone()),
+                id,
+                stop,
+                completion,
+                joined: false,
+                fence,
+                notified: Some(Box::pin(self.wake.clone().notified_owned())),
+            },
+            previous,
+        )
     }
 
     fn poll_join(
@@ -451,6 +480,12 @@ impl OperationOwner {
     /// closure and task custody intact. Runtime destruction is not shutdown.
     pub(crate) async fn shutdown(&self) -> Result<(), OperationError> {
         self.closed.store(true, Ordering::SeqCst);
+        self.join().await
+    }
+
+    /// Stop and join current work without changing admission. Callers allowing
+    /// reuse must fence new starts themselves until this join has completed.
+    pub(crate) async fn join(&self) -> Result<(), OperationError> {
         let mut notified = Box::pin(self.wake.clone().notified_owned());
         let id = poll_fn(|cx| {
             let state = std::task::ready!(self.poll_state(cx, &mut notified));
@@ -514,5 +549,53 @@ impl State {
         // only on the next successful start. No running handle is abandoned.
         let running = self.running.take().unwrap();
         self.completed = Some(running._completion);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    struct DropProbe {
+        owner: std::sync::Weak<OperationOwner>,
+        outside_lock: Arc<AtomicBool>,
+    }
+    impl Drop for DropProbe {
+        fn drop(&mut self) {
+            let owner = self.owner.upgrade().unwrap();
+            self.outside_lock
+                .store(owner.state.try_lock().is_ok(), Ordering::SeqCst);
+        }
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn replacing_unread_success_drops_arbitrary_results_outside_owner_lock() {
+        let owner = Arc::new(OperationOwner::default());
+        let outside_lock = Arc::new(AtomicBool::new(false));
+        let probe = DropProbe {
+            owner: Arc::downgrade(&owner),
+            outside_lock: outside_lock.clone(),
+        };
+        let operation = owner.start_blocking(CancellationToken::new(), move || {
+            Ok::<_, crate::SessionError>(probe)
+        });
+        let fence = operation.fence();
+        drop(operation);
+        tokio::time::timeout(std::time::Duration::from_secs(2), async {
+            while !fence.is_finished() {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .unwrap();
+        owner
+            .start_blocking(
+                CancellationToken::new(),
+                || Ok::<_, crate::SessionError>(()),
+            )
+            .await
+            .unwrap();
+        assert!(outside_lock.load(Ordering::SeqCst));
+        owner.shutdown().await.unwrap();
     }
 }

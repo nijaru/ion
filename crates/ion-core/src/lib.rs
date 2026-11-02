@@ -24,7 +24,7 @@ pub use completion::{
     CompletionDelivery, CompletionInbox, CompletionNotice, CompletionPermit, CompletionReceipt,
     CompletionRevocation, CompletionSignal, CompletionStatus,
 };
-pub use operation::{IdleSession, Operation, OperationError};
+pub use operation::{IdleSession, Operation, OperationError, OperationFence};
 
 pub use agent::{
     Agent, AgentError, AgentEvent, AgentLimits, CompletionSubmission, PromptCacheWarmingPolicy,
