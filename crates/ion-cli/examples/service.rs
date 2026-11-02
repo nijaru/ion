@@ -391,7 +391,11 @@ async fn qualify_projection(root: PathBuf) -> Result<()> {
     }
     .await;
     let report = control.shutdown().await;
+    let retirements = control.retirements();
+    drop(control);
+    let resources = retirements.join().await;
     result?;
+    resources?;
     ensure!(
         report.cleanup_errors.is_empty(),
         "projection cleanup failed"
@@ -437,6 +441,7 @@ async fn main() -> Result<()> {
             metadata("third"),
         )
         .map_err(|e| e.reason)?;
+    let retirements = control.retirements();
     let (requests, queries) = mpsc::channel(1);
     let connection = Connection {
         grant: ReadGrant {
@@ -467,11 +472,13 @@ async fn main() -> Result<()> {
     let mut control = task.await?;
     let before = control.snapshot(|_| ()).await?.cursor;
     let report = control.shutdown().await;
-    result.context("service qualification timed out")??;
-    ensure!(report.cleanup_errors.is_empty(), "cleanup failed");
-    ensure!(report.updates.iter().any(|u| matches!(u, ControlUpdate::Returned(input) if input.metadata.correlation == "third" && input.metadata.marker.get() == 7)), "original metadata lost");
     drop(control);
     drop(session);
+    let resources = retirements.join().await;
+    result.context("service qualification timed out")??;
+    resources?;
+    ensure!(report.cleanup_errors.is_empty(), "cleanup failed");
+    ensure!(report.updates.iter().any(|u| matches!(u, ControlUpdate::Returned(input) if input.metadata.correlation == "third" && input.metadata.marker.get() == 7)), "original metadata lost");
     let reopened = Arc::new(Session::open(path)?);
     let mut replacement = SessionSetup::new(
         reopened,
@@ -490,6 +497,9 @@ async fn main() -> Result<()> {
         "new owner reused an attachment epoch"
     );
     replacement.shutdown().await;
+    let retirements = replacement.retirements();
+    drop(replacement);
+    retirements.join().await?;
     println!("service attachment smoke passed");
     Ok(())
 }

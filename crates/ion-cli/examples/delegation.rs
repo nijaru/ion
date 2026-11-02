@@ -377,6 +377,10 @@ async fn main() -> Result<()> {
     }.await;
     let report = control.shutdown().await;
     let cleanup = owner.join_shutdown().await;
+    let retirements = control.retirements();
+    drop(control);
+    drop(session);
+    let resources = retirements.join().await;
     let run = match (run, cleanup) {
         (run, Ok(())) => run,
         (Ok(()), Err(error)) => Err(error.into()),
@@ -390,6 +394,7 @@ async fn main() -> Result<()> {
         report.cleanup_errors
     );
     run?;
+    resources?;
     println!(
         "delegation: explicit environment, retained ownership/join, stable identity; no lost child replay"
     );

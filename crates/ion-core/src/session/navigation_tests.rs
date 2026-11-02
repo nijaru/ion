@@ -57,17 +57,17 @@ fn compacted_payloads_leave_the_working_set_but_remain_inspectable() {
         .unwrap();
     assert_eq!(session.view().unwrap().messages, original.messages);
     assert!(
-        session.store.lock().unwrap().messages.is_empty(),
+        session.store().lock().unwrap().messages.is_empty(),
         "archived payloads remain resident after compaction"
     );
-    assert!(session.store.lock().unwrap().context_changes.is_empty());
+    assert!(session.store().lock().unwrap().context_changes.is_empty());
     let expected = session.context_messages().unwrap();
     drop(session);
     let reopened = Session::open(&path).unwrap();
     assert_eq!(reopened.context_messages().unwrap(), expected);
     assert_eq!(reopened.view().unwrap().messages, original.messages);
     assert!(
-        reopened.store.lock().unwrap().messages.is_empty(),
+        reopened.store().lock().unwrap().messages.is_empty(),
         "reopen resurrected the compacted archive into the working set"
     );
     select(&reopened, through);
@@ -322,7 +322,7 @@ fn stale_previews_exclusive_preparation_and_failed_commits_do_not_publish() {
     ));
     drop(prepared);
     assert_eq!(session.context_position().unwrap(), before);
-    session.store.lock().unwrap().connection.execute_batch("CREATE TRIGGER reject_navigation BEFORE INSERT ON entries BEGIN SELECT RAISE(ABORT, 'injected'); END;").unwrap();
+    session.store().lock().unwrap().connection.execute_batch("CREATE TRIGGER reject_navigation BEFORE INSERT ON entries BEGIN SELECT RAISE(ABORT, 'injected'); END;").unwrap();
     assert!(
         session
             .prepare_navigation(before, 0)
@@ -334,7 +334,7 @@ fn stale_previews_exclusive_preparation_and_failed_commits_do_not_publish() {
     assert_eq!(session.model_preference().unwrap(), Some(model("two")));
     assert_eq!(Session::inspect(&path).unwrap().context_position(), before);
     session
-        .store
+        .store()
         .lock()
         .unwrap()
         .connection
@@ -453,7 +453,7 @@ fn interrupted_effects_close_atomically_before_selection_without_replay() {
         .admit_user_shell("touch unknown-file".into(), false)
         .unwrap();
     let before = session.view().unwrap();
-    session.store.lock().unwrap().connection.execute_batch("CREATE TRIGGER reject_navigation BEFORE INSERT ON entries WHEN json_extract(NEW.body,'$.kind') = 'context_selected' BEGIN SELECT RAISE(ABORT, 'injected'); END;").unwrap();
+    session.store().lock().unwrap().connection.execute_batch("CREATE TRIGGER reject_navigation BEFORE INSERT ON entries WHEN json_extract(NEW.body,'$.kind') = 'context_selected' BEGIN SELECT RAISE(ABORT, 'injected'); END;").unwrap();
     assert!(
         session
             .prepare_navigation(before.context_position(), 0)
@@ -467,7 +467,7 @@ fn interrupted_effects_close_atomically_before_selection_without_replay() {
         "unknown settlement cannot publish alone"
     );
     session
-        .store
+        .store()
         .lock()
         .unwrap()
         .connection

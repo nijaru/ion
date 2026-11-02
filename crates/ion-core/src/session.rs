@@ -50,7 +50,11 @@ mod records;
 mod recovery;
 #[cfg(test)]
 mod recovery_tests;
+mod retirement;
+mod retirements;
 mod storage;
+pub use retirement::SessionRetirement;
+pub use retirements::SessionRetirements;
 pub use storage::{SessionIo, SessionReader};
 mod store;
 mod submission;
@@ -602,18 +606,29 @@ struct HistoryProjection {
 /// A writable Session holds a cross-process lock and retains its exclusive
 /// operation through started effects, observed-result commit and task joining.
 pub struct Session {
-    // Field order closes SQLite before releasing the writer lock.
-    store: Mutex<Store>,
-    _lock: SessionLock,
+    native: Option<retirement::NativeStore>,
     header: Header,
     path: PathBuf,
     pub(crate) operations: Arc<OperationOwner>,
-    storage: storage::StorageWork,
+    storage: Arc<storage::StorageWork>,
+}
+
+impl Drop for Session {
+    fn drop(&mut self) {
+        self.storage
+            .retirement
+            .release(self.native.take().expect("live Store"));
+        self.storage.retirement.start(&self.storage);
+    }
 }
 
 impl Session {
+    fn store(&self) -> &Mutex<Store> {
+        &self.native.as_ref().expect("live Store").store
+    }
+
     fn lock_store(&self) -> Result<MutexGuard<'_, Store>, SessionError> {
-        let store = self.store.lock().map_err(|_| SessionError::Poisoned)?;
+        let store = self.store().lock().map_err(|_| SessionError::Poisoned)?;
         store.ensure_healthy()?;
         Ok(store)
     }
@@ -686,12 +701,14 @@ impl Session {
         })?;
         creation.publish();
         Ok(Self {
-            store: Mutex::new(Store::from_projection(connection, projection)),
-            _lock: lock,
+            native: Some(retirement::NativeStore {
+                store: Mutex::new(Store::from_projection(connection, projection)),
+                _lock: lock,
+            }),
             header,
             path,
             operations: Arc::new(OperationOwner::default()),
-            storage: storage::StorageWork::default(),
+            storage: Arc::default(),
         })
     }
 
@@ -709,12 +726,14 @@ impl Session {
         let projection = project_connection(&connection, ProjectionMode::Working)?;
         prepare_writer(&connection)?;
         Ok(Self {
-            store: Mutex::new(Store::from_projection(connection, projection)),
-            _lock: lock,
+            native: Some(retirement::NativeStore {
+                store: Mutex::new(Store::from_projection(connection, projection)),
+                _lock: lock,
+            }),
             header,
             path,
             operations: Arc::new(OperationOwner::default()),
-            storage: storage::StorageWork::default(),
+            storage: Arc::default(),
         })
     }
 
@@ -1877,6 +1896,8 @@ pub enum SessionError {
     InvalidArtifactRange,
     #[error("Session storage failed: {0}")]
     Storage(String),
+    #[error("Session resource admission is closed")]
+    RetirementClosed,
     #[error("Session shutdown failed: {0}")]
     Shutdown(String),
     #[error("invalid or inconsistent session history")]

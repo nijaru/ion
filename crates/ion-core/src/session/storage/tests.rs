@@ -60,7 +60,7 @@ impl StoreHold {
         let session = session.clone();
         let (entered, ready) = oneshot::channel();
         let thread = thread::spawn(move || {
-            let _store = session.store.lock().unwrap();
+            let _store = session.store().lock().unwrap();
             entered.send(()).unwrap();
             worker_gate.wait();
         });

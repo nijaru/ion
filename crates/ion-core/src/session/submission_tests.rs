@@ -37,7 +37,7 @@ fn failed_request_commit_preserves_interrupted_work_and_retry_authority() {
         )
         .unwrap();
     let before = session.view().unwrap().entries;
-    session.store.lock().unwrap().connection.execute_batch(
+    session.store().lock().unwrap().connection.execute_batch(
         "CREATE TRIGGER fail_admission BEFORE INSERT ON entries WHEN json_extract(NEW.body, '$.kind') = 'turn_started' BEGIN SELECT RAISE(FAIL, 'injected'); END;"
     ).unwrap();
     let key = RequestKey::new("inbox".into(), "delivery".into()).unwrap();
@@ -49,7 +49,7 @@ fn failed_request_commit_preserves_interrupted_work_and_retry_authority() {
     assert_eq!(session.view().unwrap().entries, before);
     assert!(session.request_receipt(&key).unwrap().is_none());
     session
-        .store
+        .store()
         .lock()
         .unwrap()
         .connection

@@ -203,6 +203,8 @@ impl SessionReader {
 
 #[derive(Default)]
 pub(super) struct StorageWork {
+    pub(super) retirement: super::retirement::RetirementWork,
+    pub(super) children: super::SessionRetirements,
     state: Mutex<State>,
     shutdown: tokio::sync::Mutex<()>,
     admissions_changed: tokio::sync::Notify,
@@ -260,6 +262,24 @@ impl Drop for Admission<'_> {
 }
 
 impl StorageWork {
+    pub(super) fn take_owners(&self) -> Vec<Arc<OperationOwner>> {
+        std::mem::take(
+            &mut self
+                .state
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .owners,
+        )
+    }
+
+    pub(super) fn owners(&self) -> Vec<Arc<OperationOwner>> {
+        self.state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .owners
+            .clone()
+    }
+
     pub(super) async fn run<T, E>(
         &self,
         owner: &Arc<OperationOwner>,

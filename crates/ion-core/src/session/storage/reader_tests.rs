@@ -53,7 +53,7 @@ async fn view_projection_runs_off_executor_outside_store_and_survives_an_abandon
                 entered
                     .send((
                         thread::current().id() != caller,
-                        inspected.store.try_lock().is_ok(),
+                        inspected.store().try_lock().is_ok(),
                         view.id,
                     ))
                     .unwrap();
@@ -97,7 +97,7 @@ impl StoreHold {
         let session = session.clone();
         let (entered, ready) = oneshot::channel();
         let worker = thread::spawn(move || {
-            let _store = session.store.lock().unwrap();
+            let _store = session.store().lock().unwrap();
             entered.send(()).unwrap();
             let (_released, timeout) = signal
                 .1

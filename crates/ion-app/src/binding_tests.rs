@@ -242,8 +242,11 @@ async fn idle_override_and_effort_restore_as_one_selection() {
         .select_reasoning(ion_ai::Reasoning::High)
         .await
         .unwrap();
+    let retirements = binding.retirements();
+    binding.shutdown().await;
     drop(binding);
     drop(session);
+    retirements.join().await.unwrap();
     let session = Arc::new(Session::open(path).unwrap());
     let selected = host
         .models()

@@ -122,12 +122,12 @@ fn recovery_orders_lost_relationships_before_tools_and_rolls_back_as_one_batch()
         assert!(copy.recovery_state().unwrap().is_none());
         drop(copy);
         let point = session.recovery_state().unwrap().unwrap().point;
-        session.store.lock().unwrap().connection.execute_batch("CREATE TRIGGER fail_outer BEFORE INSERT ON entries WHEN json_extract(NEW.body,'$.kind') = 'tool_result' BEGIN SELECT RAISE(FAIL, 'injected'); END;").unwrap();
+        session.store().lock().unwrap().connection.execute_batch("CREATE TRIGGER fail_outer BEFORE INSERT ON entries WHEN json_extract(NEW.body,'$.kind') = 'tool_result' BEGIN SELECT RAISE(FAIL, 'injected'); END;").unwrap();
         assert!(session.resume_turn(point, &binding).is_err());
         assert_eq!(session.view().unwrap().entries, before);
         assert_eq!(session.recovery_state().unwrap().unwrap().point, point);
         session
-            .store
+            .store()
             .lock()
             .unwrap()
             .connection
@@ -276,7 +276,7 @@ fn repeated_run_or_creation_identity_is_invalid_even_without_derived_indexes() {
         let entry = SessionEntry::DelegationAdmitted { record };
         // The candidate is otherwise legal at this second occurrence. The derived
         // index is not the authority for uniqueness across historical relationships.
-        let mut state = session.store.lock().unwrap().state.clone();
+        let mut state = session.store().lock().unwrap().state.clone();
         state.apply(&entry, &|_| false).unwrap();
         drop(session);
         let connection = Connection::open(root.join("parent.sqlite")).unwrap();

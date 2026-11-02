@@ -81,6 +81,107 @@ fn switch_rejects_followups_before_native_idle_reservation_and_until_result_take
     });
 }
 
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn released_writer_close_is_awaited_before_reopen_without_blocking_native_capacity() {
+    use futures_util::FutureExt;
+    struct Hold(Arc<Gate>);
+    impl Drop for Hold {
+        fn drop(&mut self) {
+            self.0.wait().unwrap();
+        }
+    }
+    let mut fixture = Fixture::new();
+    let mut control = fixture.setup().into_control::<Cell<u8>>();
+    let old_id = fixture.session.id();
+    let old_path = fixture.session.path().to_owned();
+    let close = Release(Gate::new());
+    let hold = Hold(close.0.clone());
+    let reader = fixture.session.reader().unwrap();
+    let (entered, waiting) = tokio::sync::oneshot::channel();
+    let (release, gate) = std::sync::mpsc::channel();
+    let mut read = Box::pin(reader.map_view(move |_| {
+        entered.send(()).unwrap();
+        gate.recv_timeout(Duration::from_secs(3)).unwrap();
+        hold
+    }));
+    assert!(read.as_mut().now_or_never().is_none());
+    waiting.await.unwrap();
+    drop(read);
+    release.send(()).unwrap();
+    drop(reader);
+    control.new_session().await.unwrap(); // The external A lease cannot delay binding B.
+    let old = std::mem::replace(&mut fixture.session, control.session().clone());
+    let retired = old.retirement();
+    drop(old);
+    tokio::time::timeout(DEADLINE, async {
+        tokio::select! {
+            _ = retired.join() => panic!("native resource destructor must reach its gate"),
+            _ = close.0.entered.notified() => {},
+        }
+    })
+    .await
+    .unwrap();
+    let operation = control
+        .start_binding(BindingChange::SwitchSession(old_path))
+        .unwrap();
+    let pending =
+        tokio::time::timeout(Duration::from_millis(25), control.join_binding(operation)).await;
+    // Release before assertions, including regression failure, so a native
+    // destructor is never stranded by a failed test.
+    let heartbeat = tokio::time::timeout(DEADLINE, tokio::task::spawn_blocking(|| 37)).await;
+    close.0.release();
+    assert!(pending.is_err(), "reopen raced the still-held writer lease");
+    assert_eq!(heartbeat.unwrap().unwrap(), 37);
+    control
+        .join_binding(operation)
+        .await
+        .unwrap()
+        .result
+        .unwrap();
+    assert_eq!(control.session().id(), old_id);
+    control.shutdown().await;
+    let retirements = control.retirements();
+    drop(control);
+    drop(fixture.session);
+    retirements.join().await.unwrap();
+}
+
+#[tokio::test]
+async fn historical_read_failure_is_retained_without_poisoning_unrelated_switches() {
+    let mut fixture = Fixture::new();
+    let target = Session::create(fixture.catalog.new_path().unwrap(), None).unwrap();
+    let target_id = target.id();
+    let target_path = target.path().to_owned();
+    drop(target);
+    let reader = fixture.session.reader().unwrap();
+    let error = reader
+        .map_view(|_| -> Result<(), ion_core::SessionError> {
+            panic!("historical projection fault")
+        })
+        .await
+        .unwrap_err();
+    assert!(error.to_string().contains("historical projection fault"));
+    drop(reader);
+    let mut control = fixture.setup().into_control::<Cell<u8>>();
+    control.new_session().await.unwrap();
+    let old = std::mem::replace(&mut fixture.session, control.session().clone());
+    drop(old);
+    control.switch_session(target_path).await.unwrap();
+    assert_eq!(control.session().id(), target_id);
+    let retirements = control.retirements();
+    control.shutdown().await;
+    drop(control);
+    drop(fixture.session);
+    assert!(
+        retirements
+            .join()
+            .await
+            .unwrap_err()
+            .to_string()
+            .contains("historical projection fault")
+    );
+}
+
 struct Gate {
     entered: Notify,
     released: Mutex<bool>,

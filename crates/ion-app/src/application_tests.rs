@@ -253,7 +253,9 @@ async fn workspace_free_application_keeps_its_authority_across_shared_lifecycle(
     let report = control.shutdown().await;
     assert!(report.cleanup_errors.is_empty());
     let path = control.session().path().to_owned();
+    let retirements = control.retirements();
     drop(control);
+    retirements.join().await.unwrap();
     let reopened = Arc::new(Session::open(&path).unwrap());
     assert_eq!(reopened.cwd(), None);
     assert_eq!(Session::inspect_metadata(&path).unwrap().cwd, None);

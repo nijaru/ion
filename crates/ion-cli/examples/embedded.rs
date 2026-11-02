@@ -42,19 +42,34 @@ async fn main() -> Result<()> {
 
     // Keep every fallible step after opening the Session inside this outcome.
     // `?` must not destroy the runtime before shutdown joins retained work.
+    let retirements = ion_core::SessionRetirements::default();
+    retirements.register(&session)?;
     let outcome = submit(args, &cwd, session.clone()).await;
     let shutdown = session.shutdown().await;
-    match (outcome, shutdown) {
-        (Ok(()), Ok(())) => Ok(()),
+    drop(session);
+    let resources = retirements.join().await;
+    let outcome = match (outcome, shutdown) {
+        (Ok(answer), Ok(())) => Ok(answer),
         (Err(error), Ok(())) => Err(error),
-        (Ok(()), Err(error)) => Err(error.into()),
+        (Ok(_), Err(error)) => Err(error.into()),
         (Err(error), Err(shutdown)) => {
             Err(error.context(format!("Session shutdown also failed: {shutdown}")))
         }
-    }
+    };
+    let answer = match (outcome, resources) {
+        (outcome, Ok(())) => outcome,
+        (Ok(_), Err(error)) => Err(error.into()),
+        (Err(error), Err(cleanup)) => {
+            Err(error.context(format!("Session resource cleanup also failed: {cleanup}")))
+        }
+    }?;
+    // A blocking publisher cannot delay joining application-owned work.
+    let mut output = std::io::stdout().lock();
+    writeln!(output, "{answer}").context("publish committed answer")?;
+    output.flush().context("flush committed answer")
 }
 
-async fn submit(args: Args, cwd: &Path, session: Arc<Session>) -> Result<()> {
+async fn submit(args: Args, cwd: &Path, session: Arc<Session>) -> Result<String> {
     ensure!(
         session.cwd() == Some(cwd),
         "Session belongs to a different working directory"
@@ -114,11 +129,9 @@ async fn submit(args: Args, cwd: &Path, session: Arc<Session>) -> Result<()> {
             Err(primary) => Err(primary.context(format!("control shutdown also failed: {error}"))),
         };
     }
-    // No blocking publisher can delay joining application-owned work.
-    let answer = outcome?;
-    let mut output = std::io::stdout().lock();
-    writeln!(output, "{answer}").context("publish committed answer")?;
-    output.flush().context("flush committed answer")
+    drop(control);
+    drop(io);
+    outcome
 }
 
 async fn prompt(control: &mut SessionControl, text: String) -> Result<String> {

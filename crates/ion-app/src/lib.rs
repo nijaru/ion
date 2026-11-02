@@ -7,6 +7,7 @@ mod application_tests;
 pub mod auth;
 mod background;
 mod binding;
+pub use ion_core::SessionRetirements;
 pub mod catalog;
 pub mod code_mode;
 mod command_args;

@@ -697,9 +697,13 @@ async fn run_cli(cli: Invocation) -> Result<()> {
                 application = application.with_tool_selection(tool_selection);
             }
             let application_owner = application.owner();
+            let retirements = application
+                .session_retirements()
+                .expect("coding resource scope");
             // Every fallible setup step after MCP startup belongs to the same
             // exit scope as the client, so preflight errors still join cleanup.
             let result = async {
+                retirements.register(preflight_session.as_ref().expect("unbound Session"))?;
                 ensure!(!interrupted, "MCP startup interrupted");
                 let mut startup_diagnostics = startup
                     .diagnostics
@@ -810,6 +814,13 @@ async fn run_cli(cli: Invocation) -> Result<()> {
                 (Ok(()), Err(error)) => Err(error.into()),
                 (Err(error), Err(shutdown)) => {
                     Err(error.context(format!("Session shutdown also failed: {shutdown}")))
+                }
+            };
+            let result = match (result, retirements.join().await) {
+                (result, Ok(())) => result,
+                (Ok(()), Err(error)) => Err(error.into()),
+                (Err(error), Err(cleanup)) => {
+                    Err(error.context(format!("Session resource cleanup also failed: {cleanup}")))
                 }
             };
             let cleanup = match external_mcp {

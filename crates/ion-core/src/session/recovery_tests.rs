@@ -63,12 +63,12 @@ fn continuation_commit_is_atomic_checkpointed_and_does_not_grant_copies_authorit
         .unwrap();
     let point = session.recovery_state().unwrap().unwrap().point;
     let before = session.view().unwrap().entries;
-    session.store.lock().unwrap().connection.execute_batch("CREATE TRIGGER fail_resume BEFORE INSERT ON entries WHEN json_extract(NEW.body, '$.kind') = 'tool_result' BEGIN SELECT RAISE(FAIL, 'injected'); END;").unwrap();
+    session.store().lock().unwrap().connection.execute_batch("CREATE TRIGGER fail_resume BEFORE INSERT ON entries WHEN json_extract(NEW.body, '$.kind') = 'tool_result' BEGIN SELECT RAISE(FAIL, 'injected'); END;").unwrap();
     assert!(session.resume_turn(point, &binding).is_err());
     assert_eq!(session.view().unwrap().entries, before);
     assert_eq!(session.recovery_state().unwrap().unwrap().point, point);
     session
-        .store
+        .store()
         .lock()
         .unwrap()
         .connection

@@ -19,6 +19,11 @@ pub use owner::ApplicationOwner;
 /// Implementations select the complete model/tool environment, not additions to
 /// coding defaults. A missing model requests the application's own default.
 pub trait Application: Send + Sync {
+    /// Shared native-resource custody for this application's Sessions, including
+    /// managed children. Custom recipes may use the scope exposed by SessionSetup.
+    fn session_retirements(&self) -> Option<crate::SessionRetirements> {
+        None
+    }
     fn resources(&self, cwd: Option<&Path>) -> Result<Resources>;
     /// Explicit user-command metadata. Custom applications inherit no
     /// executable catalog; this is separate from model tools and instructions.
@@ -105,6 +110,7 @@ pub struct CodingApplication {
     command_environment: Option<Arc<crate::CommandEnvironment>>,
     search_settings: Option<Arc<crate::SearchSettings>>,
     tool_veto: Option<Arc<crate::ToolVetoSettings>>,
+    session_retirements: crate::SessionRetirements,
 }
 
 const READ_ONLY_TOOLS: &[&str] = &[
@@ -139,6 +145,7 @@ impl CodingApplication {
             command_environment: None,
             search_settings: None,
             tool_veto: None,
+            session_retirements: crate::SessionRetirements::default(),
         }
     }
 
@@ -209,6 +216,7 @@ impl CodingApplication {
     ) -> crate::binding::SetupPreparation {
         let application = self.clone();
         crate::binding::SetupPreparation::start(stop, move |_| {
+            application.session_retirements.register(&session)?;
             application.setup(session, selected, reasoning, questions, resources)
         })
     }
@@ -352,6 +360,9 @@ impl CodingApplication {
 }
 
 impl Application for CodingApplication {
+    fn session_retirements(&self) -> Option<crate::SessionRetirements> {
+        Some(self.session_retirements.clone())
+    }
     fn mcp_tools(&self) -> Option<Arc<crate::McpTools>> {
         match self.role {
             CodingRole::Main(_) => self.mcp_tools.clone(),

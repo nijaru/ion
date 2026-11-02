@@ -243,6 +243,9 @@ async fn main() -> Result<()> {
     }
     .await;
     let report = control.shutdown().await;
+    let retirements = control.retirements();
+    drop(control);
+    let resources = retirements.join().await;
     if !report.cleanup_errors.is_empty() {
         return Err(anyhow!(
             "shared shutdown failed: {:?}; run result: {result:?}",
@@ -250,7 +253,7 @@ async fn main() -> Result<()> {
         ));
     }
     result?;
-    drop(control);
+    resources?;
     let reopened = Arc::new(Session::open(path)?);
     ensure!(reopened.id() == session_id, "logical identity changed");
     let mut control = SessionSetup::new(
@@ -279,6 +282,9 @@ async fn main() -> Result<()> {
         control.shutdown().await.cleanup_errors.is_empty(),
         "reopened shutdown failed"
     );
+    let retirements = control.retirements();
+    drop(control);
+    retirements.join().await?;
     if resume {
         println!(
             "restricted application: explicit continuation completed the original Turn without old tool dispatch"

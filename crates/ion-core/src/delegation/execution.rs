@@ -28,7 +28,11 @@ pub(super) async fn run_child(
     }
     let materialization_record = record.clone();
     let child = match io
-        .run(move |_| Session::materialize_delegation(&materialization_record, prepared))
+        .run(move |parent| {
+            let child = Session::materialize_delegation(&materialization_record, prepared)?;
+            parent.retain_child_resources(&child)?;
+            Ok(child)
+        })
         .await
     {
         Ok(child) => child,
@@ -50,6 +54,9 @@ pub(super) async fn run_child(
             );
         }
     };
+    // Core resource custody outlives the callback and any child reader, even
+    // for a programmatic recipe without a coding-application resource scope.
+    let retirement = child.retirement();
     let submission = request(&record);
     let key = submission.key.clone();
     // The callback receives the already-linked scope before child admission;
@@ -109,6 +116,13 @@ pub(super) async fn run_child(
         let error = "child reported an answer without its completed request".to_owned();
         infrastructure = Some(error.clone());
         errors.push(error);
+    }
+    drop(child);
+    if retirement.is_released()
+        && let Err(error) = retirement.join().await
+    {
+        infrastructure = Some(error.to_string());
+        errors.push(error.to_string());
     }
     if !errors.is_empty() {
         answer = None;

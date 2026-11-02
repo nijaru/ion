@@ -95,7 +95,7 @@ fn shell_admission_recovers_before_authority_and_rejects_failed_recovery() {
     let session = Session::open(&path).unwrap();
     let before = session.view().unwrap();
     assert_eq!(before.unfinished_turn, Some(turn));
-    session.store.lock().unwrap().connection.execute_batch(
+    session.store().lock().unwrap().connection.execute_batch(
         "CREATE TRIGGER reject_recovery BEFORE INSERT ON entries BEGIN SELECT RAISE(ABORT, 'recovery unavailable'); END;"
     ).unwrap();
     assert!(matches!(
@@ -104,7 +104,7 @@ fn shell_admission_recovers_before_authority_and_rejects_failed_recovery() {
     ));
     assert_eq!(session.view().unwrap().entries, before.entries);
     session
-        .store
+        .store()
         .lock()
         .unwrap()
         .connection
@@ -178,7 +178,7 @@ fn shell_admission_recovers_before_authority_and_rejects_failed_recovery() {
 fn shell_admission_and_result_faults_leave_only_committed_authority() {
     let (root, path) = fixture();
     let session = Session::create(&path, Some(&root)).unwrap();
-    session.store.lock().unwrap().connection.execute_batch(
+    session.store().lock().unwrap().connection.execute_batch(
         "CREATE TRIGGER reject_shell BEFORE INSERT ON entries BEGIN SELECT RAISE(ABORT, 'storage unavailable'); END;"
     ).unwrap();
     assert!(matches!(
@@ -187,7 +187,7 @@ fn shell_admission_and_result_faults_leave_only_committed_authority() {
     ));
     assert!(session.view().unwrap().entries.is_empty());
     session
-        .store
+        .store()
         .lock()
         .unwrap()
         .connection
@@ -206,7 +206,7 @@ fn shell_admission_and_result_faults_leave_only_committed_authority() {
     );
     // Simulate the started host's effect, then fail only result publication.
     fs::write(root.join("effect"), "observed").unwrap();
-    session.store.lock().unwrap().connection.execute_batch(
+    session.store().lock().unwrap().connection.execute_batch(
         "CREATE TRIGGER reject_result BEFORE INSERT ON entries BEGIN SELECT RAISE(ABORT, 'result unavailable'); END;"
     ).unwrap();
     assert!(matches!(
@@ -273,7 +273,7 @@ fn interrupted_shell_recovery_is_atomic_private_and_never_replayed() {
         drop(clone);
         // Fail the NEW admission after recovery would have been inserted:
         // both shell and coding admissions must roll back recovery too.
-        session.store.lock().unwrap().connection.execute_batch(
+        session.store().lock().unwrap().connection.execute_batch(
             "CREATE TRIGGER reject_admission BEFORE INSERT ON entries WHEN json_extract(CAST(NEW.body AS TEXT), '$.kind') IN ('turn_started', 'user_shell_admitted') BEGIN SELECT RAISE(ABORT, 'admission unavailable'); END;"
         ).unwrap();
         assert!(
@@ -288,7 +288,7 @@ fn interrupted_shell_recovery_is_atomic_private_and_never_replayed() {
         );
         assert_eq!(session.view().unwrap().entries, before.entries);
         session
-            .store
+            .store()
             .lock()
             .unwrap()
             .connection
@@ -1200,7 +1200,14 @@ fn releasing_a_session_unlocks_an_inherited_file_description() {
         Session::open(&path),
         Err(SessionError::AlreadyOpen)
     ));
-    let inherited = session._lock.0.try_clone().unwrap();
+    let inherited = session
+        .native
+        .as_ref()
+        .unwrap()
+        ._lock
+        .0
+        .try_clone()
+        .unwrap();
     drop(session);
     let reopened = Session::open(&path).unwrap();
     drop(reopened);
@@ -1311,7 +1318,7 @@ fn rejected_batch_does_not_publish_projection_or_settled_cut() {
         provider_replay: None,
     };
     {
-        let mut store = session.store.lock().unwrap();
+        let mut store = session.store().lock().unwrap();
         let before = store.settled.clone();
         assert!(matches!(
             store.append(&[
@@ -1429,7 +1436,7 @@ fn reasoning_preference_is_atomic_exclusive_and_prefix_owned() {
     assert_eq!(clone.reasoning().unwrap(), Reasoning::Off);
     drop(clone);
     let before = session.view().unwrap().entries;
-    session.store.lock().unwrap().connection.execute_batch("CREATE TRIGGER refuse_setting BEFORE INSERT ON entries WHEN json_extract(CAST(NEW.body AS TEXT), '$.kind') = 'reasoning_selected' BEGIN SELECT RAISE(FAIL, 'injected preference failure'); END").unwrap();
+    session.store().lock().unwrap().connection.execute_batch("CREATE TRIGGER refuse_setting BEFORE INSERT ON entries WHEN json_extract(CAST(NEW.body AS TEXT), '$.kind') = 'reasoning_selected' BEGIN SELECT RAISE(FAIL, 'injected preference failure'); END").unwrap();
     {
         let guard = session.operations.try_lock().unwrap();
         assert!(
@@ -3326,7 +3333,7 @@ fn context_timeline_tracks_committed_message_boundaries() {
         session.context_timeline_for(&model, &context("C")).unwrap(),
         Some(expected(&["C"]))
     );
-    session.store.lock().unwrap().connection.execute_batch(
+    session.store().lock().unwrap().connection.execute_batch(
         "CREATE TRIGGER reject_context BEFORE INSERT ON entries WHEN json_extract(CAST(NEW.body AS TEXT), '$.kind') = 'model_context_changed' BEGIN SELECT RAISE(ABORT, 'storage unavailable'); END;"
     ).unwrap();
     assert!(
@@ -3339,7 +3346,7 @@ fn context_timeline_tracks_committed_message_boundaries() {
         Some(expected(&[]))
     );
     session
-        .store
+        .store()
         .lock()
         .unwrap()
         .connection

@@ -60,7 +60,7 @@ async fn originals_survive_reopen_and_prefix_copies_without_the_source_database(
     assert_eq!(reference.sha256, format!("{:x}", Sha256::digest(&expected)));
     assert_eq!(bytes(&session, &reference), expected);
     let origin: Vec<u8> = session
-        .store
+        .store()
         .lock()
         .unwrap()
         .connection
@@ -172,7 +172,7 @@ fn artifact_pages_render_text_without_losing_raw_bytes() {
             .artifact_sink()
             .capture("page text", payload)
             .unwrap();
-        let store = session.store.lock().unwrap();
+        let store = session.store().lock().unwrap();
         let page = artifacts::page(&store.connection, &reference, offset, limit).unwrap();
         assert_eq!(page["encoding"], encoding, "{payload:?}, {offset}, {limit}");
         assert_eq!(page_bytes(&page), expected);
@@ -288,7 +288,7 @@ async fn private_future_and_opaque_references_do_not_grant_reads() {
 #[tokio::test]
 async fn failed_flush_and_corrupt_chunks_never_become_successful_evidence() {
     let (root, _, session) = fixture();
-    session.store.lock().unwrap().connection.execute_batch("CREATE TRIGGER fail_capture BEFORE INSERT ON artifact_chunks BEGIN SELECT RAISE(ABORT,'injected capture failure'); END;").unwrap();
+    session.store().lock().unwrap().connection.execute_batch("CREATE TRIGGER fail_capture BEFORE INSERT ON artifact_chunks BEGIN SELECT RAISE(ABORT,'injected capture failure'); END;").unwrap();
     let mut writer = session.artifact_sink().start("failed").unwrap();
     writer
         .write_bytes(b"buffered, not committed yet")
@@ -303,7 +303,7 @@ async fn failed_flush_and_corrupt_chunks_never_become_successful_evidence() {
             .contains("injected capture failure")
     );
     let count: i64 = session
-        .store
+        .store()
         .lock()
         .unwrap()
         .connection
@@ -311,7 +311,7 @@ async fn failed_flush_and_corrupt_chunks_never_become_successful_evidence() {
         .unwrap();
     assert_eq!(count, 0, "chunk failure rolls back its manifest too");
     session
-        .store
+        .store()
         .lock()
         .unwrap()
         .connection
@@ -323,7 +323,7 @@ async fn failed_flush_and_corrupt_chunks_never_become_successful_evidence() {
     assert!(!reference.complete);
     assert_eq!(bytes(&session, &reference), b"prefix");
     session
-        .store
+        .store()
         .lock()
         .unwrap()
         .connection
@@ -348,7 +348,7 @@ fn abandoned_artifact_waits_remain_joined_and_report_storage_failure() {
     runtime.block_on(async {
         for finalize in [false, true] {
             let (root, _, session) = fixture();
-            session.store.lock().unwrap().connection.execute_batch("CREATE TRIGGER fail_capture BEFORE INSERT ON artifact_chunks BEGIN SELECT RAISE(ABORT,'abandoned capture failure'); END;").unwrap();
+            session.store().lock().unwrap().connection.execute_batch("CREATE TRIGGER fail_capture BEFORE INSERT ON artifact_chunks BEGIN SELECT RAISE(ABORT,'abandoned capture failure'); END;").unwrap();
             let mut writer = session.artifact_sink().start("abandoned").unwrap();
             if finalize { writer.write_all(b"buffered before finalization").unwrap(); }
             let (release, gate) = std::sync::mpsc::channel::<()>();
@@ -423,7 +423,7 @@ fn failed_copy_removes_only_its_new_database_and_preserves_lock_identity() {
         )
         .unwrap();
     session
-        .store
+        .store()
         .lock()
         .unwrap()
         .connection
@@ -441,7 +441,7 @@ fn failed_copy_removes_only_its_new_database_and_preserves_lock_identity() {
     let lock_path = root.join("retry.sqlite.lock");
     let lock_inode = fs::metadata(&lock_path).unwrap().ino();
     session
-        .store
+        .store()
         .lock()
         .unwrap()
         .connection
@@ -573,7 +573,7 @@ async fn synchronous_capture_does_not_block_async_shutdown_or_its_deadline() {
     let writer = std::thread::spawn(move || sink.capture("synchronous", b"blocked until released"));
     tokio::time::timeout(Duration::from_secs(2), async {
         loop {
-            if session.store.try_lock().is_err() {
+            if session.store().try_lock().is_err() {
                 break;
             }
             tokio::task::yield_now().await;

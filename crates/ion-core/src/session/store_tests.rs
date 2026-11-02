@@ -35,7 +35,7 @@ fn model(name: &str) -> ModelRef {
 fn sql(session: &Session, sql: &str) {
     // Fault injection and evidence inspection deliberately bypass the gate.
     session
-        .store
+        .store()
         .lock()
         .unwrap()
         .connection
@@ -156,7 +156,7 @@ fn validation_and_begin_failures_do_not_fault_store() {
     let fixture = Fixture::new();
     let session = fixture.session();
     let error = session
-        .store
+        .store()
         .lock()
         .unwrap()
         .append(&[SessionEntry::TurnEnded {
@@ -195,7 +195,7 @@ fn commit_phase_failure_never_publishes_and_fences_until_reopen() {
         matches!(error, SessionError::CommitUncertain { error, rollback_error: None } if matches!(*error, SessionError::Sqlite(_)))
     );
     {
-        let store = session.store.lock().unwrap();
+        let store = session.store().lock().unwrap();
         assert_eq!(store.state.sequence, 1);
         assert_eq!(store.state.last_model, Some(model("before")));
         assert_eq!(read_entries(&store.connection).unwrap(), before.entries);

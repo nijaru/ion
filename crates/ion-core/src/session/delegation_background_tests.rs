@@ -56,7 +56,7 @@ fn transferred_children_reconcile_without_a_live_turn_and_copies_never_acquire_t
             "resume" => "tool_result",
             _ => "turn_started",
         };
-        session.store.lock().unwrap().connection.execute_batch(&format!(
+        session.store().lock().unwrap().connection.execute_batch(&format!(
             "CREATE TRIGGER reject_admission BEFORE INSERT ON entries WHEN json_extract(NEW.body,'$.kind') = '{reject}' BEGIN SELECT RAISE(ABORT, 'injected'); END;"
         )).unwrap();
         let admit = || match entry {
@@ -73,7 +73,7 @@ fn transferred_children_reconcile_without_a_live_turn_and_copies_never_acquire_t
             "orphan closure and admission roll back together"
         );
         session
-            .store
+            .store()
             .lock()
             .unwrap()
             .connection

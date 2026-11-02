@@ -26,6 +26,7 @@ pub struct SessionSetup {
     pub(crate) resources: Resources,
     pub(crate) commands: CommandCatalog,
     pub(crate) questions: Option<Arc<QuestionCustody>>,
+    retirements: crate::SessionRetirements,
 }
 
 struct PreparedBinding {
@@ -79,6 +80,7 @@ pub(crate) enum BindingWork {
     Running {
         operation: BindingOperationId,
         work: Preparation<BindingDelta>,
+        launch: Option<BindingLaunch>,
     },
     Finished(BindingFinished),
 }
@@ -106,7 +108,20 @@ impl BindingWork {
     }
     pub(crate) async fn join(&mut self) -> Result<BindingDelta> {
         match self {
-            Self::Running { work, .. } => work.join().await,
+            Self::Running { work, launch, .. } => {
+                if let Some(pending) = launch.as_ref() {
+                    for retirement in &pending.retirements {
+                        // Readiness is physical completion, not success of an
+                        // unrelated historical read. The scope retains errors
+                        // for final cleanup rather than poisoning every switch.
+                        let _ = retirement.join().await;
+                    }
+                }
+                if let Some(BindingLaunch { source, change, .. }) = launch.take() {
+                    work.launch_blocking(move |stop| source.run(change, stop));
+                }
+                work.join().await
+            }
             Self::Finished(_) => unreachable!("only running bindings are driven"),
         }
     }
@@ -126,6 +141,12 @@ enum PreparedChange {
     Replacement(Arc<Session>, PreparedBinding),
 }
 
+pub(crate) struct BindingLaunch {
+    source: BindingSource,
+    change: BindingChange,
+    retirements: Vec<ion_core::SessionRetirement>,
+}
+
 struct BindingSource {
     application: Arc<dyn Application>,
     catalog: SessionCatalog,
@@ -133,6 +154,7 @@ struct BindingSource {
     runtime: ApplicationRuntime,
     questions: Option<Arc<QuestionCustody>>,
     background: Option<Arc<crate::BackgroundOwner>>,
+    retirements: crate::SessionRetirements,
 }
 
 /// Retained, owned setup for async application callers. Its actual blocking
@@ -220,7 +242,10 @@ impl SessionSetup {
         } else {
             runtime.agent.validate_reasoning(session.reasoning()?)?;
         }
+        let retirements = application.session_retirements().unwrap_or_default();
+        retirements.register(&session)?;
         Ok(Self {
+            retirements,
             initial_completion_delivery: crate::CompletionDelivery::Inbox,
             application,
             catalog,
@@ -234,6 +259,12 @@ impl SessionSetup {
 
     pub(crate) fn mcp_tools(&self) -> Option<Arc<crate::McpTools>> {
         self.application.mcp_tools()
+    }
+
+    /// Retain this outside control, release all Session/read capabilities, then
+    /// join it after control shutdown to finish actual native Store destruction.
+    pub fn retirements(&self) -> crate::SessionRetirements {
+        self.retirements.clone()
     }
 
     pub fn owner(&self) -> Option<Arc<crate::ApplicationOwner>> {
@@ -319,7 +350,7 @@ impl BindingSource {
     // blocking worker. Never move an IdleSession guard into an async future.
     fn run(self, change: BindingChange, stop: CancellationToken) -> Result<BindingDelta> {
         check_stop(&stop)?;
-        match change {
+        let delta: Result<_> = match change {
             BindingChange::ReloadResources => self.reload(&stop, BindingResult::ResourcesReloaded),
             BindingChange::SelectModel(model) => {
                 self.session.ensure_idle()?;
@@ -449,11 +480,20 @@ impl BindingSource {
                     result: BindingResult::SessionSwitched,
                 })
             }
+        };
+        let delta = delta?;
+        if let PreparedChange::Replacement(session, _) = &delta.prepared {
+            self.retirements.register(session)?;
         }
+        Ok(delta)
     }
 }
 
 impl<M: Serialize + Send + 'static> SessionControl<M> {
+    pub fn retirements(&self) -> crate::SessionRetirements {
+        self.setup.retirements()
+    }
+
     pub fn owner(&self) -> Option<Arc<crate::ApplicationOwner>> {
         self.setup.owner()
     }
@@ -500,6 +540,7 @@ impl<M: Serialize + Send + 'static> SessionControl<M> {
             runtime: self.setup.runtime.clone(),
             questions: self.setup.questions.clone(),
             background: self.background(),
+            retirements: self.setup.retirements.clone(),
         };
         let operation = BindingOperationId(uuid::Uuid::now_v7());
         let stop = source
@@ -507,14 +548,32 @@ impl<M: Serialize + Send + 'static> SessionControl<M> {
             .as_ref()
             .map_or_else(CancellationToken::new, |owner| owner.work_stop());
         self.reserve_binding_result()?;
+        // Reopening an already-released Session must wait for its physical
+        // writer close, not fail spuriously or block a native worker behind
+        // another task on the same bounded pool. Live external leases are not
+        // awaited and remain ordinary AlreadyOpen refusals.
+        let retirements = if matches!(change, BindingChange::SwitchSession(_)) {
+            self.setup.retirements.released()
+        } else {
+            Vec::new()
+        };
         self.binding = Some(BindingWork::Running {
             operation,
             work: Preparation::pending(stop),
+            launch: Some(BindingLaunch {
+                source,
+                change,
+                retirements,
+            }),
         });
-        let Some(BindingWork::Running { work, .. }) = self.binding.as_mut() else {
-            unreachable!("binding custody installed before launch")
-        };
-        work.launch_blocking(move |stop| source.run(change, stop));
+        if let Some(BindingWork::Running { work, launch, .. }) = self.binding.as_mut()
+            && launch
+                .as_ref()
+                .is_some_and(|pending| pending.retirements.is_empty())
+        {
+            let BindingLaunch { source, change, .. } = launch.take().expect("pending launch");
+            work.launch_blocking(move |stop| source.run(change, stop));
+        }
         Ok(operation)
     }
 

@@ -80,7 +80,7 @@ impl StoreHold {
         let (entered, ready) = oneshot::channel();
         let (release, released) = mpsc::channel();
         let worker = thread::spawn(move || {
-            let _store = session.store.lock().unwrap();
+            let _store = session.store().lock().unwrap();
             entered.send(()).unwrap();
             released.recv_timeout(Duration::from_secs(2)).is_ok()
         });
@@ -257,7 +257,7 @@ async fn abandoned_actual_history_read_retains_writer_lease_and_shutdown_joins_i
         // wait, without holding the Session Store or adding a reader test hook.
         fixture
             .session
-            .store
+            .store()
             .lock()
             .unwrap()
             .connection

@@ -172,6 +172,13 @@ impl Gateway {
                         },
                         None => None,
                     };
+                    if matches!(task.spec.target, DelegationTarget::Resume { .. }) {
+                        parent.join_released_child_resources().await;
+                        if stop.is_cancelled() || child_stop.is_cancelled() {
+                            let _ = sender.send(Err("delegation admission is closed".into()));
+                            continue;
+                        }
+                    }
                     let ownership = task.ownership();
                     // A destination reserves its late-settlement capabilities
                     // while Open, before any intent or child work. Materialization
@@ -200,6 +207,9 @@ impl Gateway {
                         // has released its transaction and mutex.
                         let DelegationTask { spec, work, background } = task;
                         let admitted = parent.admit_delegation(site, spec, ownership)?;
+                        if let ChildMaterialization::Resume(child) = &admitted.1 {
+                            parent.retain_child_resources(child).expect("live parent keeps child resource admission open");
+                        }
                         let _ = retained.send((work, background));
                         Ok(admitted)
                     }).await {

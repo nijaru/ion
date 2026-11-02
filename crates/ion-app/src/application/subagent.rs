@@ -42,6 +42,9 @@ struct ChildApplication {
     selected: Selection,
 }
 impl Application for ChildApplication {
+    fn session_retirements(&self) -> Option<crate::SessionRetirements> {
+        self.coding.session_retirements()
+    }
     fn resources(&self, cwd: Option<&Path>) -> Result<Resources> {
         self.coding.resources(cwd)
     }
@@ -81,6 +84,7 @@ impl Subagent {
                     code_mode: parent.code_mode,
                     selection: parent.selection.clone(),
                     role: CodingRole::Subagent,
+                    session_retirements: parent.session_retirements.clone(),
                     processes: parent.processes.clone(),
                     command_environment: Some(environment),
                     search_settings: Some(search_settings),
