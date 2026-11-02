@@ -6,8 +6,16 @@ impl<M: Serialize + Send + 'static> SessionControl<M> {
     pub fn request_stop(&mut self) {
         // Cancel execution before taking inbox locks: an atomic final commit
         // must not open a window for another request while Stop waits for it.
+        if let Some(admitting) = &self.admitting {
+            // A stop request cannot establish rollback. Join the actual worker
+            // and let its receipt or typed failure decide custody.
+            admitting.stop.cancel();
+        }
         if let Some(active) = &self.active {
             active.work.stop();
+        }
+        if let Some(binding) = &self.binding {
+            binding.request_stop();
         }
         if let Some(reconnect) = &self.mcp_reconnect {
             reconnect.work.request_stop();
@@ -258,7 +266,12 @@ impl<M: Serialize + Send + 'static> SessionControl<M> {
                 active.inbox.push_prepared(prepared);
             }
         }
-        if self.active.is_none() && !self.closed && !self.stop_requested {
+        if self.active.is_none()
+            && self.admitting.is_none()
+            && !self.binding_running()
+            && !self.closed
+            && !self.stop_requested
+        {
             let next = self.starting.or_else(|| {
                 custody.inputs.iter().find_map(|(&id, input)| {
                     (input.delivery == Delivery::FollowUp

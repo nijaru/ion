@@ -313,10 +313,111 @@ impl<M> Custody<M> {
         }
     }
 
+    pub(super) fn take_matching(
+        &mut self,
+        matches: impl Fn(&ControlUpdate<M>) -> bool,
+    ) -> Option<ControlUpdate<M>> {
+        let index = self
+            .updates
+            .iter()
+            .position(|update| update.with(&matches))?;
+        let mut update = self
+            .updates
+            .remove(index)
+            .expect("located reliable decision")
+            .into_inner();
+        self.occupied -= update.release();
+        Some(update)
+    }
+
     pub(super) fn pop(&mut self) -> Option<ControlUpdate<M>> {
         let mut update = self.updates.pop_front()?.into_inner();
         self.occupied -= update.release();
         Some(update)
+    }
+}
+
+/// Core may publish before an asynchronous admission returns its actual handle.
+/// Keep that bounded passive prefix private until reliable acceptance is owned.
+pub(super) struct AdmissionObservations {
+    sender: broadcast::Sender<Observation>,
+    operation: OperationId,
+    state: Mutex<AdmissionObservationState>,
+}
+enum AdmissionObservationState {
+    Pending {
+        events: VecDeque<Observation>,
+        skipped: u64,
+    },
+    Open,
+    Closed,
+}
+impl AdmissionObservations {
+    pub(super) fn new(sender: broadcast::Sender<Observation>, operation: OperationId) -> Arc<Self> {
+        Arc::new(Self {
+            sender,
+            operation,
+            state: Mutex::new(AdmissionObservationState::Pending {
+                events: VecDeque::new(),
+                skipped: 0,
+            }),
+        })
+    }
+    pub(super) fn observer(self: &Arc<Self>) -> Box<dyn FnMut(AgentEvent) + Send + 'static> {
+        let gate = self.clone();
+        Box::new(move |event| {
+            let observation = Observation::Event {
+                operation: gate.operation,
+                event: Arc::new(event),
+            };
+            let mut state = gate
+                .state
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            match &mut *state {
+                AdmissionObservationState::Pending { events, skipped } => {
+                    // Leave room for the gap itself when releasing the prefix.
+                    if events.len() == OBSERVATION_CAPACITY - 1 {
+                        events.pop_front();
+                        *skipped = skipped.saturating_add(1);
+                    }
+                    events.push_back(observation);
+                }
+                AdmissionObservationState::Open => {
+                    let _ = gate.sender.send(observation);
+                }
+                AdmissionObservationState::Closed => {}
+            }
+        })
+    }
+    pub(super) fn publish(&self) {
+        let mut state = self
+            .state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let AdmissionObservationState::Pending { events, skipped } =
+            std::mem::replace(&mut *state, AdmissionObservationState::Open)
+        else {
+            panic!("admission observation prefix is released once")
+        };
+        // Never called beneath custody. Serializing sends with the observer's
+        // private gate prevents new events from overtaking this retained prefix.
+        if skipped != 0 {
+            let _ = self.sender.send(Observation::Gap { skipped });
+        }
+        for event in events {
+            let _ = self.sender.send(event);
+        }
+    }
+    pub(super) fn discard(&self) {
+        let previous = {
+            let mut state = self
+                .state
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            std::mem::replace(&mut *state, AdmissionObservationState::Closed)
+        };
+        drop(previous);
     }
 }
 

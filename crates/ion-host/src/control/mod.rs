@@ -22,9 +22,11 @@ use crate::{SessionSetup, image_input::ImageSource, question::TurnStopScope};
 mod admission;
 pub use admission::preflight_messages;
 mod completion;
+pub use completion::CompletionTargetPlan;
 mod custody;
 use custody::{
-    Custody, Input, InputContent, InputState, PendingInput, SnapshotValue, turn_observer,
+    AdmissionObservations, Custody, Input, InputContent, InputState, PendingInput, SnapshotValue,
+    turn_observer,
 };
 mod input;
 mod mcp;
@@ -46,6 +48,44 @@ fn identity() -> u64 {
     NEXT_ID
         .try_update(Ordering::Relaxed, Ordering::Relaxed, |id| id.checked_add(1))
         .expect("Host identity exhausted")
+}
+
+/// Host preparation custody, not another Core operation owner. Metadata and
+/// originals never enter the worker output; the worker returns Core's actual
+/// retained handle and durable admission fact together.
+struct Admitting<M> {
+    operation: OperationId,
+    stop: CancellationToken,
+    inbox: Arc<SteeringInbox<InputId>>,
+    turn_stop: Option<crate::question::TurnStopBinding>,
+    prior_stop_requested: bool,
+    payload: AdmissionPayload<M>,
+    observations: Arc<AdmissionObservations>,
+    work: crate::preparation::Preparation<AdmissionOutput>,
+}
+enum AdmissionPayload<M> {
+    Request {
+        id: InputId,
+        key: ion_core::RequestKey,
+        original: UserInput,
+        metadata: SnapshotValue<M>,
+        reservation: InputReservation,
+        inflight: InputReservation,
+    },
+    Recovery {
+        point: ion_core::RecoveryPoint,
+        metadata: SnapshotValue<M>,
+        reservation: InputReservation,
+    },
+    Completion,
+}
+enum AdmissionOutput {
+    Request(ion_core::RequestSubmission),
+    Recovery {
+        point: ion_core::RecoveryPoint,
+        work: Operation<String, AgentError>,
+    },
+    Completion(Option<ion_core::CompletionSubmission>),
 }
 
 struct Active<M> {
@@ -91,10 +131,12 @@ impl Work {
 pub struct SessionControl<M = ()> {
     pub(crate) setup: SessionSetup,
     pub(crate) completions: Arc<crate::completion::CompletionReceiver>,
+    pub(crate) binding: Option<crate::binding::BindingWork>,
     custody: Arc<Mutex<Custody<M>>>,
     budget: InputBudget,
     input_changes: Arc<tokio::sync::Notify>,
     active: Option<Active<M>>,
+    admitting: Option<Admitting<M>>,
     preparing: Option<(InputId, crate::preparation::Preparation<ion_ai::Message>)>,
     /// An initial prompt has operation identity even while its images prepare.
     starting: Option<(InputId, OperationId)>,
@@ -135,10 +177,12 @@ impl<M: Serialize + Send + 'static> SessionControl<M> {
         Self {
             setup,
             completions,
+            binding: None,
             custody: Arc::new(Mutex::new(Custody::default())),
             budget: InputBudget::default(),
             input_changes: Arc::new(tokio::sync::Notify::new()),
             active: None,
+            admitting: None,
             preparing: None,
             starting: None,
             mcp_reconnect: None,
@@ -170,6 +214,7 @@ impl<M: Serialize + Send + 'static> SessionControl<M> {
         self.active
             .as_ref()
             .map(|active| active.id)
+            .or_else(|| self.admitting.as_ref().map(|admission| admission.operation))
             .or(self.starting.map(|(_, id)| id))
     }
     pub fn is_busy(&self) -> bool {
@@ -212,12 +257,23 @@ impl<M: Serialize + Send + 'static> SessionControl<M> {
                     },
                 })
                 .or_else(|| {
+                    self.admitting.as_ref().map(|admission| OperationState {
+                        id: admission.operation,
+                        turn: None,
+                        kind: OperationKind::Turn,
+                    })
+                })
+                .or_else(|| {
                     self.starting.map(|(_, id)| OperationState {
                         id,
                         turn: None,
                         kind: OperationKind::Turn,
                     })
                 }),
+            binding: self
+                .binding
+                .as_ref()
+                .map(crate::binding::BindingWork::operation),
             mcp_reconnect: self
                 .mcp_reconnect
                 .as_ref()
@@ -225,14 +281,16 @@ impl<M: Serialize + Send + 'static> SessionControl<M> {
                     id: reconnect.id,
                     stop_requested: reconnect.work.is_stopped(),
                 }),
-            busy: self.mcp_reconnect.is_some()
+            busy: self.binding_running()
+                || self.mcp_reconnect.is_some()
                 || self.active.is_some()
+                || self.admitting.is_some()
                 || self.starting.is_some()
                 || self.preparing.is_some()
                 || !custody.inputs.is_empty()
                 || self.wake_is_runnable(custody),
             completion_delivery: self.completion_delivery(),
-            preparing_input: self.preparing.is_some(),
+            preparing_input: self.preparing.is_some() || self.admitting.is_some(),
             pending_steering,
             pending_follow_ups,
             stop_requested: self.stop_requested,
@@ -297,13 +355,15 @@ impl<M: Serialize + Send + 'static> SessionControl<M> {
         self.background()
             .map_or_else(CancellationToken::new, |owner| owner.work_stop())
     }
-    pub(crate) fn ensure_replaceable(&self) -> Result<()> {
+    fn ensure_host_replaceable(&self) -> Result<()> {
         if let Some(owner) = self.background() {
             owner.ensure_open()?;
         }
         ensure!(!self.closed, "session control is closed");
         ensure!(
-            self.active.is_none()
+            self.binding.is_none()
+                && self.active.is_none()
+                && self.admitting.is_none()
                 && self.starting.is_none()
                 && self.preparing.is_none()
                 && self.mcp_reconnect.is_none()
@@ -316,21 +376,76 @@ impl<M: Serialize + Send + 'static> SessionControl<M> {
                 .iter()
                 .any(|update| update.with(|update| matches!(
                     update,
-                    ControlUpdate::Returned(_)
+                    ControlUpdate::RequestAdmission(_)
+                        | ControlUpdate::RecoveryAdmission(_)
+                        | ControlUpdate::Returned(_)
                         | ControlUpdate::Unresolved(_)
                         | ControlUpdate::Settled(_)
                         | ControlUpdate::McpReconnectFinished(_)
                 ))),
             "drain returned inputs and settlements before replacing the binding or starting new work"
         );
+        Ok(())
+    }
+
+    pub(crate) fn ensure_replaceable(&self) -> Result<()> {
+        self.ensure_host_replaceable()?;
         // Surface Core's closed/panic/unknown-effect state before acknowledging
         // replacement or new work, including work started by another embedder.
         let _idle = self.setup.session.reserve_idle()?;
         Ok(())
     }
 
+    fn binding_running(&self) -> bool {
+        self.binding
+            .as_ref()
+            .is_some_and(crate::binding::BindingWork::is_running)
+    }
+
+    /// Binding native preflight owns its Core leases on the blocking worker.
+    /// Host checks here must not obtain a Session lease or touch its Store.
+    pub(crate) fn ensure_binding_start(&self, reload: bool) -> Result<()> {
+        if reload {
+            if let Some(owner) = self.background() {
+                owner.ensure_open()?;
+            }
+            ensure!(!self.closed, "session control is closed");
+            ensure!(
+                self.binding.is_none(),
+                "join or take the previous binding result first"
+            );
+        } else {
+            self.ensure_host_replaceable()?;
+        }
+        ensure!(
+            lock(&self.custody).occupied < MAX_ADMISSIONS,
+            "session result/admission capacity is full"
+        );
+        Ok(())
+    }
+
+    pub(crate) fn reserve_binding_result(&mut self) -> Result<()> {
+        let mut custody = lock(&self.custody);
+        ensure!(
+            custody.occupied < MAX_ADMISSIONS,
+            "session result/admission capacity is full"
+        );
+        custody.occupied += 1;
+        Ok(())
+    }
+
+    pub(crate) fn release_binding_result(&mut self) {
+        let mut custody = lock(&self.custody);
+        custody.occupied = custody
+            .occupied
+            .checked_sub(1)
+            .expect("binding result retains its reserved slot");
+    }
+
     async fn drive(&mut self, activity: ActivityRetention) -> Option<Observation> {
         enum Progress {
+            Binding(Result<crate::binding::BindingDelta>),
+            Admitted(Result<AdmissionOutput>),
             Prepared(Result<Message>),
             Settled(OperationOutcome),
             McpReconnected(Result<crate::McpReconnectReport>),
@@ -338,28 +453,39 @@ impl<M: Serialize + Send + 'static> SessionControl<M> {
             Question,
             Input,
         }
-        if self.preparing.is_none() && self.active.is_none() && self.mcp_reconnect.is_none() {
+        if !self.binding_running()
+            && self.admitting.is_none()
+            && self.preparing.is_none()
+            && self.active.is_none()
+            && self.mcp_reconnect.is_none()
+        {
             return None;
         }
         // Preparation and newly queued intent precede activity, so a busy stream
         // cannot starve admission. Drain ready observations before completion.
         let progress = tokio::select! {
             biased;
+            result = async { self.binding.as_mut().expect("enabled binding preparation").join().await },
+                if self.binding_running() => Progress::Binding(result),
+            result = async { self.admitting.as_mut().expect("enabled admission").work.join().await },
+                if self.admitting.is_some() => Progress::Admitted(result),
             result = async { self.preparing.as_mut().expect("enabled preparation").1.join().await },
                 if self.preparing.is_some() => Progress::Prepared(result),
             result = async { self.mcp_reconnect.as_mut().expect("enabled MCP reconnect").work.join().await },
                 if self.mcp_reconnect.is_some() => Progress::McpReconnected(result),
             () = self.input_changes.notified() => Progress::Input,
-            Some(observation) = self.observer.next() => Progress::Activity(observation),
+            Some(observation) = self.observer.next(), if self.admitting.is_none() => Progress::Activity(observation),
             result = async { self.active.as_mut().expect("enabled operation").work.join().await },
                 if self.active.is_some() => Progress::Settled(result),
             Some(()) = async {
                 self.question_changes.as_mut().expect("enabled question observer").changed().await.ok()
-            }, if self.question_changes.is_some() => Progress::Question,
+            }, if self.question_changes.is_some() && self.admitting.is_none() => Progress::Question,
         };
         // No await after consuming either completion until it is safely retained.
         self.reconcile_admissions();
         match progress {
+            Progress::Binding(result) => self.finish_binding(result),
+            Progress::Admitted(result) => self.finish_admission(result),
             Progress::Prepared(result) => self.finish_preparation(result),
             Progress::Settled(result) => self.finish_operation(result, activity),
             Progress::McpReconnected(result) => self.finish_mcp_reconnect(result),
@@ -509,7 +635,7 @@ impl<M: Serialize + Send + 'static> SessionControl<M> {
             if let Some(update) = self.take_update() {
                 return update;
             }
-            if self.take_question_change() {
+            if self.admitting.is_none() && self.take_question_change() {
                 return ControlUpdate::QuestionChanged;
             }
             if !self.is_busy() {
@@ -567,6 +693,12 @@ impl<M: Serialize + Send + 'static> SessionControl<M> {
 
 impl<M> Drop for SessionControl<M> {
     fn drop(&mut self) {
+        if let Some(binding) = &self.binding {
+            binding.request_stop();
+        }
+        if let Some(admitting) = &self.admitting {
+            admitting.stop.cancel();
+        }
         if let Some(reconnect) = &self.mcp_reconnect {
             reconnect.work.request_stop();
         }
@@ -578,9 +710,16 @@ impl<M> Drop for SessionControl<M> {
         if let Some(questions) = &self.setup.questions {
             questions.close(self.owner, "control_dropped");
         }
-        if let Some(active) = &self.active
-            && let (Some(questions), Some(scope)) = (&self.setup.questions, active.turn_stop)
-        {
+        let turn_stop = self
+            .active
+            .as_ref()
+            .and_then(|active| active.turn_stop)
+            .or_else(|| {
+                self.admitting.as_ref().and_then(|admission| {
+                    admission.turn_stop.as_ref().map(|binding| binding.scope())
+                })
+            });
+        if let (Some(questions), Some(scope)) = (&self.setup.questions, turn_stop) {
             questions.clear_turn_stop(self.owner, self.setup.session.id(), scope);
         }
         if let Some((_, preparation)) = &self.preparing {

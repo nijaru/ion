@@ -16,11 +16,12 @@ fn notice() -> CompletionNotice {
 async fn authorized_peer_wakes_idle_without_fabricating_client_input_or_metadata() {
     let model = Model::new(1);
     let mut fixture = Fixture::new(model.clone(), false);
-    assert!(fixture.control.completion_target(Mode::Wake).is_err());
+    assert!(fixture.control.completion_target(Mode::Wake).await.is_err());
     fixture.control.set_completion_delivery(Mode::Wake).unwrap();
     let permit = fixture
         .control
         .completion_target(Mode::Wake)
+        .await
         .unwrap()
         .reserve()
         .unwrap();
@@ -63,7 +64,15 @@ async fn authorized_peer_wakes_idle_without_fabricating_client_input_or_metadata
         permit.receipt().snapshot(),
         CompletionStatus::Offered { turn }
     );
-    assert!(fixture.control.snapshot(|_| ()).unwrap().inputs.is_empty());
+    assert!(
+        fixture
+            .control
+            .snapshot(|_| ())
+            .await
+            .unwrap()
+            .inputs
+            .is_empty()
+    );
     assert_eq!(
         lock(&fixture.control.custody).occupied,
         0,
@@ -81,6 +90,7 @@ async fn unread_settlement_backpressures_wake_without_advertising_runnable_work(
     let permit = fixture
         .control
         .completion_target(Mode::Wake)
+        .await
         .unwrap()
         .reserve()
         .unwrap();
@@ -124,7 +134,7 @@ async fn stop_and_binding_changes_permanently_revoke_old_targets_even_after_new_
     let model = Model::new(1);
     let mut fixture = Fixture::new(model.clone(), false);
     fixture.control.set_completion_delivery(Mode::Wake).unwrap();
-    let old_target = fixture.control.completion_target(Mode::Wake).unwrap();
+    let old_target = fixture.control.completion_target(Mode::Wake).await.unwrap();
     let old = old_target.reserve().unwrap();
     fixture.control.request_stop();
     fixture
@@ -152,9 +162,9 @@ async fn stop_and_binding_changes_permanently_revoke_old_targets_even_after_new_
     assert!(matches!(fixture.control.next().await, ControlUpdate::Idle));
     assert_eq!(model.calls.load(Ordering::SeqCst), 1);
 
-    let target = fixture.control.completion_target(Mode::Wake).unwrap();
+    let target = fixture.control.completion_target(Mode::Wake).await.unwrap();
     let pending = target.reserve().unwrap();
-    fixture.control.reload_resources().unwrap();
+    fixture.control.reload_resources().await.unwrap();
     pending.offer(notice());
     assert!(target.reserve().is_err());
     assert_eq!(
@@ -174,6 +184,7 @@ async fn admitted_human_start_has_priority_and_acknowledgement_withdraws_queued_
     let permit = fixture
         .control
         .completion_target(Mode::Wake)
+        .await
         .unwrap()
         .reserve()
         .unwrap();
@@ -197,6 +208,7 @@ async fn admitted_human_start_has_priority_and_acknowledgement_withdraws_queued_
     let pending = fixture
         .control
         .completion_target(Mode::Wake)
+        .await
         .unwrap()
         .reserve()
         .unwrap();

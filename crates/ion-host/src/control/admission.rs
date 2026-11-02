@@ -1,5 +1,25 @@
-//! Validation and result-capacity reservation before effects.
+//! Admission preflight, retained preparation custody and adoption of actual Core work.
 use super::*;
+
+fn admission_unknown(error: &anyhow::Error) -> bool {
+    fn uncertain(error: &SessionError) -> bool {
+        error.is_commit_uncertain()
+            || matches!(
+                error,
+                SessionError::Operation(ion_core::OperationError::TaskFailed(_))
+            )
+    }
+    error.chain().any(|source| {
+        source.downcast_ref::<SessionError>().is_some_and(uncertain)
+            || source.downcast_ref::<AgentError>().is_some_and(
+                |error| matches!(error, AgentError::Session(error) if uncertain(error)),
+            )
+            || source
+                .downcast_ref::<ion_core::OperationError>()
+                .is_some_and(|error| matches!(error, ion_core::OperationError::TaskFailed(_)))
+            || source.is::<tokio::task::JoinError>()
+    })
+}
 
 /// Check a literal, unit-metadata launch batch before application setup has effects. Retain
 /// both original-input and ready-message accounting for the entire batch. Local
@@ -183,39 +203,107 @@ impl<M: Serialize + Send + 'static> SessionControl<M> {
     /// Durably admit a literal message, or reconcile the same delivery without
     /// dispatch. This does not persist pending queues, metadata, or live authority.
     /// Callers authorize the key's namespace; it is not an authentication token.
-    pub fn submit_request(
+    pub async fn submit_request(
         &mut self,
         key: &ion_core::RequestKey,
         input: Message,
         metadata: M,
     ) -> Result<RequestAdmission<M>, Box<RejectedInput<M>>> {
         self.submit_linked_request(key, input, metadata, self.work_stop())
+            .await
     }
 
-    pub(crate) fn submit_linked_request(
+    /// Owns only a read lane and literal input, never the controller or metadata.
+    /// This lookup intentionally precedes closed/busy/capacity preflight.
+    pub fn prepare_request(
+        &self,
+        key: ion_core::RequestKey,
+        input: Message,
+    ) -> impl std::future::Future<Output = Result<RequestPlan>> + Send + 'static + use<M> {
+        let session = self.session().id();
+        let reader = self.session().reader();
+        async move {
+            let existing = reader?.reconcile_request(&key, &input).await?;
+            Ok(RequestPlan {
+                session,
+                key,
+                input,
+                existing,
+            })
+        }
+    }
+
+    /// Launch without borrowing control across I/O. Pending is local custody,
+    /// not acceptance. The reliable RequestAdmission update carries the decision.
+    pub fn launch_request(
+        &mut self,
+        plan: RequestPlan,
+        metadata: M,
+    ) -> Result<RequestLaunch<M>, Box<RejectedInput<M>>> {
+        self.launch_linked_request(plan, metadata, self.work_stop())
+    }
+
+    pub(crate) async fn submit_linked_request(
         &mut self,
         key: &ion_core::RequestKey,
         input: Message,
         metadata: M,
         stop: CancellationToken,
     ) -> Result<RequestAdmission<M>, Box<RejectedInput<M>>> {
-        let known = self.setup.session.reconcile_request(key, &input);
-        match known {
-            Ok(Some(receipt)) => return Ok(RequestAdmission::Existing { receipt, metadata }),
+        let mut plan = match self.prepare_request(key.clone(), input.clone()).await {
+            Ok(plan) => plan,
             Err(reason) => {
                 return Err(Box::new(RejectedInput {
                     delivery: Delivery::Start,
                     input: UserInput::Message(input),
                     metadata,
-                    reason: reason.into(),
+                    reason,
                 }));
             }
-            Ok(None) => {}
+        };
+        plan.input = input;
+        match self.launch_linked_request(plan, metadata, stop)? {
+            RequestLaunch::Existing { receipt, metadata } => {
+                Ok(RequestAdmission::Existing { receipt, metadata })
+            }
+            RequestLaunch::Pending(id) => self.wait_request(id).await,
         }
-        let id = InputId(identity());
+    }
+
+    fn launch_linked_request(
+        &mut self,
+        plan: RequestPlan,
+        metadata: M,
+        stop: CancellationToken,
+    ) -> Result<RequestLaunch<M>, Box<RejectedInput<M>>> {
+        let RequestPlan {
+            session,
+            key,
+            input,
+            existing,
+        } = plan;
         let original = UserInput::Message(input);
-        let admission = match self.admit(Delivery::Start, &original, &metadata) {
-            Ok(admission) => admission,
+        let prepared = (|| {
+            ensure!(
+                session == self.session().id(),
+                "request plan belongs to another Session"
+            );
+            if existing.is_some() {
+                return Ok(None);
+            }
+            tokio::runtime::Handle::try_current()?;
+            let admission = self.admit(Delivery::Start, &original, &metadata)?;
+            let AdmissionContent::Ready(message) = admission.content else {
+                unreachable!("literal messages are prepared")
+            };
+            let id = InputId(identity());
+            let prepared = self
+                .budget
+                .prepare(message, id, self.setup.runtime.agent.limits())?;
+            Ok(Some((id, admission.reservation, prepared)))
+        })();
+        let prepared = match prepared {
+            Ok(prepared) => prepared,
             Err(reason) => {
                 return Err(Box::new(RejectedInput {
                     delivery: Delivery::Start,
@@ -225,112 +313,104 @@ impl<M: Serialize + Send + 'static> SessionControl<M> {
                 }));
             }
         };
-        let AdmissionContent::Ready(message) = admission.content else {
-            unreachable!("literal messages are prepared")
+        let Some((id, reservation, prepared)) = prepared else {
+            return Ok(RequestLaunch::Existing {
+                receipt: existing.expect("reconciled plan"),
+                metadata,
+            });
         };
-        let prepared = match self
-            .budget
-            .prepare(message, id, self.setup.runtime.agent.limits())
-        {
-            Ok(prepared) => prepared,
-            Err(reason) => {
-                return Err(Box::new(RejectedInput {
-                    delivery: Delivery::Start,
-                    input: original,
-                    metadata,
-                    reason: reason.into(),
-                }));
-            }
-        };
-        let (message, _, inflight) = prepared.into_parts();
+        let (input, _, inflight) = prepared.into_parts();
         let operation = OperationId(identity());
-        let inbox = self.turn_inbox();
+        let agent = self.setup.runtime.agent.clone();
+        let session = self.session().clone();
         let instructions = self.setup.resources.instructions().to_owned();
-        // The returned durable receipt, not an observer, acknowledges keyed
-        // admission. Originals remain local until this synchronous admission ends.
-        let turn_stop = self.bind_turn_stop(stop.clone());
-        self.completions.rearm();
-        let result = self.setup.runtime.agent.submit_request(
-            self.setup.session.clone(),
-            ion_core::SubmissionRequest {
-                key: key.clone(),
-                input: message,
+        let inbox = self.turn_inbox();
+        let work_stop = stop.clone();
+        let work_inbox = inbox.clone();
+        let request = ion_core::SubmissionRequest {
+            key: key.clone(),
+            input,
+        };
+        self.begin_admission(
+            operation,
+            stop,
+            inbox,
+            AdmissionPayload::Request {
+                id,
+                key,
+                original,
+                metadata: SnapshotValue::new(metadata),
+                reservation,
+                inflight,
             },
-            instructions,
-            stop.clone(),
-            Some(inbox.clone()),
-            turn_observer(self.observations.clone(), operation),
+            move |observer| async move {
+                Ok(AdmissionOutput::Request(
+                    agent
+                        .submit_request(
+                            session,
+                            request,
+                            instructions,
+                            work_stop,
+                            Some(work_inbox),
+                            observer,
+                        )
+                        .await?,
+                ))
+            },
         );
-        drop(inflight);
-        match result {
-            Ok(ion_core::RequestSubmission {
-                receipt,
-                operation: Some(work),
-            }) => {
-                let mut custody = lock(&self.custody);
-                custody.occupied += 1;
-                custody.inputs.insert(
-                    id,
-                    Input {
-                        delivery: Delivery::Start,
-                        metadata: SnapshotValue::new(metadata),
-                        reservation: admission.reservation,
-                        state: InputState::Accepted(InputAcceptance {
-                            operation,
-                            turn: receipt.turn,
-                        }),
-                        steering_status: None,
-                    },
-                );
-                custody.push_update(ControlUpdate::Dispatched { id, operation });
-                custody.push_update(ControlUpdate::Accepted {
-                    id,
-                    operation,
-                    turn: receipt.turn,
-                });
-                custody.steering_target = Some(SteeringTarget {
-                    operation,
-                    stop: stop.clone(),
-                    fence: work.fence(),
-                });
-                self.stop_requested = false;
-                self.active = Some(Active {
-                    id: operation,
-                    turn: Some(receipt.turn),
-                    root: Some(id),
-                    work: Work::Turn(work),
-                    inbox,
-                    automated: false,
-                    metadata: None,
-                    turn_stop: turn_stop.as_ref().map(|binding| binding.scope()),
-                });
-                Ok(RequestAdmission::Started { id, receipt })
+        Ok(RequestLaunch::Pending(id))
+    }
+
+    /// Wait only for this reliable decision; unrelated lifecycle updates remain
+    /// in their original order. Abandoning this wait leaves the decision retained.
+    pub async fn wait_request(
+        &mut self,
+        id: InputId,
+    ) -> Result<RequestAdmission<M>, Box<RejectedInput<M>>> {
+        loop {
+            let update = lock(&self.custody).take_matching(|update| {
+                matches!(update, ControlUpdate::RequestAdmission(decision) if decision.id == id)
+            });
+            if let Some(ControlUpdate::RequestAdmission(decision)) = update {
+                return decision.result;
             }
-            result => {
-                self.restore_turn_stop(turn_stop);
-                match result {
-                    Ok(ion_core::RequestSubmission { receipt, .. }) => {
-                        Ok(RequestAdmission::Existing { receipt, metadata })
-                    }
-                    Err(reason) => Err(Box::new(RejectedInput {
-                        delivery: Delivery::Start,
-                        input: original,
-                        metadata,
-                        reason: reason.into(),
-                    })),
-                }
-            }
+            let pending = self.admitting.as_ref().is_some_and(|admission| {
+                matches!(&admission.payload, AdmissionPayload::Request { id: pending, .. } if *pending == id)
+            });
+            assert!(
+                pending,
+                "request decision already taken or identity is not pending"
+            );
+            drop(self.drive(ActivityRetention::Retain).await);
         }
     }
 
     /// Continue existing committed work, not another user input. The application
     /// must reconstruct and attest the saved authority before calling this method.
-    pub fn resume_turn(
+    pub async fn resume_turn(
         &mut self,
         point: ion_core::RecoveryPoint,
         metadata: M,
-    ) -> Result<RecoveryAdmission, (M, anyhow::Error)> {
+    ) -> Result<RecoveryAdmission, RecoveryFailure<M>> {
+        let operation = self.launch_recovery(point, metadata)?;
+        loop {
+            let update = lock(&self.custody).take_matching(|update| {
+                matches!(update, ControlUpdate::RecoveryAdmission(decision) if decision.operation == operation)
+            });
+            if let Some(ControlUpdate::RecoveryAdmission(decision)) = update {
+                return decision.result;
+            }
+            drop(self.drive(ActivityRetention::Retain).await);
+        }
+    }
+
+    pub fn launch_recovery(
+        &mut self,
+        point: ion_core::RecoveryPoint,
+        metadata: M,
+    ) -> Result<OperationId, RecoveryFailure<M>> {
         let prepared = (|| {
+            tokio::runtime::Handle::try_current()?;
             self.ensure_replaceable()?;
             ensure!(
                 lock(&self.custody).occupied < MAX_ADMISSIONS,
@@ -344,50 +424,360 @@ impl<M: Serialize + Send + 'static> SessionControl<M> {
         })();
         let reservation = match prepared {
             Ok(value) => value,
-            Err(error) => return Err((metadata, error)),
-        };
-        let operation = OperationId(identity());
-        let inbox = self.turn_inbox();
-        let stop = self.work_stop();
-        let turn_stop = self.bind_turn_stop(stop.clone());
-        // Publish the lease under the same fence as acceptance/end callbacks.
-        let mut custody = lock(&self.custody);
-        self.completions.rearm();
-        let result = self.setup.runtime.agent.resume_turn(
-            self.setup.session.clone(),
-            point,
-            self.setup.resources.instructions().to_owned(),
-            stop.clone(),
-            Some(inbox.clone()),
-            turn_observer(self.observations.clone(), operation),
-        );
-        let (point, work) = match result {
-            Ok(value) => value,
-            Err(error) => {
-                drop(custody);
-                self.restore_turn_stop(turn_stop);
-                return Err((metadata, error.into()));
+            Err(reason) => {
+                return Err(RecoveryFailure {
+                    point,
+                    metadata,
+                    reason,
+                    kind: AdmissionFailureKind::NotAccepted,
+                });
             }
         };
-        custody.occupied += 1;
-        custody.steering_target = Some(SteeringTarget {
+        let operation = OperationId(identity());
+        let agent = self.setup.runtime.agent.clone();
+        let session = self.session().clone();
+        let instructions = self.setup.resources.instructions().to_owned();
+        let inbox = self.turn_inbox();
+        let stop = self.work_stop();
+        let work_stop = stop.clone();
+        let work_inbox = inbox.clone();
+        self.begin_admission(
             operation,
             stop,
-            fence: work.fence(),
-        });
-        drop(custody);
-        self.stop_requested = false;
-        self.active = Some(Active {
-            id: operation,
-            turn: Some(point.turn),
-            root: None,
-            work: Work::Turn(work),
             inbox,
-            automated: false,
-            metadata: Some((metadata, reservation)),
-            turn_stop: turn_stop.as_ref().map(|binding| binding.scope()),
+            AdmissionPayload::Recovery {
+                point,
+                metadata: SnapshotValue::new(metadata),
+                reservation,
+            },
+            move |observer| async move {
+                let (point, work) = agent
+                    .resume_turn(
+                        session,
+                        point,
+                        instructions,
+                        work_stop,
+                        Some(work_inbox),
+                        observer,
+                    )
+                    .await?;
+                Ok(AdmissionOutput::Recovery { point, work })
+            },
+        );
+        Ok(operation)
+    }
+
+    pub(super) fn begin_admission<F, W>(
+        &mut self,
+        operation: OperationId,
+        stop: CancellationToken,
+        inbox: Arc<SteeringInbox<InputId>>,
+        payload: AdmissionPayload<M>,
+        future: F,
+    ) where
+        F: FnOnce(Box<dyn FnMut(AgentEvent) + Send + 'static>) -> W + Send + 'static,
+        W: std::future::Future<Output = Result<AdmissionOutput>> + Send + 'static,
+    {
+        assert!(
+            self.admitting.is_none() && self.active.is_none(),
+            "one actual admission owner"
+        );
+        lock(&self.custody).occupied += 1;
+        let prior_stop_requested = self.stop_requested;
+        let explicit = !matches!(&payload, AdmissionPayload::Completion);
+        let turn_stop = self.bind_turn_stop(stop.clone());
+        let observations = AdmissionObservations::new(self.observations.clone(), operation);
+        let observer = observations.observer();
+        let (launch, ready) = tokio::sync::oneshot::channel();
+        let work =
+            crate::preparation::Preparation::start(CancellationToken::new(), move |_| async move {
+                ready.await.context("admission custody was not installed")?;
+                future(observer).await
+            });
+        self.admitting = Some(Admitting {
+            operation,
+            stop,
+            inbox,
+            turn_stop,
+            prior_stop_requested,
+            payload,
+            observations,
+            work,
         });
-        Ok(RecoveryAdmission { operation, point })
+        if explicit {
+            self.stop_requested = false;
+            self.completions.rearm();
+        }
+        // Even a multithreaded runtime cannot write before original custody is
+        // installed. There is no suspension between installation and this send.
+        launch.send(()).expect("retained admission awaits launch");
+    }
+
+    pub(super) fn finish_admission(&mut self, result: Result<AdmissionOutput>) {
+        let Admitting {
+            operation,
+            stop,
+            inbox,
+            turn_stop,
+            prior_stop_requested,
+            payload,
+            observations,
+            work,
+        } = self
+            .admitting
+            .take()
+            .expect("retained admission preparation");
+        drop(work);
+        let accepted = matches!(
+            &result,
+            Ok(AdmissionOutput::Request(ion_core::RequestSubmission {
+                operation: Some(_),
+                ..
+            }) | AdmissionOutput::Recovery { .. }
+                | AdmissionOutput::Completion(Some(_)))
+        );
+        if !accepted && prior_stop_requested {
+            self.stop_requested = true;
+            self.completions
+                .revoke(ion_core::CompletionRevocation::Stopped);
+        }
+        match payload {
+            AdmissionPayload::Request {
+                id,
+                key,
+                original,
+                metadata,
+                reservation,
+                inflight,
+            } => {
+                drop(inflight);
+                match result {
+                    Ok(AdmissionOutput::Request(ion_core::RequestSubmission {
+                        receipt,
+                        operation: Some(work),
+                    })) => {
+                        let turn = receipt.turn;
+                        let fence = work.fence();
+                        self.active = Some(Active {
+                            id: operation,
+                            turn: Some(turn),
+                            root: Some(id),
+                            work: Work::Turn(work),
+                            inbox,
+                            automated: false,
+                            metadata: None,
+                            turn_stop: turn_stop.as_ref().map(|binding| binding.scope()),
+                        });
+                        let mut custody = lock(&self.custody);
+                        custody.inputs.insert(
+                            id,
+                            Input {
+                                delivery: Delivery::Start,
+                                metadata,
+                                reservation,
+                                state: InputState::Accepted(InputAcceptance { operation, turn }),
+                                steering_status: None,
+                            },
+                        );
+                        custody.push_update(ControlUpdate::RequestAdmission(RequestDecision {
+                            id,
+                            result: Ok(RequestAdmission::Started { id, receipt }),
+                            reservation: None,
+                        }));
+                        custody.push_update(ControlUpdate::Dispatched { id, operation });
+                        custody.push_update(ControlUpdate::Accepted {
+                            id,
+                            operation,
+                            turn,
+                        });
+                        if !self.stop_requested && !self.closed {
+                            custody.steering_target = Some(SteeringTarget {
+                                operation,
+                                stop,
+                                fence,
+                            });
+                        }
+                    }
+                    result => {
+                        stop.cancel();
+                        if result.is_err() {
+                            self.completions
+                                .revoke(ion_core::CompletionRevocation::OperationFailed);
+                        }
+                        self.restore_turn_stop(turn_stop);
+                        if let Some((_, preparation)) = &self.preparing {
+                            preparation.request_stop();
+                        }
+                        let metadata = metadata.into_inner();
+                        let decision = match result {
+                            Ok(AdmissionOutput::Request(ion_core::RequestSubmission {
+                                receipt,
+                                operation: None,
+                            })) => Ok(RequestAdmission::Existing { receipt, metadata }),
+                            Err(reason) if admission_unknown(&reason) => {
+                                Ok(RequestAdmission::Unresolved(UnresolvedRequest {
+                                    session: self.session().id(),
+                                    key,
+                                    id,
+                                    operation,
+                                    input: original,
+                                    metadata,
+                                    reason,
+                                }))
+                            }
+                            Err(reason) => Err(Box::new(RejectedInput {
+                                delivery: Delivery::Start,
+                                input: original,
+                                metadata,
+                                reason,
+                            })),
+                            Ok(_) => unreachable!("request worker returns request admission"),
+                        };
+                        let mut custody = lock(&self.custody);
+                        for pending in custody.inputs.values_mut().filter_map(Input::pending_mut) {
+                            pending.withdraw(ReturnReason::PredecessorFailed);
+                        }
+                        custody.push_update(ControlUpdate::RequestAdmission(RequestDecision {
+                            id,
+                            result: decision,
+                            reservation: Some(reservation),
+                        }));
+                    }
+                }
+            }
+            AdmissionPayload::Recovery {
+                point: expected,
+                metadata,
+                reservation,
+            } => match result {
+                Ok(AdmissionOutput::Recovery { point, work }) => {
+                    let fence = work.fence();
+                    self.active = Some(Active {
+                        id: operation,
+                        turn: Some(point.turn),
+                        root: None,
+                        work: Work::Turn(work),
+                        inbox,
+                        automated: false,
+                        metadata: Some((metadata.into_inner(), reservation)),
+                        turn_stop: turn_stop.as_ref().map(|binding| binding.scope()),
+                    });
+                    let mut custody = lock(&self.custody);
+                    custody.push_update(ControlUpdate::RecoveryAdmission(RecoveryDecision {
+                        operation,
+                        result: Ok(RecoveryAdmission { operation, point }),
+                        reservation: None,
+                    }));
+                    if !self.stop_requested && !self.closed {
+                        custody.steering_target = Some(SteeringTarget {
+                            operation,
+                            stop,
+                            fence,
+                        });
+                    }
+                }
+                Err(reason) => {
+                    stop.cancel();
+                    self.completions
+                        .revoke(ion_core::CompletionRevocation::OperationFailed);
+                    self.restore_turn_stop(turn_stop);
+                    let kind = if admission_unknown(&reason) {
+                        AdmissionFailureKind::Unknown
+                    } else {
+                        AdmissionFailureKind::NotAccepted
+                    };
+                    if let Some((_, preparation)) = &self.preparing {
+                        preparation.request_stop();
+                    }
+                    let failure = RecoveryFailure {
+                        point: expected,
+                        metadata: metadata.into_inner(),
+                        reason,
+                        kind,
+                    };
+                    let mut custody = lock(&self.custody);
+                    for pending in custody.inputs.values_mut().filter_map(Input::pending_mut) {
+                        pending.withdraw(ReturnReason::PredecessorFailed);
+                    }
+                    custody.push_update(ControlUpdate::RecoveryAdmission(RecoveryDecision {
+                        operation,
+                        result: Err(failure),
+                        reservation: Some(reservation),
+                    }));
+                }
+                Ok(_) => unreachable!("recovery worker returns recovery admission"),
+            },
+            AdmissionPayload::Completion => match result {
+                Ok(AdmissionOutput::Completion(Some(ion_core::CompletionSubmission {
+                    turn,
+                    operation: work,
+                }))) => {
+                    let fence = work.fence();
+                    self.active = Some(Active {
+                        id: operation,
+                        turn: Some(turn),
+                        root: None,
+                        work: Work::Turn(work),
+                        inbox,
+                        automated: true,
+                        metadata: None,
+                        turn_stop: turn_stop.as_ref().map(|binding| binding.scope()),
+                    });
+                    let mut custody = lock(&self.custody);
+                    custody.push_update(ControlUpdate::Automated {
+                        operation,
+                        turn: Some(turn),
+                    });
+                    if !self.stop_requested && !self.closed {
+                        custody.steering_target = Some(SteeringTarget {
+                            operation,
+                            stop,
+                            fence,
+                        });
+                    }
+                }
+                Ok(AdmissionOutput::Completion(None)) => {
+                    self.restore_turn_stop(turn_stop);
+                    lock(&self.custody).occupied -= 1;
+                }
+                Err(error) => {
+                    self.restore_turn_stop(turn_stop);
+                    self.request_stop();
+                    let unknown = admission_unknown(&error);
+                    let error = error.downcast::<AgentError>().unwrap_or_else(|error| {
+                        if unknown {
+                            SessionError::Operation(ion_core::OperationError::TaskFailed(
+                                error.to_string(),
+                            ))
+                            .into()
+                        } else {
+                            SessionError::Storage(error.to_string()).into()
+                        }
+                    });
+                    let mut custody = lock(&self.custody);
+                    custody.push_update(ControlUpdate::Automated {
+                        operation,
+                        turn: None,
+                    });
+                    custody.push_update(ControlUpdate::Settled(Settlement {
+                        automated: true,
+                        operation,
+                        turn: None,
+                        outcome: OperationOutcome::Turn(Err(error)),
+                        stop_requested: true,
+                        accepted: Vec::new(),
+                        metadata: None,
+                        reservation: None,
+                    }));
+                }
+                Ok(_) => unreachable!("completion worker returns completion admission"),
+            },
+        }
+        if accepted {
+            observations.publish();
+        } else {
+            observations.discard();
+        }
     }
 
     fn admit(&self, delivery: Delivery, input: &UserInput, metadata: &M) -> Result<Admission> {

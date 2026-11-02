@@ -63,13 +63,15 @@ pub use binding::SessionSetup;
 pub use command_args::parse_args as parse_command_args;
 pub use command_environment::CommandEnvironment;
 pub use control::{
-    AcceptedMetadata, ControlObserver, ControlSnapshot, ControlState, ControlUpdate, Delivery,
-    InputAcceptance, InputCustodyPhase, InputId, InputPhase, InputSnapshot, McpReconnectFinished,
-    McpReconnectSnapshot, McpReconnectState, Observation, OperationId, OperationKind,
-    OperationOutcome, OperationState, OutcomeSnapshot, RecoveryAdmission, RejectedBatch,
-    RejectedInput, RequestAdmission, ReturnReason, ReturnSnapshot, ReturnedInput, SessionControl,
-    Settlement, ShutdownReport, SnapshotCursor, SteeringReceipt, SteeringStatus, TurnSteering,
-    UnresolvedInput, UpdateSnapshot, UserInput, preflight_messages,
+    AcceptedMetadata, AdmissionFailureKind, CompletionTargetPlan, ControlObserver, ControlSnapshot,
+    ControlState, ControlUpdate, Delivery, InputAcceptance, InputCustodyPhase, InputId, InputPhase,
+    InputSnapshot, McpReconnectFinished, McpReconnectSnapshot, McpReconnectState, Observation,
+    OperationId, OperationKind, OperationOutcome, OperationState, OutcomeSnapshot,
+    RecoveryAdmission, RecoveryDecision, RecoveryFailure, RejectedBatch, RejectedInput,
+    RequestAdmission, RequestDecision, RequestLaunch, RequestPlan, ReturnReason, ReturnSnapshot,
+    ReturnedInput, SessionControl, Settlement, ShutdownReport, SnapshotCursor, SteeringReceipt,
+    SteeringStatus, TurnSteering, UnresolvedInput, UnresolvedRequest, UpdateSnapshot, UserInput,
+    preflight_messages,
 };
 pub use credentials::{CredentialResolutionError, CredentialResolver};
 pub use delegation::{

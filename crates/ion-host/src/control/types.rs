@@ -44,6 +44,8 @@ pub struct McpReconnectState {
 pub struct ControlState {
     pub completion_delivery: crate::CompletionDelivery,
     pub operation: Option<OperationState>,
+    /// Retained binding preparation/result, independent of Core execution.
+    pub binding: Option<crate::binding::BindingOperationId>,
     /// Independent user management, never a steering target or a Core Turn.
     pub mcp_reconnect: Option<McpReconnectState>,
     pub busy: bool,
@@ -79,6 +81,76 @@ pub enum RequestAdmission<M> {
         receipt: ion_core::RequestReceipt,
         metadata: M,
     },
+    /// Neither a positive durable receipt nor proof of rollback is available.
+    Unresolved(UnresolvedRequest<M>),
+}
+
+/// An owned read-only reconciliation result. A new plan grants no admission;
+/// launch rechecks local capacity and Core arbitrates any concurrent key race.
+pub struct RequestPlan {
+    pub(super) session: uuid::Uuid,
+    pub(super) key: ion_core::RequestKey,
+    pub(super) input: Message,
+    pub(super) existing: Option<ion_core::RequestReceipt>,
+}
+impl RequestPlan {
+    pub fn existing(&self) -> Option<&ion_core::RequestReceipt> {
+        self.existing.as_ref()
+    }
+}
+
+pub enum RequestLaunch<M> {
+    Pending(InputId),
+    Existing {
+        receipt: ion_core::RequestReceipt,
+        metadata: M,
+    },
+}
+
+pub struct UnresolvedRequest<M> {
+    pub session: uuid::Uuid,
+    pub key: ion_core::RequestKey,
+    pub id: InputId,
+    pub operation: OperationId,
+    pub input: UserInput,
+    pub metadata: M,
+    pub reason: anyhow::Error,
+}
+
+/// Reliable admission decision, published before passive operation activity.
+/// Started metadata remains in accepted custody until settlement. Other outcomes
+/// retain their reservation here until the controlling application takes them.
+pub struct RequestDecision<M> {
+    pub id: InputId,
+    pub result: Result<RequestAdmission<M>, Box<RejectedInput<M>>>,
+    pub(super) reservation: Option<InputReservation>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum AdmissionFailureKind {
+    NotAccepted,
+    Unknown,
+}
+
+pub struct RecoveryFailure<M> {
+    pub point: ion_core::RecoveryPoint,
+    pub metadata: M,
+    pub reason: anyhow::Error,
+    pub kind: AdmissionFailureKind,
+}
+impl<M> std::fmt::Debug for RecoveryFailure<M> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("RecoveryFailure")
+            .field("kind", &self.kind)
+            .field("reason", &self.reason)
+            .finish_non_exhaustive()
+    }
+}
+
+pub struct RecoveryDecision<M> {
+    pub operation: OperationId,
+    pub result: Result<RecoveryAdmission, RecoveryFailure<M>>,
+    pub(super) reservation: Option<InputReservation>,
 }
 
 /// A committed continuation and its local owner; no new input was accepted.
@@ -242,6 +314,9 @@ pub enum Observation {
 }
 
 pub enum ControlUpdate<M> {
+    BindingFinished(crate::binding::BindingFinished),
+    RequestAdmission(RequestDecision<M>),
+    RecoveryAdmission(RecoveryDecision<M>),
     Automated {
         operation: OperationId,
         turn: Option<u64>,
@@ -277,6 +352,10 @@ pub enum ControlUpdate<M> {
 impl<M> ControlUpdate<M> {
     pub(super) fn release(&mut self) -> usize {
         match self {
+            // Binding custody releases its own result slot on transfer.
+            Self::BindingFinished(_) => 0,
+            Self::RequestAdmission(decision) => usize::from(decision.reservation.take().is_some()),
+            Self::RecoveryAdmission(decision) => usize::from(decision.reservation.take().is_some()),
             Self::McpReconnectFinished(finished) => {
                 finished.reservation.take();
                 1
@@ -336,6 +415,9 @@ impl ControlObserver {
     }
 
     fn filter_activity(&mut self, observation: Observation) -> Option<Observation> {
+        if matches!(observation, Observation::Gap { .. }) {
+            self.suppress = true;
+        }
         if let Observation::Event { event, .. } = &observation {
             let boundary = matches!(
                 event.as_ref(),

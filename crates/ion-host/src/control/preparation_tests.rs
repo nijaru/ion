@@ -56,7 +56,7 @@ async fn literal_files_survive_expansion_image_preparation_and_rejected_input() 
     let prompts = fixture.root.join(".ion/prompts");
     fs::create_dir_all(&prompts).unwrap();
     fs::write(prompts.join("next.md"), "EXPANDED $1").unwrap();
-    fixture.control.reload_resources().unwrap();
+    fixture.control.reload_resources().await.unwrap();
     let file = || crate::prompt_files::TextFile {
         name: "source.md".into(),
         text: "/next dangerous\n{{ARG}}\n".into(),
@@ -183,7 +183,7 @@ async fn normalized_attachments_keep_notes_while_prompt_resources_expand() {
     let mut fixture = Fixture::new(model.clone(), true);
     fs::create_dir_all(fixture.root.join(".ion/prompts")).unwrap();
     fs::write(fixture.root.join(".ion/prompts/check.md"), "expanded $1").unwrap();
-    fixture.control.reload_resources().unwrap();
+    fixture.control.reload_resources().await.unwrap();
     let mut image = ion_ai::normalize_image(
         &base64::engine::general_purpose::STANDARD
             .decode(PNG)
@@ -252,7 +252,7 @@ async fn preparation_refusal_retains_exact_input_and_blocks_silent_replacement()
     }
     assert!(!fixture.control.is_busy());
     assert!(
-        fixture.control.new_session().is_err(),
+        fixture.control.new_session().await.is_err(),
         "unreturned input cannot move to another binding"
     );
     match fixture.control.next().await {
@@ -279,7 +279,7 @@ fn preparation_overlaps_turns_but_a_late_steer_never_retargets() {
         let target = fixture.control.current_operation().unwrap();
         let steer = fixture.control.submit(Delivery::Steer(target), image_prompt(), meta("  literal 🦀\n")).unwrap();
         let release = hold_preparation(&mut fixture.control).await;
-        let snapshot = fixture.control.snapshot(|_| ()).unwrap();
+        let snapshot = fixture.control.snapshot(|_| ()).await.unwrap();
         let input = snapshot.inputs.iter().find(|input| input.id == steer).unwrap();
         assert_eq!(input.phase, InputCustodyPhase::PendingPreparation);
         assert!(matches!(&input.original, Some(UserInput::Prompt { text, images, .. })
@@ -291,8 +291,8 @@ fn preparation_overlaps_turns_but_a_late_steer_never_retargets() {
         model.wait_calls(2).await;
         assert_ne!(fixture.control.current_operation(), Some(target));
         assert!(fixture.control.preparing.is_some(), "preparation must remain in retained custody while another Turn starts");
-        assert!(fixture.control.new_session().is_err());
-        fixture.control.reload_resources().unwrap();
+        assert!(fixture.control.new_session().await.is_err());
+        fixture.control.reload_resources().await.unwrap();
         model.release();
         let (_, second) = settle(&mut fixture.control).await;
         assert!(matches!(second.outcome, OperationOutcome::Turn(Ok(_))));
@@ -399,7 +399,7 @@ fn joining_preparation_preserves_the_first_withdrawal_cause() {
             );
             assert!(matches!(settlement.outcome, OperationOutcome::Turn(Err(_))));
             assert_eq!(settlement.stop_requested, cause == "stop");
-            let snapshot = fixture.control.snapshot(|_| ()).unwrap();
+            let snapshot = fixture.control.snapshot(|_| ()).await.unwrap();
             let withdrawal = &snapshot
                 .inputs
                 .iter()

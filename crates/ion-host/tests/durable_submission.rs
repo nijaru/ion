@@ -159,6 +159,7 @@ async fn worker(root: &Path, mode: &str) {
     if mode == "effect" {
         let RequestAdmission::Started { receipt, .. } = control
             .submit_request(&key, message(), "original".into())
+            .await
             .unwrap()
         else {
             panic!("first admission")
@@ -169,6 +170,7 @@ async fn worker(root: &Path, mode: &str) {
         // Busy redelivery returns its own metadata, not new work or originals.
         let RequestAdmission::Existing { metadata, .. } = control
             .submit_request(&key, message(), "busy retry".into())
+            .await
             .unwrap()
         else {
             panic!("duplicate dispatch")
@@ -178,6 +180,7 @@ async fn worker(root: &Path, mode: &str) {
         let before = session.view().unwrap().entries;
         let RequestAdmission::Existing { receipt, metadata } = control
             .submit_request(&key, message(), "redelivery".into())
+            .await
             .unwrap()
         else {
             panic!("replayed accepted work")
@@ -190,6 +193,7 @@ async fn worker(root: &Path, mode: &str) {
                 Message::user_input("changed".into(), []),
                 "conflict".into(),
             )
+            .await
             .err()
             .unwrap();
         assert_eq!(conflict.metadata, "conflict");
@@ -213,6 +217,7 @@ async fn worker(root: &Path, mode: &str) {
             assert!(
                 control
                     .resume_turn(point, "selected model changed".into())
+                    .await
                     .is_err()
             );
             assert_eq!(session.view().unwrap().entries, changed);
@@ -245,6 +250,7 @@ async fn worker(root: &Path, mode: &str) {
                             None,
                             |_| {}
                         )
+                        .await
                         .is_err()
                 );
                 assert_eq!(session.view().unwrap().entries, before);
@@ -258,13 +264,16 @@ async fn worker(root: &Path, mode: &str) {
                     },
                     "stale".into(),
                 )
+                .await
                 .unwrap_err();
-            assert_eq!(rejected.0, "stale");
+            assert_eq!(rejected.metadata, "stale");
+            assert_eq!(rejected.kind, ion_host::AdmissionFailureKind::NotAccepted);
             assert_eq!(session.view().unwrap().entries, before);
             let resumed = control
                 .resume_turn(saved.point, "continuation".into())
+                .await
                 .unwrap();
-            let snapshot = control.snapshot(String::clone).unwrap();
+            let snapshot = control.snapshot(String::clone).await.unwrap();
             assert_eq!(
                 snapshot.operation_metadata,
                 Some((resumed.operation, "continuation".into()))
@@ -275,6 +284,7 @@ async fn worker(root: &Path, mode: &str) {
             assert!(
                 control
                     .resume_turn(saved.point, "duplicate".into())
+                    .await
                     .is_err()
             );
             if mode == "cancel" {
@@ -301,6 +311,7 @@ async fn worker(root: &Path, mode: &str) {
                         Message::user_input("fresh authority".into(), []),
                         "new".into()
                     )
+                    .await
                     .unwrap(),
                 RequestAdmission::Started { .. }
             ));
@@ -387,6 +398,7 @@ async fn worker(root: &Path, mode: &str) {
     assert!(matches!(
         control
             .submit_request(&key, message(), "closed retry".into())
+            .await
             .unwrap(),
         RequestAdmission::Existing { .. }
     ));
@@ -397,6 +409,7 @@ async fn worker(root: &Path, mode: &str) {
                 message(),
                 "closed".into()
             )
+            .await
             .is_err()
     );
 }

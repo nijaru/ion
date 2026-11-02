@@ -77,6 +77,8 @@ async fn failed_operation_returns_follow_ups_without_fabricating_stop() {
     fixture.control.shutdown().await;
 }
 
+#[path = "admission_tests.rs"]
+mod admissions;
 #[path = "completion_tests.rs"]
 mod completions;
 #[path = "mcp_tests.rs"]
@@ -304,6 +306,36 @@ fn non_sync_metadata_does_not_prevent_sending_the_owner_or_its_waits() {
     require_send(fixture.control.next());
     require_send(fixture.control.shutdown());
     require_send(fixture.control.observe().next());
+    let key = ion_core::RequestKey::new("fixture".into(), "send".into()).unwrap();
+    require_send(fixture.control.submit_request(
+        &key,
+        Message::user_input("work".into(), []),
+        meta("M"),
+    ));
+    require_send(fixture.control.resume_turn(
+        ion_core::RecoveryPoint {
+            session: fixture.control.session().id(),
+            turn: 1,
+            checkpoint: 1,
+        },
+        meta("M"),
+    ));
+    require_send(
+        fixture
+            .control
+            .completion_target(ion_core::CompletionDelivery::Wake),
+    );
+    fn require_owned(_: impl Send + 'static) {}
+    require_owned(
+        fixture
+            .control
+            .prepare_request(key, Message::user_input("read".into(), [])),
+    );
+    require_owned(
+        fixture
+            .control
+            .prepare_completion_target(ion_core::CompletionDelivery::Wake),
+    );
 }
 
 #[tokio::test]
@@ -527,7 +559,11 @@ async fn acceptance_custody_precedes_progress_and_steering_uses_fifo_ids() {
     model.release();
     // Committed steering causes another model request, even with a final reply.
     model.wait_calls(2).await;
-    let snapshot = fixture.control.snapshot(|m| m.literal.clone()).unwrap();
+    let snapshot = fixture
+        .control
+        .snapshot(|m| m.literal.clone())
+        .await
+        .unwrap();
     for id in [root, first, second] {
         let input = snapshot.inputs.iter().find(|input| input.id == id).unwrap();
         assert_eq!(
@@ -744,7 +780,7 @@ async fn queued_expansion_is_frozen_and_prepared_messages_are_literal() {
     fs::create_dir_all(fixture.root.join(".ion/prompts")).unwrap();
     let template = fixture.root.join(".ion/prompts/next.md");
     fs::write(&template, "OLD $1").unwrap();
-    fixture.control.reload_resources().unwrap();
+    fixture.control.reload_resources().await.unwrap();
     fixture
         .control
         .submit(Delivery::Start, prompt("root"), meta("root"))
@@ -767,7 +803,7 @@ async fn queued_expansion_is_frozen_and_prepared_messages_are_literal() {
         )
         .unwrap();
     fs::write(&template, "NEW $1").unwrap();
-    fixture.control.reload_resources().unwrap();
+    fixture.control.reload_resources().await.unwrap();
     model.release();
     settle(&mut fixture.control).await;
     model.wait_calls(2).await;
@@ -923,7 +959,7 @@ async fn user_command_reuses_shell_admission_share_and_cancellation_custody() {
         commands.to_string(),
     )
     .unwrap();
-    fixture.control.reload_resources().unwrap();
+    fixture.control.reload_resources().await.unwrap();
     fixture
         .control
         .command(
@@ -964,7 +1000,7 @@ async fn user_command_reuses_shell_admission_share_and_cancellation_custody() {
         &original_manifest,
     )
     .unwrap();
-    fixture.control.reload_resources().unwrap();
+    fixture.control.reload_resources().await.unwrap();
     let (metadata, error) = fixture
         .control
         .command("missing", &[], meta("unknown literal"))
@@ -1092,7 +1128,7 @@ async fn panic_blocks_reuse_and_preserves_primary_and_cleanup_failures() {
         .unwrap_err();
     assert_eq!(rejected.metadata.literal, "kept");
     assert_eq!(model.calls.load(Ordering::SeqCst), 1);
-    assert!(fixture.control.new_session().is_err());
+    assert!(fixture.control.new_session().await.is_err());
     assert!(
         fixture
             .control

@@ -2,6 +2,19 @@
 use super::*;
 use ion_core::{CompletionDelivery, CompletionSignal};
 
+/// Read-only context captured for a grant, not producer authority. Finish under
+/// exclusive control so Stop/rebinding cannot turn a stale read into a new grant.
+pub struct CompletionTargetPlan {
+    owner: uuid::Uuid,
+    session: uuid::Uuid,
+    inbox: Arc<ion_core::CompletionInbox>,
+    revision: u64,
+    operation: Option<OperationId>,
+    turn: Option<u64>,
+    anchor: u64,
+    delivery: CompletionDelivery,
+}
+
 impl<M: Serialize + Send + 'static> SessionControl<M> {
     pub fn completion_delivery(&self) -> CompletionDelivery {
         self.completions.policy()
@@ -21,25 +34,88 @@ impl<M: Serialize + Send + 'static> SessionControl<M> {
     pub fn completion_changes(&self) -> CompletionSignal {
         self.completions.inbox().signal()
     }
-    /// Explicitly authorize a producer, including a peer, to notify this live
-    /// receiver and current context. Transport/disclosure are independently owned.
-    pub fn completion_target(
-        &self,
+    /// Explicitly authorize a producer for the current committed context.
+    pub async fn completion_target(
+        &mut self,
         delivery: CompletionDelivery,
     ) -> Result<crate::CompletionTarget> {
-        ensure!(
-            !self.closed && !self.stop_requested,
-            "receiving control is stopped or closed"
-        );
-        if let Some(owner) = self.background() {
-            owner.ensure_open()?;
+        let plan = self.prepare_completion_target(delivery).await?;
+        self.finish_completion_target(plan)
+    }
+    /// Owned read preparation for transports that must release their controller
+    /// lock during I/O. No Store read or filesystem work occurs on this thread.
+    pub fn prepare_completion_target(
+        &self,
+        delivery: CompletionDelivery,
+    ) -> impl std::future::Future<Output = Result<CompletionTargetPlan>> + Send + 'static + use<M>
+    {
+        let prepared = (|| {
+            self.ensure_completion_target_open()?;
+            self.reconcile_admissions();
+            let turn = self
+                .active
+                .as_ref()
+                .and_then(|active| self.active_turn(active, &lock(&self.custody)));
+            // Validate policy now without reserving any producer capacity.
+            self.completions.target(0, turn, delivery)?;
+            let inbox = self.completions.inbox();
+            let revision = inbox.revision();
+            Ok((
+                self.session().reader()?,
+                CompletionTargetPlan {
+                    owner: self.owner,
+                    session: self.session().id(),
+                    inbox,
+                    revision,
+                    operation: self.current_operation(),
+                    turn,
+                    anchor: 0,
+                    delivery,
+                },
+            ))
+        })();
+        async move {
+            let (reader, mut plan) = prepared?;
+            plan.anchor = reader.view().await?.context_position().head_entry;
+            Ok(plan)
         }
-        let position = self.session().context_position()?;
+    }
+    pub fn finish_completion_target(
+        &mut self,
+        plan: CompletionTargetPlan,
+    ) -> Result<crate::CompletionTarget> {
+        self.ensure_completion_target_open()?;
+        self.reconcile_admissions();
+        let inbox = self.completions.inbox();
         let turn = self
             .active
             .as_ref()
             .and_then(|active| self.active_turn(active, &lock(&self.custody)));
-        self.completions.target(position.head_entry, turn, delivery)
+        ensure!(
+            plan.owner == self.owner
+                && plan.session == self.session().id()
+                && Arc::ptr_eq(&plan.inbox, &inbox)
+                && plan.revision == inbox.revision()
+                && plan.operation == self.current_operation()
+                && plan.turn == turn,
+            "completion target changed during context read; prepare again"
+        );
+        self.completions
+            .target(plan.anchor, plan.turn, plan.delivery)
+    }
+    fn ensure_completion_target_open(&self) -> Result<()> {
+        ensure!(
+            !self.closed && !self.stop_requested,
+            "receiving control is stopped or closed"
+        );
+        ensure!(
+            self.admitting.is_none(),
+            "receiving admission is not yet acknowledged"
+        );
+        if let Some(owner) = self.background() {
+            owner.ensure_open()?;
+        }
+        Ok(())
     }
     pub(super) fn turn_inbox(&self) -> Arc<SteeringInbox<InputId>> {
         Arc::new(
@@ -50,6 +126,7 @@ impl<M: Serialize + Send + 'static> SessionControl<M> {
     pub(super) fn wake_is_runnable(&self, custody: &Custody<M>) -> bool {
         !self.closed
             && !self.stop_requested
+            && self.binding.is_none()
             && custody.inputs.is_empty()
             && custody.updates.is_empty()
             && custody.occupied < MAX_ADMISSIONS
@@ -59,8 +136,11 @@ impl<M: Serialize + Send + 'static> SessionControl<M> {
         if self.closed
             || self.stop_requested
             || self.active.is_some()
+            || self.admitting.is_some()
+            || self.binding_running()
             || self.starting.is_some()
             || self.preparing.is_some()
+            || self.mcp_reconnect.is_some()
             || !self.completions.inbox().has_wake()
         {
             return;
@@ -75,69 +155,23 @@ impl<M: Serialize + Send + 'static> SessionControl<M> {
         let operation = OperationId(identity());
         let inbox = self.turn_inbox();
         let stop = self.work_stop();
-        let turn_stop = self.bind_turn_stop(stop.clone());
-        // Publish the operation/steering lease before completion callbacks can
-        // clear it. This is the same fence used by keyed human admission.
-        let mut custody = lock(&self.custody);
-        let result = self.setup.runtime.agent.submit_completions(
-            self.session().clone(),
-            self.setup.resources.instructions().to_owned(),
-            stop.clone(),
-            inbox.clone(),
-            turn_observer(self.observations.clone(), operation),
+        let agent = self.setup.runtime.agent.clone();
+        let session = self.session().clone();
+        let instructions = self.setup.resources.instructions().to_owned();
+        let work_stop = stop.clone();
+        let work_inbox = inbox.clone();
+        self.begin_admission(
+            operation,
+            stop,
+            inbox,
+            AdmissionPayload::Completion,
+            move |observer| async move {
+                Ok(AdmissionOutput::Completion(
+                    agent
+                        .submit_completions(session, instructions, work_stop, work_inbox, observer)
+                        .await?,
+                ))
+            },
         );
-        match result {
-            Ok(Some(ion_core::CompletionSubmission {
-                turn,
-                operation: work,
-            })) => {
-                custody.occupied += 1;
-                custody.steering_target = Some(SteeringTarget {
-                    operation,
-                    stop,
-                    fence: work.fence(),
-                });
-                custody.push_update(ControlUpdate::Automated {
-                    operation,
-                    turn: Some(turn),
-                });
-                self.active = Some(Active {
-                    id: operation,
-                    turn: Some(turn),
-                    root: None,
-                    work: Work::Turn(work),
-                    inbox,
-                    automated: true,
-                    metadata: None,
-                    turn_stop: turn_stop.as_ref().map(|binding| binding.scope()),
-                });
-            }
-            Ok(None) => {
-                drop(custody);
-                self.restore_turn_stop(turn_stop);
-            }
-            Err(error) => {
-                drop(custody);
-                self.restore_turn_stop(turn_stop);
-                // Do not retry an admission/storage failure on every idle poll.
-                self.request_stop();
-                let mut custody = lock(&self.custody);
-                custody.occupied += 1;
-                custody.push_update(ControlUpdate::Automated {
-                    operation,
-                    turn: None,
-                });
-                custody.push_update(ControlUpdate::Settled(Settlement {
-                    automated: true,
-                    operation,
-                    turn: None,
-                    outcome: OperationOutcome::Turn(Err(error)),
-                    stop_requested: true,
-                    accepted: Vec::new(),
-                    metadata: None,
-                    reservation: None,
-                }));
-            }
-        }
     }
 }
