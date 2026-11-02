@@ -68,7 +68,7 @@ impl Agent {
     /// Explicitly continue an unfinished Turn from one exact committed checkpoint.
     /// Missing observations become Unknown; no old call or guest is replayed.
     /// Retrying this checkpoint is stale, not another execution authorization.
-    pub fn resume_turn<F, M: Send + 'static>(
+    pub async fn resume_turn<F, M: Send + 'static>(
         &self,
         session: Arc<Session>,
         expected: RecoveryPoint,
@@ -80,46 +80,55 @@ impl Agent {
     where
         F: FnMut(AgentEvent) + Send + 'static,
     {
-        let result = session.operations.start_prepared(stop.clone(), || {
-            self.validate_context(&session, &stop)?;
-            if session.model_preference()?.as_ref() != Some(&self.model) {
-                return Err(AgentError::Session(SessionError::RecoveryAuthorityChanged));
-            }
-            self.service.validate_controls(
-                &self.model,
-                &self.limits.controls(session.reasoning()?, true),
-            )?;
-            let (binding, catalog) = self.admission_binding(&session, &instructions)?;
-            let binding = binding.ok_or(SessionError::RecoveryAuthorityChanged)?;
-            let (point, interrupted) = session.resume_turn(expected, &binding)?;
-            let agent = self.clone();
-            let session = session.clone();
+        let io = session.io()?;
+        let turn_io = session.io()?;
+        let agent = self.clone();
+        io.run_with(move |session| {
+            let mut observe = Some(observe);
+            let (point, operation) = session.operations.start_prepared(stop.clone(), || {
+                agent.validate_context(session, &stop)?;
+                if session.model_preference()?.as_ref() != Some(&agent.model) {
+                    return Err(AgentError::Session(SessionError::RecoveryAuthorityChanged));
+                }
+                agent.service.validate_controls(
+                    &agent.model,
+                    &agent.limits.controls(session.reasoning()?, true),
+                )?;
+                let (binding, catalog) = agent.admission_binding(session, &instructions)?;
+                let binding = binding.ok_or(SessionError::RecoveryAuthorityChanged)?;
+                let (point, interrupted) = session.resume_turn(expected, &binding)?;
+                let observe = observe.take().expect("resumed admission owns its observer");
+                Ok((
+                    point,
+                    Some(async move {
+                        let (mut observe, failed) = contained_observer(observe, stop.clone());
+                        let result = agent
+                            .run_admitted(
+                                turn_io,
+                                TurnStart {
+                                    turn: point.turn,
+                                    interrupted,
+                                    origin: TurnOrigin::Resumed { point },
+                                    catalog,
+                                },
+                                instructions,
+                                stop,
+                                steering.as_ref(),
+                                &mut observe,
+                            )
+                            .await;
+                        observation_result(
+                            result,
+                            failed.load(std::sync::atomic::Ordering::Relaxed),
+                        )
+                    }),
+                ))
+            })?;
             Ok((
                 point,
-                Some(async move {
-                    let (mut observe, failed) = contained_observer(observe, stop.clone());
-                    let result = agent
-                        .run_admitted(
-                            session.io()?,
-                            TurnStart {
-                                turn: point.turn,
-                                interrupted,
-                                origin: TurnOrigin::Resumed { point },
-                                catalog,
-                            },
-                            instructions,
-                            stop,
-                            steering.as_ref(),
-                            &mut observe,
-                        )
-                        .await;
-                    observation_result(result, failed.load(std::sync::atomic::Ordering::Relaxed))
-                }),
+                operation.expect("continuation always retains an operation"),
             ))
-        })?;
-        Ok((
-            result.0,
-            result.1.expect("continuation always retains an operation"),
-        ))
+        })
+        .await
     }
 }

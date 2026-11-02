@@ -266,7 +266,7 @@ impl Agent {
     /// Accept a literal message with stable delivery correlation. Only the message
     /// defines conflicting reuse; redelivery cannot change the original binding.
     /// An accepted request reconciles even while another operation is active.
-    pub fn submit_request<F, M: Send + 'static>(
+    pub async fn submit_request<F, M: Send + 'static>(
         &self,
         session: Arc<Session>,
         request: SubmissionRequest,
@@ -279,76 +279,106 @@ impl Agent {
         F: FnMut(AgentEvent) + Send + 'static,
     {
         let SubmissionRequest { key, input } = request;
-        if let Some(receipt) = session.reconcile_request(&key, &input)? {
+        // Reconciliation is read-only and remains available after shutdown. Do
+        // not let busy/closed admission or changed preflight hide a durable key.
+        let reader = session.reader()?;
+        if let Some(receipt) = reader.reconcile_request(&key, &input).await? {
             return Ok(RequestSubmission {
                 receipt,
                 operation: None,
             });
         }
-        let mut input = Some(input);
-        let result = session.operations.start_prepared(stop.clone(), || {
-            self.validate_submission(&session, input.as_ref().expect("unconsumed request"), &stop)?;
-            let (binding, catalog) = self.admission_binding(&session, &instructions)?;
-            let admission = session.admit_turn(
-                input.take().expect("validated request"),
-                self.model.clone(),
-                Some(key.clone()),
-                binding,
-            )?;
-            let (turn, entry, interrupted, input) = match admission {
-                TurnAdmission::Existing(receipt) => return Ok((receipt, None)),
-                TurnAdmission::New {
-                    turn,
-                    entry,
-                    interrupted,
-                    input,
-                } => (turn, entry, interrupted, input),
-            };
-            let receipt = RequestReceipt {
-                session: session.id(),
-                key: key.clone(),
-                turn,
-                end: None,
-            };
+        let admission = async {
+            let io = session.io()?;
+            // The Root may start before the admission worker joins. Its storage
+            // lane must not overlap the worker's retained operation.
+            let turn_io = session.io()?;
             let agent = self.clone();
-            let session = session.clone();
-            Ok((
-                receipt,
-                Some(async move {
-                    let (mut observe, failed) = contained_observer(observe, stop.clone());
-                    let result = agent
-                        .run_admitted(
-                            session.io()?,
-                            TurnStart {
+            let key = key.clone();
+            let input = input.clone();
+            io.run_with(move |session| {
+                // Borrow this slot in prepare: an early error must release the
+                // operation gate before dropping arbitrary observer captures.
+                let mut observe = Some(observe);
+                let (receipt, operation) =
+                    session.operations.start_prepared(stop.clone(), || {
+                        if let Some(receipt) = session.reconcile_request(&key, &input)? {
+                            return Ok((receipt, None));
+                        }
+                        agent.validate_submission(session, &input, &stop)?;
+                        let (binding, catalog) = agent.admission_binding(session, &instructions)?;
+                        let admission = session.admit_turn(
+                            input,
+                            agent.model.clone(),
+                            Some(key.clone()),
+                            binding,
+                        )?;
+                        let (turn, entry, interrupted, input) = match admission {
+                            TurnAdmission::Existing(receipt) => return Ok((receipt, None)),
+                            TurnAdmission::New {
                                 turn,
+                                entry,
                                 interrupted,
-                                origin: TurnOrigin::User { entry, input },
-                                catalog,
-                            },
-                            instructions,
-                            stop,
-                            steering.as_ref(),
-                            &mut observe,
-                        )
-                        .await;
-                    observation_result(result, failed.load(std::sync::atomic::Ordering::Relaxed))
-                }),
-            ))
-        });
-        match result {
-            Ok((receipt, operation)) => Ok(RequestSubmission { receipt, operation }),
+                                input,
+                            } => (turn, entry, interrupted, input),
+                        };
+                        let receipt = RequestReceipt {
+                            session: session.id(),
+                            key,
+                            turn,
+                            end: None,
+                        };
+                        let observe = observe.take().expect("new admission owns its observer");
+                        Ok((
+                            receipt,
+                            Some(async move {
+                                let (mut observe, failed) =
+                                    contained_observer(observe, stop.clone());
+                                let result = agent
+                                    .run_admitted(
+                                        turn_io,
+                                        TurnStart {
+                                            turn,
+                                            interrupted,
+                                            origin: TurnOrigin::User { entry, input },
+                                            catalog,
+                                        },
+                                        instructions,
+                                        stop,
+                                        steering.as_ref(),
+                                        &mut observe,
+                                    )
+                                    .await;
+                                observation_result(
+                                    result,
+                                    failed.load(std::sync::atomic::Ordering::Relaxed),
+                                )
+                            }),
+                        ))
+                    })?;
+                Ok::<_, AgentError>(RequestSubmission { receipt, operation })
+            })
+            .await
+        }
+        .await;
+        match admission {
+            Ok(submission) => Ok(submission),
             Err(error) => {
-                // Another owner may have committed between the optimistic lookup
-                // and operation reservation. Reconcile without taking its custody.
-                if let Some(input) = input.as_ref()
-                    && let Some(receipt) = session.reconcile_request(&key, input)?
-                {
-                    return Ok(RequestSubmission {
+                if matches!(&error, AgentError::Session(error) if error.is_commit_uncertain()) {
+                    return Err(error);
+                }
+                // A competing admission may commit before our reservation is
+                // refused. Reconcile without taking custody of that operation.
+                match reader.reconcile_request(&key, &input).await {
+                    Ok(Some(receipt)) => Ok(RequestSubmission {
                         receipt,
                         operation: None,
-                    });
+                    }),
+                    Err(SessionError::RequestConflict) => Err(SessionError::RequestConflict.into()),
+                    // A secondary read failure must not hide the actual worker
+                    // failure, especially an unknown task/effect outcome.
+                    Ok(None) | Err(_) => Err(error),
                 }
-                Err(error)
             }
         }
     }
@@ -709,6 +739,8 @@ impl AgentError {
     }
 }
 
+#[cfg(test)]
+mod admission_tests;
 #[cfg(test)]
 mod input_tests;
 #[cfg(test)]

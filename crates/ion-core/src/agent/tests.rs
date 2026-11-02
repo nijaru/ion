@@ -2119,6 +2119,7 @@ async fn completion_modes_preserve_natural_requests_and_typed_idle_turns() {
             inbox,
             move |event| observed.lock().unwrap().push(event),
         )
+        .await
         .unwrap()
         .unwrap();
     assert_eq!(turn, 2);
