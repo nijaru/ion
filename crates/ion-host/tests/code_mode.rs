@@ -1122,21 +1122,23 @@ async fn failed_guest_evidence_is_rediscovered_after_cut_and_reopen_without_reex
             .unwrap()
             .contains("PRIVATE_RAW")
     );
-    let parent = session
+    let failed = session
         .view()
         .unwrap()
         .entries
         .into_iter()
         .find_map(|entry| match entry {
             SessionEntry::ToolResult { result, .. } if result.call_id == "original" => {
-                Some(result.outcome.inspection_output().value["parent"].clone())
+                Some(result.outcome.inspection_output().into_owned())
             }
             _ => None,
         })
         .unwrap();
-    assert!(
-        parent.is_object(),
-        "failed guest did not expose a recovery locator"
+    assert!(failed.is_error);
+    let parent = failed.value["parent"].clone();
+    assert_eq!(
+        failed.value["recovery"]["query"],
+        json!({"kind":"children","parent":parent})
     );
     assert!(
         agent
@@ -1190,6 +1192,7 @@ async fn failed_guest_evidence_is_rediscovered_after_cut_and_reopen_without_reex
         .unwrap();
     assert!(!output.is_error, "{:?}", output.value);
     assert_eq!(output.value["calls"], 0);
+    assert!(output.value.get("recovery").is_none());
     assert_eq!(
         output.value["result"]["parents"]["parents"],
         json!([{"parent":parent,"child_count":2}])

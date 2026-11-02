@@ -742,6 +742,15 @@ pub(crate) async fn run<F: FnMut(AgentEvent) + Send>(
     counters.insert("calls".into(), json!(gate.calls));
     counters.insert("failed_calls".into(), json!(gate.failed));
     counters.insert("skipped_calls".into(), json!(gate.skipped));
+    if output.is_error && gate.calls > 0 {
+        counters.insert(
+            "recovery".into(),
+            json!({
+                "query": {"kind":"children", "parent":parent},
+                "notice": "Pass query to global inspectSaved to inspect saved child outcomes and output before retrying. A script error does not undo effects; do not rerun tools just to recover their output."
+            }),
+        );
+    }
     Ok(output)
 }
 

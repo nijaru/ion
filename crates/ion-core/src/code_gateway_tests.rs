@@ -299,6 +299,7 @@ async fn namespace_and_replies_share_one_delivery_budget() {
         .await
         .unwrap();
         assert_eq!(!output.is_error, succeeds, "{output:?}");
+        assert!(output.value.get("recovery").is_none());
         if succeeds {
             assert_eq!(output.value["result"], Value::Null);
         } else {
