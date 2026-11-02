@@ -41,6 +41,9 @@ impl Control {
         output: &mut Output<W>,
     ) -> Result<()> {
         match update {
+            ControlUpdate::RequestAdmission(decision) => self.request_decision(decision, output)?,
+            ControlUpdate::BindingFinished(finished) => self.binding_finished(finished, output)?,
+            ControlUpdate::RecoveryAdmission(_) => bail!("RPC has no recovery admission requester"),
             ControlUpdate::McpReconnectFinished(finished) => {
                 let mut record = json!({"type":"mcp_reconnect_finished","id":finished.metadata.id,
                     "operation":finished.operation,"server":finished.server,"stop_requested":finished.stop_requested});
@@ -178,6 +181,15 @@ impl Control {
                 self.suppress_activity = false;
                 let mut fatal = None;
                 let (record, credit) = match settlement.outcome {
+                    OperationOutcome::NotDispatched(error) => {
+                        let metadata = settlement
+                            .metadata
+                            .context("native preflight retains protocol metadata")?;
+                        (
+                            json!({"type":"shell_end","id":metadata.id,"status":"failed","dispatch":"not_dispatched","error":format!("{error:#}")}),
+                            Some(metadata.credit),
+                        )
+                    }
                     OperationOutcome::Turn(result) => {
                         if let Err(error) = &result {
                             fatal = unknown_agent_task(error);

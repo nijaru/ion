@@ -16,6 +16,8 @@ use crate::{
     stdio,
 };
 
+mod access;
+mod bindings;
 mod connection;
 mod input;
 mod lifecycle;
@@ -64,6 +66,9 @@ struct Control {
     gap: Option<u64>,
     refused: u64,
     unacknowledged_stops: u64,
+    accesses: futures_util::stream::FuturesUnordered<access::AccessFuture>,
+    binding_reply: Option<bindings::BindingReply>,
+    request_epoch: u64,
 }
 impl Control {
     fn new(setup: SessionSetup, services: Arc<ion_app::Host>) -> Self {
@@ -78,6 +83,9 @@ impl Control {
             gap: None,
             refused: 0,
             unacknowledged_stops: 0,
+            accesses: futures_util::stream::FuturesUnordered::new(),
+            binding_reply: None,
+            request_epoch: 0,
         }
     }
     fn session_id(&self) -> String {
@@ -90,6 +98,14 @@ impl Control {
             .context("application has no background owner")?
             .request_stop(run)?;
         Ok(json!({"run":run,"stop_requested":true}))
+    }
+
+    fn stop_requests(&mut self) {
+        self.request_epoch = self
+            .request_epoch
+            .checked_add(1)
+            .expect("RPC request epoch exhausted");
+        self.host.request_stop();
     }
 
     fn idle(&self) -> Result<()> {
@@ -121,16 +137,26 @@ impl Control {
                 Err(error) => Some((failure(id, command, &format!("{error:#}")), credit)),
             };
         }
+        match self.defer_command(&value, id.clone(), command, credit.clone()) {
+            Ok(true) => return None,
+            Err(error) => return Some((failure(id, command, &format!("{error:#}")), credit)),
+            Ok(false) => {}
+        }
         let outcome: Result<Value> = (|| {
             match command {
-                "submit_request" => self.submit_request(&value, id.clone(), credit.clone()),
                 "reconnect_mcp" => {
                     let server = required_string(&value, "server")?;
-                    let metadata = RpcMetadata { id: id.clone(), command: "reconnect_mcp", credit: credit.clone() };
-                    let operation = self.host.reconnect_mcp(server, metadata).map_err(|(_, error)| error)?;
+                    let metadata = RpcMetadata {
+                        id: id.clone(),
+                        command: "reconnect_mcp",
+                        credit: credit.clone(),
+                    };
+                    let operation = self
+                        .host
+                        .reconnect_mcp(server, metadata)
+                        .map_err(|(_, error)| error)?;
                     Ok(json!({"disposition":"admitted","operation":operation,"server":server}))
                 }
-                "get_request" => self.get_request(&value),
                 "get_question" => self.get_question(&value),
                 "answer_question" => self.answer_question(&value),
                 "cancel_question" => self.cancel_question(&value),
@@ -141,110 +167,78 @@ impl Control {
                     Ok(json!({"disposition":"requested","recovery":"input_return_events"}))
                 }
                 "abort" => {
-                    ensure!(self.host.is_busy(), "no active operation or input preparation");
-                    self.host.request_stop();
+                    let busy = self.host.is_busy() || !self.accesses.is_empty();
+                    self.stop_requests();
+                    ensure!(busy, "no active operation or input preparation");
                     Ok(json!({"disposition":"requested"}))
                 }
-                "get_state" => {
-                    let status = self.host.session().status()?;
-                    let state = self.host.state();
-                    let operation = state.operation.map(|operation| match operation.kind { ion_app::OperationKind::Turn => "turn", ion_app::OperationKind::Compact => "compact", ion_app::OperationKind::Shell => "shell" });
-                    Ok(json!({"session":self.session_id(),"cwd":status.cwd,"name":status.name,"model":self.host.agent().model(),"reasoning":status.reasoning.to_string(),"busy":state.busy,"operation":operation,"preparing_input":state.preparing_input,"mcp_reconnect":state.mcp_reconnect,"mcp_servers":self.host.mcp_servers(),"completion_delivery":state.completion_delivery,"entries":status.entries,"follow_ups":state.pending_follow_ups}))
-                }
                 "set_completion_delivery" => {
-                    let delivery = required_string(&value, "delivery")?.parse().map_err(anyhow::Error::msg)?;
+                    let delivery = required_string(&value, "delivery")?
+                        .parse()
+                        .map_err(anyhow::Error::msg)?;
                     self.host.set_completion_delivery(delivery)?;
-                    Ok(json!({"completion_delivery":self.host.completion_delivery(),"previous_grants":"revoked"}))
+                    Ok(
+                        json!({"completion_delivery":self.host.completion_delivery(),"previous_grants":"revoked"}),
+                    )
                 }
-                "get_background" => Ok(json!({"background":self.host.background().map(|owner| owner.snapshot())})),
+                "get_background" => {
+                    Ok(json!({"background":self.host.background().map(|owner| owner.snapshot())}))
+                }
                 "cancel_background" => self.cancel_background(&value),
                 "acknowledge_background" => {
                     let run = required_string(&value, "run")?.parse::<uuid::Uuid>()?;
-                    let owner = self.host.background().context("application has no background owner")?;
+                    let owner = self
+                        .host
+                        .background()
+                        .context("application has no background owner")?;
                     let result = owner.take(run).context("no joined result to acknowledge (running, unknown or already acknowledged)")??;
-                    Ok(json!({"receipt":result.receipt,"steering":result.steering,"progress":result.progress}))
+                    Ok(
+                        json!({"receipt":result.receipt,"steering":result.steering,"progress":result.progress}),
+                    )
                 }
-                "inspect" => inspection::to_value(&self.host.session().view()?),
-                "list_sessions" => Ok(json!(self.host.catalog().list()?.iter().map(|item| json!({"id":item.id,"name":item.name,"preview":item.preview,"turns":item.turns,"model":item.model})).collect::<Vec<_>>())),
-                "get_context" => {
-                    let view = self.host.session().view()?;
-                    Ok(json!({"position":view.context_position(),"points":view.context_points().iter().map(|point| json!({"entry":point.entry,"head_entry":point.head_entry,"restore_input":point.restore_input,"selected_path":point.selected_path,"preview":preview_input(&point.message)})).collect::<Vec<_>>()}))
-                }
-                "navigate_context" => {
-                    self.idle()?;
-                    let expected: ion_core::ContextPosition = serde_json::from_value(value.get("expected").context("expected context position is required")?.clone())?;
-                    let head = value.get("head_entry").and_then(Value::as_u64).context("head_entry must be an unsigned integer")?;
-                    let position = self.host.navigate_context(expected, head)?;
-                    Ok(json!({"position":position,"files_unchanged":true}))
-                }
-                "list_turns" => Ok(json!(self.host.session().view()?.turns().iter().map(|item| json!({"turn":item.turn,"preview":preview_input(&item.input),"ended":item.end.is_some()})).collect::<Vec<_>>())),
-                "list_models" => Ok(json!(self.services.models().choices(self.services.credentials())?.iter().map(|item| json!({"provider":item.selected.provider,"model":item.selected.model,"label":item.label,"image_input":item.selected.image_input})).collect::<Vec<_>>())),
-                "list_resources" => Ok(json!({"skills":self.host.resources().skills().map(|item| json!({"name":item.name,"description":item.description})).collect::<Vec<_>>(),"prompts":self.host.resources().templates().map(|item| json!({"name":item.name,"description":item.description})).collect::<Vec<_>>(),"diagnostics":self.host.resources().diagnostics().iter().map(|item| json!({"path":item.path,"message":item.message})).collect::<Vec<_>>()})),
-                "reload_resources" => {
-                    self.idle()?;
-                    self.host.reload_resources()?;
-                    Ok(json!({"skills":self.host.resources().skills().count(),"prompts":self.host.resources().templates().count()}))
-                }
+                "list_resources" => Ok(
+                    json!({"skills":self.host.resources().skills().map(|item| json!({"name":item.name,"description":item.description})).collect::<Vec<_>>(),"prompts":self.host.resources().templates().map(|item| json!({"name":item.name,"description":item.description})).collect::<Vec<_>>(),"diagnostics":self.host.resources().diagnostics().iter().map(|item| json!({"path":item.path,"message":item.message})).collect::<Vec<_>>()}),
+                ),
                 "compact" => {
                     fields(&value, &["type", "id", "instructions"])?;
-                    let instructions = value.get("instructions").map(|text| {
-                        text.as_str().context("instructions must be a string").map(str::to_owned)
-                    }).transpose()?;
-                    let metadata = RpcMetadata { id: id.clone(), command: "compact", credit: credit.clone() };
-                    self.host.compact(instructions, metadata).map_err(|(_, error)| error)?;
+                    let instructions = value
+                        .get("instructions")
+                        .map(|text| {
+                            text.as_str()
+                                .context("instructions must be a string")
+                                .map(str::to_owned)
+                        })
+                        .transpose()?;
+                    let metadata = RpcMetadata {
+                        id: id.clone(),
+                        command: "compact",
+                        credit: credit.clone(),
+                    };
+                    self.host
+                        .compact(instructions, metadata)
+                        .map_err(|(_, error)| error)?;
                     Ok(json!({"disposition":"started"}))
                 }
                 "shell" => {
                     let command = required_string(&value, "command")?;
                     ensure!(!command.trim().is_empty(), "command is empty");
-                    let excluded = value.get("exclude_from_context").map_or(Ok(false), |value| value.as_bool().context("exclude_from_context must be a boolean"))?;
-                    let metadata = RpcMetadata { id: id.clone(), command: "shell", credit: credit.clone() };
-                    self.host.shell(command.to_owned(), excluded, metadata).map_err(|(_, error)| error)?;
-                    Ok(json!({"disposition":"started"}))
-                }
-                "set_reasoning" => {
-                    self.idle()?;
-                    let reasoning = required_string(&value, "effort")?.parse::<ion_ai::Reasoning>().map_err(anyhow::Error::msg)?;
-                    self.host.select_reasoning(reasoning)?;
-                    Ok(json!({"reasoning":reasoning.to_string()}))
-                }
-                "set_model" => {
-                    self.idle()?;
-                    let provider = required_string(&value, "provider")?;
-                    let model = required_string(&value, "model")?;
-                    self.host.select_model(ion_ai::ModelRef { provider: provider.to_owned(), model: model.to_owned() })?;
-                    Ok(json!({"model":self.host.agent().model()}))
-                }
-                "new_session" => {
-                    self.idle()?;
-                    self.host.new_session()?;
-                    Ok(json!({"session":self.session_id(),"model":self.host.agent().model()}))
-                }
-                "clone_session" => {
-                    self.idle()?;
-                    let session = self.host.clone_session()?;
-                    Ok(json!({"session":session,"model":self.host.agent().model()}))
-                }
-                "fork" => {
-                    self.idle()?;
-                    let turn = value.get("turn").and_then(Value::as_u64).context("turn must be an unsigned integer")?;
-                    let after = value.get("after").map(|value| value.as_bool().context("after must be a boolean")).transpose()?.unwrap_or(false);
-                    self.host.fork_session(if after { ForkPoint::AfterTurn(turn) } else { ForkPoint::BeforeTurn(turn) })?;
-                    Ok(json!({"session":self.session_id(),"model":self.host.agent().model()}))
-                }
-                "switch_session" => {
-                    self.idle()?;
-                    self.host.switch_session(PathBuf::from(required_string(&value, "session")?))?;
-                    Ok(json!({"session":self.session_id(),"model":self.host.agent().model()}))
-                }
-                "set_name" => {
-                    self.idle()?;
-                    let name = match value.get("name") {
-                        None | Some(Value::Null) => None,
-                        Some(value) => Some(value.as_str().context("name must be a string or null")?),
+                    let excluded =
+                        value
+                            .get("exclude_from_context")
+                            .map_or(Ok(false), |value| {
+                                value
+                                    .as_bool()
+                                    .context("exclude_from_context must be a boolean")
+                            })?;
+                    let metadata = RpcMetadata {
+                        id: id.clone(),
+                        command: "shell",
+                        credit: credit.clone(),
                     };
-                    self.host.session().set_name(name)?;
-                    Ok(json!({"name":name}))
+                    self.host
+                        .shell(command.to_owned(), excluded, metadata)
+                        .map_err(|(_, error)| error)?;
+                    Ok(json!({"disposition":"started"}))
                 }
                 _ => bail!("unknown command: {command}"),
             }

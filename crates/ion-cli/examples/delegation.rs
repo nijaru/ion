@@ -319,20 +319,20 @@ async fn main() -> Result<()> {
     let input = Message::user_input("delegate the effect".into(), []);
     let run: Result<()> = async {
         if fork && !recovering {
-            control.submit_request(&ion_core::RequestKey::new("example".into(), "history".into())?, Message::user_input("fork source marker".into(), []), ()).map_err(|rejected| rejected.reason)?;
+            control.submit_request(&ion_core::RequestKey::new("example".into(), "history".into())?, Message::user_input("fork source marker".into(), []), ()).await.map_err(|rejected| rejected.reason)?;
             drive(&mut control).await?;
         }
         let old = if recovering { Some(session.view()?.delegations().first().context("missing original relationship")?.record.clone()) } else { None };
         let before = session.view()?.entries;
-        let admission = control.submit_request(&key, input, ()).map_err(|rejected| rejected.reason)?;
+        let admission = control.submit_request(&key, input, ()).await.map_err(|rejected| rejected.reason)?;
         if recovering {
             ensure!(matches!(admission, RequestAdmission::Existing { receipt, .. } if receipt.turn == parent_turn && (if background { receipt.end == Some(TurnEndReason::Completed) } else { receipt.end.is_none() })), "redelivery must only reconcile original work");
             ensure!(session.view()?.entries == before && !control.is_busy() && service.requests().is_empty(), "redelivery executed or changed work");
             if resume {
                 let point = session.recovery_state()?.context("continuation unavailable")?.point;
-                control.resume_turn(point, ()).map_err(|(_, error)| error)?;
+                control.resume_turn(point, ()).await.map_err(|failure| failure.reason)?;
             } else {
-                control.submit_request(&ion_core::RequestKey::new("example".into(), "fresh-delivery".into())?, Message::user_input("new explicit work".into(), []), ()).map_err(|rejected| rejected.reason)?;
+                control.submit_request(&ion_core::RequestKey::new("example".into(), "fresh-delivery".into())?, Message::user_input("new explicit work".into(), []), ()).await.map_err(|rejected| rejected.reason)?;
             }
         } else {
             ensure!(matches!(admission, RequestAdmission::Started { .. }), "first delivery did not start");

@@ -169,6 +169,13 @@ async fn foreground(
                 }
             }
             update = control.next(), if poll_control => match update {
+                ControlUpdate::BindingFinished(_) | ControlUpdate::RequestAdmission(_) | ControlUpdate::RecoveryAdmission(_) => {
+                    // This client launches only anonymous prompts or compaction.
+                    // Do not silently consume an unrequested management result.
+                    control.request_shutdown();
+                    request_shutdown();
+                    parent_result = Some(Err(anyhow!("unexpected application admission result in headless mode")));
+                }
                 ControlUpdate::McpReconnectFinished(finished) => {
                     let record = match finished.result {
                         Ok(report) => json!({"type":"mcp_reconnect_finished","server":finished.server,"success":true,"diagnostics":report.diagnostics}),
@@ -334,6 +341,7 @@ async fn foreground(
 
 fn answer(outcome: OperationOutcome) -> Result<String> {
     match outcome {
+        OperationOutcome::NotDispatched(error) => Err(error),
         OperationOutcome::Turn(result) => result.map_err(Into::into),
         OperationOutcome::Compact(result) => result
             .map(|changed| {

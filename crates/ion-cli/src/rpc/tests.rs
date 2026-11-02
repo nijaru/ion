@@ -24,6 +24,9 @@ struct Fixture {
 }
 impl Fixture {
     fn new() -> Self {
+        Self::with_application(None)
+    }
+    fn with_application(application: Option<Arc<dyn ion_app::Application>>) -> Self {
         let root = std::env::temp_dir().join(format!("ion-rpc-{}", uuid::Uuid::now_v7()));
         let cwd = root.join("work");
         fs::create_dir_all(&cwd).unwrap();
@@ -44,9 +47,20 @@ impl Fixture {
         let path = host.sessions(Some(cwd.clone())).new_path().unwrap();
         let session = Arc::new(ion_core::Session::create(path, Some(&cwd)).unwrap());
         session.select_model(selected.identity()).unwrap();
-        let setup = ion_app::CodingApplication::new(host.clone(), None)
-            .setup(session, selected, None, None, host.resources(&cwd).unwrap())
-            .unwrap();
+        let setup = match application {
+            Some(application) => ion_app::SessionSetup::new(
+                session,
+                host.sessions(Some(cwd.clone())),
+                application,
+                Some(&selected.identity()),
+                None,
+                None,
+            )
+            .unwrap(),
+            None => ion_app::CodingApplication::new(host.clone(), None)
+                .setup(session, selected, None, None, host.resources(&cwd).unwrap())
+                .unwrap(),
+        };
         Self {
             control: Some(Control::new(setup, host)),
             root,
@@ -68,10 +82,53 @@ fn records(bytes: &[u8]) -> Vec<Value> {
         .map(|line| serde_json::from_slice(line).unwrap())
         .collect()
 }
-fn invoke(control: &mut Control, value: Value) -> Option<Value> {
-    control
-        .command(value, ReplyCredits::new(1).acquire().unwrap())
-        .map(|(record, _)| record)
+struct Capture(Arc<std::sync::Mutex<Vec<u8>>>);
+impl AsyncWrite for Capture {
+    fn poll_write(
+        self: Pin<&mut Self>,
+        _: &mut TaskContext<'_>,
+        bytes: &[u8],
+    ) -> Poll<std::io::Result<usize>> {
+        self.0.lock().unwrap().extend_from_slice(bytes);
+        Poll::Ready(Ok(bytes.len()))
+    }
+    fn poll_flush(self: Pin<&mut Self>, _: &mut TaskContext<'_>) -> Poll<std::io::Result<()>> {
+        Poll::Ready(Ok(()))
+    }
+    fn poll_shutdown(self: Pin<&mut Self>, _: &mut TaskContext<'_>) -> Poll<std::io::Result<()>> {
+        Poll::Ready(Ok(()))
+    }
+}
+async fn invoke(control: &mut Control, value: Value) -> Option<Value> {
+    use futures_util::StreamExt;
+    if let Some((record, _)) = control.command(value, ReplyCredits::new(1).acquire().unwrap()) {
+        return Some(record);
+    }
+    if control.accesses.is_empty() && control.binding_reply.is_none() {
+        return None;
+    }
+    if let Some(reply) = control.accesses.next().await
+        && let Some((record, _)) = control.finish_access(reply, true)
+    {
+        return Some(serde_json::from_slice(&crate::publication::encode(record).unwrap()).unwrap());
+    }
+    let bytes = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let mut output = Output::new(Capture(bytes.clone()));
+    loop {
+        let update = control.host.next().await;
+        assert!(
+            !matches!(update, ControlUpdate::Idle),
+            "deferred command retains its result"
+        );
+        control.update(update, &mut output).unwrap();
+        output.finish().await.unwrap();
+        if let Some(record) = records(&bytes.lock().unwrap())
+            .into_iter()
+            .find(|record| record["type"] == "reply")
+        {
+            return Some(record);
+        }
+    }
 }
 async fn started_shell(control: &mut Control, root: &std::path::Path) {
     let ready = root.join("ready");
@@ -81,6 +138,7 @@ async fn started_shell(control: &mut Control, root: &std::path::Path) {
             control,
             json!({"type":"shell","id":"shell","command":command})
         )
+        .await
         .unwrap()["success"],
         true
     );
@@ -103,6 +161,7 @@ async fn shell_end_retains_complete_tool_output_and_session_artifacts() {
             &mut control,
             json!({"type":"shell","id":"capture","command":"printf '\\377'"})
         )
+        .await
         .unwrap()["success"],
         true
     );
@@ -223,6 +282,7 @@ async fn prompt_ack_is_only_the_durable_host_accepted_update() {
             &mut control,
             json!({"type":"prompt","id":"root","message":"literal input"})
         )
+        .await
         .is_none()
     );
     let mut bytes = Vec::new();
@@ -279,6 +339,7 @@ async fn unaccepted_followup_settlement_retains_its_protocol_correlation() {
             &mut control,
             json!({"type":"shell","id":"shell","command":"true"})
         )
+        .await
         .unwrap()["success"],
         true
     );
@@ -287,6 +348,7 @@ async fn unaccepted_followup_settlement_retains_its_protocol_correlation() {
             &mut control,
             json!({"type":"follow_up","id":"queued","message":"never dispatched to a provider"})
         )
+        .await
         .is_none()
     );
     // Close Core after the shell settles but before Host drives the queued

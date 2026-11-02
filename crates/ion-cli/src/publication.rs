@@ -10,6 +10,8 @@ use tokio::{
 pub(super) enum Record {
     Json(Value),
     Line(String),
+    /// Prepared by the same encoder on a retained native worker, newline included.
+    Encoded(Vec<u8>),
 }
 impl From<Value> for Record {
     fn from(value: Value) -> Self {
@@ -168,10 +170,11 @@ impl<W: AsyncWrite + Unpin> Output<W> {
         }
     }
 }
-fn encode(record: Record) -> Result<Vec<u8>> {
+pub(super) fn encode(record: Record) -> Result<Vec<u8>> {
     let mut bytes = match record {
         Record::Json(value) => serde_json::to_vec(&value)?,
         Record::Line(text) => text.into_bytes(),
+        Record::Encoded(bytes) => return Ok(bytes),
     };
     bytes.push(b'\n');
     Ok(bytes)

@@ -1566,10 +1566,11 @@ dependencies = [
  "arboard",
  "base64 0.22.1",
  "clap",
+ "futures-util",
  "ignore",
  "ion-ai",
- "ion-core",
  "ion-app",
+ "ion-core",
  "ion-terminal",
  "pulldown-cmark",
  "ratatui",
@@ -1598,24 +1599,6 @@ dependencies = [
  "serde_json",
  "thiserror 2.0.20",
  "tokio",
-]
-
-[[package]]
-name = "ion-core"
-version = "0.0.0"
-dependencies = [
- "base64 0.22.1",
- "futures-util",
- "ion-ai",
- "rusqlite",
- "rustix",
- "serde",
- "serde_json",
- "sha2",
- "thiserror 2.0.20",
- "tokio",
- "tokio-util",
- "uuid",
 ]
 
 [[package]]
@@ -1653,6 +1636,24 @@ dependencies = [
  "url",
  "uuid",
  "vt100",
+]
+
+[[package]]
+name = "ion-core"
+version = "0.0.0"
+dependencies = [
+ "base64 0.22.1",
+ "futures-util",
+ "ion-ai",
+ "rusqlite",
+ "rustix",
+ "serde",
+ "serde_json",
+ "sha2",
+ "thiserror 2.0.20",
+ "tokio",
+ "tokio-util",
+ "uuid",
 ]
 
 [[package]]

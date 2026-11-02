@@ -154,6 +154,8 @@ async fn serve(
     finish: CancellationToken,
 ) -> SessionControl<Metadata> {
     let mut completion_revision = 0;
+    type Read = BoxFuture<'static, Result<(ControlSnapshot<String>, ControlObserver)>>;
+    let mut inspection: Option<(Query, Read)> = None;
     loop {
         let state = control.state();
         let readiness = control.completion_changes();
@@ -163,13 +165,21 @@ async fn serve(
             // supervisor capabilities, not queued behind inspection or publication.
             _ = shutdown.cancelled(), if !state.closed => control.request_shutdown(),
             _ = stop.cancelled(), if !state.stop_requested => control.request_stop(),
-            _ = finish.cancelled(), if state.shutdown_complete => return control,
-            Some(query) = queries.recv() => {
-                let result = if query.grant.allowed && query.grant.session == control.session().id() {
-                    // Subscribe before the read. Activity remains a lossy hint;
-                    // callers replace snapshots, never splice it onto this cut.
-                    control.attach(|m| m.correlation.clone())
+            _ = finish.cancelled(), if state.shutdown_complete && inspection.is_none() => return control,
+            Some(query) = queries.recv(), if inspection.is_none() => {
+                let prepared = if query.grant.allowed && query.grant.session == control.session().id() {
+                    let observer = control.observe();
+                    control.prepare_snapshot(|m| m.correlation.clone()).map(|read| {
+                        Box::pin(async move { Ok((read.await?, observer)) }) as Read
+                    })
                 } else { Err(anyhow::anyhow!("inspection not authorized")) };
+                match prepared {
+                    Ok(read) => inspection = Some((query, read)),
+                    Err(error) => { let _ = query.reply.send(Reply { result: Err(error), _credit: query.credit }); }
+                }
+            }
+            result = async { inspection.as_mut().expect("enabled inspection").1.as_mut().await }, if inspection.is_some() => {
+                let (query, _) = inspection.take().expect("completed inspection");
                 let _ = query.reply.send(Reply { result, _credit: query.credit });
             }
             _ = async {
@@ -351,16 +361,18 @@ async fn qualify_projection(root: PathBuf) -> Result<()> {
         until(|| model.calls.load(Ordering::SeqCst) == 1).await?;
         let steering = control.steering().context("live steering grant")?;
         let mut submitted = None;
-        let captured = control.snapshot(|original| {
-            // Application projection can reenter shared input custody. It still
-            // borrows the original non-Clone/non-Sync value, not a reconstruction.
-            original.marker.set(8);
-            submitted = Some(steering.submit(
-                Message::user_input("from projection".into(), []),
-                metadata("guidance"),
-            ));
-            original.correlation.clone()
-        })?;
+        let captured = control
+            .snapshot(|original| {
+                // Application projection can reenter shared input custody. It still
+                // borrows the original non-Clone/non-Sync value, not a reconstruction.
+                original.marker.set(8);
+                submitted = Some(steering.submit(
+                    Message::user_input("from projection".into(), []),
+                    metadata("guidance"),
+                ));
+                original.correlation.clone()
+            })
+            .await?;
         let receipt = submitted
             .context("root metadata projected")?
             .map_err(|error| error.reason)?;
@@ -368,7 +380,9 @@ async fn qualify_projection(root: PathBuf) -> Result<()> {
             captured.inputs.len() == 1,
             "projection changed its captured cut"
         );
-        let next = control.snapshot(|original| original.correlation.clone())?;
+        let next = control
+            .snapshot(|original| original.correlation.clone())
+            .await?;
         ensure!(
             next.inputs.iter().any(|input| input.id == receipt.id),
             "steering missing from next cut"
@@ -451,7 +465,7 @@ async fn main() -> Result<()> {
     shutdown.cancel();
     finish.cancel();
     let mut control = task.await?;
-    let before = control.snapshot(|_| ())?.cursor;
+    let before = control.snapshot(|_| ()).await?.cursor;
     let report = control.shutdown().await;
     result.context("service qualification timed out")??;
     ensure!(report.cleanup_errors.is_empty(), "cleanup failed");
@@ -468,7 +482,7 @@ async fn main() -> Result<()> {
         None,
     )?
     .into_control::<Metadata>();
-    let after = replacement.snapshot(|_| ())?.cursor;
+    let after = replacement.snapshot(|_| ()).await?.cursor;
     ensure!(
         after.session == before.session
             && after.owner != before.owner

@@ -170,11 +170,11 @@ async fn main() -> Result<()> {
     let result: Result<()> = async {
         if resume {
             let state = control.session().recovery_state()?.context("no recoverable Turn")?;
-            let admission = control.resume_turn(state.point, ()).map_err(|(_, error)| error)?;
+            let admission = control.resume_turn(state.point, ()).await.map_err(|failure| failure.reason)?;
             ensure!(admission.point.turn == 1, "continued a different Turn");
         } else {
         let admission = control
-            .submit_request(&key, literal.clone(), ())
+            .submit_request(&key, literal.clone(), ()).await
             .map_err(|input| input.reason)?;
         ensure!(
             matches!(admission, RequestAdmission::Started { .. }),
@@ -183,7 +183,7 @@ async fn main() -> Result<()> {
         ensure!(
             matches!(
                 control
-                    .submit_request(&key, literal.clone(), ())
+                    .submit_request(&key, literal.clone(), ()).await
                     .map_err(|input| input.reason)?,
                 RequestAdmission::Existing { .. }
             ),
@@ -264,6 +264,7 @@ async fn main() -> Result<()> {
     .into_control::<()>();
     let admission = control
         .submit_request(&key, literal, ())
+        .await
         .map_err(|input| input.reason)?;
     ensure!(
         matches!(admission, RequestAdmission::Existing { receipt, .. } if receipt.session == session_id && receipt.turn == 1 && receipt.end == Some(TurnEndReason::Completed)),

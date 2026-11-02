@@ -59,24 +59,40 @@ async fn submit(args: Args, cwd: &Path, session: Arc<Session>) -> Result<()> {
         session.cwd() == Some(cwd),
         "Session belongs to a different working directory"
     );
-    let host = Arc::new(Host::from_environment()?);
-    let selected = host.models().choose(
-        Some(ion_ai::ModelRef {
-            provider: args.provider,
-            model: args.model,
-        }),
+    let io = session.io()?;
+    let (host, selected, resources) = io
+        .run(move |session| {
+            let result: Result<_> = (|| {
+                let host = Arc::new(Host::from_environment()?);
+                let selected = host.models().choose(
+                    Some(ion_ai::ModelRef {
+                        provider: args.provider,
+                        model: args.model,
+                    }),
+                    None,
+                    host.credentials(),
+                )?;
+                let resources = host.resources(
+                    session
+                        .cwd()
+                        .context("coding requires a working directory")?,
+                )?;
+                Ok((host, selected, resources))
+            })();
+            Ok(result)
+        })
+        .await??;
+    // Setup may retain this Session, so its worker/outcome live outside that
+    // Session's storage registry. There is no client-owned agent loop.
+    let mut preparation = ion_app::CodingApplication::new(host, None).prepare_setup(
+        session,
+        selected,
         None,
-        host.credentials(),
-    )?;
-    // This example connects no MCP servers and restores the saved reasoning
-    // preference instead of overriding it. There is no client-owned agent loop.
-    let resources = host.resources(
-        session
-            .cwd()
-            .context("coding requires a working directory")?,
-    )?;
-    let setup = ion_app::CodingApplication::new(host, None)
-        .setup(session, selected, None, None, resources)?;
+        None,
+        resources,
+        tokio_util::sync::CancellationToken::new(),
+    );
+    let setup = preparation.join().await?;
     let mut control = setup.into_control::<()>();
     let application_owner = control.owner();
     let mut outcome = prompt(&mut control, args.prompt).await;
@@ -138,6 +154,10 @@ async fn prompt(control: &mut SessionControl, text: String) -> Result<String> {
                     ReturnReason::PredecessorFailed => anyhow::anyhow!("input was not attempted because preceding work failed"),
                     reason => anyhow::anyhow!("input not accepted: {reason:?}"),
                 }),
+                ControlUpdate::Unresolved(input) => {
+                    rejection = Some(anyhow::anyhow!("input commit unresolved in Session {}; inspect before retrying", input.session));
+                    control.request_shutdown();
+                }
                 ControlUpdate::Idle => break Err(rejection.unwrap_or_else(|| anyhow::anyhow!("operation ended without settlement"))),
                 _ => {} // Passive progress never performs blocking publication.
             }

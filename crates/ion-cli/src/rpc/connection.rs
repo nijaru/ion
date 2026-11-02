@@ -5,6 +5,7 @@ use super::{
 };
 use crate::publication::{Output, ReplyCredits};
 use anyhow::Result;
+use futures_util::StreamExt;
 use ion_app::ControlUpdate;
 use serde_json::Value;
 use tokio::io::{AsyncBufRead, AsyncWrite};
@@ -63,6 +64,12 @@ pub(super) async fn connection<R: AsyncBufRead + Unpin, W: AsyncWrite + Unpin>(
                     poll_host = true;
                 }
                 published = output.advance(), if output.has_pending() => { published?; }
+                Some(reply) = control.accesses.next(), if !control.accesses.is_empty() => {
+                    if let Some((record, credit)) = control.finish_access(reply, true) {
+                        output.enqueue_reliable(record, credit)?;
+                    }
+                    poll_host = true;
+                }
                 update = control.host.next(), if poll_host => {
                     poll_host = !matches!(update, ControlUpdate::Idle);
                     control.update(update, &mut output)?;
@@ -89,7 +96,7 @@ pub(super) async fn connection<R: AsyncBufRead + Unpin, W: AsyncWrite + Unpin>(
                     };
                     let Some(credit) = pool.acquire() else {
                         if command == "abort" {
-                            control.host.request_stop();
+                            control.stop_requests();
                             poll_host = true;
                             control.unacknowledged_stops = control.unacknowledged_stops.saturating_add(1);
                         } else if command == "cancel_background" && value.as_ref().is_ok_and(|value| control.cancel_background(value).is_ok()) {
@@ -123,8 +130,22 @@ pub(super) async fn connection<R: AsyncBufRead + Unpin, W: AsyncWrite + Unpin>(
         // a resync request, not a fabricated count of missing shell events.
         control.mark_gap(0);
     }
-    let report = control.host.shutdown().await;
+    control.host.request_shutdown();
     let mut result = result;
+    // Keep owned reads and their credits through actual completion. EOF cannot
+    // turn a late read-only request plan into a new durable admission.
+    while let Some(reply) = control.accesses.next().await {
+        if let Some((record, credit)) = control.finish_access(reply, false)
+            && output.is_healthy()
+        {
+            result = combine_errors(
+                result,
+                output.enqueue_reliable(record, credit),
+                "pending access delivery also failed",
+            );
+        }
+    }
+    let report = control.host.shutdown().await;
     if let Some(owner) = &application_owner {
         result = combine_errors(
             result,

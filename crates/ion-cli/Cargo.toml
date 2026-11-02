@@ -10,6 +10,7 @@ anyhow = "1.0"
 arboard = { version = "3.6.1", features = ["wayland-data-control"] }
 base64 = "0.22.1"
 clap.workspace = true
+futures-util = "0.3.34"
 ignore = "0.4.33"
 ion-ai.workspace = true
 ion-core.workspace = true
