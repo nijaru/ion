@@ -166,6 +166,19 @@ pub struct ReturnedInput<M> {
     pub preparation_error: Option<anyhow::Error>,
     pub(super) reservation: Option<InputReservation>,
 }
+/// Exact custody with no safe replay claim. The read-only receipt may still
+/// resolve if a retained storage leaf outlives a failed root task.
+pub struct UnresolvedInput<M> {
+    pub session: uuid::Uuid,
+    pub id: InputId,
+    pub delivery: Delivery,
+    pub operation: OperationId,
+    pub input: UserInput,
+    pub metadata: M,
+    pub receipt: ion_core::InputReceipt,
+    pub(super) reservation: Option<InputReservation>,
+}
+
 pub struct AcceptedMetadata<M> {
     pub id: InputId,
     pub acceptance: super::InputAcceptance,
@@ -255,6 +268,7 @@ pub enum ControlUpdate<M> {
     /// this invalidation carries no payload and is omitted from snapshots.
     QuestionChanged,
     Returned(ReturnedInput<M>),
+    Unresolved(UnresolvedInput<M>),
     Settled(Settlement<M>),
     McpReconnectFinished(McpReconnectFinished<M>),
     /// No work remains now; admission remains open unless shutdown was requested.
@@ -268,6 +282,10 @@ impl<M> ControlUpdate<M> {
                 1
             }
             Self::Returned(input) => {
+                input.reservation.take();
+                1
+            }
+            Self::Unresolved(input) => {
                 input.reservation.take();
                 1
             }

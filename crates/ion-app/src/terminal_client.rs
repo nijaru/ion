@@ -138,6 +138,8 @@ struct Frontend {
     presenter: block_presenter::BlockPresenter,
     view: block_presenter::ConversationView,
     editor: Editor,
+    // Not editor drafts: no automatic restore or replay before reconciliation.
+    unresolved_inputs: Vec<ion_host::UnresolvedInput<EditorDraft>>,
     status: String,
     pickers: Pickers,
     details: Option<DetailView>,

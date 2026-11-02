@@ -83,6 +83,8 @@ mod completions;
 mod mcp;
 #[path = "preparation_tests.rs"]
 mod preparation;
+#[path = "receipt_tests.rs"]
+mod receipts;
 #[path = "snapshot_tests.rs"]
 mod snapshots;
 #[path = "steering_tests.rs"]
@@ -270,13 +272,21 @@ async fn settle(
 async fn wait_committed_end(control: &SessionControl<Metadata>) {
     tokio::time::timeout(Duration::from_secs(5), async {
         loop {
-            if control
-                .session()
-                .view()
-                .unwrap()
-                .entries
-                .iter()
-                .any(|entry| matches!(entry, ion_core::SessionEntry::TurnEnded { .. }))
+            let finished = control
+                .active
+                .as_ref()
+                .is_some_and(|active| match &active.work {
+                    Work::Turn(operation) => operation.fence().is_finished(),
+                    _ => false,
+                });
+            if finished
+                && control
+                    .session()
+                    .view()
+                    .unwrap()
+                    .entries
+                    .iter()
+                    .any(|entry| matches!(entry, ion_core::SessionEntry::TurnEnded { .. }))
             {
                 break;
             }

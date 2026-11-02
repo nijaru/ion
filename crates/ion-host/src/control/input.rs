@@ -88,12 +88,19 @@ impl<M: Serialize + Send + 'static> SessionControl<M> {
         let Some(active) = &self.active else {
             return;
         };
-        let returned = active.inbox.take_uncommitted();
+        let returned: Vec<_> = active
+            .inbox
+            .take_uncommitted()
+            .into_iter()
+            .map(|input| {
+                let (_, id, reservation) = input.into_parts();
+                drop(reservation);
+                id
+            })
+            .collect();
+        self.reconcile_admissions();
         let mut custody = lock(&self.custody);
-        for input in returned {
-            let (_, id, reservation) = input.into_parts();
-            drop(reservation);
-            custody.steering_order.retain(|queued| *queued != id);
+        for id in returned {
             let reason = match reason {
                 ReturnReason::Cleared => ReturnReason::Cleared,
                 _ => ReturnReason::Stopped,
@@ -103,6 +110,7 @@ impl<M: Serialize + Send + 'static> SessionControl<M> {
     }
 
     pub(super) fn advance(&mut self) {
+        self.reconcile_admissions();
         if self
             .background()
             .is_some_and(|owner| owner.ensure_open().is_err())
@@ -110,15 +118,15 @@ impl<M: Serialize + Send + 'static> SessionControl<M> {
             self.request_shutdown();
         }
         let mut custody = lock(&self.custody);
-        // A transferred steer stays in the inbox until Core's callback or a
-        // synchronized withdrawal. Never return a committed-but-not-yet-observed input.
+        // Transferred custody may be frozen in a blocking commit, not queued.
+        // Only a positive receipt or an actually returned ticket resolves it.
         let withdrawn: Vec<_> = custody
             .inputs
             .iter()
             .filter_map(|(&id, input)| {
                 let pending = input.pending()?;
                 (pending.withdrawn.is_some()
-                    && !custody.steering_order.contains(&id)
+                    && !matches!(pending.content, InputContent::Transferred { .. })
                     && self
                         .preparing
                         .as_ref()
@@ -150,8 +158,9 @@ impl<M: Serialize + Send + 'static> SessionControl<M> {
             .iter()
             .filter_map(|(&id, input)| match input.delivery {
                 Delivery::Steer(target)
-                    if input.pending().is_some()
-                        && self.current_operation() != Some(target)
+                    if input.pending().is_some_and(|pending| {
+                        !matches!(pending.content, InputContent::Transferred { .. })
+                    }) && self.current_operation() != Some(target)
                         && self
                             .preparing
                             .as_ref()
@@ -243,10 +252,9 @@ impl<M: Serialize + Send + 'static> SessionControl<M> {
                 if pending.withdrawn.is_some() {
                     continue;
                 }
-                let Some(prepared) = pending.take_ready() else {
+                let Some(prepared) = pending.take_ready(active.id) else {
                     break;
                 };
-                custody.steering_order.push_back(id);
                 active.inbox.push_prepared(prepared);
             }
         }
@@ -264,23 +272,16 @@ impl<M: Serialize + Send + 'static> SessionControl<M> {
                 && let Some(prepared) = custody
                     .inputs
                     .get_mut(&root)
-                    .and_then(|input| input.pending_mut()?.take_ready())
+                    .and_then(|input| input.pending_mut()?.take_ready(operation))
             {
-                let (message, _, reservation) = prepared.into_parts();
-                // Core owns its message; the Host original and metadata remain
-                // until the post-persistence callback, without text matching.
                 let pending = custody
                     .inputs
                     .get_mut(&root)
                     .unwrap()
                     .pending_mut()
                     .expect("dispatched root retains its original until acceptance");
-                pending.content = InputContent::Transferred {
-                    _reservation: Some(reservation),
-                };
                 let instructions = pending.instructions.clone();
                 let inbox = self.turn_inbox();
-                let state = self.custody.clone();
                 let observations = self.observations.clone();
                 custody.push_update(ControlUpdate::Dispatched {
                     id: root,
@@ -290,18 +291,19 @@ impl<M: Serialize + Send + 'static> SessionControl<M> {
                 let turn_stop = self
                     .bind_turn_stop(stop.clone())
                     .map(|binding| binding.scope());
+                let work = self.setup.runtime.agent.submit_prepared(
+                    self.setup.session.clone(),
+                    prepared,
+                    instructions,
+                    stop.clone(),
+                    Some(inbox.clone()),
+                    turn_observer(observations, operation),
+                );
                 custody.steering_target = Some(SteeringTarget {
                     operation,
-                    stop: stop.clone(),
-                });
-                let work = self.setup.runtime.agent.submit_message_with_steering(
-                    self.setup.session.clone(),
-                    message,
-                    instructions,
                     stop,
-                    inbox.clone(),
-                    turn_observer(state, observations, Some(root), operation),
-                );
+                    fence: work.fence(),
+                });
                 self.starting = None;
                 self.active = Some(Active {
                     id: operation,

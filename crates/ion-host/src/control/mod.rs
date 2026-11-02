@@ -10,8 +10,8 @@ use std::{
 use anyhow::{Context, Result, ensure};
 use ion_ai::Message;
 use ion_core::{
-    AgentError, AgentEvent, InputBudget, InputReservation, Operation, PreparedInput, SessionError,
-    SteeringInbox, ToolOutput,
+    AgentError, AgentEvent, InputBudget, InputReceipt, InputReservation, InputStatus, Operation,
+    PreparedInput, SessionError, SteeringInbox, ToolOutput,
 };
 use serde::Serialize;
 use tokio::sync::{broadcast, watch};
@@ -110,10 +110,8 @@ pub struct SessionControl<M = ()> {
     snapshot_sequence: u64,
     shutdown_complete: bool,
 }
-fn lock<M>(custody: &Mutex<Custody<M>>) -> MutexGuard<'_, Custody<M>> {
-    custody
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner)
+fn lock<M>(custody: &Mutex<Custody<M>>) -> custody::Guard<'_, M> {
+    custody::Guard::new(custody)
 }
 
 impl<M: Serialize + Send + 'static> SessionControl<M> {
@@ -179,6 +177,7 @@ impl<M: Serialize + Send + 'static> SessionControl<M> {
     }
     /// Derive client status from this owner rather than parallel frontend flags.
     pub fn state(&self) -> ControlState {
+        self.reconcile_admissions();
         let custody = lock(&self.custody);
         self.state_with(&custody)
     }
@@ -249,6 +248,51 @@ impl<M: Serialize + Send + 'static> SessionControl<M> {
                 .and_then(|input| input.acceptance().map(|accepted| accepted.turn))
         })
     }
+    fn reconcile_admissions(&self) {
+        if let Some(active) = &self.active {
+            self.reconcile_active(active);
+        }
+    }
+
+    fn reconcile_active(&self, active: &Active<M>) {
+        // Drain steering first, then sample the root: a committed steer must
+        // never become visible in Host custody ahead of its committed root.
+        let acknowledgements = active.inbox.take_committed();
+        let mut custody = lock(&self.custody);
+        if let Some(root) = active.root
+            && let Some(InputContent::Transferred { receipt, operation }) = custody
+                .inputs
+                .get(&root)
+                .and_then(Input::pending)
+                .map(|pending| &pending.content)
+            && let InputStatus::Committed(commit) = receipt.status()
+        {
+            assert_eq!(commit.session, self.session().id());
+            let operation = *operation;
+            custody.accept(root, operation, commit.turn);
+        }
+        for acknowledgement in &acknowledgements {
+            let InputStatus::Committed(commit) = acknowledgement.receipt().status() else {
+                unreachable!("Core queues only committed acknowledgements")
+            };
+            assert_eq!(commit.session, self.session().id());
+            let id = custody
+                .inputs
+                .iter()
+                .find_map(|(&id, input)| {
+                    let InputContent::Transferred { receipt, .. } = &input.pending()?.content
+                    else {
+                        return None;
+                    };
+                    receipt.same_input(acknowledgement.receipt()).then_some(id)
+                })
+                .expect("Core acknowledgement retains its exact Host input identity");
+            custody.accept(id, active.id, commit.turn);
+        }
+        drop(custody);
+        drop(acknowledgements);
+    }
+
     fn work_stop(&self) -> CancellationToken {
         self.background()
             .map_or_else(CancellationToken::new, |owner| owner.work_stop())
@@ -273,6 +317,7 @@ impl<M: Serialize + Send + 'static> SessionControl<M> {
                 .any(|update| update.with(|update| matches!(
                     update,
                     ControlUpdate::Returned(_)
+                        | ControlUpdate::Unresolved(_)
                         | ControlUpdate::Settled(_)
                         | ControlUpdate::McpReconnectFinished(_)
                 ))),
@@ -313,6 +358,7 @@ impl<M: Serialize + Send + 'static> SessionControl<M> {
             }, if self.question_changes.is_some() => Progress::Question,
         };
         // No await after consuming either completion until it is safely retained.
+        self.reconcile_admissions();
         match progress {
             Progress::Prepared(result) => self.finish_preparation(result),
             Progress::Settled(result) => self.finish_operation(result, activity),
@@ -327,6 +373,7 @@ impl<M: Serialize + Send + 'static> SessionControl<M> {
     fn finish_operation(&mut self, outcome: OperationOutcome, activity: ActivityRetention) {
         lock(&self.custody).steering_target = None;
         let active = self.active.take().expect("retained Core operation");
+        self.reconcile_active(&active);
         if outcome.failed() {
             self.completions
                 .revoke(ion_core::CompletionRevocation::OperationFailed);
@@ -354,13 +401,19 @@ impl<M: Serialize + Send + 'static> SessionControl<M> {
                 skipped: u64::try_from(skipped).expect("observation capacity fits u64"),
             }));
         }
-        let returned = active.inbox.take_uncommitted();
+        let returned: Vec<_> = active
+            .inbox
+            .take_uncommitted()
+            .into_iter()
+            .map(|input| {
+                let (_, id, reservation) = input.into_parts();
+                drop(reservation);
+                id
+            })
+            .collect();
+        self.reconcile_active(&active);
         let mut custody = lock(&self.custody);
-        let turn = self.active_turn(&active, &custody);
-        for input in returned {
-            let (_, id, reservation) = input.into_parts();
-            drop(reservation);
-            custody.steering_order.retain(|queued| *queued != id);
+        for id in returned {
             custody.return_input(
                 id,
                 if self.stop_requested {
@@ -370,47 +423,59 @@ impl<M: Serialize + Send + 'static> SessionControl<M> {
                 },
             );
         }
-        // Core removes an inbox entry only after persistence. Once joined, any
-        // transferred entry absent from the returned inbox is committed even if
-        // an observer failed before publishing its acknowledgement. Never return
-        // that guidance as unaccepted or make it eligible for replay.
-        while let Some(id) = custody.steering_order.pop_front() {
-            custody.accept(
-                id,
-                active.id,
-                turn.expect("consumed steering has an acknowledged Turn"),
-            );
-        }
-        let accepted_ids: Vec<_> = custody
+        // Even a failed publisher can leave positive receipts. Recover only
+        // those facts, in their durable order; queue absence proves nothing.
+        let dispositions: Vec<_> = custody
             .inputs
             .iter()
-            .filter_map(|(&id, input)| input.acceptance().is_some().then_some(id))
+            .filter_map(|(&id, input)| {
+                let InputContent::Transferred { receipt, operation } = &input.pending()?.content
+                else {
+                    return None;
+                };
+                assert_eq!(*operation, active.id);
+                Some((id, receipt.status()))
+            })
             .collect();
-        let mut accepted = Vec::new();
-        for id in accepted_ids {
-            let input = custody.inputs.remove(&id).unwrap();
-            let acceptance = input
-                .acceptance()
-                .expect("accepted metadata retains its Turn");
-            accepted.push(AcceptedMetadata {
-                id,
-                metadata: input.metadata.into_inner(),
-                acceptance,
-                reservation: Some(input.reservation),
-            });
+        let mut positive: Vec<_> = dispositions
+            .iter()
+            .filter_map(|(id, status)| {
+                let InputStatus::Committed(commit) = status else {
+                    return None;
+                };
+                Some((*commit, *id, active.id))
+            })
+            .collect();
+        positive.sort_by_key(|(commit, _, _)| commit.entry);
+        for (commit, id, operation) in positive {
+            assert_eq!(commit.session, self.session().id());
+            custody.accept(id, operation, commit.turn);
         }
-        if let Some(root) = active.root
-            && custody.inputs.contains_key(&root)
-        {
-            custody.return_input(
-                root,
-                if self.stop_requested {
-                    ReturnReason::Stopped
-                } else {
-                    ReturnReason::NotAccepted
-                },
-            );
+        let turn = self.active_turn(&active, &custody);
+        for (id, status) in dispositions {
+            if matches!(status, InputStatus::Committed(_)) {
+                continue;
+            }
+            if status == InputStatus::NotAccepted {
+                custody.return_input(
+                    id,
+                    if self.stop_requested {
+                        ReturnReason::Stopped
+                    } else {
+                        ReturnReason::NotAccepted
+                    },
+                );
+            } else {
+                custody.unresolved(id, self.session().id());
+            }
         }
+        let accepted = custody.take_accepted();
+        assert!(
+            active
+                .root
+                .is_none_or(|root| !custody.inputs.contains_key(&root)),
+            "joined root custody is resolved by its receipt"
+        );
         if outcome.failed() {
             for pending in custody.inputs.values_mut().filter_map(Input::pending_mut) {
                 pending.withdraw(ReturnReason::PredecessorFailed);
@@ -453,7 +518,8 @@ impl<M: Serialize + Send + 'static> SessionControl<M> {
             // drive retains every completion before it can yield. Selecting away
             // from it only abandons a borrowed wait, never a task or local outcome.
             if let Some(observation) = self.drive(ActivityRetention::Retain).await {
-                return ControlUpdate::Activity(observation);
+                // Newly discovered commit receipts precede this progress item.
+                lock(&self.custody).push_update(ControlUpdate::Activity(observation));
             }
         }
     }
@@ -508,16 +574,7 @@ impl<M> Drop for SessionControl<M> {
             active.work.stop();
         }
         self.completions.close();
-        let mut custody = lock(&self.custody);
-        custody.steering_target = None;
-        for input in custody.inputs.values() {
-            if input.pending().is_some()
-                && let Some(status) = &input.steering_status
-            {
-                status.publish(SteeringStatus::Unknown);
-            }
-        }
-        drop(custody);
+        lock(&self.custody).lost_control();
         if let Some(questions) = &self.setup.questions {
             questions.close(self.owner, "control_dropped");
         }

@@ -133,12 +133,15 @@ async fn snapshots_retain_bounded_recovery_without_consuming_owner_results() {
         RequestAdmission::Started { id, .. } => id,
         _ => panic!("fresh admission"),
     };
-    // Synchronous durable acceptance precedes the asynchronous Host callback.
-    // The view must not equate absent acknowledgement with absent admission.
+    // The durable request receipt acknowledges admission before asynchronous
+    // progress. No observer is needed to establish this fact.
     let early = control.snapshot(|m| m.literal.clone()).unwrap();
     assert_eq!(early.session.unfinished_turn, Some(1));
     assert_eq!(early.state.operation.unwrap().turn, Some(1));
-    assert!(matches!(early.inputs[0].phase, InputCustodyPhase::InFlight));
+    assert!(matches!(
+        early.inputs[0].phase,
+        InputCustodyPhase::Acknowledged(_)
+    ));
     assert_eq!(early.inputs[0].id, root);
     for i in 1..MAX_ADMISSIONS {
         control

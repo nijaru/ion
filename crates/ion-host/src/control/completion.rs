@@ -84,12 +84,7 @@ impl<M: Serialize + Send + 'static> SessionControl<M> {
             self.setup.resources.instructions().to_owned(),
             stop.clone(),
             inbox.clone(),
-            turn_observer(
-                self.custody.clone(),
-                self.observations.clone(),
-                None,
-                operation,
-            ),
+            turn_observer(self.observations.clone(), operation),
         );
         match result {
             Ok(Some(ion_core::CompletionSubmission {
@@ -97,7 +92,11 @@ impl<M: Serialize + Send + 'static> SessionControl<M> {
                 operation: work,
             })) => {
                 custody.occupied += 1;
-                custody.steering_target = Some(SteeringTarget { operation, stop });
+                custody.steering_target = Some(SteeringTarget {
+                    operation,
+                    stop,
+                    fence: work.fence(),
+                });
                 custody.push_update(ControlUpdate::Automated {
                     operation,
                     turn: Some(turn),

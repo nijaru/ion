@@ -1573,6 +1573,7 @@ dependencies = [
  "ion-terminal",
  "pulldown-cmark",
  "ratatui",
+ "rusqlite",
  "rustix",
  "serde",
  "serde_json",

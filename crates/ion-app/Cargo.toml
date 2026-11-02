@@ -28,5 +28,8 @@ unicode-segmentation = "1.13.3"
 unicode-width = "0.2.2"
 uuid = { version = "1.25.0", features = ["v7"] }
 
+[dev-dependencies]
+rusqlite = "0.40.2"
+
 [lints]
 workspace = true

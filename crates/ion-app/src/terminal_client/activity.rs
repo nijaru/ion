@@ -196,6 +196,11 @@ pub(super) fn apply(
             };
             ui.note(format!("{kind} returned: {reason}{fault}. Draft retained; {} additional draft(s) · {} cycles without resubmitting", ui.editor.recovered.len(), ui.keys.hint(crate::keybindings::KeyAction::Dequeue)));
         }
+        ControlUpdate::Unresolved(input) => {
+            ui.status = "Input commit unresolved; inspect Session before retrying".into();
+            ui.note(format!("Input commit is unresolved in Session {}. Original retained separately, not restored for retry:\n{}", input.session, input.metadata.literal));
+            ui.unresolved_inputs.push(input);
+        }
         ControlUpdate::Settled(settlement) => {
             ui.conversation.clear_live();
             let result = match settlement.outcome {
@@ -302,6 +307,56 @@ pub(super) fn combine_error(outcome: &mut Result<()>, error: anyhow::Error) {
 mod tests {
     use super::*;
     use std::sync::Arc;
+
+    #[tokio::test]
+    async fn uncertain_input_is_retained_separately_and_never_restored_or_resent() {
+        let mut fixture = super::super::tests::Fixture::new();
+        rusqlite::Connection::open(fixture.control.session().path()).unwrap().execute_batch(
+            "CREATE TABLE commit_parent (id INTEGER PRIMARY KEY);
+             CREATE TABLE commit_child (parent INTEGER REFERENCES commit_parent(id) DEFERRABLE INITIALLY DEFERRED);
+             CREATE TRIGGER uncertain_commit AFTER INSERT ON entries
+             BEGIN INSERT INTO commit_child(parent) VALUES (999); END;"
+        ).unwrap();
+        let literal = "  uncertain original 🦀\n";
+        fixture
+            .control
+            .submit(
+                Delivery::Start,
+                UserInput::Prompt {
+                    text: literal.into(),
+                    images: Vec::new(),
+                    files: Vec::new(),
+                },
+                EditorDraft::at_end(literal.into()),
+            )
+            .unwrap();
+        let mut ui = Frontend::default();
+        tokio::time::timeout(std::time::Duration::from_secs(5), async {
+            loop {
+                let update = fixture.control.next().await;
+                if matches!(update, ControlUpdate::Unresolved(_)) {
+                    apply(&mut ui, &fixture.control, update).unwrap();
+                    break;
+                }
+            }
+        })
+        .await
+        .unwrap();
+        assert!(ui.editor.draft.is_empty());
+        assert!(ui.editor.recovered.is_empty());
+        assert_eq!(ui.unresolved_inputs.len(), 1);
+        assert_eq!(ui.unresolved_inputs[0].metadata.literal, literal);
+        super::super::interaction::submit_editor(
+            &mut fixture.control,
+            &mut ui,
+            Delivery::Start,
+            EditorDraft::at_end("do not send".into()),
+        );
+        assert_eq!(ui.editor.draft, "do not send");
+        assert!(ui.status.contains("reconcile this Session"));
+        assert_eq!(ui.unresolved_inputs.len(), 1);
+        fixture.control.shutdown().await;
+    }
 
     #[tokio::test]
     async fn maintenance_is_not_input_preparation_or_stale_core_stop_intent() {

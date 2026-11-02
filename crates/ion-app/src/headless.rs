@@ -223,6 +223,10 @@ async fn foreground(
                         rejected = rejected.map(|first| first.context(format!("preparation also failed: {error:#}")));
                     }
                 }
+                ControlUpdate::Unresolved(input) => {
+                    rejected = Some(anyhow!("input commit is unresolved in Session {}; inspect it before retrying", input.session));
+                    request_shutdown();
+                }
                 ControlUpdate::Settled(settlement) => {
                     let result = answer(settlement.outcome);
                     if result.is_err() { request_shutdown(); }

@@ -13,7 +13,7 @@ pub enum SteeringStatus {
         input: UserInput,
         reason: ReturnSnapshot,
     },
-    /// Control was lost before joining; inspect committed Session facts.
+    /// Commit disposition is unresolved; inspect Session facts before retrying.
     Unknown,
 }
 
@@ -22,16 +22,40 @@ pub enum SteeringStatus {
 pub struct SteeringReceipt {
     pub id: InputId,
     status: watch::Receiver<SteeringStatus>,
+    core: InputReceipt,
+    operation: OperationId,
+    core_closed: bool,
 }
 impl SteeringReceipt {
     pub fn status(&self) -> SteeringStatus {
-        self.status.borrow().clone()
+        match self.core.status() {
+            InputStatus::Committed(commit) => SteeringStatus::Committed {
+                acceptance: InputAcceptance {
+                    operation: self.operation,
+                    turn: commit.turn,
+                },
+            },
+            InputStatus::Unresolved => SteeringStatus::Unknown,
+            _ => self.status.borrow().clone(),
+        }
     }
     pub async fn changed(&mut self) -> Result<(), watch::error::RecvError> {
-        self.status.changed().await
+        if self.core_closed {
+            return self.status.changed().await;
+        }
+        tokio::select! {
+            result = self.core.changed() => {
+                if result.is_err() { self.core_closed = true; }
+                // Closing the Core sender itself changes disposition. Read the
+                // final status once, then wait only on the Host monitor.
+                Ok(())
+            }
+            result = self.status.changed() => result,
+        }
     }
 }
 
+#[derive(Clone)]
 pub(super) struct SteeringMonitor {
     status: watch::Sender<SteeringStatus>,
     changed: Option<std::task::Waker>,
@@ -48,6 +72,7 @@ impl SteeringMonitor {
 pub(super) struct SteeringTarget {
     pub operation: OperationId,
     pub stop: CancellationToken,
+    pub fence: ion_core::OperationFence,
 }
 
 /// A live, literal-input grant for exactly one model operation. It cannot start
@@ -111,9 +136,9 @@ impl<M: Serialize + Send + 'static> TurnSteering<M> {
                 custody
                     .steering_target
                     .as_ref()
-                    .is_some_and(
-                        |target| target.operation == self.operation && !target.stop.is_cancelled()
-                    ),
+                    .is_some_and(|target| target.operation == self.operation
+                        && !target.stop.is_cancelled()
+                        && !target.fence.is_finished()),
                 "steering target is no longer accepting input"
             );
             ensure!(
@@ -138,6 +163,7 @@ impl<M: Serialize + Send + 'static> TurnSteering<M> {
                 }));
             }
         };
+        let core = prepared.receipt();
         let (status, receiver) = watch::channel(SteeringStatus::Queued);
         custody.occupied += 1;
         custody.inputs.insert(
@@ -173,6 +199,9 @@ impl<M: Serialize + Send + 'static> TurnSteering<M> {
         Ok(SteeringReceipt {
             id,
             status: receiver,
+            core,
+            operation: self.operation,
+            core_closed: false,
         })
     }
 }
@@ -180,7 +209,7 @@ impl<M: Serialize + Send + 'static> SessionControl<M> {
     pub fn steering(&self) -> Option<TurnSteering<M>> {
         let custody = lock(&self.custody);
         let target = custody.steering_target.as_ref()?;
-        if target.stop.is_cancelled() {
+        if target.stop.is_cancelled() || target.fence.is_finished() {
             return None;
         }
         Some(TurnSteering {

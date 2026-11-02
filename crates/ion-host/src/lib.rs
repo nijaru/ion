@@ -69,7 +69,7 @@ pub use control::{
     OperationOutcome, OperationState, OutcomeSnapshot, RecoveryAdmission, RejectedBatch,
     RejectedInput, RequestAdmission, ReturnReason, ReturnSnapshot, ReturnedInput, SessionControl,
     Settlement, ShutdownReport, SnapshotCursor, SteeringReceipt, SteeringStatus, TurnSteering,
-    UpdateSnapshot, UserInput, preflight_messages,
+    UnresolvedInput, UpdateSnapshot, UserInput, preflight_messages,
 };
 pub use credentials::{CredentialResolutionError, CredentialResolver};
 pub use delegation::{

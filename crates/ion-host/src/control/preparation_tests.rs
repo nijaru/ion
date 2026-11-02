@@ -29,6 +29,26 @@ async fn block_decoder() -> (std::sync::mpsc::Sender<()>, tokio::task::JoinHandl
     (release, worker)
 }
 
+// Gate the preparation result, not the whole shared blocking pool: Core now
+// legitimately needs that pool to admit and settle the concurrently running Turn.
+async fn hold_preparation(
+    control: &mut SessionControl<Metadata>,
+) -> tokio::sync::oneshot::Sender<()> {
+    let (id, mut preparation) = control.preparing.take().expect("image preparation");
+    let result = preparation.join().await;
+    let (release, waiting) = tokio::sync::oneshot::channel();
+    control.preparing = Some((
+        id,
+        crate::preparation::Preparation::start(CancellationToken::new(), move |_| async move {
+            waiting
+                .await
+                .context("release retained image preparation")?;
+            result
+        }),
+    ));
+    release
+}
+
 #[tokio::test]
 async fn literal_files_survive_expansion_image_preparation_and_rejected_input() {
     let model = Model::new(1);
@@ -252,13 +272,13 @@ async fn preparation_refusal_retains_exact_input_and_blocks_silent_replacement()
 #[test]
 fn preparation_overlaps_turns_but_a_late_steer_never_retargets() {
     runtime().block_on(async {
-        let (release, blocker) = block_decoder().await;
         let model = Model::new(1);
         let mut fixture = Fixture::new(model.clone(), true);
         fixture.control.submit(Delivery::Start, prompt("root"), meta("root")).unwrap();
         model.wait_calls(1).await;
         let target = fixture.control.current_operation().unwrap();
         let steer = fixture.control.submit(Delivery::Steer(target), image_prompt(), meta("  literal 🦀\n")).unwrap();
+        let release = hold_preparation(&mut fixture.control).await;
         let snapshot = fixture.control.snapshot(|_| ()).unwrap();
         let input = snapshot.inputs.iter().find(|input| input.id == steer).unwrap();
         assert_eq!(input.phase, InputCustodyPhase::PendingPreparation);
@@ -270,14 +290,13 @@ fn preparation_overlaps_turns_but_a_late_steer_never_retargets() {
         assert!(matches!(first.outcome, OperationOutcome::Turn(Ok(_))));
         model.wait_calls(2).await;
         assert_ne!(fixture.control.current_operation(), Some(target));
-        assert!(fixture.control.preparing.is_some(), "decoder must remain in retained custody while another Turn starts");
+        assert!(fixture.control.preparing.is_some(), "preparation must remain in retained custody while another Turn starts");
         assert!(fixture.control.new_session().is_err());
         fixture.control.reload_resources().unwrap();
         model.release();
         let (_, second) = settle(&mut fixture.control).await;
         assert!(matches!(second.outcome, OperationOutcome::Turn(Ok(_))));
         release.send(()).unwrap();
-        blocker.await.unwrap();
         let returned = tokio::time::timeout(Duration::from_secs(5), async {
             loop {
                 match fixture.control.next().await {
@@ -354,7 +373,6 @@ fn clear_preserves_initial_preparation_and_abandoned_shutdown_joins_it() {
 fn joining_preparation_preserves_the_first_withdrawal_cause() {
     runtime().block_on(async {
         for cause in ["failure", "clear", "stop"] {
-            let (release, blocker) = block_decoder().await;
             let model = Model::new(1);
             let mut fixture = Fixture::new(model.clone(), true);
             fixture.fault("json_extract(NEW.body, '$.kind') = 'assistant'");
@@ -367,8 +385,7 @@ fn joining_preparation_preserves_the_first_withdrawal_cause() {
                 .control
                 .submit(Delivery::FollowUp, image_prompt(), meta("original draft"))
                 .unwrap();
-            // Let the preparation enqueue its blocking decoder behind the held worker.
-            tokio::task::yield_now().await;
+            let release = hold_preparation(&mut fixture.control).await;
             match cause {
                 "clear" => fixture.control.clear_queue(),
                 "stop" => fixture.control.request_stop(),
@@ -400,7 +417,6 @@ fn joining_preparation_preserves_the_first_withdrawal_cause() {
             fixture.control.request_stop();
             fixture.control.clear_queue();
             release.send(()).unwrap();
-            blocker.await.unwrap();
             let report = fixture.control.shutdown().await;
             let returned = report
                 .updates

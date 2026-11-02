@@ -77,8 +77,9 @@ impl<M> SteeringInbox<M> {
             .pending
             .push_back(input);
     }
-    /// Only after the actual operation joins can remaining prepared custody be
-    /// treated as uncommitted. Stop and an abandoned wait are not that proof.
+    /// Withdraw unclaimed prepared custody. A frozen commit owns its inputs
+    /// outside this queue: absence, stop, or an abandoned wait proves nothing
+    /// about their acceptance. Resolve those inputs through their receipts.
     pub fn take_uncommitted(&self) -> Vec<PreparedInput<M>> {
         self.state
             .lock()

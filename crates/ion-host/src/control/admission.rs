@@ -246,25 +246,8 @@ impl<M: Serialize + Send + 'static> SessionControl<M> {
         let operation = OperationId(identity());
         let inbox = self.turn_inbox();
         let instructions = self.setup.resources.instructions().to_owned();
-        let mut custody = lock(&self.custody);
-        custody.inputs.insert(
-            id,
-            Input {
-                delivery: Delivery::Start,
-                metadata: SnapshotValue::new(metadata),
-                reservation: admission.reservation,
-                state: InputState::Pending(Box::new(PendingInput {
-                    original,
-                    instructions: instructions.clone(),
-                    content: InputContent::Transferred {
-                        _reservation: Some(inflight),
-                    },
-                    withdrawn: None,
-                })),
-                steering_status: None,
-            },
-        );
-        // Hold custody until the callback has a complete root to acknowledge.
+        // The returned durable receipt, not an observer, acknowledges keyed
+        // admission. Originals remain local until this synchronous admission ends.
         let turn_stop = self.bind_turn_stop(stop.clone());
         self.completions.rearm();
         let result = self.setup.runtime.agent.submit_request(
@@ -276,23 +259,39 @@ impl<M: Serialize + Send + 'static> SessionControl<M> {
             instructions,
             stop.clone(),
             Some(inbox.clone()),
-            turn_observer(
-                self.custody.clone(),
-                self.observations.clone(),
-                Some(id),
-                operation,
-            ),
+            turn_observer(self.observations.clone(), operation),
         );
+        drop(inflight);
         match result {
             Ok(ion_core::RequestSubmission {
                 receipt,
                 operation: Some(work),
             }) => {
+                let mut custody = lock(&self.custody);
                 custody.occupied += 1;
+                custody.inputs.insert(
+                    id,
+                    Input {
+                        delivery: Delivery::Start,
+                        metadata: SnapshotValue::new(metadata),
+                        reservation: admission.reservation,
+                        state: InputState::Accepted(InputAcceptance {
+                            operation,
+                            turn: receipt.turn,
+                        }),
+                        steering_status: None,
+                    },
+                );
                 custody.push_update(ControlUpdate::Dispatched { id, operation });
+                custody.push_update(ControlUpdate::Accepted {
+                    id,
+                    operation,
+                    turn: receipt.turn,
+                });
                 custody.steering_target = Some(SteeringTarget {
                     operation,
                     stop: stop.clone(),
+                    fence: work.fence(),
                 });
                 self.stop_requested = false;
                 self.active = Some(Active {
@@ -309,26 +308,14 @@ impl<M: Serialize + Send + 'static> SessionControl<M> {
             }
             result => {
                 self.restore_turn_stop(turn_stop);
-                let input = custody
-                    .inputs
-                    .remove(&id)
-                    .expect("unaccepted request retains custody");
                 match result {
                     Ok(ion_core::RequestSubmission { receipt, .. }) => {
-                        Ok(RequestAdmission::Existing {
-                            receipt,
-                            metadata: input.metadata.into_inner(),
-                        })
+                        Ok(RequestAdmission::Existing { receipt, metadata })
                     }
                     Err(reason) => Err(Box::new(RejectedInput {
                         delivery: Delivery::Start,
-                        input: match input.state {
-                            InputState::Pending(pending) => pending.original,
-                            InputState::Accepted(_) => {
-                                unreachable!("rejected request was not accepted")
-                            }
-                        },
-                        metadata: input.metadata.into_inner(),
+                        input: original,
+                        metadata,
                         reason: reason.into(),
                     })),
                 }
@@ -372,12 +359,7 @@ impl<M: Serialize + Send + 'static> SessionControl<M> {
             self.setup.resources.instructions().to_owned(),
             stop.clone(),
             Some(inbox.clone()),
-            turn_observer(
-                self.custody.clone(),
-                self.observations.clone(),
-                None,
-                operation,
-            ),
+            turn_observer(self.observations.clone(), operation),
         );
         let (point, work) = match result {
             Ok(value) => value,
@@ -388,7 +370,11 @@ impl<M: Serialize + Send + 'static> SessionControl<M> {
             }
         };
         custody.occupied += 1;
-        custody.steering_target = Some(SteeringTarget { operation, stop });
+        custody.steering_target = Some(SteeringTarget {
+            operation,
+            stop,
+            fence: work.fence(),
+        });
         drop(custody);
         self.stop_requested = false;
         self.active = Some(Active {
@@ -425,7 +411,10 @@ impl<M: Serialize + Send + 'static> SessionControl<M> {
                         || self
                             .active
                             .as_ref()
-                            .is_some_and(|active| matches!(active.work, Work::Turn(_))),
+                            .is_some_and(|active| match &active.work {
+                                Work::Turn(operation) => !operation.fence().is_finished(),
+                                _ => false,
+                            }),
                     "steering requires a model Turn"
                 );
             }

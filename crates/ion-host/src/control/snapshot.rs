@@ -112,6 +112,14 @@ pub enum UpdateSnapshot<T> {
         reason: ReturnSnapshot,
         preparation_error: Option<String>,
     },
+    Unresolved {
+        session: uuid::Uuid,
+        id: InputId,
+        delivery: Delivery,
+        operation: OperationId,
+        input: UserInput,
+        metadata: T,
+    },
     McpReconnectFinished {
         operation: OperationId,
         server: String,
@@ -188,6 +196,7 @@ impl<M: Serialize + Send + 'static> SessionControl<M> {
             .snapshot_sequence
             .checked_add(1)
             .context("snapshot sequence exhausted")?;
+        self.reconcile_admissions();
         let mcp_servers = self.mcp_servers();
         let custody = lock(&self.custody);
         let state = self.state_with(&custody);
@@ -297,6 +306,7 @@ impl<M: Serialize + Send + 'static> SessionControl<M> {
     /// recovery custody here, releasing their capacity. Persist or deliver them
     /// before claiming recovery elsewhere. Passive snapshots never release them.
     pub fn take_update(&mut self) -> Option<ControlUpdate<M>> {
+        self.reconcile_admissions();
         lock(&self.custody).pop()
     }
 }
@@ -341,6 +351,14 @@ fn update_snapshot<M, T>(
             metadata: metadata(&input.metadata),
             reason: (&input.reason).into(),
             preparation_error: input.preparation_error.as_ref().map(ToString::to_string),
+        },
+        ControlUpdate::Unresolved(input) => UpdateSnapshot::Unresolved {
+            session: input.session,
+            id: input.id,
+            delivery: input.delivery,
+            operation: input.operation,
+            input: input.input.clone(),
+            metadata: metadata(&input.metadata),
         },
         ControlUpdate::McpReconnectFinished(finished) => UpdateSnapshot::McpReconnectFinished {
             operation: finished.operation,

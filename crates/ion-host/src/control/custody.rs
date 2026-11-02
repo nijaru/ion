@@ -1,10 +1,8 @@
-//! Pending input payloads and atomic acknowledgement, separate from execution.
+//! Pending input payloads and positive Core acknowledgements, separate from execution.
 use super::*;
 
 // Snapshot captures retain values across release of the lifecycle mutex. M only
 // needs Send: its own mutex permits a borrowed projection without requiring Sync.
-// Only the controlling owner's exclusive methods extract or mutate these values;
-// Core acknowledgement and steering producers change custody, never their contents.
 pub(super) struct SnapshotValue<T>(Arc<Mutex<T>>);
 impl<T> Clone for SnapshotValue<T> {
     fn clone(&self) -> Self {
@@ -62,10 +60,9 @@ pub(super) struct PendingInput {
 pub(super) enum InputContent {
     Images(Message),
     Ready(PreparedInput<InputId>),
-    // Root dispatch keeps its message reservation here; transferred steering
-    // carries that reservation into Core's inbox instead.
     Transferred {
-        _reservation: Option<InputReservation>,
+        receipt: InputReceipt,
+        operation: OperationId,
     },
 }
 
@@ -94,41 +91,86 @@ impl<M> Input<M> {
 
 impl PendingInput {
     pub(super) fn withdraw(&mut self, reason: ReturnReason) {
-        // Joining preparation or shutdown must preserve the first withdrawal cause.
         self.withdrawn.get_or_insert(reason);
     }
 
-    pub(super) fn take_ready(&mut self) -> Option<PreparedInput<InputId>> {
-        if !matches!(self.content, InputContent::Ready(_)) {
+    pub(super) fn take_ready(&mut self, operation: OperationId) -> Option<PreparedInput<InputId>> {
+        let InputContent::Ready(prepared) = &self.content else {
             return None;
-        }
-        // No await or fallible publication between taking ready content and
-        // handing it off. The original remains recoverable until Core commits.
-        let InputContent::Ready(prepared) = std::mem::replace(
-            &mut self.content,
-            InputContent::Transferred { _reservation: None },
-        ) else {
+        };
+        let transferred = InputContent::Transferred {
+            receipt: prepared.receipt(),
+            operation,
+        };
+        let InputContent::Ready(prepared) = std::mem::replace(&mut self.content, transferred)
+        else {
             unreachable!("matched ready content")
         };
         Some(prepared)
     }
 }
 
+// Watch notifications and closing prepared custody can wake caller code. Defer
+// both until the lifecycle mutation is complete and the mutex is released.
+enum Deferred {
+    Notify(SteeringMonitor, SteeringStatus),
+    Pending(Box<PendingInput>),
+    Content(InputContent),
+    Monitor(SteeringMonitor),
+}
+
+pub(super) struct Guard<'a, M>(Option<MutexGuard<'a, Custody<M>>>);
+impl<'a, M> Guard<'a, M> {
+    pub(super) fn new(custody: &'a Mutex<Custody<M>>) -> Self {
+        Self(Some(
+            custody
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner),
+        ))
+    }
+}
+impl<M> std::ops::Deref for Guard<'_, M> {
+    type Target = Custody<M>;
+    fn deref(&self) -> &Self::Target {
+        self.0.as_ref().expect("held custody")
+    }
+}
+impl<M> std::ops::DerefMut for Guard<'_, M> {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        self.0.as_mut().expect("held custody")
+    }
+}
+impl<M> Drop for Guard<'_, M> {
+    fn drop(&mut self) {
+        let mut custody = self.0.take().expect("held custody");
+        let deferred = std::mem::take(&mut custody.deferred);
+        drop(custody);
+        for action in deferred {
+            match action {
+                Deferred::Notify(monitor, status) => monitor.publish(status),
+                Deferred::Pending(pending) => drop(pending),
+                Deferred::Content(content) => drop(content),
+                Deferred::Monitor(monitor) => drop(monitor),
+            }
+        }
+    }
+}
+
 pub(super) struct Custody<M> {
     pub(super) inputs: BTreeMap<InputId, Input<M>>,
     pub(super) updates: VecDeque<SnapshotValue<ControlUpdate<M>>>,
-    pub(super) steering_order: VecDeque<InputId>,
     pub(super) occupied: usize,
     pub(super) steering_target: Option<SteeringTarget>,
+    deferred: Vec<Deferred>,
 }
 impl<M> Default for Custody<M> {
     fn default() -> Self {
         Self {
             inputs: BTreeMap::new(),
             updates: VecDeque::new(),
-            steering_order: VecDeque::new(),
             occupied: 0,
             steering_target: None,
+            deferred: Vec::new(),
         }
     }
 }
@@ -150,11 +192,16 @@ impl<M> Custody<M> {
             "Core acknowledges transferred input once"
         );
         let acceptance = InputAcceptance { operation, turn };
-        // Drop all pending payload/reservations before fallible publication.
-        // Metadata remains separately budgeted until reliable settlement delivery.
-        input.state = InputState::Accepted(acceptance);
+        let previous = std::mem::replace(&mut input.state, InputState::Accepted(acceptance));
+        let InputState::Pending(pending) = previous else {
+            unreachable!("pending input")
+        };
+        self.deferred.push(Deferred::Pending(pending));
         if let Some(status) = &input.steering_status {
-            status.publish(SteeringStatus::Committed { acceptance });
+            self.deferred.push(Deferred::Notify(
+                status.clone(),
+                SteeringStatus::Committed { acceptance },
+            ));
         }
         self.push_update(ControlUpdate::Accepted {
             id,
@@ -169,23 +216,101 @@ impl<M> Custody<M> {
             .remove(&id)
             .expect("returned input retains Host custody");
         let InputState::Pending(pending) = input.state else {
-            panic!("committed input cannot be returned");
+            panic!("committed input cannot be returned")
         };
-        if let Some(status) = &input.steering_status {
-            status.publish(SteeringStatus::Returned {
-                input: pending.original.clone(),
-                reason: ReturnSnapshot::from(&reason),
-            });
+        let PendingInput {
+            original,
+            content,
+            withdrawn,
+            ..
+        } = *pending;
+        let reason = withdrawn.unwrap_or(reason);
+        if let Some(status) = input.steering_status {
+            self.deferred.push(Deferred::Notify(
+                status,
+                SteeringStatus::Returned {
+                    input: original.clone(),
+                    reason: ReturnSnapshot::from(&reason),
+                },
+            ));
         }
+        self.deferred.push(Deferred::Content(content));
         self.push_update(ControlUpdate::Returned(ReturnedInput {
             id,
             delivery: input.delivery,
-            input: pending.original,
+            input: original,
             metadata: input.metadata.into_inner(),
             reason,
             preparation_error: None,
             reservation: Some(input.reservation),
         }));
+    }
+
+    pub(super) fn unresolved(&mut self, id: InputId, session: uuid::Uuid) {
+        let input = self
+            .inputs
+            .remove(&id)
+            .expect("unresolved input retains Host custody");
+        let InputState::Pending(pending) = input.state else {
+            panic!("committed input is resolved")
+        };
+        let InputContent::Transferred { receipt, operation } = pending.content else {
+            panic!("only transferred custody can have an unresolved commit")
+        };
+        if let Some(status) = input.steering_status {
+            self.deferred
+                .push(Deferred::Notify(status, SteeringStatus::Unknown));
+        }
+        self.push_update(ControlUpdate::Unresolved(UnresolvedInput {
+            session,
+            id,
+            delivery: input.delivery,
+            operation,
+            receipt,
+            input: pending.original,
+            metadata: input.metadata.into_inner(),
+            reservation: Some(input.reservation),
+        }));
+    }
+
+    pub(super) fn take_accepted(&mut self) -> Vec<AcceptedMetadata<M>> {
+        let ids: Vec<_> = self
+            .inputs
+            .iter()
+            .filter_map(|(&id, input)| input.acceptance().map(|_| id))
+            .collect();
+        let mut accepted = Vec::with_capacity(ids.len());
+        for id in ids {
+            let input = self
+                .inputs
+                .remove(&id)
+                .expect("accepted metadata retains custody");
+            let acceptance = input
+                .acceptance()
+                .expect("accepted metadata retains its Turn");
+            if let Some(monitor) = input.steering_status {
+                self.deferred.push(Deferred::Monitor(monitor));
+            }
+            accepted.push(AcceptedMetadata {
+                id,
+                acceptance,
+                metadata: input.metadata.into_inner(),
+                reservation: Some(input.reservation),
+            });
+        }
+        accepted
+    }
+
+    pub(super) fn lost_control(&mut self) {
+        self.steering_target = None;
+        for input in self.inputs.values() {
+            if input.pending().is_some()
+                && let Some(status) = &input.steering_status
+            {
+                self.deferred
+                    .push(Deferred::Notify(status.clone(), SteeringStatus::Unknown));
+            }
+        }
     }
 
     pub(super) fn pop(&mut self) -> Option<ControlUpdate<M>> {
@@ -195,37 +320,11 @@ impl<M> Custody<M> {
     }
 }
 
-pub(super) fn turn_observer<M: Send + 'static>(
-    custody: Arc<Mutex<Custody<M>>>,
+pub(super) fn turn_observer(
     observations: broadcast::Sender<Observation>,
-    root: Option<InputId>,
     operation: OperationId,
 ) -> impl FnMut(AgentEvent) + Send + 'static {
     move |event| {
-        match &event {
-            AgentEvent::TurnAccepted { turn, .. } => {
-                lock(&custody).accept(root.expect("new Turn retains a root"), operation, *turn);
-            }
-            AgentEvent::SteeringCommitted { turn, .. } => {
-                let mut custody = lock(&custody);
-                let id = custody
-                    .steering_order
-                    .pop_front()
-                    .expect("Core commits controlled FIFO steering");
-                custody.accept(id, operation, *turn);
-            }
-            AgentEvent::TurnEnded { .. } => {
-                let mut custody = lock(&custody);
-                if custody
-                    .steering_target
-                    .as_ref()
-                    .is_some_and(|target| target.operation == operation)
-                {
-                    custody.steering_target = None;
-                }
-            }
-            _ => {}
-        }
         let _ = observations.send(Observation::Event {
             operation,
             event: Arc::new(event),

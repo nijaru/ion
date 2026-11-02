@@ -145,6 +145,33 @@ impl Control {
                 }
             }
             ControlUpdate::Returned(returned) => self.returned(returned, output)?,
+            ControlUpdate::Unresolved(input) => {
+                let correlation = self
+                    .correlations
+                    .remove(&input.id)
+                    .context("unresolved Host input has protocol correlation")?;
+                let metadata = input.metadata;
+                if output.is_healthy() {
+                    if !correlation.acknowledged {
+                        output.enqueue_reliable(
+                            failure(
+                                metadata.id.clone(),
+                                metadata.command,
+                                "input commit is unresolved; inspect Session before retrying",
+                            ),
+                            metadata.credit.clone(),
+                        )?;
+                    }
+                    output.enqueue_reliable(
+                        json!({
+                            "type":"unresolved_input", "id":metadata.id, "kind":metadata.command,
+                            "session":input.session, "operation":input.operation,
+                            "input":input.input, "status":input.receipt.status(), "can_retry":false,
+                        }),
+                        metadata.credit,
+                    )?;
+                }
+            }
             ControlUpdate::Settled(settlement) => {
                 // Settlement is authoritative even if no provisional event fit.
                 let progress_complete = !self.suppress_activity && self.gap.is_none();

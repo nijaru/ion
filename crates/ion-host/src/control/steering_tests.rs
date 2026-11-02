@@ -100,30 +100,19 @@ async fn joined_inbox_reconciliation_preserves_consumed_guidance_after_acknowled
             .any(|entry| matches!(entry,
         ion_core::SessionEntry::Steering { input, .. } if input == &message))
     );
-    // Inject a lost Host acknowledgement, not a failed Session commit: Core's
-    // actual inbox has consumed persisted input while the original remains in
-    // Host custody. Joined reconciliation must use that ownership evidence.
-    {
-        let mut custody = lock(&f.control.custody);
-        let input = custody.inputs.get_mut(&receipt.id).unwrap();
-        input.state = InputState::Pending(Box::new(PendingInput {
-            original: UserInput::Message(message),
-            instructions: String::new(),
-            content: InputContent::Transferred { _reservation: None },
-            withdrawn: None,
-        }));
-        input
-            .steering_status
-            .as_ref()
-            .unwrap()
-            .publish(SteeringStatus::Queued);
-        custody.steering_order.push_back(receipt.id);
-        custody.updates.retain(|update| {
-            update.with(
-                |update| !matches!(update, ControlUpdate::Accepted { id, .. } if *id == receipt.id),
-            )
-        });
-    }
+    // No Host poll occurred since the commit. Passive Core observations do not
+    // mutate Host custody, but the producer can already see its positive receipt.
+    assert!(
+        lock(&f.control.custody).inputs[&receipt.id]
+            .pending()
+            .is_some()
+    );
+    assert!(matches!(receipt.status(), SteeringStatus::Committed { .. }));
+    // Lose the ordered handoff, not the commit or its local identity. Final
+    // reconciliation must use the positive receipt, never infer from absence.
+    let lost = f.control.active.as_ref().unwrap().inbox.take_committed();
+    assert_eq!(lost.len(), 1);
+    drop(lost);
     model.release();
     let (returned, settled) = settle(&mut f.control).await;
     assert!(returned.is_empty());
