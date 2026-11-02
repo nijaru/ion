@@ -2,11 +2,12 @@
 use tokio_util::sync::CancellationToken;
 
 use super::*;
-use crate::Session;
+use crate::{Session, SessionIo};
 
 pub(super) type Completion = (DelegationOutcome, Option<String>);
 
 pub(super) async fn run_child(
+    io: Arc<SessionIo>,
     record: DelegationRecord,
     prepared: ChildMaterialization,
     work: DelegationWork,
@@ -25,7 +26,11 @@ pub(super) async fn run_child(
             None,
         );
     }
-    let child = match Session::materialize_delegation(&record, prepared) {
+    let materialization_record = record.clone();
+    let child = match io
+        .run(move |_| Session::materialize_delegation(&materialization_record, prepared))
+        .await
+    {
         Ok(child) => child,
         Err(error) => {
             let message = format!(
@@ -51,7 +56,12 @@ pub(super) async fn run_child(
     // Host must use it rather than start with an independent fresh token.
     let completion = work(child.clone(), submission, stop).await;
     let shutdown = child.shutdown().await;
-    let receipt = child.reconcile_request(&key, &record.spec.input);
+    // Host may already have closed the child's write admission. Read only
+    // after full shutdown; the reader retains its actual leaf and child lease.
+    let receipt = match child.reader() {
+        Ok(reader) => reader.reconcile_request(&key, &record.spec.input).await,
+        Err(error) => Err(error),
+    };
     let mut infrastructure = None;
     let mut errors = Vec::new();
     let mut answer = None;

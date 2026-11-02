@@ -37,6 +37,7 @@ impl Gateway {
         stop: &CancellationToken,
         tool: impl Future<Output = T> + Send,
     ) -> Result<T, SessionError> {
+        let io = Arc::new(parent.io()?);
         tokio::pin!(tool);
         let mut output = None;
         let mut receipt: Option<DelegationReceipt> = None;
@@ -87,7 +88,13 @@ impl Gateway {
                             *partial_output = Some(output);
                         }
                     }
-                    match parent.settle_delegation(&known.record, outcome.clone()) {
+                    let record = known.record.clone();
+                    let saved_outcome = outcome.clone();
+                    let job = run.job;
+                    match io.run(move |parent| {
+                        let _job = job;
+                        parent.settle_delegation(&record, saved_outcome)
+                    }).await {
                         Ok(()) => known.outcome = Some(outcome),
                         Err(error) => { fault = Some(error); }
                     }
@@ -108,7 +115,7 @@ impl Gateway {
                     // A closure racing the select can still be observed before
                     // installation; like stop racing commit, later closure may lose.
                     if run.reply.is_closed() { continue; }
-                    match transfer.slot.install(&mut run.job) {
+                    match transfer.slot.install(&mut run.job).await {
                         Ok(transferred) => {
                             let run = running.take().expect("transferred child");
                             receipt = Some(transferred.clone());
@@ -166,12 +173,42 @@ impl Gateway {
                         None => None,
                     };
                     let ownership = task.ownership();
-                    match parent.admit_delegation(self.site, task.spec, ownership) {
+                    // A destination reserves its late-settlement capabilities
+                    // while Open, before any intent or child work. Materialization
+                    // and transfer can overlap, so retain separate serial lanes.
+                    let lanes = match task.background.as_ref() {
+                        Some(destination) => parent.transferred_io(destination).and_then(|job_io| {
+                            parent.transferred_io(destination).map(|child_io| (Arc::new(job_io), Arc::new(child_io)))
+                        }),
+                        None => parent.io().map(|child_io| (io.clone(), Arc::new(child_io))),
+                    };
+                    let (job_io, child_io) = match lanes {
+                        Ok(lanes) => lanes,
+                        Err(error) => {
+                            stop.cancel(); fault = Some(error);
+                            let _ = sender.send(Err("delegation storage admission is closed".into()));
+                            continue;
+                        }
+                    };
+                    let site = self.site;
+                    let (retained, resources) = tokio::sync::oneshot::channel();
+                    match io.run(move |parent| {
+                        // Keep callback/reservations through actual admission.
+                        // Hand them back separately: an unread storage completion
+                        // must not later drop arbitrary Host code under a lane's
+                        // lifecycle lock. Failed delivery drops here, after Store
+                        // has released its transaction and mutex.
+                        let DelegationTask { spec, work, background } = task;
+                        let admitted = parent.admit_delegation(site, spec, ownership)?;
+                        let _ = retained.send((work, background));
+                        Ok(admitted)
+                    }).await {
                         Ok((record, prepared)) => {
-                            let mut job = BackgroundJob::new(parent.clone(), record.clone(), prepared, task.work, child_stop, stop.clone());
-                            let transfer = match task.background {
+                            let (work, background) = resources.await.expect("successful admission returns retained cold work");
+                            let mut job = BackgroundJob::new(job_io, child_io, record.clone(), prepared, work, child_stop, stop.clone());
+                            let transfer = match background {
                                 Some(plan) if plan.join_timeout.is_zero() => {
-                                    match plan.slot.install(&mut job) {
+                                    match plan.slot.install(&mut job).await {
                                         Ok(transferred) => {
                                             receipt = Some(transferred.clone());
                                             let _ = sender.send(Ok(transferred));
@@ -181,7 +218,12 @@ impl Gateway {
                                             // no callback was polled before this transfer.
                                             let (message, infrastructure) = start_error(error);
                                             let outcome = DelegationOutcome::Joined { execution_timed_out: false, elapsed_ms: None, partial_output: None, receipt: None, error: Some(message.clone()), answer: None };
-                                            if let Err(error) = parent.settle_delegation(&record, outcome.clone()) { fault = Some(error); }
+                                            let saved_record = record.clone();
+                                            let saved_outcome = outcome.clone();
+                                            if let Err(error) = io.run(move |parent| {
+                                                let _job = job;
+                                                parent.settle_delegation(&saved_record, saved_outcome)
+                                            }).await { fault = Some(error); }
                                             else { fault = infrastructure; }
                                             receipt = Some(DelegationReceipt { record, transferred: false, outcome: Some(outcome) });
                                             if fault.is_some() { stop.cancel(); }

@@ -15,6 +15,8 @@ pub use background::{BackgroundJob, BackgroundSlot, BackgroundStartError};
 pub use report::{DelegationPartialOutput, MAX_DELEGATION_PARTIAL_BYTES};
 pub(crate) mod gateway;
 #[cfg(test)]
+mod io_tests;
+#[cfg(test)]
 mod tests;
 
 /// Serializable coordinates are inspection data, not an execution permit.

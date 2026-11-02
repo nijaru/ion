@@ -20,6 +20,7 @@ use super::{RequestKey, RequestReceipt, Session, SessionError, SessionStatus, Se
 pub struct SessionIo {
     session: Arc<Session>,
     owner: Arc<OperationOwner>,
+    access: Access,
 }
 
 impl SessionIo {
@@ -31,6 +32,15 @@ impl SessionIo {
         Ok(Self {
             session: session.clone(),
             owner: session.storage.register()?,
+            access: Access::ReadWrite,
+        })
+    }
+
+    pub(super) fn new_transferred(session: &Arc<Session>) -> Result<Self, SessionError> {
+        Ok(Self {
+            session: session.clone(),
+            owner: session.storage.register_access(Access::Transferred)?,
+            access: Access::Transferred,
         })
     }
 
@@ -55,8 +65,68 @@ impl SessionIo {
         let session = self.session.clone();
         self.session
             .storage
+            .run(&self.owner, self.access, move || work(&session))
+            .await
+    }
+
+    // Initial ownership transfer is new admission, unlike later settlement by
+    // an already-transferred job. Even a reserved capability must require Open.
+    pub(crate) async fn run_open<T: Send + 'static>(
+        &self,
+        work: impl FnOnce(&Session) -> Result<T, SessionError> + Send + 'static,
+    ) -> Result<T, SessionError> {
+        let session = self.session.clone();
+        self.session
+            .storage
             .run(&self.owner, Access::ReadWrite, move || work(&session))
             .await
+    }
+
+    // Code Mode guests may occupy the entire Tokio blocking pool while waiting
+    // for inspection. Keep this bounded, independently provisioned leaf in the
+    // same lane registry, including Store selection and thread cleanup.
+    pub(crate) async fn run_on_thread<T: Send + 'static>(
+        &self,
+        work: impl FnOnce(&Session) -> Result<T, SessionError> + Send + 'static,
+    ) -> Result<T, SessionError> {
+        let admission = self.session.storage.admit(self.access)?;
+        let session = self.session.clone();
+        let operation = self
+            .owner
+            .start(tokio_util::sync::CancellationToken::new(), async move {
+                let (sender, result) = tokio::sync::oneshot::channel();
+                let worker = std::thread::Builder::new()
+                    .name("ion-code-inspection".into())
+                    .spawn(move || {
+                        let outcome = work(&session);
+                        drop(session);
+                        let _ = sender.send(outcome);
+                    })?;
+                let mut worker = JoinedThread(Some(worker));
+                let outcome = result.await;
+                if let Err(panic) = worker.0.take().expect("retained inspection thread").join() {
+                    std::panic::resume_unwind(panic);
+                }
+                outcome.map_err(|error| {
+                    SessionError::Storage(format!("inspection worker failed: {error}"))
+                })?
+            });
+        drop(admission);
+        operation.await
+    }
+}
+
+// Normally only thread exit remains after its completion signal. If the owning
+// Tokio task is aborted or panics first, its destruction must still join actual
+// I/O before Operation custody can report that task finished. Runtime teardown
+// may therefore block here; dropping a JoinHandle must never detach the reader.
+struct JoinedThread(Option<std::thread::JoinHandle<()>>);
+
+impl Drop for JoinedThread {
+    fn drop(&mut self) {
+        if let Some(worker) = self.0.take() {
+            let _ = worker.join();
+        }
     }
 }
 
@@ -131,6 +201,9 @@ pub(super) struct StorageWork {
 pub(super) enum Access {
     ReadWrite,
     ReadOnly,
+    // Reserved only by live background admission while Open. The destination's
+    // existing job custody owns later use, not the parent's engine lifetime.
+    Transferred,
 }
 
 #[derive(Default)]
@@ -143,7 +216,9 @@ enum Phase {
 
 impl Phase {
     fn admits(&self, access: Access) -> bool {
-        matches!(self, Self::Open) || matches!((self, access), (Self::Closed, Access::ReadOnly))
+        matches!(self, Self::Open)
+            || matches!(access, Access::Transferred)
+            || matches!((self, access), (Self::Closed, Access::ReadOnly))
     }
 }
 
@@ -220,7 +295,11 @@ impl StorageWork {
             .state
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        if !state.phase.admits(access) {
+        // Only already-reserved transferred lanes survive closing. This is not
+        // a factory for new write authority after Session shutdown.
+        if !state.phase.admits(access)
+            || (matches!(access, Access::Transferred) && !matches!(state.phase, Phase::Open))
+        {
             return Err(OperationError::Closed);
         }
         let owner = Arc::new(OperationOwner::default());
@@ -275,9 +354,11 @@ impl StorageWork {
             }
             changed.await;
         };
-        // The registry permanently closes write admission; owners themselves
-        // stay reusable for explicit readers after this join. Join every owner
-        // even after a failure. Cancellation retains Closing and task custody.
+        // Ordinary write admission stays closed; readers and privately reserved
+        // transferred lanes retain their explicit access. This cut joins leaf
+        // I/O, not transferred native jobs: their existing destination custody
+        // can admit later settlement, including during this join. Join every
+        // owner after failure. Cancellation retains Closing and task custody.
         let mut errors = Vec::new();
         for owner in owners {
             if let Err(error) = owner.join().await {

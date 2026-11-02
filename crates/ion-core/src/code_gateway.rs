@@ -19,7 +19,7 @@ use crate::{
     agent::{AgentError, AgentEvent},
     composition::failure,
     json_size::encoded_len,
-    session::{Session, SessionError, code_inspection::InspectionError},
+    session::{Session, SessionError, SessionIo, code_inspection::InspectionError},
     tool_result::ToolOutput,
     tool_set::{ToolCatalog, ToolDispatch, ToolExecution},
 };
@@ -69,12 +69,12 @@ fn search_tools(
 
 struct Inspection {
     reply: oneshot::Sender<CodeReply>,
-    result: oneshot::Receiver<Result<Option<Value>, InspectionError>>,
-    worker: std::thread::JoinHandle<()>,
+    result: BoxFuture<'static, Result<Option<Value>, InspectionError>>,
 }
 
 struct Gate<'a, F> {
-    session: &'a Arc<Session>,
+    io: SessionIo,
+    inspection_io: Arc<SessionIo>,
     catalog: &'a ToolCatalog,
     observe: &'a mut F,
     turn: u64,
@@ -139,7 +139,7 @@ impl<F: FnMut(AgentEvent)> Gate<'_, F> {
         }
     }
 
-    fn accept(&mut self, request: CodeRequest) {
+    async fn accept(&mut self, request: CodeRequest) {
         match request.kind {
             CodeRequestKind::DescribeTool { name } => {
                 if self.stop.is_cancelled() {
@@ -184,54 +184,34 @@ impl<F: FnMut(AgentEvent)> Gate<'_, F> {
                         .reply
                         .send(Err("inspection query JSON byte limit exceeded".into()));
                 } else {
-                    match self
-                        .session
-                        .prepare_code_inspection(&query_json, self.parent)
-                    {
-                        Ok(inspection) => {
-                            let stop = self.stop.clone();
-                            let (sender, result) = oneshot::channel();
-                            // A guest can occupy the runtime's only blocking
-                            // thread while awaiting this reply. This bounded,
-                            // owned reader must have independent capacity.
-                            let worker = std::thread::Builder::new()
-                                .name("ion-code-inspection".into())
-                                .spawn(move || {
-                                    let outcome = if stop.is_cancelled() {
-                                        Ok(None)
-                                    } else {
-                                        inspection.read().map(Some)
-                                    };
-                                    let _ = sender.send(outcome);
-                                });
-                            match worker {
-                                Ok(worker) => {
-                                    self.inspection = Some(Inspection {
-                                        reply: request.reply,
-                                        result,
-                                        worker,
-                                    });
+                    let io = self.inspection_io.clone();
+                    let parent = self.parent;
+                    let stop = self.stop.clone();
+                    // A guest may occupy Tokio's only blocking thread while
+                    // awaiting this reply. Retain independent read capacity,
+                    // including Store selection, not just the SQLite read.
+                    self.inspection = Some(Inspection {
+                        reply: request.reply,
+                        result: Box::pin(async move {
+                            io.run_on_thread(move |session| {
+                                let result = if stop.is_cancelled() {
+                                    Ok(None)
+                                } else {
+                                    session
+                                        .prepare_code_inspection(&query_json, parent)
+                                        .and_then(|inspection| inspection.read())
+                                        .map(Some)
+                                };
+                                match result {
+                                    Ok(value) => Ok(Ok(value)),
+                                    Err(InspectionError::Request(error)) => Ok(Err(error)),
+                                    Err(InspectionError::Session(error)) => Err(error),
                                 }
-                                Err(error) => {
-                                    self.close(&format!(
-                                        "saved child inspection could not start: {error}"
-                                    ));
-                                    let _ = request
-                                        .reply
-                                        .send(Err("saved child inspection could not start".into()));
-                                }
-                            }
-                        }
-                        Err(InspectionError::Request(error)) => {
-                            let _ = request.reply.send(Err(error));
-                        }
-                        Err(InspectionError::Session(error)) => {
-                            self.storage_fault(error);
-                            let _ = request
-                                .reply
-                                .send(Err("saved child evidence could not be read".into()));
-                        }
-                    }
+                            })
+                            .await?
+                            .map_err(InspectionError::Request)
+                        }),
+                    });
                 }
             }
             CodeRequestKind::Call { name, args_json } => {
@@ -289,7 +269,13 @@ impl<F: FnMut(AgentEvent)> Gate<'_, F> {
                     activity: self.catalog.activity(&call),
                     call,
                 };
-                match self.session.record_child_intent(self.turn, intent.clone()) {
+                let turn = self.turn;
+                let saved = intent.clone();
+                match self
+                    .io
+                    .run(move |session| session.record_child_intent(turn, saved))
+                    .await
+                {
                     Ok(()) => {
                         self.calls += 1;
                         self.audit(&intent);
@@ -316,47 +302,36 @@ impl<F: FnMut(AgentEvent)> Gate<'_, F> {
     fn complete_inspection(
         &mut self,
         inspection: Inspection,
-        result: Result<Result<Option<Value>, InspectionError>, oneshot::error::RecvError>,
+        result: Result<Option<Value>, InspectionError>,
     ) {
-        // The completion channel follows all database/decoding cleanup. Only
-        // thread exit remains to join; no filesystem work follows the signal.
-        if inspection.worker.join().is_err() {
-            self.close("saved child inspection worker panicked");
-            let _ = inspection
-                .reply
-                .send(Err("saved child inspection worker panicked".into()));
-            return;
-        }
         let reply = inspection.reply;
         match result {
-            Ok(Ok(Some(value))) if !self.stop.is_cancelled() => self.reply(reply, &value),
-            Ok(Ok(_)) => {
+            Ok(Some(value)) if !self.stop.is_cancelled() => self.reply(reply, &value),
+            Ok(_) => {
                 let _ = reply.send(Err("guest stopped".into()));
             }
-            Ok(Err(InspectionError::Request(error))) => {
+            Err(InspectionError::Request(error)) => {
                 let _ = reply.send(Err(error));
             }
-            Ok(Err(InspectionError::Session(error))) => {
+            Err(InspectionError::Session(error)) => {
                 self.storage_fault(error);
                 let _ = reply.send(Err("saved child evidence could not be read".into()));
-            }
-            Err(error) => {
-                self.close(&format!("saved child inspection worker failed: {error}"));
-                let _ = reply.send(Err("saved child inspection worker failed".into()));
             }
         }
     }
 
-    fn complete(&mut self, admitted: Admitted, outcome: ChildOutcome) {
+    async fn complete(&mut self, admitted: Admitted, outcome: ChildOutcome) {
         self.failed +=
             usize::from(matches!(&outcome, ChildOutcome::Observed { output } if output.is_error));
         self.skipped += usize::from(matches!(outcome, ChildOutcome::NotDispatched { .. }));
-        match self.session.record_child_outcome(
-            self.turn,
-            self.parent,
-            admitted.intent.child,
-            outcome,
-        ) {
+        let turn = self.turn;
+        let parent = self.parent;
+        let child = admitted.intent.child;
+        match self
+            .io
+            .run(move |session| session.record_child_outcome(turn, parent, child, outcome))
+            .await
+        {
             Ok(outcome) => {
                 self.audit(&outcome);
                 match &outcome {
@@ -580,6 +555,8 @@ pub(crate) async fn run<F: FnMut(AgentEvent) + Send>(
         Err(error) => return Ok(failure(error)),
     };
     let host_bytes = tools_json.len();
+    let io = session.io()?;
+    let inspection_io = Arc::new(session.io()?);
     let stop = operation_stop.child_token();
     let CodeTask {
         mut requests,
@@ -589,7 +566,8 @@ pub(crate) async fn run<F: FnMut(AgentEvent) + Send>(
         Err(error) => return Ok(failure(error)),
     };
     let mut gate = Gate {
-        session,
+        io,
+        inspection_io,
         catalog,
         observe,
         turn,
@@ -622,7 +600,8 @@ pub(crate) async fn run<F: FnMut(AgentEvent) + Send>(
                     .problem
                     .clone()
                     .unwrap_or_else(|| "guest failed or operation stopped".into());
-                gate.complete(admitted, ChildOutcome::NotDispatched { reason });
+                gate.complete(admitted, ChildOutcome::NotDispatched { reason })
+                    .await;
                 continue;
             }
             (gate.observe)(AgentEvent::ChildToolStarted {
@@ -712,12 +691,12 @@ pub(crate) async fn run<F: FnMut(AgentEvent) + Send>(
                 gate.complete_inspection(inspection, inspected);
             }
             request = requests.recv(), if !requests_closed && gate.inspection.is_none() => {
-                if let Some(request) = request { gate.accept(request); } else { requests_closed = true; }
+                if let Some(request) = request { gate.accept(request).await; } else { requests_closed = true; }
             }
             completed = started.next(), if !started.is_empty() => {
                 let (admitted, outcome) = completed.expect("nonempty started set");
                 match outcome {
-                    Ok(outcome) => gate.complete(admitted, outcome),
+                    Ok(outcome) => gate.complete(admitted, outcome).await,
                     Err(error) => {
                         gate.storage_fault(error);
                         let _ = admitted.reply.send(Err("delegation infrastructure failed".into()));
@@ -757,6 +736,10 @@ pub(crate) async fn run<F: FnMut(AgentEvent) + Send>(
 #[cfg(test)]
 #[path = "code_gateway_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "code_gateway/io_tests.rs"]
+mod io_tests;
 
 #[cfg(test)]
 mod discovery_tests {

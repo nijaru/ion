@@ -7,7 +7,7 @@ use super::{
     execution::{Completion, run_child},
     *,
 };
-use crate::{Operation, OperationError, SessionError, operation::OperationOwner};
+use crate::{Operation, OperationError, SessionError, SessionIo, operation::OperationOwner};
 
 /// A trusted live Host destination. Core reserves custody before durable
 /// admission, returning the destination's stop scope. Exact retries need no
@@ -17,10 +17,10 @@ use crate::{Operation, OperationError, SessionError, operation::OperationOwner};
 pub trait BackgroundSlot: Send {
     fn owner(&self) -> uuid::Uuid;
     fn reserve(&mut self) -> Result<CancellationToken, String>;
-    fn install(
+    fn install<'a>(
         self: Box<Self>,
-        job: &mut BackgroundJob,
-    ) -> Result<DelegationReceipt, BackgroundStartError>;
+        job: &'a mut BackgroundJob,
+    ) -> BoxFuture<'a, Result<DelegationReceipt, BackgroundStartError>>;
 }
 
 /// Refusal or infrastructure failure while installing a background child.
@@ -36,8 +36,9 @@ pub enum BackgroundStartError {
 /// contain a cold or already-polled callback; moving it never recreates work.
 /// Historical coordinates, owner UUIDs and serialized receipts cannot make one.
 pub struct BackgroundJob {
-    parent: Arc<crate::Session>,
+    io: Arc<SessionIo>,
     record: DelegationRecord,
+    transfer_lease: Option<Arc<()>>,
     execution: Option<ion_ai::BoxFuture<'static, Completion>>,
     stop: CancellationToken,
     parent_stop: CancellationToken,
@@ -54,7 +55,8 @@ impl<F: FnOnce()> Drop for FailOnDrop<F> {
 
 impl BackgroundJob {
     pub(super) fn new(
-        parent: Arc<crate::Session>,
+        io: Arc<SessionIo>,
+        child_io: Arc<SessionIo>,
         record: DelegationRecord,
         prepared: ChildMaterialization,
         work: DelegationWork,
@@ -63,13 +65,15 @@ impl BackgroundJob {
     ) -> Self {
         Self {
             execution: Some(Box::pin(run_child(
+                child_io,
                 record.clone(),
                 prepared,
                 work,
                 stop.clone(),
             ))),
-            parent,
+            io,
             record,
+            transfer_lease: None,
             stop,
             parent_stop,
         }
@@ -89,19 +93,21 @@ impl BackgroundJob {
     /// The actual retained parent, not authority reconstructed from its ID.
     /// Unread results must not keep its exclusive writer after settlement.
     pub fn parent(&self) -> &Arc<crate::Session> {
-        &self.parent
+        self.io.session()
     }
 
-    /// Install under the destination's admission lock. The operation primitive
-    /// checks runtime/custody before the transfer transaction. Only after commit
-    /// is the same pinned execution taken from this job. On any returned error
-    /// it remains here, so the gateway can stop and fully join it before release.
+    /// Commit transfer off-executor before taking the same pinned execution.
+    /// The destination must retain its reservation across this wait, without
+    /// holding a lifecycle lock. On returned error execution remains here, so
+    /// the gateway can stop and fully join it before release. An abandoned wait
+    /// retains the actual I/O and its lease; this job still owns foreground work
+    /// and must be joined, not retried or treated as rolled back.
     /// A parent stop observed before commit refuses transfer; a racing stop may
     /// lose to commit. After commit the destination's reserved stop scope owns it.
     /// A joined infrastructure error carries its committed receipt in
     /// `SessionError::DelegationSettledFailure`; failed settlement does not.
     /// The failure hook must not panic or block on the installation lock.
-    pub fn start(
+    pub async fn start(
         &mut self,
         destination: uuid::Uuid,
         infrastructure_failed: impl FnOnce() + Send + 'static,
@@ -113,59 +119,91 @@ impl BackgroundJob {
         BackgroundStartError,
     > {
         if self.execution.is_none()
+            || self.transfer_lease.is_some()
             || self.record.ownership != (DelegationOwnership::Background { owner: destination })
         {
             return Err(BackgroundStartError::Infrastructure(
                 SessionError::InvalidHistory,
             ));
         }
+        tokio::runtime::Handle::try_current().map_err(|_| {
+            BackgroundStartError::Infrastructure(SessionError::Operation(
+                OperationError::RuntimeUnavailable,
+            ))
+        })?;
         let owner = Arc::new(OperationOwner::default());
         let retained_owner = owner.clone();
         let lease = Arc::new(());
+        self.transfer_lease = Some(lease.clone());
+        let record = self.record.clone();
+        let parent_stop = self.parent_stop.clone();
+        let stop = self.stop.clone();
+        let transfer = self
+            .io
+            .run_open(move |parent| {
+                if parent_stop.is_cancelled() || stop.is_cancelled() {
+                    return Err(SessionError::Operation(OperationError::Closed));
+                }
+                parent.transfer_delegation(&record, &lease)
+            })
+            .await;
+        match transfer {
+            Ok(()) => {}
+            Err(SessionError::Operation(OperationError::Closed)) => {
+                return Err(BackgroundStartError::Refused(
+                    "stopped before ownership transfer".into(),
+                ));
+            }
+            Err(error) => return Err(BackgroundStartError::Infrastructure(error)),
+        }
         let receipt = DelegationReceipt {
             record: self.record.clone(),
             transferred: true,
             outcome: None,
         };
-        let parent = self.parent.clone();
+        let io = self.io.clone();
         let record = self.record.clone();
         let prepared = owner.start_prepared(self.stop.clone(), || {
-            if self.parent_stop.is_cancelled() || self.stop.is_cancelled() {
-                return Err(SessionError::Operation(OperationError::Closed));
-            }
-            parent.transfer_delegation(&record, &lease)?;
             let execution = self
                 .execution
                 .take()
                 .expect("validated single-use transfer");
             // Arm before spawn, including task destruction before its first poll.
             let failure = FailOnDrop(Some(infrastructure_failed));
+            let lease = self
+                .transfer_lease
+                .take()
+                .expect("committed transfer lease");
             Ok((
                 receipt.clone(),
                 Some(async move {
                     let _retained_owner = retained_owner;
-                    let _lease = lease;
                     let mut failure = failure;
                     let (outcome, infrastructure) = execution.await;
-                    let result =
-                        parent
-                            .settle_delegation(&record, outcome.clone())
-                            .and_then(|()| {
-                                let receipt = DelegationReceipt {
-                                    record,
-                                    transferred: true,
-                                    outcome: Some(outcome),
-                                };
-                                match infrastructure {
-                                    Some(error) => Err(SessionError::DelegationSettledFailure {
-                                        receipt: Box::new(receipt),
-                                        error: Box::new(SessionError::DelegationInfrastructure(
-                                            error,
-                                        )),
-                                    }),
-                                    None => Ok(receipt),
-                                }
-                            });
+                    let saved_record = record.clone();
+                    let saved_outcome = outcome.clone();
+                    let result = io
+                        .run(move |parent| {
+                            // Retain live custody until the actual settlement
+                            // finishes, even if its async waiter is abandoned.
+                            let _lease = lease;
+                            parent.settle_delegation(&saved_record, saved_outcome)
+                        })
+                        .await
+                        .and_then(|()| {
+                            let receipt = DelegationReceipt {
+                                record,
+                                transferred: true,
+                                outcome: Some(outcome),
+                            };
+                            match infrastructure {
+                                Some(error) => Err(SessionError::DelegationSettledFailure {
+                                    receipt: Box::new(receipt),
+                                    error: Box::new(SessionError::DelegationInfrastructure(error)),
+                                }),
+                                None => Ok(receipt),
+                            }
+                        });
                     if result.is_ok() {
                         failure.0 = None;
                     }

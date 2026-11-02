@@ -942,6 +942,16 @@ impl Session {
         SessionIo::new(self)
     }
 
+    // Only a live, reserved background destination may capture this capability,
+    // before durable admission or dispatch and while storage is still Open.
+    // Serialized delegation coordinates cannot mint late write authority.
+    pub(crate) fn transferred_io(
+        self: &Arc<Self>,
+        _destination: &crate::delegation::BackgroundTransfer,
+    ) -> Result<SessionIo, SessionError> {
+        SessionIo::new_transferred(self)
+    }
+
     /// Create an explicit read-only storage lane. Unlike `io`, it remains
     /// available after completed shutdown, but not while shutdown joins work.
     pub fn reader(self: &Arc<Self>) -> Result<SessionReader, SessionError> {
@@ -952,6 +962,9 @@ impl Session {
     /// wait leaves admission closed. This also reports unread operation failures
     /// without consuming a retained handle's result. Complete shutdown before
     /// destroying the Tokio runtime; a genuine task panic cannot prove quiescence.
+    /// Transferred background jobs belong to their destination's custody, not
+    /// this engine. This joins the storage cut, not those jobs; their previously
+    /// reserved private lanes may still record observed outcomes afterward.
     pub async fn shutdown(&self) -> Result<(), SessionError> {
         let execution = self.operations.shutdown().await.map_err(SessionError::from);
         let storage = self.storage.shutdown().await.map_err(SessionError::Storage);
