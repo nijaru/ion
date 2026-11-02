@@ -402,9 +402,7 @@ fn replace_text_preserving_format(source: &str, edits: &[TextEdit]) -> Result<St
         replacement: &'a str,
         index: usize,
     }
-    let bom_bytes = if source.starts_with('\u{feff}') { 3 } else { 0 };
-    let body = &source[bom_bytes..];
-    let normalized = normalize_newlines(body);
+    let normalized = normalize_newlines(source);
     let mut matched = Vec::with_capacity(edits.len());
     for (index, edit) in edits.iter().enumerate() {
         let old = normalize_newlines(&edit.old_text);
@@ -447,20 +445,33 @@ fn replace_text_preserving_format(source: &str, edits: &[TextEdit]) -> Result<St
     let mut copied_through = 0;
     for item in matched {
         advance_raw_offset(
-            body.as_bytes(),
+            source.as_bytes(),
             &mut raw,
             &mut normalized_offset,
             item.start,
         );
-        let raw_start = bom_bytes + raw;
-        advance_raw_offset(body.as_bytes(), &mut raw, &mut normalized_offset, item.end);
-        let raw_end = bom_bytes + raw;
+        let raw_start = raw;
+        advance_raw_offset(
+            source.as_bytes(),
+            &mut raw,
+            &mut normalized_offset,
+            item.end,
+        );
+        let raw_end = raw;
         result.push_str(&source[copied_through..raw_start]);
         let style = if source[raw_start..raw_end].contains(['\r', '\n']) {
             line_ending(&source[raw_start..raw_end])
         } else {
-            line_ending(body)
+            line_ending(source)
         };
+        // A read-back match can consume the format marker. Preserve it even
+        // when the replacement omits it, without stripping literal interior BOMs.
+        if raw_start == 0
+            && source.starts_with('\u{feff}')
+            && !item.replacement.starts_with('\u{feff}')
+        {
+            result.push('\u{feff}');
+        }
         result.push_str(&normalize_newlines(item.replacement).replace('\n', style));
         copied_through = raw_end;
     }
@@ -783,6 +794,73 @@ mod tests {
         assert!(patch.contains("-two\r\n+TWO\r\n"), "{patch:?}");
         assert_eq!(output.value["diff"]["truncated"], false);
         fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn read_back_bom_prefix_can_guard_edit_without_losing_or_duplicating_it() {
+        let root = std::env::temp_dir().join(format!("ion-edit-bom-{}", uuid::Uuid::now_v7()));
+        fs::create_dir(&root).unwrap();
+        let path = root.join("file.txt");
+        let stop = CancellationToken::new();
+        for (source, replacement, expected) in [
+            (
+                "\u{feff}const n = 1;\n",
+                "\u{feff}const n = 2;\n",
+                "\u{feff}const n = 2;\n",
+            ),
+            (
+                "\u{feff}α = 1;\r\nunchanged\n",
+                "\u{feff}α = 2;\n",
+                "\u{feff}α = 2;\r\nunchanged\n",
+            ),
+            (
+                "\u{feff}const n = 1;\n",
+                "const n = 2;\n",
+                "\u{feff}const n = 2;\n",
+            ),
+            ("\u{feff}", "\u{feff}new\n", "\u{feff}new\n"),
+        ] {
+            fs::write(&path, source).unwrap();
+            let observed = read(&root, &json!({"path":"file.txt","limit":1}), &stop);
+            assert!(!observed.is_error, "{}", observed.value);
+            let output = edit(
+                &root,
+                &json!({
+                    "path":"file.txt",
+                    "base_digest":observed.value["base_digest"],
+                    "edits":[{"old_text":observed.value["content"],"new_text":replacement}],
+                }),
+                &stop,
+                None,
+            );
+            assert!(!output.is_error, "{source:?}: {}", output.value);
+            assert_eq!(fs::read_to_string(&path).unwrap(), expected);
+        }
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn edit_matches_interior_bom_literally_and_keeps_original_ambiguity() {
+        let source = "\u{feff}header\ninside:\u{feff}text\n";
+        let output = replace_text_preserving_format(
+            source,
+            &[TextEdit {
+                old_text: "\u{feff}text".into(),
+                new_text: "changed".into(),
+            }],
+        )
+        .unwrap();
+        assert_eq!(output, "\u{feff}header\ninside:changed\n");
+        assert!(
+            replace_text_preserving_format(
+                "\u{feff}text\ninside:\u{feff}text\n",
+                &[TextEdit {
+                    old_text: "\u{feff}text".into(),
+                    new_text: "changed".into(),
+                }],
+            )
+            .is_err()
+        );
     }
 
     #[test]

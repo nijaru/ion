@@ -1,4 +1,4 @@
-"""Exercise line-ranged native reads and special-file rejection through the built CLI."""
+"""Exercise native reads, exact edits, and file/instruction safety through the built CLI."""
 
 import hashlib
 import json
@@ -99,12 +99,41 @@ def scoped_response(body):
     return {"content": "SCOPED_CODE_COMPLETE"}, "stop"
 
 
+def bom_response(body):
+    step = len(requests) - 1
+    results = [json.loads(message["content"]) for message in body["messages"] if message["role"] == "tool"]
+
+    def invoke(name, arguments):
+        call = {"index": 0, "id": f"{fixture}-{step}", "type": "function", "function": {"name": name, "arguments": json.dumps(arguments)}}
+        return {"tool_calls": [call]}, "tool_calls"
+
+    if step == 0:
+        if fixture == "bom_code":
+            return invoke("code_mode", {"code": "const r=await tools.read({path:'bom.txt',limit:1}); const e=await tools.edit({path:'bom.txt',base_digest:r.value.base_digest,edits:[{old_text:r.value.content,new_text:r.value.content.replace(' = 1;',' = 2;')}]}); return {read_error:r.is_error,edit_error:e.is_error};"})
+        return invoke("read", {"path": "bom.txt", "limit": 1})
+    assert not results[-1]["is_error"], results[-1]
+    if fixture == "bom_direct" and step == 1:
+        page = results[-1]["result"]
+        assert page["content"] == "\ufeffα = 1;\r\n", page
+        return invoke("edit", {"path": "bom.txt", "base_digest": page["base_digest"], "edits": [{"old_text": page["content"], "new_text": page["content"].replace(" = 1;", " = 2;")}]})
+    if fixture == "bom_code":
+        assert results[-1]["result"]["result"] == {"read_error": False, "edit_error": False}, results[-1]
+    assert (workspace / "bom.txt").read_bytes() == "\ufeffα = 2;\r\nunchanged\n".encode(), "BOM or mixed newline bytes changed"
+    return {"content": "BOM_ROUNDTRIP_COMPLETE"}, "stop"
+
+
 class Handler(BaseHTTPRequestHandler):
     def do_POST(self):
         body = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
         requests.append(body)
         results = [message for message in body["messages"] if message["role"] == "tool"]
-        if fixture.startswith("scoped"):
+        if fixture.startswith("bom_"):
+            try:
+                delta, reason = bom_response(body)
+            except AssertionError as failure:
+                failures.append(str(failure))
+                delta, reason = {"content": "BOM_ROUNDTRIP_FAILED"}, "stop"
+        elif fixture.startswith("scoped"):
             try:
                 delta, reason = scoped_response(body)
             except AssertionError as failure:
@@ -187,6 +216,14 @@ with tempfile.TemporaryDirectory(prefix="ion-file-io-") as temporary:
         result = subprocess.run([binary, "--cwd", workspace, "run", "Read the second line and continue to EOF."], env=env, capture_output=True, text=True, timeout=10)
         assert result.returncode == 0 and result.stdout.strip() == "LINE_RANGES_READ", result
         assert len(requests) == 3, len(requests)
+        for fixture in ("bom_direct", "bom_code"):
+            requests.clear()
+            (workspace / "bom.txt").write_bytes("\ufeffα = 1;\r\nunchanged\n".encode())
+            options = ["--code-mode"] if fixture == "bom_code" else []
+            result = subprocess.run([binary, "--cwd", workspace, *options, "run", "Read and edit the exact BOM-prefixed first line."], env=env, capture_output=True, text=True, timeout=10)
+            assert not failures, failures
+            assert result.returncode == 0 and result.stdout.strip() == "BOM_ROUNDTRIP_COMPLETE", result
+            assert len(requests) == (2 if fixture == "bom_code" else 3), len(requests)
         requests.clear()
         os.mkfifo(workspace / "AGENTS.md")
         fixture = "instructions"
@@ -222,7 +259,7 @@ with tempfile.TemporaryDirectory(prefix="ion-file-io-") as temporary:
         result = subprocess.run([binary, "--cwd", workspace, "--code-mode", "run", "Exercise selected instruction delivery in Code Mode."], env=env, capture_output=True, text=True, timeout=15)
         assert not failures, failures
         assert result.returncode == 0 and result.stdout.strip() == "SCOPED_CODE_COMPLETE", result
-        print("Ion file reads, instruction omissions/global scope, deferred mutations, refresh/reopen and Code Mode delivery: OK")
+        print("Ion file reads, BOM edit roundtrips, instruction scope, deferred mutations, refresh/reopen and Code Mode delivery: OK")
     finally:
         server.shutdown()
         server.server_close()
