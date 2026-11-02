@@ -150,7 +150,18 @@ impl SessionReader {
     }
 
     pub async fn view(&self) -> Result<SessionView, SessionError> {
-        self.run(Session::view).await
+        self.map_view(std::convert::identity).await
+    }
+
+    /// Materialize and project owned records in one retained blocking leaf.
+    /// The projection receives no Session/write authority and runs after Store
+    /// locks are released. Use this for expensive exports and serialization;
+    /// abandoning the wait retains both materialization and projection.
+    pub async fn map_view<T: Send + 'static>(
+        &self,
+        project: impl FnOnce(SessionView) -> T + Send + 'static,
+    ) -> Result<T, SessionError> {
+        self.run(move |session| Ok(project(session.view()?))).await
     }
 
     pub async fn status(&self) -> Result<SessionStatus, SessionError> {

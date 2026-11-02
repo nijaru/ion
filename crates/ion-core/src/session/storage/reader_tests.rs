@@ -38,6 +38,51 @@ fn admit(session: &Session) -> (RequestKey, Message) {
     (key, input)
 }
 
+#[tokio::test(flavor = "current_thread")]
+async fn view_projection_runs_off_executor_outside_store_and_survives_an_abandoned_wait() {
+    let (root, session) = fixture();
+    let reader = Arc::new(session.reader().unwrap());
+    session.shutdown().await.unwrap();
+    let caller = thread::current().id();
+    let inspected = session.clone();
+    let (entered, ready) = oneshot::channel();
+    let (release, released) = std::sync::mpsc::channel();
+    let waiting = tokio::spawn(async move {
+        reader
+            .map_view(move |view| {
+                entered
+                    .send((
+                        thread::current().id() != caller,
+                        inspected.store.try_lock().is_ok(),
+                        view.id,
+                    ))
+                    .unwrap();
+                assert!(
+                    released.recv_timeout(Duration::from_secs(2)).is_ok(),
+                    "projection must not block its caller's executor"
+                );
+                view.id
+            })
+            .await
+    });
+    let (off_executor, unlocked, id) = ready.await.unwrap();
+    assert!(off_executor);
+    assert!(
+        unlocked,
+        "application projection must not hold Store custody"
+    );
+    assert_eq!(id, session.id());
+    waiting.abort();
+    assert!(waiting.await.unwrap_err().is_cancelled());
+    let mut shutdown = Box::pin(session.shutdown());
+    assert!(futures_util::poll!(&mut shutdown).is_pending());
+    tokio::time::sleep(Duration::from_millis(20)).await;
+    release.send(()).unwrap();
+    shutdown.await.unwrap();
+    drop(session);
+    std::fs::remove_dir_all(root).unwrap();
+}
+
 /// A bounded real Store lock wait lets public reader methods exercise blocking
 /// work without adding a callback or test hook to the reader capability.
 struct StoreHold {
