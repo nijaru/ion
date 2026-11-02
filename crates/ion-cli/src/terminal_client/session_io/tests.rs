@@ -141,6 +141,34 @@ async fn delayed_session_read_leaves_stop_and_reliable_returns_responsive() {
 }
 
 #[tokio::test]
+async fn idle_controls_do_not_invalidate_pending_startup_history() {
+    let mut fixture = Fixture::new();
+    let mut ui = Frontend::default();
+    let release = hold_read(&fixture.control, &mut ui, |view| {
+        ReadOutput::History(Box::new(History::prepare(view)))
+    })
+    .await;
+    ui.session_io.read.as_mut().unwrap().projection_revision = Some(ui.conversation.revision());
+    ui.session_io.blocked = true;
+    assert!(
+        !ui.session_io.has_pending_effect(),
+        "passive history must leave draft editing available"
+    );
+    for _ in 0..3 {
+        activity::apply(&mut ui, &fixture.control, ControlUpdate::Idle).unwrap();
+    }
+    release.send(()).unwrap();
+    let finished = ui.session_io.complete().await;
+    apply(&mut fixture.control, &mut ui, finished).unwrap();
+    assert!(
+        !ui.session_io.blocked,
+        "idle input must not strand startup behind another refresh"
+    );
+    assert!(!ui.session_io.refresh_pending);
+    fixture.control.shutdown().await;
+}
+
+#[tokio::test]
 async fn committed_context_refresh_fault_blocks_prompt_with_attachments_until_retry() {
     let mut fixture = Fixture::new();
     let mut ui = Frontend::default();

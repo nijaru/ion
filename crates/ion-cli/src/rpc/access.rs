@@ -5,7 +5,7 @@ use futures_util::future::BoxFuture;
 pub(super) enum AccessData {
     Json(Value),
     Encoded(Vec<u8>),
-    Request(ion_app::RequestPlan, RpcMetadata, u64),
+    Request(Box<ion_app::RequestPlan>, RpcMetadata, u64),
 }
 pub(super) struct AccessReply {
     pub id: Option<Value>,
@@ -141,7 +141,7 @@ impl Control {
                         credit,
                     ));
                 }
-                match self.host.launch_request(plan, metadata) {
+                match self.host.launch_request(*plan, metadata) {
                     Ok(ion_app::RequestLaunch::Pending(input)) => {
                         self.correlations.insert(
                             input,

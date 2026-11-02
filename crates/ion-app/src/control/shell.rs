@@ -40,7 +40,6 @@ impl<M: Serialize + Send + 'static> SessionControl<M> {
         resolve: impl FnOnce(&str) -> Result<(String, bool)> + Send + 'static,
     ) -> Result<OperationId, (M, anyhow::Error)> {
         let prepared = (|| {
-            tokio::runtime::Handle::try_current()?;
             self.ensure_replaceable()?;
             ensure!(
                 lock(&self.custody).occupied < MAX_ADMISSIONS,
@@ -52,6 +51,7 @@ impl<M: Serialize + Send + 'static> SessionControl<M> {
                 .shell
                 .clone()
                 .context("direct shell is not enabled by this application")?;
+            tokio::runtime::Handle::try_current()?;
             let reservation = self.budget.reserve(
                 &Message::user_input(literal.clone(), []),
                 &metadata,

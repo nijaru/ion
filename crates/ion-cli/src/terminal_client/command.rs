@@ -101,6 +101,7 @@ pub(super) async fn dispatch_command(
         return Ok(());
     }
     if (ui.session_io.has_read() || ui.session_io.binding.is_some())
+        && !(kind == CommandKind::Builtin(Builtin::Editor) && !ui.session_io.has_pending_effect())
         && !matches!(
             kind,
             CommandKind::Builtin(Builtin::Help | Builtin::Tui | Builtin::Tasks)

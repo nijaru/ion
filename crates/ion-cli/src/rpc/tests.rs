@@ -49,8 +49,8 @@ impl Fixture {
         session.select_model(selected.identity()).unwrap();
         let setup = match application {
             Some(application) => ion_app::SessionSetup::new(
-                session,
-                host.sessions(Some(cwd.clone())),
+                session.clone(),
+                host.sessions(session.cwd().map(PathBuf::from)),
                 application,
                 Some(&selected.identity()),
                 None,
@@ -124,7 +124,7 @@ async fn invoke(control: &mut Control, value: Value) -> Option<Value> {
         output.finish().await.unwrap();
         if let Some(record) = records(&bytes.lock().unwrap())
             .into_iter()
-            .find(|record| record["type"] == "reply")
+            .find(|record| record["type"] == "response")
         {
             return Some(record);
         }
@@ -144,7 +144,10 @@ async fn started_shell(control: &mut Control, root: &std::path::Path) {
     );
     tokio::time::timeout(Duration::from_secs(5), async {
         while !ready.exists() {
-            tokio::time::sleep(Duration::from_millis(5)).await;
+            tokio::select! {
+                _ = control.host.maintain() => {},
+                _ = tokio::time::sleep(Duration::from_millis(5)) => {},
+            }
         }
     })
     .await
@@ -343,6 +346,13 @@ async fn unaccepted_followup_settlement_retains_its_protocol_correlation() {
         .unwrap()["success"],
         true
     );
+    tokio::time::timeout(Duration::from_secs(5), async {
+        while control.host.state().preparing_input {
+            control.host.maintain().await;
+        }
+    })
+    .await
+    .unwrap();
     assert!(
         invoke(
             &mut control,
@@ -360,6 +370,16 @@ async fn unaccepted_followup_settlement_retains_its_protocol_correlation() {
     })
     .await
     .unwrap();
+    assert!(
+        control
+            .host
+            .session()
+            .view()
+            .unwrap()
+            .entries
+            .iter()
+            .any(|entry| matches!(entry, ion_core::SessionEntry::UserShellSettled { .. }))
+    );
     control.host.session().shutdown().await.unwrap();
     let mut bytes = Vec::new();
     let mut output = Output::new(&mut bytes);
@@ -623,6 +643,127 @@ async fn stalled_inspection_does_not_block_abort_or_eof_join() {
                     >= 8
             );
         }
+    }
+}
+
+#[tokio::test]
+async fn name_reply_matches_canonical_committed_metadata() {
+    let mut fixture = Fixture::new();
+    let mut control = fixture.take();
+    for (literal, expected) in [("  example  ", json!("example")), ("   ", Value::Null)] {
+        let reply = invoke(
+            &mut control,
+            json!({"type":"set_name","id":"rename","name":literal}),
+        )
+        .await
+        .unwrap();
+        assert_eq!(reply["id"], "rename");
+        assert_eq!(reply["success"], true);
+        assert_eq!(reply["data"]["name"], expected);
+        assert_eq!(
+            json!(
+                control
+                    .host
+                    .session()
+                    .reader()
+                    .unwrap()
+                    .status()
+                    .await
+                    .unwrap()
+                    .name
+            ),
+            expected
+        );
+    }
+    control.host.shutdown().await;
+}
+
+struct NativeWrite {
+    task: tokio::task::JoinHandle<std::io::Result<usize>>,
+    flushing: Option<tokio::sync::oneshot::Sender<()>>,
+}
+impl AsyncWrite for NativeWrite {
+    fn poll_write(
+        mut self: Pin<&mut Self>,
+        cx: &mut TaskContext<'_>,
+        _: &[u8],
+    ) -> Poll<std::io::Result<usize>> {
+        use std::future::Future;
+        Pin::new(&mut self.task)
+            .poll(cx)
+            .map(|result| result.unwrap())
+    }
+    fn poll_flush(mut self: Pin<&mut Self>, cx: &mut TaskContext<'_>) -> Poll<std::io::Result<()>> {
+        use std::future::Future;
+        if let Some(started) = self.flushing.take() {
+            let _ = started.send(());
+        }
+        Pin::new(&mut self.task)
+            .poll(cx)
+            .map(|result| result.unwrap().map(|_| ()))
+    }
+    fn poll_shutdown(self: Pin<&mut Self>, cx: &mut TaskContext<'_>) -> Poll<std::io::Result<()>> {
+        self.poll_flush(cx)
+    }
+}
+
+#[tokio::test]
+async fn interrupt_joins_started_native_output_without_draining_queued_frames() {
+    use futures_util::FutureExt;
+    for during_intake in [true, false] {
+        let mut fixture = Fixture::new();
+        let control = fixture.take();
+        let session = control.host.session().clone();
+        let (release, gate) = std::sync::mpsc::channel();
+        let (entered, ready) = tokio::sync::oneshot::channel();
+        let (flushing, flush_started) = tokio::sync::oneshot::channel();
+        let task = tokio::task::spawn_blocking(move || {
+            entered.send(()).unwrap();
+            gate.recv_timeout(Duration::from_secs(5)).unwrap();
+            Err(std::io::Error::other("injected native output failure"))
+        });
+        let mut output = Output::new(NativeWrite {
+            task,
+            flushing: Some(flushing),
+        });
+        output.enqueue(json!({"type":"already_started"})).unwrap();
+        output.enqueue(json!({"type":"must_not_start"})).unwrap();
+        assert!(output.advance().now_or_never().is_none());
+        ready.await.unwrap();
+        let interrupt = async move {
+            if !during_intake {
+                while session.ensure_idle().is_ok() {
+                    tokio::task::yield_now().await;
+                }
+            }
+        };
+        let mut running = tokio::spawn(connection::connection(
+            control,
+            CommandReader::new(BufReader::new(tokio::io::empty())),
+            output,
+            interrupt,
+        ));
+        let joined = tokio::select! {
+            result = &mut running => Some(result),
+            _ = flush_started => None,
+        };
+        let abandoned = joined.is_some();
+        let returned_early = running.is_finished();
+        release.send(()).unwrap();
+        let error = match joined {
+            Some(result) => result,
+            None => running.await,
+        }
+        .unwrap()
+        .unwrap_err();
+        assert!(
+            !abandoned && !returned_early,
+            "interrupt returned before joining native output"
+        );
+        assert!(
+            format!("{error:#}").contains("injected native output failure"),
+            "{error:#}"
+        );
     }
 }
 

@@ -62,6 +62,29 @@ fn armed<'a, T: 'a>(
     future
 }
 
+struct DropProbe {
+    shared: Weak<Shared>,
+    dropped: Arc<AtomicBool>,
+    locked: Arc<AtomicBool>,
+}
+impl Wake for DropProbe {
+    fn wake(self: Arc<Self>) {
+        if let Some(shared) = self.shared.upgrade() {
+            self.locked
+                .fetch_or(shared.state.try_lock().is_err(), Ordering::SeqCst);
+        }
+    }
+}
+impl Drop for DropProbe {
+    fn drop(&mut self) {
+        self.dropped.store(true, Ordering::SeqCst);
+        if let Some(shared) = self.shared.upgrade() {
+            self.locked
+                .fetch_or(shared.state.try_lock().is_err(), Ordering::SeqCst);
+        }
+    }
+}
+
 struct Transfer {
     owner: Arc<BackgroundOwner>,
     target: crate::CompletionTarget,
@@ -199,6 +222,36 @@ async fn background_reserve_finish_stop_shutdown_and_ack_wake_only_after_unlock(
         .unwrap()
         .unwrap();
         let id = owner.snapshot().runs[0].receipt.record.run;
+        let dropped = Arc::new(AtomicBool::new(false));
+        let locked = Arc::new(AtomicBool::new(false));
+        let old = Waker::from(Arc::new(DropProbe {
+            shared: Arc::downgrade(&owner.shared),
+            dropped: dropped.clone(),
+            locked: locked.clone(),
+        }));
+        let mut maintaining = Box::pin(owner.maintain());
+        assert!(
+            maintaining
+                .as_mut()
+                .poll(&mut Context::from_waker(&old))
+                .is_pending()
+        );
+        drop(old);
+        assert!(
+            maintaining
+                .as_mut()
+                .poll(&mut Context::from_waker(Waker::noop()))
+                .is_pending()
+        );
+        assert!(
+            dropped.load(Ordering::SeqCst),
+            "replace a real registered observer"
+        );
+        assert!(
+            !locked.load(Ordering::SeqCst),
+            "observer destructor ran under background lifecycle lock"
+        );
+        drop(maintaining);
         let stop = owner.shared.lock().runs[&id].stop.clone();
         let stop_probe = WakeProbe::new(&owner);
         let _stop_wait = armed(stop.cancelled_owned(), &stop_probe);

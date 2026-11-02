@@ -1213,8 +1213,8 @@ impl Session {
         })
     }
 
-    /// Change only display metadata. Conversation history remains append-only.
-    pub fn set_name(&self, name: Option<&str>) -> Result<(), SessionError> {
+    /// Commit display metadata and return its canonical name. History remains append-only.
+    pub fn set_name(&self, name: Option<&str>) -> Result<Option<String>, SessionError> {
         let name = name.map(str::trim).filter(|name| !name.is_empty());
         if name.is_some_and(|name| name.len() > 120 || name.chars().any(char::is_control)) {
             return Err(SessionError::InvalidName);
@@ -1230,7 +1230,7 @@ impl Session {
             )?;
             Ok(())
         })?;
-        Ok(())
+        Ok(header.name)
     }
 
     /// Persist an idle Session's identity without route validation. Use

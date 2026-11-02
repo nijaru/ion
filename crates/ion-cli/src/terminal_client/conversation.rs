@@ -148,8 +148,9 @@ impl Conversation {
         }
     }
     pub(super) fn clear_live(&mut self) {
-        self.live = None;
-        self.revision += 1;
+        if self.live.take().is_some() {
+            self.revision += 1;
+        }
     }
 
     /// Returns true when a canonical refresh is required. A surviving event suffix

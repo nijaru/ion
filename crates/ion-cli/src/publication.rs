@@ -152,6 +152,12 @@ impl<W: AsyncWrite + Unpin> Output<W> {
         }
         result.map_err(Into::into)
     }
+    /// Join an already-started native write without advancing queued frames.
+    /// Pollable stdio flushes immediately; regular-file flush joins its worker.
+    pub(super) async fn join_started(&mut self) -> Result<()> {
+        self.writer.flush().await.map_err(Into::into)
+    }
+
     pub(super) async fn finish(&mut self) -> Result<()> {
         let mut publication = Ok(());
         while self.healthy && self.has_pending() {

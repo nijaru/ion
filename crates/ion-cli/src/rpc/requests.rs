@@ -22,7 +22,11 @@ impl Control {
             credit: credit.clone(),
         };
         self.queue_access(id, "submit_request", credit, async move {
-            Ok(AccessData::Request(lookup.await?, metadata, epoch))
+            Ok(AccessData::Request(
+                Box::new(lookup.await?),
+                metadata,
+                epoch,
+            ))
         });
         Ok(())
     }

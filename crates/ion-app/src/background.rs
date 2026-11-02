@@ -431,6 +431,8 @@ impl BackgroundOwner {
                     (id, operation, result, error)
                 })
                 .collect();
+            // Registering/replacing a waiter may destroy a caller's old waker.
+            let notified_ready = notified.as_mut().poll(cx).is_ready();
             let mut completed = Vec::new();
             let mut failures = Vec::new();
             let mut offers = Vec::new();
@@ -484,7 +486,7 @@ impl BackgroundOwner {
                 false
             };
             let joined = !completed.is_empty();
-            let ready = joined || !busy || notified.as_mut().poll(cx).is_ready();
+            let ready = joined || !busy || notified_ready;
             let open = !self.shared.closed.load(Ordering::SeqCst);
             let offering = offers.len();
             state.offering += offering;
@@ -648,9 +650,7 @@ impl BackgroundOwner {
         run: uuid::Uuid,
     ) -> Option<Result<BackgroundRunSnapshot, BackgroundRunFailure>> {
         let mut state = self.shared.lock();
-        if state.runs.get(&run)?.result.is_none() {
-            return None;
-        }
+        state.runs.get(&run)?.result.as_ref()?;
         let run = state.runs.remove(&run)?;
         drop(state);
         if let Some(permit) = &run.completion {

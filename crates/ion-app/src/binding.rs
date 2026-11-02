@@ -349,7 +349,7 @@ impl BindingSource {
                 })
             }
             BindingChange::SetName(name) => {
-                self.session.set_name(name.as_deref())?;
+                let name = self.session.set_name(name.as_deref())?;
                 Ok(BindingDelta {
                     prepared: PreparedChange::Preference,
                     result: BindingResult::SessionNamed { name },

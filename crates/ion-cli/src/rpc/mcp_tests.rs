@@ -78,12 +78,23 @@ async fn reconnect_ack_and_completion_share_correlation_and_reliable_reply_custo
     let before = control.host.session().view().unwrap().entries;
     let credits = ReplyCredits::new(1);
     for _ in 0..3 {
-        let (view, credit) = control
-            .command(
-                json!({"id":"inspect","type":"get_state"}),
-                credits.acquire().unwrap(),
-            )
-            .unwrap();
+        use futures_util::StreamExt;
+        assert!(
+            control
+                .command(
+                    json!({"id":"inspect","type":"get_state"}),
+                    credits.acquire().unwrap()
+                )
+                .is_none()
+        );
+        assert!(
+            credits.acquire().is_none(),
+            "read preparation retains reply credit"
+        );
+        let reply = control.accesses.next().await.unwrap();
+        let (record, credit) = control.finish_access(reply, true).unwrap();
+        let view: Value =
+            serde_json::from_slice(&crate::publication::encode(record).unwrap()).unwrap();
         assert_eq!(
             view["data"]["mcp_servers"][0],
             json!({"name":"peer","status":"available","tools":{"direct":0,"deferred":0,"hidden":0},"resources":false})

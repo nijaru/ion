@@ -162,6 +162,11 @@ pub(super) async fn connection<R: AsyncBufRead + Unpin, W: AsyncWrite + Unpin>(
             cleanup_result(report.cleanup_errors),
             "Host cleanup also failed",
         );
+        result = combine_errors(
+            result,
+            output.join_started().await,
+            "started RPC output also failed",
+        );
         return combine_errors(
             result,
             Err(anyhow::anyhow!("RPC interrupted")),
@@ -209,8 +214,17 @@ pub(super) async fn connection<R: AsyncBufRead + Unpin, W: AsyncWrite + Unpin>(
     };
     let delivery = tokio::select! {
         biased;
-        () = &mut interrupt => Err(anyhow::anyhow!("RPC interrupted")),
+        () = &mut interrupt => { interrupted = true; Err(anyhow::anyhow!("RPC interrupted")) },
         result = publication => result,
+    };
+    let delivery = if interrupted {
+        combine_errors(
+            delivery,
+            output.join_started().await,
+            "started RPC output also failed",
+        )
+    } else {
+        delivery
     };
     combine_errors(result, delivery, "RPC recovery output also failed")
 }

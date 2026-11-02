@@ -156,10 +156,12 @@ async fn direct_shell_preflights_before_recovery_or_admission() {
     let mut control = control(host, session.clone(), selected);
     let before = session.view().unwrap();
     fs::rename(&cwd, root.join("moved-work")).unwrap();
+    control
+        .shell("touch must-not-dispatch".into(), false, ())
+        .unwrap();
     assert!(
-        control
-            .shell("touch must-not-dispatch".into(), false, ())
-            .is_err()
+        matches!(control.next().await, ControlUpdate::Settled(settlement)
+        if matches!(settlement.outcome, OperationOutcome::NotDispatched(_)))
     );
     assert_eq!(session.view().unwrap().entries, before.entries);
     assert!(!root.join("moved-work/must-not-dispatch").exists());

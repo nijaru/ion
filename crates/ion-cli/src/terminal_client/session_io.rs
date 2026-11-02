@@ -122,12 +122,16 @@ impl SessionIo {
         self.read.is_some()
     }
 
-    pub(super) fn blocks_input(&self) -> bool {
-        self.blocked
+    pub(super) fn has_pending_effect(&self) -> bool {
+        self.binding.is_some()
             || self
                 .read
                 .as_ref()
                 .is_some_and(|read| read.binding_intent || read.writes_files)
+    }
+
+    pub(super) fn blocks_input(&self) -> bool {
+        self.blocked || self.has_pending_effect()
     }
 
     pub(super) fn request_refresh(&mut self) {
