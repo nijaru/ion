@@ -259,6 +259,9 @@ pub struct AcceptedMetadata<M> {
 }
 
 pub enum OperationOutcome {
+    /// Native preflight failed or stopped before the executor was dispatched.
+    /// This does not claim rollback of arbitrary work performed by preflight.
+    NotDispatched(anyhow::Error),
     Turn(Result<String, AgentError>),
     Compact(Result<bool, AgentError>),
     Shell(Result<ToolOutput, SessionError>),
@@ -266,6 +269,7 @@ pub enum OperationOutcome {
 impl OperationOutcome {
     pub(super) fn failed(&self) -> bool {
         match self {
+            Self::NotDispatched(_) => true,
             Self::Turn(r) => r.is_err(),
             Self::Compact(r) => r.is_err(),
             Self::Shell(r) => r.is_err(),

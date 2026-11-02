@@ -31,6 +31,7 @@ use custody::{
 mod input;
 mod mcp;
 mod question;
+mod shell;
 mod snapshot;
 pub use snapshot::*;
 mod steering;
@@ -51,8 +52,8 @@ fn identity() -> u64 {
 }
 
 /// Host preparation custody, not another Core operation owner. Metadata and
-/// originals never enter the worker output; the worker returns Core's actual
-/// retained handle and durable admission fact together.
+/// originals never enter the worker output. Durable submissions return Core's
+/// actual handle and admission fact; native root preflight returns a cold executor.
 struct Admitting<M> {
     operation: OperationId,
     stop: CancellationToken,
@@ -77,6 +78,10 @@ enum AdmissionPayload<M> {
         metadata: SnapshotValue<M>,
         reservation: InputReservation,
     },
+    Shell {
+        metadata: SnapshotValue<M>,
+        reservation: InputReservation,
+    },
     Completion,
 }
 enum AdmissionOutput {
@@ -86,6 +91,12 @@ enum AdmissionOutput {
         work: Operation<String, AgentError>,
     },
     Completion(Option<ion_core::CompletionSubmission>),
+    Shell {
+        command: String,
+        exclude_from_context: bool,
+        remapped: bool,
+        prepared: crate::PreparedShell,
+    },
 }
 
 struct Active<M> {
@@ -260,7 +271,11 @@ impl<M: Serialize + Send + 'static> SessionControl<M> {
                     self.admitting.as_ref().map(|admission| OperationState {
                         id: admission.operation,
                         turn: None,
-                        kind: OperationKind::Turn,
+                        kind: if matches!(&admission.payload, AdmissionPayload::Shell { .. }) {
+                            OperationKind::Shell
+                        } else {
+                            OperationKind::Turn
+                        },
                     })
                 })
                 .or_else(|| {
@@ -500,7 +515,8 @@ impl<M: Serialize + Send + 'static> SessionControl<M> {
         lock(&self.custody).steering_target = None;
         let active = self.active.take().expect("retained Core operation");
         self.reconcile_active(&active);
-        if outcome.failed() {
+        let failed = outcome.failed();
+        if failed {
             self.completions
                 .revoke(ion_core::CompletionRevocation::OperationFailed);
         }
@@ -602,12 +618,9 @@ impl<M: Serialize + Send + 'static> SessionControl<M> {
                 .is_none_or(|root| !custody.inputs.contains_key(&root)),
             "joined root custody is resolved by its receipt"
         );
-        if outcome.failed() {
+        if failed {
             for pending in custody.inputs.values_mut().filter_map(Input::pending_mut) {
                 pending.withdraw(ReturnReason::PredecessorFailed);
-            }
-            if let Some((_, preparation)) = &self.preparing {
-                preparation.request_stop();
             }
         }
         let (metadata, reservation) = match active.metadata {
@@ -624,6 +637,10 @@ impl<M: Serialize + Send + 'static> SessionControl<M> {
             metadata,
             reservation,
         }));
+        drop(custody);
+        if failed && let Some((_, preparation)) = &self.preparing {
+            preparation.request_stop();
+        }
     }
 
     /// Return custody updates before polling live activity, retaining an operation's

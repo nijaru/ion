@@ -87,6 +87,8 @@ mod mcp;
 mod preparation;
 #[path = "receipt_tests.rs"]
 mod receipts;
+#[path = "shell_tests.rs"]
+mod shell;
 #[path = "snapshot_tests.rs"]
 mod snapshots;
 #[path = "steering_tests.rs"]
@@ -988,12 +990,17 @@ async fn user_command_reuses_shell_admission_share_and_cancellation_custody() {
         edited.to_string(),
     )
     .unwrap();
-    let (metadata, error) = fixture
+    fixture
         .control
         .command("check", &[], meta("stale literal"))
-        .unwrap_err();
-    assert_eq!(metadata.literal, "stale literal");
-    assert!(error.to_string().contains("changed since it was loaded"));
+        .map_err(|(_, error)| error)
+        .unwrap();
+    let (_, settled) = settle(&mut fixture.control).await;
+    assert_eq!(settled.metadata.unwrap().literal, "stale literal");
+    assert!(
+        matches!(settled.outcome, OperationOutcome::NotDispatched(error)
+        if error.to_string().contains("changed since it was loaded"))
+    );
     assert!(!fixture.control.is_busy());
     fs::write(
         fixture.host.config_root().join("commands.json"),
@@ -1001,12 +1008,17 @@ async fn user_command_reuses_shell_admission_share_and_cancellation_custody() {
     )
     .unwrap();
     fixture.control.reload_resources().await.unwrap();
-    let (metadata, error) = fixture
+    fixture
         .control
         .command("missing", &[], meta("unknown literal"))
-        .unwrap_err();
-    assert_eq!(metadata.literal, "unknown literal");
-    assert!(error.to_string().contains("unknown user command"));
+        .map_err(|(_, error)| error)
+        .unwrap();
+    let (_, settled) = settle(&mut fixture.control).await;
+    assert_eq!(settled.metadata.unwrap().literal, "unknown literal");
+    assert!(
+        matches!(settled.outcome, OperationOutcome::NotDispatched(error)
+        if error.to_string().contains("unknown user command"))
+    );
     assert!(!fixture.control.is_busy());
     assert!(
         fixture
@@ -1067,7 +1079,7 @@ async fn user_command_reuses_shell_admission_share_and_cancellation_custody() {
     let (_, settled) = settle(&mut fixture.control).await;
     assert!(matches!(
         settled.outcome,
-        OperationOutcome::Shell(Err(ion_core::SessionError::UserShellCancelled))
+        OperationOutcome::NotDispatched(_)
     ));
     assert_eq!(settled.metadata.unwrap().literal, "wait literal");
     assert!(!fixture.control.is_busy());

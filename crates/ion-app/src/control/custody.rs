@@ -337,6 +337,10 @@ impl<M> Custody<M> {
     }
 }
 
+#[cfg(test)]
+#[path = "observation_tests.rs"]
+mod observation_tests;
+
 /// Core may publish before an asynchronous admission returns its actual handle.
 /// Keep that bounded passive prefix private until reliable acceptance is owned.
 pub(super) struct AdmissionObservations {
@@ -344,22 +348,24 @@ pub(super) struct AdmissionObservations {
     operation: OperationId,
     state: Mutex<AdmissionObservationState>,
 }
-enum AdmissionObservationState {
-    Pending {
-        events: VecDeque<Observation>,
-        skipped: u64,
-    },
-    Open,
-    Closed,
+struct AdmissionObservationState {
+    events: VecDeque<Observation>,
+    skipped: u64,
+    open: bool,
+    closed: bool,
+    draining: bool,
 }
 impl AdmissionObservations {
     pub(super) fn new(sender: broadcast::Sender<Observation>, operation: OperationId) -> Arc<Self> {
         Arc::new(Self {
             sender,
             operation,
-            state: Mutex::new(AdmissionObservationState::Pending {
+            state: Mutex::new(AdmissionObservationState {
                 events: VecDeque::new(),
                 skipped: 0,
+                open: false,
+                closed: false,
+                draining: false,
             }),
         })
     }
@@ -374,19 +380,23 @@ impl AdmissionObservations {
                 .state
                 .lock()
                 .unwrap_or_else(std::sync::PoisonError::into_inner);
-            match &mut *state {
-                AdmissionObservationState::Pending { events, skipped } => {
-                    // Leave room for the gap itself when releasing the prefix.
-                    if events.len() == OBSERVATION_CAPACITY - 1 {
-                        events.pop_front();
-                        *skipped = skipped.saturating_add(1);
-                    }
-                    events.push_back(observation);
-                }
-                AdmissionObservationState::Open => {
-                    let _ = gate.sender.send(observation);
-                }
-                AdmissionObservationState::Closed => {}
+            if state.closed {
+                return;
+            }
+            // Leave room for the gap itself, also while a sender is publishing.
+            let discarded = if state.events.len() == OBSERVATION_CAPACITY - 1 {
+                state.skipped = state.skipped.saturating_add(1);
+                state.events.pop_front()
+            } else {
+                None
+            };
+            state.events.push_back(observation);
+            let drain = state.open && !state.draining;
+            state.draining |= drain;
+            drop(state);
+            drop(discarded);
+            if drain {
+                gate.drain();
             }
         })
     }
@@ -395,18 +405,38 @@ impl AdmissionObservations {
             .state
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        let AdmissionObservationState::Pending { events, skipped } =
-            std::mem::replace(&mut *state, AdmissionObservationState::Open)
-        else {
-            panic!("admission observation prefix is released once")
-        };
-        // Never called beneath custody. Serializing sends with the observer's
-        // private gate prevents new events from overtaking this retained prefix.
-        if skipped != 0 {
-            let _ = self.sender.send(Observation::Gap { skipped });
-        }
-        for event in events {
-            let _ = self.sender.send(event);
+        assert!(
+            !state.open && !state.closed,
+            "admission prefix released once"
+        );
+        state.open = true;
+        state.draining = true;
+        drop(state);
+        self.drain();
+    }
+    // One synchronous drainer owns publication, not a task or execution loop.
+    // Reentrant wakes can enqueue but cannot overtake the retained prefix.
+    fn drain(&self) {
+        loop {
+            let next = {
+                let mut state = self
+                    .state
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner);
+                let next = if state.skipped != 0 {
+                    Some(Observation::Gap {
+                        skipped: std::mem::take(&mut state.skipped),
+                    })
+                } else {
+                    state.events.pop_front()
+                };
+                if next.is_none() {
+                    state.draining = false;
+                }
+                next
+            };
+            let Some(next) = next else { return };
+            let _ = self.sender.send(next);
         }
     }
     pub(super) fn discard(&self) {
@@ -415,7 +445,9 @@ impl AdmissionObservations {
                 .state
                 .lock()
                 .unwrap_or_else(std::sync::PoisonError::into_inner);
-            std::mem::replace(&mut *state, AdmissionObservationState::Closed)
+            state.closed = true;
+            state.skipped = 0;
+            std::mem::take(&mut state.events)
         };
         drop(previous);
     }

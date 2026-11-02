@@ -65,6 +65,7 @@ impl From<&ReturnReason> for ReturnSnapshot {
 
 #[derive(Debug, Serialize)]
 pub enum OutcomeSnapshot {
+    NotDispatched(String),
     Turn(std::result::Result<String, String>),
     Compact(std::result::Result<bool, String>),
     Shell(std::result::Result<ToolOutput, String>),
@@ -72,6 +73,7 @@ pub enum OutcomeSnapshot {
 impl From<&OperationOutcome> for OutcomeSnapshot {
     fn from(outcome: &OperationOutcome) -> Self {
         match outcome {
+            OperationOutcome::NotDispatched(error) => Self::NotDispatched(error.to_string()),
             OperationOutcome::Turn(result) => {
                 Self::Turn(result.as_ref().cloned().map_err(ToString::to_string))
             }
@@ -350,9 +352,12 @@ impl<M: Serialize + Send + 'static> SessionControl<M> {
             })
             .or_else(|| {
                 let admitting = self.admitting.as_ref()?;
-                let AdmissionPayload::Recovery {
+                let (AdmissionPayload::Recovery {
                     metadata: value, ..
-                } = &admitting.payload
+                }
+                | AdmissionPayload::Shell {
+                    metadata: value, ..
+                }) = &admitting.payload
                 else {
                     return None;
                 };

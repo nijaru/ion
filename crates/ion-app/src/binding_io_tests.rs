@@ -14,6 +14,73 @@ use tokio::sync::Notify;
 
 const DEADLINE: Duration = Duration::from_secs(2);
 
+#[test]
+fn switch_rejects_followups_before_native_idle_reservation_and_until_result_taken() {
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .max_blocking_threads(1)
+        .build()
+        .unwrap();
+    let fixture = Fixture::new();
+    let target_path = fixture.root.0.join("switch-target.sqlite");
+    let target = Session::create(&target_path, None).unwrap();
+    let target_id = target.id();
+    drop(target);
+    let mut control = fixture.setup().into_control::<Cell<u8>>();
+    runtime.block_on(async {
+        let gate = Gate::new();
+        let release = Release(gate.clone());
+        let blocked = tokio::task::spawn_blocking(move || gate.wait().unwrap());
+        tokio::time::timeout(DEADLINE, release.0.entered.notified())
+            .await
+            .unwrap();
+        let operation = control
+            .start_binding(BindingChange::SwitchSession(target_path))
+            .unwrap();
+        // The only native thread is blocked. Core's idle guard is still free,
+        // which previously allowed this input to be retargeted after switch.
+        fixture.session.ensure_idle().unwrap();
+        let original = Message::user_input("old binding instructions 雪\n".into(), []);
+        let reject = |control: &mut crate::SessionControl<Cell<u8>>| {
+            let rejected = control
+                .submit(
+                    Delivery::FollowUp,
+                    UserInput::Message(original.clone()),
+                    Cell::new(37),
+                )
+                .unwrap_err();
+            assert_eq!(rejected.metadata.get(), 37);
+            assert!(matches!(rejected.input, UserInput::Message(message) if message == original));
+            assert!(rejected.reason.to_string().contains("binding result"));
+        };
+        reject(&mut control);
+        release.0.release();
+        blocked.await.unwrap();
+        tokio::time::timeout(DEADLINE, async {
+            while control.binding.as_ref().unwrap().is_running() {
+                control.maintain().await;
+            }
+        })
+        .await
+        .unwrap();
+        assert_eq!(control.session().id(), target_id);
+        reject(&mut control); // Finished but unread is still a binding fence.
+        control
+            .join_binding(operation)
+            .await
+            .unwrap()
+            .result
+            .unwrap();
+        assert!(!control.is_busy());
+        let view = control.session().reader().unwrap().view().await.unwrap();
+        assert!(
+            view.turns().is_empty(),
+            "rejected old input must never reach the target journal"
+        );
+        control.shutdown().await;
+    });
+}
+
 struct Gate {
     entered: Notify,
     released: Mutex<bool>,

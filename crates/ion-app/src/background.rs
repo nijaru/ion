@@ -1,4 +1,7 @@
 //! Bounded application ownership of transferred Sessions, independent of readers.
+#[cfg(test)]
+#[path = "control/background_tests.rs"]
+mod tests;
 use std::{
     collections::{BTreeMap, BTreeSet},
     future::poll_fn,
@@ -79,11 +82,16 @@ struct Run {
     // Latest confirmed transfer or settlement; joining errors cannot erase it.
     receipt: DelegationReceipt,
     parent: Weak<Session>,
+    /// None while synchronously leased for polling, or after result adoption.
+    /// `result`, not handle presence, is the authoritative join publication.
     operation: Option<Operation<DelegationReceipt, SessionError>>,
     result: Option<Result<(), SessionError>>,
+    /// Render once outside lifecycle custody; inspection only copies this value.
+    error: Option<String>,
     steering: Option<ChildSteering>,
     progress: Option<ChildProgress>,
     completion: Option<Arc<ion_core::CompletionPermit>>,
+    stop: CancellationToken,
 }
 
 /// Cold live destination, not serialized authority.
@@ -94,6 +102,7 @@ pub struct BackgroundDestination {
     progress: Option<ChildProgress>,
     shared: Arc<Shared>,
     reserved: bool,
+    stop: Option<CancellationToken>,
 }
 #[derive(Clone, Serialize)]
 pub struct BackgroundSnapshot {
@@ -163,25 +172,41 @@ pub struct BackgroundWait {
     /// All selected runs, in requested order, including still-running jobs.
     pub runs: Vec<BackgroundRunSnapshot>,
 }
+struct RunInspection {
+    receipt: DelegationReceipt,
+    joined: bool,
+    error: Option<String>,
+    steering: Option<ChildSteering>,
+    progress: Option<ChildProgress>,
+    completion: Option<Arc<ion_core::CompletionPermit>>,
+}
 impl Run {
-    fn snapshot(&self) -> BackgroundRunSnapshot {
+    fn inspect(&self) -> RunInspection {
+        RunInspection {
+            receipt: self.receipt.clone(),
+            joined: self.result.is_some(),
+            error: self.error.clone(),
+            steering: self.steering.clone(),
+            progress: self.progress.clone(),
+            completion: self.completion.clone(),
+        }
+    }
+}
+impl RunInspection {
+    fn snapshot(self) -> BackgroundRunSnapshot {
         BackgroundRunSnapshot {
             completion: self
                 .completion
                 .as_ref()
                 .map(|permit| permit.receipt().snapshot()),
-            receipt: self.receipt.clone(),
-            joined: self.operation.is_none(),
+            receipt: self.receipt,
+            joined: self.joined,
             progress: self.progress.as_ref().and_then(ChildProgress::snapshot),
             steering: self
                 .steering
                 .as_ref()
                 .map_or_else(Vec::new, ChildSteering::snapshot),
-            error: self
-                .result
-                .as_ref()
-                .and_then(|r| r.as_ref().err())
-                .map(ToString::to_string),
+            error: self.error,
         }
     }
 }
@@ -215,6 +240,7 @@ impl BackgroundOwner {
             progress: None,
             shared: self.shared.clone(),
             reserved: false,
+            stop: None,
         }
     }
     pub(crate) fn work_stop(&self) -> CancellationToken {
@@ -235,7 +261,7 @@ impl BackgroundOwner {
         let state = self.shared.lock();
         state.reserved != 0
             || state.offering != 0
-            || state.runs.values().any(|run| run.operation.is_some())
+            || state.runs.values().any(|run| run.result.is_none())
     }
     /// Sticky after acknowledgement. Joining enriches an early task-loss signal
     /// with original operation errors; neither a reader nor a tool can clear it.
@@ -259,18 +285,22 @@ impl BackgroundOwner {
         let revision = self.revision();
         let failed = self.shared.failed.load(Ordering::SeqCst);
         let closed = self.shared.closed.load(Ordering::SeqCst);
+        let reserved = state.reserved;
+        let runs: Vec<_> = state.runs.values().map(Run::inspect).collect();
+        drop(state);
         BackgroundSnapshot {
             owner: self.shared.id,
             revision,
             closed,
             failed,
-            reserved: state.reserved,
-            runs: state.runs.values().map(Run::snapshot).collect(),
+            reserved,
+            runs: runs.into_iter().map(RunInspection::snapshot).collect(),
         }
     }
     /// Job coordinates/status without copying tasks or successful answers.
     pub fn jobs(&self) -> Vec<BackgroundJobStatus> {
-        self.shared
+        let runs: Vec<_> = self
+            .shared
             .lock()
             .runs
             .values()
@@ -282,25 +312,30 @@ impl BackgroundOwner {
                     }
                     _ => (None, None),
                 };
-                BackgroundJobStatus {
-                    completion: run
-                        .completion
-                        .as_ref()
-                        .map(|permit| permit.receipt().snapshot()),
-                    id: receipt.record.run,
-                    model: receipt.record.spec.model.clone(),
-                    parent: receipt.record.site.session,
-                    path: receipt.record.path.clone(),
-                    joined: run.operation.is_none(),
-                    end,
-                    progress: run.progress.as_ref().and_then(ChildProgress::activity),
-                    error: run
-                        .result
-                        .as_ref()
-                        .and_then(|r| r.as_ref().err())
-                        .map(ToString::to_string)
-                        .or(error),
-                }
+                (
+                    BackgroundJobStatus {
+                        completion: None,
+                        id: receipt.record.run,
+                        model: receipt.record.spec.model.clone(),
+                        parent: receipt.record.site.session,
+                        path: receipt.record.path.clone(),
+                        joined: run.result.is_some(),
+                        end,
+                        progress: None,
+                        error: run.error.clone().or(error),
+                    },
+                    run.completion.clone(),
+                    run.progress.clone(),
+                )
+            })
+            .collect();
+        runs.into_iter()
+            .map(|(mut job, completion, progress)| {
+                job.completion = completion
+                    .as_ref()
+                    .map(|permit| permit.receipt().snapshot());
+                job.progress = progress.as_ref().and_then(ChildProgress::activity);
+                job
             })
             .collect()
     }
@@ -310,7 +345,7 @@ impl BackgroundOwner {
         let running = state
             .runs
             .values()
-            .filter(|run| run.operation.is_some())
+            .filter(|run| run.result.is_none())
             .count();
         BackgroundSummary {
             running,
@@ -319,16 +354,22 @@ impl BackgroundOwner {
         }
     }
     pub fn run(&self, run: uuid::Uuid) -> Option<BackgroundRunSnapshot> {
-        self.shared.lock().runs.get(&run).map(Run::snapshot)
+        let run = self.shared.lock().runs.get(&run).map(Run::inspect);
+        run.map(RunInspection::snapshot)
     }
     /// Reuse an actual retained parent while a transferred task holds its writer.
     /// Weak handles do not let unread results pin a writer after settlement.
     pub(crate) fn parent(&self, path: &Path) -> Option<Arc<Session>> {
-        self.shared
+        let parents: Vec<_> = self
+            .shared
             .lock()
             .runs
             .values()
-            .filter_map(|run| run.parent.upgrade())
+            .map(|run| run.parent.clone())
+            .collect();
+        parents
+            .into_iter()
+            .filter_map(|parent| parent.upgrade())
             .find(|parent| parent.path() == path)
     }
     /// Cancellation-safe invalidation, including when every parent is idle.
@@ -348,7 +389,7 @@ impl BackgroundOwner {
                 .lock()
                 .runs
                 .values()
-                .any(|run| run.operation.is_some());
+                .any(|run| run.result.is_none());
             if running {
                 tokio::select! { () = &mut notified => {}, () = self.maintain() => {} }
             } else {
@@ -364,62 +405,99 @@ impl BackgroundOwner {
         tokio::pin!(notified);
         notified.as_mut().enable();
         poll_fn(|cx| {
+            // Core join polling can itself notify waiters. Lease a bounded
+            // batch synchronously, poll outside state, and adopt before any
+            // yield. A leased run remains running until its result is retained.
+            let operations: Vec<_> = {
+                let mut state = self.shared.lock();
+                state
+                    .runs
+                    .iter_mut()
+                    .filter_map(|(&id, run)| run.operation.take().map(|operation| (id, operation)))
+                    .collect()
+            };
             let mut operation_context = Context::from_waker(&self.shared.completion_waker);
-            let mut state = self.shared.lock();
-            let mut completed = false;
-            let mut busy = false;
+            let polled: Vec<_> = operations
+                .into_iter()
+                .map(|(id, mut operation)| {
+                    let result = Pin::new(&mut operation).poll(&mut operation_context);
+                    let error = match &result {
+                        Poll::Ready(Err(SessionError::DelegationSettledFailure {
+                            error, ..
+                        })) => Some(error.to_string()),
+                        Poll::Ready(Err(error)) => Some(error.to_string()),
+                        _ => None,
+                    };
+                    (id, operation, result, error)
+                })
+                .collect();
+            let mut completed = Vec::new();
             let mut failures = Vec::new();
             let mut offers = Vec::new();
-            for run in state.runs.values_mut() {
-                if let Some(operation) = &mut run.operation {
-                    match Pin::new(operation).poll(&mut operation_context) {
-                        Poll::Pending => busy = true,
-                        Poll::Ready(result) => {
-                            let result = match result {
-                                Ok(receipt) => {
-                                    run.receipt = receipt;
-                                    Ok(())
-                                }
-                                Err(SessionError::DelegationSettledFailure { receipt, error }) => {
-                                    run.receipt = *receipt;
-                                    Err(*error)
-                                }
-                                Err(error) => Err(error),
-                            };
-                            if let Err(error) = &result {
-                                failures.push(error.to_string());
+            let mut state = self.shared.lock();
+            for (id, operation, result, error) in polled {
+                let run = state
+                    .runs
+                    .get_mut(&id)
+                    .expect("leased run cannot be acknowledged");
+                match result {
+                    Poll::Pending => run.operation = Some(operation),
+                    Poll::Ready(result) => {
+                        let result = match result {
+                            Ok(receipt) => {
+                                run.receipt = receipt;
+                                Ok(())
                             }
-                            if result.is_ok()
-                                && let Some(permit) = &run.completion
-                            {
-                                offers.push((
-                                    permit.clone(),
-                                    ion_core::CompletionNotice {
-                                        source_session: run.receipt.record.site.session,
-                                        run: run.receipt.record.run,
-                                        child_session: run.receipt.record.child,
-                                    },
-                                ));
+                            Err(SessionError::DelegationSettledFailure { receipt, error }) => {
+                                run.receipt = *receipt;
+                                Err(*error)
                             }
-                            run.operation = None;
-                            run.result = Some(result);
-                            completed = true;
+                            Err(error) => Err(error),
+                        };
+                        if let Some(error) = &error {
+                            failures.push(error.clone());
                         }
+                        run.error = error;
+                        if result.is_ok()
+                            && let Some(permit) = &run.completion
+                        {
+                            offers.push((
+                                permit.clone(),
+                                ion_core::CompletionNotice {
+                                    source_session: run.receipt.record.site.session,
+                                    run: run.receipt.record.run,
+                                    child_session: run.receipt.record.child,
+                                },
+                            ));
+                        }
+                        run.result = Some(result);
+                        completed.push(operation);
                     }
                 }
             }
-            if !failures.is_empty() {
+            let busy = state.runs.values().any(|run| run.result.is_none());
+            let failed = !failures.is_empty();
+            let close_changed = if failed {
                 state.failures.extend(failures);
-                self.shared.close(true);
-            }
-            if completed {
-                self.shared.invalidate();
-            }
-            let ready = completed || !busy || notified.as_mut().poll(cx).is_ready();
+                self.shared.mark_closed(true)
+            } else {
+                false
+            };
+            let joined = !completed.is_empty();
+            let ready = joined || !busy || notified.as_mut().poll(cx).is_ready();
             let open = !self.shared.closed.load(Ordering::SeqCst);
             let offering = offers.len();
             state.offering += offering;
             drop(state);
+            // Operation Drop, cancellation and notification can wake arbitrary
+            // observers. None may run beneath source lifecycle custody.
+            drop(completed);
+            if failed {
+                self.shared.publish_close(close_changed);
+            }
+            if joined {
+                self.shared.invalidate();
+            }
             // Receiver intake cannot run under source custody: receiving
             // admission consults its own application/background owner.
             if open {
@@ -468,15 +546,20 @@ impl BackgroundOwner {
                         })
                     })
                     .collect::<Result<Vec<_>>>()?;
-                let ready = runs.iter().any(|run| run.operation.is_none());
-                (ready || tokio::time::Instant::now() >= deadline).then(|| BackgroundWait {
-                    wait_expired: !ready,
-                    runs: runs.into_iter().map(Run::snapshot).collect(),
+                let ready = runs.iter().any(|run| run.result.is_some());
+                (ready || tokio::time::Instant::now() >= deadline).then(|| {
+                    (
+                        !ready,
+                        runs.into_iter().map(Run::inspect).collect::<Vec<_>>(),
+                    )
                 })
             };
             self.check()?;
-            if let Some(report) = report {
-                return Ok(report);
+            if let Some((wait_expired, runs)) = report {
+                return Ok(BackgroundWait {
+                    wait_expired,
+                    runs: runs.into_iter().map(RunInspection::snapshot).collect(),
+                });
             }
             tokio::select! {
                 _ = self.changed(revision) => {},
@@ -513,24 +596,33 @@ impl BackgroundOwner {
             .await
     }
     pub fn request_stop(&self, id: uuid::Uuid) -> Result<()> {
-        let state = self.shared.lock();
-        let run = state
-            .runs
-            .get(&id)
-            .ok_or_else(|| anyhow::anyhow!("run is not owned here (unknown or acknowledged)"))?;
-        if let Some(operation) = &run.operation {
-            operation.request_stop();
+        let stop = {
+            let state = self.shared.lock();
+            let run = state.runs.get(&id).ok_or_else(|| {
+                anyhow::anyhow!("run is not owned here (unknown or acknowledged)")
+            })?;
+            run.result.is_none().then(|| run.stop.clone())
+        };
+        if let Some(stop) = stop {
+            stop.cancel();
         }
         self.shared.invalidate();
         Ok(())
     }
     pub fn request_shutdown(&self) {
-        let state = self.shared.lock();
-        self.shared.close(false);
-        for run in state.runs.values() {
-            if let Some(permit) = &run.completion {
-                permit.withdraw();
-            }
+        let (changed, permits) = {
+            let state = self.shared.lock();
+            let changed = self.shared.mark_closed(false);
+            let permits: Vec<_> = state
+                .runs
+                .values()
+                .filter_map(|run| run.completion.clone())
+                .collect();
+            (changed, permits)
+        };
+        self.shared.publish_close(changed);
+        for permit in permits {
+            permit.withdraw();
         }
     }
     /// Natural completion without stopping runs. Interrupted waits retain all
@@ -556,10 +648,11 @@ impl BackgroundOwner {
         run: uuid::Uuid,
     ) -> Option<Result<BackgroundRunSnapshot, BackgroundRunFailure>> {
         let mut state = self.shared.lock();
-        if state.runs.get(&run)?.operation.is_some() {
+        if state.runs.get(&run)?.result.is_none() {
             return None;
         }
         let run = state.runs.remove(&run)?;
+        drop(state);
         if let Some(permit) = &run.completion {
             permit.acknowledge();
         }
@@ -597,8 +690,14 @@ impl Shared {
         match self.state.lock() {
             Ok(state) => state,
             Err(error) => {
+                // PoisonError itself owns the guard. Release it before waking
+                // observers, then reacquire once without recursive recovery.
+                self.state.clear_poison();
+                drop(error.into_inner());
                 self.close(true);
-                error.into_inner()
+                self.state
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner)
             }
         }
     }
@@ -608,13 +707,21 @@ impl Shared {
             .expect("background revision exhausted");
         self.changed.notify_waiters();
     }
-    fn close(&self, failure: bool) {
+    // Fence admission under the state lock; publish only after releasing it.
+    fn mark_closed(&self, failure: bool) -> bool {
         let closed = self.closed.swap(true, Ordering::SeqCst);
         let failed = failure && !self.failed.swap(true, Ordering::SeqCst);
+        !closed || failed
+    }
+    fn publish_close(&self, changed: bool) {
         self.stop.cancel();
-        if !closed || failed {
+        if changed {
             self.invalidate();
         }
+    }
+    fn close(&self, failure: bool) {
+        let changed = self.mark_closed(failure);
+        self.publish_close(changed);
     }
 }
 impl Drop for BackgroundOwner {
@@ -655,26 +762,38 @@ impl BackgroundSlot for BackgroundDestination {
     }
     fn reserve(&mut self) -> std::result::Result<CancellationToken, String> {
         if self.reserved {
-            return Ok(self.shared.stop.child_token());
+            return Ok(self.stop.as_ref().expect("reserved stop scope").clone());
         }
         tokio::runtime::Handle::try_current().map_err(|error| error.to_string())?;
+        // Receiving custody may notify or consult this same background owner.
+        // A refused cold permit is also destroyed only after state unlocks.
+        let completion = self
+            .completion_target
+            .as_ref()
+            .map(|target| target.reserve().map(Arc::new))
+            .transpose()
+            .map_err(|error| error.to_string())?;
         let mut state = self.shared.lock();
-        if self.shared.closed.load(Ordering::SeqCst) {
-            return Err("background owner is closed".into());
-        }
-        if state.reserved + state.runs.len() == self.shared.capacity {
-            return Err("background custody is full".into());
-        }
-        if let Some(target) = &self.completion_target {
-            self.completion = Some(Arc::new(
-                target.reserve().map_err(|error| error.to_string())?,
-            ));
+        let refusal = if self.shared.closed.load(Ordering::SeqCst) {
+            Some("background owner is closed")
+        } else if state.reserved + state.runs.len() == self.shared.capacity {
+            Some("background custody is full")
+        } else {
+            None
+        };
+        if let Some(refusal) = refusal {
+            drop(state);
+            drop(completion);
+            return Err(refusal.into());
         }
         state.reserved += 1;
-        self.reserved = true;
         drop(state);
+        self.completion = completion;
+        self.reserved = true;
+        let stop = self.shared.stop.child_token();
+        self.stop = Some(stop.clone());
         self.shared.invalidate();
-        Ok(self.shared.stop.child_token())
+        Ok(stop)
     }
     fn install<'a>(
         mut self: Box<Self>,
@@ -717,21 +836,29 @@ impl BackgroundSlot for BackgroundDestination {
                 })
                 .await?;
             let mut state = self.shared.lock();
-            state.runs.insert(
+            let completion = self.completion.clone();
+            let replaced = state.runs.insert(
                 receipt.record.run,
                 Run {
                     receipt: receipt.clone(),
                     parent,
                     operation: Some(operation),
                     result: None,
+                    error: None,
                     steering: self.steering.take(),
                     progress: self.progress.take(),
                     completion: self.completion.take(),
+                    stop: self.stop.take().expect("installed reserved stop scope"),
                 },
             );
             state.reserved -= 1;
             self.reserved = false;
+            let closed = self.shared.closed.load(Ordering::SeqCst);
             drop(state);
+            drop(replaced);
+            if closed && let Some(permit) = completion {
+                permit.withdraw();
+            }
             self.shared.invalidate();
             Ok(receipt)
         })

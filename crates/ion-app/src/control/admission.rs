@@ -534,7 +534,8 @@ impl<M: Serialize + Send + 'static> SessionControl<M> {
                 operation: Some(_),
                 ..
             }) | AdmissionOutput::Recovery { .. }
-                | AdmissionOutput::Completion(Some(_)))
+                | AdmissionOutput::Completion(Some(_))
+                | AdmissionOutput::Shell { .. })
         );
         if !accepted && prior_stop_requested {
             self.stop_requested = true;
@@ -707,6 +708,19 @@ impl<M: Serialize + Send + 'static> SessionControl<M> {
                 }
                 Ok(_) => unreachable!("recovery worker returns recovery admission"),
             },
+            AdmissionPayload::Shell {
+                metadata,
+                reservation,
+            } => {
+                self.finish_shell_preparation(
+                    operation,
+                    stop,
+                    metadata.into_inner(),
+                    reservation,
+                    result,
+                    prior_stop_requested,
+                );
+            }
             AdmissionPayload::Completion => match result {
                 Ok(AdmissionOutput::Completion(Some(ion_core::CompletionSubmission {
                     turn,
@@ -814,6 +828,10 @@ impl<M: Serialize + Send + 'static> SessionControl<M> {
                     "stop intent suppresses follow-ups; start explicitly"
                 );
                 if self.current_operation().is_none() {
+                    ensure!(
+                        self.binding.is_none(),
+                        "join or take the binding result before queuing follow-ups"
+                    );
                     let _idle = self.setup.session.reserve_idle()?;
                 }
             }
@@ -878,70 +896,6 @@ impl<M: Serialize + Send + 'static> SessionControl<M> {
                 None => AdmissionContent::Ready(message),
             },
         })
-    }
-
-    /// Direct actions reserve reliable result/metadata capacity before Core admission.
-    pub fn shell(
-        &mut self,
-        command: String,
-        exclude_from_context: bool,
-        metadata: M,
-    ) -> Result<OperationId, (M, anyhow::Error)> {
-        let prepared = (|| {
-            self.ensure_replaceable()?;
-            ensure!(
-                lock(&self.custody).occupied < MAX_ADMISSIONS,
-                "session result/admission capacity is full"
-            );
-            let tools = self
-                .setup
-                .runtime
-                .shell
-                .as_ref()
-                .context("direct shell is not enabled by this application")?
-                .prepare(&command)?;
-            let reservation = self.budget.reserve(
-                &Message::user_input(command.clone(), []),
-                &metadata,
-                self.setup.runtime.agent.limits(),
-            )?;
-            Ok((tools, reservation))
-        })();
-        let (tools, reservation) = match prepared {
-            Ok(value) => value,
-            Err(error) => return Err((metadata, error)),
-        };
-        let id = OperationId(identity());
-        lock(&self.custody).occupied += 1;
-        let work = self.setup.session.run_user_shell(
-            command,
-            exclude_from_context,
-            self.work_stop(),
-            move |_, stop, artifacts| tools(stop, artifacts),
-        );
-        self.install_direct(id, Work::Shell(work), metadata, reservation);
-        Ok(id)
-    }
-
-    /// Invoke one enabled user command with literal argv. The frozen catalog is
-    /// resolved first, then its manifest bytes and project grant are revalidated
-    /// against the current filesystem before the existing direct-shell preflight
-    /// and durable admission. A changed, revoked or deleted source is rejected;
-    /// dispatch never falls back to another definition.
-    pub fn command(
-        &mut self,
-        name: &str,
-        args: &[String],
-        metadata: M,
-    ) -> Result<OperationId, (M, anyhow::Error)> {
-        if let Err(error) = self.ensure_replaceable() {
-            return Err((metadata, error));
-        }
-        let mapped = match self.setup.commands.resolve(name, args) {
-            Ok(mapped) => mapped,
-            Err(error) => return Err((metadata, error)),
-        };
-        self.shell(mapped.command, !mapped.share_with_model, metadata)
     }
 
     /// Start explicit compaction; focus is request-local, never a new User Turn.
