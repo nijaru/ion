@@ -230,8 +230,12 @@ def exercise_file_discovery():
                 for busy in (False, True):
                     output.clear()
                     if busy:
-                        os.write(master, b"!sleep 30\r")
-                        wait(lambda: b"Running shell" in output)
+                        # The local running title also covers cold preparation.
+                        # Hold discovery only after a real executor effect, so
+                        # cancellation exercises an in-flight process, not the
+                        # separately protected pre-dispatch refusal boundary.
+                        os.write(master, b"!touch .shell-started; sleep 30\r")
+                        wait(lambda: b"Running shell" in output and (workspace / ".shell-started").exists())
                     os.write(master, b"Read @")
                     writer = hold_read()
                     wait(lambda: "discovering paths…".encode() in output)
