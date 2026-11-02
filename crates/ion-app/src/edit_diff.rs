@@ -1,270 +1,88 @@
-//! Presentation of a recorded edit or write observation; patch syntax never determines effect state.
-use crate::{
-    display_text::{Component, Field, MappedLine, Wrapping, fit_mapped, source_lines, wrap_mapped},
-    presentation_style::Role,
+//! A bounded observation of the edit's read/write snapshots, not a later disk diff.
+use std::{
+    fmt::{self, Write},
+    time::Duration,
 };
-use ion_core::{ActivityState, ToolActivityKind, TranscriptActivity};
-use ratatui::text::{Line, Span};
-use serde_json::{Map, Value};
-use unicode_width::UnicodeWidthStr;
 
-pub(crate) struct RecordedDiff<'a> {
-    pub fields: &'a Map<String, Value>,
-    pub text: &'a str,
-    pub truncated: bool,
+use serde::Serialize;
+use similar::TextDiff;
+
+const CAPTURE_BYTES: usize = 64 * 1024;
+
+#[derive(Serialize)]
+pub(crate) struct EditDiff {
+    text: String,
+    truncated: bool,
 }
 
-pub(crate) fn recorded(activity: &TranscriptActivity) -> Option<RecordedDiff<'_>> {
-    if !matches!(
-        activity.activity.kind,
-        ToolActivityKind::Edit | ToolActivityKind::Write
-    ) || activity.state != ActivityState::Completed
-    {
-        return None;
-    }
-    let result = activity.result.as_ref().filter(|result| !result.is_error)?;
-    let fields = result.value.as_object()?;
-    let diff = fields.get("diff")?;
-    Some(RecordedDiff {
-        fields,
-        text: diff.get("text")?.as_str()?,
-        truncated: diff.get("truncated")?.as_bool()?,
-    })
+pub(crate) fn capture(path: &str, before: &str, after: &str) -> EditDiff {
+    // This limits diff search, not all parsing/formatting or host execution.
+    let diff = TextDiff::configure()
+        .timeout(Duration::from_millis(100))
+        .diff_lines(before, after);
+    // Escaping the filename prevents newlines/control bytes becoming patch headers.
+    let header = format!("{path:?}");
+    let mut capture = EditDiff {
+        text: String::new(),
+        truncated: false,
+    };
+    let result = write!(
+        capture,
+        "{}",
+        diff.unified_diff()
+            .context_radius(3)
+            .header(&header, &header)
+    );
+    // Our writer's only error is the intentional capture bound.
+    debug_assert!(result.is_ok() || capture.truncated);
+    capture
 }
 
-pub(crate) fn render(
-    rows: &mut Vec<MappedLine>,
-    activity: &TranscriptActivity,
-    prefix: &str,
-    width: usize,
-    detail: &crate::tool_output::RenderOptions<'_>,
-) {
-    let Some(diff) = recorded(activity) else {
-        return;
-    };
-    const PREVIEW_LINES: usize = 8;
-    let expanded = detail.detail == crate::tool_output::OutputDetail::Expanded;
-    let mut source = source_lines(diff.text).skip(if expanded { 0 } else { 2 });
-    let lines = source
-        .by_ref()
-        .take(if expanded { usize::MAX } else { PREVIEW_LINES })
-        .collect::<Vec<_>>();
-    let more = source.next().is_some();
-    let footer = if diff.truncated {
-        Some(format!("… diff capture truncated · {}", detail.details_key))
-    } else if more {
-        Some(format!("… more diff · {}", detail.details_key))
-    } else if lines.is_empty() {
-        Some("No text changes".into())
-    } else {
-        None
-    };
-    for (index, (byte, text)) in lines.iter().enumerate() {
-        let last = index + 1 == lines.len() && footer.is_none();
-        // These are syntax styles only. The Completed state above comes from Core facts.
-        let style = match text.as_bytes().first() {
-            Some(b'+') => detail.theme.style(Role::Added),
-            Some(b'-') => detail.theme.style(Role::Removed),
-            Some(b'@') => detail.theme.style(Role::Hunk),
-            _ => detail.theme.style(Role::Secondary),
-        };
-        // Bound physical preview rows; long source lines remain in inspection.
-        let source = MappedLine::component(
-            Line::from(Span::styled((*text).to_owned(), style)),
-            Component::Field(Field::Diff),
-            *byte,
-        );
-        let visible = if expanded {
-            source
-        } else {
-            fit_mapped(source, width.saturating_sub(prefix.width() + 2).max(1)).0
-        };
-        rows.extend(wrap_mapped(
-            &format!("{prefix}{}", if last { "└ " } else { "│ " }),
-            &format!("{prefix}{}", if last { "  " } else { "│ " }),
-            visible,
-            width,
-            Wrapping::Literal,
-        ));
-    }
-    if let Some(footer) = footer {
-        rows.extend(wrap_mapped(
-            &format!("{prefix}└ "),
-            &format!("{prefix}  "),
-            MappedLine::generated(
-                Line::styled(
-                    crate::display_text::fit_line(
-                        &footer,
-                        width.saturating_sub(prefix.width() + 2).max(1),
-                    ),
-                    detail.theme.style(Role::Secondary),
-                ),
-                0,
-            ),
-            width,
-            Wrapping::Literal,
-        ));
+impl Write for EditDiff {
+    fn write_str(&mut self, text: &str) -> fmt::Result {
+        let available = CAPTURE_BYTES - self.text.len();
+        if text.len() <= available {
+            self.text.push_str(text);
+            return Ok(());
+        }
+        let mut end = available;
+        while !text.is_char_boundary(end) {
+            end -= 1;
+        }
+        self.text.push_str(&text[..end]);
+        self.truncated = true;
+        Err(fmt::Error)
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use ion_core::{
-        ActivityGroup, ActivityResult, ToolActivity, ToolResultProjection, TranscriptItem,
-        TranscriptProjection,
-    };
-    use serde_json::json;
 
     #[test]
-    fn write_activity_uses_the_same_recorded_diff_presentation() {
-        let mut activity = TranscriptActivity {
-            identity: ion_core::TranscriptActivityIdentity::Tool(ion_core::ToolOccurrence {
-                assistant_entry: 1,
-                ordinal: 0,
-            }),
-            call_id: "write-1".into(),
-            name: "write".into(),
-            activity: ToolActivity {
-                kind: ToolActivityKind::Write,
-                subject: Some("file".into()),
-            },
-            arguments: json!({"path":"file"}),
-            state: ActivityState::Completed,
-            result: Some(ActivityResult {
-                projection: Some(ToolResultProjection::Observed),
-                value: json!({"path":"file", "diff":{"text":"--- file\n+++ file\n@@ -1 +1 @@\n-old\n+new\n","truncated":false}}),
-                artifacts: Vec::new(),
-                image_mime_types: vec![],
-                is_error: false,
-            }),
-            children: vec![],
-        };
-        let mut rows = Vec::new();
-        render(
-            &mut rows,
-            &activity,
-            "  ",
-            80,
-            &crate::tool_output::RenderOptions::new(
-                crate::tool_output::OutputDetail::Compact,
-                &crate::keybindings::KeyBindings::default(),
-                &crate::presentation_style::Theme::default(),
-                crate::transcript_render::ThinkingVisibility::Hidden,
-            ),
+    fn snapshots_preserve_context_and_missing_newlines_not_requested_anchors() {
+        let patch = capture("a\npath", "before\nold\nafter", "before\nnew\nafter");
+        assert!(!patch.truncated);
+        assert!(
+            patch
+                .text
+                .contains(" before\n-old\n+new\n after\n\\ No newline at end of file"),
+            "{:?}",
+            patch.text
         );
-        assert!(rows.iter().any(|row| row.line.to_string().contains("+new")));
-        activity.activity.kind = ToolActivityKind::Read;
-        assert!(recorded(&activity).is_none());
+        assert!(
+            patch
+                .text
+                .starts_with("--- \"a\\npath\"\n+++ \"a\\npath\"\n")
+        );
+        assert!(capture("same", "unchanged", "unchanged").text.is_empty());
     }
 
     #[test]
-    fn preview_bounds_physical_rows_and_inspection_retains_the_recorded_patch() {
-        let text = format!(
-            "--- old\n+++ new\n@@ -1 +1 @@\n-{}\n+x\u{1b}[2J\n",
-            "\u{200b}".repeat(500)
-        );
-        let mut activity = TranscriptActivity {
-            identity: ion_core::TranscriptActivityIdentity::Tool(ion_core::ToolOccurrence {
-                assistant_entry: 1,
-                ordinal: 0,
-            }),
-            call_id: "edit-1".into(),
-            name: "edit".into(),
-            activity: ToolActivity {
-                kind: ToolActivityKind::Edit,
-                subject: Some("file".into()),
-            },
-            arguments: json!({"path":"file"}),
-            state: ActivityState::Completed,
-            result: Some(ActivityResult {
-                projection: Some(ToolResultProjection::Observed),
-                value: json!({"path":"file", "diff":{"text":text,"truncated":true}}),
-                artifacts: Vec::new(),
-                image_mime_types: vec![],
-                is_error: false,
-            }),
-            children: vec![],
-        };
-        for width in 1..=40 {
-            let mut rows = vec![];
-            render(
-                &mut rows,
-                &activity,
-                "│ ",
-                width,
-                &crate::tool_output::RenderOptions::new(
-                    crate::tool_output::OutputDetail::Compact,
-                    &crate::keybindings::KeyBindings::default(),
-                    &crate::presentation_style::Theme::default(),
-                    crate::transcript_render::ThinkingVisibility::Hidden,
-                ),
-            );
-            assert!(rows.len() <= 9, "width {width}: {} rows", rows.len());
-            assert!(
-                rows.iter().all(
-                    |row| row.line.width() <= width && !row.line.to_string().contains('\u{1b}')
-                )
-            );
-            assert!(rows.iter().any(|row| {
-                row.line.spans.iter().any(|span| {
-                    span.style.fg
-                        == crate::presentation_style::Theme::default()
-                            .style(Role::Removed)
-                            .fg
-                })
-            }));
-            assert!(rows.iter().any(|row| {
-                row.line.spans.iter().any(|span| {
-                    span.style.fg
-                        == crate::presentation_style::Theme::default()
-                            .style(Role::Added)
-                            .fg
-                })
-            }));
-        }
-        let mut expanded = Vec::new();
-        render(
-            &mut expanded,
-            &activity,
-            "  ",
-            80,
-            &crate::tool_output::RenderOptions::new(
-                crate::tool_output::OutputDetail::Expanded,
-                &crate::keybindings::KeyBindings::default(),
-                &crate::presentation_style::Theme::default(),
-                crate::transcript_render::ThinkingVisibility::Hidden,
-            ),
-        );
-        let expanded = expanded
-            .iter()
-            .map(|row| row.line.to_string())
-            .collect::<Vec<_>>()
-            .join("\n");
-        assert!(expanded.contains("--- old") && expanded.contains("+++ new"));
-        assert!(expanded.contains("diff capture truncated") && !expanded.contains('\u{1b}'));
-        let history = TranscriptProjection {
-            items: vec![TranscriptItem::ActivityGroup(ActivityGroup {
-                source: ion_core::TranscriptSource { entry: 1, part: 0 },
-                turn: 1,
-                open: false,
-                activities: vec![activity.clone()],
-            })],
-        };
-        let mut detail = crate::transcript_detail::DetailView::new(std::num::NonZeroUsize::new(1));
-        detail.prepare(history.items.iter(), &[], 0, 80);
-        let inspection = detail.rows().join("\n");
-        assert!(inspection.contains("Recorded edit diff · capture truncated"));
-        assert!(inspection.contains("@@ -1 +1 @@") && inspection.contains("+x�[2J"));
-        assert!(
-            !inspection.contains("\\n"),
-            "patch was displayed as escaped JSON"
-        );
-        assert_eq!(
-            activity.result.as_ref().unwrap().value["diff"]["text"],
-            text
-        );
-        activity.state = ActivityState::Unknown;
-        assert!(recorded(&activity).is_none());
+    fn large_changed_lines_have_an_explicit_utf8_safe_capture_bound() {
+        let patch = capture("large", &"界".repeat(CAPTURE_BYTES), "replacement\n");
+        assert!(patch.truncated);
+        assert!(patch.text.len() <= CAPTURE_BYTES);
+        assert!(patch.text.is_char_boundary(patch.text.len()));
     }
 }

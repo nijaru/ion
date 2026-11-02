@@ -1569,7 +1569,7 @@ dependencies = [
  "ignore",
  "ion-ai",
  "ion-core",
- "ion-host",
+ "ion-app",
  "ion-terminal",
  "pulldown-cmark",
  "ratatui",
@@ -1619,7 +1619,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "ion-host"
+name = "ion-app"
 version = "0.0.0"
 dependencies = [
  "anyhow",

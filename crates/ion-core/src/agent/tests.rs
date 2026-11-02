@@ -19,7 +19,7 @@ fn tiny_image() -> ImageContent {
 }
 
 /// Minimal concrete host used only to exercise the core Turn/tool protocol.
-/// Native filesystem/process edge cases belong to ion-host::LocalTools tests.
+/// Native filesystem/process edge cases belong to ion-app::LocalTools tests.
 struct TestTools {
     root: std::path::PathBuf,
 }

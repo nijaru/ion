@@ -1,35 +1,47 @@
 [package]
-name = "ion"
+name = "ion-app"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
+repository.workspace = true
+description = "Ion shared application and SDK for models, tools and sessions"
 
 [dependencies]
+async-stream = "0.3.6"
 anyhow = "1.0"
-arboard = { version = "3.6.1", features = ["wayland-data-control"] }
 base64 = "0.22.1"
-clap.workspace = true
+futures-util = "0.3.34"
+getrandom = "0.3.4"
 ignore = "0.4.33"
+indexmap = { version = "2.14.2", features = ["serde"] }
+httpdate = "1.0.3"
+html5ever = "0.39"
+image = { version = "0.25.10", default-features = false, features = ["jpeg", "png", "gif", "webp"] }
 ion-ai.workspace = true
 ion-core.workspace = true
-ion-host.workspace = true
-ion-terminal.workspace = true
-pulldown-cmark = { version = "0.13.4", default-features = false, features = ["html"] }
-ratatui = "0.30.2"
-rustix = { version = "1.1.4", features = ["fs", "termios"] }
+jsonschema = { version = "0.60.2", default-features = false }
+reqwest = { version = "0.13.5", default-features = false, features = ["json", "stream", "rustls"] }
+regex = "1.13.1"
+rmcp = { version = "3.4.0", default-features = false, features = ["client", "transport-async-rw", "transport-streamable-http-client-reqwest"] }
+rquickjs = { version = "=0.14.0", default-features = false, features = ["std"] }
+rustix = { version = "1.1.4", features = ["event", "fs", "pipe", "process", "pty", "stdio", "termios"] }
 serde = { version = "1.0.229", features = ["derive"] }
-serde_json = "1.0.151"
-shlex = "2.0.1"
+serde_json = { version = "1.0.151", features = ["raw_value"] }
+serde-saphyr = { version = "2.0.0", default-features = false, features = ["deserialize"] }
+sha2 = "0.10.9"
+similar = "3.2.0"
+sse-stream = "0.2.6"
+thiserror.workspace = true
 tokio = { workspace = true, features = ["net"] }
 tokio-util.workspace = true
-two-face = { version = "=0.5.2", default-features = false, features = ["syntect-onig"] }
-unicode-segmentation = "1.13.3"
-unicode-width = "0.2.2"
-uuid = { version = "1.25.0", features = ["v7"] }
+url = "2.5.8"
+uuid = { version = "1.24.1", features = ["v7"] }
+vt100 = "0.16.2"
 
 [dev-dependencies]
 rusqlite = "0.40.2"
+tokio = { workspace = true, features = ["test-util"] }
 
 [lints]
 workspace = true

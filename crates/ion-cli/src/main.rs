@@ -1,0 +1,901 @@
+//! Local CLI and terminal host for the same coding Agent and Session.
+use std::{
+    collections::BTreeSet,
+    io::{self, IsTerminal, Write},
+    path::PathBuf,
+    sync::Arc,
+};
+
+use anyhow::{Context, Result, bail, ensure};
+use ion_ai::{Content, Message};
+use ion_app::{Application, CredentialStatus, Host, Resources, SavedSelection};
+use ion_core::{ForkPoint, Session};
+
+mod agent_events;
+mod cli;
+mod clipboard;
+mod clipboard_reader;
+mod display_text;
+mod doctor;
+mod edit_diff;
+mod external_editor;
+mod headless;
+mod inspection;
+mod keybindings;
+mod markdown;
+mod mcp_cli;
+mod presentation_style;
+mod publication;
+mod rpc;
+mod session_usage;
+mod stdio;
+mod terminal_client;
+mod terminal_commands;
+mod terminal_completion;
+mod terminal_input;
+mod themes;
+mod tool_output;
+mod transcript;
+mod transcript_detail;
+mod transcript_render;
+
+use cli::{Action, CommandsAction, Invocation};
+
+fn configured_cwd(cwd: Option<PathBuf>) -> Result<PathBuf> {
+    let path = cwd.unwrap_or(std::env::current_dir()?);
+    let path = path
+        .canonicalize()
+        .with_context(|| format!("cannot resolve working directory {}", path.display()))?;
+    ensure!(path.is_dir(), "working directory is not a directory");
+    Ok(path)
+}
+
+#[tokio::main]
+async fn main() {
+    let result = match cli::parse() {
+        Ok(invocation) => run_cli(invocation).await,
+        Err(error) => Err(error),
+    };
+    if let Err(error) = result {
+        // Reporting to a broken stderr must not replace the original failure
+        // with a printing panic after controlled cleanup has completed.
+        // Errors can quote repository metadata before trust is granted.
+        let diagnostic = display_text::diagnostic(&format!("{error:#}"));
+        let _ = writeln!(io::stderr().lock(), "ion: {diagnostic}");
+        std::process::exit(1);
+    }
+}
+
+async fn run_cli(cli: Invocation) -> Result<()> {
+    if matches!(cli.action, Action::ClipboardRead) {
+        return clipboard_reader::write_native();
+    }
+    let tool_selection = cli.tool_selection;
+    if matches!(cli.action, Action::SyntaxLicenses) {
+        let mut notices = String::from("# Bundled syntax definitions\n\n");
+        for license in two_face::acknowledgement::listing().for_syntaxes() {
+            license.write_md(&mut notices);
+        }
+        return Ok(io::stdout().lock().write_all(notices.as_bytes())?);
+    }
+    let mut host = Host::from_environment()?;
+    if let Some(patterns) = cli.model_scope {
+        host = host.with_model_scope(patterns);
+        // Validate an explicit invocation even when --model or a saved Session
+        // chooses the initial binding. Invalid preferences must not be ignored.
+        host.models().cycle_choices(host.credentials())?;
+    }
+    if cli.no_skills
+        || !cli.skills.is_empty()
+        || cli.no_prompt_templates
+        || !cli.prompt_templates.is_empty()
+    {
+        let cwd = configured_cwd(cli.cwd.clone())?;
+        host = host.with_resource_selection(ion_app::ResourceSelection {
+            skills: ion_app::ResourcePaths::new(&cwd, !cli.no_skills, cli.skills)?,
+            prompt_templates: ion_app::ResourcePaths::new(
+                &cwd,
+                !cli.no_prompt_templates,
+                cli.prompt_templates,
+            )?,
+        });
+    }
+    let host = Arc::new(host);
+    let credentials = host.credentials();
+    let models = host.models();
+    match cli.action {
+        Action::ClipboardRead | Action::SyntaxLicenses => {
+            unreachable!("standalone command handled before Host setup")
+        }
+        Action::Doctor => doctor::run(&host, &configured_cwd(cli.cwd)?),
+        Action::Models { query } => {
+            let query = query.unwrap_or_default().to_ascii_lowercase();
+            for choice in models.choices(credentials)? {
+                let model = choice.selected;
+                if !model.provider.contains(&query)
+                    && !model.model.to_ascii_lowercase().contains(&query)
+                    && !choice.label.to_ascii_lowercase().contains(&query)
+                {
+                    continue;
+                }
+                print_stdout(format_args!(
+                    "{}/{}\t{}\t{}",
+                    metadata_field(&model.provider),
+                    metadata_field(&model.model),
+                    metadata_field(choice.label),
+                    status_label(choice.credential)
+                ))?;
+            }
+            Ok(())
+        }
+        Action::Use {
+            provider,
+            model,
+            endpoint,
+            wire,
+            api_key_env,
+            context_window,
+            max_output_tokens,
+            images,
+        } => {
+            let (provider, model) = if endpoint.is_none() {
+                let selected = models.resolve_pattern(&model, Some(&provider), credentials)?;
+                (selected.provider, selected.model)
+            } else {
+                (provider, model)
+            };
+            let saved = SavedSelection {
+                provider,
+                model,
+                endpoint,
+                wire,
+                api_key_env,
+                context_window_tokens: context_window,
+                max_output_tokens,
+                image_input: images,
+            };
+            let resolved = models.save_default(&saved)?;
+            print_stdout(format_args!(
+                "Selected {}/{}",
+                metadata_field(&resolved.provider),
+                metadata_field(&resolved.model)
+            ))?;
+            Ok(())
+        }
+        Action::Login { provider } => {
+            ensure!(
+                io::stdin().is_terminal() && io::stdout().is_terminal(),
+                "API-key login requires a terminal; use an environment variable in headless mode"
+            );
+            let mut terminal = ion_terminal::TerminalSession::with_requirements(
+                ion_terminal::TerminalRequirements {
+                    keyboard_enhancement: false,
+                    ..Default::default()
+                },
+            )
+            .await?;
+            // Keep input validation intact: unsafe provider text is rejected
+            // by the secret reader, not transformed into a different prompt.
+            let key = terminal
+                .read_secret(&format!("{provider} API key: "))
+                .await?;
+            terminal.restore()?;
+            let key = key?;
+            credentials.save_api_key(&provider, &key)?;
+            print_stdout(format_args!(
+                "Saved {} credential.",
+                metadata_field(&provider)
+            ))?;
+            Ok(())
+        }
+        Action::Logout { provider } => {
+            credentials.remove(&provider)?;
+            print_stdout(format_args!(
+                "Removed saved {} credential. Any environment key remains active.",
+                metadata_field(&provider)
+            ))?;
+            Ok(())
+        }
+        Action::Auth => {
+            let mut seen = BTreeSet::new();
+            for choice in models.choices(credentials)? {
+                let model = choice.selected;
+                if seen.insert(model.provider.clone()) {
+                    print_stdout(format_args!(
+                        "{}: {}",
+                        metadata_field(&model.provider),
+                        status_label(choice.credential)
+                    ))?;
+                }
+            }
+            Ok(())
+        }
+        Action::Sessions => {
+            let cwd = cli.cwd.unwrap_or(std::env::current_dir()?).canonicalize()?;
+            let catalog = host.sessions(Some(cwd));
+            for session in catalog.list()? {
+                print_stdout(format_args!(
+                    "{}\t{}\t{} turn(s)\t{}\t{}",
+                    metadata_field(&session.id),
+                    metadata_field(session.name.as_deref().unwrap_or("")),
+                    session.turns,
+                    session
+                        .model
+                        .as_ref()
+                        .map_or_else(String::new, |model| format!(
+                            "{}/{}",
+                            metadata_field(&model.provider),
+                            metadata_field(&model.model)
+                        )),
+                    metadata_field(session.preview.as_deref().unwrap_or(""))
+                ))?;
+            }
+            Ok(())
+        }
+        Action::Resources => {
+            let cwd = cli.cwd.unwrap_or(std::env::current_dir()?).canonicalize()?;
+            let resources = host.resources(&cwd)?;
+            for skill in resources.skills() {
+                print_stdout(format_args!(
+                    "skill\t{}\t{}\t{}",
+                    metadata_field(&skill.name),
+                    metadata_field(&skill.description),
+                    metadata_field(&skill.path.to_string_lossy())
+                ))?;
+            }
+            for template in resources.templates() {
+                print_stdout(format_args!(
+                    "prompt\t{}\t{}\t{}",
+                    metadata_field(&template.name),
+                    metadata_field(&template.description),
+                    metadata_field(&template.path.to_string_lossy())
+                ))?;
+            }
+            for diagnostic in resources.diagnostics() {
+                print_stderr(format_args!(
+                    "[resource: {}: {}]",
+                    metadata_field(&diagnostic.path.to_string_lossy()),
+                    metadata_field(&diagnostic.message)
+                ))?;
+            }
+            Ok(())
+        }
+        Action::Commands { action } => {
+            let cwd = configured_cwd(cli.cwd.clone())?;
+            let commands = ion_app::CommandConfig::with_project(host.config_root(), &cwd)?;
+            match action.unwrap_or(CommandsAction::List) {
+                CommandsAction::List => {
+                    if let Some(path) = commands.project_path().filter(|path| path.is_file()) {
+                        print_stderr(format_args!(
+                            "[commands project: {}]",
+                            metadata_field(&path.to_string_lossy())
+                        ))?;
+                    }
+                    let catalog = commands.list()?;
+                    for diagnostic in catalog.diagnostics() {
+                        print_stderr(format_args!("[commands: {}]", metadata_field(diagnostic)))?;
+                    }
+                    for command in catalog.iter() {
+                        print_stdout(format_args!(
+                            "{}\t{}\t{}",
+                            metadata_field(&command.name),
+                            metadata_field(&command.description),
+                            command.origin
+                        ))?;
+                    }
+                }
+                CommandsAction::Trust => {
+                    let path = commands.trust_project()?;
+                    print_stdout(format_args!(
+                        "Trusted project commands manifest {}",
+                        metadata_field(&path.to_string_lossy())
+                    ))?;
+                }
+                CommandsAction::Untrust => {
+                    commands.untrust_project()?;
+                    print_stdout(format_args!("Removed project commands trust"))?;
+                }
+            }
+            Ok(())
+        }
+        Action::Trust => {
+            let cwd = configured_cwd(cli.cwd.clone())?;
+            let config = host.mcp_config_for(&cwd)?;
+            config.trust_project()?;
+            let path = config
+                .project_path()
+                .context("project MCP configuration path is unavailable")?;
+            print_stdout(format_args!(
+                "Trusted project MCP configuration {}",
+                metadata_field(&path.to_string_lossy())
+            ))?;
+            Ok(())
+        }
+        Action::Untrust => {
+            let cwd = configured_cwd(cli.cwd.clone())?;
+            let config = host.mcp_config_for(&cwd)?;
+            config.untrust_project()?;
+            print_stdout(format_args!("Removed project MCP trust"))?;
+            Ok(())
+        }
+        Action::Mcp { action } => {
+            let cwd = configured_cwd(cli.cwd.clone())?;
+            let config = host.mcp_config_for(&cwd)?;
+            mcp_cli::run(action, &config)
+        }
+        action => {
+            let keys = if cli.resume_session
+                || (matches!(action, Action::Chat { .. })
+                    && io::stdin().is_terminal()
+                    && io::stdout().is_terminal())
+            {
+                keybindings::KeyBindings::load(host.config_root())?
+            } else {
+                keybindings::KeyBindings::default()
+            };
+            let themes = if cli.resume_session
+                || (matches!(action, Action::Chat { .. })
+                    && io::stdin().is_terminal()
+                    && io::stdout().is_terminal())
+            {
+                themes::Themes::load(host.config_root(), cli.use_theme.as_deref())?
+            } else {
+                themes::Themes::default()
+            };
+            let explicit_cwd = cli.cwd.is_some();
+            let cwd = cli.cwd.unwrap_or(std::env::current_dir()?).canonicalize()?;
+            ensure!(cwd.is_dir(), "working directory is not a directory");
+            let catalog = host.sessions(Some(cwd.clone()));
+            let path = if cli.resume_session {
+                let Some(path) =
+                    terminal_client::choose_session(catalog.clone(), &keys, &themes).await?
+                else {
+                    return Ok(());
+                };
+                path
+            } else if let Some(explicit) = cli.session {
+                catalog.resolve_explicit(explicit)?
+            } else if cli.continue_session {
+                catalog.latest()?
+            } else if matches!(
+                action,
+                Action::Inspect
+                    | Action::Usage
+                    | Action::Export { .. }
+                    | Action::Turns
+                    | Action::Compact { .. }
+                    | Action::Clone
+                    | Action::Fork { .. }
+            ) {
+                bail!(
+                    "use --continue, --resume in a terminal, or --session ID; run `ion sessions` to find one"
+                )
+            } else {
+                catalog.new_path()?
+            };
+            let existing = if cli.resume_session || cli.continue_session || path.is_file() {
+                Some(Session::inspect_metadata(&path)?)
+            } else {
+                None
+            };
+            if let Some(view) = &existing {
+                ensure!(
+                    !explicit_cwd || view.cwd.as_deref() == Some(cwd.as_path()),
+                    "--cwd does not match the session's working directory ({})",
+                    view.cwd
+                        .as_deref()
+                        .map_or_else(|| "(none)".into(), |cwd| cwd.display().to_string())
+                );
+            }
+            // Copies and navigation belong to the stored Session's namespace,
+            // not the directory that happened to launch this executable.
+            let catalog = existing
+                .as_ref()
+                .map_or(catalog, |view| host.sessions(view.cwd.clone()));
+            if matches!(action, Action::Inspect) {
+                ensure!(existing.is_some(), "session does not exist");
+                let view = Session::inspect(&path)?;
+                inspection::write(&view, &mut io::stdout().lock())?;
+                return Ok(());
+            }
+            if matches!(action, Action::Usage) {
+                ensure!(existing.is_some(), "session does not exist");
+                let view = Session::inspect(&path)?;
+                print_stdout(format_args!(
+                    "Session {}\n{}",
+                    view.id,
+                    session_usage::render(&view.usage())
+                ))?;
+                return Ok(());
+            }
+            if let Action::Export { path: output } = &action {
+                ensure!(existing.is_some(), "session does not exist");
+                let view = Session::inspect(&path)?;
+                if let Some(output) = output {
+                    let target = if output.is_absolute() {
+                        output.clone()
+                    } else {
+                        view.cwd
+                            .as_deref()
+                            .context("relative export path requires a working directory")?
+                            .join(output)
+                    };
+                    transcript::save_new(&view, &target).with_context(|| {
+                        format!("cannot save transcript to {}", target.display())
+                    })?;
+                    print_stdout(format_args!("{}", target.display()))?;
+                } else {
+                    io::stdout().write_all(transcript::render(&view).as_bytes())?;
+                }
+                return Ok(());
+            }
+            if matches!(action, Action::Turns) {
+                ensure!(existing.is_some(), "session does not exist");
+                let view = Session::inspect(&path)?;
+                for turn in view.turns() {
+                    print_stdout(format_args!(
+                        "{}\t{}\t{}",
+                        turn.turn,
+                        if turn.end.is_some() {
+                            "ended"
+                        } else {
+                            "active"
+                        },
+                        preview_input(&turn.input)
+                    ))?;
+                }
+                return Ok(());
+            }
+            if matches!(action, Action::Clone) {
+                ensure!(existing.is_some(), "session does not exist");
+                let source = Session::open(&path)?;
+                let target = catalog.new_path()?;
+                let cloned = source.clone_to(&target)?;
+                let id = cloned.id().to_string();
+                print_stdout(format_args!("Cloned session as {}", metadata_field(&id)))?;
+                return Ok(());
+            }
+            if let Action::Fork { turn, after } = &action {
+                ensure!(existing.is_some(), "session does not exist");
+                let source = Session::open(&path)?;
+                let target = catalog.new_path()?;
+                let fork = source.fork_to(
+                    &target,
+                    if *after {
+                        ForkPoint::AfterTurn(*turn)
+                    } else {
+                        ForkPoint::BeforeTurn(*turn)
+                    },
+                )?;
+                let id = fork.id().to_string();
+                print_stdout(format_args!("Forked session as {}", metadata_field(&id)))?;
+                return Ok(());
+            }
+            if matches!(action, Action::Compact { .. }) {
+                ensure!(existing.is_some(), "session does not exist");
+            }
+            let session_cwd = match &existing {
+                Some(view) => view
+                    .cwd
+                    .as_deref()
+                    .context("coding requires a working directory")?,
+                None => cwd.as_path(),
+            };
+            let previous = existing.as_ref().and_then(|view| view.last_model.clone());
+            let interactive_setup = matches!(action, Action::Chat { .. })
+                && io::stdin().is_terminal()
+                && io::stdout().is_terminal();
+            let selection = match cli.model {
+                Some(pattern) => {
+                    models.resolve_pattern(&pattern.text, pattern.provider.as_deref(), credentials)
+                }
+                None => models.choose(None, previous, credentials),
+            };
+            let selected = if interactive_setup {
+                let selected = match selection {
+                    Ok(selected) => Some(selected),
+                    Err(error) if error.is::<ion_app::ModelSelectionRequired>() => None,
+                    Err(error) => return Err(error),
+                };
+                let choose_default = existing.is_none() && selected.is_none();
+                let Some(selected) =
+                    terminal_client::setup_model(&host, selected, choose_default, &keys, &themes)
+                        .await?
+                else {
+                    return Ok(());
+                };
+                selected
+            } else {
+                selection?
+            };
+            selected.require_access(credentials)?;
+            let sources = cli
+                .image
+                .iter()
+                .map(|path| {
+                    ion_app::image_input::ImageSource::Path(if path.is_absolute() {
+                        path.clone()
+                    } else {
+                        session_cwd.join(path)
+                    })
+                })
+                .collect();
+            // Startup has not admitted a Session operation or taken terminal
+            // custody. Preserve default SIGINT here; registering Tokio's handler
+            // would also change the later interactive terminal's signal behavior.
+            let mut images = ion_app::image_input::prepare_images(
+                &selected.identity(),
+                selected.image_input,
+                sources,
+                ion_core::AgentLimits::default().max_request_bytes,
+                tokio_util::sync::CancellationToken::new(),
+            )
+            .await?;
+            let paths = match &action {
+                Action::Run { input } | Action::Chat { input } => input
+                    .files()
+                    .map(|path| {
+                        let path = if let Some(rest) =
+                            path.to_str().and_then(|value| value.strip_prefix("~/"))
+                        {
+                            PathBuf::from(std::env::var_os("HOME").context("@~/ requires HOME")?)
+                                .join(rest)
+                        } else {
+                            path.to_path_buf()
+                        };
+                        Ok(if path.is_absolute() {
+                            path
+                        } else {
+                            session_cwd.join(path)
+                        })
+                    })
+                    .collect::<Result<Vec<_>>>()?,
+                _ => Vec::new(),
+            };
+            let prepared = ion_app::prompt_files::prepare_files(
+                paths,
+                selected.identity(),
+                selected.image_input,
+                ion_core::AgentLimits::default().max_request_bytes,
+                tokio_util::sync::CancellationToken::new(),
+            )
+            .await?;
+            images.extend(prepared.images);
+            let files = prepared.text;
+            // Freeze resources and validate the complete launch before creating a
+            // Session or starting MCP. Terminal resource errors still belong to
+            // ordinary recoverable editor admission, not a second submission path.
+            let resources = host.resources(session_cwd)?;
+            enum Client {
+                Headless(headless::Request, bool),
+                Rpc,
+                Terminal {
+                    prompts: Vec<String>,
+                    images: Vec<ion_ai::LoadedImage>,
+                    files: Vec<ion_app::prompt_files::TextFile>,
+                },
+            }
+            let client = match action {
+                Action::Run { input } => {
+                    let mut prompts = input.into_prompts();
+                    let first = cli::with_piped_input(
+                        expand_input(
+                            &resources,
+                            prompts.next().unwrap_or_default(),
+                            ion_core::AgentLimits::default().max_request_bytes,
+                        )?,
+                        cli.piped_input,
+                    );
+                    let first = ion_app::prompt_files::compose_prompt(first, &files, images);
+                    let messages = std::iter::once(Ok(first)).chain(prompts.map(|prompt| {
+                        expand_input(
+                            &resources,
+                            prompt,
+                            ion_core::AgentLimits::default().max_request_bytes,
+                        )
+                        .map(|text| ion_ai::Message::user_input(text, []))
+                    }));
+                    let messages = ion_app::preflight_messages(
+                        messages,
+                        ion_core::AgentLimits {
+                            image_input: selected.image_input,
+                            ..ion_core::AgentLimits::default()
+                        },
+                    )?;
+                    Client::Headless(headless::Request::Prompts(messages), cli.json)
+                }
+                Action::Chat { input } => {
+                    let files_only = input.files().next().is_some();
+                    let mut prompts: Vec<_> = input.into_prompts().collect();
+                    if prompts.is_empty() && files_only {
+                        prompts.push(String::new());
+                    }
+                    Client::Terminal {
+                        prompts,
+                        images,
+                        files,
+                    }
+                }
+                Action::Compact { instructions } => {
+                    Client::Headless(headless::Request::Compact(instructions), false)
+                }
+                Action::Rpc => Client::Rpc,
+                _ => unreachable!("non-agent action handled above"),
+            };
+            if let Client::Terminal {
+                prompts,
+                files,
+                images,
+            } = &client
+            {
+                validate_launch_size(&ion_app::prompt_files::compose_prompt(
+                    prompts.first().cloned().unwrap_or_default(),
+                    files,
+                    images.clone(),
+                ))?;
+                for prompt in prompts.iter().skip(1) {
+                    validate_launch_size(&ion_ai::Message::user_input(prompt.clone(), []))?;
+                }
+            }
+            if let Client::Headless(headless::Request::Compact(Some(instructions)), _) = &client {
+                validate_launch_size(&ion_ai::Message::user_input(instructions.clone(), []))?;
+            }
+            let session = Arc::new(if existing.is_some() {
+                Session::open(&path)?
+            } else {
+                Session::create(&path, Some(&cwd))?
+            });
+            if let Some(view) = &existing {
+                ensure!(
+                    session.id() == view.id && session.cwd() == view.cwd.as_deref(),
+                    "saved Session identity or working directory changed during startup; reopen it explicitly"
+                );
+            }
+            // Native effects need interruption custody before MCP helpers start.
+            // Hand this same stream to the client: Tokio's installed SIGINT
+            // handler outlives a dropped listener, so a temporary one is unsafe.
+            let mut interrupt =
+                tokio::signal::unix::signal(tokio::signal::unix::SignalKind::interrupt())?;
+            let stop = tokio_util::sync::CancellationToken::new();
+            let mut interrupted = false;
+            let startup = if matches!(client, Client::Headless(headless::Request::Compact(_), _)) {
+                ion_app::McpStartup::default()
+            } else {
+                let preparation = host.external_tools(
+                    session
+                        .cwd()
+                        .context("coding requires a working directory")?,
+                    stop.clone(),
+                );
+                tokio::pin!(preparation);
+                tokio::select! {
+                    biased;
+                    _ = interrupt.recv() => {
+                        interrupted = true;
+                        stop.cancel();
+                        // Never drop startup while it owns helpers/transports.
+                        preparation.await
+                    }
+                    startup = &mut preparation => startup,
+                }
+            };
+            let external_mcp = startup.tools;
+            let mut preflight_session = Some(session);
+            // Terminal and bidirectional RPC own a live question responder.
+            // One-shot headless, compaction and managed children have no answer
+            // channel and therefore no declared question tool.
+            let questions = matches!(&client, Client::Terminal { .. } | Client::Rpc)
+                .then(ion_app::QuestionCustody::new);
+            let mut application =
+                ion_app::CodingApplication::new(host.clone(), None).with_code_mode(cli.code_mode);
+            if let Some(tools) = &external_mcp {
+                application = application.with_mcp_tools(tools.clone());
+            }
+            if cli.read_only {
+                application = application.with_read_only_tools();
+            } else {
+                application = application.with_tool_selection(tool_selection);
+            }
+            let application_owner = application.owner();
+            // Every fallible setup step after MCP startup belongs to the same
+            // exit scope as the client, so preflight errors still join cleanup.
+            let result = async {
+                ensure!(!interrupted, "MCP startup interrupted");
+                let mut startup_diagnostics = startup
+                    .diagnostics
+                    .into_iter()
+                    .map(|diagnostic| format!("[mcp: {}]", metadata_field(&diagnostic)))
+                    .collect::<Vec<_>>();
+                let mut preparation = application.prepare_setup(
+                    preflight_session.as_ref().expect("unbound Session").clone(),
+                    selected,
+                    cli.reasoning,
+                    questions,
+                    resources,
+                    stop.child_token(),
+                );
+                let prepared = tokio::select! {
+                    biased;
+                    _ = interrupt.recv() => {
+                        interrupted = true;
+                        preparation.request_stop();
+                        preparation.join().await
+                    }
+                    result = preparation.join() => result,
+                };
+                let setup = match prepared {
+                    Ok(setup) => setup,
+                    Err(error) => {
+                        // Failed-server cleanup diagnostics must not disappear
+                        // just because independent binding preflight also fails.
+                        for diagnostic in &startup_diagnostics {
+                            if let Err(delivery) = print_stderr(format_args!("{diagnostic}")) {
+                                return Err(error.context(format!(
+                                    "startup diagnostic delivery also failed: {delivery:#}"
+                                )));
+                            }
+                        }
+                        return Err(error);
+                    }
+                };
+                ensure!(!interrupted, "application setup interrupted");
+                for diagnostic in setup.resources().diagnostics() {
+                    startup_diagnostics.push(format!(
+                        "[resource: {}: {}]",
+                        metadata_field(&diagnostic.path.to_string_lossy()),
+                        metadata_field(&diagnostic.message)
+                    ));
+                }
+                for diagnostic in setup.commands().diagnostics() {
+                    startup_diagnostics.push(format!("[commands: {}]", metadata_field(diagnostic)));
+                }
+                if !matches!(&client, Client::Terminal { .. }) {
+                    for diagnostic in &startup_diagnostics {
+                        print_stderr(format_args!("{diagnostic}"))?;
+                    }
+                }
+                // Each client immediately owns shared control and always joins it.
+                // Keeping the original Arc here would pin its exclusive writer
+                // lock after a client switches to a different Session.
+                drop(preflight_session.take());
+                let setup = setup.with_completion_delivery(cli.completion_delivery);
+                match client {
+                    Client::Headless(request, json) => {
+                        headless::run(setup, request, json, interrupt).await
+                    }
+                    Client::Rpc => rpc::run(setup, host, interrupt).await,
+                    Client::Terminal {
+                        prompts,
+                        images,
+                        files,
+                    } => {
+                        terminal_client::chat(terminal_client::ChatInit {
+                            setup,
+                            services: host,
+                            images,
+                            files,
+                            startup_diagnostics,
+                            initial_prompts: prompts,
+                            tui_mode: cli.tui_mode,
+                            keys,
+                            themes,
+                            interrupt,
+                        })
+                        .await
+                    }
+                }
+            }
+            .await;
+            // Unconditional outer fallback, including preflight/client failure.
+            // Join children and programs before releasing their captured MCP environment.
+            let result = if let Some(owner) = &application_owner {
+                match (result, owner.join_shutdown().await) {
+                    (result, Ok(())) => result,
+                    (Ok(()), Err(error)) => Err(error),
+                    (Err(error), Err(cleanup)) => {
+                        Err(error.context(format!("application shutdown also failed: {cleanup}")))
+                    }
+                }
+            } else {
+                result
+            };
+            // Preflight failures still own the original Session. After handoff,
+            // the client alone owns current-session cleanup, including replacement.
+            let shutdown = match preflight_session {
+                Some(session) => session.shutdown().await,
+                None => Ok(()),
+            };
+            let result = match (result, shutdown) {
+                (result, Ok(())) => result,
+                (Ok(()), Err(error)) => Err(error.into()),
+                (Err(error), Err(shutdown)) => {
+                    Err(error.context(format!("Session shutdown also failed: {shutdown}")))
+                }
+            };
+            let cleanup = match external_mcp {
+                Some(tools) => tools.shutdown().await,
+                None => Ok(()),
+            };
+            match (result, cleanup) {
+                (result, Ok(())) => result,
+                (Ok(()), Err(error)) => Err(error),
+                (Err(error), Err(cleanup)) => {
+                    Err(error.context(format!("MCP cleanup also failed: {cleanup:#}")))
+                }
+            }
+        }
+    }
+}
+
+// Keep each lock inside synchronous publication, never across client awaits.
+// A failed confirmation does not roll back an already-applied host effect.
+fn print_stdout(arguments: std::fmt::Arguments<'_>) -> Result<()> {
+    writeln!(io::stdout().lock(), "{arguments}").context("cannot write CLI stdout")
+}
+
+fn print_stderr(arguments: std::fmt::Arguments<'_>) -> Result<()> {
+    writeln!(io::stderr().lock(), "{arguments}").context("cannot write CLI stderr")
+}
+
+fn validate_launch_size(message: &ion_ai::Message) -> Result<()> {
+    ensure!(
+        serde_json::to_vec(message)?.len() <= ion_core::AgentLimits::default().max_request_bytes,
+        "launch input exceeds input byte limit"
+    );
+    Ok(())
+}
+
+fn expand_input(resources: &Resources, prompt: String, max_output_bytes: usize) -> Result<String> {
+    resources
+        .expand_command(&prompt, max_output_bytes)
+        .transpose()
+        .map(|expanded| expanded.unwrap_or(prompt))
+}
+
+fn preview_input(input: &Message) -> String {
+    let text = input
+        .content
+        .iter()
+        .find_map(|part| match part {
+            Content::Text(text) if !text.trim().is_empty() => Some(text.as_str()),
+            Content::ToolResult(result) => Some(result.name.as_str()),
+            Content::ToolCall(call) => Some(call.name.as_str()),
+            _ => None,
+        })
+        .unwrap_or(
+            if input
+                .content
+                .iter()
+                .any(|part| matches!(part, Content::Image(_)))
+            {
+                "[image]"
+            } else {
+                "[no text]"
+            },
+        );
+    text.lines()
+        .next()
+        .unwrap_or("")
+        .chars()
+        .take(120)
+        .map(metadata_character)
+        .collect()
+}
+
+// Plain one-line metadata only: keep formatter delimiters outside these fields.
+// Identities and machine-readable/durable data remain exact.
+fn metadata_field(text: &str) -> String {
+    text.chars().map(metadata_character).collect()
+}
+
+fn metadata_character(ch: char) -> char {
+    if ch.is_control() { ' ' } else { ch }
+}
+
+fn status_label(status: CredentialStatus) -> &'static str {
+    match status {
+        CredentialStatus::Environment => "environment key",
+        CredentialStatus::Saved => "saved login",
+        CredentialStatus::Missing => "no credential",
+    }
+}

@@ -13,7 +13,7 @@ cargo build --locked -p ion
 target/debug/ion models
 ```
 
-Or install with `cargo install --locked --path crates/ion-app`.
+Or install with `cargo install --locked --path crates/ion-cli`.
 
 ## Basic usage
 
@@ -54,7 +54,7 @@ Configuration, saved credentials, resources and sessions use `~/.ion` by default
 
 ## Develop and embed
 
-This is a Cargo workspace with `ion-ai` (model-facing types), `ion-core` (Turn and Session runtime), `ion-host` (applications and effects), `ion-terminal` (physical terminal) and `ion-app` (CLI and clients). These are current code owners, not promised permanent API boundaries.
+This workspace contains `ion-ai` (model-facing types), `ion-core` (Turn and Session runtime), `ion-app` (the shared application, SDK and effects), and `ion-terminal` (physical terminal). The `ion` executable and its CLI, TUI and RPC clients live in `crates/ion-cli`. These are current code owners, not promised permanent API boundaries.
 
 ```sh
 cargo fmt --all -- --check
@@ -64,7 +64,7 @@ cargo build --locked -p ion
 scripts/smoke.sh
 ```
 
-Rust host entry points and examples live in `crates/ion-app/examples/`. The current `CodingApplication` and `SessionControl` APIs permit embedding the same execution engine; APIs may change before release. `AGENTS.md` contains project-specific development checks.
+Rust host entry points and examples live in `crates/ion-cli/examples/`. The current `CodingApplication` and `SessionControl` APIs permit embedding the same execution engine; APIs may change before release. `AGENTS.md` contains project-specific development checks.
 
 ## Limitations
 
