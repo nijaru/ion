@@ -92,17 +92,20 @@ async fn navigation_preflights_and_commits_before_publishing_resources_or_prefer
     let path = host.sessions(Some(cwd.clone())).new_path().unwrap();
     let session = Arc::new(Session::create(&path, Some(&cwd)).unwrap());
     let mut binding = control(host, session.clone(), selected);
-    binding.select_reasoning(ion_ai::Reasoning::High).unwrap();
+    binding
+        .select_reasoning(ion_ai::Reasoning::High)
+        .await
+        .unwrap();
     let before = session.context_position().unwrap();
     let moved = root.join("moved-work");
     fs::rename(&cwd, &moved).unwrap();
-    assert!(binding.navigate_context(before, 0).is_err());
+    assert!(binding.navigate_context(before, 0).await.is_err());
     assert_eq!(session.context_position().unwrap(), before);
     fs::rename(&moved, &cwd).unwrap();
     fs::write(cwd.join("AGENTS.md"), "CHANGED_NAVIGATION_RULE").unwrap();
     let fault = rusqlite::Connection::open(&path).unwrap();
     fault.execute_batch("CREATE TRIGGER reject_navigation BEFORE INSERT ON entries BEGIN SELECT RAISE(ABORT, 'injected'); END;").unwrap();
-    assert!(binding.navigate_context(before, 0).is_err());
+    assert!(binding.navigate_context(before, 0).await.is_err());
     assert_eq!(session.context_position().unwrap(), before);
     assert_eq!(session.reasoning().unwrap(), ion_ai::Reasoning::High);
     assert!(binding.instructions().contains("ORIGINAL_NAVIGATION_RULE"));
@@ -111,7 +114,7 @@ async fn navigation_preflights_and_commits_before_publishing_resources_or_prefer
         .execute_batch("DROP TRIGGER reject_navigation")
         .unwrap();
     drop(fault);
-    let selected = binding.navigate_context(before, 0).unwrap();
+    let selected = binding.navigate_context(before, 0).await.unwrap();
     assert_eq!(selected.session, session.id());
     assert_eq!(selected.head_entry, 0);
     assert_eq!(
@@ -162,14 +165,14 @@ async fn direct_shell_preflights_before_recovery_or_admission() {
     assert!(!root.join("moved-work/must-not-dispatch").exists());
     fs::rename(root.join("moved-work"), &cwd).unwrap();
     control.shell("printf captured".into(), false, ()).unwrap();
-    assert!(control.new_session().is_err());
+    assert!(control.new_session().await.is_err());
     match control.next().await {
         ControlUpdate::Settled(settlement) => assert!(
             matches!(settlement.outcome, OperationOutcome::Shell(Ok(output)) if !output.is_error)
         ),
         _ => panic!("shell settlement required"),
     }
-    control.new_session().unwrap();
+    control.new_session().await.unwrap();
     let original = session.view().unwrap();
     assert!(
         matches!(original.entries.last(), Some(ion_core::SessionEntry::UserShellSettled { outcome: ion_core::UserShellOutcome::Observed { output, .. }, .. }) if output.value["stdout"] == "captured")
@@ -188,8 +191,8 @@ async fn direct_shell_preflights_before_recovery_or_admission() {
     fs::remove_dir_all(root).unwrap();
 }
 
-#[test]
-fn clone_preserves_resolved_route_without_a_store_entry() {
+#[tokio::test]
+async fn clone_preserves_resolved_route_without_a_store_entry() {
     let root = std::env::temp_dir().join(format!("ion-clone-route-{}", uuid::Uuid::now_v7()));
     let cwd = root.join("work");
     fs::create_dir_all(&cwd).unwrap();
@@ -208,6 +211,7 @@ fn clone_preserves_resolved_route_without_a_store_entry() {
     let mut control = control(host, session, selected);
     control
         .clone_session()
+        .await
         .expect("a conversation copy retains the resolved route");
     assert_eq!(control.agent().model(), &identity);
     assert_eq!(
@@ -218,8 +222,8 @@ fn clone_preserves_resolved_route_without_a_store_entry() {
     fs::remove_dir_all(root).unwrap();
 }
 
-#[test]
-fn idle_override_and_effort_restore_as_one_selection() {
+#[tokio::test]
+async fn idle_override_and_effort_restore_as_one_selection() {
     let root = std::env::temp_dir().join(format!("ion-control-{}", uuid::Uuid::now_v7()));
     let cwd = root.join("work");
     fs::create_dir_all(&cwd).unwrap();
@@ -231,8 +235,11 @@ fn idle_override_and_effort_restore_as_one_selection() {
     let path = host.sessions(Some(cwd.clone())).new_path().unwrap();
     let session = Arc::new(Session::create(&path, Some(&cwd)).unwrap());
     session.select_model(limited.identity()).unwrap();
-    let binding = control(host.clone(), session.clone(), selected);
-    binding.select_reasoning(ion_ai::Reasoning::High).unwrap();
+    let mut binding = control(host.clone(), session.clone(), selected);
+    binding
+        .select_reasoning(ion_ai::Reasoning::High)
+        .await
+        .unwrap();
     drop(binding);
     drop(session);
     let session = Arc::new(Session::open(path).unwrap());
@@ -251,8 +258,8 @@ fn idle_override_and_effort_restore_as_one_selection() {
     fs::remove_dir_all(root).unwrap();
 }
 
-#[test]
-fn replacement_restores_model_and_keeps_old_binding_on_preflight_failure() {
+#[tokio::test]
+async fn replacement_restores_model_and_keeps_old_binding_on_preflight_failure() {
     let root = std::env::temp_dir().join(format!("ion-control-{}", uuid::Uuid::now_v7()));
     let cwd = root.join("work");
     fs::create_dir_all(&cwd).unwrap();
@@ -262,11 +269,15 @@ fn replacement_restores_model_and_keeps_old_binding_on_preflight_failure() {
     let first = Arc::new(Session::create(&first_path, Some(&cwd)).unwrap());
     first.select_model(first_model.identity()).unwrap();
     let mut binding = control(host.clone(), first, first_model);
-    binding.select_reasoning(ion_ai::Reasoning::High).unwrap();
+    binding
+        .select_reasoning(ion_ai::Reasoning::High)
+        .await
+        .unwrap();
     let entries = binding.session().view().unwrap().entries;
     assert!(
         binding
             .select_reasoning(ion_ai::Reasoning::BudgetTokens(128))
+            .await
             .is_err()
     );
     assert_eq!(binding.session().view().unwrap().entries, entries);
@@ -279,12 +290,13 @@ fn replacement_restores_model_and_keeps_old_binding_on_preflight_failure() {
                 provider: "desktop".into(),
                 model: "limited".into()
             })
+            .await
             .is_err()
     );
     assert_eq!(binding.agent().model().model, "one");
     assert_eq!(binding.session().view().unwrap().entries, entries);
     host.models().save_default(&route("two")).unwrap();
-    binding.new_session().unwrap();
+    binding.new_session().await.unwrap();
     let second_id = binding.session_id();
     assert_eq!(binding.agent().model().model, "two");
     assert_eq!(
@@ -293,11 +305,11 @@ fn replacement_restores_model_and_keeps_old_binding_on_preflight_failure() {
     );
     let moved = root.join("moved-work");
     fs::rename(&cwd, &moved).unwrap();
-    assert!(binding.switch_session(first_path.clone()).is_err());
+    assert!(binding.switch_session(first_path.clone()).await.is_err());
     assert_eq!(binding.session_id(), second_id);
     assert_eq!(binding.agent().model().model, "two");
     fs::rename(&moved, &cwd).unwrap();
-    binding.switch_session(first_path).unwrap();
+    binding.switch_session(first_path).await.unwrap();
     assert_eq!(binding.agent().model().model, "one");
     assert_eq!(
         binding.session().reasoning().unwrap(),
@@ -306,7 +318,7 @@ fn replacement_restores_model_and_keeps_old_binding_on_preflight_failure() {
     assert_ne!(binding.session_id(), second_id);
     fs::create_dir_all(cwd.join(".ion/prompts")).unwrap();
     fs::write(cwd.join(".ion/prompts/hello.md"), "Hello $1").unwrap();
-    binding.reload_resources().unwrap();
+    binding.reload_resources().await.unwrap();
     assert!(
         binding
             .resources()

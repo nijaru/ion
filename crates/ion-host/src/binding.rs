@@ -1,18 +1,19 @@
-//! Immutable service preflight and prepare-before-publish binding replacement.
+//! Retained blocking preflight and prepare-before-publish binding replacement.
 use std::{
     fs,
     path::{Path, PathBuf},
     sync::Arc,
 };
 
-use anyhow::{Result, ensure};
+use anyhow::{Context, Result, ensure};
 use ion_ai::{ModelRef, Reasoning};
-use ion_core::{Agent, ForkPoint, Session};
+use ion_core::{Agent, ContextPosition, ForkPoint, Session};
 use serde::Serialize;
+use tokio_util::sync::CancellationToken;
 
 use crate::{
     Application, ApplicationRuntime, CommandCatalog, QuestionCustody, Resources, SessionCatalog,
-    SessionControl,
+    SessionControl, preparation::Preparation,
 };
 
 /// Configuration, not execution. Consume this to create the sole control owner.
@@ -33,12 +34,144 @@ struct PreparedBinding {
     runtime: ApplicationRuntime,
 }
 
+/// Owned request; starting it does not borrow the Controller until completion.
+#[derive(Debug)]
+pub enum BindingChange {
+    ReloadResources,
+    SelectModel(ModelRef),
+    SelectReasoning(Reasoning),
+    NewSession,
+    CloneSession,
+    ForkSession(ForkPoint),
+    NavigateContext {
+        expected: ContextPosition,
+        head_entry: u64,
+    },
+    SwitchSession(PathBuf),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+pub struct BindingOperationId(pub uuid::Uuid);
+
+#[derive(Debug, Serialize)]
+pub enum BindingResult {
+    ResourcesReloaded,
+    ModelSelected,
+    ReasoningSelected,
+    SessionCreated,
+    SessionCloned { session_id: String },
+    SessionForked { session_id: String },
+    ContextNavigated(ContextPosition),
+    SessionSwitched,
+}
+
+/// The sole bounded result slot, consumed by SDK join or ControlUpdate delivery.
+#[derive(Debug)]
+pub struct BindingFinished {
+    pub operation: BindingOperationId,
+    pub result: Result<BindingResult>,
+    pub stop_requested: bool,
+}
+
+pub(crate) enum BindingWork {
+    Running {
+        operation: BindingOperationId,
+        work: Preparation<BindingDelta>,
+    },
+    Finished(BindingFinished),
+}
+
+impl BindingWork {
+    pub(crate) fn operation(&self) -> BindingOperationId {
+        match self {
+            Self::Running { operation, .. } => *operation,
+            Self::Finished(finished) => finished.operation,
+        }
+    }
+    pub(crate) fn is_running(&self) -> bool {
+        matches!(self, Self::Running { .. })
+    }
+    pub(crate) fn request_stop(&self) {
+        if let Self::Running { work, .. } = self {
+            work.request_stop();
+        }
+    }
+    pub(crate) fn is_stopped(&self) -> bool {
+        match self {
+            Self::Running { work, .. } => work.is_stopped(),
+            Self::Finished(finished) => finished.stop_requested,
+        }
+    }
+    pub(crate) async fn join(&mut self) -> Result<BindingDelta> {
+        match self {
+            Self::Running { work, .. } => work.join().await,
+            Self::Finished(_) => unreachable!("only running bindings are driven"),
+        }
+    }
+}
+
+// No Session registry owns this outcome: it may itself retain the same Session.
+// Registering it as SessionIo would create Session -> outcome -> Session custody.
+pub(crate) struct BindingDelta {
+    prepared: PreparedChange,
+    result: BindingResult,
+}
+
+enum PreparedChange {
+    Resources(Resources, CommandCatalog),
+    Runtime(ApplicationRuntime, CommandCatalog),
+    Reasoning,
+    Replacement(Arc<Session>, PreparedBinding),
+}
+
+struct BindingSource {
+    application: Arc<dyn Application>,
+    catalog: SessionCatalog,
+    session: Arc<Session>,
+    runtime: ApplicationRuntime,
+    questions: Option<Arc<QuestionCustody>>,
+    background: Option<Arc<crate::BackgroundOwner>>,
+}
+
+/// Retained, owned setup for async application callers. Its actual blocking
+/// worker and outcome live outside the Session registry: a setup can itself
+/// retain that Session without creating a registry/outcome ownership cycle.
+#[must_use = "retain setup preparation and join its outcome"]
+pub struct SetupPreparation {
+    work: Preparation<SessionSetup>,
+}
+impl SetupPreparation {
+    pub(crate) fn start(
+        stop: CancellationToken,
+        work: impl FnOnce(CancellationToken) -> Result<SessionSetup> + Send + 'static,
+    ) -> Self {
+        Self {
+            work: Preparation::start_blocking(stop, move |stop| {
+                check_stop(&stop)?;
+                work(stop)
+            }),
+        }
+    }
+
+    /// Cooperative intent, not proof that an in-flight native write stopped.
+    pub fn request_stop(&self) {
+        self.work.request_stop();
+    }
+
+    /// Abandoning this borrowed wait retains the actual worker and its outcome.
+    pub async fn join(&mut self) -> Result<SessionSetup> {
+        self.work.join().await
+    }
+}
+
 impl SessionSetup {
     /// Initial receiving policy; live changes belong to SessionControl.
     pub fn with_completion_delivery(mut self, delivery: crate::CompletionDelivery) -> Self {
         self.initial_completion_delivery = delivery;
         self
     }
+
+    /// Explicit blocking construction for offline factories and blocking workers.
     /// An omitted model restores the Session preference, then the application's
     /// default for a fresh Session. Omitted reasoning restores its saved value.
     pub fn new(
@@ -46,7 +179,7 @@ impl SessionSetup {
         catalog: SessionCatalog,
         application: Arc<dyn Application>,
         model: Option<&ModelRef>,
-        reasoning: Option<ion_ai::Reasoning>,
+        reasoning: Option<Reasoning>,
         questions: Option<QuestionCustody>,
     ) -> Result<Self> {
         let questions = questions.map(Arc::new);
@@ -65,13 +198,14 @@ impl SessionSetup {
         )
     }
 
+    /// Explicit blocking completion of a preflighted application recipe.
     pub(crate) fn from_prepared(
         session: Arc<Session>,
         catalog: SessionCatalog,
         application: Arc<dyn Application>,
         resources: Resources,
         runtime: ApplicationRuntime,
-        reasoning: Option<ion_ai::Reasoning>,
+        reasoning: Option<Reasoning>,
         questions: Option<Arc<QuestionCustody>>,
     ) -> Result<Self> {
         ensure!(
@@ -103,11 +237,9 @@ impl SessionSetup {
     pub fn owner(&self) -> Option<Arc<crate::ApplicationOwner>> {
         self.application.owner()
     }
-
     pub fn background(&self) -> Option<Arc<crate::BackgroundOwner>> {
         self.owner().map(|owner| owner.background().clone())
     }
-
     pub fn catalog(&self) -> &SessionCatalog {
         &self.catalog
     }
@@ -132,7 +264,25 @@ impl SessionSetup {
     pub fn into_control<M: Serialize + Send + 'static>(self) -> SessionControl<M> {
         SessionControl::from_setup(self)
     }
+}
 
+pub(crate) fn validate_model(
+    runtime: &ApplicationRuntime,
+    requested: Option<&ModelRef>,
+) -> Result<()> {
+    ensure!(
+        requested.is_none_or(|model| model == runtime.agent.model()),
+        "application returned a different model than requested"
+    );
+    Ok(())
+}
+
+fn check_stop(stop: &CancellationToken) -> Result<()> {
+    ensure!(!stop.is_cancelled(), "binding preparation stopped");
+    Ok(())
+}
+
+impl BindingSource {
     fn prepare(
         &self,
         cwd: Option<&Path>,
@@ -152,28 +302,155 @@ impl SessionSetup {
             runtime,
         })
     }
-}
 
-pub(crate) fn validate_model(
-    runtime: &ApplicationRuntime,
-    requested: Option<&ModelRef>,
-) -> Result<()> {
-    ensure!(
-        requested.is_none_or(|model| model == runtime.agent.model()),
-        "application returned a different model than requested"
-    );
-    Ok(())
+    fn reload(&self, stop: &CancellationToken, result: BindingResult) -> Result<BindingDelta> {
+        let resources = self.application.resources(self.session.cwd())?;
+        let commands = self.application.commands(self.session.cwd())?;
+        check_stop(stop)?;
+        Ok(BindingDelta {
+            prepared: PreparedChange::Resources(resources, commands),
+            result,
+        })
+    }
+
+    // Every native lease, Store access and user callback lives in this actual
+    // blocking worker. Never move an IdleSession guard into an async future.
+    fn run(self, change: BindingChange, stop: CancellationToken) -> Result<BindingDelta> {
+        check_stop(&stop)?;
+        match change {
+            BindingChange::ReloadResources => self.reload(&stop, BindingResult::ResourcesReloaded),
+            BindingChange::SelectModel(model) => {
+                self.session.ensure_idle()?;
+                let commands = self.application.commands(self.session.cwd())?;
+                let runtime = self.application.runtime(
+                    self.session.cwd(),
+                    Some(&model),
+                    self.questions.clone(),
+                )?;
+                validate_model(&runtime, Some(&model))?;
+                check_stop(&stop)?;
+                // Agent validates saved reasoning and commits under Core's gate.
+                runtime.agent.select_model(&self.session)?;
+                Ok(BindingDelta {
+                    prepared: PreparedChange::Runtime(runtime, commands),
+                    result: BindingResult::ModelSelected,
+                })
+            }
+            BindingChange::SelectReasoning(reasoning) => {
+                check_stop(&stop)?;
+                self.runtime
+                    .agent
+                    .select_reasoning(&self.session, reasoning)?;
+                Ok(BindingDelta {
+                    prepared: PreparedChange::Reasoning,
+                    result: BindingResult::ReasoningSelected,
+                })
+            }
+            BindingChange::NewSession => {
+                let _idle = self.session.reserve_idle()?;
+                // New Sessions reset reasoning, unlike conversation copies.
+                let prepared =
+                    self.prepare(self.session.cwd(), None, Reasoning::ProviderDefault)?;
+                check_stop(&stop)?;
+                let path = self.catalog.new_path()?;
+                let session = Arc::new(Session::create(path, self.session.cwd())?);
+                prepared.runtime.agent.select_model(&session)?;
+                Ok(BindingDelta {
+                    prepared: PreparedChange::Replacement(session, prepared),
+                    result: BindingResult::SessionCreated,
+                })
+            }
+            BindingChange::CloneSession => {
+                let _idle = self.session.reserve_idle()?;
+                // Keep the resolved runtime, including an unsaved route. A store
+                // lookup could otherwise redirect or invalidate a valid copy.
+                let prepared = PreparedBinding {
+                    resources: self.application.resources(self.session.cwd())?,
+                    commands: self.application.commands(self.session.cwd())?,
+                    runtime: self.runtime.clone(),
+                };
+                prepared
+                    .runtime
+                    .agent
+                    .validate_reasoning(self.session.reasoning()?)?;
+                check_stop(&stop)?;
+                let path = self.catalog.new_path()?;
+                let session = Arc::new(self.session.clone_to(path)?);
+                let session_id = session.id().to_string();
+                Ok(BindingDelta {
+                    prepared: PreparedChange::Replacement(session, prepared),
+                    result: BindingResult::SessionCloned { session_id },
+                })
+            }
+            BindingChange::ForkSession(point) => {
+                let _idle = self.session.reserve_idle()?;
+                let (model, reasoning) = self.session.fork_preferences(point)?;
+                let prepared = self.prepare(self.session.cwd(), Some(&model), reasoning)?;
+                check_stop(&stop)?;
+                let path = self.catalog.new_path()?;
+                let session = Arc::new(self.session.fork_to(path, point)?);
+                let session_id = session.id().to_string();
+                Ok(BindingDelta {
+                    prepared: PreparedChange::Replacement(session, prepared),
+                    result: BindingResult::SessionForked { session_id },
+                })
+            }
+            BindingChange::NavigateContext {
+                expected,
+                head_entry,
+            } => {
+                let mut navigation = self.session.prepare_navigation(expected, head_entry)?;
+                let prepared = self.prepare(
+                    self.session.cwd(),
+                    navigation.model(),
+                    navigation.reasoning(),
+                )?;
+                check_stop(&stop)?;
+                let position = navigation.commit()?;
+                Ok(BindingDelta {
+                    prepared: PreparedChange::Replacement(self.session.clone(), prepared),
+                    result: BindingResult::ContextNavigated(position),
+                })
+            }
+            BindingChange::SwitchSession(path) => {
+                let _idle = self.session.reserve_idle()?;
+                let path = fs::canonicalize(self.catalog.resolve_explicit(path)?)?;
+                if self.session.path() == path {
+                    return self.reload(&stop, BindingResult::SessionSwitched);
+                }
+                let session = match self
+                    .background
+                    .as_ref()
+                    .and_then(|owner| owner.parent(&path))
+                {
+                    Some(parent) => parent,
+                    None => Arc::new(Session::open(path)?),
+                };
+                let target_idle = session.reserve_idle()?;
+                ensure!(
+                    session.cwd() == self.session.cwd(),
+                    "session belongs to another working directory"
+                );
+                let model = session.model_preference()?;
+                let prepared = self.prepare(session.cwd(), model.as_ref(), session.reasoning()?)?;
+                check_stop(&stop)?;
+                drop(target_idle);
+                Ok(BindingDelta {
+                    prepared: PreparedChange::Replacement(session, prepared),
+                    result: BindingResult::SessionSwitched,
+                })
+            }
+        }
+    }
 }
 
 impl<M: Serialize + Send + 'static> SessionControl<M> {
     pub fn owner(&self) -> Option<Arc<crate::ApplicationOwner>> {
         self.setup.owner()
     }
-
     pub fn background(&self) -> Option<Arc<crate::BackgroundOwner>> {
         self.setup.background()
     }
-
     pub fn catalog(&self) -> &SessionCatalog {
         self.setup.catalog()
     }
@@ -196,134 +473,162 @@ impl<M: Serialize + Send + 'static> SessionControl<M> {
         self.setup.session_id()
     }
 
-    /// Reload affects future admission; active/queued inputs retain their snapshot.
-    pub fn reload_resources(&mut self) -> Result<()> {
-        let resources = self.setup.application.resources(self.setup.session.cwd())?;
-        let commands = self.setup.application.commands(self.setup.session.cwd())?;
-        self.completions.invalidate_binding();
-        self.setup.resources = resources;
-        self.setup.commands = commands;
-        Ok(())
-    }
-
-    pub fn select_model(&mut self, model: ModelRef) -> Result<()> {
-        self.ensure_replaceable()?;
-        let commands = self.setup.application.commands(self.setup.session.cwd())?;
-        let runtime = self.setup.application.runtime(
-            self.setup.session.cwd(),
-            Some(&model),
-            self.setup.questions.clone(),
-        )?;
-        validate_model(&runtime, Some(&model))?;
-        runtime.agent.select_model(&self.setup.session)?;
-        self.completions.invalidate_binding();
-        self.setup.runtime = runtime;
-        self.setup.commands = commands;
-        Ok(())
-    }
-
-    pub fn select_reasoning(&self, reasoning: ion_ai::Reasoning) -> Result<()> {
-        self.ensure_replaceable()?;
-        self.setup
-            .runtime
-            .agent
-            .select_reasoning(&self.setup.session, reasoning)?;
-        self.completions.invalidate_binding();
-        Ok(())
-    }
-
-    pub fn new_session(&mut self) -> Result<()> {
-        self.ensure_replaceable()?;
-        let previous = self.setup.session.clone();
-        let _idle = previous.reserve_idle()?;
-        // Preflight before allocating/publishing a new database. New Sessions
-        // intentionally reset reasoning, unlike conversation copies.
-        let prepared = self
-            .setup
-            .prepare(previous.cwd(), None, Reasoning::ProviderDefault)?;
-        let path = self.setup.catalog.new_path()?;
-        let session = Arc::new(Session::create(&path, previous.cwd())?);
-        prepared.runtime.agent.select_model(&session)?;
-        self.publish(session, prepared);
-        Ok(())
-    }
-
-    pub fn clone_session(&mut self) -> Result<String> {
-        self.ensure_replaceable()?;
-        let previous = self.setup.session.clone();
-        let _idle = previous.reserve_idle()?;
-        // Retain the resolved configuration, not its lookup key. An unsaved
-        // route must remain usable; a changed store must not redirect a clone.
-        let prepared = PreparedBinding {
-            resources: self.setup.application.resources(previous.cwd())?,
-            commands: self.setup.application.commands(previous.cwd())?,
-            runtime: self.setup.runtime.clone(),
-        };
-        prepared
-            .runtime
-            .agent
-            .validate_reasoning(previous.reasoning()?)?;
-        let path = self.setup.catalog.new_path()?;
-        let session = Arc::new(previous.clone_to(&path)?);
-        let id = session.id().to_string();
-        self.publish(session, prepared);
-        Ok(id)
-    }
-
-    pub fn fork_session(&mut self, point: ForkPoint) -> Result<String> {
-        self.ensure_replaceable()?;
-        let previous = self.setup.session.clone();
-        let _idle = previous.reserve_idle()?;
-        let (model, reasoning) = previous.fork_preferences(point)?;
-        let prepared = self
-            .setup
-            .prepare(previous.cwd(), Some(&model), reasoning)?;
-        let path = self.setup.catalog.new_path()?;
-        let session = Arc::new(previous.fork_to(&path, point)?);
-        let id = session.id().to_string();
-        self.publish(session, prepared);
-        Ok(id)
-    }
-
-    /// Prepare a historical context under the same engine gate as commit. A
-    /// failed preflight leaves both the current binding and selection unchanged.
-    pub fn navigate_context(
-        &mut self,
-        expected: ion_core::ContextPosition,
-        head_entry: u64,
-    ) -> Result<ion_core::ContextPosition> {
-        self.ensure_replaceable()?;
-        let session = self.setup.session.clone();
-        let mut navigation = session.prepare_navigation(expected, head_entry)?;
-        let prepared =
-            self.setup
-                .prepare(session.cwd(), navigation.model(), navigation.reasoning())?;
-        let position = navigation.commit()?;
-        self.publish(session.clone(), prepared);
-        Ok(position)
-    }
-
-    pub fn switch_session(&mut self, path: PathBuf) -> Result<()> {
-        self.ensure_replaceable()?;
-        let previous = self.setup.session.clone();
-        let _idle = previous.reserve_idle()?;
-        let path = fs::canonicalize(self.setup.catalog.resolve_explicit(path)?)?;
-        if previous.path() == path {
-            return self.reload_resources();
-        }
-        let session = match self.background().and_then(|owner| owner.parent(&path)) {
-            Some(parent) => parent,
-            None => Arc::new(Session::open(path)?),
-        };
+    /// Reserve the one binding/result slot before any worker or write starts.
+    /// No metadata is retained here; RPC keeps its one bounded command credit
+    /// until BindingFinished is transferred. Reload alone may overlap live work.
+    pub fn start_binding(&mut self, change: BindingChange) -> Result<BindingOperationId> {
         ensure!(
-            session.cwd() == previous.cwd(),
-            "session belongs to another working directory"
+            self.binding.is_none(),
+            "join or take the previous binding result first"
         );
-        let model = session.model_preference()?;
-        let prepared = self
-            .setup
-            .prepare(session.cwd(), model.as_ref(), session.reasoning()?)?;
-        self.publish(session, prepared);
+        self.ensure_binding_start(matches!(&change, BindingChange::ReloadResources))?;
+        tokio::runtime::Handle::try_current()
+            .context("binding preparation requires a Tokio runtime")?;
+        let source = BindingSource {
+            application: self.setup.application.clone(),
+            catalog: self.setup.catalog.clone(),
+            session: self.setup.session.clone(),
+            runtime: self.setup.runtime.clone(),
+            questions: self.setup.questions.clone(),
+            background: self.background(),
+        };
+        let operation = BindingOperationId(uuid::Uuid::now_v7());
+        let stop = source
+            .background
+            .as_ref()
+            .map_or_else(CancellationToken::new, |owner| owner.work_stop());
+        self.binding = Some(BindingWork::Running {
+            operation,
+            work: Preparation::pending(stop),
+        });
+        let Some(BindingWork::Running { work, .. }) = self.binding.as_mut() else {
+            unreachable!("binding custody installed before launch")
+        };
+        work.launch_blocking(move |stop| source.run(change, stop));
+        Ok(operation)
+    }
+
+    /// Borrow the retained worker. Abandoning this wait leaves both the worker
+    /// and its eventual committed delta in the Controller's one binding slot.
+    pub async fn join_binding(&mut self, operation: BindingOperationId) -> Result<BindingFinished> {
+        let binding = self
+            .binding
+            .as_mut()
+            .context("no retained binding operation")?;
+        ensure!(
+            binding.operation() == operation,
+            "binding operation identity differs"
+        );
+        if binding.is_running() {
+            let result = binding.join().await;
+            // No await between consuming the worker and retaining its outcome.
+            self.finish_binding(result);
+        }
+        Ok(self
+            .take_binding_result()
+            .expect("joined binding outcome retained"))
+    }
+
+    /// Transfer a finished result once. Running work is never removed here.
+    pub fn take_binding_result(&mut self) -> Option<BindingFinished> {
+        if !matches!(self.binding, Some(BindingWork::Finished(_))) {
+            return None;
+        }
+        match self.binding.take().expect("finished binding") {
+            BindingWork::Finished(finished) => Some(finished),
+            BindingWork::Running { .. } => unreachable!("finished binding checked"),
+        }
+    }
+
+    /// Controller drive calls this immediately after BindingWork::join, even
+    /// when stopped or closed. A successful Core commit cannot be rolled back
+    /// by suppressing Host adoption; readers may sample a causal earlier cut.
+    pub(crate) fn finish_binding(&mut self, result: Result<BindingDelta>) {
+        let binding = self.binding.as_ref().expect("retained binding worker");
+        let operation = binding.operation();
+        let stop_requested = binding.is_stopped();
+        let result = result.map(|delta| {
+            match delta.prepared {
+                PreparedChange::Resources(resources, commands) => {
+                    self.completions.invalidate_binding();
+                    self.setup.resources = resources;
+                    self.setup.commands = commands;
+                }
+                PreparedChange::Runtime(runtime, commands) => {
+                    self.completions.invalidate_binding();
+                    self.setup.runtime = runtime;
+                    self.setup.commands = commands;
+                }
+                PreparedChange::Reasoning => self.completions.invalidate_binding(),
+                PreparedChange::Replacement(session, prepared) => self.publish(session, prepared),
+            }
+            delta.result
+        });
+        self.binding = Some(BindingWork::Finished(BindingFinished {
+            operation,
+            result,
+            stop_requested,
+        }));
+    }
+
+    async fn change_binding(&mut self, change: BindingChange) -> Result<BindingResult> {
+        let operation = self.start_binding(change)?;
+        self.join_binding(operation).await?.result
+    }
+
+    /// Active/queued inputs retain their admitted instruction snapshots.
+    pub async fn reload_resources(&mut self) -> Result<()> {
+        self.change_binding(BindingChange::ReloadResources).await?;
+        Ok(())
+    }
+    pub async fn select_model(&mut self, model: ModelRef) -> Result<()> {
+        self.change_binding(BindingChange::SelectModel(model))
+            .await?;
+        Ok(())
+    }
+    pub async fn select_reasoning(&mut self, reasoning: Reasoning) -> Result<()> {
+        self.change_binding(BindingChange::SelectReasoning(reasoning))
+            .await?;
+        Ok(())
+    }
+    pub async fn new_session(&mut self) -> Result<()> {
+        self.change_binding(BindingChange::NewSession).await?;
+        Ok(())
+    }
+    pub async fn clone_session(&mut self) -> Result<String> {
+        match self.change_binding(BindingChange::CloneSession).await? {
+            BindingResult::SessionCloned { session_id } => Ok(session_id),
+            _ => unreachable!("clone worker returns its Session identity"),
+        }
+    }
+    pub async fn fork_session(&mut self, point: ForkPoint) -> Result<String> {
+        match self
+            .change_binding(BindingChange::ForkSession(point))
+            .await?
+        {
+            BindingResult::SessionForked { session_id } => Ok(session_id),
+            _ => unreachable!("fork worker returns its Session identity"),
+        }
+    }
+    pub async fn navigate_context(
+        &mut self,
+        expected: ContextPosition,
+        head_entry: u64,
+    ) -> Result<ContextPosition> {
+        match self
+            .change_binding(BindingChange::NavigateContext {
+                expected,
+                head_entry,
+            })
+            .await?
+        {
+            BindingResult::ContextNavigated(position) => Ok(position),
+            _ => unreachable!("navigation worker returns the committed position"),
+        }
+    }
+    pub async fn switch_session(&mut self, path: PathBuf) -> Result<()> {
+        self.change_binding(BindingChange::SwitchSession(path))
+            .await?;
         Ok(())
     }
 
@@ -342,3 +647,7 @@ impl<M: Serialize + Send + 'static> SessionControl<M> {
 #[cfg(test)]
 #[path = "binding_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "binding_io_tests.rs"]
+mod io_tests;
