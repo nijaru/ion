@@ -243,6 +243,13 @@ pub struct IdleSession<'a>(StateGuard<'a>);
 struct StateGuard<'a> {
     state: Option<MutexGuard<'a, State>>,
     owner: &'a OperationOwner,
+    notify: bool,
+    failed: Option<FailedTask>,
+}
+
+struct FailedTask {
+    stop: CancellationToken,
+    error: tokio::task::JoinError,
 }
 impl std::ops::Deref for StateGuard<'_> {
     type Target = State;
@@ -262,8 +269,16 @@ impl std::ops::DerefMut for StateGuard<'_> {
 impl Drop for StateGuard<'_> {
     fn drop(&mut self) {
         drop(self.state.take());
-        if self.owner.contended.swap(false, Ordering::SeqCst) {
+        if let Some(failed) = &self.failed {
+            failed.stop.cancel();
+        }
+        let contended = self.owner.contended.swap(false, Ordering::SeqCst);
+        if self.notify || contended {
             self.owner.wake.notify_waiters();
+        }
+        // A JoinError can own an arbitrary panic payload with a destructor.
+        if let Some(failed) = self.failed.take() {
+            drop(failed.error);
         }
     }
 }
@@ -278,6 +293,8 @@ impl OperationOwner {
         Some(StateGuard {
             state: Some(state),
             owner: self,
+            notify: false,
+            failed: None,
         })
     }
 
@@ -310,8 +327,8 @@ impl OperationOwner {
             let result = (&mut state.running.as_mut().unwrap().task)
                 .now_or_never()
                 .expect("a finished task is ready to join");
-            state.finish(result);
-            self.wake.notify_waiters();
+            state.failed = state.finish(result);
+            state.notify = true;
         }
         state.idle(self.closed.load(Ordering::SeqCst))?;
         Ok(IdleSession(state))
@@ -467,8 +484,8 @@ impl OperationOwner {
         match Pin::new(&mut running.task).poll(&mut Context::from_waker(&self.join_waker)) {
             Poll::Pending => Poll::Pending,
             Poll::Ready(result) => {
-                state.finish(result);
-                self.wake.notify_waiters();
+                state.failed = state.finish(result);
+                state.notify = true;
                 Poll::Ready(state.failure.as_ref().map_or(Ok(()), |failure| {
                     Err(OperationError::TaskFailed(failure.clone()))
                 }))
@@ -489,14 +506,20 @@ impl OperationOwner {
         let mut notified = Box::pin(self.wake.clone().notified_owned());
         let id = poll_fn(|cx| {
             let state = std::task::ready!(self.poll_state(cx, &mut notified));
-            Poll::Ready(if let Some(running) = &state.running {
-                running.stop.cancel();
-                Ok(Some(running.id))
+            let result = if let Some(running) = &state.running {
+                Ok(Some((running.id, running.stop.clone())))
             } else if let Some(failure) = &state.failure {
                 Err(OperationError::TaskFailed(failure.clone()))
             } else {
                 Ok(None)
-            })
+            };
+            drop(state);
+            Poll::Ready(result.map(|running| {
+                running.map(|(id, stop)| {
+                    stop.cancel();
+                    id
+                })
+            }))
         })
         .await?;
         if let Some(id) = id {
@@ -535,20 +558,27 @@ impl State {
             .and_then(|completion| completion.unreported_failure())
     }
 
-    fn finish(&mut self, result: Result<(), tokio::task::JoinError>) {
-        match result {
-            Ok(()) => self.settled = self.running.as_ref().unwrap().id,
+    fn finish(&mut self, result: Result<(), tokio::task::JoinError>) -> Option<FailedTask> {
+        let failed = match result {
+            Ok(()) => {
+                self.settled = self.running.as_ref().unwrap().id;
+                None
+            }
             // A genuine panic can destroy an executor's joining continuation.
             // Do not claim local quiescence or allow reuse of this live owner.
             Err(error) => {
-                self.running.as_ref().unwrap().stop.cancel();
                 self.failure = Some(error.to_string());
+                Some(FailedTask {
+                    stop: self.running.as_ref().unwrap().stop.clone(),
+                    error,
+                })
             }
-        }
+        };
         // Keep the outcome after join as well; replacement of the slot occurs
         // only on the next successful start. No running handle is abandoned.
         let running = self.running.take().unwrap();
         self.completed = Some(running._completion);
+        failed
     }
 }
 
@@ -566,6 +596,112 @@ mod tests {
             self.outside_lock
                 .store(owner.state.try_lock().is_ok(), Ordering::SeqCst);
         }
+    }
+
+    struct WakeProbe {
+        owner: std::sync::Weak<OperationOwner>,
+        woke: AtomicBool,
+        locked: AtomicBool,
+    }
+    impl Wake for WakeProbe {
+        fn wake(self: Arc<Self>) {
+            self.wake_by_ref();
+        }
+        fn wake_by_ref(self: &Arc<Self>) {
+            self.woke.store(true, Ordering::SeqCst);
+            self.locked.fetch_or(
+                self.owner.upgrade().unwrap().state.try_lock().is_err(),
+                Ordering::SeqCst,
+            );
+        }
+    }
+    fn probe(owner: &Arc<OperationOwner>) -> Arc<WakeProbe> {
+        Arc::new(WakeProbe {
+            owner: Arc::downgrade(owner),
+            woke: AtomicBool::new(false),
+            locked: AtomicBool::new(false),
+        })
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn completed_task_notifies_only_after_idle_guard_unlocks() {
+        let owner = Arc::new(OperationOwner::default());
+        let operation =
+            owner.start_blocking(
+                CancellationToken::new(),
+                || Ok::<_, crate::SessionError>(()),
+            );
+        while !operation.fence().is_finished() {
+            tokio::task::yield_now().await;
+        }
+        let probe = probe(&owner);
+        let waker = Waker::from(probe.clone());
+        let mut notified = Box::pin(owner.wake.clone().notified_owned());
+        assert!(
+            notified
+                .as_mut()
+                .poll(&mut Context::from_waker(&waker))
+                .is_pending()
+        );
+        let idle = owner.try_lock().unwrap();
+        drop(idle);
+        operation.await.unwrap();
+        assert!(probe.woke.load(Ordering::SeqCst));
+        assert!(
+            !probe.locked.load(Ordering::SeqCst),
+            "completion woke an observer under the owner lock"
+        );
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn join_cancels_observers_outside_owner_lock() {
+        let owner = Arc::new(OperationOwner::default());
+        let stop = CancellationToken::new();
+        let worker_stop = stop.clone();
+        let operation = owner.start(stop.clone(), async move {
+            worker_stop.cancelled().await;
+            Ok::<_, crate::SessionError>(())
+        });
+        let probe = probe(&owner);
+        let waker = Waker::from(probe.clone());
+        let mut cancelled = Box::pin(stop.cancelled());
+        assert!(
+            cancelled
+                .as_mut()
+                .poll(&mut Context::from_waker(&waker))
+                .is_pending()
+        );
+        owner.join().await.unwrap();
+        operation.await.unwrap();
+        assert!(probe.woke.load(Ordering::SeqCst));
+        assert!(
+            !probe.locked.load(Ordering::SeqCst),
+            "join requested stop under the owner lock"
+        );
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn panic_payload_drops_outside_owner_lock() {
+        let owner = Arc::new(OperationOwner::default());
+        let outside_lock = Arc::new(AtomicBool::new(false));
+        let probe = DropProbe {
+            owner: Arc::downgrade(&owner),
+            outside_lock: outside_lock.clone(),
+        };
+        let operation = owner.start_blocking(
+            CancellationToken::new(),
+            move || -> Result<(), crate::SessionError> { std::panic::panic_any(probe) },
+        );
+        assert!(matches!(
+            operation.await,
+            Err(crate::SessionError::Operation(OperationError::TaskFailed(
+                _
+            )))
+        ));
+        assert!(
+            outside_lock.load(Ordering::SeqCst),
+            "panic payload destructor ran under the owner lock"
+        );
     }
 
     #[tokio::test(flavor = "current_thread")]
