@@ -1,11 +1,13 @@
 """Exercise same-Turn RPC questions, reply pressure and foreground owner loss."""
 
+import array
 import fcntl
 import json
 import os
 import select
 import subprocess
 import tempfile
+import termios
 import threading
 import time
 import uuid
@@ -234,10 +236,25 @@ with tempfile.TemporaryDirectory(prefix="ion-rpc-questions-") as temporary:
         assert client.command("get_question")["data"]["question"]["request"] == nonce
         assert not (client.cwd / "question-effect.txt").exists()
 
+        # A following ordinary reply also proves the previous get_question
+        # frame released its single inspection credit, not just its last byte.
+        assert client.command("get_state")["success"]
+
         # A large inspection fills physical stdout. All ordinary reply slots then
         # remain retained, but an answer in the reserved control lane must advance
         # the existing Turn before this test resumes reading output.
         client.send({"type": "inspect", "id": "blocked-inspection"})
+        # Reads complete independently: a command written first need not finish
+        # first. Witness the inspection in the actual pipe before bulk admission
+        # rather than allowing small state replies to release credits first.
+        unread = array.array("i", [0])
+        deadline = time.monotonic() + 8
+        while time.monotonic() < deadline:
+            fcntl.ioctl(client.process.stdout, termios.FIONREAD, unread, True)
+            if unread[0] >= 4096:
+                break
+            time.sleep(0.01)
+        assert unread[0] >= 4096, "stdout did not acquire the large inspection"
         for index in range(40):
             client.send({"type": "get_state", "id": f"bulk-{index}"})
         client.send({"type": "answer_question", "id": "answer", "request": nonce, "answers": answers})
@@ -250,7 +267,9 @@ with tempfile.TemporaryDirectory(prefix="ion-rpc-questions-") as temporary:
         settled = client.through(lambda record: record["type"] == "turn_end")
         assert settled[-1]["status"] == "completed" and settled[-1]["turn"] == 1, settled[-1]
         assert any(record.get("id") == "answer" and record.get("success") for record in settled), settled
-        assert sum(record.get("commands_not_admitted", 0) for record in settled) >= 8, settled
+        assert sum(record.get("commands_not_admitted", 0) for record in settled) >= 8, [
+            (record["type"], record.get("id"), record.get("commands_not_admitted")) for record in settled
+        ]
         assert client.command("get_question")["data"]["question"] is None
         assert not client.command("answer_question", request=nonce, answers=answers)["success"]
         assert not client.command("cancel_question", request=nonce)["success"]
