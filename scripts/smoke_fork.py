@@ -17,6 +17,8 @@ import zlib
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
+from terminal_style import program_ready
+
 
 root = Path(__file__).resolve().parent.parent
 binary = Path(os.environ.get("ION_SMOKE_BIN", root / "target/debug/ion"))
@@ -170,11 +172,11 @@ with tempfile.TemporaryDirectory(prefix="ion-fork-") as temporary:
                     output.extend(data)
                     if b"\x1b[6n" in data:
                         os.write(master, b"\x1b[2;1R")
-                if b"\xe2\x80\xba" in output and not sent:
+                if b"\xe2\x80\xba" in output and program_ready(output) and not sent:
                     assert b"\x1b[?1049h" not in output, "fork smoke entered alternate screen at inline startup"
                     os.write(master, b"/fork 2\r")
                     sent = True
-                if sent and b"Forked as" in output and not quit_sent:
+                if sent and b"Forked as" in output and program_ready(output) and not quit_sent:
                     os.write(master, b"\x03\x03")
                     quit_sent = True
                 if child.poll() is not None:
@@ -211,13 +213,13 @@ with tempfile.TemporaryDirectory(prefix="ion-fork-") as temporary:
                     output.extend(data)
                     if b"\x1b[6n" in data:
                         os.write(master, b"\x1b[2;1R")
-                if b"\xe2\x80\xba" in output and not picker_sent:
+                if b"\xe2\x80\xba" in output and program_ready(output) and not picker_sent:
                     os.write(master, b"/fork-after\r")
                     picker_sent = True
                 if picker_sent and b"Fork after Turn" in output and b"Turn 1  ended completed" in output and b"Turn 2  ended completed" in output and not selected:
                     os.write(master, b"\r")
                     selected = True
-                if selected and b"Forked as" in output and not quit_sent:
+                if selected and b"Forked as" in output and program_ready(output) and not quit_sent:
                     os.write(master, b"\x03")
                     quit_sent = True
                 if child.poll() is not None:
@@ -276,10 +278,10 @@ with tempfile.TemporaryDirectory(prefix="ion-fork-") as temporary:
                         output.extend(data)
                         if b"\x1b[6n" in data:
                             os.write(master, b"\x1b[2;1R")
-                    if b"\xe2\x80\xba" in output and not fork_sent:
+                    if b"\xe2\x80\xba" in output and program_ready(output) and not fork_sent:
                         os.write(master, command)
                         fork_sent = True
-                    if fork_sent and notice in output and not submit_sent:
+                    if fork_sent and notice in output and program_ready(output) and not submit_sent:
                         assert len(requests) == before, "fork dispatched restored input"
                         os.write(master, b"\r")
                         output.clear()

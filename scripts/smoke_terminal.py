@@ -17,13 +17,7 @@ import termios
 import time
 from pathlib import Path
 
-from terminal_style import has_foreground
-
-
-def program_ready(output):
-    """Use the published lifecycle state, not a notice or a timing guess."""
-    states = re.findall(rb"\x1b]7501;state=([^:\x1b]+)", output)
-    return bool(states) and states[-1] in (b"idle", b"done")
+from terminal_style import has_foreground, program_ready
 
 
 class CursorReplies:

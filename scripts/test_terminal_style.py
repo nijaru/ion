@@ -1,6 +1,6 @@
 import unittest
 
-from terminal_style import has_foreground
+from terminal_style import has_foreground, program_ready
 
 
 class ForegroundTest(unittest.TestCase):
@@ -22,6 +22,18 @@ class ForegroundTest(unittest.TestCase):
     def test_rgb_encodings_are_compared_by_components(self):
         for code in [b"38;2;1;2;3", b"38:2::1:2:3"]:
             self.assertTrue(has_foreground(b"\x1b[" + code + b"mvalue", b"value", ("rgb", 1, 2, 3)))
+
+
+class LifecycleTest(unittest.TestCase):
+    def test_readiness_requires_the_latest_complete_lifecycle_marker(self):
+        idle = b"\x1b]7501;state=idle:app=ion\x1b\\"
+        for state, ready in [(b"idle", True), (b"done", True),
+                             (b"working", False), (b"error", False),
+                             (b"blocked:kind=question", False)]:
+            with self.subTest(state=state):
+                self.assertEqual(program_ready(idle + b"\x1b]7501;state=" + state + b":app=ion\x1b\\"), ready)
+        self.assertFalse(program_ready(b"Ready"))
+        self.assertFalse(program_ready(idle + b"\x1b]7501;state=idle"))
 
 
 if __name__ == "__main__":

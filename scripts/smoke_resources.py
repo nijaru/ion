@@ -18,6 +18,8 @@ import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
+from terminal_style import program_ready
+
 
 root = Path(__file__).resolve().parent.parent
 binary = Path(os.environ.get("ION_SMOKE_BIN", root / "target/debug/ion"))
@@ -358,7 +360,7 @@ with tempfile.TemporaryDirectory(prefix="ion-resources-") as temporary:
                         if b"\x1b[6n" in data:
                             os.write(master, b"\x1b[2;1R")
                     current = output[checkpoint:]
-                    if phase == 0 and b"\xe2\x80\xba" in output:
+                    if phase == 0 and b"\xe2\x80\xba" in output and program_ready(output):
                         checkpoint = len(output)
                         os.write(master, b"/che")
                         phase = 1
@@ -386,35 +388,23 @@ with tempfile.TemporaryDirectory(prefix="ion-resources-") as temporary:
                     elif phase == 13 and re.search("› /check ".encode() + rb"(?=\x1b)", current):
                         os.write(master, b"TUI\r")
                         phase = 2
-                    elif phase == 2 and len(requests) == before + 1 and b"RESOURCE_OK" in current:
+                    elif phase == 2 and len(requests) == before + 1 and b"RESOURCE_OK" in current and program_ready(output):
                         (live_prompts / "late.md").write_text("A later prompt.\n")
                         global_rule.write_text(new_rule + "\n")
                         checkpoint = len(output)
                         os.write(master, b"/reload\r")
                         phase = 3
-                    # Wait for the reload acknowledgement, not its incidental
-                    # list of presentation components. Prompt/rule effects are
-                    # checked independently below.
-                    elif phase == 3 and b"Reloaded keybindings" in current:
+                    # A positive binding notice can precede mandatory history
+                    # refresh. Require published readiness before the next action;
+                    # prompt/rule/policy effects are checked independently below.
+                    elif phase == 3 and b"Reloaded keybindings" in current and program_ready(output):
                         checkpoint = len(output)
                         os.write(master, b"/reasoning high\r")
-                        reasoning_retry_at = time.monotonic() + 0.1
                         phase = 31
-                    elif phase == 31 and b"Generation effort: high" in current:
+                    elif phase == 31 and b"Generation effort selected" in current and program_ready(output):
                         checkpoint = len(output)
                         os.write(master, b"/la")
                         phase = 4
-                    elif (phase == 31
-                          and b"session control has active work or pending inputs" in current
-                          and time.monotonic() >= reasoning_retry_at
-                          and completed_turns(work / "ion", previous_sessions) == 1):
-                        # Streamed text and /reload are valid before settlement;
-                        # changing reasoning requires joined Host control. A busy
-                        # refusal retains this exact command in the composer.
-                        # Retry Enter while draining until its actual success
-                        # acknowledgement, not merely the committed Turn end.
-                        os.write(master, b"\r")
-                        reasoning_retry_at = time.monotonic() + 0.1
                     elif phase == 4 and b"A later prompt" in current:
                         assert len(requests) == before + 1, "reload/discovery issued a model request"
                         checkpoint = len(output)
@@ -478,7 +468,7 @@ with tempfile.TemporaryDirectory(prefix="ion-resources-") as temporary:
                             output.extend(data)
                             if b"\x1b[6n" in data:
                                 os.write(master, b"\x1b[2;1R")
-                        if phase == 0 and b"\xe2\x80\xba" in output:
+                        if phase == 0 and b"\xe2\x80\xba" in output and program_ready(output):
                             os.write(master, b"RESOURCE_WAIT\r")
                             output.clear()
                             phase = 1
@@ -491,7 +481,7 @@ with tempfile.TemporaryDirectory(prefix="ion-resources-") as temporary:
                             os.write(master, b"\x03")
                             output.clear()
                             phase = 3
-                        elif phase == 3 and b"Turn stopped" in output:
+                        elif phase == 3 and b"Turn stopped" in output and program_ready(output):
                             release.set()
                             os.write(master, b"PREFIX_\r")
                             output.clear()

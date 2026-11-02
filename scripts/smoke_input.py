@@ -21,6 +21,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
 from smoke_input_files import exercise_file_input
+from terminal_style import program_ready
 
 
 root = Path(__file__).resolve().parent.parent
@@ -101,6 +102,8 @@ class Terminal:
         if redirected_tty:
             os.close(redirected_slave)
         self.output = bytearray()
+        # Assertions reset their capture window; lifecycle state spans windows.
+        self.lifecycle_output = bytearray()
 
     def send(self, data):
         data = data.encode() if isinstance(data, str) else data
@@ -126,6 +129,7 @@ class Terminal:
                     raise
                 data = b""
             self.output.extend(data)
+            self.lifecycle_output.extend(data)
             if b"\x1b[6n" in data:
                 self.send(b"\x1b[2;1R")
 
@@ -143,6 +147,9 @@ class Terminal:
             # Recheck the requested condition; an unexpected exit still fails.
             assert (time.monotonic() < end and status is None) or predicate(), (status, self.output[-2500:])
             self.pump()
+
+    def wait_ready(self, predicate):
+        self.wait(lambda: predicate() and program_ready(self.lifecycle_output))
 
     def text(self):
         return re.sub(rb"\x1b\[[0-9;?]*[A-Za-z]", b"", self.output).decode("utf-8", errors="replace")
@@ -294,7 +301,7 @@ def exercise_launch(work, base_env, endpoint):
             terminal.send("UNSENT_Ab🦀\x1b[H")
             terminal.output.clear()
             terminal.send(b"\x03")
-            terminal.wait(lambda: "Turn stopped" in terminal.text())
+            terminal.wait_ready(lambda: "Turn stopped" in terminal.text())
             try:
                 os.kill(pid, 0)
                 raise AssertionError("startup Stop did not join its exec child")
@@ -391,7 +398,7 @@ def exercise_keybindings(work, base_env, endpoint):
         pid = None
         terminal = Terminal(cwd, env, mode)
         try:
-            terminal.wait(lambda: "›" in terminal.text())
+            terminal.wait_ready(lambda: "›" in terminal.text())
             terminal.output.clear()
             terminal.send(b"DRAFT_Ab\x0c")  # Old Ctrl-L no longer opens a picker.
             terminal.paint()
@@ -434,7 +441,7 @@ def exercise_keybindings(work, base_env, endpoint):
             config.write_text(json.dumps(keys))
             terminal.output.clear()
             terminal.send(b"/reload\x13")
-            terminal.wait(lambda: "Reloaded keybindings" in terminal.text())
+            terminal.wait_ready(lambda: "Reloaded keybindings" in terminal.text())
             terminal.output.clear()
             terminal.send(b"\x1bm")
             terminal.paint()
@@ -620,13 +627,13 @@ def exercise_orientation(work, env, endpoint):
         terminal = Terminal(cwd, env, mode, ["--cwd", str(cwd), "--tui-mode", mode,
                                             "--model", "other/VENDOR", "chat"])
         try:
-            terminal.wait(lambda: "other/vendor/model · /help" in terminal.text())
+            terminal.wait_ready(lambda: "other/vendor/model · /help" in terminal.text())
             database, = set((work / "ion").rglob("*.sqlite")) - previous
             with sqlite3.connect(f"file:{database}?mode=ro", uri=True) as connection:
                 assert connection.execute("SELECT count(*) FROM entries").fetchone()[0] == 0
                 header = json.loads(connection.execute("SELECT header FROM session WHERE id=1").fetchone()[0])
             assert Path(header["cwd"]).resolve() == cwd.resolve()
-            terminal.wait(lambda: "Session " + header["id"][:8] in terminal.text())
+            terminal.wait_ready(lambda: "Session " + header["id"][:8] in terminal.text())
             terminal.send("/name Release\r")
             terminal.wait(lambda: " · Release" in terminal.text())
             terminal.send("/help model\r")
@@ -643,15 +650,15 @@ def exercise_orientation(work, env, endpoint):
             terminal.send(b"\x15\x0b")
             terminal.output.clear()
             terminal.send("/model smoke-model\r")
-            terminal.wait(lambda: "smoke/smoke-model · /help" in terminal.text())
+            terminal.wait_ready(lambda: "smoke/smoke-model · /help" in terminal.text())
             previous = set((work / "ion").rglob("*.sqlite"))
             terminal.output.clear()
             terminal.send("/new\r")
-            terminal.wait(lambda: "Started a new session" in terminal.text())
+            terminal.wait_ready(lambda: "Started a new session" in terminal.text())
             database, = set((work / "ion").rglob("*.sqlite")) - previous
             with sqlite3.connect(f"file:{database}?mode=ro", uri=True) as connection:
                 header = json.loads(connection.execute("SELECT header FROM session WHERE id=1").fetchone()[0])
-            terminal.wait(lambda: "Session " + header["id"][:8] in terminal.text())
+            terminal.wait_ready(lambda: "Session " + header["id"][:8] in terminal.text())
             terminal.output.clear()
             terminal.send("ORIENTATION_🦀\x01")
             # Inline CPR is synthetic in this fixture: it cannot model native
@@ -660,7 +667,7 @@ def exercise_orientation(work, env, endpoint):
             if mode == "fullscreen":
                 for rows, columns in ((1, 12), (4, 30), (30, 100)):
                     terminal.resize(rows, columns)
-                terminal.wait(lambda: "smoke/smoke-model · /help" in terminal.text())
+                terminal.wait_ready(lambda: "smoke/smoke-model · /help" in terminal.text())
             terminal.wait(lambda: "ORIENTATION_🦀" in terminal.text())
             assert len(requests) == before, "presentation admitted model input"
             terminal.send("PREFIX_\r")
@@ -693,7 +700,7 @@ def exercise_configuration(work, base_env, endpoint):
         before = len(requests)
         terminal = Terminal(cwd, env, mode)
         try:
-            terminal.wait(lambda: "smoke/smoke-model · /help" in terminal.text())
+            terminal.wait_ready(lambda: "smoke/smoke-model · /help" in terminal.text())
             release.clear()
             terminal.send("WAIT_HISTORY\r")
             terminal.wait(lambda: len(requests) == before + 1)
@@ -722,13 +729,13 @@ def exercise_configuration(work, base_env, endpoint):
             # loopback routes, exercising wrap, direction, and the real CSI-u key.
             terminal.output.clear()
             terminal.send("CYCLE_🦀\x01\x10")
-            terminal.wait(lambda: "Selected cycle-first/first-model" in terminal.text())
+            terminal.wait_ready(lambda: "Selected cycle-first/first-model" in terminal.text())
             terminal.output.clear()
             terminal.send(b"\x1b[112;6u")
-            terminal.wait(lambda: "Selected smoke/smoke-model" in terminal.text())
+            terminal.wait_ready(lambda: "Selected smoke/smoke-model" in terminal.text())
             terminal.output.clear()
             terminal.send(b"\x1b[112;6u")
-            terminal.wait(lambda: "Selected login-only/model" in terminal.text())
+            terminal.wait_ready(lambda: "Selected login-only/model" in terminal.text())
             assert len(requests) == before, "model cycling issued a provider request"
             terminal.output.clear()
             terminal.send("PREFIX_\r")
@@ -738,7 +745,7 @@ def exercise_configuration(work, base_env, endpoint):
             terminal.wait(lambda: b"state=done" in terminal.output)
             terminal.output.clear()
             terminal.send("\x10")
-            terminal.wait(lambda: "Selected smoke/smoke-model" in terminal.text())
+            terminal.wait_ready(lambda: "Selected smoke/smoke-model" in terminal.text())
             before = len(requests)
             terminal.send("/settings\r")
             terminal.wait(lambda: "Settings ·" in terminal.text() and "Space changes settings" in terminal.text())
@@ -752,11 +759,11 @@ def exercise_configuration(work, base_env, endpoint):
             terminal.paint()
             terminal.output.clear()
             terminal.send("/reasoning\r")
-            terminal.wait(lambda: "Generation effort" in terminal.text())
+            terminal.wait_ready(lambda: "Generation effort ·" in terminal.text())
             terminal.send("high")
             terminal.paint()
             terminal.send("\r")
-            terminal.wait(lambda: "Generation effort: high" in terminal.text())
+            terminal.wait_ready(lambda: "Generation effort selected" in terminal.text())
             # The next ready route cannot carry the current reasoning policy.
             # A failed preflight must not skip ahead or replace the old binding.
             models = home / "models.json"
@@ -787,10 +794,10 @@ def exercise_configuration(work, base_env, endpoint):
             try:
                 terminal.output.clear()
                 terminal.send("SCOPED_🦀\x01\x10")
-                terminal.wait(lambda: "Selected login-only/model" in terminal.text())
+                terminal.wait_ready(lambda: "Selected login-only/model" in terminal.text())
                 terminal.output.clear()
                 terminal.send(b"\x1b[112;6u")
-                terminal.wait(lambda: "Selected smoke/smoke-model" in terminal.text())
+                terminal.wait_ready(lambda: "Selected smoke/smoke-model" in terminal.text())
                 scoped["scope"] = ["openai/gpt-5.4-mini"]
                 models.write_text(json.dumps(scoped))
                 terminal.output.clear()
@@ -813,7 +820,7 @@ def exercise_configuration(work, base_env, endpoint):
             finally:
                 models.write_bytes(configured)
             terminal.send("/login\r")
-            terminal.wait(lambda: "API-key provider" in terminal.text())
+            terminal.wait_ready(lambda: "API-key provider ·" in terminal.text())
             terminal.send("login-only")
             terminal.paint()
             terminal.send("\r")
@@ -827,7 +834,7 @@ def exercise_configuration(work, base_env, endpoint):
             terminal.send("\x03")
             terminal.wait(lambda: "read login credential" in terminal.text())
             assert not credential.exists(), "cancelled model auth saved a key"
-            terminal.wait(lambda: "smoke/smoke-model · /help" in terminal.text())
+            terminal.wait_ready(lambda: "smoke/smoke-model · /help" in terminal.text())
             terminal.send("\x15")
             terminal.paint()
             terminal.output.clear()
@@ -840,7 +847,7 @@ def exercise_configuration(work, base_env, endpoint):
             terminal.send("\r")
             terminal.wait(lambda: "openai API key:" in terminal.text())
             terminal.send("DISPOSABLE_MODEL_KEY\rSECRET_TAIL_SHOULD_NOT_SUBMIT\r")
-            terminal.wait(lambda: "openai/gpt-5.4-mini · /help" in terminal.text())
+            terminal.wait_ready(lambda: "openai/gpt-5.4-mini · /help" in terminal.text())
             assert credential.read_text() == "DISPOSABLE_MODEL_KEY"
             assert credential.stat().st_mode & 0o777 == 0o600
             assert len(requests) == before, "configuration or secret typeahead admitted input"
@@ -851,7 +858,7 @@ def exercise_configuration(work, base_env, endpoint):
             terminal.send("smoke/smoke-model")
             terminal.paint()
             terminal.send("\r")
-            terminal.wait(lambda: "smoke/smoke-model · /help" in terminal.text())
+            terminal.wait_ready(lambda: "smoke/smoke-model · /help" in terminal.text())
             terminal.output.clear()
             terminal.send("PREFIX_\r")
             terminal.wait(lambda: len(requests) == before + 1)
@@ -919,9 +926,9 @@ def exercise_resume(work, base_env, endpoint):
         # Give one Session a real name through the existing user entry point.
         terminal = Terminal(b, env, mode, ["--session", by_cwd[b.resolve()], "--tui-mode", mode, "chat"])
         try:
-            terminal.wait(lambda: "resume-saved/saved-model" in terminal.text())
+            terminal.wait_ready(lambda: "resume-saved/saved-model" in terminal.text())
             terminal.send("/name BETA_NAMED\r")
-            terminal.wait(lambda: "BETA_NAMED" in terminal.text())
+            terminal.wait_ready(lambda: "Session renamed" in terminal.text())
             browse_requests = len(requests)
             terminal.send("/resume\r")
             terminal.wait(lambda: "1 match(es)" in terminal.text())
@@ -954,7 +961,7 @@ def exercise_resume(work, base_env, endpoint):
         keymap.write_text(json.dumps({"app.session.toggleNamedFilter": "alt+n"}))
         terminal = Terminal(a, env, mode, ["--session", by_cwd[a.resolve()], "--tui-mode", mode, "chat"])
         try:
-            terminal.wait(lambda: "resume-saved/saved-model" in terminal.text())
+            terminal.wait_ready(lambda: "resume-saved/saved-model" in terminal.text())
             terminal.send("/resume\r")
             terminal.wait(lambda: "1 match(es)" in terminal.text())
             terminal.output.clear()
@@ -1009,7 +1016,7 @@ def exercise_resume(work, base_env, endpoint):
             terminal.paint()
             terminal.output.clear()
             terminal.send(b"\r")
-            terminal.wait(lambda: "resume-saved/saved-model" in terminal.text())
+            terminal.wait_ready(lambda: "resume-saved/saved-model" in terminal.text())
             assert "default-model" not in terminal.text()
             assert len(requests) == before_requests
             terminal.send("RESUME_CHECK_BETA\r")
@@ -1064,9 +1071,9 @@ def exercise_resume(work, base_env, endpoint):
         keyed_env = dict(env, OPENAI_API_KEY="DISPOSABLE_NOT_SENT")
         terminal = Terminal(b, keyed_env, mode, ["--session", target_path, "--tui-mode", mode])
         try:
-            terminal.wait(lambda: "resume-saved/saved-model" in terminal.text())
+            terminal.wait_ready(lambda: "resume-saved/saved-model" in terminal.text())
             terminal.send("/model openai/gpt-5.4-mini\r")
-            terminal.wait(lambda: "Selected openai/gpt-5.4-mini" in terminal.text())
+            terminal.wait_ready(lambda: "Selected openai/gpt-5.4-mini" in terminal.text())
             terminal.finish()
         finally:
             terminal.close()
@@ -1081,7 +1088,7 @@ def exercise_resume(work, base_env, endpoint):
             terminal.paint()
             terminal.output.clear()
             terminal.send(b"\r")
-            terminal.wait(lambda: "resume-saved/saved-model" in terminal.text())
+            terminal.wait_ready(lambda: "resume-saved/saved-model" in terminal.text())
             terminal.finish()
         finally:
             terminal.close()
@@ -1200,7 +1207,7 @@ def exercise_onboarding(work, base_env, endpoint):
             terminal.wait(lambda: "openai API key:" in terminal.text())
             terminal.output.clear()
             terminal.send(b"ACTUAL_DISPOSABLE\rSUFFIX_DISPOSABLE\r")
-            terminal.wait(lambda: "›" in terminal.text())
+            terminal.wait_ready(lambda: "›" in terminal.text())
             terminal.paint()
             assert "DISPOSABLE" not in terminal.text(), "secret became visible input"
             saved = json.loads((home / "models.json").read_text())
@@ -1260,7 +1267,7 @@ def exercise_onboarding(work, base_env, endpoint):
             terminal.paint()
             terminal.output.clear()
             terminal.send(b"\r")
-            terminal.wait(lambda: "›" in terminal.text())
+            terminal.wait_ready(lambda: "›" in terminal.text())
             assert "API key:" not in terminal.text(), "keyless route requested a credential"
             terminal.wait(lambda: "DONE_" + prompt in terminal.text())
             assert len(requests) == 1 and user_text(requests[0]) == prompt, requests
@@ -1342,7 +1349,7 @@ with tempfile.TemporaryDirectory(prefix="ion-input-") as temporary:
             cwd.mkdir()
             terminal = Terminal(cwd, env, mode)
             try:
-                terminal.wait(lambda: "›" in terminal.text())
+                terminal.wait_ready(lambda: "›" in terminal.text())
                 before = len(requests)
                 print(f"Intake {mode}: malformed paste", flush=True)
                 terminal.send(b"BASE\x1b[H\x1b[200")
@@ -1411,7 +1418,7 @@ with tempfile.TemporaryDirectory(prefix="ion-input-") as temporary:
                 terminal = Terminal(cwd, env, mode)
                 pid = None
                 try:
-                    terminal.wait(lambda: "›" in terminal.text())
+                    terminal.wait_ready(lambda: "›" in terminal.text())
                     database, = set((work / "ion").rglob("*.sqlite")) - previous
                     before = len(requests)
                     command = "printf '%s\\n' $$ > native.pid; printf 'OBSERVED_QUEUE\\n'; touch native.ready; " + (
@@ -1487,7 +1494,7 @@ with tempfile.TemporaryDirectory(prefix="ion-input-") as temporary:
             cwd.mkdir()
             terminal = Terminal(cwd, env, mode)
             try:
-                terminal.wait(lambda: "›" in terminal.text())
+                terminal.wait_ready(lambda: "›" in terminal.text())
                 before = len(requests)
                 release.clear()
                 terminal.send("WAIT_HISTORY\r")
@@ -1515,7 +1522,7 @@ with tempfile.TemporaryDirectory(prefix="ion-input-") as temporary:
             cwd.mkdir()
             terminal = Terminal(cwd, env, mode)
             try:
-                terminal.wait(lambda: "›" in terminal.text())
+                terminal.wait_ready(lambda: "›" in terminal.text())
                 before = len(requests)
                 release.clear()
                 terminal.send("WAIT_HISTORY\r")
@@ -1543,7 +1550,7 @@ with tempfile.TemporaryDirectory(prefix="ion-input-") as temporary:
             cwd.mkdir()
             terminal = Terminal(cwd, env, mode)
             try:
-                terminal.wait(lambda: "›" in terminal.text())
+                terminal.wait_ready(lambda: "›" in terminal.text())
                 before = len(requests)
                 terminal.send("EARLIER\r")
                 terminal.wait(lambda: "DONE_EARLIER" in terminal.text())
@@ -1575,7 +1582,7 @@ with tempfile.TemporaryDirectory(prefix="ion-input-") as temporary:
             previous = set((work / "ion").rglob("*.sqlite"))
             terminal = Terminal(cwd, env, mode)
             try:
-                terminal.wait(lambda: "›" in terminal.text())
+                terminal.wait_ready(lambda: "›" in terminal.text())
                 database, = set((work / "ion").rglob("*.sqlite")) - previous
                 connection = sqlite3.connect(database)
                 try:
@@ -1586,14 +1593,29 @@ with tempfile.TemporaryDirectory(prefix="ion-input-") as temporary:
                     before = len(requests)
                     terminal.output.clear()
                     terminal.send("KEEP_ORIGINAL_INPUT\r")
-                    terminal.wait(lambda: "Session history refresh failed" in terminal.text())
+                    terminal.wait(lambda: "Session refresh failed" in terminal.text())
                     assert "› KEEP_ORIGINAL_INPUT" in terminal.text(), terminal.output[-2500:]
                     assert len(requests) == before, "failed admission issued a request"
                     connection.execute("DROP TRIGGER reject_admission")
                     connection.execute("DELETE FROM entries WHERE seq=?", (seq,))
                     connection.commit()
                     terminal.output.clear()
-                    terminal.send("\r")
+                    # A following edit acknowledges processing Enter even when
+                    # the critical refresh error clips the ordinary status line.
+                    terminal.send("\rx")
+                    terminal.wait(lambda: "› KEEP_ORIGINAL_INPUTx" in terminal.text())
+                    assert len(requests) == before, "repair alone bypassed the stale-view barrier"
+                    terminal.send(b"\x7f")
+                    # Preserve the returned original while explicitly retrying
+                    # inspection. Its success removes the critical refresh error
+                    # and makes the retained-prompt status visible again; the
+                    # program marker still describes the failed prior operation.
+                    terminal.output.clear()
+                    terminal.send("\x15/session\r")
+                    terminal.wait(lambda: "Recorded usage" in terminal.text()
+                                  and "Prompt retained; not sent" in terminal.text())
+                    terminal.output.clear()
+                    terminal.send("\x19\r")
                     terminal.wait(lambda: len(requests) == before + 1)
                     assert user_text(requests[-1]) == "KEEP_ORIGINAL_INPUT"
                     terminal.wait(lambda: "DONE_KEEP_ORIGINAL_INPUT" in terminal.text())
@@ -1608,7 +1630,7 @@ with tempfile.TemporaryDirectory(prefix="ion-input-") as temporary:
             previous = set((work / "ion").rglob("*.sqlite"))
             terminal = Terminal(cwd, env, mode)
             try:
-                terminal.wait(lambda: "›" in terminal.text())
+                terminal.wait_ready(lambda: "›" in terminal.text())
                 database, = set((work / "ion").rglob("*.sqlite")) - previous
                 before = len(requests)
                 release.clear()
@@ -1617,17 +1639,26 @@ with tempfile.TemporaryDirectory(prefix="ion-input-") as temporary:
                 terminal.wait(lambda: len(requests) == before + 1)
                 connection = sqlite3.connect(database)
                 try:
-                    seq = connection.execute("SELECT COALESCE(MAX(seq), -1) + 1 FROM entries").fetchone()[0]
-                    connection.execute("INSERT INTO entries VALUES (?, ?)", (seq, b'{"kind":"invalid_qualification_entry"}'))
+                    # Corrupt and restore one existing payload, not the sequence:
+                    # an inserted row would shift concurrent committed coordinates
+                    # and deleting it would not repair those durable references.
+                    seq, saved = connection.execute("SELECT seq, body FROM entries ORDER BY seq LIMIT 1").fetchone()
+                    connection.execute("UPDATE entries SET body=? WHERE seq=?", (b'{"kind":"invalid_qualification_entry"}', seq))
                     connection.commit()
                     release.set()
-                    terminal.wait(lambda: "Session history refresh failed" in terminal.text())
-                    terminal.paint()
-                    terminal.send("\r")
-                    terminal.paint()
-                    assert len(requests) == before + 1, "accepted input was restored and replayed"
-                    connection.execute("DELETE FROM entries WHERE seq=?", (seq,))
+                    terminal.wait(lambda: "Session refresh failed" in terminal.text())
+                    terminal.output.clear()
+                    terminal.send("UNSEEN_VIEW_MUST_NOT_SEND\rx")
+                    terminal.wait(lambda: "› UNSEEN_VIEW_MUST_NOT_SENDx" in terminal.text())
+                    assert len(requests) == before + 1, "stale view admitted input or replayed the accepted original"
+                    connection.execute("UPDATE entries SET body=? WHERE seq=?", (saved, seq))
                     connection.commit()
+                    terminal.output.clear()
+                    terminal.send("\x15/session\r")
+                    terminal.wait(lambda: "Recorded usage" in terminal.text()
+                                  and ("Prompt retained; not sent" in terminal.text()
+                                       or "Previous operation interrupted" in terminal.text()))
+                    assert len(requests) == before + 1, "inspection replayed accepted input"
                     terminal.finish()
                 finally:
                     connection.close()

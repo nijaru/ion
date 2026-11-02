@@ -1,7 +1,15 @@
-"""Inspect effective SGR foreground runs, not terminal geometry or screen pixels."""
+"""Inspect terminal styling and lifecycle protocols, not screen pixels."""
 import re
 
 CSI = re.compile(rb"\x1b\[([0-?]*)(?:[ -/]*)([@-~])")
+
+
+def program_ready(output):
+    """Require the latest complete lifecycle marker, not an earlier idle frame."""
+    start = output.rfind(b"\x1b]7501;")
+    return start >= 0 and re.match(
+        rb"\x1b]7501;state=(idle|done):[^\x1b]*\x1b\\", output[start:]
+    ) is not None
 
 
 def foreground_after(parameters, foreground):
