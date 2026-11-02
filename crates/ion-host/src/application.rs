@@ -195,6 +195,25 @@ impl CodingApplication {
         self
     }
 
+    /// Prepare an owned initial binding off-executor. Retain the handle through
+    /// Stop and join: abandoning a borrowed wait does not discard native work or
+    /// an already committed preference.
+    pub fn prepare_setup(
+        &self,
+        session: Arc<Session>,
+        selected: Selection,
+        reasoning: Option<ion_ai::Reasoning>,
+        questions: Option<QuestionCustody>,
+        resources: Resources,
+        stop: tokio_util::sync::CancellationToken,
+    ) -> crate::binding::SetupPreparation {
+        let application = self.clone();
+        crate::binding::SetupPreparation::start(stop, move |_| {
+            application.setup(session, selected, reasoning, questions, resources)
+        })
+    }
+
+    /// Explicit blocking construction for offline factories and blocking workers.
     /// Preserve the executable's already-resolved initial route (including
     /// explicit overrides); subsequent selections use this application's store.
     /// Supply the resource snapshot from `Application::resources` so launch

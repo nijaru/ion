@@ -49,7 +49,7 @@ impl<M: Serialize + Send + 'static> SessionControl<M> {
         delivery: CompletionDelivery,
     ) -> impl std::future::Future<Output = Result<CompletionTargetPlan>> + Send + 'static + use<M>
     {
-        let prepared = (|| {
+        let prepared: Result<_> = (|| {
             self.ensure_completion_target_open()?;
             self.reconcile_admissions();
             let turn = self

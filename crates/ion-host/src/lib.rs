@@ -59,7 +59,10 @@ pub use application::{
     Application, ApplicationOwner, ApplicationRuntime, CodingApplication, PreparedShell, UserShell,
 };
 pub use auth::{CredentialStatus, CredentialStore};
-pub use binding::SessionSetup;
+pub use binding::{
+    BindingChange, BindingFinished, BindingOperationId, BindingResult, SessionSetup,
+    SetupPreparation,
+};
 pub use command_args::parse_args as parse_command_args;
 pub use command_environment::CommandEnvironment;
 pub use control::{

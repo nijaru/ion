@@ -27,7 +27,7 @@ async fn completion_only_incomplete_text_is_a_partial_report_not_an_answer() {
         Some(60_000),
         Some(child.clone()),
     );
-    f.start();
+    f.start().await;
     assert!(f.settle().await.cleanup_errors.is_empty());
     let outcome = f.session.view().unwrap().delegations()[0]
         .outcome

@@ -30,7 +30,7 @@ async fn idle_invalidation_waits_cover_reservation_release_and_closure() {
 async fn cancelled_result_wait_retains_original_answer_until_acknowledgement() {
     let owner = Arc::new(BackgroundOwner::new(1).unwrap());
     let mut f = Fixture::with_owner(Wait::Join, true, false, None, Some(owner.clone()), None);
-    f.start();
+    f.start().await;
     background::drain(&mut f.control).await;
     let child = owner.jobs()[0].id;
     let selected = [child];
@@ -93,7 +93,7 @@ async fn application_failure_stops_parent_without_a_host_result_reader() {
     .unwrap()
     .into_control();
     let mut started = f.effect.started.subscribe();
-    f.start();
+    f.start().await;
     started.wait_for(|started| *started).await.unwrap();
     f.trigger("delegation_settled");
     f.effect.release.notify_one();

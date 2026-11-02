@@ -35,7 +35,7 @@ async fn completion_releases_reservation_without_transfer_and_overflow_never_adm
             Some(owner.clone()),
             None,
         );
-        f.start();
+        f.start().await;
         let report = f.settle().await;
         assert!(report.cleanup_errors.is_empty());
         let links = f.session.view().unwrap().delegations();
@@ -72,7 +72,7 @@ async fn expiry_moves_same_live_run_and_grant_without_refreshing_execution_deadl
         Some(owner.clone()),
         Some(10_000),
     );
-    f.start();
+    f.start().await;
     started(&f).await;
     let before = f.session.view().unwrap().delegations()[0].clone();
     assert!(!before.transferred);
@@ -161,7 +161,7 @@ async fn abandoned_bounded_wait_keeps_foreground_joining_without_stopping_or_tra
         Some(owner.clone()),
         None,
     );
-    f.start();
+    f.start().await;
     started(&f).await;
     tokio::time::advance(Duration::from_secs(62)).await;
     // Let closure and the old deadline both become observable by the gateway.
@@ -204,7 +204,7 @@ async fn stop_and_failed_transfers_join_started_work_before_parent_release() {
     ] {
         let owner = Arc::new(BackgroundOwner::new(1).unwrap());
         let mut f = Fixture::with_owner(mode, true, storage_fault, None, Some(owner.clone()), None);
-        f.start();
+        f.start().await;
         started(&f).await;
         tokio::time::pause();
         if stop_before {

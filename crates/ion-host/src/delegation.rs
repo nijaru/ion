@@ -121,16 +121,23 @@ impl SessionDelegation {
                 let result = async {
                     let child_id = child.id();
                     let processes = runtime.processes.clone();
-                    let setup = SessionSetup::from_prepared(
-                        child,
-                        catalog,
-                        application,
-                        resources,
-                        runtime,
-                        Some(reasoning),
-                        None,
-                    )
-                    .map_err(|error| DelegationFailure::Infrastructure(error.to_string()))?;
+                    let mut setup =
+                        crate::binding::SetupPreparation::start(stop.child_token(), move |stop| {
+                            preparation::check_stop(&stop)?;
+                            SessionSetup::from_prepared(
+                                child,
+                                catalog,
+                                application,
+                                resources,
+                                runtime,
+                                Some(reasoning),
+                                None,
+                            )
+                        });
+                    let setup = setup
+                        .join()
+                        .await
+                        .map_err(|error| DelegationFailure::Infrastructure(error.to_string()))?;
                     let mut control = setup.into_control::<()>();
                     let started = tokio::time::Instant::now();
                     report
@@ -151,18 +158,6 @@ impl SessionDelegation {
                                 })
                         })
                         .transpose()?;
-                    let admission = control.submit_linked_request(
-                        &request.key,
-                        request.input,
-                        (),
-                        stop.clone(),
-                    );
-                    if let Some(port) = control.steering() {
-                        ready.send_replace(Some((child_id, request.key.clone(), port)));
-                    }
-                    report.failure = admission
-                        .err()
-                        .map(|rejected| admission_failure(rejected.reason));
                     let expires = async {
                         match deadline {
                             Some(deadline) => tokio::time::sleep_until(deadline).await,
@@ -171,6 +166,49 @@ impl SessionDelegation {
                     };
                     tokio::pin!(expires);
                     let mut stopping = false;
+                    let admission_stop = stop.child_token();
+                    let admission = {
+                        let admission = control.submit_linked_request(
+                            &request.key,
+                            request.input,
+                            (),
+                            admission_stop.clone(),
+                        );
+                        tokio::pin!(admission);
+                        tokio::select! {
+                            biased;
+                            () = stop.cancelled() => {
+                                elapsed_ms = Some(elapsed());
+                                stopping = true;
+                                admission_stop.cancel();
+                                admission.await
+                            }
+                            () = &mut expires => {
+                                elapsed_ms = Some(elapsed());
+                                execution_timed_out = true;
+                                stopping = true;
+                                admission_stop.cancel();
+                                admission.await
+                            }
+                            admission = &mut admission => admission,
+                        }
+                    };
+                    if stopping {
+                        report
+                            .progress
+                            .stop(elapsed_ms.expect("observed admission stop"));
+                        control.request_shutdown();
+                    }
+                    if let Some(port) = control.steering() {
+                        ready.send_replace(Some((child_id, request.key.clone(), port)));
+                    }
+                    report.failure = match admission {
+                        Err(rejected) => Some(admission_failure(rejected.reason)),
+                        Ok(crate::RequestAdmission::Unresolved(input)) => {
+                            Some(admission_failure(input.reason))
+                        }
+                        Ok(_) => None,
+                    };
                     while control.is_busy() {
                         tokio::select! {
                             biased;

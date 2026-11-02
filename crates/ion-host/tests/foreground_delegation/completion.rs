@@ -31,9 +31,12 @@ async fn joined_child_can_wake_a_peer_without_parent_input_or_coding_authority()
     .unwrap()
     .with_completion_delivery(CompletionDelivery::Wake)
     .into_control();
-    *source.delegate.completion.lock().unwrap() =
-        Some(peer.completion_target(CompletionDelivery::Wake).unwrap());
-    source.start();
+    *source.delegate.completion.lock().unwrap() = Some(
+        peer.completion_target(CompletionDelivery::Wake)
+            .await
+            .unwrap(),
+    );
+    source.start().await;
     background::drain(&mut source.control).await;
     assert!(service.requests().is_empty());
     assert!(peer_session.view().unwrap().entries.is_empty());

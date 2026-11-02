@@ -672,56 +672,68 @@ impl BackgroundSlot for BackgroundDestination {
         }
         state.reserved += 1;
         self.reserved = true;
+        drop(state);
         self.shared.invalidate();
         Ok(self.shared.stop.child_token())
     }
-    fn install(
+    fn install<'a>(
         mut self: Box<Self>,
-        job: &mut BackgroundJob,
-    ) -> std::result::Result<DelegationReceipt, BackgroundStartError> {
-        let mut state = self.shared.lock();
-        if !self.reserved {
-            return Err(BackgroundStartError::Infrastructure(
-                SessionError::InvalidHistory,
-            ));
-        }
-        if self.shared.closed.load(Ordering::SeqCst) {
-            return Err(BackgroundStartError::Refused(
-                "background owner is closed".into(),
-            ));
-        }
-        if let Some(steering) = &self.steering {
-            steering.observe_changes(Waker::from(Arc::new(ObservationWake(Arc::downgrade(
-                &self.shared,
-            )))));
-        }
-        if let Some(progress) = &self.progress {
-            progress.observe_changes(Waker::from(Arc::new(ObservationWake(Arc::downgrade(
-                &self.shared,
-            )))));
-        }
-        let parent = Arc::downgrade(job.parent());
-        let weak = Arc::downgrade(&self.shared);
-        let (receipt, operation) = job.start(self.shared.id, move || {
-            if let Some(shared) = weak.upgrade() {
-                shared.close(true);
+        job: &'a mut BackgroundJob,
+    ) -> ion_ai::BoxFuture<'a, std::result::Result<DelegationReceipt, BackgroundStartError>> {
+        Box::pin(async move {
+            {
+                let _state = self.shared.lock();
+                if !self.reserved {
+                    return Err(BackgroundStartError::Infrastructure(
+                        SessionError::InvalidHistory,
+                    ));
+                }
+                if self.shared.closed.load(Ordering::SeqCst) {
+                    return Err(BackgroundStartError::Refused(
+                        "background owner is closed".into(),
+                    ));
+                }
             }
-        })?;
-        state.runs.insert(
-            receipt.record.run,
-            Run {
-                receipt: receipt.clone(),
-                parent,
-                operation: Some(operation),
-                result: None,
-                steering: self.steering.take(),
-                progress: self.progress.take(),
-                completion: self.completion.take(),
-            },
-        );
-        state.reserved -= 1;
-        self.reserved = false;
-        self.shared.invalidate();
-        Ok(receipt)
+            if let Some(steering) = &self.steering {
+                steering.observe_changes(Waker::from(Arc::new(ObservationWake(Arc::downgrade(
+                    &self.shared,
+                )))));
+            }
+            if let Some(progress) = &self.progress {
+                progress.observe_changes(Waker::from(Arc::new(ObservationWake(Arc::downgrade(
+                    &self.shared,
+                )))));
+            }
+            let parent = Arc::downgrade(job.parent());
+            let weak = Arc::downgrade(&self.shared);
+            // Keep this destination and its reservation across the actual transfer,
+            // but never its lifecycle lock. A racing close may lose to commit: adopt
+            // that operation even when closed, so shutdown can join it reliably.
+            let (receipt, operation) = job
+                .start(self.shared.id, move || {
+                    if let Some(shared) = weak.upgrade() {
+                        shared.close(true);
+                    }
+                })
+                .await?;
+            let mut state = self.shared.lock();
+            state.runs.insert(
+                receipt.record.run,
+                Run {
+                    receipt: receipt.clone(),
+                    parent,
+                    operation: Some(operation),
+                    result: None,
+                    steering: self.steering.take(),
+                    progress: self.progress.take(),
+                    completion: self.completion.take(),
+                },
+            );
+            state.reserved -= 1;
+            self.reserved = false;
+            drop(state);
+            self.shared.invalidate();
+            Ok(receipt)
+        })
     }
 }

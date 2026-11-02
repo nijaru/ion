@@ -47,10 +47,11 @@ async fn transfer_survives_parent_work_and_shutdown_and_retains_unread_results()
                     Message::user_input("historical input marker".into(), []),
                     (),
                 )
+                .await
                 .unwrap();
             drain(&mut f.control).await;
         }
-        f.start();
+        f.start().await;
         drain(&mut f.control).await;
         let mut started = f.effect.started.subscribe();
         started.wait_for(|started| *started).await.unwrap();
@@ -71,6 +72,7 @@ async fn transfer_survives_parent_work_and_shutdown_and_retains_unread_results()
                 Message::user_input("later work".into(), []),
                 (),
             )
+            .await
             .unwrap();
         drain(&mut f.control).await;
         assert!(
@@ -130,7 +132,7 @@ async fn transfer_survives_parent_work_and_shutdown_and_retains_unread_results()
 async fn owner_shutdown_is_joined_even_when_its_wait_is_cancelled() {
     let owner = Arc::new(BackgroundOwner::new(1).unwrap());
     let mut f = Fixture::with_owner(Wait::Join, true, false, None, Some(owner.clone()), None);
-    f.start();
+    f.start().await;
     drain(&mut f.control).await;
     let mut started = f.effect.started.subscribe();
     started.wait_for(|started| *started).await.unwrap();
@@ -170,7 +172,7 @@ async fn transfer_failure_cannot_be_caught_to_continue_and_creates_no_child() {
     let owner = Arc::new(BackgroundOwner::new(1).unwrap());
     let mut f = Fixture::with_owner(Wait::Join, false, false, None, Some(owner.clone()), None);
     f.trigger("delegation_transferred");
-    f.start();
+    f.start().await;
     let report = f.settle().await;
     assert_eq!(f.effect.calls.load(Ordering::SeqCst), 0);
     assert!(!f.root.join("children").exists());
@@ -195,7 +197,7 @@ async fn transfer_failure_cannot_be_caught_to_continue_and_creates_no_child() {
 async fn late_settlement_failure_closes_owner_without_any_result_reader() {
     let owner = Arc::new(BackgroundOwner::new(2).unwrap());
     let mut f = Fixture::with_owner(Wait::Join, true, false, None, Some(owner.clone()), None);
-    f.start();
+    f.start().await;
     drain(&mut f.control).await;
     let mut started = f.effect.started.subscribe();
     started.wait_for(|started| *started).await.unwrap();
@@ -234,14 +236,14 @@ async fn late_settlement_failure_closes_owner_without_any_result_reader() {
 async fn panic_closes_owner_and_stops_siblings_without_a_result_reader() {
     let owner = Arc::new(BackgroundOwner::new(2).unwrap());
     let mut sibling = Fixture::with_owner(Wait::Join, true, false, None, Some(owner.clone()), None);
-    sibling.start();
+    sibling.start().await;
     drain(&mut sibling.control).await;
     let mut started = sibling.effect.started.subscribe();
     started.wait_for(|started| *started).await.unwrap();
     let mut stopped = sibling.effect.stopped.subscribe();
     let mut panics =
         Fixture::with_owner(Wait::Panic, false, false, None, Some(owner.clone()), None);
-    panics.start();
+    panics.start().await;
     drain(&mut panics.control).await;
     tokio::time::timeout(Duration::from_secs(5), stopped.wait_for(|stopped| *stopped))
         .await
@@ -292,17 +294,20 @@ impl ion_core::BackgroundSlot for BeforeTransfer {
     fn reserve(&mut self) -> Result<tokio_util::sync::CancellationToken, String> {
         self.permit.reserve()
     }
-    fn install(
+    fn install<'a>(
         self: Box<Self>,
-        job: &mut ion_core::BackgroundJob,
-    ) -> Result<ion_core::DelegationReceipt, ion_core::BackgroundStartError> {
-        if let Some(stop) = self.stop {
-            stop.cancel();
-        }
-        if let Some(owner) = self.close {
-            owner.request_shutdown();
-        }
-        Box::new(self.permit).install(job)
+        job: &'a mut ion_core::BackgroundJob,
+    ) -> ion_ai::BoxFuture<'a, Result<ion_core::DelegationReceipt, ion_core::BackgroundStartError>>
+    {
+        Box::pin(async move {
+            if let Some(stop) = self.stop {
+                stop.cancel();
+            }
+            if let Some(owner) = self.close {
+                owner.request_shutdown();
+            }
+            Box::new(self.permit).install(job).await
+        })
     }
 }
 
@@ -311,7 +316,7 @@ async fn cancellation_and_owner_close_before_transfer_refuse_cold_work() {
     for wait in [Wait::StopBeforeTransfer, Wait::CloseBeforeTransfer] {
         let owner = Arc::new(BackgroundOwner::new(1).unwrap());
         let mut f = Fixture::with_owner(wait, false, false, None, Some(owner.clone()), None);
-        f.start();
+        f.start().await;
         let report = f.settle().await;
         assert!(report.cleanup_errors.is_empty());
         let links = f.session.view().unwrap().delegations();
@@ -350,7 +355,7 @@ async fn cancelling_the_active_parent_after_transfer_does_not_cancel_the_child()
         None,
     );
     let mut started = f.effect.started.subscribe();
-    f.start();
+    f.start().await;
     started.wait_for(|started| *started).await.unwrap();
     assert!(f.session.view().unwrap().delegations()[0].transferred);
     assert!(f.control.is_busy());
@@ -389,7 +394,7 @@ async fn wait_any_expires_without_stop_and_returns_a_joined_cancellation_before_
         Fixture::with_owner(Wait::Join, true, false, None, Some(owner.clone()), None)
     });
     for fixture in &mut fixtures {
-        fixture.start();
+        fixture.start().await;
         drain(&mut fixture.control).await;
         let mut started = fixture.effect.started.subscribe();
         started.wait_for(|started| *started).await.unwrap();
@@ -483,7 +488,7 @@ async fn background_waiters_keep_completion_when_the_last_waiter_is_cancelled() 
     for cancel_last in [false, true] {
         let owner = Arc::new(BackgroundOwner::new(1).unwrap());
         let mut f = Fixture::with_owner(Wait::Join, true, false, None, Some(owner.clone()), None);
-        f.start();
+        f.start().await;
         drain(&mut f.control).await;
         let mut started = f.effect.started.subscribe();
         started.wait_for(|started| *started).await.unwrap();

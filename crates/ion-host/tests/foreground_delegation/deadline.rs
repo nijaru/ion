@@ -29,7 +29,7 @@ async fn deadline_stops_but_joins_and_retains_provenance_after_infrastructure_fa
         );
         let mut started = f.effect.started.subscribe();
         let mut stopped = f.effect.stopped.subscribe();
-        f.start();
+        f.start().await;
         tokio::time::timeout(Duration::from_secs(5), started.wait_for(|started| *started))
             .await
             .unwrap()
@@ -208,7 +208,7 @@ async fn model_progress_does_not_refresh_the_execution_deadline() {
         Some(Arc::new(ProgressModel(progress))),
     );
     tokio::time::pause();
-    f.start();
+    f.start().await;
     // Five real provider deltas reach the child's ordinary control path. A
     // budget restarted on progress would never expire while this stream runs.
     observed.wait_for(|count| *count >= 5).await.unwrap();
@@ -270,7 +270,7 @@ async fn explicit_stop_wins_over_unobserved_expiry_and_cleanup_has_no_new_deadli
     );
     let mut started = f.effect.started.subscribe();
     let mut stopped = f.effect.stopped.subscribe();
-    f.start();
+    f.start().await;
     background::drain(&mut f.control).await;
     started.wait_for(|started| *started).await.unwrap();
     let id = f.session.view().unwrap().delegations()[0].record.run;

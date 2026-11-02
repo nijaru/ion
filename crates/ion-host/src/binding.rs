@@ -40,6 +40,7 @@ pub enum BindingChange {
     ReloadResources,
     SelectModel(ModelRef),
     SelectReasoning(Reasoning),
+    SetName(Option<String>),
     NewSession,
     CloneSession,
     ForkSession(ForkPoint),
@@ -53,11 +54,12 @@ pub enum BindingChange {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 pub struct BindingOperationId(pub uuid::Uuid);
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Clone, Serialize)]
 pub enum BindingResult {
     ResourcesReloaded,
     ModelSelected,
     ReasoningSelected,
+    SessionNamed { name: Option<String> },
     SessionCreated,
     SessionCloned { session_id: String },
     SessionForked { session_id: String },
@@ -120,7 +122,7 @@ pub(crate) struct BindingDelta {
 enum PreparedChange {
     Resources(Resources, CommandCatalog),
     Runtime(ApplicationRuntime, CommandCatalog),
-    Reasoning,
+    Preference,
     Replacement(Arc<Session>, PreparedBinding),
 }
 
@@ -342,8 +344,15 @@ impl BindingSource {
                     .agent
                     .select_reasoning(&self.session, reasoning)?;
                 Ok(BindingDelta {
-                    prepared: PreparedChange::Reasoning,
+                    prepared: PreparedChange::Preference,
                     result: BindingResult::ReasoningSelected,
+                })
+            }
+            BindingChange::SetName(name) => {
+                self.session.set_name(name.as_deref())?;
+                Ok(BindingDelta {
+                    prepared: PreparedChange::Preference,
+                    result: BindingResult::SessionNamed { name },
                 })
             }
             BindingChange::NewSession => {
@@ -497,6 +506,7 @@ impl<M: Serialize + Send + 'static> SessionControl<M> {
             .background
             .as_ref()
             .map_or_else(CancellationToken::new, |owner| owner.work_stop());
+        self.reserve_binding_result()?;
         self.binding = Some(BindingWork::Running {
             operation,
             work: Preparation::pending(stop),
@@ -534,6 +544,7 @@ impl<M: Serialize + Send + 'static> SessionControl<M> {
         if !matches!(self.binding, Some(BindingWork::Finished(_))) {
             return None;
         }
+        self.release_binding_result();
         match self.binding.take().expect("finished binding") {
             BindingWork::Finished(finished) => Some(finished),
             BindingWork::Running { .. } => unreachable!("finished binding checked"),
@@ -559,7 +570,11 @@ impl<M: Serialize + Send + 'static> SessionControl<M> {
                     self.setup.runtime = runtime;
                     self.setup.commands = commands;
                 }
-                PreparedChange::Reasoning => self.completions.invalidate_binding(),
+                PreparedChange::Preference => {
+                    if matches!(delta.result, BindingResult::ReasoningSelected) {
+                        self.completions.invalidate_binding();
+                    }
+                }
                 PreparedChange::Replacement(session, prepared) => self.publish(session, prepared),
             }
             delta.result
@@ -589,6 +604,10 @@ impl<M: Serialize + Send + 'static> SessionControl<M> {
     pub async fn select_reasoning(&mut self, reasoning: Reasoning) -> Result<()> {
         self.change_binding(BindingChange::SelectReasoning(reasoning))
             .await?;
+        Ok(())
+    }
+    pub async fn set_name(&mut self, name: Option<String>) -> Result<()> {
+        self.change_binding(BindingChange::SetName(name)).await?;
         Ok(())
     }
     pub async fn new_session(&mut self) -> Result<()> {

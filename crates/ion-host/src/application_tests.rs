@@ -96,10 +96,14 @@ fn identified_admission_requires_execution_custody_before_commit() {
         .into_control::<String>();
     let key = ion_core::RequestKey::new("inbox".into(), "not-accepted".into()).unwrap();
     let input = Message::user_input("original".into(), []);
-    let rejected = control
-        .submit_request(&key, input.clone(), "metadata".into())
-        .err()
-        .unwrap();
+    let rejected = futures_util::FutureExt::now_or_never(control.submit_request(
+        &key,
+        input.clone(),
+        "metadata".into(),
+    ))
+    .expect("runtime preflight completes without an executor")
+    .err()
+    .unwrap();
     assert_eq!(rejected.metadata, "metadata");
     assert!(matches!(rejected.input, UserInput::Message(found) if found == input));
     assert!(rejected.reason.to_string().contains("Tokio runtime"));
@@ -214,35 +218,38 @@ async fn workspace_free_application_keeps_its_authority_across_shared_lifecycle(
                 }
             ))
     );
-    control.select_model(model("second")).unwrap();
+    control.select_model(model("second")).await.unwrap();
     let original_entries = control.session().view().unwrap().entries;
     for name in ["missing", "misbound"] {
-        assert!(control.select_model(model(name)).is_err());
+        assert!(control.select_model(model(name)).await.is_err());
         assert_eq!(control.agent().model(), &model("second"));
         assert_eq!(control.session().view().unwrap().entries, original_entries);
     }
     *application.instructions.write().unwrap() = Some("Reloaded application instructions.".into());
-    control.reload_resources().unwrap();
-    let cloned = control.clone_session().unwrap();
+    control.reload_resources().await.unwrap();
+    let cloned = control.clone_session().await.unwrap();
     let clone_path = control.session().path().to_owned();
     assert_eq!(control.session_id(), cloned);
     assert_eq!(control.agent().model(), &model("second"));
-    control.new_session().unwrap();
+    control.new_session().await.unwrap();
     assert_eq!(control.agent().model(), &model("first"));
-    control.switch_session(clone_path).unwrap();
+    control.switch_session(clone_path).await.unwrap();
     assert_eq!(control.agent().model(), &model("second"));
-    control.fork_session(ForkPoint::BeforeTurn(1)).unwrap();
+    control
+        .fork_session(ForkPoint::BeforeTurn(1))
+        .await
+        .unwrap();
     assert_eq!(control.agent().model(), &model("first"));
     assert_eq!(control.session().cwd(), None);
     assert!(control.agent().tool_catalog().declared_specs().is_empty());
     assert_eq!(control.instructions(), "Reloaded application instructions.");
     let before = control.session_id();
     *application.instructions.write().unwrap() = None;
-    assert!(control.reload_resources().is_err());
-    assert!(control.new_session().is_err());
+    assert!(control.reload_resources().await.is_err());
+    assert!(control.new_session().await.is_err());
     assert_eq!(control.session_id(), before);
     assert_eq!(control.instructions(), "Reloaded application instructions.");
-    control.select_model(model("second")).unwrap();
+    control.select_model(model("second")).await.unwrap();
     let report = control.shutdown().await;
     assert!(report.cleanup_errors.is_empty());
     let path = control.session().path().to_owned();

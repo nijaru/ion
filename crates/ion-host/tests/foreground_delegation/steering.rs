@@ -48,7 +48,7 @@ async fn steering_commit_invalidates_owner_before_child_join_without_retaining_a
         None,
         Some(model.clone()),
     );
-    f.start();
+    f.start().await;
     f.effect
         .started
         .subscribe()
@@ -173,7 +173,7 @@ async fn foreground_sdk_grant_reconciles_inputs_and_never_reopens_a_settled_chil
         None,
         Some(service.clone()),
     );
-    f.start();
+    f.start().await;
     f.effect
         .started
         .subscribe()

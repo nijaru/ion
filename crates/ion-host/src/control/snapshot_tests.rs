@@ -35,12 +35,14 @@ async fn metadata_projection_can_submit_steering_without_changing_the_captured_c
             metadata.marker.set(8);
             metadata.literal.clone()
         })
+        .await
         .unwrap();
     for worker in workers {
         worker.join().unwrap();
     }
     let next = control
         .snapshot(|metadata| metadata.literal.clone())
+        .await
         .unwrap();
     let report = control.shutdown().await;
     assert!(
@@ -75,6 +77,85 @@ async fn metadata_projection_can_submit_steering_without_changing_the_captured_c
     )));
 }
 
+#[test]
+fn owned_snapshot_releases_metadata_before_waiting_for_storage_and_keeps_stop_available() {
+    tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .max_blocking_threads(1)
+        .build()
+        .unwrap()
+        .block_on(async {
+            let model = Model::new(1);
+            let mut fixture = Fixture::new(model.clone(), false);
+            let control = &mut fixture.control;
+            let root = control
+                .submit(Delivery::Start, prompt("root"), meta("root"))
+                .unwrap();
+            control
+                .submit(Delivery::FollowUp, prompt("withdrawn"), meta("returned"))
+                .unwrap();
+            control.clear_queue();
+            model.wait_calls(1).await;
+
+            let (entered, ready) = tokio::sync::oneshot::channel();
+            let (release, released) = std::sync::mpsc::channel();
+            let blocker = tokio::task::spawn_blocking(move || {
+                entered.send(()).unwrap();
+                released.recv_timeout(Duration::from_secs(2)).is_ok()
+            });
+            ready.await.unwrap();
+            let read = control
+                .prepare_snapshot(|metadata| {
+                    metadata.marker.set(9);
+                    metadata.literal.clone()
+                })
+                .unwrap();
+            fn require_send(_: &impl Send) {}
+            require_send(&read);
+            let mut read = Box::pin(read);
+            assert!(futures_util::poll!(read.as_mut()).is_pending());
+
+            let mut returned = None;
+            while let Some(update) = control.take_update() {
+                if let ControlUpdate::Returned(input) = update {
+                    returned = Some(input);
+                }
+            }
+            let returned = returned.expect("reliable metadata can transfer during the owned read");
+            assert_eq!(returned.metadata.literal, "returned");
+            assert_eq!(returned.metadata.marker.get(), 9);
+            control.request_stop();
+            let mut shutdown = Box::pin(control.join_shutdown());
+            assert!(futures_util::poll!(shutdown.as_mut()).is_pending());
+            drop(shutdown);
+            tokio::time::sleep(Duration::from_millis(20)).await;
+            assert!(
+                !blocker.is_finished(),
+                "the executor must not wait for storage"
+            );
+            release.send(()).unwrap();
+            assert!(
+                blocker.await.unwrap(),
+                "storage released before its OS deadline"
+            );
+
+            let snapshot = read.await.unwrap();
+            assert_eq!(snapshot.inputs[0].id, root);
+            assert_eq!(snapshot.inputs[0].metadata, "root");
+            assert!(matches!(
+                snapshot.inputs[0].phase,
+                InputCustodyPhase::Acknowledged(_)
+            ));
+            assert!(snapshot.updates.iter().any(|update| matches!(update,
+                UpdateSnapshot::Returned { metadata, .. } if metadata == "returned")));
+            let report = control.shutdown().await;
+            assert!(report.cleanup_errors.is_empty());
+            assert!(report.updates.iter().any(|update| matches!(update,
+                ControlUpdate::Settled(settlement) if settlement.accepted.iter().any(|input|
+                    input.id == root && input.metadata.marker.get() == 9))));
+        });
+}
+
 #[tokio::test]
 async fn panicking_projection_releases_captures_without_consuming_metadata() {
     let model = Model::new(1);
@@ -90,7 +171,7 @@ async fn panicking_projection_releases_captures_without_consuming_metadata() {
     model.wait_calls(1).await;
     for target in ["root", "returned"] {
         let panicked = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            control.snapshot(|metadata| {
+            control.prepare_snapshot(|metadata| {
                 if metadata.literal == target {
                     metadata.marker.set(8);
                     panic!("application projection failed");
@@ -100,6 +181,7 @@ async fn panicking_projection_releases_captures_without_consuming_metadata() {
         assert!(panicked.is_err());
         let snapshot = control
             .snapshot(|metadata| metadata.literal.clone())
+            .await
             .unwrap();
         assert_eq!(snapshot.inputs[0].metadata, "root");
         assert!(snapshot.updates.iter().any(|update| matches!(
@@ -128,6 +210,7 @@ async fn snapshots_retain_bounded_recovery_without_consuming_owner_results() {
             Message::user_input("root".into(), []),
             meta("root metadata"),
         )
+        .await
         .unwrap()
     {
         RequestAdmission::Started { id, .. } => id,
@@ -135,7 +218,7 @@ async fn snapshots_retain_bounded_recovery_without_consuming_owner_results() {
     };
     // The durable request receipt acknowledges admission before asynchronous
     // progress. No observer is needed to establish this fact.
-    let early = control.snapshot(|m| m.literal.clone()).unwrap();
+    let early = control.snapshot(|m| m.literal.clone()).await.unwrap();
     assert_eq!(early.session.unfinished_turn, Some(1));
     assert_eq!(early.state.operation.unwrap().turn, Some(1));
     assert!(matches!(
@@ -152,7 +235,7 @@ async fn snapshots_retain_bounded_recovery_without_consuming_owner_results() {
             )
             .unwrap();
     }
-    let queued = control.snapshot(|m| m.literal.clone()).unwrap();
+    let queued = control.snapshot(|m| m.literal.clone()).await.unwrap();
     for input in queued.inputs.iter().filter(|input| input.id != root) {
         assert_eq!(input.phase, InputCustodyPhase::Prepared);
         assert!(matches!(input.original, Some(UserInput::Message(_))));
@@ -168,7 +251,7 @@ async fn snapshots_retain_bounded_recovery_without_consuming_owner_results() {
     })
     .await
     .unwrap();
-    let snapshot = control.snapshot(|m| m.literal.clone()).unwrap();
+    let snapshot = control.snapshot(|m| m.literal.clone()).await.unwrap();
     assert!(snapshot.cursor.read > early.cursor.read);
     assert_eq!(snapshot.cursor.owner, early.cursor.owner);
     assert_eq!(
@@ -197,7 +280,7 @@ async fn snapshots_retain_bounded_recovery_without_consuming_owner_results() {
     assert_eq!(rejected.metadata.literal, "new metadata");
     assert_eq!(model.calls.load(Ordering::SeqCst), 1);
     // Repeated reads neither acknowledge results nor free the reserved slots.
-    let again = control.snapshot(|_| ()).unwrap();
+    let again = control.snapshot(|_| ()).await.unwrap();
     assert_eq!(again.cursor.committed, snapshot.cursor.committed);
     assert!(again.cursor.read > snapshot.cursor.read);
     assert_eq!(again.updates.len(), snapshot.updates.len());
@@ -209,7 +292,7 @@ async fn snapshots_retain_bounded_recovery_without_consuming_owner_results() {
         }
     }
     assert_eq!(returned, MAX_ADMISSIONS - 1);
-    assert!(control.snapshot(|_| ()).unwrap().updates.is_empty());
+    assert!(control.snapshot(|_| ()).await.unwrap().updates.is_empty());
     // Explicit transfer frees capacity; no receipt ring silently evicts originals.
     control
         .submit(
@@ -252,7 +335,7 @@ async fn acknowledged_metadata_keeps_its_byte_reservation_until_settlement_trans
         .submit(Delivery::Start, input, metadata)
         .unwrap();
     model.wait_calls(1).await;
-    let snapshot = fixture.control.snapshot(|_| ()).unwrap();
+    let snapshot = fixture.control.snapshot(|_| ()).await.unwrap();
     assert!(matches!(
         snapshot.inputs[0].phase,
         InputCustodyPhase::Acknowledged(_)
@@ -307,12 +390,12 @@ async fn cancelled_shutdown_preserves_inspectable_recovery_until_explicit_transf
     let mut waiting = Box::pin(control.join_shutdown());
     assert!(futures_util::poll!(waiting.as_mut()).is_pending());
     drop(waiting);
-    let closing = control.snapshot(|m| m.literal.clone()).unwrap();
+    let closing = control.snapshot(|m| m.literal.clone()).await.unwrap();
     assert!(closing.state.closed);
     assert!(closing.state.stop_requested);
     assert!(!closing.state.shutdown_complete);
     control.join_shutdown().await;
-    let joined = control.snapshot(|m| m.literal.clone()).unwrap();
+    let joined = control.snapshot(|m| m.literal.clone()).await.unwrap();
     assert!(joined.state.shutdown_complete);
     assert!(!joined.state.busy);
     assert!(
@@ -331,5 +414,5 @@ async fn cancelled_shutdown_preserves_inspectable_recovery_until_explicit_transf
     assert!(report.updates.iter().any(
         |u| matches!(u, ControlUpdate::Returned(input) if input.metadata.literal == "returned")
     ));
-    assert!(control.snapshot(|_| ()).unwrap().updates.is_empty());
+    assert!(control.snapshot(|_| ()).await.unwrap().updates.is_empty());
 }

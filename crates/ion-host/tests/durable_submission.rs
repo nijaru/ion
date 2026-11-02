@@ -22,7 +22,7 @@ use std::{
 };
 use tokio_util::sync::CancellationToken;
 
-struct Effect(PathBuf);
+struct Effect(PathBuf, tokio::sync::Semaphore);
 impl ToolSource for Effect {
     fn registrations(self: Arc<Self>) -> Vec<ToolRegistration> {
         vec![ToolRegistration::new(
@@ -42,6 +42,7 @@ impl ToolExecutor for Effect {
     ) -> BoxFuture<'a, ToolOutput> {
         let stop = invocation.stop().clone();
         Box::pin(async move {
+            let _dispatch = self.1.acquire().await.unwrap();
             let mut file = OpenOptions::new()
                 .create(true)
                 .append(true)
@@ -62,8 +63,36 @@ impl ToolExecutor for Effect {
         })
     }
 }
+struct FixtureService {
+    inner: ScriptedModelService,
+    hold_first: std::sync::atomic::AtomicBool,
+    entered: tokio::sync::Notify,
+    release: tokio::sync::Semaphore,
+}
+impl FixtureService {
+    fn requests(&self) -> Vec<ion_ai::ModelRequest> {
+        self.inner.requests()
+    }
+}
+impl ion_ai::ModelService for FixtureService {
+    fn stream<'a>(
+        &'a self,
+        request: ion_ai::ModelRequest,
+    ) -> BoxFuture<'a, Result<ion_ai::ModelStream, ion_ai::ProviderError>> {
+        Box::pin(async move {
+            if self
+                .hold_first
+                .swap(false, std::sync::atomic::Ordering::SeqCst)
+            {
+                self.entered.notify_one();
+                self.release.acquire().await.unwrap().forget();
+            }
+            ion_ai::ModelService::stream(&self.inner, request).await
+        })
+    }
+}
 struct Fixture {
-    service: Arc<ScriptedModelService>,
+    service: Arc<FixtureService>,
     effect: Arc<Effect>,
 }
 impl Application for Fixture {
@@ -137,13 +166,29 @@ async fn worker(root: &Path, mode: &str) {
             message: "changed signed prefix".into(),
             retry_after_ms: None,
         })]
+    } else if mode == "resume" {
+        // Steering is deliberately admitted after the first request freezes.
+        // Its answer therefore needs a second request, in the same Turn.
+        vec![
+            response(vec![Content::Text("resumed work".into())]),
+            response(vec![Content::Text("steering addressed".into())]),
+        ]
     } else {
         vec![response(vec![Content::Text("fresh work".into())])]
     };
-    let service = Arc::new(ScriptedModelService::new(scripts));
+    let service = Arc::new(FixtureService {
+        inner: ScriptedModelService::new(scripts),
+        hold_first: std::sync::atomic::AtomicBool::new(matches!(mode, "resume" | "cancel")),
+        entered: tokio::sync::Notify::new(),
+        release: tokio::sync::Semaphore::new(0),
+    });
+    let effect = Arc::new(Effect(
+        root.join("effects"),
+        tokio::sync::Semaphore::new(usize::from(mode != "effect")),
+    ));
     let application = Arc::new(Fixture {
         service: service.clone(),
-        effect: Arc::new(Effect(root.join("effects"))),
+        effect: effect.clone(),
     });
     let key = RequestKey::new("authorized-inbox".into(), "delivery-1".into()).unwrap();
     let mut control = SessionSetup::new(
@@ -176,6 +221,8 @@ async fn worker(root: &Path, mode: &str) {
             panic!("duplicate dispatch")
         };
         assert_eq!(metadata, "busy retry");
+        // Crash only after the busy reconciliation assertions have run.
+        effect.1.add_permits(1);
     } else {
         let before = session.view().unwrap().entries;
         let RequestAdmission::Existing { receipt, metadata } = control
@@ -273,6 +320,11 @@ async fn worker(root: &Path, mode: &str) {
                 .resume_turn(saved.point, "continuation".into())
                 .await
                 .unwrap();
+            if matches!(mode, "resume" | "cancel") {
+                tokio::time::timeout(Duration::from_secs(5), service.entered.notified())
+                    .await
+                    .unwrap();
+            }
             let snapshot = control.snapshot(String::clone).await.unwrap();
             assert_eq!(
                 snapshot.operation_metadata,
@@ -301,6 +353,7 @@ async fn worker(root: &Path, mode: &str) {
                         "steering".into(),
                     )
                     .unwrap();
+                service.release.add_permits(1);
             }
         } else {
             let next = RequestKey::new("authorized-inbox".into(), "delivery-2".into()).unwrap();
@@ -391,7 +444,22 @@ async fn worker(root: &Path, mode: &str) {
     }
     assert!(session.view().unwrap().entries.iter().any(|entry| matches!(entry, SessionEntry::ToolResult { result, .. } if matches!(result.outcome, ToolOutcome::Unknown))));
     assert_eq!(fs::read(root.join("effects")).unwrap(), b"effect\n");
-    assert_eq!(service.requests().len(), usize::from(mode != "cancel"));
+    let requests = service.requests();
+    assert_eq!(
+        requests.len(),
+        match mode {
+            "cancel" => 0,
+            "resume" => 2,
+            _ => 1,
+        }
+    );
+    if mode == "resume" {
+        assert!(requests[1].messages.iter().any(|message| {
+            message.content.iter().any(
+                |part| matches!(part, Content::Text(text) if text == "steering after recovery"),
+            )
+        }));
+    }
     let report = control.shutdown().await;
     assert!(report.cleanup_errors.is_empty());
     // Closed execution still permits reconciliation, not a fresh admission.

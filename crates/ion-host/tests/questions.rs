@@ -249,6 +249,7 @@ async fn answer_resumes_the_same_turn_and_dispatches_dependent_effect_once() {
     let snapshot = fixture
         .control
         .snapshot(|_| ())
+        .await
         .unwrap()
         .pending_question
         .unwrap();
@@ -624,10 +625,10 @@ async fn replacement_rebinds_custody_and_shutdown_revokes_saved_responder() {
     assert_eq!(fixture.service.requests().len(), 2);
     assert_eq!(fixture.calls.load(Ordering::SeqCst), 0);
 
-    fixture.control.select_model(model()).unwrap();
-    let cloned = fixture.control.clone_session().unwrap();
+    fixture.control.select_model(model()).await.unwrap();
+    let cloned = fixture.control.clone_session().await.unwrap();
     assert_eq!(fixture.control.session_id(), cloned);
-    fixture.control.new_session().unwrap();
+    fixture.control.new_session().await.unwrap();
     assert_ne!(fixture.control.session_id(), cloned);
     assert_ne!(fixture.control.session().id(), first_session);
     assert!(

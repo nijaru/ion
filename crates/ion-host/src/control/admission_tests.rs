@@ -9,6 +9,7 @@ struct AdmissionModel {
     released: Mutex<bool>,
     changed: Condvar,
     first: AtomicBool,
+    after_claim: std::sync::OnceLock<Arc<ion_core::CompletionInbox>>,
     panic: bool,
 }
 impl AdmissionModel {
@@ -23,7 +24,9 @@ impl ModelService for AdmissionModel {
         _model: &ion_ai::ModelRef,
         controls: &ion_ai::GenerationControls,
     ) -> Result<(), ProviderError> {
-        if self.first.swap(false, Ordering::SeqCst) {
+        if self.after_claim.get().is_none_or(|inbox| !inbox.has_wake())
+            && self.first.swap(false, Ordering::SeqCst)
+        {
             assert_ne!(
                 std::thread::current().id(),
                 self.executor,
@@ -60,6 +63,7 @@ fn gated_fixture(panic: bool) -> (Fixture, Arc<AdmissionModel>) {
         released: Mutex::new(false),
         changed: Condvar::new(),
         first: AtomicBool::new(true),
+        after_claim: std::sync::OnceLock::new(),
         panic,
     });
     let agent = fixture.control.agent();
@@ -430,64 +434,95 @@ async fn abandoned_recovery_failure_retains_checkpoint_metadata_and_reservation(
 
 #[tokio::test(flavor = "current_thread")]
 async fn abandoned_automated_admission_is_joined_on_stop_without_resubmitting() {
-    let (mut fixture, service) = gated_fixture(false);
-    fixture
-        .control
-        .set_completion_delivery(ion_core::CompletionDelivery::Wake)
-        .unwrap();
-    let permit = fixture
-        .control
-        .completion_target(ion_core::CompletionDelivery::Wake)
-        .await
-        .unwrap()
-        .reserve()
-        .unwrap();
-    permit.offer(ion_core::CompletionNotice {
-        source_session: uuid::Uuid::now_v7(),
-        run: uuid::Uuid::now_v7(),
-        child_session: uuid::Uuid::now_v7(),
-    });
-    let mut wait = Box::pin(fixture.control.next());
-    tokio::select! {
-        () = service.entered.notified() => {},
-        _ = &mut wait => panic!("automated admission published before its actual decision"),
-        () = tokio::time::sleep(Duration::from_secs(5)) => panic!("automated admission did not enter its worker"),
-    }
-    drop(wait);
-    assert!(matches!(
+    for claimed in [false, true] {
+        let (mut fixture, service) = gated_fixture(false);
+        if claimed {
+            assert!(
+                service
+                    .after_claim
+                    .set(fixture.control.completions.inbox())
+                    .is_ok()
+            );
+        }
         fixture
             .control
-            .admitting
-            .as_ref()
-            .map(|admission| &admission.payload),
-        Some(AdmissionPayload::Completion)
-    ));
-    fixture.control.request_stop();
-    service.release();
-    let report = fixture.control.shutdown().await;
-    let results = report
-        .updates
-        .into_iter()
-        .filter_map(|update| {
-            if let ControlUpdate::Settled(result) = update {
-                Some(result)
-            } else {
-                None
-            }
-        })
-        .collect::<Vec<_>>();
-    assert_eq!(results.len(), 1);
-    assert!(
-        results[0].automated && results[0].metadata.is_none() && results[0].accepted.is_empty()
-    );
-    assert!(results[0].stop_requested);
-    assert!(matches!(
-        results[0].outcome,
-        OperationOutcome::Turn(Err(AgentError::Cancelled))
-    ));
-    assert_eq!(service.model.calls.load(Ordering::SeqCst), 0);
-    assert_eq!(lock(&fixture.control.custody).occupied, 0);
-    assert!(!fixture.control.is_busy());
+            .set_completion_delivery(ion_core::CompletionDelivery::Wake)
+            .unwrap();
+        let permit = fixture
+            .control
+            .completion_target(ion_core::CompletionDelivery::Wake)
+            .await
+            .unwrap()
+            .reserve()
+            .unwrap();
+        permit.offer(ion_core::CompletionNotice {
+            source_session: uuid::Uuid::now_v7(),
+            run: uuid::Uuid::now_v7(),
+            child_session: uuid::Uuid::now_v7(),
+        });
+        let mut wait = Box::pin(fixture.control.next());
+        tokio::select! {
+            () = service.entered.notified() => {},
+            _ = &mut wait => panic!("automated admission published before its actual decision"),
+            () = tokio::time::sleep(Duration::from_secs(5)) => panic!("automated admission did not enter its worker"),
+        }
+        drop(wait);
+        assert!(matches!(
+            fixture
+                .control
+                .admitting
+                .as_ref()
+                .map(|admission| &admission.payload),
+            Some(AdmissionPayload::Completion)
+        ));
+        fixture.control.request_stop();
+        service.release();
+        let report = fixture.control.shutdown().await;
+        assert!(report.cleanup_errors.is_empty());
+        if !claimed {
+            // Stop revoked readiness before Core selected it. No Turn was admitted;
+            // inventing a cancelled settlement here would be a false positive.
+            assert!(report.updates.is_empty());
+            assert!(fixture.control.session().view().unwrap().entries.is_empty());
+            assert!(matches!(
+                permit.receipt().snapshot(),
+                ion_core::CompletionStatus::Revoked {
+                    reason: ion_core::CompletionRevocation::Stopped,
+                }
+            ));
+            assert_eq!(service.model.calls.load(Ordering::SeqCst), 0);
+            assert_eq!(lock(&fixture.control.custody).occupied, 0);
+            assert!(!fixture.control.is_busy());
+            continue;
+        }
+        let results = report
+            .updates
+            .into_iter()
+            .filter_map(|update| {
+                if let ControlUpdate::Settled(result) = update {
+                    Some(result)
+                } else {
+                    None
+                }
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(results.len(), 1);
+        assert!(
+            results[0].automated && results[0].metadata.is_none() && results[0].accepted.is_empty()
+        );
+        assert!(results[0].stop_requested);
+        assert!(matches!(
+            results[0].outcome,
+            OperationOutcome::Turn(Err(AgentError::Cancelled))
+        ));
+        assert_eq!(service.model.calls.load(Ordering::SeqCst), 0);
+        assert_eq!(lock(&fixture.control.custody).occupied, 0);
+        assert!(!fixture.control.is_busy());
+        assert!(matches!(
+            permit.receipt().snapshot(),
+            ion_core::CompletionStatus::Offered { turn: 1 }
+        ));
+    }
 }
 
 #[tokio::test]

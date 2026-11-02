@@ -496,13 +496,14 @@ impl Fixture {
             delegate,
         }
     }
-    fn start(&mut self) {
+    async fn start(&mut self) {
         self.control
             .submit_request(
                 &ion_core::RequestKey::new("fixture".into(), "parent".into()).unwrap(),
                 Message::user_input("delegate".into(), []),
                 (),
             )
+            .await
             .unwrap();
     }
     async fn settle(&mut self) -> ion_host::ShutdownReport<()> {
@@ -527,7 +528,7 @@ impl Fixture {
 #[tokio::test]
 async fn fresh_foreground_child_reconciles_without_inheriting_parent_configuration() {
     let mut f = Fixture::new(Wait::Repeat, false, false);
-    f.start();
+    f.start().await;
     let report = f.settle().await;
     assert!(report.cleanup_errors.is_empty());
     let view = f.session.view().unwrap();
@@ -601,6 +602,7 @@ async fn forked_child_shares_only_the_chosen_history_and_current_child_capabilit
                 Message::user_input("historical input marker".into(), []),
                 (),
             )
+            .await
             .unwrap();
         tokio::time::timeout(std::time::Duration::from_secs(5), async {
             while f.control.is_busy() {
@@ -620,7 +622,7 @@ async fn forked_child_shares_only_the_chosen_history_and_current_child_capabilit
             settled,
             "transfer the first Turn's reliable result before new work"
         );
-        f.start();
+        f.start().await;
         let report = f.settle().await;
         assert!(report.cleanup_errors.is_empty());
         assert_eq!(f.effect.calls.load(Ordering::SeqCst), 1);
@@ -670,7 +672,7 @@ async fn forked_child_shares_only_the_chosen_history_and_current_child_capabilit
 #[tokio::test]
 async fn abandoned_tool_wait_still_joins_child_and_parent_stop_reaches_cleanup() {
     let mut f = Fixture::new(Wait::Abandon, true, false);
-    f.start();
+    f.start().await;
     let mut started = f.effect.started.subscribe();
     tokio::time::timeout(
         std::time::Duration::from_secs(5),
@@ -726,7 +728,7 @@ async fn relationship_faults_cannot_be_caught_to_continue_direct_or_composed_wor
     ] {
         let mut f = Fixture::new(Wait::Join, false, composed);
         f.trigger(kind);
-        f.start();
+        f.start().await;
         let report = f.settle().await;
         assert!(report.cleanup_errors.is_empty());
         assert_eq!(f.parent.requests().len(), 1);

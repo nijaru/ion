@@ -105,7 +105,11 @@ async fn reconnect_preserves_core_work_and_reliable_metadata_until_transfer() {
     })
     .await
     .unwrap();
-    let snapshot = fixture.control.snapshot(|m| m.literal.clone()).unwrap();
+    let snapshot = fixture
+        .control
+        .snapshot(|m| m.literal.clone())
+        .await
+        .unwrap();
     assert_eq!(
         snapshot.mcp_servers.unwrap()[0].status,
         crate::McpServerStatus::Available
@@ -160,7 +164,11 @@ async fn stop_and_cancelled_waiters_keep_reconnect_cleanup_and_result_custody() 
                 .await
                 .is_err()
         );
-        let snapshot = fixture.control.snapshot(|m| m.literal.clone()).unwrap();
+        let snapshot = fixture
+            .control
+            .snapshot(|m| m.literal.clone())
+            .await
+            .unwrap();
         assert_eq!(snapshot.mcp_reconnect.unwrap().metadata, "retain");
         let owner_interrupted = if owner_stop {
             fixture.control.owner().unwrap().request_shutdown();

@@ -8,7 +8,7 @@ async fn live_observations_invalidate_without_readers_and_do_not_own_execution()
     let mut f = Fixture::with_owner(Wait::Join, true, false, None, Some(owner.clone()), None);
     let mut started = f.effect.started.subscribe();
     let mut stopped = f.effect.stopped.subscribe();
-    f.start();
+    f.start().await;
     tokio::time::timeout(Duration::from_secs(5), started.wait_for(|started| *started))
         .await
         .unwrap()
