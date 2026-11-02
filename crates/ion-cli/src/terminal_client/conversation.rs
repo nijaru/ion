@@ -3,9 +3,57 @@ use std::{collections::HashMap, path::PathBuf};
 
 use ion_app::OperationId;
 use ion_core::{
-    AgentEvent, LiveTranscript, Session, SessionEntry, SessionView, TranscriptItem,
-    TranscriptProjection, TranscriptSource,
+    AgentEvent, LiveTranscript, SessionEntry, SessionView, TranscriptItem, TranscriptProjection,
+    TranscriptSource,
 };
+
+#[cfg(test)]
+use ion_core::Session;
+
+pub(super) struct Prepared {
+    canonical: TranscriptProjection,
+    positions: HashMap<TranscriptSource, usize>,
+    session: uuid::Uuid,
+    selection: u64,
+    head_entry: u64,
+    tail: super::ResumeHistoryTail,
+}
+
+impl Prepared {
+    pub(super) fn new(view: &SessionView) -> Self {
+        let canonical = TranscriptProjection::from_session(view);
+        let positions = canonical
+            .items
+            .iter()
+            .enumerate()
+            .map(|(index, item)| {
+                (
+                    item.source()
+                        .expect("canonical facts have source coordinates"),
+                    index,
+                )
+            })
+            .collect::<HashMap<_, _>>();
+        assert_eq!(
+            positions.len(),
+            canonical.items.len(),
+            "canonical item sources are unique"
+        );
+        let tail = super::resume_history_tail(&canonical.items);
+        Self {
+            canonical,
+            positions,
+            session: view.id,
+            selection: view
+                .entries
+                .iter()
+                .rposition(|entry| matches!(entry, SessionEntry::ContextSelected { .. }))
+                .map_or(0, |index| index as u64 + 1),
+            head_entry: view.context_position().head_entry,
+            tail,
+        }
+    }
+}
 
 #[cfg(test)]
 pub(super) mod fixtures;
@@ -180,15 +228,28 @@ impl Conversation {
         }
     }
 
+    #[cfg(test)]
     pub(super) fn reconcile(&mut self, session: &Session, view: &SessionView) -> Change {
+        self.reconcile_prepared(session.path(), Prepared::new(view))
+    }
+
+    pub(super) fn reconcile_prepared(
+        &mut self,
+        path: &std::path::Path,
+        prepared: Prepared,
+    ) -> Change {
+        let Prepared {
+            canonical,
+            positions,
+            session,
+            selection,
+            head_entry,
+            tail,
+        } = prepared;
         let scope = Scope {
-            path: session.path().to_path_buf(),
-            session: view.id,
-            selection: view
-                .entries
-                .iter()
-                .rposition(|entry| matches!(entry, SessionEntry::ContextSelected { .. }))
-                .map_or(0, |index| index as u64 + 1),
+            path: path.to_path_buf(),
+            session,
+            selection,
         };
         let same_session = self.scope.as_ref().is_some_and(|previous| {
             previous.path == scope.path && previous.session == scope.session
@@ -200,41 +261,22 @@ impl Conversation {
         } else {
             Change::Session
         };
-        let canonical = TranscriptProjection::from_session(view);
-        let positions = canonical
-            .items
-            .iter()
-            .enumerate()
-            .map(|(index, item)| {
-                (
-                    item.source()
-                        .expect("canonical facts have source coordinates"),
-                    index,
-                )
-            })
-            .collect::<HashMap<_, _>>();
-        assert_eq!(
-            positions.len(),
-            canonical.items.len(),
-            "canonical item sources are unique"
-        );
         if change != Change::Unchanged {
             self.publication_generation += 1;
             let had_previous_session = self.scope.is_some();
             self.notices.clear();
             self.notices_published = 0;
-            let tail = super::resume_history_tail(&canonical.items);
             let start = tail.start.min(canonical.sealed_prefix());
             self.through = start.checked_sub(1).map(|index| {
                 canonical.items[index]
                     .source()
                     .expect("resume boundary is committed")
             });
-            let label = view.id;
+            let label = session;
             self.banner = if same_session {
                 Some(format!(
                     "— selected context at entry {} · alternatives retained · files unchanged —",
-                    view.context_position().head_entry
+                    head_entry
                 ))
             } else if !canonical.items.is_empty() {
                 Some(if tail.omitted_turns > 0 {

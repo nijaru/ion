@@ -14,20 +14,6 @@ use crate::display_text::fit_line;
 
 const MAX_MODEL_METADATA_WIDTH: usize = 96;
 
-#[derive(Debug)]
-pub(super) struct CommittedContextRefresh(anyhow::Error);
-
-impl std::fmt::Display for CommittedContextRefresh {
-    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(
-            formatter,
-            "Context selection committed but display refresh failed; reopen the saved Session before continuing: {:#}",
-            self.0
-        )
-    }
-}
-impl std::error::Error for CommittedContextRefresh {}
-
 pub(super) struct ContextPickerValue {
     expected: ion_core::ContextPosition,
     point: ion_core::ContextPoint,
@@ -38,23 +24,15 @@ pub(super) fn apply_context(
     ui: &mut Frontend,
     value: ContextPickerValue,
 ) -> Result<()> {
-    runtime.navigate_context(value.expected, value.point.head_entry)?;
-    // A client projection failure cannot undo a committed cursor. Stop this
-    // terminal rather than accept another prompt against a stale conversation.
-    ui.refresh_session(runtime.session())
-        .map_err(CommittedContextRefresh)?;
-    let restore_error = if value.point.restore_input {
-        ui.restore_input(value.point.message).err()
-    } else {
-        None
-    };
-    ui.status = if let Some(error) = restore_error {
-        format!("Context selected; {error}; draft retained; workspace files unchanged")
-    } else {
-        "Context selected; /tree returns to preserved alternatives; workspace files unchanged"
-            .into()
-    };
-    Ok(())
+    super::session_io::start_binding(
+        runtime,
+        ui,
+        ion_app::BindingChange::NavigateContext {
+            expected: value.expected,
+            head_entry: value.point.head_entry,
+        },
+        value.point.restore_input.then_some(value.point.message),
+    )
 }
 
 pub(super) fn tree(
@@ -62,16 +40,37 @@ pub(super) fn tree(
     ui: &mut Frontend,
     args: &str,
 ) -> Result<()> {
-    let view = runtime.session().view()?;
+    let entry = (!args.is_empty())
+        .then(|| args.parse::<u64>().context("use /tree [ENTRY]"))
+        .transpose()?;
+    let reader = runtime.session().reader()?;
+    let read = async move {
+        reader
+            .map_view(move |view| prepare_tree(view, entry))
+            .await?
+    };
+    if entry.is_some() {
+        ui.session_io.start_binding_read(runtime.session(), read)
+    } else {
+        ui.session_io.start(runtime.session(), read)
+    }
+}
+
+fn prepare_tree(
+    view: ion_core::SessionView,
+    entry: Option<u64>,
+) -> Result<super::session_io::ReadOutput> {
     let expected = view.context_position();
     let points = view.context_points();
-    if !args.is_empty() {
-        let entry = args.parse::<u64>().context("use /tree [ENTRY]")?;
+    if let Some(entry) = entry {
         let point = points
             .into_iter()
             .find(|point| point.entry == entry)
             .context("selected message does not exist or is not a complete boundary")?;
-        return apply_context(runtime, ui, ContextPickerValue { expected, point });
+        return Ok(super::session_io::ReadOutput::Context(ContextPickerValue {
+            expected,
+            point,
+        }));
     }
     let items = points
         .into_iter()
@@ -99,13 +98,12 @@ pub(super) fn tree(
         })
         .collect::<Vec<_>>();
     anyhow::ensure!(!items.is_empty(), "no messages to explore");
-    ui.pickers.open(Picker {
+    Ok(super::session_io::ReadOutput::Picker(Box::new(Picker {
         title: "Explore context (files unchanged)",
         query: String::new(),
         selected: 0,
         items,
-    });
-    Ok(())
+    })))
 }
 
 pub(super) struct ForkPickerValue {
@@ -118,23 +116,12 @@ pub(super) fn apply_fork(
     ui: &mut Frontend,
     value: ForkPickerValue,
 ) -> Result<()> {
-    let id = runtime.fork_session(value.point)?;
-    ui.refresh_session(runtime.session())?;
-    let restore_error = value
-        .restore
-        .and_then(|input| ui.restore_input(input).err());
-    ui.status = if let Some(error) = restore_error {
-        format!(
-            "Forked as {}; {error}; draft retained; inspect source to copy selected input",
-            short_session_id(&id)
-        )
-    } else {
-        format!(
-            "Forked as {}; both sessions use the same working directory",
-            short_session_id(&id)
-        )
-    };
-    Ok(())
+    super::session_io::start_binding(
+        runtime,
+        ui,
+        ion_app::BindingChange::ForkSession(value.point),
+        value.restore,
+    )
 }
 
 pub(super) fn resume(
@@ -148,9 +135,15 @@ pub(super) fn resume(
         ui.pickers
             .open_sessions(catalog, super::picker::SessionBrowser::Active(current));
     } else {
-        let path = runtime.catalog().by_id(args)?;
-        runtime.switch_session(path)?;
-        ui.refresh_session(runtime.session())?;
+        let catalog = runtime.catalog().clone();
+        let id = args.to_owned();
+        let io = runtime.session().io()?;
+        ui.session_io
+            .start_binding_read(runtime.session(), async move {
+                Ok(super::session_io::ReadOutput::Switch(
+                    io.run(move |_| Ok(catalog.by_id(&id))).await??,
+                ))
+            })?;
     }
     Ok(())
 }
@@ -160,31 +153,7 @@ pub(super) fn fork(
     ui: &mut Frontend,
     args: &str,
 ) -> Result<()> {
-    let turns = runtime.session().view()?.turns();
-    if args.is_empty() {
-        ui.pickers.open(Picker {
-            title: "Fork before Turn",
-            query: String::new(),
-            selected: 0,
-            items: fork_before_items(turns),
-        });
-    } else {
-        let turn: u64 = args.parse().context("use /fork TURN")?;
-        let input = turns
-            .into_iter()
-            .find(|item| item.turn == turn)
-            .context("selected Turn does not exist")?
-            .input;
-        apply_fork(
-            runtime,
-            ui,
-            ForkPickerValue {
-                point: ForkPoint::BeforeTurn(turn),
-                restore: Some(input),
-            },
-        )?;
-    }
-    Ok(())
+    read_fork(runtime, ui, args, false)
 }
 
 pub(super) fn fork_after(
@@ -192,28 +161,74 @@ pub(super) fn fork_after(
     ui: &mut Frontend,
     args: &str,
 ) -> Result<()> {
-    if args.is_empty() {
-        let items = fork_after_items(runtime.session().view()?.turns());
-        anyhow::ensure!(!items.is_empty(), "no ended Turns to fork after");
-        ui.pickers.open(Picker {
-            title: "Fork after Turn",
+    read_fork(runtime, ui, args, true)
+}
+
+fn read_fork(
+    runtime: &SessionControl<EditorDraft>,
+    ui: &mut Frontend,
+    args: &str,
+    after: bool,
+) -> Result<()> {
+    let turn = (!args.is_empty())
+        .then(|| args.parse::<u64>().context("use /fork[-after] [TURN]"))
+        .transpose()?;
+    let reader = runtime.session().reader()?;
+    let read = async move {
+        reader
+            .map_view(move |view| prepare_fork(view.turns(), turn, after))
+            .await?
+    };
+    if turn.is_some() {
+        ui.session_io.start_binding_read(runtime.session(), read)
+    } else {
+        ui.session_io.start(runtime.session(), read)
+    }
+}
+
+fn prepare_fork(
+    turns: Vec<TurnSummary>,
+    turn: Option<u64>,
+    after: bool,
+) -> Result<super::session_io::ReadOutput> {
+    if let Some(turn) = turn {
+        let restore = if after {
+            None
+        } else {
+            Some(
+                turns
+                    .into_iter()
+                    .find(|item| item.turn == turn)
+                    .context("selected Turn does not exist")?
+                    .input,
+            )
+        };
+        Ok(super::session_io::ReadOutput::Fork(ForkPickerValue {
+            point: if after {
+                ForkPoint::AfterTurn(turn)
+            } else {
+                ForkPoint::BeforeTurn(turn)
+            },
+            restore,
+        }))
+    } else {
+        let items = if after {
+            fork_after_items(turns)
+        } else {
+            fork_before_items(turns)
+        };
+        anyhow::ensure!(!items.is_empty(), "no complete Turn boundaries to fork");
+        Ok(super::session_io::ReadOutput::Picker(Box::new(Picker {
+            title: if after {
+                "Fork after Turn"
+            } else {
+                "Fork before Turn"
+            },
             query: String::new(),
             selected: 0,
             items,
-        });
-    } else {
-        let turn: u64 = args.parse().context("use /fork-after [TURN]")?;
-        // Core owns boundary validation; browsing is only a presentation aid.
-        apply_fork(
-            runtime,
-            ui,
-            ForkPickerValue {
-                point: ForkPoint::AfterTurn(turn),
-                restore: None,
-            },
-        )?;
+        })))
     }
-    Ok(())
 }
 
 fn fork_before_items(turns: Vec<TurnSummary>) -> Vec<PickerItem> {

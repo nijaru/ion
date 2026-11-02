@@ -1,5 +1,5 @@
 //! Provisional terminal projection of shared control updates, not execution custody.
-use anyhow::{Context, Result};
+use anyhow::Result;
 use ion_app::{
     ControlUpdate, Delivery, InputPhase, Observation, OperationOutcome, ReturnReason,
     SessionControl, UserInput,
@@ -14,6 +14,7 @@ pub(super) enum OperationKind {
     Shell,
     Compaction,
     Preparation,
+    Binding,
     McpReconnect,
 }
 
@@ -37,6 +38,7 @@ impl ActiveOperation {
             ),
             None => match state.mcp_reconnect {
                 Some(reconnect) => (OperationKind::McpReconnect, reconnect.stop_requested),
+                None if state.binding.is_some() => (OperationKind::Binding, state.stop_requested),
                 None if state.busy => (OperationKind::Preparation, state.stop_requested),
                 None => return None,
             },
@@ -65,6 +67,7 @@ impl ActiveOperation {
                 format!("{cancel} cancels · {submit} queues")
             }
             OperationKind::Preparation => format!("{cancel} cancels · {follow_up} queues"),
+            OperationKind::Binding => format!("{cancel} cancels · input waits for Session refresh"),
         }
     }
 
@@ -74,11 +77,13 @@ impl ActiveOperation {
             (OperationKind::Shell, true) => "Cancelling shell…",
             (OperationKind::Compaction, true) => "Cancelling compaction…",
             (OperationKind::Preparation, true) => "Cancelling input…",
+            (OperationKind::Binding, true) => "Stopping Session change…",
             (OperationKind::McpReconnect, true) => "Cancelling MCP reconnect…",
             (OperationKind::Coding, false) => "Working",
             (OperationKind::Shell, false) => "Running shell",
             (OperationKind::Compaction, false) => "Summarizing context",
             (OperationKind::Preparation, false) => "Preparing input",
+            (OperationKind::Binding, false) => "Preparing Session change",
             (OperationKind::McpReconnect, false) => "Reconnecting MCP",
         }
     }
@@ -93,6 +98,59 @@ pub(super) fn apply(
     update: ControlUpdate<EditorDraft>,
 ) -> Result<Option<anyhow::Error>> {
     match update {
+        ControlUpdate::BindingFinished(finished) => {
+            super::session_io::binding_finished(ui, control, finished)?
+        }
+        ControlUpdate::RequestAdmission(decision) => match decision.result {
+            Ok(ion_app::RequestAdmission::Started { .. }) => {
+                ui.status = "Request durably accepted".into();
+                ui.session_io.request_refresh();
+            }
+            Ok(ion_app::RequestAdmission::Existing { receipt, metadata }) => {
+                ui.note(format!("Request already exists in Session {}; not replayed. Original attempt retained separately: {}", receipt.session, metadata.literal));
+                ui.existing_requests.push((receipt, metadata));
+                ui.session_io.request_refresh();
+            }
+            Ok(ion_app::RequestAdmission::Unresolved(input)) => {
+                ui.status = "Request admission unknown; inspect before retrying".into();
+                ui.note(format!("Request admission unresolved in Session {}; original retained separately, not restored: {}", input.session, input.metadata.literal));
+                ui.unresolved_requests.push(input);
+                ui.session_io.request_refresh();
+            }
+            Err(rejected) => {
+                let rejected = *rejected;
+                ui.status = format!("Request was not accepted: {:#}", rejected.reason);
+                if let UserInput::Prompt { images, files, .. } = rejected.input {
+                    ui.return_draft(rejected.metadata, images, files);
+                } else {
+                    // A prepared SDK Message is not an editor draft. Keep the
+                    // entire input, including media, rather than reconstruct it.
+                    ui.note(format!(
+                        "Prepared request was not accepted; original retained separately: {}",
+                        rejected.metadata.literal
+                    ));
+                    ui.rejected_requests.push(rejected);
+                }
+            }
+        },
+        ControlUpdate::RecoveryAdmission(decision) => match decision.result {
+            Ok(_) => {
+                ui.status = "Continuation admitted; no input replayed".into();
+                ui.session_io.request_refresh();
+            }
+            Err(failure) => {
+                ui.status = format!(
+                    "Continuation admission {:?}: {:#}",
+                    failure.kind, failure.reason
+                );
+                if failure.kind == ion_app::AdmissionFailureKind::NotAccepted {
+                    ui.restore_editor(failure.metadata);
+                } else {
+                    ui.note(format!("Continuation outcome unknown; original retained separately, not restored: {}", failure.metadata.literal));
+                    ui.unresolved_recoveries.push(failure);
+                }
+            }
+        },
         ControlUpdate::McpReconnectFinished(finished) => {
             match finished.result {
                 Ok(report) => {
@@ -148,7 +206,7 @@ pub(super) fn apply(
                 ui.view.commit_response(live, &event);
             }
             if ui.conversation.observe(operation, &event) {
-                return Ok(reconcile(ui, control).err());
+                ui.session_io.request_refresh();
             }
         }
         ControlUpdate::Activity(Observation::Gap { .. }) => {
@@ -159,7 +217,7 @@ pub(super) fn apply(
             ui.conversation.clear_live();
             ui.view.discard_provisional();
             ui.note("Live updates skipped; showing committed Session facts".into());
-            return Ok(reconcile(ui, control).err());
+            ui.session_io.request_refresh();
         }
         ControlUpdate::Returned(returned) => {
             let UserInput::Prompt { images, files, .. } = returned.input else {
@@ -201,9 +259,13 @@ pub(super) fn apply(
             ui.note(format!("Input commit is unresolved in Session {}. Original retained separately, not restored for retry:\n{}", input.session, input.metadata.literal));
             ui.unresolved_inputs.push(input);
         }
-        ControlUpdate::Settled(settlement) => {
+        ControlUpdate::Settled(mut settlement) => {
             ui.conversation.clear_live();
+            let not_dispatched = matches!(&settlement.outcome, OperationOutcome::NotDispatched(_));
             let result = match settlement.outcome {
+                OperationOutcome::NotDispatched(error) => {
+                    Err(error.context("Operation was not dispatched; no executor invoked"))
+                }
                 OperationOutcome::Turn(Err(ion_core::AgentError::Cancelled))
                     if settlement.stop_requested =>
                 {
@@ -246,22 +308,16 @@ pub(super) fn apply(
                     Some(error)
                 }
             };
-            // Direct-operation metadata is correlation, not Returned input.
-            // Do not revive an uncertain command in the composer/recovery
-            // queue. Explicit command recall remains in editor history.
-            drop(settlement.metadata);
-            if let Err(refresh) = reconcile(ui, control) {
-                let refresh = match error {
-                    Some(error) => {
-                        refresh.context(format!("Concurrent settlement failure: {error:#}"))
-                    }
-                    None => refresh,
-                };
-                // Keep the concise history-failure status visible even in
-                // narrow/fullscreen viewports; retain concurrent details.
-                ui.note(format!("Operation/inspection failure: {refresh:#}"));
-                return Ok(Some(refresh));
+            // Only cold preflight proves the executor was never invoked.
+            // Restore that exact source, never an uncertain executed command.
+            if not_dispatched {
+                if let Some(source) = settlement.metadata.take() {
+                    ui.restore_editor(source);
+                }
+            } else {
+                drop(settlement.metadata);
             }
+            ui.session_io.request_refresh();
             return Ok(error);
         }
         ControlUpdate::QuestionChanged => {}
@@ -282,16 +338,6 @@ pub(super) fn cleanup_update(
         Ok(Some(error)) | Err(error) => combine_error(outcome, error),
         Ok(None) => {}
     }
-}
-
-fn reconcile(ui: &mut Frontend, control: &SessionControl<EditorDraft>) -> Result<()> {
-    let view = control
-        .session()
-        .view()
-        .context("Session history refresh failed")
-        .inspect_err(|error| ui.status = format!("{error:#}"))?;
-    ui.load_history(control.session(), &view);
-    Ok(())
 }
 
 pub(super) fn combine_error(outcome: &mut Result<()>, error: anyhow::Error) {
@@ -522,6 +568,7 @@ mod tests {
         ] {
             apply(&mut ui, &fixture.control, event(Arc::new(value))).unwrap();
         }
+        super::super::tests::settle_io(&mut fixture.control, &mut ui).await;
         assert!(ui.conversation.live().is_none());
         assert_eq!(
             ui.conversation.items().cloned().collect::<Vec<_>>(),

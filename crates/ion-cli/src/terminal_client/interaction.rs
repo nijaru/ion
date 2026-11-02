@@ -59,10 +59,23 @@ pub(super) fn submit_editor(
     delivery: Delivery,
     source: EditorDraft,
 ) {
+    if ui.session_io.blocks_input() {
+        ui.restore_editor(source);
+        ui.status = "Prompt retained; not sent".into();
+        return;
+    }
     if ui
         .unresolved_inputs
         .iter()
         .any(|input| input.session == runtime.session().id())
+        || ui
+            .unresolved_requests
+            .iter()
+            .any(|input| input.session == runtime.session().id())
+        || ui
+            .unresolved_recoveries
+            .iter()
+            .any(|failure| failure.point.session == runtime.session().id())
     {
         ui.restore_editor(source);
         ui.status =
@@ -110,6 +123,20 @@ pub(super) fn submit_initial_prompts(
     if prompts.is_empty() {
         return;
     }
+    if ui.session_io.blocks_input() {
+        let (mut images, mut files) = ui.editor.take_attachments();
+        let mut drafts = prompts.into_iter().map(|literal| super::RecoveredDraft {
+            source: EditorDraft::at_end(literal),
+            images: std::mem::take(&mut images),
+            files: std::mem::take(&mut files),
+        });
+        if let Some(first) = drafts.next() {
+            ui.show_draft(first);
+        }
+        ui.editor.recovered.extend(drafts);
+        ui.status = "Session display is stale; launch prompts retained, not submitted".into();
+        return;
+    }
     let (mut images, mut files) = ui.editor.take_attachments();
     let inputs = prompts
         .into_iter()
@@ -151,7 +178,7 @@ pub(super) fn submit_initial_prompts(
 
 pub(super) async fn apply_picker(
     runtime: &mut SessionControl<EditorDraft>,
-    services: &Host,
+    services: &std::sync::Arc<Host>,
     ui: &mut Frontend,
     terminal: &mut TerminalSession,
     screen: &mut Screen,
@@ -216,9 +243,6 @@ pub(super) async fn apply_picker(
     let result = match value {
         PickerValue::Context(value) => {
             if let Err(error) = super::navigation::apply_context(runtime, ui, value) {
-                if error.is::<super::navigation::CommittedContextRefresh>() {
-                    return Err(error);
-                }
                 ui.status = format!("{error:#}");
             }
             return Ok(());
@@ -232,22 +256,27 @@ pub(super) async fn apply_picker(
                 }
             };
         }
-        PickerValue::Session { path, .. } => runtime.switch_session(path),
-        PickerValue::Model(model) => match services.models().resolve_identity(&model) {
-            Ok(selection) => {
-                super::configuration::select_model(
-                    runtime, services, terminal, screen, program, selection,
-                )
-                .await?
-            }
-            Err(error) => Err(error),
-        },
+        PickerValue::Session { path, .. } => super::session_io::start_binding(
+            runtime,
+            ui,
+            ion_app::BindingChange::SwitchSession(path),
+            None,
+        ),
+        PickerValue::Model(model) => super::configuration::select_model(
+            runtime,
+            ui,
+            services.clone(),
+            super::configuration::ModelRequest::Identity(model),
+        ),
         PickerValue::Reasoning(reasoning) => {
-            let result = runtime.select_reasoning(reasoning);
-            ui.status = match result {
-                Ok(()) => format!("Generation effort: {reasoning}"),
-                Err(error) => format!("{error:#}"),
-            };
+            if let Err(error) = super::session_io::start_binding(
+                runtime,
+                ui,
+                ion_app::BindingChange::SelectReasoning(reasoning),
+                None,
+            ) {
+                ui.status = format!("{error:#}");
+            }
             return Ok(());
         }
         PickerValue::Login(provider) => {
@@ -280,10 +309,7 @@ pub(super) async fn apply_picker(
         }
     };
     match result {
-        Ok(()) => {
-            ui.refresh_session(runtime.session())?;
-            ui.status = "Ready".into();
-        }
+        Ok(()) => {}
         Err(error) => ui.status = format!("{error:#}"),
     }
     Ok(())

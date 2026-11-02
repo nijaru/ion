@@ -30,6 +30,12 @@ fn settlement_program_status_distinguishes_done_and_cancelled() {
         ))),
         ProgramStatus::Error
     );
+    assert_eq!(
+        settlement_program_status(&OperationOutcome::NotDispatched(anyhow::anyhow!(
+            "cold preflight failed"
+        ))),
+        ProgramStatus::Error
+    );
     for (is_error, cancelled, expected) in [
         (false, false, ProgramStatus::Done),
         (true, false, ProgramStatus::Error),
@@ -243,7 +249,7 @@ async fn command_namespace_completes_and_never_becomes_a_model_prompt_or_queue()
         r#"{"commands":{"check":{"description":"Run checks","program":"true","args":[],"share_with_model":false}}}"#,
     )
     .unwrap();
-    fixture.control.reload_resources().unwrap();
+    fixture.control.reload_resources().await.unwrap();
     let mut ui = Frontend::default();
     ui.insert("/command:ch");
     ui.refresh_completion(None, Some(fixture.control.commands()), false);
@@ -321,6 +327,7 @@ async fn detailed_help_and_binding_orientation_are_presentation_not_input() {
         "Roadmap",
     )
     .unwrap();
+    settle_io(&mut fixture.control, &mut ui).await;
     assert!(
         orientation::rows(&ui, Some(fixture.control.agent().model()), 100, 2)[0]
             .to_string()
@@ -375,6 +382,7 @@ async fn detailed_help_and_binding_orientation_are_presentation_not_input() {
         "",
     )
     .unwrap();
+    settle_io(&mut fixture.control, &mut ui).await;
     assert!(!ui.session_label.contains("Roadmap"));
     fixture.control.shutdown().await;
 }
@@ -414,6 +422,28 @@ async fn drain(control: &mut SessionControl<EditorDraft>, ui: &mut Frontend) {
             let idle = matches!(update, ControlUpdate::Idle);
             assert!(activity::apply(ui, control, update).unwrap().is_none());
             if idle {
+                break;
+            }
+        }
+    })
+    .await
+    .unwrap();
+    settle_io(control, ui).await;
+}
+
+pub(super) async fn settle_io(control: &mut SessionControl<EditorDraft>, ui: &mut Frontend) {
+    tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            ui.session_io
+                .start_refresh(control.session(), ui.conversation.revision())
+                .unwrap();
+            if ui.session_io.has_read() {
+                let finished = ui.session_io.complete().await;
+                assert!(session_io::apply(control, ui, finished).unwrap().is_none());
+            } else if ui.session_io.binding.is_some() {
+                let update = control.next().await;
+                assert!(activity::apply(ui, control, update).unwrap().is_none());
+            } else {
                 break;
             }
         }
@@ -671,7 +701,7 @@ async fn session_sync_preserves_text_recovery_but_session_replacement_resets_it(
     );
 
     ui.insert("kept across replacement");
-    fixture.control.new_session().unwrap();
+    fixture.control.new_session().await.unwrap();
     ui.refresh_session(fixture.control.session()).unwrap();
     assert_eq!(ui.editor.draft, "kept across replacement");
     ui.key(
@@ -723,7 +753,7 @@ async fn rejected_launch_batch_keeps_empty_attached_first_and_ordered_literal_ta
     let mut fixture = Fixture::new();
     fs::create_dir_all(fixture.root.join(".ion/prompts")).unwrap();
     fs::write(fixture.root.join(".ion/prompts/check.md"), "Expanded $1").unwrap();
-    fixture.control.reload_resources().unwrap();
+    fixture.control.reload_resources().await.unwrap();
     let before = fixture.control.session().view().unwrap().entries.len();
     let mut ui = Frontend {
         editor: Editor {
@@ -775,7 +805,7 @@ async fn asynchronous_preparation_return_retains_raw_source_and_other_edits() {
     let mut fixture = Fixture::new();
     fs::create_dir_all(fixture.root.join(".ion/prompts")).unwrap();
     fs::write(fixture.root.join(".ion/prompts/check.md"), "Expanded $1").unwrap();
-    fixture.control.reload_resources().unwrap();
+    fixture.control.reload_resources().await.unwrap();
     let literal = "  /check café 🦀\n";
     let mut ui = Frontend {
         editor: Editor {
@@ -1393,6 +1423,7 @@ async fn configuration_selectors_preserve_unsent_input_without_admission() {
         Builtin::Model,
     ] {
         command::handle_builtin(&mut fixture.control, &fixture.host, &mut ui, builtin, "").unwrap();
+        settle_io(&mut fixture.control, &mut ui).await;
         assert!(
             ui.pickers.active().is_some(),
             "{builtin:?} must offer choices"
@@ -1520,6 +1551,7 @@ async fn model_picker_scope_keeps_order_query_draft_and_visible_selection_author
         "",
     )
     .unwrap();
+    settle_io(&mut fixture.control, &mut ui).await;
     let (rows, _) = painted_dock_rows(&mut ui, None, 120, 20);
     let text = rows
         .iter()
@@ -1695,6 +1727,7 @@ async fn reasoning_choices_use_adapter_support_and_preselect_current() {
         fixture
             .control
             .select_reasoning(ion_ai::Reasoning::ProviderDefault)
+            .await
             .unwrap();
         let selected = fixture
             .host
@@ -1710,11 +1743,15 @@ async fn reasoning_choices_use_adapter_support_and_preselect_current() {
                 image_input: false,
             })
             .unwrap();
-        fixture.control.select_model(selected.identity()).unwrap();
+        fixture
+            .control
+            .select_model(selected.identity())
+            .await
+            .unwrap();
         let current = *expected.last().unwrap();
-        fixture.control.select_reasoning(current).unwrap();
+        fixture.control.select_reasoning(current).await.unwrap();
         let before = fixture.control.session().view().unwrap().entries.len();
-        let picker = Picker::reasoning(&fixture.control).unwrap();
+        let picker = Picker::reasoning_for(fixture.control.agent(), current).unwrap();
         let actual: Vec<_> = picker
             .items
             .iter()
@@ -1760,23 +1797,26 @@ fn question_block_status_requires_the_real_modal_and_clears() {
     assert_eq!(program.status(true), ProgramStatus::BlockedAuth);
     program.blocked_auth = false;
     program.blocked_question = false;
+    program.blocked_refresh = true;
+    assert_eq!(program.status(false), ProgramStatus::Error);
+    program.blocked_refresh = false;
     assert_eq!(program.status(false), ProgramStatus::Done);
 }
 
 #[test]
 fn question_modal_preserves_composer_draft_images_and_defers_to_other_views() {
-    let request = ion_host::QuestionRequestId(uuid::Uuid::now_v7());
-    let questions = vec![ion_host::Question {
+    let request = ion_app::QuestionRequestId(uuid::Uuid::now_v7());
+    let questions = vec![ion_app::Question {
         question: "Continue?".into(),
         header: None,
         multi_select: false,
         options: vec![
-            ion_host::QuestionOption {
+            ion_app::QuestionOption {
                 label: "Yes".into(),
                 description: None,
                 preview: None,
             },
-            ion_host::QuestionOption {
+            ion_app::QuestionOption {
                 label: "No".into(),
                 description: None,
                 preview: None,

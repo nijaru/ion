@@ -3,12 +3,11 @@ use std::collections::BTreeMap;
 
 use anyhow::Result;
 use ion_ai::{ModelRef, ProviderErrorKind, Reasoning};
-use ion_app::{CredentialStatus, Host, Selection, SessionControl};
+use ion_app::{CredentialStatus, Host, SessionControl};
 use ion_core::AgentError;
-use ion_terminal::{Screen, TerminalSession};
 
 use super::picker::{ModelScope, PickerItem, Pickers};
-use super::{EditorDraft, Frontend, Picker, PickerValue, ProgramStatusState, login_in_terminal};
+use super::{EditorDraft, Frontend, Picker, PickerValue};
 use crate::{tool_output::OutputDetail, transcript_render::ThinkingVisibility};
 
 #[derive(Clone, Copy)]
@@ -18,6 +17,7 @@ pub(super) enum Setting {
 }
 
 impl Pickers {
+    #[cfg(test)]
     pub fn open_models(
         &mut self,
         services: &Host,
@@ -27,6 +27,16 @@ impl Pickers {
         let choices = services
             .models()
             .selection_choices(services.credentials())?;
+        self.apply_models(choices, current, title);
+        Ok(())
+    }
+
+    pub(super) fn apply_models(
+        &mut self,
+        choices: ion_app::ModelChoices,
+        current: Option<&ModelRef>,
+        title: &'static str,
+    ) {
         let items: Vec<_> = choices
             .all
             .into_iter()
@@ -73,14 +83,12 @@ impl Pickers {
             identities,
             scoped: true,
         });
-        Ok(())
     }
 }
 
 impl Picker {
-    pub fn reasoning(runtime: &SessionControl<EditorDraft>) -> Result<Self> {
-        let current = runtime.session().reasoning()?;
-        runtime.agent().validate_reasoning(current)?;
+    pub fn reasoning_for(agent: &ion_core::Agent, current: Reasoning) -> Result<Self> {
+        agent.validate_reasoning(current)?;
         let mut candidates = vec![
             Reasoning::ProviderDefault,
             Reasoning::Off,
@@ -93,7 +101,7 @@ impl Picker {
         }
         let mut items = Vec::new();
         for reasoning in candidates {
-            match runtime.agent().validate_reasoning(reasoning) {
+            match agent.validate_reasoning(reasoning) {
                 Ok(()) => items.push(PickerItem {
                     label: format!(
                         "{reasoning}{}",
@@ -252,42 +260,72 @@ impl Frontend {
     }
 }
 
-// The outer result owns terminal lifecycle. Cancellation, missing access and
-// binding preflight errors are recoverable without changing the current model.
-pub(super) async fn select_model(
-    runtime: &mut SessionControl<EditorDraft>,
-    services: &Host,
-    terminal: &mut TerminalSession,
-    screen: &mut Screen,
-    program: &mut ProgramStatusState,
-    selection: Selection,
-) -> Result<Result<()>> {
-    let access = (|| -> Result<_> {
-        anyhow::ensure!(
-            !runtime.is_busy(),
-            "This action is available after the operation"
-        );
-        let missing = selection.credential_missing(services.credentials())?;
-        Ok((selection, missing))
-    })();
-    let (selection, missing) = match access {
-        Ok(access) => access,
-        Err(error) => return Ok(Err(error)),
-    };
-    if missing {
-        let result = login_in_terminal(
-            terminal,
-            screen,
-            services.credentials(),
-            &selection.provider,
-            program,
-        )
-        .await?;
-        if let Err(error) = result {
-            return Ok(Err(error));
-        }
-    }
-    Ok(selection
-        .require_access(services.credentials())
-        .and_then(|()| runtime.select_model(selection.identity())))
+pub(super) enum ModelRequest {
+    Pattern(String),
+    Identity(ModelRef),
+    Cycle(ion_app::ModelCycleDirection),
+}
+
+pub(super) fn select_model(
+    runtime: &SessionControl<EditorDraft>,
+    ui: &mut Frontend,
+    services: std::sync::Arc<Host>,
+    request: ModelRequest,
+) -> Result<()> {
+    anyhow::ensure!(
+        !runtime.is_busy(),
+        "This action is available after the operation"
+    );
+    let current = runtime.agent().model().clone();
+    let io = runtime.session().io()?;
+    ui.session_io
+        .start_binding_read(runtime.session(), async move {
+            io.run(move |_| {
+                Ok((|| -> Result<_> {
+                    let selection = match request {
+                        ModelRequest::Pattern(pattern) => Some(services.models().resolve_pattern(
+                            &pattern,
+                            None,
+                            services.credentials(),
+                        )?),
+                        ModelRequest::Identity(identity) => {
+                            Some(services.models().resolve_identity(&identity)?)
+                        }
+                        ModelRequest::Cycle(direction) => direction.candidate(
+                            services.models().cycle_choices(services.credentials())?,
+                            &current,
+                        ),
+                    };
+                    let Some(selection) = selection else {
+                        return Ok(super::session_io::ReadOutput::Notice(
+                            "No other locally ready model".into(),
+                        ));
+                    };
+                    let missing = selection.credential_missing(services.credentials())?;
+                    Ok(super::session_io::ReadOutput::ModelAccess { selection, missing })
+                })())
+            })
+            .await?
+        })
+}
+
+pub(super) fn model_access_ready(
+    runtime: &SessionControl<EditorDraft>,
+    ui: &mut Frontend,
+    services: std::sync::Arc<Host>,
+    selection: ion_app::Selection,
+) -> Result<()> {
+    let io = runtime.session().io()?;
+    ui.session_io
+        .start_binding_read(runtime.session(), async move {
+            io.run(move |_| {
+                Ok((|| -> Result<_> {
+                    selection.require_access(services.credentials())?;
+                    Ok(super::session_io::ReadOutput::SelectModel(
+                        selection.identity(),
+                    ))
+                })())
+            })
+            .await?
+        })
 }

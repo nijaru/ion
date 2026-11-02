@@ -167,21 +167,19 @@ async fn reload_publishes_prepared_keys_and_discards_only_obsolete_status_hints(
         "fullscreen",
     )
     .unwrap();
-    let old_status = ui.status.clone();
     let path = fixture.host.config_root().join("keybindings.json");
     fs::write(&path, br#"{"app.model.select":true}"#).unwrap();
-    assert!(
-        command::handle_builtin(
-            &mut fixture.control,
-            &fixture.host,
-            &mut ui,
-            Builtin::Reload,
-            ""
-        )
-        .is_err()
-    );
+    command::handle_builtin(
+        &mut fixture.control,
+        &fixture.host,
+        &mut ui,
+        Builtin::Reload,
+        "",
+    )
+    .unwrap();
+    super::tests::settle_io(&mut fixture.control, &mut ui).await;
     assert_eq!(ui.keys.label(KeyAction::Model), "Ctrl-L");
-    assert_eq!(ui.status, old_status);
+    assert!(ui.status.contains("Session inspection failed"));
     fs::write(
         &path,
         br#"{"app.model.select":"alt+m","tui.editor.pageUp":"f7"}"#,
@@ -190,16 +188,16 @@ async fn reload_publishes_prepared_keys_and_discards_only_obsolete_status_hints(
     let settings = fixture.host.config_root().join("settings.json");
     fs::write(&settings, br#"{"theme":"missing"}"#).unwrap();
     let original_theme = ui.themes.theme().clone();
-    assert!(
-        command::handle_builtin(
-            &mut fixture.control,
-            &fixture.host,
-            &mut ui,
-            Builtin::Reload,
-            ""
-        )
-        .is_err()
-    );
+    command::handle_builtin(
+        &mut fixture.control,
+        &fixture.host,
+        &mut ui,
+        Builtin::Reload,
+        "",
+    )
+    .unwrap();
+    super::tests::settle_io(&mut fixture.control, &mut ui).await;
+    assert!(ui.status.contains("Session inspection failed"));
     assert_eq!(ui.keys.label(KeyAction::Model), "Ctrl-L");
     assert_eq!(ui.themes.theme(), &original_theme);
     fs::write(&settings, br#"{"theme":"light"}"#).unwrap();
@@ -211,6 +209,7 @@ async fn reload_publishes_prepared_keys_and_discards_only_obsolete_status_hints(
         "",
     )
     .unwrap();
+    super::tests::settle_io(&mut fixture.control, &mut ui).await;
     assert_eq!(
         ui.themes.theme(),
         &crate::presentation_style::Theme::fixed(false)

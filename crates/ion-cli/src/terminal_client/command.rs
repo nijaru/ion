@@ -9,7 +9,7 @@ use ion_terminal::{Screen, TerminalSession};
 
 use super::{
     Builtin, EditorDraft, Frontend, Picker, ProgramStatusState, TuiMode, context_label,
-    copy_last_answer, edit_text_in_terminal,
+    edit_text_in_terminal,
     interaction::{editor_delivery, submit_editor},
     login_in_terminal, navigation, tasks, tools,
 };
@@ -75,7 +75,7 @@ impl CommandInput {
 
 pub(super) async fn dispatch_command(
     runtime: &mut SessionControl<EditorDraft>,
-    services: &ion_app::Host,
+    services: &std::sync::Arc<ion_app::Host>,
     ui: &mut Frontend,
     terminal: &mut TerminalSession,
     screen: &mut Screen,
@@ -100,6 +100,32 @@ pub(super) async fn dispatch_command(
         );
         return Ok(());
     }
+    if (ui.session_io.has_read() || ui.session_io.binding.is_some())
+        && !matches!(
+            kind,
+            CommandKind::Builtin(Builtin::Help | Builtin::Tui | Builtin::Tasks)
+        )
+    {
+        if let Some(source) = input.into_editor() {
+            ui.restore_editor(source);
+        }
+        ui.status = "Wait for Session inspection or binding; interrupt remains available".into();
+        return Ok(());
+    }
+    if ui.session_io.blocks_input()
+        && matches!(
+            kind,
+            CommandKind::UserCommand(_)
+                | CommandKind::Other(_)
+                | CommandKind::Builtin(Builtin::Compact)
+        )
+    {
+        if let Some(source) = input.into_editor() {
+            ui.restore_editor(source);
+        }
+        ui.status = "Command retained; not started".into();
+        return Ok(());
+    }
     // Modal external I/O cannot monopolize foreground controls while work runs.
     // Host itself enforces drained replacement for model/session operations.
     if runtime.is_busy()
@@ -116,33 +142,14 @@ pub(super) async fn dispatch_command(
     }
     match kind {
         CommandKind::CycleModel(direction) => {
-            let candidate = (|| -> Result<_> {
-                anyhow::ensure!(
-                    !runtime.is_busy(),
-                    "This action is available after the operation"
-                );
-                Ok(direction.candidate(
-                    services.models().cycle_choices(services.credentials())?,
-                    runtime.agent().model(),
-                ))
-            })();
-            let result = match candidate {
-                Ok(Some(selection)) => super::configuration::select_model(
-                    runtime, services, terminal, screen, program, selection,
-                )
-                .await?
-                .map(|()| true),
-                Ok(None) => Ok(false),
-                Err(error) => Err(error),
-            };
-            ui.status = match result {
-                Ok(true) => {
-                    let model = runtime.agent().model();
-                    format!("Selected {}/{}", model.provider, model.model)
-                }
-                Ok(false) => "No other locally ready model".into(),
-                Err(error) => format!("{error:#}"),
-            };
+            if let Err(error) = super::configuration::select_model(
+                runtime,
+                ui,
+                services.clone(),
+                super::configuration::ModelRequest::Cycle(direction),
+            ) {
+                ui.status = format!("{error:#}");
+            }
         }
         CommandKind::Builtin(Builtin::Login) if !args.is_empty() => {
             match login_in_terminal(terminal, screen, services.credentials(), args, program).await?
@@ -153,25 +160,17 @@ pub(super) async fn dispatch_command(
             }
         }
         CommandKind::Builtin(Builtin::Model) if !args.is_empty() => {
-            let result = match services
-                .models()
-                .resolve_pattern(args, None, services.credentials())
-            {
-                Ok(selection) => {
-                    super::configuration::select_model(
-                        runtime, services, terminal, screen, program, selection,
-                    )
-                    .await?
-                }
-                Err(error) => Err(error),
-            };
+            let result = super::configuration::select_model(
+                runtime,
+                ui,
+                services.clone(),
+                super::configuration::ModelRequest::Pattern(args.to_owned()),
+            );
+            let source = input.into_editor();
             match result {
-                Ok(()) => {
-                    let model = runtime.agent().model();
-                    ui.status = format!("Selected {}/{}", model.provider, model.model);
-                }
+                Ok(()) => ui.session_io.retain_source(source),
                 Err(error) => {
-                    if let Some(source) = input.into_editor() {
+                    if let Some(source) = source {
                         ui.restore_editor(source);
                     }
                     ui.status = format!("{error:#}");
@@ -199,13 +198,23 @@ pub(super) async fn dispatch_command(
             }
         }
         CommandKind::Builtin(Builtin::Copy) if args.is_empty() => {
-            ui.status = match copy_last_answer(runtime.session(), terminal).await {
-                Ok(crate::clipboard::CopyOutcome::Copied) => "Copied last assistant answer".into(),
-                Ok(crate::clipboard::CopyOutcome::RequestedFromTerminal) => {
-                    "Sent clipboard request to terminal".into()
+            let reader = runtime.session().reader()?;
+            let result = ui.session_io.start(runtime.session(), async move {
+                Ok(super::session_io::ReadOutput::Copy(
+                    reader
+                        .map_view(|view| super::last_committed_answer(&view))
+                        .await??,
+                ))
+            });
+            match result {
+                Ok(()) => ui.session_io.retain_source(input.into_editor()),
+                Err(error) => {
+                    if let Some(source) = input.into_editor() {
+                        ui.restore_editor(source);
+                    }
+                    ui.status = format!("Copy failed: {error:#}");
                 }
-                Err(error) => crate::clipboard::failure_status(error)?,
-            };
+            }
         }
         CommandKind::Builtin(Builtin::Attach) => {
             match super::attach::run(runtime, terminal, screen, args).await {
@@ -255,14 +264,34 @@ pub(super) async fn dispatch_command(
             }
         }
         CommandKind::Builtin(builtin) => {
-            if let Err(error) = handle_builtin(runtime, services, ui, builtin, args) {
-                if error.is::<navigation::CommittedContextRefresh>() {
-                    return Err(error);
+            match handle_builtin(runtime, services, ui, builtin, args) {
+                Ok(()) => {
+                    if matches!(
+                        builtin,
+                        Builtin::Reasoning
+                            | Builtin::Reload
+                            | Builtin::Session
+                            | Builtin::Export
+                            | Builtin::New
+                            | Builtin::Clone
+                            | Builtin::Tree
+                            | Builtin::Fork
+                            | Builtin::ForkAfter
+                            | Builtin::Resume
+                            | Builtin::Name
+                            | Builtin::Model
+                            | Builtin::Login
+                            | Builtin::Logout
+                    ) {
+                        ui.session_io.retain_source(input.into_editor());
+                    }
                 }
-                if let Some(source) = input.into_editor() {
-                    ui.restore_editor(source);
+                Err(error) => {
+                    if let Some(source) = input.into_editor() {
+                        ui.restore_editor(source);
+                    }
+                    ui.status = format!("{error:#}");
                 }
-                ui.status = format!("{error:#}");
             }
         }
         CommandKind::Other(name) => {
@@ -301,7 +330,7 @@ pub(super) async fn dispatch_command(
 
 pub(super) fn handle_builtin(
     runtime: &mut SessionControl<EditorDraft>,
-    services: &ion_app::Host,
+    services: &std::sync::Arc<ion_app::Host>,
     ui: &mut Frontend,
     builtin: Builtin,
     args: &str,
@@ -329,13 +358,25 @@ pub(super) fn handle_builtin(
         }
         Builtin::Reasoning => {
             if args.is_empty() {
-                ui.pickers.open(Picker::reasoning(runtime)?);
+                let reader = runtime.session().reader()?;
+                let agent = runtime.agent().clone();
+                ui.session_io.start(runtime.session(), async move {
+                    Ok(super::session_io::ReadOutput::Picker(Box::new(
+                        reader
+                            .map_view(move |view| Picker::reasoning_for(&agent, view.reasoning))
+                            .await??,
+                    )))
+                })?;
             } else {
                 let reasoning = args
                     .parse::<ion_ai::Reasoning>()
                     .map_err(anyhow::Error::msg)?;
-                runtime.select_reasoning(reasoning)?;
-                ui.status = format!("Generation effort: {reasoning}");
+                super::session_io::start_binding(
+                    runtime,
+                    ui,
+                    ion_app::BindingChange::SelectReasoning(reasoning),
+                    None,
+                )?;
             }
         }
         Builtin::Tui => match args {
@@ -384,31 +425,50 @@ pub(super) fn handle_builtin(
                 .join("\n"),
         ),
         Builtin::Reload => {
-            let keys = crate::keybindings::KeyBindings::load(services.config_root())?;
-            let themes = ui.themes.reloaded()?;
-            runtime.reload_resources()?;
-            ui.editor.break_edit_focus();
-            ui.keys = keys;
-            ui.themes = themes;
-            ui.status.clear();
-            ui.print(format!(
-                "Reloaded keybindings, theme, resources and commands ({} diagnostic(s))",
-                runtime.resources().diagnostics().len() + runtime.commands().diagnostics().len()
-            ));
+            let root = services.config_root().to_owned();
+            let themes = ui.themes.clone();
+            let io = runtime.session().io()?;
+            ui.session_io
+                .start_binding_read(runtime.session(), async move {
+                    let (keys, themes) = io
+                        .run(move |_| {
+                            Ok((|| -> Result<_> {
+                                Ok((
+                                    crate::keybindings::KeyBindings::load(&root)?,
+                                    themes.reloaded()?,
+                                ))
+                            })())
+                        })
+                        .await??;
+                    Ok(super::session_io::ReadOutput::Reload(Box::new((
+                        keys, themes,
+                    ))))
+                })?;
         }
         Builtin::Session => {
-            let view = runtime.session().view()?;
-            ui.print(format!(
-                "Session {} · {} turn(s) · {} · {}\n{}",
-                runtime.session().path().display(),
-                view.entries
-                    .iter()
-                    .filter(|entry| matches!(entry, ion_core::SessionEntry::TurnStarted { .. }))
-                    .count(),
-                view.name.as_deref().unwrap_or("unnamed"),
-                context_label(&view, runtime.agent().limits().context_window_tokens),
-                crate::session_usage::render(&view.usage()),
-            ));
+            let reader = runtime.session().reader()?;
+            let path = runtime.session().path().to_owned();
+            let window = runtime.agent().limits().context_window_tokens;
+            ui.session_io.start(runtime.session(), async move {
+                Ok(reader
+                    .map_view(move |view| {
+                        super::session_io::ReadOutput::SessionInfo(format!(
+                            "Session {} · {} turn(s) · {} · {}\n{}",
+                            path.display(),
+                            view.entries
+                                .iter()
+                                .filter(|entry| matches!(
+                                    entry,
+                                    ion_core::SessionEntry::TurnStarted { .. }
+                                ))
+                                .count(),
+                            view.name.as_deref().unwrap_or("unnamed"),
+                            context_label(&view, window),
+                            crate::session_usage::render(&view.usage()),
+                        ))
+                    })
+                    .await?)
+            })?;
         }
         Builtin::Export => {
             let requested = if args.is_empty() {
@@ -430,20 +490,33 @@ pub(super) fn handle_builtin(
                     .context("relative export path requires a working directory")?
                     .join(target)
             };
-            crate::transcript::save_new(&runtime.session().view()?, &target)?;
-            ui.status = format!("Transcript saved to {}", target.display());
+            let io = runtime.session().io()?;
+            ui.session_io
+                .start_file_write(runtime.session(), async move {
+                    Ok(io
+                        .run(move |session| {
+                            let view = session.view()?;
+                            Ok(crate::transcript::save_new(&view, &target)
+                                .map(|()| super::session_io::ReadOutput::Exported(target)))
+                        })
+                        .await??)
+                })?;
         }
         Builtin::New => {
-            runtime.new_session()?;
-            ui.refresh_session(runtime.session())?;
-            ui.print("Started a new session".into());
+            super::session_io::start_binding(
+                runtime,
+                ui,
+                ion_app::BindingChange::NewSession,
+                None,
+            )?;
         }
         Builtin::Clone => {
-            let id = runtime.clone_session()?;
-            ui.refresh_session(runtime.session())?;
-            ui.print(format!(
-                "Cloned conversation as {id}; both sessions use the same working directory"
-            ));
+            super::session_io::start_binding(
+                runtime,
+                ui,
+                ion_app::BindingChange::CloneSession,
+                None,
+            )?;
         }
         Builtin::Tree => navigation::tree(runtime, ui, args)?,
         Builtin::Fork => navigation::fork(runtime, ui, args)?,
@@ -451,27 +524,62 @@ pub(super) fn handle_builtin(
         Builtin::Resume => navigation::resume(runtime, ui, args)?,
         Builtin::Name => {
             if args.is_empty() {
-                ui.print(
-                    runtime
-                        .session()
-                        .view()?
-                        .name
-                        .unwrap_or_else(|| "Session has no name".into()),
-                );
+                let reader = runtime.session().reader()?;
+                ui.session_io.start(runtime.session(), async move {
+                    Ok(reader
+                        .map_view(|view| {
+                            super::session_io::ReadOutput::Notice(
+                                view.name.unwrap_or_else(|| "Session has no name".into()),
+                            )
+                        })
+                        .await?)
+                })?;
             } else {
-                runtime.session().set_name(Some(args))?;
-                ui.refresh_session(runtime.session())?;
+                super::session_io::start_binding(
+                    runtime,
+                    ui,
+                    ion_app::BindingChange::SetName(Some(args.to_owned())),
+                    None,
+                )?;
             }
         }
         Builtin::Model if args.is_empty() => {
-            ui.pickers
-                .open_models(services, Some(runtime.agent().model()), "Choose model")?;
+            let services = services.clone();
+            let current = runtime.agent().model().clone();
+            let io = runtime.session().io()?;
+            ui.session_io.start(runtime.session(), async move {
+                let choices = io
+                    .run(move |_| Ok(services.models().selection_choices(services.credentials())))
+                    .await??;
+                Ok(super::session_io::ReadOutput::Models { choices, current })
+            })?;
         }
-        Builtin::Login if args.is_empty() => ui.pickers.open(Picker::providers(services)?),
+        Builtin::Login if args.is_empty() => {
+            let services = services.clone();
+            let io = runtime.session().io()?;
+            ui.session_io.start(runtime.session(), async move {
+                Ok(super::session_io::ReadOutput::Picker(Box::new(
+                    io.run(move |_| Ok(Picker::providers(&services))).await??,
+                )))
+            })?;
+        }
         Builtin::Logout => {
             anyhow::ensure!(!args.is_empty(), "use /logout PROVIDER");
-            services.credentials().remove(args)?;
-            ui.status = format!("Removed saved {args} credential");
+            let services = services.clone();
+            let provider = args.to_owned();
+            let io = runtime.session().io()?;
+            ui.session_io
+                .start_file_write(runtime.session(), async move {
+                    io.run(move |_| {
+                        Ok((|| -> Result<_> {
+                            services.credentials().remove(&provider)?;
+                            Ok(super::session_io::ReadOutput::Notice(format!(
+                                "Removed saved {provider} credential"
+                            )))
+                        })())
+                    })
+                    .await?
+                })?;
         }
         Builtin::Mcp => anyhow::bail!("use /mcp [reconnect [SERVER]]"),
         Builtin::Tasks => {

@@ -16,7 +16,9 @@ use anyhow::{Context, Result};
 use ion_ai::{Content, ModelRef};
 use ion_app::image_input::{ImageSource, LoadedImage};
 use ion_app::{CredentialStore, Delivery, QuestionResponder, Resources};
-use ion_core::{LiveTranscript, Session, SessionEntry, SessionView, TranscriptItem, TurnEndReason};
+#[cfg(test)]
+use ion_core::Session;
+use ion_core::{LiveTranscript, SessionEntry, SessionView, TranscriptItem, TurnEndReason};
 use ion_terminal::{
     Frame, InputEvent, KeyEvent, MouseKind, ProgramStatus, Screen, TerminalSession,
 };
@@ -45,6 +47,7 @@ mod orientation;
 pub(crate) mod paint;
 mod picker;
 mod question;
+mod session_io;
 mod session_search;
 mod setup;
 mod tasks;
@@ -67,6 +70,7 @@ pub(super) struct ProgramStatusState {
     settled: Option<ProgramStatus>,
     blocked_auth: bool,
     blocked_question: bool,
+    blocked_refresh: bool,
     published: Option<ProgramStatus>,
 }
 
@@ -86,6 +90,8 @@ impl ProgramStatusState {
             ProgramStatus::BlockedAuth
         } else if self.blocked_question {
             ProgramStatus::BlockedQuestion
+        } else if self.blocked_refresh {
+            ProgramStatus::Error
         } else if busy {
             ProgramStatus::Working
         } else {
@@ -141,6 +147,12 @@ struct Frontend {
     // Not editor drafts: no automatic restore or replay before reconciliation.
     unresolved_inputs: Vec<ion_app::UnresolvedInput<EditorDraft>>,
     status: String,
+    session_io: session_io::SessionIo,
+    uncertain_commands: Vec<EditorDraft>,
+    existing_requests: Vec<(ion_core::RequestReceipt, EditorDraft)>,
+    rejected_requests: Vec<ion_app::RejectedInput<EditorDraft>>,
+    unresolved_requests: Vec<ion_app::UnresolvedRequest<EditorDraft>>,
+    unresolved_recoveries: Vec<ion_app::RecoveryFailure<EditorDraft>>,
     pickers: Pickers,
     details: Option<DetailView>,
     clipboard_job: Option<ClipboardJob>,
@@ -196,7 +208,9 @@ pub async fn chat(init: ChatInit) -> Result<()> {
         let terminal = terminal_owner.as_mut().expect("entered terminal");
         screen_owner = Some(new_inline_screen(terminal).await?);
         let screen = screen_owner.as_mut().expect("initialized screen");
-        ui.refresh_session(runtime.session())?;
+        ui.cwd = runtime.session().cwd().context("terminal coding requires a working directory")?.to_owned();
+        ui.session_label = format!("Session {}", &runtime.session().id().to_string()[..8]);
+        ui.session_io.request_refresh();
         for diagnostic in init.startup_diagnostics {
             ui.note(diagnostic);
         }
@@ -205,11 +219,15 @@ pub async fn chat(init: ChatInit) -> Result<()> {
         theme_poll.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
         loop {
             terminal.check_active().context("terminal lifecycle failed")?;
+            if ui.conversation.live().is_none() && let Err(error) = ui.session_io.start_refresh(runtime.session(), ui.conversation.revision()) {
+                ui.session_io.refresh_error = Some(format!("{error:#}"));
+            }
             ui.sync_question(questions.as_ref());
             mcp::refresh(&runtime, &mut ui);
             ui.refresh_completion(Some(runtime.resources()), Some(runtime.commands()), false);
+            program.blocked_refresh = ui.session_io.refresh_error.is_some();
             program.blocked_question = ui.question_owns_input();
-            program.publish(terminal, runtime.is_busy())?;
+            program.publish(terminal, runtime.is_busy() || ui.session_io.has_read())?;
             let painted = draw(terminal, screen, &mut ui, ActiveOperation::from_state(runtime.state()), Some(runtime.agent().model())).await?;
             #[cfg(debug_assertions)]
             if std::env::var_os("ION_SMOKE_PANIC_AFTER_FIRST_DRAW").is_some() {
@@ -223,7 +241,7 @@ pub async fn chat(init: ChatInit) -> Result<()> {
                 _ = interrupt.recv() => anyhow::bail!("terminal interrupted"),
                 () = std::future::ready(()) => {}
             }
-            if let Some(prompts) = initial_prompts.take() {
+            if !ui.session_io.blocks_input() && let Some(prompts) = initial_prompts.take() {
                 submit_initial_prompts(&mut runtime, &mut ui, prompts);
                 poll_control = true;
                 continue;
@@ -270,6 +288,36 @@ pub async fn chat(init: ChatInit) -> Result<()> {
                     if let Err(error) = finish_joined_clipboard_paste(&mut ui, joined) {
                         ui.status = format!("Paste failed: {error:#}");
                     }
+                    continue;
+                },
+                finished = ui.session_io.complete(), if ui.session_io.has_read() => {
+                    match session_io::apply(&mut runtime, &mut ui, finished) {
+                        Ok(Some(session_io::UiEffect::Copy(text))) => {
+                            ui.status = match crate::clipboard::copy(&text, terminal).await {
+                                Ok(crate::clipboard::CopyOutcome::Copied) => "Copied last assistant answer".into(),
+                                Ok(crate::clipboard::CopyOutcome::RequestedFromTerminal) => "Sent clipboard request to terminal".into(),
+                                Err(error) => crate::clipboard::failure_status(error)?,
+                            };
+                        }
+                        Ok(Some(session_io::UiEffect::ModelAccess { selection, missing, source })) => {
+                            let access = if runtime.is_busy() {
+                                Err(anyhow::anyhow!("This action is available after the operation"))
+                            } else if missing {
+                                login_in_terminal(terminal, screen, init.services.credentials(), &selection.provider, &mut program).await?
+                            } else { Ok(()) };
+                            let result = access.and_then(|()| configuration::model_access_ready(&runtime, &mut ui, init.services.clone(), selection));
+                            match result {
+                                Ok(()) => ui.session_io.retain_source(source),
+                                Err(error) => {
+                                    if let Some(source) = source { ui.restore_editor(source); }
+                                    ui.status = format!("Model selection failed: {error:#}");
+                                }
+                            }
+                        }
+                        Ok(None) => {},
+                        Err(error) => ui.status = format!("Session inspection failed: {error:#}"),
+                    }
+                    poll_control = true;
                     continue;
                 },
                 notice = ui.pickers.complete(), if ui.pickers.has_job() => {
@@ -329,6 +377,11 @@ pub async fn chat(init: ChatInit) -> Result<()> {
                             }
                         },
                         Action::Shell { command, exclude_from_context, source } => {
+                            if ui.session_io.blocks_input() {
+                                ui.restore_editor(source);
+                                ui.status = "Shell command retained; not started".into();
+                                continue;
+                            }
                             match runtime.shell(command, exclude_from_context, source) {
                                 Ok(_) => {
                                     ui.status.clear();
@@ -398,6 +451,11 @@ pub async fn chat(init: ChatInit) -> Result<()> {
     if let Some(owner) = &application_owner {
         owner.request_shutdown();
     }
+    runtime.request_shutdown();
+    if ui.session_io.has_read() {
+        let finished = ui.session_io.complete().await;
+        session_io::cleanup(&mut ui, finished, &mut outcome);
+    }
     let report = runtime.shutdown().await;
     if let Some(owner) = &application_owner
         && let Err(error) = owner.join_shutdown().await
@@ -409,6 +467,14 @@ pub async fn chat(init: ChatInit) -> Result<()> {
     }
     for error in report.cleanup_errors {
         activity::combine_error(&mut outcome, error.into());
+    }
+    if outcome.is_ok() {
+        match session_io::final_history(runtime.session()).await {
+            Ok(history) => ui.apply_history(runtime.session().path(), history),
+            Err(error) => {
+                activity::combine_error(&mut outcome, error.context("final Session refresh failed"))
+            }
+        }
     }
     for cleanup in [
         cancel_clipboard_paste(&mut ui).await,
@@ -529,23 +595,24 @@ async fn login_in_terminal(
         .read_secret(&format!("{provider} API key: "))
         .await
         .context("read login credential")?;
-    let result = entry
+    let result = match entry
         .map_err(anyhow::Error::new)
         .context("read login credential")
-        .and_then(|key| credentials.save_api_key(provider, &key));
+    {
+        Ok(key) => {
+            let credentials = credentials.clone();
+            let provider = provider.to_owned();
+            tokio::task::spawn_blocking(move || credentials.save_api_key(&provider, &key))
+                .await
+                .context("join credential save")?
+        }
+        Err(error) => Err(error),
+    };
     let restored = new_inline_screen(terminal).await;
     program.blocked_auth = false;
     program.publish(terminal, false)?;
     *screen = restored.context("restore inline chat after login")?;
     Ok(result)
-}
-
-async fn copy_last_answer(
-    session: &Session,
-    terminal: &mut TerminalSession,
-) -> Result<crate::clipboard::CopyOutcome> {
-    let answer = last_committed_answer(&session.view()?)?;
-    crate::clipboard::copy(&answer, terminal).await
 }
 
 async fn copy_detail_evidence(ui: &mut Frontend, terminal: &mut TerminalSession) -> Result<()> {
@@ -754,59 +821,6 @@ impl Frontend {
             "{} image(s) attached to the next prompt",
             self.editor.images.len()
         );
-    }
-
-    fn refresh_session(&mut self, session: &Session) -> Result<()> {
-        self.editor.completion.clear();
-        self.pickers.close();
-        let view = session.view()?;
-        self.load_history(session, &view);
-        self.session_label = view
-            .name
-            .filter(|name| !name.is_empty())
-            .unwrap_or_else(|| format!("Session {}", &view.id.to_string()[..8]));
-        self.details = None;
-        self.view.follow_end();
-        self.cwd = session
-            .cwd()
-            .context("terminal coding requires a working directory")?
-            .to_path_buf();
-        if view.unfinished_turn.is_some() || view.unfinished_user_shell.is_some() {
-            self.status = "Previous operation interrupted; effects may be unknown".into();
-        }
-        Ok(())
-    }
-
-    fn load_history(&mut self, session: &Session, view: &SessionView) {
-        let change = self.conversation.reconcile(session, view);
-        let same_session = change != conversation::Change::Session;
-        if !same_session {
-            self.editor.reset_edit_baseline();
-        }
-        if let Some(details) = &mut self.details {
-            details.invalidate();
-        }
-        let prompt_history = view
-            .entries
-            .iter()
-            .filter_map(|entry| match entry {
-                SessionEntry::TurnStarted { input, .. } => {
-                    input.content.iter().find_map(|part| match part {
-                        Content::Text(text) => Some(text.clone()),
-                        _ => None,
-                    })
-                }
-                SessionEntry::Steering { input, .. } => {
-                    input.content.iter().find_map(|part| match part {
-                        Content::Text(text) => Some(text.clone()),
-                        _ => None,
-                    })
-                }
-                _ => None,
-            })
-            .collect();
-        self.editor
-            .replace_prompt_history(prompt_history, same_session);
     }
 
     fn pending_history_rows(&mut self, width: usize) -> Vec<Line<'static>> {
@@ -1315,7 +1329,8 @@ fn settlement_program_status(outcome: &ion_app::OperationOutcome) -> ProgramStat
             ProgramStatus::Idle
         }
         OperationOutcome::Shell(Ok(output)) if output.is_error => ProgramStatus::Error,
-        OperationOutcome::Turn(Err(_))
+        OperationOutcome::NotDispatched(_)
+        | OperationOutcome::Turn(Err(_))
         | OperationOutcome::Compact(Err(_))
         | OperationOutcome::Shell(Err(_)) => ProgramStatus::Error,
         _ => ProgramStatus::Done,
@@ -1360,6 +1375,29 @@ fn visible_status(ui: &Frontend, operation: Option<ActiveOperation>) -> Option<S
     } else {
         format!("{notice}{attachment}{recovery}{queued}")
     };
+    if ui.session_io.has_read() && !ui.session_io.blocked {
+        let pending = if ui.session_io.blocks_input() {
+            "Preparing local command · prompts wait"
+        } else {
+            "Reading local state…"
+        };
+        status = if status.is_empty() {
+            pending.into()
+        } else {
+            format!("{pending} · {status}")
+        };
+    }
+    if ui.session_io.blocked {
+        let refresh = ui.session_io.refresh_error.as_ref().map_or_else(
+            || "Session refresh required · prompts blocked".to_owned(),
+            |error| format!("Session refresh failed: {error} · prompts blocked · /session retries"),
+        );
+        status = if status.is_empty() {
+            refresh
+        } else {
+            format!("{refresh} · {status}")
+        };
+    }
     if ui.question_owns_input() && !ui.question_visible() {
         let hint = QuestionModal::collapsed_hint(&ui.keys);
         if status.is_empty() {
@@ -1451,7 +1489,7 @@ async fn apply_question_action(
             text,
         } => {
             let edited =
-                edit_text_in_terminal(terminal, screen, &text, ion_host::MAX_ANSWER_BYTES).await?;
+                edit_text_in_terminal(terminal, screen, &text, ion_app::MAX_ANSWER_BYTES).await?;
             // Core work runs independently. The question may have expired while
             // the native editor owned the terminal; never reuse its old lease.
             ui.sync_question(responder);

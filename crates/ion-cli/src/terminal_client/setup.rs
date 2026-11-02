@@ -12,17 +12,20 @@ use super::{
 
 /// Returns None on cancellation. Ready launches never acquire a terminal here.
 pub async fn setup_model(
-    host: &Host,
+    host: &std::sync::Arc<Host>,
     selected: Option<Selection>,
     choose_default: bool,
     keys: &KeyBindings,
     themes: &crate::themes::Themes,
 ) -> Result<Option<Selection>> {
-    let selected = match selected {
-        Some(selection) if !selection.credential_missing(host.credentials())? => {
+    let selected = if let Some(selection) = selected {
+        let (selection, missing) = credential_missing(host, selection).await?;
+        if !missing {
             return Ok(Some(selection));
         }
-        selected => selected,
+        Some(selection)
+    } else {
+        None
     };
     let mut terminal = TerminalSession::enter().await?;
     let outcome = async {
@@ -139,8 +142,21 @@ fn finish<T>(outcome: Result<T>, cleanup: Result<()>) -> Result<T> {
     }
 }
 
+async fn credential_missing(
+    host: &std::sync::Arc<Host>,
+    selection: Selection,
+) -> Result<(Selection, bool)> {
+    let host = host.clone();
+    tokio::task::spawn_blocking(move || {
+        let missing = selection.credential_missing(host.credentials())?;
+        Ok((selection, missing))
+    })
+    .await
+    .context("join startup credential inspection")?
+}
+
 async fn run(
-    host: &Host,
+    host: &std::sync::Arc<Host>,
     mut selected: Option<Selection>,
     choose_default: bool,
     keys: &KeyBindings,
@@ -156,8 +172,9 @@ async fn run(
     };
     let mut program = ProgramStatusState::default();
     loop {
-        if let Some(mut selection) = selected.take() {
-            let login = if selection.credential_missing(host.credentials())? {
+        if let Some(selection) = selected.take() {
+            let (selection, missing) = credential_missing(host, selection).await?;
+            let login = if missing {
                 login_in_terminal(
                     terminal,
                     screen,
@@ -171,20 +188,29 @@ async fn run(
             };
             match login {
                 Ok(()) => {
-                    selection.require_access(host.credentials())?;
-                    if choose_default {
-                        selection = host.models().save_default(&SavedSelection {
-                            provider: selection.provider,
-                            model: selection.model,
-                            endpoint: None,
-                            wire: None,
-                            api_key_env: None,
-                            context_window_tokens: None,
-                            max_output_tokens: None,
-                            image_input: false,
-                        })?;
+                    let host = host.clone();
+                    let selection = tokio::task::spawn_blocking(move || -> Result<_> {
                         selection.require_access(host.credentials())?;
-                    }
+                        let selection = if choose_default {
+                            let selection = host.models().save_default(&SavedSelection {
+                                provider: selection.provider,
+                                model: selection.model,
+                                endpoint: None,
+                                wire: None,
+                                api_key_env: None,
+                                context_window_tokens: None,
+                                max_output_tokens: None,
+                                image_input: false,
+                            })?;
+                            selection.require_access(host.credentials())?;
+                            selection
+                        } else {
+                            selection
+                        };
+                        Ok(selection)
+                    })
+                    .await
+                    .context("join startup model access")??;
                     return Ok(Some(selection));
                 }
                 Err(error) => {
@@ -193,15 +219,21 @@ async fn run(
             }
         }
         if ui.pickers.active().is_none() {
-            ui.pickers.open_models(
-                host,
+            let host = host.clone();
+            let choices = tokio::task::spawn_blocking(move || {
+                host.models().selection_choices(host.credentials())
+            })
+            .await
+            .context("join startup model discovery")??;
+            ui.pickers.apply_models(
+                choices,
                 None,
                 if choose_default {
                     "Choose default model"
                 } else {
                     "Choose Session model"
                 },
-            )?;
+            );
         }
         program.publish(terminal, false)?;
         let painted = draw(terminal, screen, &mut ui, None, None).await?;
@@ -221,7 +253,12 @@ async fn run(
             }
             InputEvent::Key(key) => {
                 if let Some(PickerValue::Model(model)) = ui.pickers.key(key, keys) {
-                    selected = Some(host.models().resolve_identity(&model)?);
+                    let host = host.clone();
+                    selected = Some(
+                        tokio::task::spawn_blocking(move || host.models().resolve_identity(&model))
+                            .await
+                            .context("join startup model resolution")??,
+                    );
                 } else if ui.pickers.active().is_none() {
                     return Ok(None);
                 }
