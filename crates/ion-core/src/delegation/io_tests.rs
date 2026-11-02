@@ -127,11 +127,6 @@ impl Fixture {
                                     },
                                     ion_ai::Usage::unknown(),
                                     false,
-                                )?;
-                                child.end_turn(
-                                    turn,
-                                    crate::TurnEndReason::Completed,
-                                    &std::collections::BTreeSet::new(),
                                 )
                             })
                             .await
@@ -140,7 +135,7 @@ impl Fixture {
                     };
                     DelegationCompletion {
                         result: committed
-                            .map(|()| Some("fixture answer".into()))
+                            .map(|_| Some("fixture answer".into()))
                             .map_err(|error| DelegationFailure::Infrastructure(error.to_string())),
                         execution_timed_out: false,
                         elapsed_ms: None,
@@ -184,14 +179,20 @@ impl Fixture {
     }
 }
 
-async fn released(parent: &std::sync::Weak<Session>) {
+async fn reopen(root: &std::path::Path) -> Session {
+    // Weak::upgrade can fail before the last Session's destructor releases its
+    // file lease. Observe the actual resource, not the Arc's reference count.
     tokio::time::timeout(Duration::from_secs(5), async {
-        while parent.upgrade().is_some() {
-            tokio::task::yield_now().await;
+        loop {
+            match Session::open(root.join("parent.sqlite")) {
+                Ok(session) => break session,
+                Err(SessionError::AlreadyOpen) => tokio::task::yield_now().await,
+                Err(error) => panic!("reopen after actual storage completion: {error}"),
+            }
         }
     })
     .await
-    .expect("actual storage work must eventually release the writer");
+    .expect("actual storage work must eventually release the writer")
 }
 
 #[tokio::test(flavor = "current_thread")]
@@ -229,9 +230,8 @@ async fn abandoned_transfer_wait_retains_writer_until_actual_commit_without_disp
     ));
     writer.execute_batch("ROLLBACK").unwrap();
     drop(writer);
-    released(&parent).await;
+    let reopened = reopen(&root).await;
     assert_eq!(calls.load(Ordering::SeqCst), 0);
-    let reopened = Session::open(root.join("parent.sqlite")).unwrap();
     let receipts = reopened.view().unwrap().delegations();
     assert_eq!(receipts.len(), 1);
     assert!(
@@ -368,10 +368,9 @@ async fn abandoned_background_result_retains_delayed_settlement_and_never_reexec
     );
     writer.execute_batch("ROLLBACK").unwrap();
     drop(writer);
-    released(&parent).await;
+    let reopened = reopen(&root).await;
     assert_eq!(calls.load(Ordering::SeqCst), 1);
     assert_eq!(failed.load(Ordering::SeqCst), 0);
-    let reopened = Session::open(root.join("parent.sqlite")).unwrap();
     let receipts = reopened.view().unwrap().delegations();
     assert_eq!(receipts.len(), 1);
     assert!(receipts[0].transferred);

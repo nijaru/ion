@@ -381,7 +381,7 @@ async fn automated_admission_classifies_owned_claims_and_preserves_first_withdra
                     CompletionStatus::Queued
                 };
                 assert_eq!(receipt.snapshot(), expected);
-                let entries: u64 = connection
+                let entries: i64 = connection
                     .query_row("SELECT COUNT(*) FROM entries", [], |row| row.get(0))
                     .unwrap();
                 assert_eq!(entries, 0, "failed admission must not publish a Turn");
@@ -523,7 +523,7 @@ async fn keyed_uncertain_commit_is_not_replaced_by_faulted_reconciliation() {
         )
         .await;
     assert!(matches!(result, Err(AgentError::Session(error)) if error.is_commit_uncertain()));
-    let entries: u64 = connection
+    let entries: i64 = connection
         .query_row("SELECT COUNT(*) FROM entries", [], |row| row.get(0))
         .unwrap();
     assert_eq!(entries, 0);
