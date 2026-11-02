@@ -54,9 +54,31 @@ impl<T: Send, E: Send> CompletionCustody for Completion<T, E> {
     }
 }
 
+impl<T, E: OperationFailure> Completion<T, E> {
+    fn finish(&self, result: Result<T, E>) {
+        let unreported_failure = result
+            .as_ref()
+            .err()
+            .filter(|error| !error.expected_cancellation())
+            .map(ToString::to_string);
+        *self
+            .0
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = Outcome {
+            result: Some(result),
+            unreported_failure,
+        };
+    }
+}
+
 struct StopOnFailure {
     stop: CancellationToken,
     armed: bool,
+}
+impl StopOnFailure {
+    fn disarm(mut self) {
+        self.armed = false;
+    }
 }
 impl Drop for StopOnFailure {
     fn drop(&mut self) {
@@ -294,6 +316,31 @@ impl OperationOwner {
         }
     }
 
+    /// Retain the actual blocking task, not an async wrapper that could finish
+    /// while its blocking work still holds resources.
+    pub(crate) fn start_blocking<T, E>(
+        self: &Arc<Self>,
+        stop: CancellationToken,
+        work: impl FnOnce() -> Result<T, E> + Send + 'static,
+    ) -> Operation<T, E>
+    where
+        T: Send + 'static,
+        E: Send + From<OperationError> + OperationFailure + 'static,
+    {
+        let result = (|| {
+            let runtime = tokio::runtime::Handle::try_current()
+                .map_err(|_| E::from(OperationError::RuntimeUnavailable))?;
+            let mut idle = self.try_lock().map_err(E::from)?;
+            Ok(self.install(&mut idle, stop, |completion, failure_stop| {
+                runtime.spawn_blocking(move || {
+                    completion.finish(work());
+                    failure_stop.disarm();
+                })
+            }))
+        })();
+        result.unwrap_or_else(|error| Operation::ready(Err(error)))
+    }
+
     /// Synchronous admission under exclusive custody, before publishing a receipt
     /// or allowing the task to run. Reconciliation may produce no new task.
     pub(crate) fn start_prepared<P, T, E, F>(
@@ -313,6 +360,25 @@ impl OperationOwner {
         let Some(work) = work else {
             return Ok((prepared, None));
         };
+        let operation = self.install(&mut idle, stop, |completion, failure_stop| {
+            runtime.spawn(async move {
+                completion.finish(work.await);
+                failure_stop.disarm();
+            })
+        });
+        Ok((prepared, Some(operation)))
+    }
+
+    fn install<T, E>(
+        self: &Arc<Self>,
+        idle: &mut IdleSession<'_>,
+        stop: CancellationToken,
+        spawn: impl FnOnce(Arc<Completion<T, E>>, StopOnFailure) -> JoinHandle<()>,
+    ) -> Operation<T, E>
+    where
+        T: Send + 'static,
+        E: Send + 'static,
+    {
         // Reserve while still holding authority, before another runtime thread
         // can poll the task or a preference/replacement can observe it as idle.
         idle.0.next_id = idle
@@ -326,45 +392,27 @@ impl OperationOwner {
             result: None,
             unreported_failure: None,
         })));
-        let result = completion.clone();
-        let failure_stop = StopOnFailure {
-            stop: stop.clone(),
-            armed: true,
-        };
-        let task = runtime.spawn(async move {
-            let mut failure_stop = failure_stop;
-            let outcome = work.await;
-            let unreported_failure = outcome
-                .as_ref()
-                .err()
-                .filter(|error| !error.expected_cancellation())
-                .map(ToString::to_string);
-            *result
-                .0
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner) = Outcome {
-                result: Some(outcome),
-                unreported_failure,
-            };
-            failure_stop.armed = false;
-        });
+        let task = spawn(
+            completion.clone(),
+            StopOnFailure {
+                stop: stop.clone(),
+                armed: true,
+            },
+        );
         idle.0.running = Some(Running {
             id,
             stop: stop.clone(),
             task,
             _completion: completion.clone(),
         });
-        Ok((
-            prepared,
-            Some(Operation {
-                owner: Some(self.clone()),
-                id,
-                stop,
-                completion,
-                joined: false,
-                notified: Some(Box::pin(self.wake.clone().notified_owned())),
-            }),
-        ))
+        Operation {
+            owner: Some(self.clone()),
+            id,
+            stop,
+            completion,
+            joined: false,
+            notified: Some(Box::pin(self.wake.clone().notified_owned())),
+        }
     }
 
     fn poll_join(

@@ -21,8 +21,6 @@ pub(super) enum CaptureError {
     Io(#[from] io::Error),
     #[error(transparent)]
     Operation(#[from] OperationError),
-    #[error("artifact storage worker failed: {0}")]
-    Worker(#[from] tokio::task::JoinError),
 }
 impl OperationFailure for CaptureError {
     fn expected_cancellation(&self) -> bool {
@@ -44,17 +42,9 @@ impl CaptureWork {
             if state.closed {
                 return Err(io::Error::other("Session artifact capture is closed"));
             }
-            owner.start::<T, CaptureError, _>(
+            owner.start_blocking::<T, CaptureError>(
                 tokio_util::sync::CancellationToken::new(),
-                async move {
-                    match tokio::task::spawn_blocking(work).await {
-                        Ok(result) => result.map_err(CaptureError::Io),
-                        Err(error) if error.is_panic() => {
-                            std::panic::resume_unwind(error.into_panic())
-                        }
-                        Err(error) => Err(CaptureError::Worker(error)),
-                    }
-                },
+                move || work().map_err(CaptureError::Io),
             )
         };
         operation
