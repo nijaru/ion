@@ -20,6 +20,12 @@ from pathlib import Path
 from terminal_style import has_foreground
 
 
+def program_ready(output):
+    """Use the published lifecycle state, not a notice or a timing guess."""
+    states = re.findall(rb"\x1b]7501;state=([^:\x1b]+)", output)
+    return bool(states) and states[-1] in (b"idle", b"done")
+
+
 class CursorReplies:
     """Track positioned CPR reference points, not a rendered screen/reflow model."""
     def __init__(self):
@@ -118,7 +124,7 @@ def exercise_unicode_resume(workspace, env, target, mode, session_id):
             collect()
 
     try:
-        wait(lambda: "›".encode() in output)
+        wait(lambda: "›".encode() in output and program_ready(output))
         output.clear()
         os.write(master, b"/resume\r")
         wait(lambda: b"Resume session" in output and b"01234567890" in output)
@@ -126,7 +132,7 @@ def exercise_unicode_resume(workspace, env, target, mode, session_id):
         wait(lambda: b"1 match(es)" in output)
         output.clear()
         os.write(master, b"\r")
-        wait(lambda: b"Ready" in output and "›".encode() in output)
+        wait(lambda: b"Session resumed" in output and program_ready(output) and "›".encode() in output)
         # The reopened browser marks the now-current Session and exposes the
         # existing recorded facts before a second selection.
         output.clear()
@@ -139,12 +145,10 @@ def exercise_unicode_resume(workspace, env, target, mode, session_id):
              and b"2 turn(s)" in output
              and b"smoke/smoke-model" in output)
         output.clear()
+        output.clear()
         os.write(master, b"\r")
-        # Selecting the same Session only reloads resources; the unchanged
-        # Ready status is not repainted, so let the close settle before /session.
-        settle = time.monotonic() + 0.5
-        while time.monotonic() < settle:
-            collect()
+        # Same-Session reload still owns native work and mandatory refresh.
+        wait(lambda: program_ready(output) and "›".encode() in output)
         output.clear()
         os.write(master, b"/session\r")
         wait(lambda: str(target).encode() in output)
@@ -429,11 +433,16 @@ with tempfile.TemporaryDirectory(prefix="ion-terminal-") as temporary:
                     source_before_clone = json.loads(snapshot.stdout)["entries"]
                     os.write(master, b"/clone\r")
                     sent_clone = True
-                if sent_clone and b"Cloned conversation as" in output and control_phase is None:
+                if sent_clone and b"Cloned conversation as" in output and program_ready(output) and control_phase is None:
+                    control_start = len(output)
                     os.write(master, "/name Smoke repair 01234567890🦀\r".encode())
-                    time.sleep(0.2)
+                    control_phase = "name"
+                current_control = output[control_start:]
+                if control_phase == "name" and b"Session renamed" in current_control and program_ready(output):
+                    control_start = len(output)
                     os.write(master, b"/new\r")
-                    time.sleep(0.2)
+                    control_phase = "new"
+                elif control_phase == "new" and b"Started a new session" in current_control and program_ready(output):
                     control_start = len(output)
                     os.write(master, b"/resume\r")
                     control_phase = "resume_open"
@@ -449,7 +458,7 @@ with tempfile.TemporaryDirectory(prefix="ion-terminal-") as temporary:
                     control_start = len(output)
                     os.write(master, b"\r")
                     control_phase = "resumed"
-                elif control_phase == "resumed" and b"Ready" in current_control:
+                elif control_phase == "resumed" and b"Session resumed" in current_control and program_ready(output):
                     control_start = len(output)
                     os.write(master, b"/model\r")
                     control_phase = "model_open"
@@ -457,7 +466,7 @@ with tempfile.TemporaryDirectory(prefix="ion-terminal-") as temporary:
                     control_start = len(output)
                     os.write(master, b"\r")  # The current model is visibly preselected.
                     control_phase = "model_selected"
-                elif control_phase == "model_selected" and b"Ready" in current_control:
+                elif control_phase == "model_selected" and b"Selected smoke/smoke-model" in current_control and program_ready(output):
                     sent_controls = True
                     control_phase = "done"
                 if sent_controls and b"Choose model" in output and b"Resume session" in output and not sent_login:
