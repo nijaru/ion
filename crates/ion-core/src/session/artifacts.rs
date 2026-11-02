@@ -12,8 +12,6 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
 use super::{Session, SessionError};
-mod custody;
-pub(super) use custody::CaptureWork;
 
 const CHUNK_BYTES: usize = 256 * 1024;
 pub(crate) const PAGE_BYTES: usize = 16 * 1024;
@@ -119,7 +117,7 @@ impl ArtifactSink {
 
     pub fn start(&self, label: impl Into<String>) -> io::Result<ArtifactWriter> {
         self.check_origin()?;
-        let owner = self.0.artifact_work.register()?;
+        let owner = self.0.storage.register().map_err(io_error)?;
         Ok(ArtifactWriter {
             sink: self.clone(),
             id: uuid::Uuid::new_v4(),
@@ -217,9 +215,13 @@ impl ArtifactWriter {
                 let label = self.label.clone();
                 self.sink
                     .0
-                    .artifact_work
-                    .run(&self.io, move || sink.append(id, &label, offset, &data))
-                    .await?;
+                    .storage
+                    .run(&self.io, move || {
+                        sink.append(id, &label, offset, &data)
+                            .map_err(SessionError::from)
+                    })
+                    .await
+                    .map_err(io_error)?;
                 self.committed += written;
                 self.failed = false;
             }
@@ -229,7 +231,7 @@ impl ArtifactWriter {
 
     pub fn finish(self, complete: bool) -> io::Result<ArtifactRef> {
         let owner = self.io.clone();
-        let _idle = self.sink.0.artifact_work.reserve_sync(&owner)?;
+        let _idle = self.sink.0.storage.reserve_sync(&owner).map_err(io_error)?;
         self.finish_storage(complete)
     }
 
@@ -255,9 +257,12 @@ impl ArtifactWriter {
         let owner = self.io.clone();
         let session = self.sink.0.clone();
         session
-            .artifact_work
-            .run(&owner, move || self.finish_storage(complete))
+            .storage
+            .run(&owner, move || {
+                self.finish_storage(complete).map_err(SessionError::from)
+            })
             .await
+            .map_err(io_error)
     }
 
     fn flush_storage(&mut self) -> io::Result<()> {
@@ -290,7 +295,7 @@ impl Write for ArtifactWriter {
     }
     fn flush(&mut self) -> io::Result<()> {
         let owner = self.io.clone();
-        let _idle = self.sink.0.artifact_work.reserve_sync(&owner)?;
+        let _idle = self.sink.0.storage.reserve_sync(&owner).map_err(io_error)?;
         self.flush_storage()
     }
 }

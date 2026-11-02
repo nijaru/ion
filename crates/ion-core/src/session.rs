@@ -50,6 +50,8 @@ mod records;
 mod recovery;
 #[cfg(test)]
 mod recovery_tests;
+mod storage;
+pub use storage::SessionIo;
 mod store;
 mod submission;
 #[cfg(test)]
@@ -606,7 +608,7 @@ pub struct Session {
     header: Header,
     path: PathBuf,
     pub(crate) operations: Arc<OperationOwner>,
-    artifact_work: artifacts::CaptureWork,
+    storage: storage::StorageWork,
 }
 
 impl Session {
@@ -682,7 +684,7 @@ impl Session {
             header,
             path,
             operations: Arc::new(OperationOwner::default()),
-            artifact_work: artifacts::CaptureWork::default(),
+            storage: storage::StorageWork::default(),
         })
     }
 
@@ -705,7 +707,7 @@ impl Session {
             header,
             path,
             operations: Arc::new(OperationOwner::default()),
-            artifact_work: artifacts::CaptureWork::default(),
+            storage: storage::StorageWork::default(),
         })
     }
 
@@ -864,10 +866,26 @@ impl Session {
             if stop.is_cancelled() {
                 return Err(SessionError::UserShellCancelled);
             }
-            let entry = session.admit_user_shell(command.clone(), exclude_from_context)?;
+            let io = session.io()?;
+            let admission_command = command.clone();
+            let admission_stop = stop.clone();
+            let entry = io
+                .run(move |session| {
+                    if admission_stop.is_cancelled() {
+                        return Err(SessionError::UserShellCancelled);
+                    }
+                    session.admit_user_shell(admission_command, exclude_from_context)
+                })
+                .await?;
+            if stop.is_cancelled() {
+                return Err(SessionError::UserShellCancelled);
+            }
             let output = execute(command, stop, session.artifact_sink().for_shell(entry)).await;
-            session.record_user_shell(entry, output.clone())?;
-            Ok(output)
+            io.run(move |session| {
+                session.record_user_shell(entry, output.clone())?;
+                Ok(output)
+            })
+            .await
         })
     }
 
@@ -909,17 +927,19 @@ impl Session {
         self.operations.try_lock().map_err(SessionError::from)
     }
 
+    /// Create an independent serial lane for blocking Session storage work.
+    /// Shutdown closes lane admission, including on already-created lanes.
+    pub fn io(self: &Arc<Self>) -> Result<SessionIo, SessionError> {
+        SessionIo::new(self)
+    }
+
     /// Close execution admission, request stop and join retained work. A timed-out
     /// wait leaves admission closed. This also reports unread operation failures
     /// without consuming a retained handle's result. Complete shutdown before
     /// destroying the Tokio runtime; a genuine task panic cannot prove quiescence.
     pub async fn shutdown(&self) -> Result<(), SessionError> {
         let execution = self.operations.shutdown().await.map_err(SessionError::from);
-        let storage = self
-            .artifact_work
-            .shutdown()
-            .await
-            .map_err(SessionError::ArtifactStorage);
+        let storage = self.storage.shutdown().await.map_err(SessionError::Storage);
         match (execution, storage) {
             (Err(execution), Err(storage)) => {
                 Err(SessionError::Shutdown(format!("{execution}; {storage}")))
@@ -1849,8 +1869,8 @@ pub enum SessionError {
     InvalidWorkingDirectory,
     #[error("artifact offset or page limit is out of range")]
     InvalidArtifactRange,
-    #[error("artifact storage failed: {0}")]
-    ArtifactStorage(String),
+    #[error("Session storage failed: {0}")]
+    Storage(String),
     #[error("Session shutdown failed: {0}")]
     Shutdown(String),
     #[error("invalid or inconsistent session history")]

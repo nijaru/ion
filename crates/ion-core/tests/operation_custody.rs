@@ -428,17 +428,19 @@ async fn shutdown_and_operation_waiters_share_actual_completion() {
     let session = Arc::new(Session::create(root.join("session.sqlite"), Some(&root)).unwrap());
     let (release, held) = tokio::sync::oneshot::channel();
     let stop = CancellationToken::new();
+    let (started, running) = tokio::sync::oneshot::channel();
     let operation = session.run_user_shell(
         "fixture".into(),
         false,
         stop.clone(),
         move |_, _, _| async move {
+            started.send(()).unwrap();
             held.await.unwrap();
             shell_output()
         },
     );
     let waiter = tokio::spawn(operation);
-    tokio::task::yield_now().await;
+    running.await.unwrap();
     let closing = session.clone();
     let shutdown = tokio::spawn(async move { closing.shutdown().await });
     stop.cancelled().await; // Shutdown has registered its independent join wait.
