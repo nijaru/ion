@@ -1,12 +1,13 @@
-//! Terminal-local selection, immutable palette preparation and user theme files.
+//! Terminal-local selection and immutable palette preparation.
+mod files;
 use crate::presentation_style::{Role, Theme, is_dark};
 use anyhow::{Context, Result, ensure};
+pub(crate) use files::{Files, Saved};
 use ion_terminal::{Appearance, TerminalColors};
 use ratatui::style::Color;
 use serde::Deserialize;
 use std::{
     collections::{BTreeMap, BTreeSet},
-    io,
     path::{Path, PathBuf},
 };
 
@@ -167,7 +168,7 @@ fn resolve_color(
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-struct Selection {
+pub(crate) struct Selection {
     name: String,
     light: Definition,
     dark: Option<Definition>,
@@ -271,8 +272,12 @@ impl Themes {
     pub(crate) fn is_dark(&self) -> bool {
         terminal_is_dark(self.colors)
     }
-    pub(crate) fn watches_file(&self) -> bool {
-        self.selected.custom() || self.preview.as_ref().is_some_and(Selection::custom)
+    pub(crate) fn files(&self) -> Files {
+        Files::new(self.root.clone(), self.selected.name.clone())
+    }
+    pub(crate) fn watch_name(&self) -> Option<&str> {
+        let current = self.preview.as_ref().unwrap_or(&self.selected);
+        current.custom().then_some(current.name.as_str())
     }
     fn resolve(&mut self) {
         self.theme = self
@@ -287,38 +292,34 @@ impl Themes {
             self.resolve();
         }
     }
-    pub(crate) fn preview(&mut self, name: &str) -> Result<()> {
-        let next = Selection::load(&self.root, name)?;
+    pub(crate) fn preview(&mut self, next: Selection) {
         self.preview = Some(next);
         self.resolve();
-        Ok(())
     }
     pub(crate) fn cancel_preview(&mut self) {
         if self.preview.take().is_some() {
             self.resolve();
         }
     }
-    pub(crate) fn confirm(&mut self, name: &str) -> Result<Option<String>> {
-        let next = Selection::load(&self.root, name)?;
-        let warning = ion_app::user_settings::UserSettings::save_theme(&self.root, name)?;
-        self.selected = next;
+    pub(crate) fn confirm(&mut self, saved: Saved) -> Option<String> {
+        self.selected = saved.selection;
         self.invocation = None;
         self.preview = None;
         self.file_error = None;
         self.resolve();
-        Ok(warning)
+        saved.warning
     }
     pub(crate) fn reloaded(&self) -> Result<Self> {
         let mut next = Self::load(&self.root, self.invocation.as_deref())?;
         next.observe(self.colors);
         Ok(next)
     }
-    pub(crate) fn check_files(&mut self) -> Option<String> {
-        let current = self.preview.as_ref().unwrap_or(&self.selected);
-        if !current.custom() {
+    pub(crate) fn checked(&mut self, name: &str, result: Result<Selection>) -> Option<String> {
+        if self.watch_name() != Some(name) {
             return None;
         }
-        match Selection::load(&self.root, &current.name) {
+        let current = self.preview.as_ref().unwrap_or(&self.selected);
+        match result {
             Ok(next) => {
                 let recovered = self.file_error.take().is_some();
                 if *current != next {
@@ -343,46 +344,6 @@ impl Themes {
             }
         }
     }
-    pub(crate) fn names(&self) -> Result<Vec<String>> {
-        let mut names = vec!["system".into(), "dark".into(), "light".into()];
-        let entries = match std::fs::read_dir(self.root.join("themes")) {
-            Ok(entries) => entries,
-            Err(error) if error.kind() == io::ErrorKind::NotFound => {
-                if !names.contains(&self.selected.name) {
-                    names.push(self.selected.name.clone());
-                }
-                return Ok(names);
-            }
-            Err(error) => return Err(error).context("list user themes"),
-        };
-        let mut custom = BTreeSet::new();
-        for entry in entries {
-            let entry = entry?;
-            let path = entry.path();
-            if path.extension().is_none_or(|ext| ext != "json") {
-                continue;
-            }
-            let name = path
-                .file_stem()
-                .and_then(|name| name.to_str())
-                .context("theme filename is not UTF-8")?;
-            validate_name(name)?;
-            ensure!(
-                !names.iter().any(|builtin| builtin == name),
-                "user theme collides with a builtin name"
-            );
-            custom.insert(name.to_owned());
-            ensure!(
-                custom.len() <= 256,
-                "user theme catalogue exceeds 256 files"
-            );
-        }
-        names.extend(custom);
-        if !names.contains(&self.selected.name) {
-            names.push(self.selected.name.clone());
-        }
-        Ok(names)
-    }
 }
 
 #[cfg(test)]
@@ -402,7 +363,7 @@ mod tests {
         std::fs::write(&path, r##"{"name":"test","base":"dark","vars":{"accent":"#f20"},"colors":{"error":"accent"}}"##).unwrap();
         let mut themes = Themes::load(&root, None).unwrap();
         let original = themes.theme().clone();
-        themes.preview("test").unwrap();
+        themes.preview(themes.files().load("test").unwrap());
         assert_eq!(
             themes.theme().style(Role::Error).fg,
             Some(Color::Rgb(255, 34, 0))
@@ -411,7 +372,7 @@ mod tests {
         themes.cancel_preview();
         assert_eq!(themes.theme(), &original);
         assert!(!root.join("settings.json").exists());
-        themes.confirm("test").unwrap();
+        themes.confirm(themes.files().save("test").unwrap());
         assert_eq!(Themes::load(&root, None).unwrap().name(), "test");
         let good = themes.theme().clone();
         std::fs::write(
@@ -419,12 +380,20 @@ mod tests {
             r#"{"name":"test","colors":{"unknown":"PRIVATE_INVALID_VALUE"}}"#,
         )
         .unwrap();
-        let error = themes.check_files().unwrap();
+        let error = themes.checked("test", themes.files().load("test")).unwrap();
         assert!(!error.contains("PRIVATE_INVALID_VALUE"));
         assert_eq!(themes.theme(), &good);
-        assert!(themes.check_files().is_none());
+        assert!(
+            themes
+                .checked("test", themes.files().load("test"))
+                .is_none()
+        );
         std::fs::write(&path, r##"{"name":"test","colors":{"error":"#00ff00"}}"##).unwrap();
-        assert!(themes.check_files().is_some());
+        assert!(
+            themes
+                .checked("test", themes.files().load("test"))
+                .is_some()
+        );
         assert_eq!(
             themes.theme().style(Role::Error).fg,
             Some(Color::Rgb(0, 255, 0))

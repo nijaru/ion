@@ -224,6 +224,44 @@ async fn reload_publishes_prepared_keys_and_discards_only_obsolete_status_hints(
     fixture.control.shutdown().await;
 }
 
+#[tokio::test]
+async fn presentation_reload_revokes_a_completed_old_theme_poll() {
+    let mut fixture = super::tests::Fixture::new();
+    let root = fixture.host.config_root();
+    fs::create_dir_all(root.join("themes")).unwrap();
+    fs::write(root.join("settings.json"), br#"{"theme":"custom"}"#).unwrap();
+    let file = root.join("themes/custom.json");
+    fs::write(&file, br##"{"name":"custom","colors":{"code":"#123abc"}}"##).unwrap();
+    let mut ui = Frontend {
+        themes: crate::themes::Themes::load(root, None).unwrap(),
+        ..Frontend::default()
+    };
+    ui.theme_io.poll(&ui.themes);
+    let stale = ui.theme_io.complete().await.unwrap();
+    fs::write(&file, br##"{"name":"custom","colors":{"code":"#00ff00"}}"##).unwrap();
+    command::handle_builtin(
+        &mut fixture.control,
+        &fixture.host,
+        &mut ui,
+        Builtin::Reload,
+        "",
+    )
+    .unwrap();
+    assert!(ui.session_io.reloading_presentation());
+    super::tests::settle_io(&mut fixture.control, &mut ui).await;
+    assert!(!ui.session_io.reloading_presentation());
+    ui.apply_theme_completion(stale);
+    assert_eq!(
+        ui.themes
+            .theme()
+            .style(crate::presentation_style::Role::Code)
+            .fg,
+        Some(ratatui::style::Color::Rgb(0, 255, 0))
+    );
+    ui.shutdown_theme_io().await.unwrap();
+    fixture.control.shutdown().await;
+}
+
 #[test]
 fn custom_actions_preserve_literal_case_recovery_and_disabled_shortcuts() {
     let mut ui = Frontend {

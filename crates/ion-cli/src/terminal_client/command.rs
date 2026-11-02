@@ -426,11 +426,16 @@ pub(super) fn handle_builtin(
                 .join("\n"),
         ),
         Builtin::Reload => {
+            anyhow::ensure!(
+                !ui.theme_io.has_action(),
+                "Wait for the requested theme operation to finish"
+            );
+            ui.dismiss_theme_picker();
             let root = services.config_root().to_owned();
             let themes = ui.themes.clone();
             let io = runtime.session().io()?;
             ui.session_io
-                .start_binding_read(runtime.session(), async move {
+                .start_presentation_reload(runtime.session(), async move {
                     let (keys, themes) = io
                         .run(move |_| {
                             Ok((|| -> Result<_> {

@@ -51,6 +51,7 @@ mod session_io;
 mod session_search;
 mod setup;
 mod tasks;
+mod theme_io;
 mod theme_selection;
 use clipboard_input::*;
 use command::{CommandInput, dispatch_command};
@@ -135,6 +136,7 @@ use activity::ActiveOperation;
 struct Frontend {
     keys: KeyBindings,
     themes: crate::themes::Themes,
+    theme_io: theme_io::ThemeIo,
     theme_preview_name: Option<String>,
     theme_picker: Option<theme_selection::ThemePicker>,
     mode: TuiMode,
@@ -274,13 +276,13 @@ pub async fn chat(init: ChatInit) -> Result<()> {
                     continue;
                 },
                 _ = tokio::time::sleep(Duration::from_millis(50)), if retry_paint => continue,
-                notice = async {
-                    loop {
-                        theme_poll.tick().await;
-                        if let Some(notice) = ui.themes.check_files() { break notice; }
-                    }
-                }, if ui.themes.watches_file() => {
-                    ui.status = notice;
+                _ = theme_poll.tick(), if ui.themes.watch_name().is_some() && !ui.session_io.reloading_presentation() => {
+                    ui.theme_io.poll(&ui.themes);
+                    continue;
+                },
+                completion = ui.theme_io.complete(), if ui.theme_io.has_job() => {
+                    ui.apply_theme_completion(completion?);
+                    ui.theme_io.start_next(&ui.themes);
                     continue;
                 },
                 event = terminal.next_input() => event,
@@ -478,6 +480,7 @@ pub async fn chat(init: ChatInit) -> Result<()> {
     }
     for cleanup in [
         cancel_clipboard_paste(&mut ui).await,
+        ui.shutdown_theme_io().await,
         ui.pickers.shutdown().await,
     ] {
         if let Err(error) = cleanup {

@@ -82,6 +82,7 @@ struct Read {
     projection_revision: Option<u64>,
     writes_files: bool,
     binding_intent: bool,
+    reload_presentation: bool,
 }
 
 pub(super) struct ReadFinished {
@@ -120,6 +121,16 @@ pub(super) struct SessionIo {
 impl SessionIo {
     pub(super) fn has_read(&self) -> bool {
         self.read.is_some()
+    }
+
+    pub(super) fn reloading_presentation(&self) -> bool {
+        self.read
+            .as_ref()
+            .is_some_and(|read| read.reload_presentation)
+            || self
+                .binding
+                .as_ref()
+                .is_some_and(|binding| binding.presentation.is_some())
     }
 
     pub(super) fn has_pending_effect(&self) -> bool {
@@ -182,6 +193,7 @@ impl SessionIo {
             projection_revision: None,
             writes_files: false,
             binding_intent: false,
+            reload_presentation: false,
         });
         Ok(())
     }
@@ -196,6 +208,19 @@ impl SessionIo {
             .as_mut()
             .expect("started binding inspection")
             .binding_intent = true;
+        Ok(())
+    }
+
+    pub(super) fn start_presentation_reload(
+        &mut self,
+        session: &Session,
+        future: impl Future<Output = Result<ReadOutput>> + Send + 'static,
+    ) -> Result<()> {
+        self.start_binding_read(session, future)?;
+        self.read
+            .as_mut()
+            .expect("started presentation reload")
+            .reload_presentation = true;
         Ok(())
     }
 
@@ -281,7 +306,7 @@ pub(super) fn binding_finished(
                     let (keys, themes) = *presentation;
                     ui.editor.break_edit_focus();
                     ui.keys = keys;
-                    ui.themes = themes;
+                    ui.install_reloaded_theme(themes);
                     ui.print(format!(
                         "Reloaded keybindings, theme, resources and commands ({} diagnostic(s))",
                         control.resources().diagnostics().len()

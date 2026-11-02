@@ -1,3 +1,4 @@
+mod native_io;
 use super::*;
 use crate::terminal_client::Editor;
 use crate::{
@@ -54,13 +55,29 @@ impl Drop for Root {
 fn key(ui: &mut Frontend, code: KeyCode) -> Action {
     ui.key(KeyEvent::new(code, Modifiers::NONE), None, None)
 }
-fn frame(ui: &mut Frontend) -> Vec<ratatui::text::Line<'static>> {
-    ui.sync_theme_preview();
+async fn settle(ui: &mut Frontend) {
+    loop {
+        ui.sync_theme_preview();
+        if !ui.theme_io.has_job() {
+            break;
+        }
+        tokio::time::timeout(std::time::Duration::from_secs(5), ui.finish_theme_io())
+            .await
+            .unwrap()
+            .unwrap();
+    }
+}
+async fn open(ui: &mut Frontend) {
+    ui.open_theme_picker().unwrap();
+    settle(ui).await;
+}
+async fn frame(ui: &mut Frontend) -> Vec<ratatui::text::Line<'static>> {
+    settle(ui).await;
     painted_dock_rows(ui, None, 100, 30).0
 }
 
-#[test]
-fn rendered_theme_preview_cancel_and_failed_save_preserve_input_and_publication() {
+#[tokio::test]
+async fn rendered_theme_preview_cancel_and_failed_save_preserve_input_and_publication() {
     let root = Root::new();
     fs::write(
         root.0.join("themes/custom.json"),
@@ -71,18 +88,18 @@ fn rendered_theme_preview_cancel_and_failed_save_preserve_input_and_publication(
     let original = ui.themes.theme().clone();
     ui.open_settings(ion_core::CompletionDelivery::Inbox);
     ui.pickers.insert("Theme");
-    frame(&mut ui);
+    frame(&mut ui).await;
     assert!(matches!(
         key(&mut ui, KeyCode::Enter),
         Action::Pick(PickerValue::Themes)
     ));
-    ui.open_theme_picker().unwrap();
+    open(&mut ui).await;
     ui.pickers.insert("custom");
     assert!(
         matches!(key(&mut ui, KeyCode::Enter), Action::None),
         "unpainted choices cannot save"
     );
-    let rows = frame(&mut ui);
+    let rows = frame(&mut ui).await;
     assert!(
         rows.iter()
             .flat_map(|row| &row.spans)
@@ -94,23 +111,20 @@ fn rendered_theme_preview_cancel_and_failed_save_preserve_input_and_publication(
     assert_eq!(ui.themes.theme(), &original);
     assert_eq!(ui.pickers.active().unwrap().query, "Theme");
 
-    ui.open_theme_picker().unwrap();
+    open(&mut ui).await;
     ui.pickers.insert("custom");
-    frame(&mut ui);
+    frame(&mut ui).await;
     let Action::Pick(PickerValue::Theme(name)) = key(&mut ui, KeyCode::Enter) else {
         panic!("painted theme choice");
     };
     let lock = fs::File::open(&root.0).unwrap();
     lock.lock().unwrap();
-    assert!(
-        ui.choose_theme(&name)
-            .unwrap_err()
-            .to_string()
-            .contains("not saved")
-    );
+    ui.choose_theme(&name).unwrap();
+    settle(&mut ui).await;
+    assert!(ui.status.contains("not saved"));
     assert_eq!(ui.themes.name(), "system");
     assert!(!root.0.join("settings.json").exists());
-    frame(&mut ui);
+    frame(&mut ui).await;
     assert!(
         matches!(ui.pickers.selected_value(), Some(PickerValue::Theme(name)) if name == "custom")
     );
@@ -119,6 +133,7 @@ fn rendered_theme_preview_cancel_and_failed_save_preserve_input_and_publication(
         panic!("save retry choice");
     };
     ui.choose_theme(&name).unwrap();
+    settle(&mut ui).await;
     assert_eq!(
         crate::themes::Themes::load(&root.0, None).unwrap().name(),
         "custom"
@@ -140,14 +155,14 @@ fn rendered_theme_preview_cancel_and_failed_save_preserve_input_and_publication(
     assert!(ui.pending_history_rows(80).is_empty());
 }
 
-#[test]
-fn replacing_a_theme_view_drops_its_preview_and_back_menu() {
+#[tokio::test]
+async fn replacing_a_theme_view_drops_its_preview_and_back_menu() {
     let root = Root::new();
     let mut ui = root.ui();
     ui.open_settings(ion_core::CompletionDelivery::Inbox);
-    ui.open_theme_picker().unwrap();
+    open(&mut ui).await;
     ui.pickers.insert("dark");
-    frame(&mut ui);
+    frame(&mut ui).await;
     assert!(ui.theme_picker.is_some());
     ui.open_settings(ion_core::CompletionDelivery::Inbox);
     ui.sync_theme_preview();
@@ -163,17 +178,18 @@ fn replacing_a_theme_view_drops_its_preview_and_back_menu() {
     );
 }
 
-#[test]
-fn automatic_theme_slots_are_unsaved_drafts_until_apply() {
+#[tokio::test]
+async fn automatic_theme_slots_are_unsaved_drafts_until_apply() {
     let root = Root::new();
     let mut ui = root.ui();
-    ui.open_theme_picker().unwrap();
+    open(&mut ui).await;
     ui.theme_action(ThemeAction::Automatic).unwrap();
     ui.theme_action(ThemeAction::Light).unwrap();
     ui.choose_theme("light").unwrap();
+    settle(&mut ui).await;
     ui.theme_action(ThemeAction::Dark).unwrap();
     ui.pickers.insert("dark");
-    frame(&mut ui);
+    frame(&mut ui).await;
     assert_eq!(
         ui.themes.theme(),
         &crate::presentation_style::Theme::fixed(true)
@@ -189,15 +205,18 @@ fn automatic_theme_slots_are_unsaved_drafts_until_apply() {
         &crate::presentation_style::Theme::default()
     );
 
-    ui.open_theme_picker().unwrap();
+    open(&mut ui).await;
     ui.theme_action(ThemeAction::Automatic).unwrap();
     ui.theme_action(ThemeAction::Light).unwrap();
     ui.choose_theme("light").unwrap();
+    settle(&mut ui).await;
     ui.theme_action(ThemeAction::Dark).unwrap();
     ui.choose_theme("dark").unwrap();
+    settle(&mut ui).await;
     assert_eq!(ui.themes.name(), "system");
     assert!(!root.0.join("settings.json").exists());
     ui.theme_action(ThemeAction::Apply).unwrap();
+    settle(&mut ui).await;
     assert_eq!(
         crate::themes::Themes::load(&root.0, None).unwrap().name(),
         "light/dark"

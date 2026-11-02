@@ -57,12 +57,11 @@ pub(super) struct Picker {
 
 impl Picker {
     pub fn is_theme(&self) -> bool {
-        self.items.iter().any(|item| {
-            matches!(
-                item.value,
-                PickerValue::Theme(_) | PickerValue::ThemeAction(_)
-            )
-        })
+        // Native theme preparation leaves an empty, but still owned, view.
+        matches!(
+            self.title,
+            "Theme" | "Automatic theme" | "Light theme" | "Dark theme"
+        )
     }
 
     pub fn matches(&self, named_only: bool, models: Option<&[ModelRef]>) -> Vec<usize> {
