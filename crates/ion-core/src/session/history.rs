@@ -111,8 +111,8 @@ impl HistoryError {
     }
 }
 
-/// One immutable read against a committed upper bound. Its blocking worker is
-/// owned by the caller's tool future; no Session lock or mutable Session is
+/// One immutable read against a committed upper bound. Native tool execution
+/// prepares and reads it in one retained Session I/O leaf; no Store guard is
 /// retained here.
 pub(crate) struct HistoryRead {
     path: PathBuf,
@@ -477,13 +477,34 @@ pub(crate) async fn execute(
         .assistant_entry
         .checked_sub(1)
         .expect("admitted assistant entry is one-based");
-    let read = match session.prepare_history(&query, upper_entry) {
-        Ok(read) => read,
+    let io = match session.io() {
+        Ok(io) => io,
         Err(error) => return failure(error.to_string()),
     };
-    let worker_stop = stop.clone();
-    let joined = tokio::task::spawn_blocking(move || read.read(&worker_stop)).await;
-    match joined {
+    // Store selection can block too. Keep preparation and the whole bounded
+    // read in one retained leaf, with independent capacity when a Code Mode
+    // guest occupies Tokio's only blocking thread awaiting this result.
+    let result = io
+        .run_on_thread(move |session| {
+            let result = if stop.is_cancelled() {
+                Err(HistoryError::request("history read cancelled"))
+            } else {
+                session
+                    .prepare_history(&query, upper_entry)
+                    .and_then(|read| read.read(&stop))
+            };
+            // Bad queries and cooperative cancellation are tool results, not
+            // unread storage failures. Preserve actual Session/SQLite failures
+            // in operation custody if the tool wait is abandoned.
+            match result {
+                Ok(value) => Ok(Ok(value)),
+                Err(HistoryError::Request(error)) => Ok(Err(error)),
+                Err(HistoryError::Session(error)) => Err(error),
+                Err(HistoryError::Sqlite(error)) => Err(SessionError::Sqlite(error)),
+            }
+        })
+        .await;
+    match result {
         Ok(Ok(value)) => ToolOutput {
             artifacts: Vec::new(),
             value,
@@ -491,8 +512,7 @@ pub(crate) async fn execute(
             is_error: false,
         },
         Ok(Err(error)) => failure(error.to_string()),
-        Err(error) if error.is_panic() => std::panic::resume_unwind(error.into_panic()),
-        Err(error) => failure(format!("history worker stopped: {error}")),
+        Err(error) => failure(error.to_string()),
     }
 }
 
@@ -508,3 +528,7 @@ fn failure(message: impl Into<String>) -> ToolOutput {
 #[cfg(test)]
 #[path = "history_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "history/io_tests.rs"]
+mod io_tests;
