@@ -145,7 +145,6 @@ def exercise_unicode_resume(workspace, env, target, mode, session_id):
              and b"2 turn(s)" in output
              and b"smoke/smoke-model" in output)
         output.clear()
-        output.clear()
         os.write(master, b"\r")
         # Same-Session reload still owns native work and mandatory refresh.
         wait(lambda: program_ready(output) and "›".encode() in output)
