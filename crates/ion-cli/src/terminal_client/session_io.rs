@@ -465,15 +465,20 @@ impl Frontend {
             label,
             ..
         } = history;
+        // The first native snapshot installs display facts, not a navigation.
+        // Edits and pickers opened while it loaded still belong to this Session.
+        let initialized = self.conversation.scope().is_some();
         let change = self.conversation.reconcile_prepared(path, projection);
-        let same_session = change != conversation::Change::Session;
+        let same_session = !initialized || change != conversation::Change::Session;
         if !same_session {
             self.editor.reset_edit_baseline();
         }
         if change != conversation::Change::Unchanged {
-            self.editor.completion.clear();
-            self.pickers.close();
-            self.details = None;
+            if initialized {
+                self.editor.completion.clear();
+                self.pickers.close();
+                self.details = None;
+            }
             self.view.follow_end();
         }
         if let Some(details) = &mut self.details {

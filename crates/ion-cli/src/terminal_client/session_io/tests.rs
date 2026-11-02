@@ -141,7 +141,7 @@ async fn delayed_session_read_leaves_stop_and_reliable_returns_responsive() {
 }
 
 #[tokio::test]
-async fn idle_controls_do_not_invalidate_pending_startup_history() {
+async fn startup_history_preserves_idle_edits_and_file_discovery() {
     let mut fixture = Fixture::new();
     let mut ui = Frontend::default();
     let release = hold_read(&fixture.control, &mut ui, |view| {
@@ -154,6 +154,10 @@ async fn idle_controls_do_not_invalidate_pending_startup_history() {
         !ui.session_io.has_pending_effect(),
         "passive history must leave draft editing available"
     );
+    std::fs::write(fixture.root.join("startup.txt"), "fixture").unwrap();
+    ui.insert("Read @startup.txt");
+    let scope = crate::terminal_completion::FileScope::Project(fixture.root.clone());
+    ui.pickers.request_files(&scope);
     for _ in 0..3 {
         activity::apply(&mut ui, &fixture.control, ControlUpdate::Idle).unwrap();
     }
@@ -165,6 +169,26 @@ async fn idle_controls_do_not_invalidate_pending_startup_history() {
         "idle input must not strand startup behind another refresh"
     );
     assert!(!ui.session_io.refresh_pending);
+    ui.pickers.complete().await;
+    assert!(
+        ui.pickers
+            .files(&scope)
+            .is_some_and(|paths| paths.iter().any(|path| path == "startup.txt")),
+        "the first history snapshot must not revoke concurrent file discovery"
+    );
+    assert_eq!(ui.editor.draft, "Read @startup.txt");
+    ui.key(
+        ion_terminal::KeyEvent::new(
+            ion_terminal::KeyCode::Char('-'),
+            ion_terminal::Modifiers::CONTROL,
+        ),
+        None,
+        None,
+    );
+    assert!(
+        ui.editor.draft.is_empty(),
+        "startup must preserve draft undo"
+    );
     fixture.control.shutdown().await;
 }
 
