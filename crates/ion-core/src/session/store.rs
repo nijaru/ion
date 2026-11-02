@@ -20,6 +20,7 @@ pub(super) struct Header {
 
 pub(super) struct Store {
     pub(super) connection: Connection,
+    faulted: bool,
     pub(super) state: State,
     pub(super) settled: BTreeSet<u64>,
     pub(super) messages: Vec<ProjectedMessage>,
@@ -98,6 +99,7 @@ impl Store {
     pub(super) fn from_projection(connection: Connection, projection: HistoryProjection) -> Self {
         let mut store = Self {
             connection,
+            faulted: false,
             state: projection.state,
             settled: projection.settled,
             messages: projection.messages,
@@ -109,6 +111,33 @@ impl Store {
         };
         store.prune_context();
         store
+    }
+
+    pub(super) fn ensure_healthy(&self) -> Result<(), SessionError> {
+        if self.faulted {
+            Err(SessionError::StoreFaulted)
+        } else {
+            Ok(())
+        }
+    }
+
+    /// Once a transaction begins, a failed statement is known uncommitted only
+    /// after an explicitly successful rollback. COMMIT errors remain uncertain
+    /// even if SQLite's drop cleanup
+    /// succeeds: neither rollback nor visible bytes prove durable acceptance.
+    pub(super) fn transaction<T>(
+        &mut self,
+        write: impl FnOnce(&rusqlite::Transaction<'_>) -> Result<T, SessionError>,
+    ) -> Result<T, SessionError> {
+        self.ensure_healthy()?;
+        let result = write_transaction(&mut self.connection, write);
+        if result
+            .as_ref()
+            .is_err_and(|error| error.is_commit_uncertain())
+        {
+            self.faulted = true;
+        }
+        result
     }
 
     fn prune_context(&mut self) {
@@ -152,6 +181,7 @@ impl Store {
     }
 
     pub(super) fn append(&mut self, entries: &[SessionEntry]) -> Result<(), SessionError> {
+        self.ensure_healthy()?;
         let mut replacement = None;
         let mut candidate = self.state.clone();
         // A shared pending shell owns the final context message. Seed only that
@@ -229,11 +259,12 @@ impl Store {
                 encode_entry(entry)
             })
             .collect::<Result<Vec<_>, SessionError>>()?;
-        let tx = self.connection.transaction()?;
-        for body in encoded {
-            tx.execute("INSERT INTO entries(body) VALUES (?1)", params![body])?;
-        }
-        tx.commit()?;
+        self.transaction(|tx| {
+            for body in encoded {
+                tx.execute("INSERT INTO entries(body) VALUES (?1)", params![body])?;
+            }
+            Ok(())
+        })?;
         let mut sequence = self.state.sequence;
         for entry in entries {
             sequence += 1;
@@ -272,6 +303,29 @@ impl Store {
         }
         self.prune_context();
         Ok(())
+    }
+}
+
+pub(super) fn write_transaction<T>(
+    connection: &mut Connection,
+    write: impl FnOnce(&rusqlite::Transaction<'_>) -> Result<T, SessionError>,
+) -> Result<T, SessionError> {
+    let tx = connection.transaction()?;
+    match write(&tx) {
+        Ok(value) => {
+            tx.commit().map_err(|error| SessionError::CommitUncertain {
+                error: Box::new(error.into()),
+                rollback_error: None,
+            })?;
+            Ok(value)
+        }
+        Err(error) => match tx.rollback() {
+            Ok(()) => Err(error),
+            Err(rollback_error) => Err(SessionError::CommitUncertain {
+                error: Box::new(error),
+                rollback_error: Some(rollback_error),
+            }),
+        },
     }
 }
 

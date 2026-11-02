@@ -71,7 +71,7 @@ impl Session {
         summary_images: bool,
         max_through_entry: u64,
     ) -> Result<Option<CompactionPlan>, SessionError> {
-        let store = self.store.lock().map_err(|_| SessionError::Poisoned)?;
+        let store = self.lock_store()?;
         let previous = store
             .state
             .compaction

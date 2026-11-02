@@ -127,7 +127,7 @@ impl Session {
         let query: Query = serde_json::from_str(query).map_err(|error| {
             InspectionError::Request(format!("invalid inspection query: {error}"))
         })?;
-        let store = self.store.lock().map_err(|_| SessionError::Poisoned)?;
+        let store = self.lock_store()?;
         let selection = match query {
             Query::Parents { before } => {
                 let upper = before.map_or(Unbounded, Excluded);

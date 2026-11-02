@@ -211,10 +211,7 @@ impl Session {
                             .into(),
                     );
                 }
-                let store = child
-                    .store
-                    .lock()
-                    .map_err(|_| SessionError::Poisoned.to_string())?;
+                let store = child.lock_store().map_err(|error| error.to_string())?;
                 if store.state.active.is_some()
                     || store.state.pending_shell.is_some()
                     || store
@@ -243,7 +240,7 @@ impl Session {
             ownership,
             spec,
         };
-        let mut store = self.store.lock().map_err(|_| SessionError::Poisoned)?;
+        let mut store = self.lock_store()?;
         let context = match &record.spec.target {
             DelegationTarget::Fresh { .. } | DelegationTarget::Resume { .. } => Vec::new(),
             DelegationTarget::Fork { point, .. } => {
@@ -279,7 +276,7 @@ impl Session {
         let DelegationOwnership::Background { owner } = record.ownership else {
             return Err(SessionError::InvalidHistory);
         };
-        let mut store = self.store.lock().map_err(|_| SessionError::Poisoned)?;
+        let mut store = self.lock_store()?;
         store.append(&[SessionEntry::DelegationTransferred {
             run: record.run,
             owner,
@@ -295,7 +292,7 @@ impl Session {
         record: &DelegationRecord,
         outcome: DelegationOutcome,
     ) -> Result<(), SessionError> {
-        let mut store = self.store.lock().map_err(|_| SessionError::Poisoned)?;
+        let mut store = self.lock_store()?;
         store.append(&[SessionEntry::DelegationSettled {
             run: record.run,
             outcome,
@@ -327,7 +324,7 @@ impl Session {
                 {
                     return Err(SessionError::InvalidHistory);
                 }
-                let mut store = child.store.lock().map_err(|_| SessionError::Poisoned)?;
+                let mut store = child.lock_store()?;
                 store.append(&binding)?;
                 drop(store);
                 Ok(child)

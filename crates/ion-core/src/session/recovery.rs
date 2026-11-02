@@ -52,7 +52,7 @@ impl Session {
     /// Passive eligibility only: not liveness, authentication or proof old effects
     /// stopped. Callers must explicitly choose whether to continue despite uncertainty.
     pub fn recovery_state(&self) -> Result<Option<RecoveryState>, SessionError> {
-        let store = self.store.lock().map_err(|_| SessionError::Poisoned)?;
+        let store = self.lock_store()?;
         Ok(store
             .state
             .active
@@ -74,7 +74,7 @@ impl Session {
         expected: RecoveryPoint,
         binding: &RecoveryBinding,
     ) -> Result<(RecoveryPoint, usize), SessionError> {
-        let mut store = self.store.lock().map_err(|_| SessionError::Poisoned)?;
+        let mut store = self.lock_store()?;
         if expected.session != self.id()
             || store.state.active != Some(expected.turn)
             || expected.checkpoint != store.state.sequence

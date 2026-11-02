@@ -97,11 +97,7 @@ impl PreparedNavigation<'_> {
     }
     /// Retain this guard until the caller has published its prepared binding.
     pub fn commit(&mut self) -> Result<ContextPosition, SessionError> {
-        let mut store = self
-            .session
-            .store
-            .lock()
-            .map_err(|_| SessionError::Poisoned)?;
+        let mut store = self.session.lock_store()?;
         self.session.check_position(&store, self.expected)?;
         let mut entries = interrupted_operation_entries(&store, self.session.id());
         entries.push(SessionEntry::ContextSelected {
@@ -127,7 +123,7 @@ impl Session {
         Ok(())
     }
     pub fn context_position(&self) -> Result<ContextPosition, SessionError> {
-        let store = self.store.lock().map_err(|_| SessionError::Poisoned)?;
+        let store = self.lock_store()?;
         Ok(self.position(&store))
     }
     pub fn prepare_navigation(
@@ -136,7 +132,7 @@ impl Session {
         head_entry: u64,
     ) -> Result<PreparedNavigation<'_>, SessionError> {
         let idle = self.reserve_idle()?;
-        let store = self.store.lock().map_err(|_| SessionError::Poisoned)?;
+        let store = self.lock_store()?;
         self.check_position(&store, expected)?;
         if !store.context_index.can_select(head_entry) {
             return Err(SessionError::InvalidContextPoint);

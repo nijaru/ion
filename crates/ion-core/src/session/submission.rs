@@ -77,7 +77,7 @@ impl Session {
         &self,
         key: &RequestKey,
     ) -> Result<Option<RequestReceipt>, SessionError> {
-        let store = self.store.lock().map_err(|_| SessionError::Poisoned)?;
+        let store = self.lock_store()?;
         request_receipt(&store.connection, self.id(), key, None)
     }
 
@@ -87,7 +87,7 @@ impl Session {
         key: &RequestKey,
         input: &Message,
     ) -> Result<Option<RequestReceipt>, SessionError> {
-        let store = self.store.lock().map_err(|_| SessionError::Poisoned)?;
+        let store = self.lock_store()?;
         request_receipt(&store.connection, self.id(), key, Some(input))
     }
 }

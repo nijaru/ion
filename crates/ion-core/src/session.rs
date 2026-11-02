@@ -6,7 +6,7 @@ use std::{
     fs::{self, File, OpenOptions},
     os::unix::fs::{MetadataExt, OpenOptionsExt},
     path::{Path, PathBuf},
-    sync::{Arc, Mutex},
+    sync::{Arc, Mutex, MutexGuard},
     time::Duration,
 };
 
@@ -612,6 +612,12 @@ pub struct Session {
 }
 
 impl Session {
+    fn lock_store(&self) -> Result<MutexGuard<'_, Store>, SessionError> {
+        let store = self.store.lock().map_err(|_| SessionError::Poisoned)?;
+        store.ensure_healthy()?;
+        Ok(store)
+    }
+
     pub fn create(path: impl AsRef<Path>, cwd: Option<&Path>) -> Result<Self, SessionError> {
         Self::create_initial(path.as_ref(), cwd, uuid::Uuid::new_v4(), &[], None)
     }
@@ -656,27 +662,28 @@ impl Session {
             cwd,
             name: None,
         };
-        let tx = connection.transaction()?;
-        if let Some((path, id)) = artifact_source {
-            let source = Connection::open_with_flags(path, OpenFlags::SQLITE_OPEN_READ_ONLY)?;
-            configure_connection(&source)?;
-            let snapshot = source.unchecked_transaction()?;
-            if read_header(&snapshot)?.provider_session_id != id {
-                return Err(SessionError::InvalidDatabase);
+        store::write_transaction(&mut connection, |tx| {
+            if let Some((path, id)) = artifact_source {
+                let source = Connection::open_with_flags(path, OpenFlags::SQLITE_OPEN_READ_ONLY)?;
+                configure_connection(&source)?;
+                let snapshot = source.unchecked_transaction()?;
+                if read_header(&snapshot)?.provider_session_id != id {
+                    return Err(SessionError::InvalidDatabase);
+                }
+                artifacts::copy(&snapshot, tx, entries)?;
             }
-            artifacts::copy(&snapshot, &tx, entries)?;
-        }
-        for reference in entries.iter().flat_map(artifacts::references) {
-            artifacts::validate(&tx, reference)?;
-        }
-        tx.execute(
-            "INSERT INTO session(id, header) VALUES (1, ?1)",
-            params![serde_json::to_vec(&header)?],
-        )?;
-        for body in encoded {
-            tx.execute("INSERT INTO entries(body) VALUES (?1)", params![body])?;
-        }
-        tx.commit()?;
+            for reference in entries.iter().flat_map(artifacts::references) {
+                artifacts::validate(tx, reference)?;
+            }
+            tx.execute(
+                "INSERT INTO session(id, header) VALUES (1, ?1)",
+                params![serde_json::to_vec(&header)?],
+            )?;
+            for body in encoded {
+                tx.execute("INSERT INTO entries(body) VALUES (?1)", params![body])?;
+            }
+            Ok(())
+        })?;
         creation.publish();
         Ok(Self {
             store: Mutex::new(Store::from_projection(connection, projection)),
@@ -714,7 +721,7 @@ impl Session {
     /// Copy committed conversation and context into a new Session. Future
     /// entries are independent; the working directory remains shared.
     pub fn clone_to(&self, path: impl AsRef<Path>) -> Result<Self, SessionError> {
-        let source = self.store.lock().map_err(|_| SessionError::Poisoned)?;
+        let source = self.lock_store()?;
         let entries = read_entries(&source.connection)?;
         drop(source);
         self.copy_entries_to(path.as_ref(), entries)
@@ -723,7 +730,7 @@ impl Session {
     /// Copy the valid prefix at a selected Turn boundary into an independent
     /// Session. The source and target still share the live working directory.
     pub fn fork_to(&self, path: impl AsRef<Path>, point: ForkPoint) -> Result<Self, SessionError> {
-        let source = self.store.lock().map_err(|_| SessionError::Poisoned)?;
+        let source = self.lock_store()?;
         let (mut entries, selected_model) = fork_prefix(&source.connection, point)?;
         if let Some(model) = selected_model {
             entries.push(SessionEntry::ModelSelected { model });
@@ -738,7 +745,7 @@ impl Session {
         &self,
         point: ForkPoint,
     ) -> Result<(ModelRef, Reasoning), SessionError> {
-        let source = self.store.lock().map_err(|_| SessionError::Poisoned)?;
+        let source = self.lock_store()?;
         let (entries, selected_model) = fork_prefix(&source.connection, point)?;
         let projection = project(entries.iter().map(Ok), ProjectionMode::Metadata, &|entry| {
             Ok(entries[(entry - 1) as usize].clone())
@@ -894,7 +901,7 @@ impl Session {
         command: String,
         exclude_from_context: bool,
     ) -> Result<u64, SessionError> {
-        let mut store = self.store.lock().map_err(|_| SessionError::Poisoned)?;
+        let mut store = self.lock_store()?;
         let mut entries = interrupted_operation_entries(&store, self.id());
         entries.push(SessionEntry::UserShellAdmitted {
             command,
@@ -909,7 +916,7 @@ impl Session {
         admission_entry: u64,
         output: crate::ToolOutput,
     ) -> Result<(), SessionError> {
-        let mut store = self.store.lock().map_err(|_| SessionError::Poisoned)?;
+        let mut store = self.lock_store()?;
         store.append(&[SessionEntry::UserShellSettled {
             admission_entry,
             outcome: UserShellOutcome::Observed { output },
@@ -950,12 +957,7 @@ impl Session {
     }
 
     pub fn entry_count(&self) -> Result<u64, SessionError> {
-        Ok(self
-            .store
-            .lock()
-            .map_err(|_| SessionError::Poisoned)?
-            .state
-            .sequence)
+        Ok(self.lock_store()?.state.sequence)
     }
 
     /// Provider-neutral context projection when no effective target is supplied.
@@ -964,7 +966,7 @@ impl Session {
     /// Request preparation uses `request_basis` with the resolved effective
     /// model to capture context, reasoning and replay state together.
     pub fn context_messages(&self) -> Result<Vec<Message>, SessionError> {
-        let store = self.store.lock().map_err(|_| SessionError::Poisoned)?;
+        let store = self.lock_store()?;
         let direct = match (
             store.state.last_model.as_ref(),
             store.state.last_effective_model.as_ref(),
@@ -976,17 +978,11 @@ impl Session {
     }
 
     pub fn model_context(&self) -> Result<Option<ModelContextSnapshot>, SessionError> {
-        Ok(self
-            .store
-            .lock()
-            .map_err(|_| SessionError::Poisoned)?
-            .state
-            .last_context
-            .clone())
+        Ok(self.lock_store()?.state.last_context.clone())
     }
 
     pub(crate) fn request_basis(&self, model: &ModelRef) -> Result<RequestBasis, SessionError> {
-        let store = self.store.lock().map_err(|_| SessionError::Poisoned)?;
+        let store = self.lock_store()?;
         Ok(RequestBasis {
             turn: store.state.active,
             messages: context_projection(&store, Some(model)),
@@ -1021,7 +1017,7 @@ impl Session {
         &self,
         model: &ModelRef,
     ) -> Result<Vec<Message>, SessionError> {
-        let store = self.store.lock().map_err(|_| SessionError::Poisoned)?;
+        let store = self.lock_store()?;
         Ok(context_projection(&store, Some(model)))
     }
 
@@ -1031,7 +1027,7 @@ impl Session {
         &self,
         scope: &RequestScope,
     ) -> Result<Option<RequestCalibration>, SessionError> {
-        let store = self.store.lock().map_err(|_| SessionError::Poisoned)?;
+        let store = self.lock_store()?;
         Ok(store
             .calibration
             .as_ref()
@@ -1044,7 +1040,7 @@ impl Session {
         measurement: &RequestMeasurement,
         scope: &RequestScope,
     ) -> Result<(), SessionError> {
-        let mut store = self.store.lock().map_err(|_| SessionError::Poisoned)?;
+        let mut store = self.lock_store()?;
         if store
             .calibration
             .as_ref()
@@ -1059,7 +1055,7 @@ impl Session {
         &self,
         calibration: RequestCalibration,
     ) -> Result<(), SessionError> {
-        let mut store = self.store.lock().map_err(|_| SessionError::Poisoned)?;
+        let mut store = self.lock_store()?;
         store.calibration = Some(calibration);
         Ok(())
     }
@@ -1072,7 +1068,7 @@ impl Session {
         model: ModelRef,
         context: ModelContextSnapshot,
     ) -> Result<bool, SessionError> {
-        let mut store = self.store.lock().map_err(|_| SessionError::Poisoned)?;
+        let mut store = self.lock_store()?;
         if store.state.active != Some(turn) || !store.state.pending.is_empty() {
             return Err(SessionError::InvalidHistory);
         }
@@ -1100,7 +1096,7 @@ impl Session {
     /// Permanently omit prior opaque replay from future model requests after
     /// an adapter detects a changed signed context before dispatch.
     pub(crate) fn rebase_provider_replay(&self, turn: u64) -> Result<(), SessionError> {
-        let mut store = self.store.lock().map_err(|_| SessionError::Poisoned)?;
+        let mut store = self.lock_store()?;
         store.append(&[SessionEntry::ProviderReplayRebased { turn }])
     }
 
@@ -1110,7 +1106,7 @@ impl Session {
         execution: ModelExecution,
         usage: Usage,
     ) -> Result<(), SessionError> {
-        let mut store = self.store.lock().map_err(|_| SessionError::Poisoned)?;
+        let mut store = self.lock_store()?;
         store.append(&[SessionEntry::UncommittedUsage {
             purpose,
             execution,
@@ -1124,7 +1120,7 @@ impl Session {
         execution: ModelExecution,
         usage: Usage,
     ) -> Result<(), SessionError> {
-        let mut store = self.store.lock().map_err(|_| SessionError::Poisoned)?;
+        let mut store = self.lock_store()?;
         store.append(&[SessionEntry::CacheWarm {
             turn,
             execution,
@@ -1139,7 +1135,7 @@ impl Session {
         execution: ModelExecution,
         usage: Usage,
     ) -> Result<(), SessionError> {
-        let mut store = self.store.lock().map_err(|_| SessionError::Poisoned)?;
+        let mut store = self.lock_store()?;
         let retained_inputs = store
             .state
             .active_inputs
@@ -1156,7 +1152,7 @@ impl Session {
         }])
     }
     pub fn status(&self) -> Result<SessionStatus, SessionError> {
-        let store = self.store.lock().map_err(|_| SessionError::Poisoned)?;
+        let store = self.lock_store()?;
         let header = read_header(&store.connection)?;
         Ok(SessionStatus {
             cwd: header.cwd,
@@ -1167,7 +1163,7 @@ impl Session {
     }
 
     pub fn view(&self) -> Result<SessionView, SessionError> {
-        let store = self.store.lock().map_err(|_| SessionError::Poisoned)?;
+        let store = self.lock_store()?;
         let entries = read_entries(&store.connection)?;
         let header = read_header(&store.connection)?;
         let context_path = store.context_index.path(store.context_index.head());
@@ -1202,13 +1198,17 @@ impl Session {
         if name.is_some_and(|name| name.len() > 120 || name.chars().any(char::is_control)) {
             return Err(SessionError::InvalidName);
         }
-        let store = self.store.lock().map_err(|_| SessionError::Poisoned)?;
+        let mut store = self.lock_store()?;
         let mut header = read_header(&store.connection)?;
         header.name = name.map(str::to_owned);
-        store.connection.execute(
-            "UPDATE session SET header = ?1 WHERE id = 1",
-            params![serde_json::to_vec(&header)?],
-        )?;
+        let encoded = serde_json::to_vec(&header)?;
+        store.transaction(|tx| {
+            tx.execute(
+                "UPDATE session SET header = ?1 WHERE id = 1",
+                params![encoded],
+            )?;
+            Ok(())
+        })?;
         Ok(())
     }
 
@@ -1220,22 +1220,11 @@ impl Session {
     }
 
     pub fn model_preference(&self) -> Result<Option<ModelRef>, SessionError> {
-        Ok(self
-            .store
-            .lock()
-            .map_err(|_| SessionError::Poisoned)?
-            .state
-            .last_model
-            .clone())
+        Ok(self.lock_store()?.state.last_model.clone())
     }
 
     pub fn reasoning(&self) -> Result<Reasoning, SessionError> {
-        Ok(self
-            .store
-            .lock()
-            .map_err(|_| SessionError::Poisoned)?
-            .state
-            .reasoning)
+        Ok(self.lock_store()?.state.reasoning)
     }
 
     /// Caller holds this Session's operation gate through preflight and publication.
@@ -1247,7 +1236,7 @@ impl Session {
         model: ModelRef,
         reasoning: Option<Reasoning>,
     ) -> Result<(), SessionError> {
-        let mut store = self.store.lock().map_err(|_| SessionError::Poisoned)?;
+        let mut store = self.lock_store()?;
         let mut entries = Vec::new();
         if store.state.last_model.as_ref() != Some(&model) {
             entries.push(SessionEntry::ModelSelected { model });
@@ -1296,7 +1285,7 @@ impl Session {
     }
 
     pub(crate) fn selected_context_path(&self) -> Result<Vec<u64>, SessionError> {
-        let store = self.store.lock().map_err(|_| SessionError::Poisoned)?;
+        let store = self.lock_store()?;
         Ok(store.context_index.path(store.context_index.head()))
     }
 
@@ -1323,7 +1312,7 @@ impl Session {
         {
             return Err(SessionError::InvalidUserInput);
         }
-        let mut store = self.store.lock().map_err(|_| SessionError::Poisoned)?;
+        let mut store = self.lock_store()?;
         if let Some(key) = &request
             && let Some(receipt) =
                 submission::request_receipt(&store.connection, self.id(), key, Some(&input))?
@@ -1367,16 +1356,14 @@ impl Session {
     ) -> Result<bool, SessionError> {
         let activities = default_tool_activities(&message);
         let logical = self
-            .store
-            .lock()
-            .map_err(|_| SessionError::Poisoned)?
+            .lock_store()?
             .state
             .last_model
             .clone()
             .ok_or(SessionError::InvalidHistory)?;
         let effective = logical.clone();
         {
-            let mut store = self.store.lock().map_err(|_| SessionError::Poisoned)?;
+            let mut store = self.lock_store()?;
             if store
                 .state
                 .last_effective_model
@@ -1403,9 +1390,7 @@ impl Session {
             usage,
         };
         if continue_turn {
-            self.store
-                .lock()
-                .map_err(|_| SessionError::Poisoned)?
+            self.lock_store()?
                 .append(&[assistant.into_entry(turn, ResponseTermination::Completed)?])?;
             Ok(false)
         } else {
@@ -1447,7 +1432,7 @@ impl Session {
                 notices: completion,
             });
         }
-        let mut store = self.store.lock().map_err(|_| SessionError::Poisoned)?;
+        let mut store = self.lock_store()?;
         let entry = store.state.sequence + 1;
         store.append(&entries)?;
         let mut inputs = CommittedInputEntries::default();
@@ -1508,7 +1493,7 @@ impl Session {
                 .cloned()
                 .map(|result| SessionEntry::ToolResult { turn, result }),
         );
-        let mut store = self.store.lock().map_err(|_| SessionError::Poisoned)?;
+        let mut store = self.lock_store()?;
         let entry = store.state.sequence + 1;
         store.append(&entries)?;
         Ok((entry, results))
@@ -1544,7 +1529,7 @@ impl Session {
         if entries.is_empty() {
             return Ok(CommittedInputEntries::default());
         }
-        let mut store = self.store.lock().map_err(|_| SessionError::Poisoned)?;
+        let mut store = self.lock_store()?;
         let first = store.state.sequence + 1;
         store.append(&entries)?;
         Ok(CommittedInputEntries {
@@ -1592,7 +1577,7 @@ impl Session {
         if let Some(context) = context {
             entries.push(SessionEntry::ModelContextChanged { turn, context });
         }
-        let mut store = self.store.lock().map_err(|_| SessionError::Poisoned)?;
+        let mut store = self.lock_store()?;
         store.append(&entries)
     }
 
@@ -1602,7 +1587,7 @@ impl Session {
         turn: u64,
         call_id: &str,
     ) -> Result<crate::ToolOccurrence, SessionError> {
-        let store = self.store.lock().map_err(|_| SessionError::Poisoned)?;
+        let store = self.lock_store()?;
         if store.state.active != Some(turn) {
             return Err(SessionError::InvalidHistory);
         }
@@ -1620,7 +1605,7 @@ impl Session {
         turn: u64,
         intent: crate::ChildIntent,
     ) -> Result<(), SessionError> {
-        let mut store = self.store.lock().map_err(|_| SessionError::Poisoned)?;
+        let mut store = self.lock_store()?;
         store.append(&[SessionEntry::ChildToolAdmitted { turn, intent }])
     }
 
@@ -1637,7 +1622,7 @@ impl Session {
             child,
             outcome,
         };
-        let mut store = self.store.lock().map_err(|_| SessionError::Poisoned)?;
+        let mut store = self.lock_store()?;
         store.append(std::slice::from_ref(&entry))?;
         let SessionEntry::ChildToolResult { outcome, .. } = entry else {
             unreachable!()
@@ -1651,7 +1636,7 @@ impl Session {
         reason: TurnEndReason,
         unstarted: &BTreeSet<String>,
     ) -> Result<Vec<(crate::ToolSettlement, ToolActivity)>, SessionError> {
-        let mut store = self.store.lock().map_err(|_| SessionError::Poisoned)?;
+        let mut store = self.lock_store()?;
         if store.state.active != Some(turn) {
             return Err(SessionError::InvalidHistory);
         }
@@ -1899,6 +1884,23 @@ pub enum SessionError {
     EntryTooLarge,
     #[error("turn identifier space exhausted")]
     TurnIdExhausted,
+    /// This operation reached COMMIT, or failed to confirm its rollback.
+    /// Its durable outcome must be reconciled by reopening, never assumed
+    /// safely unaccepted from the still-unpublished in-memory projection.
+    #[error(
+        "session transaction outcome is uncertain: {error}; rollback error: {rollback_error:?}"
+    )]
+    CommitUncertain {
+        /// Original write error, or the error returned by COMMIT.
+        #[source]
+        error: Box<SessionError>,
+        /// Failure of the explicit rollback after a write error. `None` means
+        /// COMMIT failed, not that a rollback was confirmed successful.
+        rollback_error: Option<rusqlite::Error>,
+    },
+    /// A previous operation faulted this Store. This operation was not admitted.
+    #[error("session store is faulted after an uncertain transaction; reopen the Session")]
+    StoreFaulted,
     #[error("session mutex was poisoned")]
     Poisoned,
     #[error(transparent)]
@@ -1907,6 +1909,22 @@ pub enum SessionError {
     Sqlite(#[from] rusqlite::Error),
     #[error(transparent)]
     Json(#[from] serde_json::Error),
+}
+
+impl SessionError {
+    /// Whether this operation's commit outcome is uncertain. A subsequent
+    /// `StoreFaulted` refusal is not an uncertain commit of that operation.
+    /// Typed artifact I/O wrappers preserve the same classification.
+    pub fn is_commit_uncertain(&self) -> bool {
+        match self {
+            Self::CommitUncertain { .. } => true,
+            Self::Io(error) => error
+                .get_ref()
+                .and_then(|source| source.downcast_ref::<Self>())
+                .is_some_and(Self::is_commit_uncertain),
+            _ => false,
+        }
+    }
 }
 
 impl OperationFailure for SessionError {
@@ -1926,5 +1944,7 @@ impl From<OperationError> for SessionError {
 
 #[cfg(test)]
 mod artifacts_tests;
+#[cfg(test)]
+mod store_tests;
 #[cfg(test)]
 mod tests;

@@ -78,7 +78,7 @@ impl Session {
         offset: u64,
         limit: usize,
     ) -> Result<ArtifactPage, SessionError> {
-        let store = self.store.lock().map_err(|_| SessionError::Poisoned)?;
+        let store = self.lock_store()?;
         read_page(&store.connection, reference, offset, limit)
     }
 }
@@ -139,39 +139,35 @@ impl ArtifactSink {
         writer.finish(true)
     }
 
-    fn append(&self, id: uuid::Uuid, label: &str, offset: u64, bytes: &[u8]) -> io::Result<()> {
-        let mut store = self.0.store.lock().map_err(io_error)?;
-        let tx = store.connection.transaction().map_err(io_error)?;
-        tx.execute(
-            "INSERT OR IGNORE INTO artifacts(id,label,source) VALUES (?1,?2,?3)",
-            params![
-                id.to_string(),
-                label,
-                serde_json::to_vec(&self.1).map_err(io_error)?
-            ],
-        )
-        .map_err(io_error)?;
-        let unfinished: bool = tx
-            .query_row(
+    fn append(
+        &self,
+        id: uuid::Uuid,
+        label: &str,
+        offset: u64,
+        bytes: &[u8],
+    ) -> Result<(), SessionError> {
+        let mut store = self.0.lock_store()?;
+        let source = serde_json::to_vec(&self.1)?;
+        let sql_offset = i64::try_from(offset).map_err(|_| SessionError::InvalidArtifactRange)?;
+        store.transaction(|tx| {
+            tx.execute(
+                "INSERT OR IGNORE INTO artifacts(id,label,source) VALUES (?1,?2,?3)",
+                params![id.to_string(), label, source],
+            )?;
+            let unfinished: bool = tx.query_row(
                 "SELECT receipt IS NULL FROM artifacts WHERE id=?1",
                 [id.to_string()],
                 |row| row.get(0),
-            )
-            .map_err(io_error)?;
-        if !unfinished {
-            return Err(io::Error::other("artifact is already finalized"));
-        }
-        tx.execute(
-            "INSERT INTO artifact_chunks(artifact, byte_offset, body, checksum) VALUES (?1,?2,?3,?4)",
-            params![
-                id.to_string(),
-                i64::try_from(offset).map_err(io_error)?,
-                bytes,
-                chunk_checksum(id, offset, bytes)
-            ],
-        )
-        .map_err(io_error)?;
-        tx.commit().map_err(io_error)
+            )?;
+            if !unfinished {
+                return Err(SessionError::Storage("artifact is already finalized".into()));
+            }
+            tx.execute(
+                "INSERT INTO artifact_chunks(artifact, byte_offset, body, checksum) VALUES (?1,?2,?3,?4)",
+                params![id.to_string(), sql_offset, bytes, chunk_checksum(id, offset, bytes)],
+            )?;
+            Ok(())
+        })
     }
 }
 
@@ -216,12 +212,9 @@ impl ArtifactWriter {
                 self.sink
                     .0
                     .storage
-                    .run(&self.io, move || {
-                        sink.append(id, &label, offset, &data)
-                            .map_err(SessionError::from)
-                    })
+                    .run(&self.io, move || sink.append(id, &label, offset, &data))
                     .await
-                    .map_err(io_error)?;
+                    .map_err(io::Error::other)?;
                 self.committed += written;
                 self.failed = false;
             }
@@ -244,12 +237,17 @@ impl ArtifactWriter {
             sha256: format!("{:x}", self.hash.finalize()),
             complete,
         };
-        let store = self.sink.0.store.lock().map_err(io_error)?;
-        let changed = store.connection.execute("INSERT INTO artifacts(id, receipt,label,source) VALUES (?1,?2,?3,?4) ON CONFLICT(id) DO UPDATE SET receipt=excluded.receipt WHERE artifacts.receipt IS NULL AND artifacts.label=excluded.label AND artifacts.source=excluded.source",
-            params![reference.id.to_string(), serde_json::to_vec(&reference).map_err(io_error)?, reference.label, serde_json::to_vec(&self.sink.1).map_err(io_error)?]).map_err(io_error)?;
-        if changed != 1 {
-            return Err(io::Error::other("artifact is already finalized"));
-        }
+        let mut store = self.sink.0.lock_store().map_err(io::Error::other)?;
+        let receipt = serde_json::to_vec(&reference).map_err(io_error)?;
+        let source = serde_json::to_vec(&self.sink.1).map_err(io_error)?;
+        store.transaction(|tx| {
+            let changed = tx.execute("INSERT INTO artifacts(id, receipt,label,source) VALUES (?1,?2,?3,?4) ON CONFLICT(id) DO UPDATE SET receipt=excluded.receipt WHERE artifacts.receipt IS NULL AND artifacts.label=excluded.label AND artifacts.source=excluded.source",
+                params![reference.id.to_string(), receipt, reference.label, source])?;
+            if changed != 1 {
+                return Err(SessionError::Storage("artifact is already finalized".into()));
+            }
+            Ok(())
+        }).map_err(io::Error::other)?;
         Ok(reference)
     }
 
@@ -262,7 +260,7 @@ impl ArtifactWriter {
                 self.finish_storage(complete).map_err(SessionError::from)
             })
             .await
-            .map_err(io_error)
+            .map_err(io::Error::other)
     }
 
     fn flush_storage(&mut self) -> io::Result<()> {
@@ -270,7 +268,8 @@ impl ArtifactWriter {
         if !self.pending.is_empty() {
             self.failed = true;
             self.sink
-                .append(self.id, &self.label, self.committed, &self.pending)?;
+                .append(self.id, &self.label, self.committed, &self.pending)
+                .map_err(io::Error::other)?;
             self.committed += self.pending.len() as u64;
             self.pending.clear();
             self.failed = false;
